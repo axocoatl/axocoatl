@@ -173,6 +173,19 @@ The build downloads the pinned Node image, the locked Playwright packages and
 Chromium. It is network access you start, on the host; Agents never trigger it. See
 [Browser](/configure/browser/).
 
+## Network policy
+
+| Command | Purpose |
+| --- | --- |
+| `axocoatl network reload` | Ask the running daemon, over its IPC socket, to read the configuration file it was started with again and apply `sandbox.egress.allow`, `sandbox.egress.private_destinations`, `browser.allow` and `browser.private_destinations` to new and running Sessions. Prints what was applied, each running Session's new policy revision with the open connections it closed, and the settings that need a restart. Exits with status 1 when the daemon is not running, was not started from a file, or the file is invalid; an invalid file changes nothing |
+
+The whole file is validated. Every other difference from the configuration the
+daemon started with, such as `sandbox.network`, `sandbox.egress.sidecar_network`,
+`max_connections`, adding or removing the `browser` block, Agents or providers, is
+listed as `restart_required` and not applied. The same reload is
+[`POST /api/network/reload`](/reference/http-api/#reload-the-network-allowlists). See
+[Network egress](/configure/sandboxes/#network-egress).
+
 ## Global help and version
 
 ```sh

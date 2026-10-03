@@ -2,15 +2,20 @@
 //!
 //! [`BrowserService`] is daemon-wide. For each Session it keeps the browser
 //! container, a semaphore of `browser.max_parallel` permits, a lock that
-//! lets `browser_check` run alone and, when `browser.allow` lists hosts, a
-//! browser-scope egress decision point and its sidecar. Each call:
+//! lets `browser_check` run alone and, under `bridge` and `none` when
+//! `browser.allow` lists hosts, a browser-scope egress decision point and its
+//! sidecar. Each call:
 //!
 //! 1. makes sure the Session's exposed ports are served as sockets: under
 //!    `bridge` and `none` by the service forwarder (a container of its own in
 //!    the Session's network namespace; the Session container never sees the
 //!    sockets), under `egress` by the Session container's own bridge, which
 //!    serves them for Preview;
-//! 2. starts the egress sidecar when declared hosts exist;
+//! 2. when declared hosts exist, finds the decision point that answers the
+//!    browser's proxy: under `egress` the Session's own, whose sidecar
+//!    (`axo-egr-{session}`) already runs and whose `browser` scope compiles
+//!    `browser.allow` apart from the Session's list; under `bridge` and
+//!    `none` a browser-only one, with a sidecar of its own;
 //! 3. starts or reuses the browser container;
 //! 4. takes a browser egress credential bound to the call (declared hosts
 //!    only), which reaches the driver only on its stdin;
@@ -57,7 +62,9 @@ use tokio::sync::Semaphore;
 use crate::session_dispatch::{HostInvocationContext, HostInvocationTool};
 use crate::session_egress::{EgressPolicyConfig, SessionEgress, SessionRecordSink, SystemResolver};
 use crate::session_network::{PolicyView, SessionNetworkRecords, SidecarView};
+use crate::session_network_reload::{ReloadFailure, ScopeRevision};
 use axocoatl_session::control_authority::ExecutionProfile;
+use axocoatl_session::network_record::EgressScope;
 
 /// Why the browser tools are refused in a Ways attempt lane.
 pub(crate) const ATTEMPT_REFUSAL: &str = "the browser tools are not available in a Ways attempt: \
@@ -120,10 +127,17 @@ impl BrowserServiceConfig {
             labels: Vec::new(),
         })
     }
+}
 
-    fn declared_hosts(&self) -> bool {
-        !self.allow.is_empty()
-    }
+/// The Session's own egress decision point and sidecar, under `network:
+/// egress`. The daemon implements it over its decision points and the
+/// Session's runtime.
+#[async_trait::async_trait]
+pub(crate) trait SessionEgressSource: Send + Sync {
+    /// The Session's decision point, opened on first use.
+    async fn session_egress(&self, session_id: &str) -> Result<Arc<SessionEgress>, String>;
+    /// Whether the Session's runtime runs and its egress sidecar is ready.
+    async fn session_sidecar_ready(&self, session_id: &str) -> bool;
 }
 
 /// The exposed ports of a Session, read from the daemon's Session records.
@@ -164,6 +178,11 @@ struct BrowserSession {
 /// The daemon's browser runtime.
 pub(crate) struct BrowserService {
     config: BrowserServiceConfig,
+    /// `browser.allow` and `browser.private_destinations` in force; a
+    /// configuration reload replaces them.
+    declared: Mutex<(Vec<EgressAllowYaml>, Vec<String>)>,
+    /// The Session's own decision point under `network: egress`.
+    egress_source: Arc<dyn SessionEgressSource>,
     supervisor_installation: SecureDir,
     /// Host directories the browser must never read from a Workspace.
     control_plane_dirs: Vec<PathBuf>,
@@ -190,8 +209,11 @@ impl BrowserService {
         control_plane_dirs: Vec<PathBuf>,
         records: Arc<SessionNetworkRecords>,
         ports: Arc<dyn SessionPorts>,
+        egress_source: Arc<dyn SessionEgressSource>,
     ) -> Self {
         Self {
+            declared: Mutex::new((config.allow.clone(), config.private_destinations.clone())),
+            egress_source,
             config,
             supervisor_installation,
             control_plane_dirs,
@@ -200,6 +222,56 @@ impl BrowserService {
             sessions: tokio::sync::Mutex::new(HashMap::new()),
             forwarder_image: tokio::sync::Mutex::new(None),
         }
+    }
+
+    fn declared(&self) -> (Vec<EgressAllowYaml>, Vec<String>) {
+        self.declared
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    /// Whether `browser.allow` lists hosts now.
+    fn declared_hosts(&self) -> bool {
+        !self
+            .declared
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .0
+            .is_empty()
+    }
+
+    /// Apply reloaded `browser.allow` and `browser.private_destinations`:
+    /// later calls use them, and each browser-only decision point (under
+    /// `bridge` and `none`) records and applies them at once. Under
+    /// `egress` the Session's own decision point holds the browser's
+    /// policy and is reloaded with the Session's.
+    pub(crate) async fn reload_declared(
+        &self,
+        allow: Vec<EgressAllowYaml>,
+        private_destinations: Vec<String>,
+        actor: &str,
+    ) -> (Vec<ScopeRevision>, Vec<ReloadFailure>) {
+        *self
+            .declared
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) =
+            (allow.clone(), private_destinations.clone());
+        let mut sessions: Vec<(String, Arc<BrowserSession>)> = self
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .map(|(id, session)| (id.clone(), session.clone()))
+            .collect();
+        sessions.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut authorities = Vec::new();
+        for (session_id, session) in sessions {
+            if let Some(egress) = session.egress.lock().await.as_ref() {
+                authorities.push((session_id, egress.authority.clone()));
+            }
+        }
+        reload_browser_only(authorities, &allow, &private_destinations, actor).await
     }
 
     async fn session(&self, session_id: &str) -> Arc<BrowserSession> {
@@ -316,17 +388,29 @@ impl BrowserService {
         }
     }
 
-    /// The browser-scope decision point, with its sidecar running.
+    /// The decision point that answers the browser's proxy, with its
+    /// sidecar running. Under `network: egress` it is the Session's own: its
+    /// sidecar (`axo-egr-{session}`) already serves the socket the browser
+    /// container mounts, and its `browser` scope holds `browser.allow`. A
+    /// second sidecar here would take that name and split the record's
+    /// policy. Under `bridge` and `none` the browser has its own.
     async fn ensure_egress(
         &self,
         session_id: &str,
         session: &BrowserSession,
     ) -> Result<Arc<SessionEgress>, String> {
-        // Under `network: egress` the Session's own decision point and
-        // sidecar (`axo-egr-{session}`) serve the browser too; a second one
-        // here would replace that sidecar and split the record's policy.
-        if let Some(reason) = egress_mode_refusal(&self.config) {
-            return Err(reason);
+        if self.config.session_network == "egress" {
+            let authority = self.egress_source.session_egress(session_id).await?;
+            if authority.policy(EgressScope::Browser).is_none() {
+                return Err(
+                    "this Session's egress decision point has no browser policy; restart the daemon after adding the browser block"
+                        .to_string(),
+                );
+            }
+            if !self.egress_source.session_sidecar_ready(session_id).await {
+                return Err("the Session's egress proxy is not running, so the browser cannot reach its declared hosts; it starts with the Session's runtime".to_string());
+            }
+            return Ok(authority);
         }
         let mut egress = session.egress.lock().await;
         // The sidecar restarts itself when its channel is lost. One stopped
@@ -352,10 +436,7 @@ impl BrowserService {
             EgressPolicyConfig {
                 session_allow: Vec::new(),
                 session_private: Vec::new(),
-                browser: Some((
-                    self.config.allow.clone(),
-                    self.config.private_destinations.clone(),
-                )),
+                browser: Some(self.declared()),
             },
             Arc::new(SessionRecordSink::new(self.records.clone(), session_id)),
             Arc::new(SystemResolver),
@@ -396,7 +477,7 @@ impl BrowserService {
         session: &BrowserSession,
         ports: &[u16],
     ) -> Result<Arc<BrowserContainer>, String> {
-        let egress = self.config.declared_hosts();
+        let egress = self.declared_hosts();
         let mut slot = session.container.lock().await;
         if let Some(container) = slot.as_ref() {
             if container.serves(ports, egress) && container.is_running().await {
@@ -548,7 +629,7 @@ impl BrowserRunner for BrowserCallRunner {
         service
             .ensure_service_sockets(session_id, &session, &ports)
             .await?;
-        let egress = if service.config.declared_hosts() {
+        let egress = if service.declared_hosts() {
             Some(service.ensure_egress(session_id, &session).await?)
         } else {
             None
@@ -728,25 +809,46 @@ impl BrowserHostTool {
     }
 }
 
-/// Why declared browser hosts cannot be used under this Session network.
-fn egress_mode_refusal(config: &BrowserServiceConfig) -> Option<String> {
-    (config.session_network == "egress" && config.declared_hosts()).then(|| {
-        "browser.allow under network: egress goes through the Session's own egress decision \
-         point and sidecar, which this build does not connect to the browser; the browser runs \
-         its own sidecar only for bridge and none Sessions"
-            .to_string()
-    })
+/// Apply reloaded declared hosts to browser-only decision points.
+async fn reload_browser_only(
+    authorities: Vec<(String, Arc<SessionEgress>)>,
+    allow: &[EgressAllowYaml],
+    private_destinations: &[String],
+    actor: &str,
+) -> (Vec<ScopeRevision>, Vec<ReloadFailure>) {
+    let mut revisions = Vec::new();
+    let mut failed = Vec::new();
+    for (session_id, authority) in authorities {
+        let config = EgressPolicyConfig {
+            session_allow: Vec::new(),
+            session_private: Vec::new(),
+            browser: Some((allow.to_vec(), private_destinations.to_vec())),
+        };
+        match authority.reload_config(config, actor).await {
+            Ok(changed) => revisions.extend(changed.into_iter().map(|scope| ScopeRevision {
+                session_id: session_id.clone(),
+                scope: scope.scope.as_str().to_string(),
+                revision: scope.revision,
+                digest: scope.digest,
+                closed: scope.closed,
+            })),
+            Err(error) => failed.push(ReloadFailure {
+                session_id,
+                error: error.to_string(),
+            }),
+        }
+    }
+    (revisions, failed)
 }
 
 /// Why this daemon cannot run the browser tools at all, if it cannot.
 pub(crate) fn browser_refusal(config: &BrowserServiceConfig) -> Option<String> {
-    if config.backend != "podman" {
-        return Some(format!(
+    (config.backend != "podman").then(|| {
+        format!(
             "the browser tools run in a local Podman container; this daemon uses backend: {}",
             config.backend
-        ));
-    }
-    egress_mode_refusal(config)
+        )
+    })
 }
 
 impl HostInvocationTool for BrowserHostTool {
@@ -792,7 +894,7 @@ impl HostInvocationTool for BrowserHostTool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use axocoatl_session::turn_contract::{
         ActivationId, ActivationRef, ExecutionEpochId, InvocationId, LogicalTurnId, SessionId,
@@ -808,6 +910,33 @@ mod tests {
         async fn exposed_ports(&self, _: &str) -> Result<Vec<u16>, String> {
             Ok(self.0.clone())
         }
+    }
+
+    /// The Session's own decision point, when there is one, and whether its
+    /// sidecar is ready.
+    pub(crate) struct FixedEgress {
+        pub(crate) egress: Option<Arc<SessionEgress>>,
+        pub(crate) ready: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionEgressSource for FixedEgress {
+        async fn session_egress(&self, _: &str) -> Result<Arc<SessionEgress>, String> {
+            self.egress
+                .clone()
+                .ok_or_else(|| "this daemon has no Session decision points".to_string())
+        }
+
+        async fn session_sidecar_ready(&self, _: &str) -> bool {
+            self.ready
+        }
+    }
+
+    pub(crate) fn no_session_egress() -> Arc<dyn SessionEgressSource> {
+        Arc::new(FixedEgress {
+            egress: None,
+            ready: false,
+        })
     }
 
     fn service(
@@ -826,7 +955,178 @@ mod tests {
             control,
             records,
             Arc::new(FixedPorts(vec![8765])),
+            no_session_egress(),
         ))
+    }
+
+    fn egress_service(root: &Path, source: FixedEgress) -> Arc<BrowserService> {
+        let mut config = axocoatl_config::AxocoatlConfig {
+            browser: Some(axocoatl_config::BrowserConfigYaml::default()),
+            ..Default::default()
+        };
+        config.sandbox.network = "egress".into();
+        let mut resolved = BrowserServiceConfig::from_config(&config, "authority".into()).unwrap();
+        resolved.allow = vec![EgressAllowYaml::Host(axocoatl_config::EgressHostYaml {
+            host: "docs.test".into(),
+            ports: None,
+        })];
+        let stores = crate::session_network::tests::Stores::new(&["ses-1"]);
+        let records = Arc::new(SessionNetworkRecords::new(stores, 50_000));
+        let dir = SecureDir::open_or_create_all(root.join("service")).unwrap();
+        Arc::new(BrowserService::new(
+            resolved,
+            dir.child("supervisors").unwrap(),
+            Vec::new(),
+            records,
+            Arc::new(FixedPorts(vec![8765])),
+            Arc::new(source),
+        ))
+    }
+
+    async fn session_decision_point(
+        browser: Option<(Vec<EgressAllowYaml>, Vec<String>)>,
+    ) -> Arc<SessionEgress> {
+        use crate::session_egress::tests::{FakeRecord, FakeResolver};
+        SessionEgress::open(
+            "ses-1",
+            EgressPolicyConfig {
+                session_allow: vec![EgressAllowYaml::Preset("npm".into())],
+                session_private: Vec::new(),
+                browser,
+            },
+            Arc::new(FakeRecord::default()),
+            FakeResolver::with(&[]),
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Gap 2: under `network: egress` the browser's declared hosts are
+    /// answered by the Session's own decision point and sidecar, never by a
+    /// second sidecar of the browser's.
+    #[tokio::test]
+    async fn under_egress_declared_hosts_use_the_sessions_own_decision_point() {
+        let root = tempfile::tempdir().unwrap();
+        let docs = vec![EgressAllowYaml::Host(axocoatl_config::EgressHostYaml {
+            host: "docs.test".into(),
+            ports: None,
+        })];
+        let egress = session_decision_point(Some((docs.clone(), Vec::new()))).await;
+        let service = egress_service(
+            root.path(),
+            FixedEgress {
+                egress: Some(egress.clone()),
+                ready: true,
+            },
+        );
+        assert!(browser_refusal(&service.config).is_none());
+        assert!(service.declared_hosts());
+        let session = service.session("ses-1").await;
+        let found = service.ensure_egress("ses-1", &session).await.unwrap();
+        assert!(Arc::ptr_eq(&found, &egress));
+        // No browser-only decision point or sidecar was made for it.
+        assert!(session.egress.lock().await.is_none());
+        let (sidecar, policies) = service.network_view("ses-1").await;
+        assert!(sidecar.is_none() && policies.is_empty());
+
+        // With the Session's sidecar down, the call is refused, and nothing
+        // starts a second one.
+        let stopped = egress_service(
+            root.path(),
+            FixedEgress {
+                egress: Some(egress.clone()),
+                ready: false,
+            },
+        );
+        let session = stopped.session("ses-1").await;
+        let error = stopped.ensure_egress("ses-1", &session).await.unwrap_err();
+        assert!(error.contains("egress proxy is not running"), "{error}");
+        assert!(session.egress.lock().await.is_none());
+
+        // A decision point opened without the browser's scope refuses too.
+        let without = egress_service(
+            root.path(),
+            FixedEgress {
+                egress: Some(session_decision_point(None).await),
+                ready: true,
+            },
+        );
+        let session = without.session("ses-1").await;
+        let error = without.ensure_egress("ses-1", &session).await.unwrap_err();
+        assert!(error.contains("no browser policy"), "{error}");
+    }
+
+    /// A reload changes which hosts later calls declare; under `bridge`
+    /// and `none` it also reloads each browser-only decision point.
+    #[tokio::test]
+    async fn a_reload_replaces_the_declared_hosts_and_reloads_browser_only_decision_points() {
+        use crate::session_egress::tests::{FakeRecord, FakeResolver};
+        let root = tempfile::tempdir().unwrap();
+        let stores = crate::session_network::tests::Stores::new(&["ses-1"]);
+        let records = Arc::new(SessionNetworkRecords::new(stores, 50_000));
+        let service = service(root.path(), records, Vec::new());
+        assert!(!service.declared_hosts());
+        let docs = vec![EgressAllowYaml::Host(axocoatl_config::EgressHostYaml {
+            host: "docs.test".into(),
+            ports: None,
+        })];
+        let (revisions, failed) = service
+            .reload_declared(docs.clone(), Vec::new(), "human")
+            .await;
+        assert!(revisions.is_empty() && failed.is_empty());
+        assert!(service.declared_hosts());
+        assert_eq!(service.declared(), (docs.clone(), Vec::new()));
+
+        // A browser-only decision point that is running records the change.
+        let record = Arc::new(FakeRecord::default());
+        let authority = SessionEgress::open_browser_only(
+            "ses-1",
+            EgressPolicyConfig {
+                session_allow: Vec::new(),
+                session_private: Vec::new(),
+                browser: Some((docs.clone(), Vec::new())),
+            },
+            record.clone(),
+            FakeResolver::with(&[]),
+        )
+        .await
+        .unwrap();
+        let fonts = vec![EgressAllowYaml::Host(axocoatl_config::EgressHostYaml {
+            host: "fonts.test".into(),
+            ports: None,
+        })];
+        let (revisions, failed) = reload_browser_only(
+            vec![("ses-1".to_string(), authority.clone())],
+            &fonts,
+            &[],
+            "human",
+        )
+        .await;
+        assert!(failed.is_empty(), "{failed:?}");
+        assert_eq!(revisions.len(), 1);
+        assert_eq!(
+            (
+                revisions[0].session_id.as_str(),
+                revisions[0].scope.as_str(),
+                revisions[0].revision
+            ),
+            ("ses-1", "browser", 2)
+        );
+        let policy = authority.policy(EgressScope::Browser).unwrap();
+        assert!(policy.match_name("fonts.test", 443).is_some());
+        assert!(policy.match_name("docs.test", 443).is_none());
+        // A browser-only decision point has no Session scope to reload.
+        assert!(authority.policy(EgressScope::Session).is_none());
+        assert!(record.events().iter().any(|event| matches!(
+            event,
+            NetworkEvent::Policy {
+                scope: EgressScope::Browser,
+                source: axocoatl_session::network_record::PolicySource::ConfigReload,
+                revision: 2,
+                ..
+            }
+        )));
     }
 
     fn context(checkout: Option<SecureDir>) -> HostInvocationContext {
@@ -1142,6 +1442,7 @@ mod tests {
             Vec::new(),
             records.clone(),
             Arc::new(FixedPorts(vec![8765])),
+            no_session_egress(),
         ));
         let mut call = context(None);
         call.session_id = session_id.clone();
@@ -1260,18 +1561,13 @@ mod tests {
         let mut e2b = resolved.clone();
         e2b.backend = "e2b".into();
         assert!(browser_refusal(&e2b).unwrap().contains("Podman"));
-        // Under network: egress, declared hosts belong to the Session's own
-        // decision point; the browser never starts a second sidecar there.
+        // Under network: egress, declared hosts go through the Session's own
+        // decision point, so they are no reason to refuse the tools.
         config.sandbox.network = "egress".into();
         let mut egress = BrowserServiceConfig::from_config(&config, "a".into()).unwrap();
-        assert!(
-            browser_refusal(&egress).is_none(),
-            "no declared hosts, no sidecar"
-        );
+        assert!(browser_refusal(&egress).is_none());
         egress.allow = vec![axocoatl_config::EgressAllowYaml::Preset("npm".into())];
-        assert!(browser_refusal(&egress)
-            .unwrap()
-            .contains("Session's own egress decision point"));
+        assert!(browser_refusal(&egress).is_none());
     }
 
     #[test]
@@ -1283,7 +1579,7 @@ mod tests {
         assert_eq!(resolved.image, axocoatl_config::DEFAULT_BROWSER_IMAGE);
         assert_eq!(resolved.backend, "podman");
         assert_eq!(resolved.max_parallel, 2);
-        assert!(!resolved.declared_hosts());
+        assert!(resolved.allow.is_empty());
         assert_eq!(resolved.settings.timeout_secs, 120);
     }
 }

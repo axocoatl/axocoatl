@@ -224,6 +224,9 @@ below.
 | POST | `/api/sessions/{id}/network/allow` | `{command_id, scope, host, ports?}`; under `network: egress`, allow one exact host for this Session. Returns `{revision, digest}` |
 | POST | `/api/sessions/{id}/network/revoke` | `{command_id, scope, host}`; remove this Session's allows for one host and close the connections they admitted. Returns `{revision, digest}` |
 | GET | `/api/sessions/{id}/network/screenshots/{sha256}` | One screenshot a browser tool kept beside the Session's network record, as `image/jpeg` or `image/png`; 404 when absent |
+| POST | `/api/sessions/{id}/network/proposals/{proposal_id}/approve` | `{command_id}`; approve a host an Agent [asked for](#hosts-agents-ask-for): it is allowed for this Session. Returns `{proposal_id, state, revision, digest}` |
+| POST | `/api/sessions/{id}/network/proposals/{proposal_id}/reject` | `{command_id}`; reject a host an Agent asked for. Returns `{proposal_id, state}` |
+| POST | `/api/network/reload` | Read the daemon's configuration file again and [apply its allowlists](#reload-the-network-allowlists) to new and running Sessions. Returns `{applied, unchanged, restart_required, revisions}` |
 | GET | `/api/session-turns/search?q=…&session_id=…` | Literal case-insensitive search; omit Session ID for all |
 | GET | `/api/sessions/{id}/export?format=markdown` | Markdown by default; accepts `markdown`, `md`, or `json` |
 | POST | `/api/sessions/{id}/rewind` | `{keep_through_turn_id?}`; legacy `{keep}` is raw message count |
@@ -378,13 +381,14 @@ activity returns an empty list.
     {"v": 1, "seq": 1, "ts_ms": 1790000000000, "event": {"kind": "sidecar", "state": "ready", "generation": 1}}
   ],
   "next_after": 1,
-  "warnings": ["Axocoatl's config file is inside this Workspace; Agents can read it. Keep secrets in environment variables."]
+  "warnings": ["Axocoatl's config file is inside this Workspace; Agents can read it. Keep secrets in environment variables."],
+  "proposals": []
 }
 ```
 
 `mode` is `sandbox.network`. Pass `next_after` back as `after` to read on. Each
 event has a `kind`: `policy`, `sidecar`, `bind`, `unbind`, `open`, `close`,
-`web_request`, `web`, `browser` or `limit`. An `open` event names the destination `host` and `port`, its
+`web_request`, `web`, `browser`, `proposal` or `limit`. An `open` event names the destination `host` and `port`, its
 `conn_kind` (`connect` for a tunnel or `http`), the `decision` (`allow` or `deny`)
 with its `reason` and `status`, the addresses used, and the tool call (`binding`)
 whose credential it presented. Credentials appear only as 16-hex tags. A `close`
@@ -399,9 +403,15 @@ file being inside its Workspace.
 Under `network: egress`, `sidecar` reports the egress proxy of the Session's running
 runtime (`state` is `starting`, `ready`, `restarting`, `failed` or `stopped`, with its
 `generation` and the number of `restarts`), and `policies` lists each scope's compiled
-policy: `session` (your `sandbox.egress` list plus this Session's allows) and
-`provisioning` (the Alpine, Debian and Ubuntu mirrors). Each rule has an `id`, its
-`text` and its `source`. Under `bridge` and `none`, `sidecar` and `policies` describe
+policy: `session` (your `sandbox.egress` list plus this Session's allows),
+`provisioning` (the Alpine, Debian and Ubuntu mirrors) and, when `browser:` is
+configured, `browser` (`browser.allow` plus this Session's browser allows), which only
+the browser's credentials are checked against. Each rule has an `id`, its
+`text` and its `source`. A `policy` event's `source` is `config` (the configuration
+the decision point opened with), `config_reload` (a
+[reload](#reload-the-network-allowlists)), `session_allow` or `session_revoke`.
+`proposals` lists the hosts Agents [asked for](#hosts-agents-ask-for), pending ones
+first. Under `bridge` and `none`, `sidecar` and `policies` describe
 only the browser's own egress sidecar and its `browser` policy, once a browser call
 with declared hosts (`browser.allow`) has started them. Otherwise, and while an
 `egress` Session has no running runtime, they are empty.
@@ -457,7 +467,8 @@ POST /api/sessions/{id}/network/allow
 {"revision": 4, "digest": "9f47a9dc…"}
 ```
 
-- `scope` is `session`. The browser's declared hosts are not changed here.
+- `scope` is `session`, or `browser` for the browser's declared hosts when
+  `browser:` is configured. The panel sends the scope of the refused connection.
 - `host` is one exact host name. A wildcard, an IP address or a private range is
   refused; put those under `sandbox.egress` instead. `ports` defaults to `[443]`.
 - The change is written to the Session's network record as a `policy` event with
@@ -471,7 +482,82 @@ POST /api/sessions/{id}/network/allow
   daemon restart, gets `409`. A validation failure gets `400` with the reason, a
   closed Session `409`, and an unknown Session `404`.
 
-Agents have no tool or route that reaches these changes.
+Agents have no tool or route that reaches these changes. An Agent can only ask, as
+below.
+
+#### Hosts Agents ask for
+
+Under `network: egress`, a writer Agent whose `tools` list `request_network_access`
+can ask for one exact host, with its ports (default `[443]`) and a reason. The request
+is written to the record as a `proposal` event with `state: pending`, its `id`
+(`prop_` and 16 hex digits), `host`, `ports`, `reason`, and the `agent`,
+`invocation_id` and `activation_id` of the call, and the tool call waits for a person
+(up to `wait_secs`, default 120, at most 600). An identical pending request joins the
+first one. A Session keeps at most 16 pending requests. `GET /api/sessions/{id}/network`
+lists them under `proposals`:
+
+```json
+{"id": "prop_6f1c0b3e9a2d4c71", "state": "pending", "host": "api.example.com",
+ "ports": [443], "reason": "The build downloads its schema from here.",
+ "agent": "writer", "invocation_id": "tool-…", "activation_id": "…"}
+```
+
+```json
+POST /api/sessions/{id}/network/proposals/prop_6f1c0b3e9a2d4c71/approve
+{"command_id": "c-7a10"}
+
+{"proposal_id": "prop_6f1c0b3e9a2d4c71", "state": "approved", "revision": 5, "digest": "…"}
+```
+
+- Approve is the per-Session allow above, in the `session` scope: a `policy` event
+  with `source` `session_allow`, `actor` `human` and `change.proposal_id`, then a
+  `proposal` event with `state: approved` and the `revision`. The waiting tool call
+  returns `approved`, and new connections to the host are allowed at once. Revoke it
+  like any other Session allow.
+- Reject records a `proposal` event with `state: rejected`; nothing is allowed, and
+  the tool call returns `rejected`.
+- A call that nobody answers in time returns `pending`; the request stays in the list
+  and a later call for the same host and ports waits on it again. A request still
+  pending when the daemon stops can be decided after it starts again.
+- A decided proposal gets `409`, as does a reused `command_id`. An unknown Session or
+  proposal gets `404`, a malformed proposal id or a daemon that does not run
+  `network: egress` `400`.
+
+Nothing approves a request by itself, and no Agent can reach these routes.
+
+### Reload the network allowlists
+
+`POST /api/network/reload` (and [`axocoatl network reload`](/reference/cli/#network-policy))
+reads the configuration file the daemon was started with again and validates all of
+it. Only four settings apply while the daemon runs: `sandbox.egress.allow`,
+`sandbox.egress.private_destinations`, `browser.allow` and
+`browser.private_destinations`.
+
+```json
+POST /api/network/reload
+
+{"applied": ["sandbox.egress.allow"],
+ "unchanged": ["sandbox.egress.private_destinations", "browser.allow", "browser.private_destinations"],
+ "restart_required": ["sandbox.egress.max_connections"],
+ "revisions": [{"session_id": "ses-…", "scope": "session", "revision": 6, "digest": "…", "closed": 1}]}
+```
+
+- New Sessions use the new lists. Each running Session whose policy changed records
+  it as a `policy` event with `source` `config_reload` and `actor` `human`, and uses
+  it for new connections at once. Its own per-Session allows stay.
+- Open connections admitted by a rule the new list no longer has, unchanged, are
+  closed (`closed` counts them per Session and scope). A rule whose position in the
+  list moved gets a new id, so its connections are closed too and reconnect.
+  Removing a private range closes that scope's open connections.
+- `restart_required` names every other setting that differs from the configuration
+  the daemon started with, such as `sandbox.network`,
+  `sandbox.egress.sidecar_network`, `sandbox.egress.max_connections`, adding or
+  removing the `browser` block, Agents or providers. Only key names are reported,
+  never values. These are not applied.
+- `failed` lists running Sessions whose new policy could not be recorded; they keep
+  their policy.
+- An invalid file, or a daemon not started from a file, gets `400` with the reason,
+  and nothing changes.
 
 ### Turn control plane
 

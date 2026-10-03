@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
 import { launchTestDaemon, newAuthorizedContext, resolveChromiumExecutable } from '../support/daemon.mjs';
@@ -37,7 +39,7 @@ function record(extraRules = []) {
   ];
 }
 
-async function setup({ full = false, sidecar = { state: 'ready', generation: 1, restarts: 0 }, loseFirstAllow = false, extra = [], warnings } = {}) {
+async function setup({ full = false, sidecar = { state: 'ready', generation: 1, restarts: 0 }, loseFirstAllow = false, extra = [], warnings, proposals = [], loseFirstDecision = false } = {}) {
   const context = await newAuthorizedContext(browser, { viewport: { width: 390, height: 844 }, colorScheme: 'dark', reducedMotion: 'reduce' });
   const page = await context.newPage();
   const calls = [];
@@ -52,6 +54,26 @@ async function setup({ full = false, sidecar = { state: 'ready', generation: 1, 
   }));
   await page.route('**/api/sessions/session/network**', async (route) => {
     const url = new URL(route.request().url());
+    const decision = url.pathname.match(/\/network\/proposals\/([^/]+)\/(approve|reject)$/);
+    if (decision) {
+      const [, id, action] = decision;
+      const body = route.request().postDataJSON();
+      calls.push({ path: url.pathname, ...body });
+      const proposal = proposals.find((entry) => entry.id === decodeURIComponent(id));
+      if (applied.has(body.command_id) || proposal.state !== 'pending') {
+        return route.fulfill({ status: 409, json: { error: `proposal ${proposal.id} was already ${proposal.state}` } });
+      }
+      applied.add(body.command_id);
+      proposal.state = action === 'approve' ? 'approved' : 'rejected';
+      proposal.actor = 'human';
+      if (action === 'approve') {
+        revision += 1;
+        proposal.revision = revision;
+        sessionRules.push({ id: `session#rev${revision}`, text: `${proposal.host}:${proposal.ports.join(',')} (allowed for this Session)`, source: 'session' });
+      }
+      if (loseFirstDecision) { loseFirstDecision = false; return route.abort('failed'); }
+      return route.fulfill({ json: { proposal_id: proposal.id, state: proposal.state, ...(action === 'approve' ? { revision, digest: 'b'.repeat(64) } : {}) } });
+    }
     if (url.pathname.endsWith('/allow')) {
       const body = route.request().postDataJSON();
       calls.push(body);
@@ -73,6 +95,7 @@ async function setup({ full = false, sidecar = { state: 'ready', generation: 1, 
         private_destinations: [],
         record: { events: events.length, bytes: 4096, max_events: 50000, full, gaps: 0 },
         events, next_after: events.length,
+        proposals: proposals.map((proposal) => ({ ...proposal })),
       },
     });
   });
@@ -155,6 +178,148 @@ test('a lost allow is resent with the same command id and a 409 for it counts as
   } finally {
     await context.close();
   }
+});
+
+function proposal(id, host, ports, state = 'pending') {
+  return {
+    id, state, host, ports, reason: `The build reads its schema from ${host}.`, agent: 'writer',
+    invocation_id: 'tool-9', activation_id: 'activation',
+  };
+}
+
+test('Agents\' host requests wait for a person, who approves or rejects each', async () => {
+  const proposals = [
+    proposal('prop_0123456789abcdef', 'api.example.com', [443]),
+    proposal('prop_fedcba9876543210', 'cdn.example.net', [443, 8443]),
+    { ...proposal('prop_00000000000000aa', 'old.example.org', [443], 'approved'), revision: 1, actor: 'human' },
+  ];
+  const { context, page, calls, errors } = await setup({ proposals });
+  try {
+    const dialog = page.getByRole('dialog', { name: 'Session network', exact: true });
+    await dialog.getByText('2 host requests from Agents wait for you below.', { exact: true }).waitFor();
+    const rows = dialog.locator('table.proposals tbody tr');
+    assert.equal(await rows.count(), 3);
+    const requests = dialog.locator('table.proposals');
+    await requests.getByRole('cell', { name: 'api.example.com:443', exact: true }).waitFor();
+    await requests.getByRole('cell', { name: 'cdn.example.net:443,8443', exact: true }).waitFor();
+    await dialog.getByText('The build reads its schema from api.example.com.', { exact: true }).waitFor();
+    await dialog.getByText('Only you can approve a request.', { exact: false }).waitFor();
+    // A decided request has no buttons.
+    await dialog.locator('tr[data-proposal="prop_00000000000000aa"]').getByText('Approved · revision 1', { exact: true }).waitFor();
+    assert.equal(await dialog.locator('tr[data-proposal="prop_00000000000000aa"] button').count(), 0);
+
+    await dialog.getByRole('button', { name: 'Approve api.example.com:443 for this Session', exact: true }).click();
+    await dialog.getByText('api.example.com:443 is allowed for this Session. The Agent\'s call continues.', { exact: true }).waitFor();
+    await dialog.locator('tr[data-proposal="prop_0123456789abcdef"]').getByText('Approved · revision 2', { exact: true }).waitFor();
+    await dialog.locator('li.session-rule', { hasText: 'api.example.com:443 (allowed for this Session)' }).waitFor();
+    await dialog.getByText('1 host request from Agents waits for you below.', { exact: true }).waitFor();
+
+    await dialog.getByRole('button', { name: 'Reject cdn.example.net:443,8443', exact: true }).click();
+    await dialog.getByText('cdn.example.net:443,8443 was rejected.', { exact: false }).waitFor();
+    await dialog.locator('tr[data-proposal="prop_fedcba9876543210"]').getByText('Rejected', { exact: true }).waitFor();
+    assert.equal(await dialog.locator('p.proposals-waiting').count(), 0);
+    assert.equal(await dialog.locator('li.session-rule', { hasText: 'cdn.example.net' }).count(), 0);
+
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].path, '/api/sessions/session/network/proposals/prop_0123456789abcdef/approve');
+    assert.equal(calls[1].path, '/api/sessions/session/network/proposals/prop_fedcba9876543210/reject');
+    for (const call of calls) {
+      assert.match(call.command_id, /^[0-9a-f-]{36}$/);
+      assert.deepEqual(Object.keys(call).sort(), ['command_id', 'path']);
+    }
+    assert.notEqual(calls[0].command_id, calls[1].command_id);
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a lost approval is resent with the same command id and a 409 for it counts as applied', async () => {
+  const proposals = [proposal('prop_0123456789abcdef', 'api.example.com', [443])];
+  const { context, page, calls, errors } = await setup({ proposals, loseFirstDecision: true });
+  try {
+    const dialog = page.getByRole('dialog', { name: 'Session network', exact: true });
+    const approve = dialog.getByRole('button', { name: 'Approve api.example.com:443 for this Session', exact: true });
+    await approve.click();
+    await dialog.getByText('The answer was lost; select Approve again', { exact: false }).waitFor();
+    await approve.click();
+    await dialog.getByText('api.example.com:443 is allowed for this Session. The Agent\'s call continues.', { exact: true }).waitFor();
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].command_id, calls[1].command_id);
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a refused browser request is allowed in the browser scope', async () => {
+  const browserRow = line(10, { kind: 'open', conn: 'g1:6', decision: 'deny', reason: 'not_allowed', status: 403, host: 'fonts.example.com', port: 443, conn_kind: 'connect', addrs: [], token: 'fedcba9876543210', binding: { kind: 'browser', invocation_id: 'tool-b', agent: 'qa' }, scope: 'browser', policy_revision: 1 });
+  const { context, page, calls, errors } = await setup({ extra: [browserRow] });
+  try {
+    const dialog = page.getByRole('dialog', { name: 'Session network', exact: true });
+    await dialog.getByRole('button', { name: 'Allow fonts.example.com:443 for this Session', exact: true }).click();
+    await dialog.getByText('fonts.example.com:443 is allowed for this Session. New connections use it now.', { exact: true }).waitFor();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].scope, 'browser');
+    assert.equal(calls[0].host, 'fonts.example.com');
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+});
+
+test('the reload and proposal routes of the real daemon answer as documented', { skip: !!process.env.AXOCOATL_COMPONENT_BASE_URL }, async () => {
+  const post = async (pathname, body) => {
+    const response = await fetch(`${runtime.baseUrl}${pathname}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const configPath = path.join(runtime.runRoot, 'axocoatl.e2e.yaml');
+  const original = await readFile(configPath, 'utf8');
+  try {
+    let reload = await post('/api/network/reload');
+    assert.equal(reload.status, 200, JSON.stringify(reload.body));
+    assert.deepEqual(reload.body.applied, []);
+    assert.deepEqual(reload.body.restart_required, []);
+    assert.equal(reload.body.unchanged.length, 4);
+
+    await writeFile(configPath, original.replace('  network: none\n', '  network: none\n  egress:\n    allow: [npm]\n'));
+    reload = await post('/api/network/reload');
+    assert.equal(reload.status, 200, JSON.stringify(reload.body));
+    assert.deepEqual(reload.body.applied, ['sandbox.egress.allow']);
+    assert.deepEqual(reload.body.restart_required, []);
+    assert.deepEqual(reload.body.revisions, []);
+
+    await writeFile(configPath, original.replace('  network: none\n', '  network: bridge\n'));
+    reload = await post('/api/network/reload');
+    assert.equal(reload.status, 200, JSON.stringify(reload.body));
+    assert.deepEqual(reload.body.restart_required, ['sandbox.network']);
+
+    await writeFile(configPath, original.replace('  network: none\n', '  network: everywhere\n'));
+    reload = await post('/api/network/reload');
+    assert.equal(reload.status, 400, JSON.stringify(reload.body));
+    assert.match(reload.body.error, /nothing was changed/);
+  } finally {
+    await writeFile(configPath, original);
+  }
+
+  const sessionId = runtime.fixtures.alpha.sessions[0].id;
+  const decide = (session, proposal, action) => post(
+    `/api/sessions/${encodeURIComponent(session)}/network/proposals/${proposal}/${action}`,
+    { command_id: 'c-route' },
+  );
+  // This daemon does not run Sessions under egress, so nothing can be decided.
+  let decided = await decide(sessionId, 'prop_0123456789abcdef', 'approve');
+  assert.equal(decided.status, 400, JSON.stringify(decided.body));
+  decided = await decide(sessionId, 'not-a-proposal', 'reject');
+  assert.equal(decided.status, 400, JSON.stringify(decided.body));
+  decided = await decide('no-such-session', 'prop_0123456789abcdef', 'approve');
+  assert.equal(decided.status, 404, JSON.stringify(decided.body));
+  const view = await fetch(`${runtime.baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/network`).then((response) => response.json());
+  assert.deepEqual(view.proposals, []);
 });
 
 test('a full record and a failed proxy are shown as banners', async () => {

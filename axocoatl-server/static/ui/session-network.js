@@ -2,12 +2,15 @@ import { adopt } from './sheets.js';
 
 /**
  * `<ax-session-network>`: the Session's network mode, egress policy and
- * network record. A person can allow a refused host for this Session.
+ * network record. A person can allow a refused host for this Session, and
+ * approve or reject the hosts Agents asked for with `request_network_access`.
  *
  * `open({sessionId})` shows the dialog and reads
  * `GET /api/sessions/{id}/network`. "Allow for this Session" posts
- * `/network/allow` with a fresh command id; a lost answer is resent with the
- * same id, and a 409 for it means the first one applied.
+ * `/network/allow` with the refused row's scope and a fresh command id;
+ * "Approve" and "Reject" post `/network/proposals/{proposal_id}/approve` or
+ * `/reject`. A lost answer is resent with the same id, and a 409 for it means
+ * the first one applied.
  */
 
 const PAGE = 1000;
@@ -203,6 +206,11 @@ class AxSessionNetwork extends HTMLElement {
       body.append(element('p', 'banner', 'The network record is full, so new connections are refused.'));
     }
     for (const warning of view.warnings || []) body.append(element('p', 'banner warning', warning));
+    const proposals = view.proposals || [];
+    const pending = proposals.filter((proposal) => proposal.state === 'pending');
+    if (pending.length) {
+      body.append(element('p', 'banner proposals-waiting', `${pending.length} host request${pending.length === 1 ? '' : 's'} from Agents wait${pending.length === 1 ? 's' : ''} for you below.`));
+    }
     const summary = summarizeNetwork(this.#lines);
     const counts = element('div', 'counts');
     counts.append(
@@ -221,6 +229,45 @@ class AxSessionNetwork extends HTMLElement {
       if (!policy.rules.length) list.append(element('li', 'muted', 'Nothing.'));
       for (const rule of policy.rules) list.append(element('li', rule.source === 'session' ? 'session-rule' : '', rule.text));
       body.append(list);
+    }
+
+    if (proposals.length) {
+      body.append(element('h3', '', 'Hosts Agents asked for'));
+      body.append(element('p', 'muted', 'Only you can approve a request. Approving allows the host for this Session, like Allow for this Session; the Agent\'s waiting call then continues.'));
+      const table = element('table', 'proposals');
+      const head = element('thead');
+      const headRow = element('tr');
+      for (const label of ['Agent', 'Destination', 'Reason', '']) headRow.append(element('th', '', label));
+      head.append(headRow);
+      const rows = element('tbody');
+      for (const proposal of proposals) {
+        const tr = element('tr');
+        tr.dataset.proposal = proposal.id;
+        tr.dataset.state = proposal.state;
+        const destination = `${proposal.host}:${(proposal.ports || []).join(',')}`;
+        tr.append(element('td', '', proposal.agent || 'unknown'), element('td', '', destination));
+        tr.append(element('td', 'reason', proposal.reason || ''));
+        const action = element('td');
+        if (proposal.state === 'pending') {
+          const approve = element('button', 'approve', 'Approve');
+          approve.setAttribute('aria-label', `Approve ${destination} for this Session`);
+          approve.disabled = this.#busy;
+          approve.onclick = () => void this.#decide(proposal, 'approve');
+          const reject = element('button', 'reject', 'Reject');
+          reject.setAttribute('aria-label', `Reject ${destination}`);
+          reject.disabled = this.#busy;
+          reject.onclick = () => void this.#decide(proposal, 'reject');
+          action.append(approve, ' ', reject);
+        } else {
+          action.append(element('span', `muted decided ${proposal.state}`, proposal.state === 'approved'
+            ? `Approved${proposal.revision ? ` · revision ${proposal.revision}` : ''}`
+            : 'Rejected'));
+        }
+        tr.append(action);
+        rows.append(tr);
+      }
+      table.append(head, rows);
+      body.append(table);
     }
 
     body.append(element('h3', '', 'Refused connections'));
@@ -267,6 +314,43 @@ class AxSessionNetwork extends HTMLElement {
         list.append(item);
       }
       body.append(list);
+    }
+  }
+
+  async #decide(proposal, action) {
+    if (this.#busy) return;
+    const destination = `${proposal.host}:${(proposal.ports || []).join(',')}`;
+    const pending = this.#pending?.proposal === proposal.id && this.#pending?.action === action
+      ? this.#pending
+      : { proposal: proposal.id, action, command_id: crypto.randomUUID() };
+    this.#pending = pending;
+    this.#busy = true;
+    this.#render();
+    try {
+      const response = await fetch(this.#url(`/proposals/${encodeURIComponent(proposal.id)}/${action}`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ command_id: pending.command_id }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok && !(response.status === 409 && pending.sent)) {
+        this.#pending = null;
+        throw new Error(result.error || `${action === 'approve' ? 'Approve' : 'Reject'} failed (${response.status})`);
+      }
+      this.#pending = null;
+      this.#busy = false;
+      await this.load();
+      this.#status.textContent = action === 'approve'
+        ? `${destination} is allowed for this Session. The Agent's call continues.`
+        : `${destination} was rejected. The Agent is told not to ask again.`;
+    } catch (error) {
+      if (this.#pending) this.#pending.sent = true;
+      this.#status.textContent = this.#pending
+        ? `The answer was lost; select ${action === 'approve' ? 'Approve' : 'Reject'} again to resend the same request. (${error.message})`
+        : error.message;
+    } finally {
+      this.#busy = false;
+      this.#render();
     }
   }
 

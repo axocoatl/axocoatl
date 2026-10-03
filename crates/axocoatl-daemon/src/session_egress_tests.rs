@@ -170,7 +170,7 @@ async fn fixture() -> Fixture {
     .await
 }
 
-fn open(id: u64, host: &str, port: u16, auth: Option<&str>) -> OpenRequest {
+pub(crate) fn open(id: u64, host: &str, port: u16, auth: Option<&str>) -> OpenRequest {
     OpenRequest {
         generation: 1,
         id,
@@ -483,7 +483,7 @@ async fn credentials_absent_unknown_ended_and_live() {
     .await;
 }
 
-async fn wait_for(mut condition: impl FnMut() -> bool) {
+pub(crate) async fn wait_for(mut condition: impl FnMut() -> bool) {
     for _ in 0..200 {
         if condition() {
             return;
@@ -883,6 +883,7 @@ async fn per_session_allows_apply_to_new_connections_immediately() {
             host: "late.test".into(),
             ports: vec![443],
             command_id: Some("cmd-1".into()),
+            proposal_id: None,
         })
     );
     assert_eq!(actor.as_deref(), Some("human"));
@@ -1031,13 +1032,13 @@ async fn invalid_policy_changes_are_refused() {
         .is_err());
 }
 
-struct FakeSidecar {
+pub(crate) struct FakeSidecar {
     to_daemon: tokio::io::DuplexStream,
     from_daemon: tokio::io::BufReader<tokio::io::DuplexStream>,
 }
 
 impl FakeSidecar {
-    async fn frame(&mut self) -> DaemonFrame {
+    pub(crate) async fn frame(&mut self) -> DaemonFrame {
         loop {
             let mut line = Vec::new();
             tokio::time::timeout(
@@ -1054,7 +1055,7 @@ impl FakeSidecar {
         }
     }
 
-    async fn send(&mut self, frame: SidecarFrame) {
+    pub(crate) async fn send(&mut self, frame: SidecarFrame) {
         self.to_daemon
             .write_all(&axocoatl_exec::egress::protocol::encode_sidecar(&frame).unwrap())
             .await
@@ -1062,7 +1063,7 @@ impl FakeSidecar {
     }
 }
 
-async fn attach_sidecar(
+pub(crate) async fn attach_sidecar(
     egress: &Arc<SessionEgress>,
     generation: u32,
 ) -> (
@@ -1096,7 +1097,7 @@ async fn attach_sidecar(
     (sidecar, task)
 }
 
-fn sidecar_open(id: u64, host: &str, port: u16, hash: &str) -> SidecarFrame {
+pub(crate) fn sidecar_open(id: u64, host: &str, port: u16, hash: &str) -> SidecarFrame {
     SidecarFrame::Open {
         id,
         kind: RequestKind::Connect,

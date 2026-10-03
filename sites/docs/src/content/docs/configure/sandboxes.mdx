@@ -176,11 +176,34 @@ terminals still run, without network.
 If Axocoatl's config file is inside the Session's Workspace, its Agents can read
 it, and **Session network** says so. Keep secrets in environment variables. Read the record with
 [`GET /api/sessions/{id}/network`](/reference/http-api/), or open **Session network**
-from an Agent's details in the Session graph. It shows the policy, allowed and
-refused counts and each refused connection; a refused host can be allowed for that
-Session only with **Allow for this Session**, which is recorded and applies to new
-connections at once. Each activation's details also show its tool calls' network
-activity.
+from an Agent's details in the Session graph. It shows the policy of each scope
+(the Session's list, provisioning and, with `browser:` configured, the browser's
+declared hosts), allowed and refused counts and each refused connection; a refused
+host can be allowed for that Session only with **Allow for this Session**, which is
+recorded and applies to new connections at once, in the scope of the refused
+connection. Each activation's details also show its tool calls' network activity.
+
+An Agent can ask for a host it was refused. Give a writer Agent the
+`request_network_access` tool in its `tools` list; it names one exact host, its ports
+and a reason. The request waits in **Session network** under **Hosts Agents asked
+for**, with **Approve** and **Reject**, while the Agent's tool call waits for your
+answer (two minutes by default, at most ten). **Approve** allows the host for that
+Session exactly like **Allow for this Session**, recorded with the request's id;
+**Reject** allows nothing. If nobody answers in time, the call tells the Agent the
+request is still pending, and the request stays in the panel. Only you can approve:
+there is no automatic approval, and no Agent can approve a request. Read-only helpers
+cannot ask, and the tool is not offered outside `network: egress`. See
+[Hosts Agents ask for](/reference/http-api/#hosts-agents-ask-for).
+
+To change the list for every Session while the daemon runs, edit `sandbox.egress.allow`
+or `private_destinations` (or `browser.allow` and `browser.private_destinations`) in
+the configuration file and run `axocoatl network reload`, or send
+[`POST /api/network/reload`](/reference/http-api/#reload-the-network-allowlists). The
+daemon validates the whole file; an invalid file changes nothing. Each running
+Session records its new policy and uses it for new connections at once, open
+connections that no rule allows any more are closed, and the Session's own allows
+stay. Other settings, such as `network`, `sidecar_network` and `max_connections`,
+still need a restart; the command lists the ones that changed.
 
 If the proxy's control channel is lost, Axocoatl removes the proxy container and
 starts it again after 1, 5 and then 30 seconds. After five restarts in ten minutes

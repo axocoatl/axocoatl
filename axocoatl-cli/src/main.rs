@@ -171,6 +171,12 @@ enum Commands {
         #[command(subcommand)]
         command: BrowserCommands,
     },
+
+    /// Network policy of the running daemon
+    Network {
+        #[command(subcommand)]
+        command: NetworkCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -181,6 +187,12 @@ enum BrowserCommands {
         #[arg(long, default_value = axocoatl_daemon::browser_install::DEFAULT_BROWSER_IMAGE)]
         image: String,
     },
+}
+
+#[derive(Subcommand)]
+enum NetworkCommands {
+    /// Apply the config file's egress and browser allowlists to running Sessions
+    Reload,
 }
 
 #[derive(Subcommand)]
@@ -426,7 +438,78 @@ async fn main() {
         Commands::Browser { command } => match command {
             BrowserCommands::Install { image } => cmd_browser_install(&image).await,
         },
+        Commands::Network { command } => match command {
+            NetworkCommands::Reload => cmd_network_reload().await,
+        },
     }
+}
+
+/// `axocoatl network reload`: the running daemon reads its config file
+/// again and applies the egress and browser allowlists to running Sessions.
+async fn cmd_network_reload() {
+    let mut client = session_ipc_client().await;
+    match client
+        .request(&axocoatl_daemon::ipc::IpcRequest::ReloadNetworkPolicy)
+        .await
+    {
+        Ok(axocoatl_daemon::ipc::IpcResponse::NetworkReloaded { report }) => {
+            for line in network_reload_lines(&report) {
+                println!("{line}");
+            }
+        }
+        Ok(axocoatl_daemon::ipc::IpcResponse::Error { message, .. }) => {
+            eprintln!("✗ {message}");
+            std::process::exit(1);
+        }
+        Ok(_) => {
+            eprintln!("✗ unexpected daemon response");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("✗ {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn network_reload_lines(
+    report: &axocoatl_daemon::session_network_reload::NetworkReloadReport,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if report.applied.is_empty() {
+        lines.push("✓ The allowlists are unchanged; nothing was applied.".to_string());
+    } else {
+        lines.push(format!("✓ Applied: {}", report.applied.join(", ")));
+        if report.revisions.is_empty() {
+            lines.push("  No running Session's policy changed.".to_string());
+        }
+        for revision in &report.revisions {
+            lines.push(format!(
+                "  Session {}: {} policy revision {}{}",
+                revision.session_id,
+                revision.scope,
+                revision.revision,
+                match revision.closed {
+                    0 => String::new(),
+                    1 => ", 1 open connection closed".to_string(),
+                    count => format!(", {count} open connections closed"),
+                }
+            ));
+        }
+    }
+    for failure in &report.failed {
+        lines.push(format!(
+            "✗ Session {} keeps its policy: {}",
+            failure.session_id, failure.error
+        ));
+    }
+    if !report.restart_required.is_empty() {
+        lines.push(format!(
+            "! Restart the daemon to apply: {}",
+            report.restart_required.join(", ")
+        ));
+    }
+    lines
 }
 
 /// `axocoatl browser install`: build the browser tools' image.
@@ -3610,6 +3693,68 @@ mod tests {
             panic!("expected url command");
         };
         assert_eq!(config, PathBuf::from("/tmp/custom.yaml"));
+    }
+
+    #[test]
+    fn network_reload_parses_and_its_report_reads_plainly() {
+        use axocoatl_daemon::session_network_reload::{
+            NetworkReloadReport, ReloadFailure, ScopeRevision,
+        };
+        let cli = Cli::try_parse_from(["axocoatl", "network", "reload"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Network {
+                command: NetworkCommands::Reload
+            }
+        ));
+        assert!(Cli::try_parse_from(["axocoatl", "network", "reload", "--config", "x"]).is_err());
+        assert!(Cli::try_parse_from(["axocoatl", "network"]).is_err());
+
+        let unchanged = NetworkReloadReport {
+            unchanged: vec!["sandbox.egress.allow".into()],
+            restart_required: vec!["sandbox.network".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            network_reload_lines(&unchanged),
+            [
+                "✓ The allowlists are unchanged; nothing was applied.",
+                "! Restart the daemon to apply: sandbox.network"
+            ]
+        );
+        let applied = NetworkReloadReport {
+            applied: vec!["sandbox.egress.allow".into(), "browser.allow".into()],
+            revisions: vec![
+                ScopeRevision {
+                    session_id: "ses-1".into(),
+                    scope: "session".into(),
+                    revision: 4,
+                    digest: "d".repeat(64),
+                    closed: 2,
+                },
+                ScopeRevision {
+                    session_id: "ses-1".into(),
+                    scope: "browser".into(),
+                    revision: 2,
+                    digest: "e".repeat(64),
+                    closed: 0,
+                },
+            ],
+            failed: vec![ReloadFailure {
+                session_id: "ses-2".into(),
+                error: "the record is full".into(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            network_reload_lines(&applied),
+            [
+                "✓ Applied: sandbox.egress.allow, browser.allow",
+                "  Session ses-1: session policy revision 4, 2 open connections closed",
+                "  Session ses-1: browser policy revision 2",
+                "✗ Session ses-2 keeps its policy: the record is full",
+            ]
+        );
     }
 
     #[test]

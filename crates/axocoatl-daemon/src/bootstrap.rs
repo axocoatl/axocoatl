@@ -34,6 +34,8 @@ use session_history::HistoryMutation;
 pub(crate) mod session_dispatch;
 #[path = "bootstrap_session_native_lifecycle.rs"]
 mod session_native_lifecycle;
+#[path = "bootstrap_session_network_policy.rs"]
+pub(crate) mod session_network_policy;
 #[path = "bootstrap_session_recovery.rs"]
 mod session_recovery;
 #[path = "bootstrap_session_repository.rs"]
@@ -773,6 +775,9 @@ fn egress_policy_error(error: crate::session_egress::EgressPolicyError) -> Daemo
             DaemonError::SessionConflict(message)
         }
         crate::session_egress::EgressPolicyError::Unavailable(message) => {
+            DaemonError::Session(message)
+        }
+        crate::session_egress::EgressPolicyError::NotFound(message) => {
             DaemonError::Session(message)
         }
     }
@@ -3588,6 +3593,11 @@ pub struct AxocoatlDaemon {
     /// Under `network: egress`, one decision point per running Session.
     session_egress:
         Arc<tokio::sync::Mutex<HashMap<String, Arc<crate::session_egress::SessionEgress>>>>,
+    /// The allowlists in force, which `axocoatl network reload` replaces.
+    network_policy: Arc<session_network_policy::LiveNetworkPolicy>,
+    /// Opens the decision points in `session_egress`; the browser tools use
+    /// it to reach a Session's own under `network: egress`.
+    egress_points: Arc<session_network_policy::SessionEgressPoints>,
     /// The configuration file this daemon loaded, canonical, once the CLI
     /// has said which one it was.
     config_path: StdMutex<Option<std::path::PathBuf>>,
@@ -5280,6 +5290,18 @@ impl AxocoatlDaemon {
                 }
             });
         }
+        let session_sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>> =
+            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let session_egress = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let network_policy = Arc::new(session_network_policy::LiveNetworkPolicy::new(&config));
+        let egress_points = Arc::new(session_network_policy::SessionEgressPoints::new(
+            session_dispatch_lifecycles.clone(),
+            session_egress.clone(),
+            secure_data_dir.clone(),
+            network_policy.clone(),
+            session_network_records.clone(),
+            session_sandboxes.clone(),
+        ));
         let browser_service =
             match crate::session_dispatch_browser::BrowserServiceConfig::from_config(
                 &config,
@@ -5304,6 +5326,7 @@ impl AxocoatlDaemon {
                             ],
                             session_network_records.clone(),
                             session_store.clone(),
+                            egress_points.clone(),
                         ),
                     ))
                 }
@@ -5401,9 +5424,11 @@ impl AxocoatlDaemon {
             automation_store,
             pending_interrupts,
             run_store,
-            session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            session_sandboxes,
             session_network_records,
-            session_egress: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            session_egress,
+            network_policy,
+            egress_points,
             config_path: StdMutex::new(None),
             session_network_evidence: Arc::new(
                 crate::session_network_evidence::NetworkEvidenceIndex::default(),
@@ -10802,38 +10827,7 @@ impl AxocoatlDaemon {
         &self,
         session_id: &str,
     ) -> Result<Arc<crate::session_egress::SessionEgress>, DaemonError> {
-        let native = self
-            .session_dispatch_lifecycles
-            .retains_session(session_id)
-            .map_err(|error| DaemonError::Session(error.to_string()))?;
-        if !native {
-            return Err(DaemonError::Session(
-                EGRESS_NEEDS_NATIVE_SESSION.to_string(),
-            ));
-        }
-        let mut decision_points = self.session_egress.lock().await;
-        if let Some(existing) = decision_points.get(session_id) {
-            return Ok(existing.clone());
-        }
-        let env_dir = self.data_root.child(EGRESS_ENV_DIR).map_err(|error| {
-            DaemonError::Session(format!("preparing egress credential storage: {error}"))
-        })?;
-        let egress = crate::session_egress::SessionEgress::open(
-            session_id,
-            crate::session_egress::EgressPolicyConfig::from_config(&self.config),
-            Arc::new(crate::session_egress::SessionRecordSink::new(
-                self.session_network_records.clone(),
-                session_id,
-            )),
-            Arc::new(crate::session_egress::SystemResolver),
-            Some(env_dir),
-        )
-        .await
-        .map_err(|error| {
-            DaemonError::Session(format!("opening the Session's egress policy: {error}"))
-        })?;
-        decision_points.insert(session_id.to_string(), egress.clone());
-        Ok(egress)
+        self.egress_points.get_or_open(session_id).await
     }
 
     /// Remember which configuration file this daemon loaded, so a Session
@@ -11001,20 +10995,16 @@ impl AxocoatlDaemon {
             .map_err(|error| DaemonError::Session(error.to_string()))?;
         let sandbox = &self.config.sandbox;
         let private_destinations = if sandbox.network == "egress" {
-            sandbox
-                .egress
-                .as_ref()
-                .map(|egress| egress.private_destinations.clone())
-                .unwrap_or_default()
+            self.network_policy.current().session_private
         } else {
             Vec::new()
         };
-        let policies = self
+        let (policies, proposals) = self
             .session_egress
             .lock()
             .await
             .get(session_id)
-            .map(|egress| egress.policy_views())
+            .map(|egress| (egress.policy_views(), egress.proposals()))
             .unwrap_or_default();
         let sidecar = self
             .session_sandboxes
@@ -11046,6 +11036,7 @@ impl AxocoatlDaemon {
             events: page.events,
             next_after: page.next_after,
             warnings,
+            proposals,
         })
     }
 
@@ -22729,6 +22720,10 @@ trap - 0 1 2 15
 #[cfg(all(test, unix))]
 #[path = "bootstrap_session_network_tests.rs"]
 mod session_network_tests;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_session_network_reload_tests.rs"]
+mod session_network_reload_tests;
 
 #[cfg(all(test, unix))]
 #[path = "bootstrap_session_web_tests.rs"]

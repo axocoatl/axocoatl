@@ -25,12 +25,16 @@ use axocoatl_isolation::egress::{
 use axocoatl_isolation::egress_control::ControlHandle;
 use axocoatl_session::network_record::{
     BindingKind, CloseOutcome, ConnKind, Decision as RecordDecision, EgressBinding, EgressScope,
-    LimitKind, NetworkEvent, NetworkLine, PolicyChange, PolicyOp, PolicySource, SidecarState,
-    UnbindReason, MAX_RECORDED_PATH_CHARS,
+    LimitKind, NetworkEvent, NetworkLine, PolicyChange, PolicyOp, PolicySource, ProposalState,
+    SidecarState, UnbindReason, MAX_RECORDED_PATH_CHARS,
 };
 
 use crate::session_egress_policy::{validate_session_host, CompiledPolicy, SessionRule};
 use crate::session_network::{PolicyRuleView, PolicyView, SessionNetworkRecords};
+use crate::session_network_proposals::{
+    new_proposal_id, ProposalBook, ProposalRequest, ProposalView, Proposed, MAX_PENDING_PROPOSALS,
+};
+use crate::session_network_reload::ScopeReload;
 
 /// How long one name may take to resolve.
 pub const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -153,25 +157,40 @@ impl EgressRecordSink for SessionRecordSink {
 pub struct EgressPolicyConfig {
     pub session_allow: Vec<EgressAllowYaml>,
     pub session_private: Vec<String>,
-    /// `None` when the browser tool is not configured.
+    /// `browser.allow` and `browser.private_destinations`; `None` when the
+    /// browser tools are not configured.
     pub browser: Option<(Vec<EgressAllowYaml>, Vec<String>)>,
 }
 
 impl EgressPolicyConfig {
     /// The policies of a Session's own decision point under `network:
-    /// egress`. It has no browser scope: the browser does not go through the
-    /// Session's sidecar yet. Under `egress` its declared hosts are refused,
-    /// and under `bridge` and `none` it opens a decision point of its own
-    /// ([`SessionEgress::open_browser_only`]).
+    /// egress`: the Session's list and, whenever `browser:` is configured,
+    /// the browser's declared hosts as a scope of their own. Under `egress`
+    /// the browser goes through the Session's own sidecar with a `browser`
+    /// credential, which is checked only against `browser.allow`, while the
+    /// Session's credentials are checked only against `sandbox.egress`.
+    /// Under `bridge` and `none` the browser opens a decision point of its
+    /// own instead ([`SessionEgress::open_browser_only`]).
     pub fn from_config(config: &AxocoatlConfig) -> Self {
         let egress = config.sandbox.egress.clone().unwrap_or_default();
         Self {
             session_allow: egress.allow,
             session_private: egress.private_destinations,
-            browser: None,
+            browser: config
+                .browser
+                .as_ref()
+                .map(|browser| (browser.allow.clone(), browser.private_destinations.clone())),
         }
     }
 }
+
+#[cfg(test)]
+#[path = "session_egress_reload_tests.rs"]
+mod reload_tests;
+
+#[cfg(test)]
+#[path = "session_egress_proposal_tests.rs"]
+mod proposal_tests;
 
 /// A refused per-Session allow or revoke.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -182,6 +201,8 @@ pub enum EgressPolicyError {
     Conflict(String),
     #[error("{0}")]
     Unavailable(String),
+    #[error("{0}")]
+    NotFound(String),
 }
 
 struct ScopeState {
@@ -271,7 +292,8 @@ struct State {
 /// The policy decision point for one Session.
 pub struct SessionEgress {
     session_id: String,
-    config: EgressPolicyConfig,
+    /// Replaced by [`SessionEgress::reload_config`], under `policy_changes`.
+    config: Mutex<EgressPolicyConfig>,
     records: Arc<dyn EgressRecordSink>,
     resolver: Arc<dyn EgressResolver>,
     classify: fn(IpAddr) -> AddrClass,
@@ -280,6 +302,8 @@ pub struct SessionEgress {
     /// Serializes per-Session allows and revokes.
     policy_changes: tokio::sync::Mutex<()>,
     this: Weak<SessionEgress>,
+    /// Agents' requests for hosts, waiting for a person.
+    proposals: Mutex<ProposalBook>,
 }
 
 impl fmt::Debug for SessionEgress {
@@ -598,9 +622,10 @@ impl SessionEgress {
             .filter_map(|line| recorded_generation(&line.event))
             .max()
             .unwrap_or(0);
+        let proposals = ProposalBook::replay(&history);
         Ok(Arc::new_cyclic(|this| Self {
             session_id,
-            config,
+            config: Mutex::new(config),
             records,
             resolver,
             classify,
@@ -617,6 +642,7 @@ impl SessionEgress {
             }),
             policy_changes: tokio::sync::Mutex::new(()),
             this: this.clone(),
+            proposals: Mutex::new(proposals),
         }))
     }
 
@@ -854,7 +880,7 @@ impl SessionEgress {
         actor: &str,
         command_id: &str,
     ) -> Result<(u64, String), EgressPolicyError> {
-        self.change_policy(scope, PolicyOp::Allow, host, ports, actor, command_id)
+        self.change_policy(scope, PolicyOp::Allow, host, ports, actor, command_id, None)
             .await
     }
 
@@ -867,10 +893,339 @@ impl SessionEgress {
         actor: &str,
         command_id: &str,
     ) -> Result<(u64, String), EgressPolicyError> {
-        self.change_policy(scope, PolicyOp::Revoke, host, None, actor, command_id)
+        self.change_policy(scope, PolicyOp::Revoke, host, None, actor, command_id, None)
             .await
     }
 
+    /// Apply reloaded allowlists (`axocoatl network reload`). Every scope is
+    /// compiled first, so an invalid list changes nothing. Each scope whose
+    /// policy changed records it (`source: config_reload`) and then uses it
+    /// for new connections; open connections admitted by a rule the new
+    /// policy no longer has, unchanged, are closed. Removing a private range
+    /// closes the scope's open connections. This Session's own allows stay.
+    pub async fn reload_config(
+        &self,
+        config: EgressPolicyConfig,
+        actor: &str,
+    ) -> Result<Vec<ScopeReload>, EgressPolicyError> {
+        let _serial = self.policy_changes.lock().await;
+        let planned = {
+            let state = self.state();
+            let mut scopes: Vec<(&EgressScope, &ScopeState)> = state.scopes.iter().collect();
+            scopes.sort_by_key(|(scope, _)| scope.as_str());
+            let mut planned = Vec::new();
+            for (scope, scope_state) in scopes {
+                let policy = Self::compile_scope(&config, *scope, &scope_state.session_rules)
+                    .map_err(EgressPolicyError::Invalid)?;
+                if policy.digest() != scope_state.policy.digest() {
+                    planned.push((*scope, scope_state.revision + 1, policy));
+                }
+            }
+            planned
+        };
+        *self
+            .config
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = config;
+        let mut reloaded = Vec::new();
+        for (scope, revision, policy) in planned {
+            let digest = policy.digest().to_string();
+            self.records
+                .append_control(NetworkEvent::Policy {
+                    scope,
+                    revision,
+                    digest: digest.clone(),
+                    source: PolicySource::ConfigReload,
+                    rules: policy.rendered(),
+                    change: None,
+                    actor: Some(actor.chars().take(128).collect()),
+                })
+                .await
+                .map_err(|error| {
+                    EgressPolicyError::Unavailable(format!(
+                        "recording the reloaded {} policy failed: {error:?}",
+                        scope.as_str()
+                    ))
+                })?;
+            let (control, revoke_ids) = {
+                let mut state = self.state();
+                let generation = state.control.as_ref().map(ControlHandle::generation);
+                let scope_state = state.scopes.get_mut(&scope).expect("planned from a scope");
+                let old = std::mem::replace(&mut scope_state.policy, Arc::new(policy));
+                scope_state.revision = revision;
+                let new = scope_state.policy.clone();
+                let narrowed = old
+                    .private_destinations()
+                    .iter()
+                    .any(|range| !new.private_destinations().contains(range));
+                let gone: HashSet<&str> = old
+                    .rules()
+                    .iter()
+                    .filter(|rule| !new.rules().contains(rule))
+                    .map(|rule| rule.id.as_str())
+                    .collect();
+                let mut revoke_ids: Vec<u64> = state
+                    .open
+                    .iter()
+                    .filter(|((connection_generation, _), connection)| {
+                        Some(*connection_generation) == generation
+                            && connection.scope == scope
+                            && (narrowed || gone.contains(connection.rule_id.as_str()))
+                    })
+                    .map(|((_, id), _)| *id)
+                    .collect();
+                revoke_ids.sort_unstable();
+                (state.control.clone(), revoke_ids)
+            };
+            let closed = revoke_ids.len();
+            if let (Some(control), false) = (control, revoke_ids.is_empty()) {
+                control.revoke(revoke_ids);
+            }
+            reloaded.push(ScopeReload {
+                scope,
+                revision,
+                digest,
+                closed,
+            });
+        }
+        Ok(reloaded)
+    }
+
+    /// The allowlists this decision point compiles from.
+    pub fn policy_config(&self) -> EgressPolicyConfig {
+        self.config
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    fn proposal_book(&self) -> std::sync::MutexGuard<'_, ProposalBook> {
+        self.proposals
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// An Agent asks for one exact host. The request is recorded as a
+    /// pending proposal before it is kept, and joins an identical pending
+    /// one instead of adding another. Only a person decides it
+    /// ([`SessionEgress::approve_proposal`], [`SessionEgress::reject_proposal`]).
+    pub async fn propose(&self, request: ProposalRequest) -> Result<Proposed, EgressPolicyError> {
+        let host = validate_session_host(&request.host).map_err(EgressPolicyError::Invalid)?;
+        let policy = self.policy(EgressScope::Session).ok_or_else(|| {
+            EgressPolicyError::Invalid("this Session has no session egress policy".into())
+        })?;
+        if request
+            .ports
+            .iter()
+            .all(|port| policy.match_name(&host, *port).is_some())
+        {
+            return Err(EgressPolicyError::Invalid(format!(
+                "{host} is already allowed for this Session on ports {:?}; a refusal of it had another reason, which the proxy's answer names",
+                request.ports
+            )));
+        }
+        {
+            let book = self.proposal_book();
+            if let Some((view, outcome)) = book.joinable(&host, &request.ports) {
+                return Ok(Proposed {
+                    view,
+                    created: false,
+                    outcome,
+                });
+            }
+            if book.pending() >= MAX_PENDING_PROPOSALS {
+                return Err(EgressPolicyError::Conflict(format!(
+                    "this Session already has {MAX_PENDING_PROPOSALS} proposals waiting for a person"
+                )));
+            }
+        }
+        let id = new_proposal_id().map_err(EgressPolicyError::Unavailable)?;
+        let view = ProposalView {
+            id: id.clone(),
+            state: ProposalState::Pending,
+            host,
+            ports: request.ports,
+            reason: Some(request.reason),
+            agent: Some(request.agent),
+            invocation_id: Some(request.invocation_id),
+            activation_id: Some(request.activation_id),
+            revision: None,
+            actor: None,
+        };
+        self.records
+            .append(NetworkEvent::Proposal {
+                id: id.clone(),
+                state: ProposalState::Pending,
+                host: view.host.clone(),
+                ports: view.ports.clone(),
+                reason: view.reason.clone(),
+                agent: view.agent.clone(),
+                invocation_id: view.invocation_id.clone(),
+                activation_id: view.activation_id.clone(),
+                actor: None,
+                command_id: None,
+                revision: None,
+            })
+            .await
+            .map_err(|error| {
+                EgressPolicyError::Unavailable(format!("recording the proposal failed: {error:?}"))
+            })?;
+        let mut book = self.proposal_book();
+        // Another call may have recorded the same request meanwhile; both
+        // lines stay in the record, and both wait on the first one kept.
+        if let Some((view, outcome)) = book.joinable(&view.host, &view.ports) {
+            return Ok(Proposed {
+                view,
+                created: false,
+                outcome,
+            });
+        }
+        let outcome = book.insert(view.clone());
+        Ok(Proposed {
+            view,
+            created: true,
+            outcome,
+        })
+    }
+
+    /// A person approves a pending proposal: the ordinary per-Session allow
+    /// of its host and ports in the `session` scope, recorded with the
+    /// person as actor and the proposal's id, then the proposal's outcome.
+    pub async fn approve_proposal(
+        &self,
+        id: &str,
+        actor: &str,
+        command_id: &str,
+    ) -> Result<(u64, String), EgressPolicyError> {
+        let (host, ports) = self.proposal_book().begin_decision(id)?;
+        let changed = self
+            .change_policy(
+                EgressScope::Session,
+                PolicyOp::Allow,
+                &host,
+                Some(ports.clone()),
+                actor,
+                command_id,
+                Some(id),
+            )
+            .await;
+        let (revision, digest) = match changed {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.proposal_book().abort_decision(id);
+                return Err(error);
+            }
+        };
+        self.proposal_book()
+            .finish(id, ProposalState::Approved, actor, Some(revision));
+        self.record_decision(
+            id,
+            ProposalState::Approved,
+            &host,
+            &ports,
+            actor,
+            command_id,
+            Some(revision),
+        )
+        .await;
+        Ok((revision, digest))
+    }
+
+    /// A person rejects a pending proposal. Nothing about the policy changes.
+    pub async fn reject_proposal(
+        &self,
+        id: &str,
+        actor: &str,
+        command_id: &str,
+    ) -> Result<(), EgressPolicyError> {
+        if command_id.is_empty() || command_id.len() > 128 {
+            return Err(EgressPolicyError::Invalid(
+                "command_id must be 1-128 characters".into(),
+            ));
+        }
+        let (host, ports) = self.proposal_book().begin_decision(id)?;
+        let recorded = self
+            .records
+            .append_control(Self::decision_event(
+                id,
+                ProposalState::Rejected,
+                &host,
+                &ports,
+                actor,
+                command_id,
+                None,
+            ))
+            .await;
+        if let Err(error) = recorded {
+            self.proposal_book().abort_decision(id);
+            return Err(EgressPolicyError::Unavailable(format!(
+                "recording the rejection failed: {error:?}"
+            )));
+        }
+        self.proposal_book()
+            .finish(id, ProposalState::Rejected, actor, None);
+        Ok(())
+    }
+
+    fn decision_event(
+        id: &str,
+        state: ProposalState,
+        host: &str,
+        ports: &[u16],
+        actor: &str,
+        command_id: &str,
+        revision: Option<u64>,
+    ) -> NetworkEvent {
+        NetworkEvent::Proposal {
+            id: id.to_string(),
+            state,
+            host: host.to_string(),
+            ports: ports.to_vec(),
+            reason: None,
+            agent: None,
+            invocation_id: None,
+            activation_id: None,
+            actor: Some(actor.chars().take(128).collect()),
+            command_id: Some(command_id.to_string()),
+            revision,
+        }
+    }
+
+    /// Record an approval's outcome. The `policy` line with the proposal's
+    /// id already decided it, so a failure here only loses the summary line.
+    #[allow(clippy::too_many_arguments)]
+    async fn record_decision(
+        &self,
+        id: &str,
+        state: ProposalState,
+        host: &str,
+        ports: &[u16],
+        actor: &str,
+        command_id: &str,
+        revision: Option<u64>,
+    ) {
+        if let Err(error) = self
+            .records
+            .append_control(Self::decision_event(
+                id, state, host, ports, actor, command_id, revision,
+            ))
+            .await
+        {
+            tracing::warn!(session = %self.session_id, ?error, "recording a proposal's approval failed");
+        }
+    }
+
+    /// Every proposal this decision point keeps, pending ones first.
+    pub fn proposals(&self) -> Vec<ProposalView> {
+        self.proposal_book().views()
+    }
+
+    /// One proposal, if kept.
+    pub fn proposal(&self, id: &str) -> Option<ProposalView> {
+        self.proposal_book().view(id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn change_policy(
         &self,
         scope: EgressScope,
@@ -879,6 +1234,7 @@ impl SessionEgress {
         ports: Option<Vec<u16>>,
         actor: &str,
         command_id: &str,
+        proposal_id: Option<&str>,
     ) -> Result<(u64, String), EgressPolicyError> {
         if scope == EgressScope::Provisioning {
             return Err(EgressPolicyError::Invalid(
@@ -899,6 +1255,7 @@ impl SessionEgress {
         // One change at a time: compute it, record it, then publish it, so the
         // record never holds a change that did not take effect.
         let _serial = self.policy_changes.lock().await;
+        let config = self.policy_config();
         let (revision, policy, session_rules, removed_ids) = {
             let state = self.state();
             if state.commands.contains(command_id) {
@@ -933,7 +1290,7 @@ impl SessionEgress {
                     }
                 }
             }
-            let policy = Self::compile_scope(&self.config, scope, &session_rules)
+            let policy = Self::compile_scope(&config, scope, &session_rules)
                 .map_err(EgressPolicyError::Invalid)?;
             (revision, policy, session_rules, removed_ids)
         };
@@ -952,6 +1309,7 @@ impl SessionEgress {
                     host: host.clone(),
                     ports,
                     command_id: Some(command_id.to_string()),
+                    proposal_id: proposal_id.map(str::to_string),
                 }),
                 actor: Some(actor.chars().take(128).collect()),
             })
@@ -1030,6 +1388,28 @@ impl SessionEgress {
             return (caller, Some((407, "binding_ended")));
         }
         (caller, None)
+    }
+
+    /// Whether `policy` still admits what `verdict` allowed: the rule that
+    /// matched still matches this host and port (a reload can give a rule id
+    /// another meaning), and every private address is still in a listed
+    /// range.
+    fn still_admits(&self, policy: &CompiledPolicy, open: &OpenRequest, verdict: &Verdict) -> bool {
+        let Some(rule) = verdict.rule.as_deref() else {
+            return false;
+        };
+        let host = match netaddr::parse_ip_literal(&open.host) {
+            Some(ip) => ip.to_string(),
+            None => match netaddr::normalize_host_name(&open.host) {
+                Ok(name) => name,
+                Err(_) => return false,
+            },
+        };
+        policy.admits(rule, &host, open.port)
+            && verdict.addrs.iter().all(|addr| {
+                !matches!((self.classify)(*addr), AddrClass::Private(_))
+                    || policy.allows_private(*addr)
+            })
     }
 
     /// Whether `ip` (or the IPv4 address it embeds) is a host gateway.
@@ -1240,13 +1620,7 @@ impl EgressAuthority for SessionEgress {
             let current = state.scopes.get(&scope).map(|scope_state| {
                 (
                     scope_state.revision,
-                    verdict.rule.as_ref().is_some_and(|rule| {
-                        scope_state
-                            .policy
-                            .rules()
-                            .iter()
-                            .any(|live| &live.id == rule)
-                    }),
+                    self.still_admits(&scope_state.policy, &open, &verdict),
                 )
             });
             if !bound {

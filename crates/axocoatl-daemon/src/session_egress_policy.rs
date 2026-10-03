@@ -272,6 +272,24 @@ impl CompiledPolicy {
         })
     }
 
+    /// Whether the rule `id` exists and admits `host` (a normalized name or
+    /// an IP address) on `port`.
+    pub fn admits(&self, id: &str, host: &str, port: u16) -> bool {
+        self.rules.iter().any(|rule| {
+            rule.id == id
+                && rule.ports.contains(&port)
+                && match &rule.matcher {
+                    Matcher::Exact(name) => name == host,
+                    Matcher::Subdomains(suffix) => {
+                        HostPattern::Subdomains(suffix.clone()).matches(host)
+                    }
+                    Matcher::Range(range) => {
+                        host.parse::<IpAddr>().is_ok_and(|ip| range.contains(ip))
+                    }
+                }
+        })
+    }
+
     /// Whether a Private address is inside a listed private destination.
     pub fn allows_private(&self, ip: IpAddr) -> bool {
         self.private.iter().any(|range| range.contains(ip))

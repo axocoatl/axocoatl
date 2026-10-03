@@ -111,6 +111,7 @@ for (const [group, name] of [
   ['workflow', 'WorkflowCommands'],
   ['tokens', 'TokenCommands'],
   ['browser', 'BrowserCommands'],
+  ['network', 'NetworkCommands'],
 ]) {
   for (const command of variants(name)) {
     if (!cliReference.includes(`axocoatl ${group} ${command}`)) {

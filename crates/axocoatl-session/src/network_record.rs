@@ -70,6 +70,9 @@ pub enum PolicySource {
     Config,
     SessionAllow,
     SessionRevoke,
+    /// `axocoatl network reload` or `POST /api/network/reload` applied the
+    /// configuration file's allowlists to a running Session.
+    ConfigReload,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +93,9 @@ pub struct PolicyChange {
     /// The person's command id, so a resend is recognized after a restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_id: Option<String>,
+    /// The Agent's proposal this allow approved, when it approved one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +120,45 @@ pub enum UnbindReason {
     BrowserDone,
     SessionStopped,
 }
+
+/// Where an Agent's request for a host stands. Only a person moves it out
+/// of `pending`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalState {
+    Pending,
+    Approved,
+    Rejected,
+}
+
+impl ProposalState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+/// Longest reason an Agent may give for a proposed host, in bytes.
+pub const MAX_PROPOSAL_REASON_BYTES: usize = 1024;
+/// Most ports one proposal names.
+pub const MAX_PROPOSAL_PORTS: usize = 16;
+
+/// Whether `value` is a proposal id: `prop_` and 16 lowercase hex digits.
+pub fn is_proposal_id(value: &str) -> bool {
+    value.strip_prefix("prop_").is_some_and(|hex| {
+        hex.len() == 16
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+#[cfg(test)]
+#[path = "network_record_proposal_tests.rs"]
+mod proposal_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -456,6 +501,36 @@ pub enum NetworkEvent {
         error: Option<String>,
         ms: u64,
     },
+    /// An Agent asked for a host with `request_network_access`
+    /// (`state: pending`), or a person approved or rejected that request.
+    /// An approval is also a `policy` event whose `change.proposal_id` names
+    /// the proposal; that event is what allows the host.
+    Proposal {
+        /// `prop_` and 16 hex digits.
+        id: String,
+        state: ProposalState,
+        host: String,
+        #[serde(default)]
+        ports: Vec<u16>,
+        /// The Agent's reason, at most [`MAX_PROPOSAL_REASON_BYTES`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        invocation_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        activation_id: Option<String>,
+        /// Who decided: always a person (`human`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actor: Option<String>,
+        /// The person's command id for the decision.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command_id: Option<String>,
+        /// The `session` policy revision an approval created.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision: Option<u64>,
+    },
 }
 
 impl NetworkEvent {
@@ -472,6 +547,7 @@ impl NetworkEvent {
             Self::Web { .. } => "web",
             Self::Limit { .. } => "limit",
             Self::Browser { .. } => "browser",
+            Self::Proposal { .. } => "proposal",
         }
     }
 
@@ -480,7 +556,7 @@ impl NetworkEvent {
         matches!(
             self,
             Self::Policy { .. } | Self::Sidecar { .. } | Self::Unbind { .. } | Self::Limit { .. }
-        )
+        ) || matches!(self, Self::Proposal { state, .. } if *state != ProposalState::Pending)
     }
 
     /// Bounds a writer must respect. Token fields must be tags, never secrets.
@@ -524,6 +600,48 @@ impl NetworkEvent {
                 ..
             } if command_id.is_empty() || command_id.len() > 128 => {
                 invalid("command_id must be 1-128 bytes")
+            }
+            Self::Policy {
+                change:
+                    Some(PolicyChange {
+                        proposal_id: Some(id),
+                        ..
+                    }),
+                ..
+            } if !is_proposal_id(id) => invalid("proposal_id must be prop_ and 16 hex digits"),
+            Self::Proposal {
+                id,
+                host,
+                ports,
+                reason,
+                agent,
+                invocation_id,
+                activation_id,
+                actor,
+                command_id,
+                ..
+            } => {
+                let long = |value: &Option<String>, max: usize| {
+                    value.as_ref().is_some_and(|value| value.len() > max)
+                };
+                if !is_proposal_id(id) {
+                    invalid("proposal id must be prop_ and 16 hex digits")
+                } else if host.is_empty() || host.len() > 253 {
+                    invalid("host must be 1-253 bytes")
+                } else if ports.is_empty() || ports.len() > MAX_PROPOSAL_PORTS {
+                    invalid("a proposal names 1-16 ports")
+                } else if long(reason, MAX_PROPOSAL_REASON_BYTES) {
+                    invalid("a proposal's reason must be at most 1024 bytes")
+                } else if long(agent, 128)
+                    || long(invocation_id, 128)
+                    || long(activation_id, 128)
+                    || long(actor, 128)
+                    || long(command_id, 128)
+                {
+                    invalid("proposal identities must be at most 128 bytes")
+                } else {
+                    Ok(())
+                }
             }
             Self::Browser {
                 url,
@@ -1757,6 +1875,7 @@ mod tests {
                     host: "api.example.com".into(),
                     ports: vec![443],
                     command_id: Some("cmd-1".into()),
+                    proposal_id: None,
                 }),
                 actor: Some("human".into()),
             },
