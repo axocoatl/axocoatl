@@ -730,6 +730,19 @@ async fn non_root_users_reach_the_proxy_and_serve_port_sockets() {
             "printf 'GET / HTTP/1.0\\r\\n\\r\\n' | nc local:/run/axocoatl-svc/3000.sock",
         ]).await;
         assert!(reader.contains("svc-ok"), "{reader}");
+        // The browser under egress uses these sockets instead of starting a
+        // service forwarder that would replace them.
+        axocoatl_isolation::browser_container::check_session_served_sockets(&session, &[3000])
+            .await
+            .expect("PID 1 serves port 3000");
+        let missing = axocoatl_isolation::browser_container::check_session_served_sockets(
+            &session,
+            &[3000, 4000],
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(missing.contains("port(s) 4000"), "{missing}");
 
         // The egress Preview container publishes the port on host loopback;
         // the Session container itself still has no network.
