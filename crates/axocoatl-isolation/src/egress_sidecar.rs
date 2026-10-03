@@ -51,6 +51,24 @@ pub const RESTART_BACKOFF: [Duration; 3] = [
 pub const RESTART_BUDGET: usize = 5;
 pub const RESTART_WINDOW: Duration = Duration::from_secs(600);
 
+/// When a lost sidecar is started again, and when it is given up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RestartPolicy {
+    pub backoff: [Duration; 3],
+    pub budget: usize,
+    pub window: Duration,
+}
+
+impl Default for RestartPolicy {
+    fn default() -> Self {
+        Self {
+            backoff: RESTART_BACKOFF,
+            budget: RESTART_BUDGET,
+            window: RESTART_WINDOW,
+        }
+    }
+}
+
 /// Most listeners one bridge opens (the supervisor's own limit).
 pub const MAX_BRIDGE_LISTENERS: usize = 64;
 
@@ -367,6 +385,7 @@ struct Shared {
     spec: SidecarSpec,
     authority: Arc<dyn EgressAuthority>,
     timing: ControlTiming,
+    restarts: RestartPolicy,
     status: Mutex<SidecarStatus>,
     stopping: AtomicBool,
     stop_signal: watch::Sender<bool>,
@@ -609,6 +628,16 @@ impl EgressSidecar {
         authority: Arc<dyn EgressAuthority>,
         timing: ControlTiming,
     ) -> Result<Self, IsolationError> {
+        Self::start_with_restarts(spec, authority, timing, RestartPolicy::default()).await
+    }
+
+    /// [`Self::start`] with an explicit restart policy.
+    pub async fn start_with_restarts(
+        spec: SidecarSpec,
+        authority: Arc<dyn EgressAuthority>,
+        timing: ControlTiming,
+        restarts: RestartPolicy,
+    ) -> Result<Self, IsolationError> {
         spec.validate()?;
         let container = spec.container();
         for (name, role) in [
@@ -628,6 +657,7 @@ impl EgressSidecar {
             spec,
             authority,
             timing,
+            restarts,
             status: Mutex::new(SidecarStatus {
                 phase: SidecarPhase::Starting,
                 generation: 1,
@@ -767,25 +797,27 @@ async fn supervise(shared: Arc<Shared>, mut current: Generation, with_limits: bo
             let now = Instant::now();
             while recent
                 .front()
-                .is_some_and(|started| now.duration_since(*started) > RESTART_WINDOW)
+                .is_some_and(|started| now.duration_since(*started) > shared.restarts.window)
             {
                 recent.pop_front();
             }
-            if recent.len() >= RESTART_BUDGET {
+            if recent.len() >= shared.restarts.budget {
                 shared.set_status(SidecarPhase::Failed, generation, None);
                 shared
                     .authority
                     .sidecar_event(SidecarEvent::BudgetSpent {
                         generation,
                         detail: format!(
-                            "the egress proxy was restarted {RESTART_BUDGET} times in {} minutes; it stays stopped and proxied connections are refused",
-                            RESTART_WINDOW.as_secs() / 60
+                            "the egress proxy was restarted {} times in {} seconds; it stays stopped and proxied connections are refused",
+                            shared.restarts.budget,
+                            shared.restarts.window.as_secs()
                         ),
                     })
                     .await;
                 return;
             }
-            let delay = RESTART_BACKOFF[recent.len().min(RESTART_BACKOFF.len() - 1)];
+            let backoff = shared.restarts.backoff;
+            let delay = backoff[recent.len().min(backoff.len() - 1)];
             recent.push_back(now);
             restarts += 1;
             generation += 1;

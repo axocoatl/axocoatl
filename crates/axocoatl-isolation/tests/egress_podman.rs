@@ -1154,3 +1154,93 @@ async fn documented_residuals_a_lingering_setup_process_and_a_borrowed_credentia
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test egress_podman -- --ignored --test-threads=1"]
+async fn a_sidecar_that_keeps_failing_stays_down_once_its_restart_budget_is_spent() {
+    use axocoatl_isolation::egress_sidecar::{
+        EgressSidecar, RestartPolicy, SidecarPhase, SidecarSpec,
+    };
+    use axocoatl_isolation::supervisor_program::SupervisorProgram;
+    with_fixture("i", |fixture| async move {
+        let arch = podman_async_ok(&["info", "--format", "{{.Host.Arch}}"]).await;
+        let arch = match arch.trim() {
+            "arm64" | "aarch64" => "aarch64",
+            _ => "x86_64",
+        };
+        let program = SupervisorProgram::install_embedded(arch, &fixture.installation).unwrap();
+        let image = axocoatl_isolation::egress_image::ensure_egress_image(&program)
+            .await
+            .unwrap();
+        let session = format!("egress-test-{}", uuid::Uuid::new_v4().simple());
+        fixture.sessions.lock().unwrap().push(session.clone());
+        let sidecar = EgressSidecar::start_with_restarts(
+            SidecarSpec {
+                session_id: session.clone(),
+                runtime_authority: None,
+                image,
+                network: Some(fixture.network.clone()),
+                max_connections: 8,
+                require_resource_limits: false,
+                labels: vec![fixture.label.clone()],
+            },
+            fixture.authority.clone(),
+            axocoatl_isolation::egress_control::ControlTiming::default(),
+            RestartPolicy {
+                backoff: [Duration::from_millis(100); 3],
+                budget: 2,
+                window: Duration::from_secs(60),
+            },
+        )
+        .await
+        .unwrap();
+        let container = sidecar.container();
+        for lost in 1..=3u32 {
+            let wanted = if lost <= 2 {
+                SidecarPhase::Ready
+            } else {
+                SidecarPhase::Failed
+            };
+            let _ = podman_async(&["kill", &container]).await;
+            let mut reached = false;
+            for _ in 0..80 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let status = sidecar.status();
+                if status.phase == wanted
+                    && (wanted == SidecarPhase::Failed || status.generation == lost + 1)
+                {
+                    reached = true;
+                    break;
+                }
+            }
+            assert!(
+                reached,
+                "loss {lost}: {:?} {:?}",
+                sidecar.status(),
+                fixture.authority.events()
+            );
+        }
+        let status = sidecar.status();
+        assert_eq!((status.phase, status.restarts), (SidecarPhase::Failed, 2));
+        assert!(
+            fixture.authority.events().iter().any(|event| matches!(
+                event,
+                Event::Sidecar(SidecarEvent::BudgetSpent { generation: 3, .. })
+            )),
+            "{:?}",
+            fixture.authority.events()
+        );
+        // It stays down: no container runs for it any more.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!podman_async(&["container", "exists", &container])
+            .await
+            .status
+            .success());
+        sidecar.stop().await;
+        assert!(matches!(
+            fixture.authority.events().last(),
+            Some(Event::Sidecar(SidecarEvent::Stopped { .. }))
+        ));
+    })
+    .await;
+}
