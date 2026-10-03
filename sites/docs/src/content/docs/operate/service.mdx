@@ -57,6 +57,31 @@ root as foreground commands. An explicit `--config` keeps advanced local mode;
 its data defaults to `<config-directory>/data` unless
 `AXOCOATL_DATA_DIR` overrides it.
 
+### What install records
+
+A service manager starts the daemon with its own minimal environment, not your
+shell's. launchd, for example, gives a LaunchAgent only
+`/usr/bin:/bin:/usr/sbin:/sbin` on its `PATH`, which does not contain a Homebrew
+Podman in `/opt/homebrew/bin`. Install therefore writes into the definition:
+
+- `PATH`: the directory of the `podman` that your shell finds at install time,
+  followed by `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+- `CONTAINER_CONNECTION` and `CONTAINER_HOST`, when they are set at install
+  time, so the service uses the same Podman connection as your shell. A
+  `CONTAINER_HOST` that contains a password is not recorded.
+
+Install prints what it recorded and warns when it found no `podman`. It never
+writes provider keys or other secrets into the definition. Run
+`axocoatl service install` again after you move Podman or change its connection.
+If the service was running, load the new definition with
+`axocoatl service stop && axocoatl service start`.
+
+On macOS the daemon's output goes to `~/Library/Logs/Axocoatl/daemon.log`. When
+they do not exist yet, install creates that directory owner-only and the file
+with mode `0600`; an existing log is kept. On Linux the output goes to the user
+journal. The service log never contains the sign-in link: `serve`
+writes only a hint to run `axocoatl url`.
+
 For an explicit configuration, validate and install it deliberately:
 
 ```sh
@@ -100,10 +125,12 @@ placeholder.
 
   </TabItem>
   <TabItem label="macOS launchd">
-    The generated LaunchAgent has no `EnvironmentVariables` block. Add required
-    variables through your approved launchd/secret-management workflow before
-    starting the agent, then inspect the loaded definition. Avoid placing a
-    long-lived API key in a world-readable plist.
+    The generated LaunchAgent's `EnvironmentVariables` block holds only `PATH`
+    and the Podman connection variables, and `axocoatl service install`
+    rewrites it. Add required variables through your approved
+    launchd/secret-management workflow before starting the agent, then inspect
+    the loaded definition. Avoid placing a long-lived API key in a
+    world-readable plist.
   </TabItem>
 </Tabs>
 
@@ -137,11 +164,14 @@ journalctl --user -u axocoatl --since today
   <TabItem label="macOS">
 
 ```sh
+tail -f ~/Library/Logs/Axocoatl/daemon.log
 launchctl print gui/$(id -u)/ai.axocoatl.daemon
 ```
 
   </TabItem>
 </Tabs>
+
+`axocoatl service status` also prints where the logs are.
 
 For an interactive diagnostic run, stop the service first so it releases the
 per-user IPC socket, then run:

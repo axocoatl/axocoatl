@@ -131,7 +131,12 @@ providers:
 ```
 
 `axocoatl doctor` treats a configured Ollama endpoint as a required check: the
-endpoint must respond and the configured Agent models must be present.
+endpoint must respond, be a loopback address, report Ollama 0.20.6 and its cloud
+features disabled, and have the configured Agent models present. To disable
+Ollama's cloud features, add `{"disable_ollama_cloud": true}` to
+`~/.ollama/server.json` of the user that runs Ollama, or start the server with
+`OLLAMA_NO_CLOUD=1`, then restart it; see
+[Configure Axocoatl](/start/onboard/#ollama).
 
 Some Ollama-served models return a requested tool call as response text instead
 of the structured field. Axocoatl recovers only complete, bounded calls whose

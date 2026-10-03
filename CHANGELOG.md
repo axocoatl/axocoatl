@@ -5,6 +5,38 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`axocoatl onboard` and `axocoatl doctor` check the Ollama server the way native
+  Sessions do.** Onboarding wrote a configuration for an Ollama server whose cloud
+  features were on, and doctor reported it OK, although native Sessions refuse such a
+  server. Onboarding now asks for the Ollama server URL and checks that it is a
+  loopback address, runs Ollama 0.20.6 and reports its cloud features disabled in
+  `GET /api/status`. When a check fails it says which one and how to fix it: add
+  `{"disable_ollama_cloud": true}` to `~/.ollama/server.json`, or start the server
+  with `OLLAMA_NO_CLOUD=1`, then restart Ollama. It offers to check again, to use a
+  different server URL, or to continue. Doctor reports each of these requirements as
+  a required check, so a server with cloud features on now fails doctor, and
+  `onboard --install-daemon` does not install the service for it.
+- **Onboarding no longer defaults Ollama to `llama3.2`.** It lists the models installed
+  on the chosen server and suggests a coding model for Lead and Scout, preferring a
+  Qwen3-Coder tag, and a different, larger model for Reviewer when one is installed,
+  preferring gpt-oss. Both are chosen from a list that preselects the suggestion, or
+  typed in. Cloud and embedding models are never suggested. With no local model
+  installed it suggests `qwen3-coder:30b`.
+- **The Always-On Service finds Podman and keeps a log.** `axocoatl service install`
+  wrote a service definition with no environment, so a launchd service could not find
+  a Homebrew Podman in `/opt/homebrew/bin`, and launchd discarded its output. Install
+  now records a `PATH` with the directory of the `podman` found at install time plus
+  the standard system directories, and `CONTAINER_CONNECTION` and `CONTAINER_HOST` when
+  they are set; it prints what it recorded and warns when it finds no `podman`. The
+  systemd user unit records the same variables and keeps logging to the journal. On
+  macOS, stdout and stderr go to `~/Library/Logs/Axocoatl/daemon.log`, created
+  owner-only. The definition never contains provider keys, and a `CONTAINER_HOST`
+  that contains a password is not recorded. Reinstall and restart an existing service
+  to pick this up.
+
 ## [1.1.2] - 2026-10-02
 
 ### Security

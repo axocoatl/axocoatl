@@ -17,7 +17,7 @@ evidence, not a substitute for exercising that journey.
 Start Ollama in a separate terminal if it is not already running:
 
 ```bash
-ollama serve
+OLLAMA_NO_CLOUD=1 ollama serve
 ollama pull llama3.2
 ```
 

@@ -324,6 +324,7 @@ dependencies = [
  "axocoatl-core",
  "axocoatl-daemon",
  "axocoatl-isolation",
+ "axocoatl-llm-ollama",
  "axocoatl-mcp",
  "axocoatl-memory",
  "axocoatl-server",
@@ -338,6 +339,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -655,6 +657,7 @@ dependencies = [
 name = "axocoatl-service"
 version = "1.1.2"
 dependencies = [
+ "tempfile",
  "thiserror 2.0.20",
  "tracing",
 ]

@@ -2,7 +2,8 @@
 //! observations, not immutable model weights or a permanent server default.
 
 use super::{
-    invalid, local_client, metadata_request, NativeOllamaConfig, NativeOllamaProvider, VERSION,
+    invalid, local_client, metadata_request, reports_cloud_disabled, NativeOllamaConfig,
+    NativeOllamaProvider, VERSION,
 };
 use axocoatl_llm::ProviderError;
 use serde::{Deserialize, Serialize};
@@ -152,7 +153,7 @@ async fn profile(
         ));
     }
     let status = metadata_request(client, base_url, "api/status", None).await?;
-    if status.pointer("/cloud/disabled").and_then(Value::as_bool) != Some(true) {
+    if !reports_cloud_disabled(&status) {
         return Err(invalid(
             "native execution requires server-reported cloud-disabled mode",
         ));

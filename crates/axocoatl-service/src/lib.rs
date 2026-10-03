@@ -9,10 +9,17 @@
 
 use std::path::Path;
 
-#[cfg(target_os = "linux")]
+mod environment;
+pub use environment::{ServiceEnvironment, CARRIED_VARIABLES, SYSTEM_PATH};
+
+// Each backend's manager runs only on its own platform, but both definitions
+// are rendered and tested on every platform.
+#[cfg(any(target_os = "linux", test))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod systemd;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod launchd;
 
 /// Logical service name — the systemd unit basename.
@@ -50,8 +57,14 @@ pub trait ServiceManager {
     fn backend(&self) -> &'static str;
 
     /// Write and register the service so it runs
-    /// `<exe> serve --config <config>`. Both paths must be absolute.
-    fn install(&self, exe: &Path, config: &Path) -> Result<(), ServiceError>;
+    /// `<exe> serve --config <config>` with `environment`. Both paths must be
+    /// absolute.
+    fn install(
+        &self,
+        exe: &Path,
+        config: &Path,
+        environment: &ServiceEnvironment,
+    ) -> Result<(), ServiceError>;
 
     /// Stop, deregister, and remove the service definition.
     fn uninstall(&self) -> Result<(), ServiceError>;
@@ -64,6 +77,10 @@ pub trait ServiceManager {
 
     /// Report the current service state.
     fn status(&self) -> Result<ServiceStatus, ServiceError>;
+
+    /// Where the daemon's output goes: a log file, or the command that shows
+    /// the service's journal.
+    fn logs(&self) -> String;
 
     /// A one-line hint to show the user after `install` (e.g. enabling
     /// systemd linger), or `None` when nothing extra is needed.

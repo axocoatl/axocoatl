@@ -55,6 +55,8 @@ workbench uses.
 | The browser shows **Sign in to Axocoatl** | This browser has no sign-in cookie for this daemon and port, the cookie expired, or the token was rotated | Run `axocoatl url` with the daemon's `--config` and `AXOCOATL_DATA_DIR`, and open the link |
 | A script or `curl` gets `401` | The local API requires the per-daemon token | Send `Authorization: Bearer <token>` with the contents of `local-api-token` in the data root |
 | “could not load the local API token” at startup | `local-api-token` is shared with other users, a symlink, or not a token | `chmod 600` it, or delete it and start again to create a new token |
+| `doctor` reports that Ollama has cloud models enabled, or a native Session refuses Ollama with "requires server-reported cloud-disabled mode" | The Ollama server runs with its cloud features on | Add `{"disable_ollama_cloud": true}` to `~/.ollama/server.json` of the user that runs Ollama, or start it with `OLLAMA_NO_CLOUD=1` (macOS app: `launchctl setenv OLLAMA_NO_CLOUD 1`), and restart Ollama. `curl -s http://localhost:11434/api/status` must show `"disabled":true`. Or run a second server with cloud disabled and set `providers.ollama.base_url` to it; see [Configure Axocoatl](/start/onboard/#ollama) |
+| `doctor` reports an Ollama version other than 0.20.6 | Native Sessions accept only the audited Ollama version | Install Ollama 0.20.6, or point `providers.ollama.base_url` at a server that runs it |
 | `doctor` passes but a hosted request fails | Doctor checks key presence, not provider access | Verify exported key, model entitlement, endpoint, and provider response |
 | OpenRouter credential warning | The configured key is empty or an unresolved environment reference | Re-run onboarding to store the key in the owner-only user config, or export the referenced key in the process environment; doctor checks presence but does not make a live OpenRouter request |
 
@@ -119,10 +121,17 @@ On macOS:
 
 ```sh
 launchctl print gui/$(id -u)/ai.axocoatl.daemon
+tail -n 100 ~/Library/Logs/Axocoatl/daemon.log
 ```
 
-Re-run `axocoatl service install` when the binary or user configuration path
-changes. Use `--config ...` only for an explicit advanced configuration.
+| Symptom | Cause/action |
+| --- | --- |
+| Sessions started by the service say Podman is not installed, but `podman` works in your shell | The service definition was written before install recorded `PATH`, or Podman moved. Run `axocoatl service install` again from a shell where `podman` works, then `axocoatl service stop && axocoatl service start` |
+| The service uses a different Podman machine than your shell | Export `CONTAINER_CONNECTION` (or `CONTAINER_HOST`) before `axocoatl service install`; install records it in the definition |
+| The macOS service log is missing | The definition predates the log setting; reinstall and restart the service as above |
+
+Re-run `axocoatl service install` when the binary, the user configuration path,
+or the Podman location or connection changes. Use `--config ...` only for an explicit advanced configuration.
 Installation does not start the service; follow it with
 `axocoatl service start`.
 

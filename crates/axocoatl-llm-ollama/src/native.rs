@@ -35,7 +35,13 @@ use serde_json::{json, Value};
 use tokio_stream::{Stream, StreamExt};
 
 mod observed_context;
+mod server_check;
 pub use observed_context::{observe_native_ollama_context, NativeOllamaContextObservation};
+use server_check::reports_cloud_disabled;
+pub use server_check::{
+    check_native_ollama_server, validate_native_ollama_endpoint, NativeOllamaServerCheck,
+    OllamaCloudMode, NATIVE_OLLAMA_SERVER_VERSION,
+};
 
 const PROVIDER: &str = "ollama";
 const VERSION: &str = "0.20.6";
@@ -118,7 +124,9 @@ fn encoded_size(value: &impl Serialize, limit: usize) -> Result<usize, ProviderE
     Ok(writer.written)
 }
 
-fn local_client(base_url: &str) -> Result<reqwest::Client, ProviderError> {
+/// Refuse an endpoint native execution cannot use: not plain HTTP(S), carrying
+/// credential material, or not a loopback address.
+fn require_loopback(base_url: &str) -> Result<(), ProviderError> {
     validated_endpoint(base_url, "api/chat", PROVIDER)?;
     let url = reqwest::Url::parse(base_url).map_err(|_| invalid("invalid local endpoint"))?;
     let host = url
@@ -135,6 +143,11 @@ fn local_client(base_url: &str) -> Result<reqwest::Client, ProviderError> {
             "zero-API-spend native execution requires a loopback Ollama endpoint",
         ));
     }
+    Ok(())
+}
+
+fn local_client(base_url: &str) -> Result<reqwest::Client, ProviderError> {
+    require_loopback(base_url)?;
     reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -232,7 +245,7 @@ impl NativeOllamaProvider {
             ));
         }
         let status = self.metadata("api/status", None).await?;
-        if status.pointer("/cloud/disabled").and_then(Value::as_bool) != Some(true) {
+        if !reports_cloud_disabled(&status) {
             return Err(invalid(
                 "native execution requires server-reported cloud-disabled mode",
             ));

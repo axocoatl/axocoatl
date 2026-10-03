@@ -18,8 +18,8 @@ axocoatl <command> --help
 | Command | Purpose |
 | --- | --- |
 | `axocoatl init [NAME]` | Scaffold an advanced project-local config in `NAME` (default `my-axocoatl-project`): local Ollama and the default team. Follow-up commands must pass its path explicitly |
-| `axocoatl onboard [--install-daemon]` | Configure the current OS user without creating a project or Workspace; the flag additionally installs the per-user service definition but does not start it, and hosted-provider keys must be supplied rather than left as shell-environment placeholders |
-| `axocoatl doctor [-c, --config CONFIG]` | Check environment and config; an omitted path resolves the user configuration |
+| `axocoatl onboard [--install-daemon]` | Configure the current OS user without creating a project or Workspace. For Ollama it asks for the server URL, checks that native Sessions can use it (loopback, Ollama 0.20.6, cloud features disabled), and suggests Lead and Reviewer models from those installed. The flag additionally installs the per-user service definition but does not start it, and hosted-provider keys must be supplied rather than left as shell-environment placeholders |
+| `axocoatl doctor [-c, --config CONFIG]` | Check environment and config, including the Ollama server requirements of native Sessions; an omitted path resolves the user configuration |
 | `axocoatl validate [CONFIG]` | Parse and validate a config path; an omitted path resolves the user configuration |
 | `axocoatl dev [-c, --config CONFIG]` | Run daemon, IPC, HTTP app, triggers, supervision, and consolidation in foreground; config defaults to the user configuration |
 | `axocoatl serve [-c, --config CONFIG]` | Run the same runtime entrypoint used by the installed service; config defaults to the user configuration |
@@ -152,10 +152,10 @@ bench`. Run those commands from a source checkout.
 
 | Command | Purpose |
 | --- | --- |
-| `axocoatl service install [-c, --config CONFIG]` | Write/register a per-user systemd or launchd definition; config defaults to the resolved user configuration and is recorded as an absolute path |
+| `axocoatl service install [-c, --config CONFIG]` | Write/register a per-user systemd or launchd definition; config defaults to the resolved user configuration and is recorded as an absolute path. Records a `PATH` that contains the install-time `podman`, and `CONTAINER_CONNECTION`/`CONTAINER_HOST` when set; on macOS, logs to `~/Library/Logs/Axocoatl/daemon.log` |
 | `axocoatl service start` | Start now and enable at login |
 | `axocoatl service stop` | Stop without uninstalling |
-| `axocoatl service status` | Report backend, installed/running/enabled state, and detail |
+| `axocoatl service status` | Report backend, installed/running/enabled state, detail, and where the logs are |
 | `axocoatl service uninstall` | Stop, deregister, and remove the definition |
 
 Install supports Linux systemd user units and macOS LaunchAgents. It does not
