@@ -409,30 +409,15 @@ Automations. `workflows` still supplies config-owned Session team selections;
 editing an Automation does not edit that roster or a native Session's applied team.
 A workflow's `htn_methods_file` was removed in 1.1.0; the daemon warns and ignores it.
 
-## Web search and consolidation
-
-```yaml
-web_search:
-  provider: tavily
-  api_key: "${TAVILY_API_KEY}"
-
-consolidation:
-  enabled: true
-  idle_threshold_secs: 120
-  interval_secs: 1800
-```
-
-The currently implemented web-search provider ID is `tavily`. When configured,
-normal Session Agents receive the tool; Attempts do not.
-
-The configuration also parses the upcoming self-hosted search and fetch tools. They
-are validated for shape and bounds but not yet run by this build:
+## Web search, web fetch and consolidation
 
 ```yaml
 web_search:
   provider: searxng
   searxng:
     managed: true        # Axocoatl runs the SearXNG container; false needs url
+    # image: docker.io/searxng/searxng:<tag>   # default: the pinned image
+    # url: http://127.0.0.1:8888               # only with managed: false
     engines: []          # keep only these engines; empty keeps SearXNG's defaults
     language: all
     safesearch: 0        # 0-2
@@ -442,6 +427,31 @@ web_fetch:
   max_bytes: 4194304     # 64 KiB-8 MiB
   timeout_secs: 20       # 1-60
 
+consolidation:
+  enabled: true
+  idle_threshold_secs: 120
+  interval_secs: 1800
+```
+
+`web_search.provider: searxng` offers `web_search` to Agents whose `tools` list it,
+through a SearXNG instance Axocoatl runs with local Podman (`managed: true`) or one
+at `url` (`managed: false`). The `web_fetch` block's presence offers `web_fetch` the
+same way. Both run on the host, not in the Session container, and each call in a
+native Session is written to the Session's network record. Native Sessions refuse
+them under `sandbox.network: none`, and in attempts made with Explore several ways
+an Agent that lists them runs without them. Legacy (1.0-format) Sessions offer
+`web_fetch` only to an Agent that lists it, never under `network: none`, and do not
+record either tool. See [Web research](/configure/web/) for setup, citations and
+what leaves the machine.
+
+`provider: tavily` with an `api_key` still loads for configurations that already use
+it, but only legacy (1.0-format) Sessions use it: native Sessions refuse it and
+`validate` warns. Any other provider is an error.
+
+The configuration also parses the upcoming browser tool. It is validated for shape
+and bounds but not yet run by this build:
+
+```yaml
 browser:
   image: localhost/axocoatl-browser:pw1.60.0
   allow: []              # same entries as sandbox.egress.allow

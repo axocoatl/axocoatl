@@ -1,0 +1,122 @@
+{
+  "query": "rust programming language",
+  "number_of_results": 0,
+  "results": [
+    {
+      "url": "https://www.rust-lang.org/",
+      "title": "Rust Programming Language",
+      "content": "A language empowering everyone to build reliable and efficient software.",
+      "publishedDate": null,
+      "thumbnail": "",
+      "engine": "duckduckgo",
+      "template": "default.html",
+      "parsed_url": ["https", "www.rust-lang.org", "/", "", "", ""],
+      "img_src": "",
+      "priority": "",
+      "engines": ["duckduckgo", "brave"],
+      "positions": [1, 1],
+      "score": 4.0,
+      "category": "general"
+    },
+    {
+      "url": "https://doc.rust-lang.org/book/",
+      "title": "The Rust Programming Language - The Rust Programming Language",
+      "content": "The Rust Programming Language by Steve Klabnik, Carol Nichols, and Chris Krycho, with contributions from the Rust Community.",
+      "engine": "brave",
+      "template": "default.html",
+      "parsed_url": ["https", "doc.rust-lang.org", "/book/", "", "", ""],
+      "engines": ["brave"],
+      "positions": [2],
+      "score": 0.5,
+      "category": "general"
+    },
+    {
+      "url": "https://www.rust-lang.org/#learn",
+      "title": "Learn Rust",
+      "content": "Duplicate of the home page with a fragment.",
+      "engine": "brave",
+      "engines": ["brave"],
+      "positions": [3],
+      "score": 0.3,
+      "category": "general"
+    },
+    {
+      "url": "https://WWW.Rust-Lang.org:443/",
+      "title": "Rust (default port spelled out)",
+      "content": "Duplicate of the home page with the default port.",
+      "engine": "duckduckgo",
+      "engines": ["duckduckgo"],
+      "positions": [4],
+      "score": 0.25,
+      "category": "general"
+    },
+    {
+      "url": "ftp://ftp.example.org/pub/rust.tar.gz",
+      "title": "rust.tar.gz",
+      "content": "An FTP link, which web_search drops.",
+      "engine": "bing",
+      "engines": ["bing"],
+      "positions": [5],
+      "score": 0.2,
+      "category": "general"
+    },
+    {
+      "url": "magnet:?xt=urn:btih:0123456789abcdef",
+      "title": "rust torrent",
+      "content": "A magnet link, which web_search drops.",
+      "engine": "piratebay",
+      "engines": ["piratebay"],
+      "positions": [1],
+      "score": 0.2,
+      "category": "files"
+    },
+    {
+      "url": "javascript:alert(1)",
+      "title": "script",
+      "content": "A script URL, which web_search drops.",
+      "engine": "bing",
+      "engines": ["bing"],
+      "positions": [6],
+      "score": 0.1,
+      "category": "general"
+    },
+    {
+      "url": "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+      "title": "Rust (programming language) - Wikipedia",
+      "content": "Rust is a general-purpose programming language emphasizing performance, type safety, and concurrency.",
+      "engine": "wikipedia",
+      "template": "default.html",
+      "positions": [1],
+      "score": 1.0,
+      "category": "general"
+    },
+    {
+      "url": "http://example.org/plain-http",
+      "title": "A plain HTTP page",
+      "content": "Plain http results are kept.",
+      "engine": "bing",
+      "engines": ["bing"],
+      "positions": [7],
+      "score": 0.1,
+      "category": "general"
+    },
+    {
+      "title": "A result without a URL",
+      "content": "Dropped.",
+      "engine": "bing"
+    }
+  ],
+  "answers": [],
+  "corrections": [],
+  "infoboxes": [
+    {
+      "infobox": "Rust",
+      "id": "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+      "content": "Rust is a general-purpose programming language.",
+      "engine": "wikipedia",
+      "engines": ["wikipedia"]
+    }
+  ],
+  "suggestions": ["rust programming language book", "rust language tutorial"],
+  "unresponsive_engines": [["google", "timeout"], ["qwant", "Suspended: too many requests"]]
+}

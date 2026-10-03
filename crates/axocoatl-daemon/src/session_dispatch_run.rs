@@ -177,9 +177,16 @@ impl SessionDispatchController {
                 &resolved,
             )?,
         };
+        // A listed host tool must be available to this Agent; the reason is
+        // the activation's failure, before any reservation.
+        if let Some(reason) = state.host_tool_refusal(&profile) {
+            return Err(error(reason));
+        }
+        let host_definitions = state.host_tool_definitions(&profile);
         let tools = match repository.as_ref() {
-            Some(resource) => resource.preview_tools(&profile)?,
-            None => tools,
+            Some(resource) => resource.preview_tools(&profile, host_definitions)?,
+            None if host_definitions.is_empty() => tools,
+            None => Arc::new(tools.extended_with(host_definitions)),
         };
         let control = state.child_run_control(&activation)?;
         let configuration = serde_json::to_string(&config).map_err(error)?;

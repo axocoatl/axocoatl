@@ -51,6 +51,22 @@ impl ToolExecutor {
         self.tools.insert(name.into(), ToolBackend::Builtin(tool));
     }
 
+    /// A new executor with this one's tools and MCP routing plus `extra`
+    /// built-ins, which replace any tool of the same name.
+    pub fn extended_with(
+        &self,
+        extra: impl IntoIterator<Item = (impl Into<String>, Arc<dyn BuiltinTool>)>,
+    ) -> Self {
+        let mut extended = Self {
+            tools: self.tools.clone(),
+            mcp_registry: self.mcp_registry.clone(),
+        };
+        for (name, tool) in extra {
+            extended.register_builtin(name, tool);
+        }
+        extended
+    }
+
     /// Register an MCP tool (from a connected server). `name` is the qualified
     /// `mcp__server__tool` name the LLM sees; `definition` is what gets
     /// advertised to it.

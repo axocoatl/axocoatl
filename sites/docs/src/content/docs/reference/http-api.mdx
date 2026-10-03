@@ -382,8 +382,8 @@ activity returns an empty list.
 ```
 
 `mode` is `sandbox.network`. Pass `next_after` back as `after` to read on. Each
-event has a `kind`: `policy`, `sidecar`, `bind`, `unbind`, `open`, `close`, `web` or
-`limit`. An `open` event names the destination `host` and `port`, its
+event has a `kind`: `policy`, `sidecar`, `bind`, `unbind`, `open`, `close`,
+`web_request`, `web` or `limit`. An `open` event names the destination `host` and `port`, its
 `conn_kind` (`connect` for a tunnel or `http`), the `decision` (`allow` or `deny`)
 with its `reason` and `status`, the addresses used, and the tool call (`binding`)
 whose credential it presented. Credentials appear only as 16-hex tags. A `close`
@@ -402,6 +402,36 @@ policy: `session` (your `sandbox.egress` list plus this Session's allows),
 `provisioning` (the Alpine, Debian and Ubuntu mirrors) and `browser` when the browser
 tool is configured. Each rule has an `id`, its `text` and its `source`. Both are empty
 under `bridge` and `none`, and while the Session has no running runtime.
+
+A `web_request` event is written before a `web_search` or `web_fetch` call with
+valid arguments sends anything: the `tool`, its `invocation_id`, `activation_id`
+and `agent`, and either the `url` a fetch requests or a search's `query_sha256` and
+`query_bytes`. If it cannot be written, nothing is sent. A `web` event with the same
+`invocation_id` follows when the call finishes; a call with invalid arguments has
+only the `web` event.
+
+A `web` event records how one call ended: the `tool`, its `invocation_id`,
+`activation_id` and `agent`, the `decision` and `reason`, the `source_ids` it
+returned, `retrieved_at_ms` and `ms`. A search adds `query_sha256` and
+`query_bytes` (not the query text), `results`, `unresponsive_engines` and `sources`
+(each `{id, url}`, URLs cut to 512 bytes and then marked `url_truncated`). A fetch
+adds `url`, `final_url`, `redirects`, `status`, `bytes`, `content_sha256` and
+`text_sha256`. Each fetch URL, in `web_request` too, is cut to 1,024 bytes;
+`url_truncated`, `final_url_truncated` and `redirects_truncated` are present and
+`true` only when one was cut. The full URL is in the tool call's recorded
+arguments.
+
+```json
+{"v": 1, "seq": 6, "ts_ms": 1790000000000, "event": {"kind": "web_request",
+  "tool": "web_fetch", "invocation_id": "tool-…", "activation_id": "…", "agent": "…",
+  "url": "https://www.rust-lang.org/"}}
+{"v": 1, "seq": 7, "ts_ms": 1790000000412, "event": {"kind": "web", "tool": "web_fetch",
+  "invocation_id": "tool-…", "activation_id": "…", "agent": "…", "decision": "allow",
+  "url": "https://www.rust-lang.org/", "final_url": "https://www.rust-lang.org/",
+  "status": 200, "redirects": [], "unresponsive_engines": [], "bytes": 18234,
+  "content_sha256": "…", "text_sha256": "…", "source_ids": ["S1a2b3c4d"],
+  "retrieved_at_ms": 1790000000412, "ms": 412}}
+```
 
 #### Allow or revoke a host for one Session
 
@@ -448,6 +478,14 @@ refused (not_allowed)`, and its `details` holds up to 200 of the matching `open`
 `truncated` set when there were more. Events are joined to the activation through the
 tool call whose credential they presented. Setup, terminal and unattributed events
 appear only in the network record.
+
+An activation that used `web_search` or `web_fetch` has one evidence item of kind
+`sources`. Its `details.sources` lists each source id the activation received with
+`url`, `final_url`, `searched`, `fetched`, `status`, `retrieved_at_ms`,
+`content_sha256`, `text_sha256`, the `invocations` that returned it and `cited`,
+which is true when the activation's final output cites the id in square brackets
+(`[S1a2b3c4d]` or `[S1a2b3c4d ¶3]`). `details.unknown_citations` lists ids the
+output cites that no web tool returned to that activation.
 
 In a native turn, an edge of kind `delegated_by` runs from a lead's node to a helper
 node the lead admitted through `delegate`; its `summary` names the helper template and

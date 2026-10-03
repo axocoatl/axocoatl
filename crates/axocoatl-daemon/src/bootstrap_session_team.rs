@@ -204,6 +204,33 @@ pub struct SessionTeamView {
     /// has `writes: []`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proposed_delegation: Option<ProposedDelegation>,
+    /// Template ids whose Agents list `web_search` or `web_fetch`, so the
+    /// team view can mark them. Absent when none do.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub web_templates: Vec<String>,
+    /// Slot ids whose current definition lists `web_search` or `web_fetch`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub web_slots: Vec<String>,
+}
+/// Whether a tools list names a web tool.
+fn lists_web_tool(tools: &[String]) -> bool {
+    tools
+        .iter()
+        .any(|tool| matches!(tool.as_str(), "web_search" | "web_fetch"))
+}
+/// The tools a slot's current definition lists.
+fn slot_tools(
+    slot: &SessionTeamSlot,
+    content: &ExecutionContentStore,
+) -> Result<Vec<String>, DaemonError> {
+    let ActivationEvidenceContent::Definition { configuration, .. } = content
+        .resolve_activation_evidence(&slot.definition.snapshot)
+        .map_err(team_error)?
+    else {
+        return Err(team_error("Session definition is unavailable"));
+    };
+    let config: AgentConfig = serde_json::from_str(configuration).map_err(team_error)?;
+    Ok(config.tools)
 }
 /// Graph bounds offered with helpers: the lead and up to five helper runs in
 /// one turn. Helpers add no connection, so five leave room for a chain of six
@@ -626,6 +653,8 @@ impl AxocoatlDaemon {
                 reviewers: vec![],
                 suggested_check: None,
                 proposed_delegation: None,
+                web_templates: vec![],
+                web_slots: vec![],
             });
         }
         let suggested_check = session
@@ -667,6 +696,13 @@ impl AxocoatlDaemon {
             .filter(|agent| review_refusal(&agent.id, &agent.to_core()).is_none())
             .map(|agent| agent.id.clone())
             .collect();
+        let web_templates: Vec<String> = self
+            .config
+            .agents
+            .iter()
+            .filter(|agent| lists_web_tool(&agent.tools))
+            .map(|agent| agent.id.clone())
+            .collect();
         self.session_dispatch_lifecycles.with_session_team_stores(
             &token,
             |canonical, content, _| {
@@ -689,6 +725,12 @@ impl AxocoatlDaemon {
                             .and_then(|approval| approval.edit.required_review),
                         None => None,
                     };
+                    let mut web_slots = Vec::new();
+                    for slot in &current.graph.slots {
+                        if lists_web_tool(&slot_tools(slot, content)?) {
+                            web_slots.push(slot.slot_id.as_str().to_string());
+                        }
+                    }
                     return Ok(SessionTeamView {
                         history_version: "execution_v2",
                         configuration_revision: current.configuration_revision,
@@ -707,6 +749,8 @@ impl AxocoatlDaemon {
                         reviewers,
                         suggested_check,
                         proposed_delegation: None,
+                        web_templates: web_templates.clone(),
+                        web_slots,
                     });
                 }
                 let selected: Vec<String> = match &session.mode {
@@ -753,6 +797,15 @@ impl AxocoatlDaemon {
                     })
                     .collect();
                 let proposed_delegation = proposed_delegation(&slots, &templates);
+                let web_slots = slots
+                    .iter()
+                    .filter(|slot| {
+                        slot.template_id
+                            .as_ref()
+                            .is_some_and(|id| web_templates.contains(id))
+                    })
+                    .map(|slot| slot.slot_id.clone())
+                    .collect();
                 Ok(SessionTeamView {
                     history_version: "execution_v2",
                     configuration_revision: 0,
@@ -766,6 +819,8 @@ impl AxocoatlDaemon {
                     reviewers,
                     suggested_check,
                     proposed_delegation,
+                    web_templates,
+                    web_slots,
                 })
             },
         )

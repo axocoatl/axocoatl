@@ -28,6 +28,7 @@ bytes = "1"
 reqwest = { workspace = true }
 base64 = { workspace = true }
 tokio-stream = { workspace = true }
+getrandom = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["process"] }

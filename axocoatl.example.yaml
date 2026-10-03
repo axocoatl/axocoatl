@@ -124,3 +124,13 @@ skills:
 #       - npm                     # registry.npmjs.org
 #       - pypi                    # pypi.org, files.pythonhosted.org
 #       - host: api.example.com   # ports default to [443]
+
+# ─── Web research (optional) ────────────────────────────────────────
+# Agents whose `tools` list web_search or web_fetch can search the web
+# through a SearXNG container Axocoatl runs with Podman, and read public
+# pages. Both run on this computer, not in the Session container, and each
+# call is kept in the Session's network record. Search queries go to public
+# search engines. See the docs: Configure > Web research.
+# web_search:
+#   provider: searxng
+# web_fetch: {}

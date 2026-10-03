@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   network** and `GET /api/sessions/{id}/network` warn that Agents can read it. See the
   Sandboxes and Security pages for what it does not cover.
 - Each native Session can keep a network record, an append-only log of egress
-  decisions, connection closes, policy changes and web-tool fetches, and
+  decisions, connection closes, policy changes and web-tool calls, and
   `GET /api/sessions/{id}/network` reads it. Reading never creates a record.
 - The bundled execution supervisor gains an egress proxy mode, a loopback/Unix-socket
   bridge mode and a socket probe, which `network: egress` uses.
@@ -53,11 +53,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows the policy, allowed and refused counts and refused connections, with
   **Allow for this Session** on hosts the list refused. An activation's details show
   its tool calls' network activity as `network` evidence.
-- The configuration parses `web_search.provider: searxng` with a `searxng` block, and
-  new `web_fetch` and `browser` blocks, for upcoming tools. They are validated but not
-  yet run.
+- Native `web_search` and `web_fetch` for Agents whose `tools` list them.
+  `web_search.provider: searxng` searches through a SearXNG container that Axocoatl
+  runs with local Podman (pinned image, loopback-only port, no capabilities, started
+  on the first search and removed when the daemon stops), or through your own
+  instance with `managed: false` and `url`. A `web_fetch` block enables
+  `web_fetch`, which reads one public page as numbered paragraphs. It refuses
+  private, loopback, link-local and other special addresses, this computer's own
+  interface addresses (such as its global IPv6 address) and addresses on a network
+  it is directly connected to, including names that resolve to them and every
+  redirect hop (at most five), reads only HTML, text, Markdown, JSON and XML, and
+  caps the body at `max_bytes`. Both run on the host, not in the Session container.
+  Each result and page has a `source_id` for citations (`[S1a2b3c4d]`,
+  `[S1a2b3c4d ¶3]`). Before a call sends anything it appends a `web_request` event to
+  the Session's network record with the URL it fetches or its query's hash, and when
+  it finishes a `web` event with the tool call, activation, Agent, source ids and
+  content hashes; a search records its query's hash, not its text. If either cannot
+  be written the call fails. The turn's control plane adds `sources` evidence per
+  activation, marking which sources its final answer cites, and Team & budget marks
+  Agents that list a web tool with a **web** badge. Native Sessions refuse the web
+  tools under `sandbox.network: none`; under `egress` they run as under `bridge`,
+  outside the `sandbox.egress` list. In attempts made with Explore several ways an
+  Agent that lists them runs without them. See Configure > Web research.
+- Legacy (1.0-format) Sessions get `web_fetch` for an Agent whose `tools` list names
+  it, never under `sandbox.network: none`, and `web_search` through SearXNG when
+  `provider: searxng`. Legacy calls are not recorded.
+- The configuration parses a new `browser` block, for an upcoming tool. It is
+  validated but not yet run.
 
 ### Changed
+- `web_search.provider` must be `searxng` or the legacy `tavily`; any other non-empty value is
+  a configuration error, and `tavily` draws a warning because only legacy Sessions
+  use it. Native Sessions refuse `tavily`.
 - `sandbox.backend: e2b` now requires `sandbox.network: bridge` when the configuration
   loads. Before, `network: none` with E2B was accepted and refused only when a
   remote Session was prepared.

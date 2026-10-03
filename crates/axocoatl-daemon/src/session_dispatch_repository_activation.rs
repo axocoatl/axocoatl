@@ -36,14 +36,19 @@ const FOREGROUND_STREAM_BYTES: usize = 1024 * 1024;
 /// Definition admission and activation preparation share the exact foreground
 /// capability boundary. Reject unsupported names before provider observation.
 /// `workspace_knowledge` is the host's own port, offered only when listed.
+/// Host invocation tools (`web_search`, `web_fetch`, `browser`) are accepted
+/// here by name; whether one is available is its registered tool's decision.
 pub(crate) fn validate_repository_tools(tools: &[String]) -> Result<()> {
     if let Some(tool) = tools.iter().find(|tool| {
-        !SUPPORTED_TOOLS.contains(&tool.as_str()) && tool.as_str() != super::knowledge::NAME
+        !SUPPORTED_TOOLS.contains(&tool.as_str())
+            && tool.as_str() != super::knowledge::NAME
+            && !super::host_tools::is_host_invocation_tool(tool)
     }) {
         return Err(error(format!(
-            "native Session repository tool '{tool}' has no owned foreground implementation; supported tools: {}, {}. Background and PTY ownership is not integrated",
+            "native Session repository tool '{tool}' has no owned foreground implementation; supported tools: {}, {}, {}. Background and PTY ownership is not integrated",
             SUPPORTED_TOOLS.join(", "),
-            super::knowledge::NAME
+            super::knowledge::NAME,
+            super::host_tools::HOST_INVOCATION_TOOLS.join(", ")
         )));
     }
     Ok(())
@@ -179,14 +184,28 @@ impl RepositoryActivationResource {
         Ok(self.description.clone())
     }
 
-    pub(super) fn preview_tools(&self, profile: &ExecutionProfile) -> Result<Arc<ToolExecutor>> {
+    pub(super) fn preview_tools(
+        &self,
+        profile: &ExecutionProfile,
+        host_tools: Vec<(&'static str, Arc<dyn BuiltinTool>)>,
+    ) -> Result<Arc<ToolExecutor>> {
         validate_repository_tools(&profile.tools)?;
         // Definitions come from the actual built-ins. This executor cannot run:
         // acknowledged admission replaces it with an exact invocation executor.
-        Ok(session_tools(Arc::new(RepositorySandbox {
-            resource: self.clone(),
-            invocation: None,
-        })))
+        let mut executor = ToolExecutor::new();
+        axocoatl_tools::register_session_tools(
+            &mut executor,
+            Arc::new(RepositorySandbox {
+                resource: self.clone(),
+                invocation: None,
+            }),
+        );
+        // Host tools the profile lists, as descriptions only; admission binds
+        // the real tool to the admitted invocation.
+        for (name, definition) in host_tools {
+            executor.register_builtin(name, definition);
+        }
+        Ok(Arc::new(executor))
     }
 }
 
@@ -231,7 +250,10 @@ impl RepositoryInvocation {
             .get(&intent.activation.activation_id)
             .filter(|bound| bound.activation == intent.activation)
             .ok_or_else(|| error("invocation has no exact bound executor"))?;
-        if intent.tool_name == super::delegate::NAME || intent.tool_name == super::knowledge::NAME {
+        if intent.tool_name == super::delegate::NAME
+            || intent.tool_name == super::knowledge::NAME
+            || super::host_tools::is_host_invocation_tool(&intent.tool_name)
+        {
             return Ok(None);
         }
         let Some(resource) = &bound.repository else {

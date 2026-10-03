@@ -280,11 +280,16 @@ misled by what it reads in the repository. See
 [Required review](/configure/agents/#required-review).
 
 `network: none` blocks container egress and Preview ports, but does not block
-the host daemon itself from reaching model providers, MCP servers, web search,
-webhooks, a remote sandbox service, or a registry for a Podman image pull. It
-also prevents readiness/setup processes inside the container from downloading
-missing commands or dependencies, so use an image that already contains the
-required repository command surface.
+the host daemon itself from reaching model providers, MCP servers, web search in
+legacy Sessions, webhooks, a remote sandbox service, or a registry for a Podman
+image pull. It also prevents readiness/setup processes inside the container from
+downloading missing commands or dependencies, so use an image that already contains
+the required repository command surface.
+
+Native Sessions refuse the web tools under `network: none`. A legacy (1.0-format)
+Session still offers `web_search`, unrecorded, to every Agent whose `tools` list is
+empty or names it. It offers `web_fetch` only to an Agent whose `tools` list names
+it, and never under `network: none`.
 
 ## Control network egress
 
@@ -320,8 +325,10 @@ What `egress` does not do:
   one Session container.
 - It does not inject or broker credentials. A `git push` from inside the container
   still needs a token there.
-- Traffic from Axocoatl itself (model providers, MCP servers, web search,
-  webhooks, Podman image pulls) does not go through the proxy or its record.
+- Traffic from Axocoatl itself (model providers, MCP servers, `web_search` and
+  `web_fetch`, webhooks, Podman image pulls) does not go through the proxy.
+  `sandbox.egress` does not limit the web tools; their calls are written to the
+  network record, and an Agent gets them only when its `tools` list them.
 - It is not available with E2B, for Ways attempt containers (they run with no
   network), or for Sessions created before the native Session format.
 - The image `ENTRYPOINT` does not run under `egress`.
@@ -338,7 +345,11 @@ Review every path by which content can leave the machine:
 - hosted model providers and an Ollama `base_url` that is not loopback;
 - E2B Cloud remote sandboxes, including repository transfer;
 - remote MCP servers and tools;
-- configured web search;
+- configured web search: a managed SearXNG sends model-written queries to public
+  search engines, and `web_fetch` requests public pages from the daemon process
+  (see [Web research](/configure/web/#what-leaves-your-computer) and what it
+  refuses under
+  [Private and local addresses](/configure/web/#private-and-local-addresses));
 - event webhooks and their headers;
 - package downloads or repository scripts inside a bridged container, or to the
   hosts listed under `sandbox.egress`;

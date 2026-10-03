@@ -200,8 +200,10 @@ What egress does not cover:
   CDN, can be used to reach those sites, and a listed host that accepts uploads
   (`github`, `npm`, `pypi`, `crates`) is a way for data to leave. `validate` and
   `doctor` warn about both.
-- Traffic from Axocoatl itself is outside the proxy and its record: model providers,
-  MCP servers, web search, webhooks and Podman image pulls.
+- Traffic from Axocoatl itself is outside the proxy: model providers, MCP servers,
+  `web_search` and `web_fetch`, webhooks and Podman image pulls. The web tools run
+  on your computer, so `sandbox.egress` does not limit them; their calls are kept in
+  the Session's network record as `web_request` and `web` events.
 - Agents in one Session share its container. A read-only helper cannot connect to
   the proxy over TCP, but it can read a running writer's credential from that
   process's environment under `/proc`. Axocoatl does not separate Agents inside one
