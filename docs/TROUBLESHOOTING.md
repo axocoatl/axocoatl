@@ -23,6 +23,19 @@ Start it: `ollama serve &`. Verify: `curl http://localhost:11434/api/tags`.
 **`Model 'llama3.2' not pulled`**
 `ollama pull llama3.2`. Confirm with `ollama list`.
 
+**`Ollama at http://localhost:11434 has cloud models enabled; native Sessions refuse it`**
+Native Sessions use only an Ollama server that reports its cloud features
+disabled. Add `{"disable_ollama_cloud": true}` to `~/.ollama/server.json` of
+the user that runs Ollama, or start it with `OLLAMA_NO_CLOUD=1` (macOS app:
+`launchctl setenv OLLAMA_NO_CLOUD 1`), and restart Ollama.
+`curl -s http://localhost:11434/api/status` must then show `"disabled":true`.
+You can instead run a second server, for example
+`OLLAMA_NO_CLOUD=1 OLLAMA_HOST=127.0.0.1:11436 ollama serve`, and set
+`providers.ollama.base_url` to it.
+
+**Ollama version other than 0.20.6**
+Native Sessions accept only the audited Ollama 0.20.6 server.
+
 ## Config
 
 **`Config invalid` / parse errors**
@@ -81,6 +94,13 @@ environment**; repository tools never fall back to direct host file access.
 Axocoatl never installs host software or creates a Podman VM during Session
 startup. Follow the printed installation or `podman machine init` command. It
 may start a VM that already exists but is stopped.
+
+**The Always-On Service cannot find Podman that works in your shell**
+A service starts with the service manager's minimal `PATH`. `axocoatl service
+install` records the directory of the `podman` your shell finds, plus
+`CONTAINER_CONNECTION` and `CONTAINER_HOST` when set. Reinstall from a shell
+where `podman` works, then run `axocoatl service stop && axocoatl service start`.
+On macOS the service log is `~/Library/Logs/Axocoatl/daemon.log`.
 
 **A `network: none` Session cannot become Ready**
 The selected image may be missing Git or another repository command Axocoatl

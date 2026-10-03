@@ -77,14 +77,22 @@ workbench path uses:
 - at least one configured model provider;
 - **Ollama** plus a pulled model for the simplest local first run.
 
-For a local Ollama setup:
+Native Sessions use Ollama **0.20.6** on this machine with its cloud features
+disabled. For a local Ollama setup, start the server with cloud disabled and pull
+a coding model:
 
 ```sh
-ollama serve
-ollama pull llama3.2
+OLLAMA_NO_CLOUD=1 ollama serve
+ollama pull qwen3-coder:30b
 ```
 
-Run `ollama serve` in its own terminal or as its own service.
+Run `ollama serve` in its own terminal or as its own service. If Ollama already
+runs as the macOS app or a Homebrew service, add
+`{"disable_ollama_cloud": true}` to `~/.ollama/server.json` instead and restart
+it. A coding model such as `qwen3-coder:30b` suits Lead, the Agent that writes;
+it is a large download, so pull a model that fits your machine's memory.
+Onboarding suggests models from the ones installed on your server; see
+[Configure Axocoatl](/start/onboard/#ollama).
 
 ## Windows through WSL2
 

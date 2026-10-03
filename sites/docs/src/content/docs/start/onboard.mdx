@@ -27,10 +27,55 @@ profiles and eligible OpenRouter-credit profiles. Anthropic, OpenAI, Gemini, and
 Mistral remain compatibility adapters configured manually; they are not eligible
 for native Session execution. See [Providers](/configure/providers/).
 
-For Ollama, the wizard asks for a model and can run `ollama pull` for you. For a
-hosted provider, the API-key prompt is masked. A supplied key is stored in the
-owner-only user configuration; leaving it blank keeps the provider's
+For a hosted provider, the API-key prompt is masked. A supplied key is stored in
+the owner-only user configuration; leaving it blank keeps the provider's
 `${PROVIDER_API_KEY}` environment reference instead.
+
+### Ollama
+
+The wizard asks for the Ollama server URL, `http://localhost:11434` by default,
+and checks it before it writes anything. Native Sessions use an Ollama server
+only when it:
+
+- is reached at a loopback address on this machine, such as `localhost`;
+- runs Ollama **0.20.6**, the audited version;
+- reports its cloud features disabled in `GET /api/status`
+  (`"cloud": {"disabled": true}`).
+
+If the server fails a check, the wizard says which one and offers to check
+again, to use a different server URL, or to continue with this one. Native
+Sessions refuse that server until it is fixed, and `axocoatl doctor` reports it
+as a failure. To turn Ollama's cloud features off, do one of these and restart
+Ollama:
+
+- add `{"disable_ollama_cloud": true}` to `~/.ollama/server.json` of the user
+  that runs Ollama (this also works for the Homebrew service);
+- start the server with `OLLAMA_NO_CLOUD=1`, for example
+  `OLLAMA_NO_CLOUD=1 ollama serve`. For the macOS app, run
+  `launchctl setenv OLLAMA_NO_CLOUD 1`, then quit and reopen Ollama.
+
+`curl -s http://localhost:11434/api/status` then shows `"disabled":true`. You
+can also keep your usual Ollama as it is and run a second, cloud-disabled server
+on another port, for example
+`OLLAMA_NO_CLOUD=1 OLLAMA_HOST=127.0.0.1:11436 ollama serve`, then give the
+wizard `http://127.0.0.1:11436`.
+
+The wizard then lists the models installed on that server and preselects one for
+**Lead** and one for **Reviewer**. You can pick any installed model or type
+another name.
+
+- For Lead, it prefers a coding model: a Qwen3-Coder tag when one is installed,
+  then the largest other coding model, then the largest general model.
+- For Reviewer, it prefers a different, larger model, gpt-oss when one is
+  installed, so a second model checks Lead's work (see
+  [Cross-model review](/configure/cross-model-review/)). Without a larger model,
+  Reviewer uses Lead's model.
+- Cloud models and embedding models are never suggested.
+- If the server has no local model, it suggests `qwen3-coder:30b`, a large
+  download.
+
+Scout and the chat Assistant use Lead's model. For a model that is not installed
+yet, the wizard offers to run `ollama pull` against that server.
 
 OpenRouter setup uses ordinary OpenRouter credits and asks you to confirm that no
 BYOK provider keys are connected. It starts with a non-reasoning text/tool model and
@@ -51,7 +96,9 @@ not encrypt that file. Protect it and its backups. The wizard does not create a
 
 ## Default team
 
-Both choices write the same Agents, on the provider and model you choose:
+Both choices write the same Agents on the provider you choose. With OpenRouter
+they all use the model you enter; with Ollama, Reviewer uses the Reviewer model
+and the others use the Lead model:
 
 | Agent | Role | Tools | May change |
 | --- | --- | --- | --- |
@@ -104,6 +151,9 @@ Doctor performs these checks against the resolved user configuration:
 |---|---|---|
 | Configuration parses and validates | Required | Fix the reported field, then run `axocoatl validate`. |
 | Configured Ollama endpoint responds | Required when configured | Start Ollama or correct `providers.ollama.base_url`. |
+| The Ollama endpoint is a loopback address | Required when configured | Native Sessions use only an Ollama server on this machine; set `providers.ollama.base_url` to one. |
+| The Ollama server reports version 0.20.6 | Required when configured | Install Ollama 0.20.6, or point `providers.ollama.base_url` at a server that runs it. |
+| The Ollama server reports its cloud features disabled (`GET /api/status`) | Required when configured | Add `{"disable_ollama_cloud": true}` to `~/.ollama/server.json` or start the server with `OLLAMA_NO_CLOUD=1`, then restart Ollama; or point `providers.ollama.base_url` at a cloud-disabled server. |
 | Every configured Ollama model is present | Required when configured | Run `ollama pull <model>`. |
 | Data directory is writable | Required | Fix permissions or set `AXOCOATL_DATA_DIR`. |
 | Rust toolchain | Warning | Needed only to build from source. |
@@ -112,8 +162,9 @@ Doctor performs these checks against the resolved user configuration:
 | Podman runtime answers a bounded `podman info --format json` probe | Warning | Required for default folder Sessions and several Ways; follow the reported install, machine, or runtime guidance. |
 | Configured webhooks | Egress notice | Confirm that each named destination is intentional. |
 
-Doctor checks prerequisites, not native profile eligibility. **Team & budget**
-performs the exact provider/model and allowance review before native work starts.
+Doctor checks the Ollama server requirements of native Sessions, but not each
+model's native profile. **Team & budget** performs the exact provider/model and
+allowance review before native work starts.
 
 Doctor exits non-zero when a required check fails. A Podman warning does not
 make a provider-only one-shot command fail, but it does block the normal local

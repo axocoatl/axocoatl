@@ -91,6 +91,10 @@ agents:
     sampling: { max_tokens: 4096 }
 ```
 
+`axocoatl onboard` with Ollama writes the same team on models installed on your server:
+Lead and Scout on the Lead model, and Reviewer on a different, larger model when one is
+installed. See [Configure Axocoatl](/start/onboard/#ollama).
+
 A new Session selects the first Agent that is not a Worker, here Lead, and runs it alone.
 When its team is that one Agent, Team & budget offers every Worker with `writes: []` as its
 helpers: select **Let this Agent delegate to helpers** to add them, then enter every limit

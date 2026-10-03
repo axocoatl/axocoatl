@@ -30,10 +30,10 @@ same proof as building `axocoatl-cli`.
 
 <Steps>
 
-1. Start Ollama in another terminal:
+1. Start Ollama in another terminal, with its cloud features disabled:
 
    ```sh
-   ollama serve
+   OLLAMA_NO_CLOUD=1 ollama serve
    ```
 
 2. Pull the exact model configured for the Agent:
@@ -52,7 +52,8 @@ same proof as building `axocoatl-cli`.
 
 </Steps>
 
-Doctor live-probes Ollama and requires every configured Ollama Agent model to
+Doctor live-probes Ollama: it requires a loopback Ollama 0.20.6 server that
+reports its cloud features disabled, and every configured Ollama Agent model to
 be present. Hosted provider checks are not equivalent: they inspect credential
 presence—including OpenRouter when configured—but do not make a live model
 request. Doctor reports Podman ready only after the client and applicable

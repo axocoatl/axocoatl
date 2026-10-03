@@ -2,8 +2,9 @@ use std::pin::Pin;
 
 mod native;
 pub use native::{
-    observe_native_ollama_context, NativeOllamaConfig, NativeOllamaContextObservation,
-    NativeOllamaProvider,
+    check_native_ollama_server, observe_native_ollama_context, validate_native_ollama_endpoint,
+    NativeOllamaConfig, NativeOllamaContextObservation, NativeOllamaProvider,
+    NativeOllamaServerCheck, OllamaCloudMode, NATIVE_OLLAMA_SERVER_VERSION,
 };
 
 use reqwest::header::CONTENT_TYPE;
