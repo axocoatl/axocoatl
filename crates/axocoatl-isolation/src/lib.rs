@@ -9,6 +9,7 @@ pub mod podman;
 pub mod pty;
 pub mod searxng;
 pub mod session_sandbox;
+pub mod session_trust;
 mod supervisor_embedded;
 mod supervisor_image;
 pub mod supervisor_program;
