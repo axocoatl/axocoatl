@@ -288,7 +288,11 @@ async fn actual_embedded_supervisor_receipt_drives_repository_observation() {
     let policy = SandboxPolicy {
         allow_untrusted_image: true,
         supervisor_installation: Some(root),
-        runtime_authority: Some(format!("repository-proof-{}", uuid::Uuid::new_v4())),
+        // Session start requires a full SHA-256 runtime authority.
+        runtime_authority: Some(format!(
+            "{:x}",
+            <sha2::Sha256 as sha2::Digest>::digest(session.as_bytes())
+        )),
         ..SandboxPolicy::default()
     };
     let sandbox =

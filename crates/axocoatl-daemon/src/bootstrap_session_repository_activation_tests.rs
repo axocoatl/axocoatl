@@ -1534,8 +1534,15 @@ env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy wget -q -T 3 -O /d
     .await;
     let expected = [
         ("localhost", 8080, 403, "not_allowed"),
-        ("host.containers.internal", 8080, 403, "private_destination"),
-        ("192.168.127.254", 8080, 403, "not_allowed"),
+        // The Podman machine's host gateway is refused even when a listed
+        // name resolves to it, and before the allowlist for a literal.
+        (
+            "host.containers.internal",
+            8080,
+            403,
+            "forbidden_destination",
+        ),
+        ("192.168.127.254", 8080, 403, "forbidden_destination"),
         ("169.254.1.2", 8080, 403, "forbidden_destination"),
         ("metadata.google.internal", 80, 403, "forbidden_destination"),
         ("loop.test", 8000, 403, "forbidden_destination"),
