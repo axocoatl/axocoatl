@@ -9,7 +9,7 @@ pub mod types;
 pub mod web;
 
 pub use automation::*;
-pub use browser::validate_browser;
+pub use browser::{validate_browser, DEFAULT_BROWSER_IMAGE};
 pub use egress::{network_warnings, validate_allow_list, validate_egress, ConfigWarning};
 pub use error::*;
 pub use secret::SecretString;

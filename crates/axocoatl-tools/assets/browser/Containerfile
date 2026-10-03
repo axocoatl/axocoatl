@@ -1,0 +1,27 @@
+# Axocoatl browser image: headless Chromium and Playwright 1.60.0 for the
+# browser and browser_check tools. Built by `axocoatl browser install` as
+# localhost/axocoatl-browser:pw1.60.0. The driver scripts are not part of the
+# image: Axocoatl passes them to node on each call.
+FROM docker.io/library/node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_AUDIT=false
+
+COPY package.json package-lock.json /opt/axocoatl/playwright/
+
+# npm ci installs the exact locked packages. The pinned playwright-core then
+# installs its own headless Chromium build and the system libraries it needs.
+# Only the headless shell is installed: both tools always run headless.
+RUN cd /opt/axocoatl/playwright \
+ && npm ci --omit=dev --ignore-scripts \
+ && node node_modules/playwright-core/cli.js install --with-deps --only-shell chromium \
+ && chmod -R a+rX /opt/axocoatl /ms-playwright \
+ && rm -rf /root/.npm /root/.cache /tmp/* /var/lib/apt/lists/*
+
+LABEL io.axocoatl.role=browser \
+      io.axocoatl.playwright=1.60.0
+
+USER node
+WORKDIR /tmp

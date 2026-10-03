@@ -1,0 +1,9 @@
+{
+  "name": "axocoatl-browser-driver",
+  "private": true,
+  "description": "Playwright for Axocoatl's browser tool, installed in /opt/axocoatl/playwright of the browser image.",
+  "dependencies": {
+    "@playwright/test": "1.60.0",
+    "playwright-core": "1.60.0"
+  }
+}

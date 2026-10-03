@@ -46,6 +46,22 @@ impl ToolExecutor {
         self
     }
 
+    /// A copy of this executor with more built-in tools; a name already
+    /// present is replaced.
+    pub fn extended(
+        &self,
+        tools: impl IntoIterator<Item = (String, Arc<dyn BuiltinTool>)>,
+    ) -> Self {
+        let mut extended = Self {
+            tools: self.tools.clone(),
+            mcp_registry: self.mcp_registry.clone(),
+        };
+        for (name, tool) in tools {
+            extended.register_builtin(name, tool);
+        }
+        extended
+    }
+
     /// Register a built-in tool.
     pub fn register_builtin(&mut self, name: impl Into<String>, tool: Arc<dyn BuiltinTool>) {
         self.tools.insert(name.into(), ToolBackend::Builtin(tool));
