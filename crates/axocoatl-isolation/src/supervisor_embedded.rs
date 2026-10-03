@@ -9,7 +9,7 @@ use crate::IsolationError;
 const EMBEDDED_PROTOCOL_VERSION: u32 = 3;
 const EMBEDDED_PACKAGE_VERSION: &str = "1.1.2";
 const EMBEDDED_SOURCE_SHA256: &str =
-    "843efdd91635d42e745e39fc1858d8b65233261130615d9914293d37559a96f3";
+    "7e0b62acbd137bed12d264065ad6b7e0fc2eb889f205f3587fc651cc129514b2";
 
 #[derive(Clone, Copy)]
 pub(crate) struct EmbeddedSupervisor {

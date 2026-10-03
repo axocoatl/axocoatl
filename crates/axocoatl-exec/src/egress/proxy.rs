@@ -913,9 +913,11 @@ mod tests {
     }
 
     fn read_response(stream: &mut UnixStream) -> String {
-        stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
+        // macOS refuses a timeout on a socket whose peer has already shut it
+        // down (EINVAL); the read below then returns at once.
+        if let Err(error) = stream.set_read_timeout(Some(Duration::from_secs(10))) {
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{error}");
+        }
         let mut response = Vec::new();
         let _ = stream.read_to_end(&mut response);
         String::from_utf8_lossy(&response).into_owned()
