@@ -481,7 +481,7 @@ impl ActivationStateStore {
         #[cfg(unix)]
         {
             root.require_owner_and_private_writes(effective_uid())?;
-            root.try_lock_exclusive()?;
+            root.lock_exclusive_waiting(axocoatl_core::LOCK_INHERITANCE_GRACE)?;
         }
         #[cfg(not(unix))]
         return Err(io::Error::new(io::ErrorKind::Unsupported, "Unix ownership required").into());

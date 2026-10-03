@@ -630,7 +630,7 @@ impl ControlCommandStore {
         bounded_id(&owner.workspace_id)?;
         dir.restrict_owner_only()?;
         #[cfg(unix)]
-        dir.try_lock_exclusive()?;
+        dir.lock_exclusive_waiting(axocoatl_core::LOCK_INHERITANCE_GRACE)?;
         #[cfg(not(unix))]
         return Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,

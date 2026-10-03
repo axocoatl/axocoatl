@@ -1057,7 +1057,7 @@ impl ExecutionContentStore {
         dir.require_owner_and_private_writes(effective_uid())?;
         dir.restrict_owner_only()?;
         #[cfg(unix)]
-        dir.try_lock_exclusive()?;
+        dir.lock_exclusive_waiting(axocoatl_core::LOCK_INHERITANCE_GRACE)?;
         #[cfg(not(unix))]
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,

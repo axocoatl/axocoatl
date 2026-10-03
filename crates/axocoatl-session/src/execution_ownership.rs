@@ -413,13 +413,14 @@ impl RootLease {
             };
             let legacy_file = root.open_lock_file(lock_name)?;
             lock(&legacy_file, "legacy controller (in-root lease)")?;
-            root.try_lock_exclusive().map_err(|error| {
-                if error.kind() == io::ErrorKind::WouldBlock {
-                    OwnershipError::Busy("controller (data-root inode)")
-                } else {
-                    OwnershipError::Io(error)
-                }
-            })?;
+            root.lock_exclusive_waiting(axocoatl_core::LOCK_INHERITANCE_GRACE)
+                .map_err(|error| {
+                    if error.kind() == io::ErrorKind::WouldBlock {
+                        OwnershipError::Busy("controller (data-root inode)")
+                    } else {
+                        OwnershipError::Io(error)
+                    }
+                })?;
             let lease = Self {
                 root,
                 external_root,
@@ -577,22 +578,18 @@ fn effective_uid() -> u32 {
 
 #[cfg(unix)]
 fn lock(file: &File, owner: &'static str) -> Result<(), OwnershipError> {
-    use std::os::fd::AsRawFd;
-    unsafe extern "C" {
-        fn flock(fd: std::os::raw::c_int, operation: std::os::raw::c_int) -> std::os::raw::c_int;
-    }
-    // LOCK_EX | LOCK_NB, matching the existing daemon and released CLI.
-    // SAFETY: File retains the live descriptor through the entire guard lifetime.
-    if unsafe { flock(file.as_raw_fd(), 2 | 4) } == 0 {
-        Ok(())
-    } else {
-        let error = io::Error::last_os_error();
+    use axocoatl_core::{lock_file_exclusive_waiting, LOCK_INHERITANCE_GRACE};
+    // flock(LOCK_EX | LOCK_NB), matching the existing daemon and released CLI.
+    // A lease reacquired while another thread starts a process can find its
+    // previous lock still shared with that child until it execs, so wait out
+    // that window before reporting the lease busy.
+    lock_file_exclusive_waiting(file, LOCK_INHERITANCE_GRACE).map_err(|error| {
         if error.kind() == io::ErrorKind::WouldBlock {
-            Err(OwnershipError::Busy(owner))
+            OwnershipError::Busy(owner)
         } else {
-            Err(error.into())
+            error.into()
         }
-    }
+    })
 }
 
 fn invalid<T>(message: &str) -> Result<T, OwnershipError> {
