@@ -34,8 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no port socket: a service forwarder (`axo-svc-<session>`) that joins only its
   network namespace serves each exposed port as a socket, and a separate
   `axo-pvw-<session>` container publishes those sockets on host loopback for Preview;
-  neither connects out, and a read-only helper, whose shell may not open TCP
-  connections, has no way to the Session's apps. Ways attempts use their Session's
+  neither connects out. A read-only helper, whose shell may not open TCP connections,
+  cannot reach the Session's apps over TCP or through the port sockets; an app that
+  listens on a Unix socket of its own, or on UDP, is still reachable. Ways attempts use their Session's
   proxy and decision point, with credentials of their own that the network record
   names with the attempt (`binding.attempt_id`). `validate`, `doctor` and daemon start warn about wildcard entries,
   CDN-fronted presets, hosts that accept uploads and ranges that contain a Podman host

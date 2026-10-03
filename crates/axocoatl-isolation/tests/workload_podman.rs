@@ -18,7 +18,10 @@
 //!
 //! `AXO_WORKLOAD_TEST_IMAGE` names a local image that already has Axocoatl's
 //! repository commands plus `wget` and `nc` (default: the supervisor's root
-//! test image), and `AXO_WORKLOAD_UPSTREAM_IMAGE` one with `node`.
+//! test image), and `AXO_WORKLOAD_UPSTREAM_IMAGE` one with `node`. The
+//! Unix-socket case copies that image's `/usr/local/bin/node`, `libstdc++` and
+//! `libgcc_s` into a Session container, so both must use the same C library
+//! (musl with the defaults).
 #![cfg(unix)]
 
 use std::collections::HashMap;
@@ -493,6 +496,27 @@ async fn supervised(
 const STATUS: &str = "id -u; id -g; echo HOME=$HOME; \
                       grep -E '^(CapInh|CapPrm|CapEff|CapAmb|NoNewPrivs):' /proc/self/status";
 
+/// The upstream image's node, copied into a Session container's `/tmp`.
+const NODE: &str = "LD_LIBRARY_PATH=/tmp/node-lib /tmp/node -e";
+
+/// Apps that listen on Unix sockets of their own: an abstract one, a socket
+/// file anyone may connect to (as PostgreSQL's default) and an owner-only one.
+const UNIX_APPS: &str = "const net=require('net'),fs=require('fs');\
+    const serve=(name,address,mode)=>{const server=net.createServer(c=>c.end(name+'-ok'));\
+    server.listen(address,()=>{if(mode)fs.chmodSync(address,mode)})};\
+    serve('abstract',String.fromCharCode(0)+'axo-workload-app');\
+    serve('open','/tmp/app-open.sock',0o777);\
+    serve('private','/tmp/app-private.sock',0o700)";
+
+/// Connects to each of `UNIX_APPS`, printing `name=reply` or `name=ERRNO`.
+const UNIX_PROBE: &str = "const net=require('net');\
+    const reach=address=>new Promise(done=>{let got='';const socket=net.connect(address);\
+    socket.on('data',data=>got+=data);socket.on('end',()=>done(got));\
+    socket.on('error',error=>done(error.code))});\
+    (async()=>{for(const [name,address] of [['abstract',String.fromCharCode(0)+'axo-workload-app'],\
+    ['open','/tmp/app-open.sock'],['private','/tmp/app-private.sock']])\
+    console.log(name+'='+await reach(address))})()";
+
 fn assert_unprivileged(ran: &Ran, uid: u32, home: &str) {
     let lines: Vec<&str> = ran.stdout.lines().collect();
     assert_eq!(lines[0], uid.to_string(), "{}", ran.stdout);
@@ -509,8 +533,10 @@ fn assert_unprivileged(ran: &Ran, uid: u32, home: &str) {
 }
 
 /// Gap 1: under egress the Session container holds no port socket, so a
-/// read-only helper's restricted shell has no way to the Session's apps, while
-/// Preview and the forwarder's sockets reach them.
+/// read-only helper's restricted shell cannot reach the Session's apps over TCP
+/// or through the port sockets, while Preview and the forwarder's sockets reach
+/// them. Landlock does not cover Unix sockets, so an app's own abstract socket,
+/// and a socket file whose mode lets the helper's user connect, stay reachable.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test workload_podman -- --ignored --test-threads=1"]
 async fn helpers_cannot_reach_the_sessions_apps_but_preview_and_the_forwarder_can() {
@@ -565,7 +591,8 @@ async fn helpers_cannot_reach_the_sessions_apps_but_preview_and_the_forwarder_ca
             "{}",
             ran.stderr
         );
-        // No Unix socket at all is in the helper's view of the container.
+        // Axocoatl puts no socket file in the helper's view of the container.
+        // (`find` cannot list abstract sockets; see below.)
         let sockets = ran
             .stdout
             .split("sockets-begin")
@@ -573,6 +600,76 @@ async fn helpers_cannot_reach_the_sessions_apps_but_preview_and_the_forwarder_ca
             .and_then(|rest| rest.split("sockets-end").next())
             .expect("the socket listing ran");
         assert!(sockets.trim().is_empty(), "sockets in the container: {sockets}");
+
+        // An app that listens on a Unix socket of its own is still within the
+        // helper's reach: Landlock does not cover Unix sockets, an abstract
+        // socket has no file mode, and only its mode keeps the helper from a
+        // socket file. Busybox's nc takes no abstract names, so the apps and
+        // the probe use node, copied from the upstream container.
+        let container = format!("axo-ses-{session}");
+        podman_ok(&["exec", "--user", "0", &container, "mkdir", "-p", "/tmp/node-lib"]).await;
+        for (from, to) in [
+            ("/usr/local/bin/node", "/tmp/node"),
+            ("/usr/lib/libstdc++.so.6", "/tmp/node-lib/libstdc++.so.6"),
+            ("/usr/lib/libgcc_s.so.1", "/tmp/node-lib/libgcc_s.so.1"),
+        ] {
+            podman_ok(&[
+                "cp",
+                &format!("{}:{from}", fixture.upstream),
+                &format!("{container}:{to}"),
+            ])
+            .await;
+        }
+        sandbox.spawn_background(&format!("{NODE} \"{UNIX_APPS}\""));
+        let probe = format!(
+            "{NODE} \"{UNIX_PROBE}\"; stat -c '%n %a %u' /tmp/app-open.sock /tmp/app-private.sock"
+        );
+        let expected = [
+            "abstract=abstract-ok",
+            "open=open-ok",
+            "private=private-ok",
+            "/tmp/app-open.sock 777 1000",
+            "/tmp/app-private.sock 700 1000",
+        ];
+        let mut writer = None;
+        for _ in 0..30 {
+            let ran = supervised(sandbox.as_ref(), ExecIdentity::Writer, &probe, None, None).await;
+            let ready = expected
+                .iter()
+                .all(|line| ran.stdout.lines().any(|seen| seen == *line));
+            writer = Some(ran);
+            if ready {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let writer = writer.unwrap();
+        assert_eq!(
+            writer.stdout.lines().collect::<Vec<_>>(),
+            expected,
+            "writer: {}",
+            writer.stderr
+        );
+        let helper = supervised(
+            sandbox.as_ref(),
+            ExecIdentity::Helper,
+            &probe,
+            None,
+            Some(helper_restriction(&workspace)),
+        )
+        .await;
+        assert_eq!(
+            helper.stdout.lines().collect::<Vec<_>>(),
+            [
+                "abstract=abstract-ok",
+                "open=open-ok",
+                "private=EACCES",
+                "/tmp/app-open.sock 777 1000",
+                "/tmp/app-private.sock 700 1000",
+            ],
+            "helper: {}",
+            helper.stderr
+        );
 
         // The forwarder's socket, from a container that mounts it read-only.
         let probe = podman_ok(&[
@@ -700,32 +797,48 @@ async fn hardened_writers_and_helpers_are_separate_users_without_capabilities() 
         );
 
         // The helper reads world-readable files and cannot write, whatever
-        // the file modes: Landlock refuses it.
+        // the file modes: Landlock refuses it. Landlock does not cover
+        // permission bits or timestamps; only the owner may change those.
         let reads = supervised(
             sandbox.as_ref(),
             ExecIdentity::Helper,
             "cat public.txt; stat -c %u private.txt; cat private.txt >/dev/null 2>&1; echo private=$?; \
-             echo nope > helper.txt; echo write=$?; echo nope >> public.txt; echo append=$?",
+             echo nope > helper.txt; echo write=$?; echo nope >> public.txt; echo append=$?; \
+             chmod 0644 private.txt; echo chmod=$?; \
+             touch -d '2001-01-01 00:00:00' public.txt; echo touch=$?",
             None,
             Some(helper_restriction(&workspace)),
         )
         .await;
         let lines: Vec<&str> = reads.stdout.lines().collect();
         assert_eq!(lines[0], "public", "{}", reads.stderr);
-        // On a macOS Podman machine the shared folder reports every file as
-        // owned by whoever asks, so file modes do not separate the users
-        // there; where it reports the real owner (the writer), the helper
-        // cannot read an owner-only file.
-        if lines[1] == "1001" {
-            assert_eq!(lines[2], "private=0", "{}", reads.stdout);
-        } else {
-            assert_eq!(lines[1], "1000", "{}", reads.stdout);
-            assert_eq!(lines[2], "private=1", "{}", reads.stdout);
-        }
         assert_eq!(lines[3], "write=1", "{}", reads.stdout);
         assert_eq!(lines[4], "append=1", "{}", reads.stdout);
         assert!(!workspace.join("helper.txt").exists());
         assert_eq!(std::fs::read_to_string(workspace.join("public.txt")).unwrap(), "public\n");
+        let private_mode = std::fs::metadata(workspace.join("private.txt")).unwrap().mode() & 0o7777;
+        let public_mtime = std::fs::metadata(workspace.join("public.txt")).unwrap().mtime();
+        // On a macOS Podman machine the shared folder reports every file as
+        // owned by whoever asks, so file modes do not separate the users
+        // there and the helper, as the apparent owner, can change permission
+        // bits and timestamps (documented). Where it reports the real owner
+        // (the writer), the helper can do neither and cannot read an
+        // owner-only file.
+        if lines[1] == "1001" {
+            assert_eq!(lines[2], "private=0", "{}", reads.stdout);
+            assert_eq!(lines[5], "chmod=0", "{}", reads.stdout);
+            assert_eq!(lines[6], "touch=0", "{}", reads.stdout);
+            assert_eq!(private_mode, 0o644);
+            assert_eq!(public_mtime, 978_307_200);
+        } else {
+            assert_eq!(lines[1], "1000", "{}", reads.stdout);
+            assert_eq!(lines[2], "private=1", "{}", reads.stdout);
+            assert_eq!(lines[5], "chmod=1", "{}", reads.stdout);
+            assert_eq!(lines[6], "touch=1", "{}", reads.stdout);
+            assert!(reads.stderr.contains("Operation not permitted"), "{}", reads.stderr);
+            assert_eq!(private_mode, 0o600);
+            assert!(public_mtime > 978_307_200);
+        }
 
         // The writer reaches an allowed host through PID 1's listener with its
         // own credential.
@@ -953,8 +1066,9 @@ async fn an_attempt_reaches_allowed_hosts_through_its_sessions_proxy() {
     .await;
 }
 
-/// The image's user still runs everything with `workload: None`, and an
-/// attempt cannot share a Session proxy that does not exist.
+/// The image's user still runs everything with `workload: None`, so a root
+/// helper can change Workspace permission bits and timestamps, and an attempt
+/// cannot share a Session proxy that does not exist.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test workload_podman -- --ignored --test-threads=1"]
 async fn image_mode_keeps_the_image_user_and_an_attempt_needs_its_sessions_proxy() {
@@ -972,6 +1086,32 @@ async fn image_mode_keeps_the_image_user_and_an_attempt_needs_its_sessions_proxy
             "0",
             "image mode runs helpers as the image user"
         );
+        // Landlock keeps a root helper from writing the Workspace, but not
+        // from changing permission bits or timestamps (documented).
+        let workspace = sandbox.root().to_path_buf();
+        let ran = supervised(
+            sandbox.as_ref(),
+            ExecIdentity::Helper,
+            "echo nope >> public.txt; echo append=$?; chmod 0644 private.txt; echo chmod=$?; \
+             touch -d '2001-01-01 00:00:00' public.txt; echo touch=$?",
+            None,
+            Some(helper_restriction(&workspace)),
+        )
+        .await;
+        assert_eq!(
+            ran.stdout.lines().collect::<Vec<_>>(),
+            ["append=1", "chmod=0", "touch=0"],
+            "{}",
+            ran.stderr
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("public.txt")).unwrap(),
+            "public\n"
+        );
+        let private = std::fs::metadata(workspace.join("private.txt")).unwrap();
+        assert_eq!(private.mode() & 0o7777, 0o644);
+        let public = std::fs::metadata(workspace.join("public.txt")).unwrap();
+        assert_eq!(public.mtime(), 978_307_200);
         let volumes = podman_ok(&[
             "inspect",
             "--format",

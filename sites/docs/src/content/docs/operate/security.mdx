@@ -236,8 +236,13 @@ outside the Workspace.
 An Agent configured with `writes: []` is a read-only helper. A required reviewer that
 has `bash` must have `writes: []`, so the same applies to it. It is not offered
 `write_file` or `edit_file`, and the host refuses them if it asks. Its own `bash`
-commands run under a Linux Landlock restriction: nothing in the repository, including
-`.git`, can change. Only `/tmp`, `/var/tmp` and `/dev` are writable. Each command gets a
+commands run under a Linux Landlock restriction: no file in the repository, including
+`.git`, can be written, created, renamed or deleted, and only `/tmp`, `/var/tmp` and
+`/dev` are writable. Landlock does not cover a file's permission bits, owner or
+timestamps. A helper that runs as root, as under `sandbox.workload.mode: image` with an
+image whose user is root, can change them; on macOS, where the Podman machine's shared
+folder reports every file as the caller's, any helper can change permission bits and
+timestamps. Each command gets a
 scratch home directory under `/tmp`, removed when it ends, so the helper cannot leave
 configuration in the Session's shared home for later commands. The same restriction
 refuses every TCP connection and every TCP bind, on any address including loopback,
@@ -246,7 +251,10 @@ over TCP, with `curl`, `git` or a package manager for example, including to a se
 running in the container. In every network mode the sockets for the Session's apps,
 which the browser tools and, under `network: egress`, Preview use, live in a separate
 forwarder container, never in the Session container, so they do not open another way
-in. With [workload users](/configure/sandboxes/#workload-users), the default under
+in. Landlock does not cover Unix sockets, though: an app in the container that listens
+on one of its own is still within a helper's reach, an abstract socket always and a
+socket file whenever its permissions let the helper's user connect. With
+[workload users](/configure/sandboxes/#workload-users), the default under
 `network: egress`, every process of a helper also runs as a user of its own, which
 cannot read the environment of a writer's processes or signal them. A helper whose
 template lists `browser` can still drive those apps

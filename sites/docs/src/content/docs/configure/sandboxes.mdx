@@ -136,8 +136,11 @@ How a Session runs under it:
   as the proxy, joins only the Session container's network namespace and serves each
   exposed port as a socket in a volume. A Preview container, `axo-pvw-<session>`,
   publishes those sockets on your computer's loopback address. Neither connects
-  anywhere else. A read-only helper's shell may not open TCP connections, so it has
-  no way to the Session's apps.
+  anywhere else. A read-only helper's shell may not open TCP connections, so it
+  cannot reach the Session's apps over TCP or through the port sockets. An app that
+  listens on a Unix socket of its own, or on UDP, is still within its reach: an
+  abstract Unix socket always, and a socket file whenever its permissions let the
+  helper's user connect.
 - A Ways attempt's container starts no proxy of its own. It uses its Session's proxy
   and decision point: its Agents' `bash` commands and its setup commands get
   credentials of their own, and their connections are written to the Session's
@@ -279,7 +282,8 @@ What it does not cover:
 - A helper can read whatever the file modes let any user read. On macOS the Podman
   machine's shared folder reports every Workspace file as owned by whoever asks, so
   file modes do not keep a helper from reading an owner-only Workspace file there.
-  A helper's shell still cannot change the Workspace.
+  A helper's shell still cannot write, create, rename or delete Workspace files; on
+  macOS it can change their permission bits and timestamps.
 - It needs rootless Podman. Under rootful Podman, `auto` falls back to `image` and
   `doctor` warns, and `hardened` refuses to start a Session. E2B refuses `hardened`.
 - The first start of an image takes longer while Podman prepares it for the user
