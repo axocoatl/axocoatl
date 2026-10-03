@@ -7,6 +7,7 @@ pub mod error;
 pub mod secret;
 pub mod types;
 pub mod web;
+pub mod workload;
 
 pub use automation::*;
 pub use browser::{validate_browser, DEFAULT_BROWSER_IMAGE};
@@ -590,6 +591,7 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
     }
 
     validate_sandbox_network(&config.sandbox.network)?;
+    workload::validate_workload(config)?;
     validate_egress(config)?;
     validate_web(config)?;
     validate_browser(config)?;

@@ -739,6 +739,49 @@ pub struct SandboxConfigYaml {
     /// other network modes.
     #[serde(default)]
     pub egress: Option<EgressConfigYaml>,
+    /// Which users run Agents' commands and read-only helpers' processes in
+    /// a local Podman Session container. Omitted means `mode: auto`.
+    #[serde(default)]
+    pub workload: Option<WorkloadConfigYaml>,
+}
+
+/// `sandbox.workload`. `auto` (the default) is `hardened` under
+/// `network: egress` and `image` under `bridge` and `none`. `hardened` runs
+/// Agents' commands, setup commands and terminals as `writer_user` and
+/// read-only helpers as `helper_user`, both without Linux capabilities,
+/// while the container's first process stays root; it needs rootless Podman.
+/// `image` runs every command as the image's own user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkloadConfigYaml {
+    #[serde(default = "default_workload_mode")]
+    pub mode: String,
+    /// Numeric `uid:gid`.
+    #[serde(default = "default_workload_writer_user")]
+    pub writer_user: String,
+    /// Numeric `uid:gid` sharing no id with `writer_user`.
+    #[serde(default = "default_workload_helper_user")]
+    pub helper_user: String,
+}
+
+impl Default for WorkloadConfigYaml {
+    fn default() -> Self {
+        Self {
+            mode: default_workload_mode(),
+            writer_user: default_workload_writer_user(),
+            helper_user: default_workload_helper_user(),
+        }
+    }
+}
+
+fn default_workload_mode() -> String {
+    "auto".to_string()
+}
+fn default_workload_writer_user() -> String {
+    "1000:1000".to_string()
+}
+fn default_workload_helper_user() -> String {
+    "1001:1001".to_string()
 }
 
 /// What a Session container may reach under `network: egress`. Everything
@@ -823,6 +866,7 @@ impl Default for SandboxConfigYaml {
             backend: default_sandbox_backend(),
             e2b: None,
             egress: None,
+            workload: None,
         }
     }
 }

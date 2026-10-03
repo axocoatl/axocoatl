@@ -105,6 +105,16 @@ impl PtyOutput {
     }
 }
 
+/// How a Podman terminal's `podman exec` runs.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct PtyExec<'a> {
+    /// `--env-file` for the egress credential's proxy settings, which never
+    /// appear in an argv.
+    pub env_file: Option<&'a std::path::Path>,
+    /// `--user` and its `--env HOME=...`, from the Session's workload users.
+    pub user: &'a [String],
+}
+
 /// Live terminal we can drive over a WebSocket: reads stream out, keystrokes
 /// stream in. Dropping it tears the backing child/stream down.
 pub struct PtyTerminal {
@@ -143,13 +153,12 @@ impl PtyTerminal {
             workdir,
             command,
             (rows, cols),
-            None,
+            PtyExec::default(),
             Arc::new(Mutex::new(true)),
         )
     }
 
-    /// [`Self::spawn_podman`] with an optional `--env-file` (the egress
-    /// credential's proxy settings, never in argv) and a caller-owned
+    /// [`Self::spawn_podman`] with [`PtyExec`] options and a caller-owned
     /// liveness flag, which the reaper sets to `false` when the child exits.
     pub(crate) fn spawn_podman_with_env(
         id: String,
@@ -157,7 +166,7 @@ impl PtyTerminal {
         workdir: &std::path::Path,
         command: &str,
         (rows, cols): (u16, u16),
-        env_file: Option<&std::path::Path>,
+        exec: PtyExec<'_>,
         alive: Arc<Mutex<bool>>,
     ) -> Result<Self, String> {
         let pty = native_pty_system();
@@ -178,9 +187,14 @@ impl PtyTerminal {
         // `-w` so a terminal opened in a variant lane starts in that lane's
         // worktree rather than the container's default (the session root).
         cmd.args(["exec", "-i", "-t"]);
-        if let Some(env_file) = env_file {
+        if let Some(env_file) = exec.env_file {
             cmd.arg("--env-file");
             cmd.arg(env_file);
+        }
+        // A hardened container's own user is root: the terminal names its
+        // user, as every exec does.
+        for option in exec.user {
+            cmd.arg(option);
         }
         cmd.arg("-w");
         cmd.arg(workdir);

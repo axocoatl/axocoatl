@@ -180,12 +180,15 @@ impl Drop for RunningSupervisedCommand {
 }
 
 impl SessionSandbox {
+    /// Prepare as the writer: in a hardened container, Agents' commands,
+    /// required checks and Axocoatl's own captures run as the writer user.
     pub async fn prepare_supervised_command(
         &self,
         request: ExecRequest,
     ) -> Result<PreparedSupervisedCommand, IsolationError> {
         request.validate_stdin(None).map_err(error)?;
-        let (command, runtime, program) = self.supervisor_transport_command(None)?;
+        let (command, runtime, program) =
+            self.supervisor_transport_command(None, crate::ExecIdentity::Writer)?;
         prepare_command(command, request, runtime, program).await
     }
 
@@ -199,13 +202,30 @@ impl SessionSandbox {
         stdin: Option<Vec<u8>>,
         env: crate::egress::ProcessEnv<'_>,
     ) -> Result<PreparedSupervisedCommand, IsolationError> {
+        self.prepare_supervised_command_as(request, stdin, env, crate::ExecIdentity::Writer)
+            .await
+    }
+
+    /// [`Self::prepare_supervised_command_with_env`] as `identity`: in a
+    /// hardened container a read-only helper's processes run as the helper
+    /// user, which cannot read the writer's processes' environment or
+    /// signal them. Without workload users every identity but root is the
+    /// image's user.
+    pub async fn prepare_supervised_command_as(
+        &self,
+        request: ExecRequest,
+        stdin: Option<Vec<u8>>,
+        env: crate::egress::ProcessEnv<'_>,
+        identity: crate::ExecIdentity,
+    ) -> Result<PreparedSupervisedCommand, IsolationError> {
         request.validate_stdin(stdin.as_deref()).map_err(error)?;
         if let Some(env_file) = env.env_file {
             if !env_file.is_absolute() {
                 return Err(error("the process environment file must be absolute"));
             }
         }
-        let (command, runtime, program) = self.supervisor_transport_command(env.env_file)?;
+        let (command, runtime, program) =
+            self.supervisor_transport_command(env.env_file, identity)?;
         prepare_command_with_stdin(
             command,
             request,
@@ -225,7 +245,8 @@ impl SessionSandbox {
         stdin: Vec<u8>,
     ) -> Result<PreparedSupervisedCommand, IsolationError> {
         request.validate_stdin(Some(&stdin)).map_err(error)?;
-        let (command, runtime, program) = self.supervisor_transport_command(None)?;
+        let (command, runtime, program) =
+            self.supervisor_transport_command(None, crate::ExecIdentity::Writer)?;
         prepare_command_with_stdin(
             command,
             request,
@@ -239,6 +260,7 @@ impl SessionSandbox {
     pub(crate) fn supervisor_transport_command(
         &self,
         env_file: Option<&std::path::Path>,
+        identity: crate::ExecIdentity,
     ) -> Result<(Command, String, String), IsolationError> {
         let (runtime, root, program) = self.supervised_parts()?;
         let mut command = Command::new("podman");
@@ -247,6 +269,7 @@ impl SessionSandbox {
             command.arg("--env-file").arg(env_file);
         }
         command
+            .args(self.exec_user(identity))
             .arg("-w")
             .arg(root)
             .arg(&runtime)

@@ -4,8 +4,8 @@
 //! The decision point here is a fake that maps names to the fixture's
 //! upstream and records every event; the daemon's own decision point is
 //! tested against the proxy in its crate. Everything a case creates carries
-//! `io.axocoatl.test=egress-<pid>` or a name derived from it and is removed
-//! at the end. Run with:
+//! `io.axocoatl.test=<prefix>-<pid>` (prefix `AXO_TEST_LABEL_PREFIX`, default
+//! `egress`) or a name derived from it and is removed at the end. Run with:
 //!
 //! ```text
 //! CONTAINER_CONNECTION=axocoatl-ci-pr74 \
@@ -261,7 +261,8 @@ struct Fixture {
 impl Fixture {
     fn new(case: &str) -> Self {
         let pid = std::process::id();
-        let label = format!("io.axocoatl.test=egress-{pid}");
+        let prefix = std::env::var("AXO_TEST_LABEL_PREFIX").unwrap_or_else(|_| "egress".into());
+        let label = format!("io.axocoatl.test={prefix}-{pid}");
         let network = format!("axo-egress-test-{pid}-{case}");
         let octet = 100 + (pid % 100) as u8;
         let third = match case {
@@ -410,7 +411,9 @@ impl Fixture {
             let _ = podman(&["rmi", "--force", image]);
         }
         for session in &sessions {
-            for name in [format!("axo-ses-{session}"), format!("axo-egr-{session}")] {
+            for name in ["axo-ses-", "axo-egr-", "axo-svc-", "axo-pvw-"]
+                .map(|prefix| format!("{prefix}{session}"))
+            {
                 if podman(&["container", "exists", &name]).status.success() {
                     errors.push(format!("{name} is still present"));
                 }
@@ -674,7 +677,7 @@ async fn allowed_unlisted_and_tokenless_requests_are_decided_and_recorded() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test egress_podman -- --ignored --test-threads=1"]
-async fn non_root_users_reach_the_proxy_and_serve_port_sockets() {
+async fn non_root_users_reach_the_proxy_and_the_forwarder_serves_their_ports() {
     with_fixture("b", |fixture| async move {
         let (session, sandbox) = fixture
             .start(&image("AXO_EGRESS_TEST_NONROOT_IMAGE", NONROOT_IMAGE), &[3000])
@@ -701,7 +704,9 @@ async fn non_root_users_reach_the_proxy_and_serve_port_sockets() {
         ).await;
         assert_eq!(code, 0, "{output}");
 
-        // PID 1 (uid 1024) serves port 3000 as a socket in the shared volume;
+        // The Session container holds no port socket and PID 1 serves only
+        // the proxy. The service forwarder, joined to this container's
+        // network namespace only, serves port 3000 in the shared volume, and
         // another container that mounts it read-only reaches the app.
         exec(
             &container,
@@ -710,8 +715,20 @@ async fn non_root_users_reach_the_proxy_and_serve_port_sockets() {
             "nohup sh -c 'while :; do printf \"HTTP/1.0 200 OK\\r\\n\\r\\nsvc-ok\" | nc -l -p 3000 >/dev/null; done' >/dev/null 2>&1 &",
         ).await;
         tokio::time::sleep(Duration::from_millis(500)).await;
-        let (_, sockets) = exec(&container, None, None, "ls -ln /run/axocoatl-svc").await;
-        assert!(sockets.contains("3000.sock"), "{sockets}");
+        let (code, sockets) = exec(&container, None, None, "ls -ln /run/axocoatl-svc").await;
+        assert_ne!(code, 0, "{sockets}");
+        let (_, cmdline) = exec(&container, None, None, "tr '\\0' ' ' < /proc/1/cmdline").await;
+        assert!(!cmdline.contains("--unix-to-tcp"), "{cmdline}");
+        let forwarder = format!("axo-svc-{session}");
+        let session_id = podman_async_ok(&["inspect", "--format", "{{.Id}}", &container]).await;
+        let joined = podman_async_ok(&[
+            "inspect",
+            "--format",
+            "{{.HostConfig.NetworkMode}} {{.HostConfig.ReadonlyRootfs}}",
+            &forwarder,
+        ])
+        .await;
+        assert_eq!(joined.trim(), format!("container:{} true", session_id.trim()));
         let reader = podman_async_ok(&[
             "run",
             "--rm",
@@ -730,19 +747,22 @@ async fn non_root_users_reach_the_proxy_and_serve_port_sockets() {
             "printf 'GET / HTTP/1.0\\r\\n\\r\\n' | nc local:/run/axocoatl-svc/3000.sock",
         ]).await;
         assert!(reader.contains("svc-ok"), "{reader}");
-        // The browser under egress uses these sockets instead of starting a
-        // service forwarder that would replace them.
-        axocoatl_isolation::browser_container::check_session_served_sockets(&session, &[3000])
-            .await
-            .expect("PID 1 serves port 3000");
-        let missing = axocoatl_isolation::browser_container::check_session_served_sockets(
-            &session,
-            &[3000, 4000],
+        // The browser asks for the same sockets and keeps the forwarder the
+        // Session's start ran, rather than replacing it.
+        let forwarder_id = podman_async_ok(&["inspect", "--format", "{{.Id}}", &forwarder]).await;
+        let kept = axocoatl_isolation::browser_container::ensure_service_sockets(
+            &axocoatl_isolation::browser_container::ServiceSocketsLaunch {
+                session_id: session.clone(),
+                runtime_authority: String::new(),
+                image: String::new(),
+                ports: vec![3000],
+                require_resource_limits: false,
+                labels: Vec::new(),
+            },
         )
         .await
-        .unwrap_err()
-        .to_string();
-        assert!(missing.contains("port(s) 4000"), "{missing}");
+        .expect("the forwarder serves port 3000");
+        assert_eq!(kept.as_deref(), Some(forwarder_id.trim()));
 
         // The egress Preview container publishes the port on host loopback;
         // the Session container itself still has no network.
@@ -773,6 +793,7 @@ async fn non_root_users_reach_the_proxy_and_serve_port_sockets() {
         assert!(body.contains("svc-ok"), "Preview through 127.0.0.1:{host_port}: {body:?}");
         sandbox.stop_checked().await.unwrap();
         assert!(!podman_async(&["container", "exists", &preview]).await.status.success());
+        assert!(!podman_async(&["container", "exists", &forwarder]).await.status.success());
     })
     .await;
 }
@@ -1076,9 +1097,10 @@ async fn documented_residuals_a_lingering_setup_process_and_a_borrowed_credentia
             .count();
         assert!(refused_after >= 1, "{events:?}");
 
-        // Agents share the container: a process without a credential can
-        // read a running process's credential from /proc. This pins the
-        // documented residual; it must not start failing silently.
+        // Without workload users (image mode) Agents share one user: a
+        // process without a credential can read a running process's
+        // credential from /proc. This pins that residual; the hardened case
+        // is in `workload_podman`.
         let container = format!("axo-ses-{session}");
         let (grant, token) = fixture.grant().await;
         let mut writer = tokio::process::Command::new("podman");

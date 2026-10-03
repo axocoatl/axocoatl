@@ -1046,6 +1046,22 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
     // Outbound egress transparency — always surface what leaves the box.
     if let Some(cfg) = &config {
         pass(&sandbox_network_doctor_line(&cfg.sandbox));
+        // Rootless Podman matters only when the workload would be hardened.
+        let rootless = match axocoatl_config::workload::workload_settings(&cfg.sandbox) {
+            Ok(settings)
+                if settings.plan(&cfg.sandbox.network)
+                    != axocoatl_config::workload::WorkloadPlan::Image =>
+            {
+                axocoatl_isolation::session_sandbox::podman_rootless()
+                    .await
+                    .ok()
+            }
+            _ => None,
+        };
+        match sandbox_workload_doctor_line(&cfg.sandbox, rootless) {
+            Ok(line) => pass(&line),
+            Err((line, hint)) => warn(&line, &hint),
+        }
         if let Some(browser) = &cfg.browser {
             let image = browser
                 .image
@@ -1112,6 +1128,44 @@ fn sandbox_network_doctor_line(sandbox: &axocoatl_config::SandboxConfigYaml) -> 
             )
         }
         other => format!("Sandbox network: {other} (unknown; the daemon refuses it)"),
+    }
+}
+
+/// The `doctor` line for `sandbox.workload`, given whether Podman runs
+/// rootless (`None` when it was not asked or did not answer). `Err` is a
+/// warning and its hint.
+fn sandbox_workload_doctor_line(
+    sandbox: &axocoatl_config::SandboxConfigYaml,
+    rootless: Option<bool>,
+) -> Result<String, (String, String)> {
+    use axocoatl_config::workload::{workload_settings, WorkloadPlan};
+    let settings = match workload_settings(sandbox) {
+        Ok(settings) => settings,
+        Err(error) => return Err(("Sandbox workload: invalid".to_string(), error.to_string())),
+    };
+    let hardened = format!(
+        "Sandbox workload: hardened (Agents run as {}, helpers as {})",
+        settings.writer_user(),
+        settings.helper_user()
+    );
+    match (settings.plan(&sandbox.network), rootless) {
+        (WorkloadPlan::Image, _) => {
+            Ok("Sandbox workload: image (commands run as the image's own user)".to_string())
+        }
+        (WorkloadPlan::Hardened { .. }, Some(true)) => Ok(hardened),
+        (WorkloadPlan::Hardened { .. }, None) => {
+            Ok(format!("{hardened}; needs rootless Podman, not checked"))
+        }
+        (WorkloadPlan::Hardened { required: false }, Some(false)) => Err((
+            "Sandbox workload: image, because Podman runs as root".to_string(),
+            "sandbox.workload: auto uses separate non-root users only with rootless Podman"
+                .to_string(),
+        )),
+        (WorkloadPlan::Hardened { required: true }, Some(false)) => Err((
+            "Sandbox workload: hardened needs rootless Podman, and Podman runs as root".to_string(),
+            "Sessions will not start; use rootless Podman or set sandbox.workload.mode: image"
+                .to_string(),
+        )),
     }
 }
 
@@ -3179,6 +3233,47 @@ mod tests {
             "Sandbox network: egress (Session containers reach only: npm, pypi, 1 host; \
              read-only helpers and checks have none)"
         );
+    }
+
+    #[test]
+    fn doctor_names_the_workload_users_or_the_rootful_fallback() {
+        let mut sandbox = axocoatl_config::SandboxConfigYaml {
+            network: "egress".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            sandbox_workload_doctor_line(&sandbox, Some(true)),
+            Ok(
+                "Sandbox workload: hardened (Agents run as 1000:1000, helpers as 1001:1001)"
+                    .to_string()
+            )
+        );
+        let (line, hint) = sandbox_workload_doctor_line(&sandbox, Some(false)).unwrap_err();
+        assert_eq!(line, "Sandbox workload: image, because Podman runs as root");
+        assert!(hint.contains("rootless Podman"), "{hint}");
+        assert!(sandbox_workload_doctor_line(&sandbox, None)
+            .unwrap()
+            .ends_with("not checked"));
+        sandbox.network = "bridge".to_string();
+        assert_eq!(
+            sandbox_workload_doctor_line(&sandbox, None),
+            Ok("Sandbox workload: image (commands run as the image's own user)".to_string())
+        );
+        sandbox.workload = Some(axocoatl_config::WorkloadConfigYaml {
+            mode: "hardened".to_string(),
+            writer_user: "2000:2000".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(
+            sandbox_workload_doctor_line(&sandbox, Some(true)),
+            Ok(
+                "Sandbox workload: hardened (Agents run as 2000:2000, helpers as 1001:1001)"
+                    .to_string()
+            )
+        );
+        let (line, hint) = sandbox_workload_doctor_line(&sandbox, Some(false)).unwrap_err();
+        assert!(line.contains("needs rootless Podman"), "{line}");
+        assert!(hint.contains("Sessions will not start"), "{hint}");
     }
 
     #[test]

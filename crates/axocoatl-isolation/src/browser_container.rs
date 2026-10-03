@@ -14,18 +14,16 @@
 //!   socket, so Chromium reaches those hosts only through the daemon's
 //!   egress policy. Without declared hosts there is no proxy listener.
 //!
-//! Under `bridge` and `none` the sockets come from the service forwarder,
+//! In every network mode the sockets come from the service forwarder,
 //! `axo-svc-{session}`: the supervisor's `--bridge --unix-to-tcp` in the
 //! scratch egress image, in a container of its own that joins the Session
 //! container's network namespace (`--network container:<id>`). Only it
-//! mounts the `axo-svc-{session}` volume writable, and only the browser
-//! container mounts it at all (read-only). The Session container never sees
-//! the sockets, so a read-only helper whose shell may not open TCP
-//! connections cannot reach the Session's apps through them either.
-//!
-//! Under `network: egress` the Session container's own bridge (PID 1)
-//! already serves each exposed port in that volume for Preview, so no
-//! forwarder starts; the browser checks that those sockets answer.
+//! mounts the `axo-svc-{session}` volume writable; the browser container and,
+//! under `network: egress`, the Preview container mount it read-only. The
+//! Session container never sees the sockets, so a read-only helper whose
+//! shell may not open TCP connections cannot reach the Session's apps through
+//! them either. Under `network: egress` the Session's start runs the
+//! forwarder before Preview.
 //!
 //! Scripts run through the supervisor's `--serve`, like repository tools.
 
@@ -44,8 +42,7 @@ use crate::{IsolationError, SessionSandbox};
 
 pub use crate::egress_image::ROLE_LABEL;
 // The service-socket and egress socket mount points are the egress
-// sidecar's. Under `bridge` and `none` the Session container never mounts
-// the service sockets.
+// sidecar's. The Session container never mounts the service sockets.
 pub use crate::egress_sidecar::{EGRESS_PROXY_SOCKET, EGRESS_SOCKET_DIR, SERVICE_SOCKET_DIR};
 /// The loopback port Chromium finds the egress proxy on, unless the Session
 /// exposes it (see [`browser_proxy_port`]).
@@ -305,39 +302,6 @@ async fn remove_forwarder(name: &str) -> Result<(), IsolationError> {
         )));
     }
     Ok(())
-}
-
-/// Under `network: egress`: check that the running Session container's own
-/// bridge (PID 1), which serves each exposed port as a socket in the
-/// `axo-svc-{session}` volume for Preview, answers on every one of `ports`.
-/// No forwarder is started: a second bridge would replace those sockets.
-pub async fn check_session_served_sockets(
-    session_id: &str,
-    ports: &[u16],
-) -> Result<(), IsolationError> {
-    let ports = dedup_ports(ports);
-    if ports.is_empty() {
-        return Ok(());
-    }
-    let session = format!("axo-ses-{session_id}");
-    match inspect_lines(&session, "{{.State.Running}}").await? {
-        Some(state) if state.first().is_some_and(|running| running == "true") => {}
-        _ => return Err(failed("the Session container is not running")),
-    }
-    let mut missing = Vec::new();
-    for port in &ports {
-        if !probe_socket(&session, *port).await? {
-            missing.push(port.to_string());
-        }
-    }
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(failed(format!(
-            "the Session's bridge is not serving the socket for port(s) {}",
-            missing.join(", ")
-        )))
-    }
 }
 
 /// Make sure each exposed port of the running Session container is served
