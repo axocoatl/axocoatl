@@ -31,6 +31,12 @@ pub struct AxocoatlConfig {
     pub proactive: Vec<ProactiveConfigYaml>,
     #[serde(default)]
     pub web_search: Option<WebSearchConfigYaml>,
+    /// The `web_fetch` tool. Present enables it for Agents whose tools list it.
+    #[serde(default)]
+    pub web_fetch: Option<WebFetchConfigYaml>,
+    /// The `browser` tool. Present enables it for Agents whose tools list it.
+    #[serde(default)]
+    pub browser: Option<BrowserConfigYaml>,
     #[serde(default)]
     pub consolidation: ConsolidationConfigYaml,
     #[serde(default)]
@@ -92,12 +98,141 @@ fn default_consolidation_interval() -> u64 {
 /// tool is offered to a session's agents.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WebSearchConfigYaml {
-    /// Provider name — currently `"tavily"`.
+    /// Provider name: `"searxng"`, or the legacy `"tavily"`.
     #[serde(default)]
     pub provider: String,
-    /// Provider API key.
+    /// Provider API key (legacy `tavily` only).
     #[serde(default)]
     pub api_key: SecretString,
+    /// SearXNG settings for `provider: searxng`.
+    #[serde(default)]
+    pub searxng: Option<SearxngConfigYaml>,
+}
+
+/// A SearXNG instance, either run by Axocoatl (`managed: true`) or an existing
+/// one at `url`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearxngConfigYaml {
+    /// Axocoatl runs and stops the SearXNG container itself.
+    #[serde(default = "default_true")]
+    pub managed: bool,
+    /// Container image for a managed instance. Defaults to the pinned image.
+    #[serde(default)]
+    pub image: Option<String>,
+    /// Base URL of an unmanaged instance. Required exactly when `managed` is false.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Keep only these engines. Empty keeps SearXNG's defaults.
+    #[serde(default)]
+    pub engines: Vec<String>,
+    #[serde(default = "default_searxng_language")]
+    pub language: String,
+    /// 0 (off), 1 (moderate) or 2 (strict).
+    #[serde(default)]
+    pub safesearch: u8,
+    /// 1-60 seconds.
+    #[serde(default = "default_searxng_timeout")]
+    pub timeout_secs: u64,
+}
+
+impl Default for SearxngConfigYaml {
+    fn default() -> Self {
+        Self {
+            managed: true,
+            image: None,
+            url: None,
+            engines: Vec::new(),
+            language: default_searxng_language(),
+            safesearch: 0,
+            timeout_secs: default_searxng_timeout(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_searxng_language() -> String {
+    "all".to_string()
+}
+fn default_searxng_timeout() -> u64 {
+    15
+}
+
+/// The `web_fetch` tool. Its presence enables the tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebFetchConfigYaml {
+    /// Largest response body read, 64 KiB to 8 MiB.
+    #[serde(default = "default_web_fetch_max_bytes")]
+    pub max_bytes: u64,
+    /// 1-60 seconds.
+    #[serde(default = "default_web_fetch_timeout")]
+    pub timeout_secs: u64,
+}
+
+impl Default for WebFetchConfigYaml {
+    fn default() -> Self {
+        Self {
+            max_bytes: default_web_fetch_max_bytes(),
+            timeout_secs: default_web_fetch_timeout(),
+        }
+    }
+}
+
+fn default_web_fetch_max_bytes() -> u64 {
+    4 * 1024 * 1024
+}
+fn default_web_fetch_timeout() -> u64 {
+    20
+}
+
+/// The `browser` tool. Its presence enables the tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserConfigYaml {
+    /// Browser image. Defaults to `localhost/axocoatl-browser:pw1.60.0`.
+    #[serde(default)]
+    pub image: Option<String>,
+    /// Hosts the browser may reach beyond the Session's exposed ports.
+    #[serde(default)]
+    pub allow: Vec<EgressAllowYaml>,
+    /// Private ranges `allow` may reach.
+    #[serde(default)]
+    pub private_destinations: Vec<String>,
+    /// 1024-65536 bytes.
+    #[serde(default = "default_browser_snapshot_bytes")]
+    pub snapshot_max_bytes: u32,
+    /// 10-170 seconds.
+    #[serde(default = "default_browser_timeout")]
+    pub timeout_secs: u64,
+    /// 1-4 browser calls at once per Session.
+    #[serde(default = "default_browser_parallel")]
+    pub max_parallel: u32,
+}
+
+impl Default for BrowserConfigYaml {
+    fn default() -> Self {
+        Self {
+            image: None,
+            allow: Vec::new(),
+            private_destinations: Vec::new(),
+            snapshot_max_bytes: default_browser_snapshot_bytes(),
+            timeout_secs: default_browser_timeout(),
+            max_parallel: default_browser_parallel(),
+        }
+    }
+}
+
+fn default_browser_snapshot_bytes() -> u32 {
+    16_384
+}
+fn default_browser_timeout() -> u64 {
+    120
+}
+fn default_browser_parallel() -> u32 {
+    2
 }
 
 /// A **proactive agent** — an agent that acts on its own, with no user prompt,
@@ -400,6 +535,11 @@ pub struct McpServerConfigYaml {
     pub url: Option<String>,
     #[serde(default)]
     pub headers: std::collections::HashMap<String, String>,
+    /// Whether a stdio server inherits the daemon's whole environment. With
+    /// `false` it gets only `PATH`, `HOME`, `USER`, `LANG`, `LC_*` and
+    /// `TMPDIR`, plus `env`.
+    #[serde(default = "default_true")]
+    pub inherit_env: bool,
 }
 
 /// Provider credentials.
@@ -574,9 +714,10 @@ pub struct SandboxConfigYaml {
     /// Honor a repo/UI-specified base image other than the trusted default.
     #[serde(default)]
     pub allow_untrusted_images: bool,
-    /// Container networking: `"bridge"` (default, outbound + published ports)
-    /// or `"none"` (no network — blocks exfiltration for untrusted code, but
-    /// also package installs and dev servers). Any other value fails
+    /// Container networking: `"bridge"` (default, outbound + published ports),
+    /// `"none"` (no network — blocks exfiltration for untrusted code, but
+    /// also package installs and dev servers) or `"egress"` (only the hosts
+    /// under `egress.allow`, through Axocoatl's proxy). Any other value fails
     /// validation instead of falling back to bridge.
     #[serde(default = "default_sandbox_network")]
     pub network: String,
@@ -594,6 +735,82 @@ pub struct SandboxConfigYaml {
     /// Settings for the `e2b` backend. Ignored unless `backend: e2b`.
     #[serde(default)]
     pub e2b: Option<E2bBackendYaml>,
+    /// Egress allowlist for `network: egress`. Ignored, with a warning, for
+    /// other network modes.
+    #[serde(default)]
+    pub egress: Option<EgressConfigYaml>,
+}
+
+/// What a Session container may reach under `network: egress`. Everything
+/// not listed is refused.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EgressConfigYaml {
+    #[serde(default)]
+    pub allow: Vec<EgressAllowYaml>,
+    /// Private ranges (CIDR) that allowed hosts may resolve to.
+    #[serde(default)]
+    pub private_destinations: Vec<String>,
+    /// Podman network for the egress sidecar. Defaults to Podman's default.
+    #[serde(default)]
+    pub sidecar_network: Option<String>,
+    /// 8-256 connections open at once through the proxy.
+    #[serde(default = "default_egress_max_connections")]
+    pub max_connections: u32,
+    /// 1,000-1,000,000 events in one Session's network record.
+    #[serde(default = "default_egress_record_max_events")]
+    pub record_max_events: u32,
+}
+
+impl Default for EgressConfigYaml {
+    fn default() -> Self {
+        Self {
+            allow: Vec::new(),
+            private_destinations: Vec::new(),
+            sidecar_network: None,
+            max_connections: default_egress_max_connections(),
+            record_max_events: default_egress_record_max_events(),
+        }
+    }
+}
+
+fn default_egress_max_connections() -> u32 {
+    128
+}
+fn default_egress_record_max_events() -> u32 {
+    50_000
+}
+
+/// One egress allowlist entry: a preset name, a host name, or an address range.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    untagged,
+    expecting = "a preset name such as npm, {host: example.com, ports: [443]} or {cidr: 10.0.0.0/8, ports: [443]}"
+)]
+pub enum EgressAllowYaml {
+    Preset(String),
+    Host(EgressHostYaml),
+    Cidr(EgressCidrYaml),
+}
+
+/// An allowed host name, or `*.example.com` for its subdomains.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EgressHostYaml {
+    pub host: String,
+    /// Defaults to `[443]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports: Option<Vec<u16>>,
+}
+
+/// An allowed address range for IP-literal destinations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EgressCidrYaml {
+    pub cidr: String,
+    /// Defaults to `[443]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports: Option<Vec<u16>>,
 }
 
 impl Default for SandboxConfigYaml {
@@ -605,6 +822,7 @@ impl Default for SandboxConfigYaml {
             require_resource_limits: false,
             backend: default_sandbox_backend(),
             e2b: None,
+            egress: None,
         }
     }
 }

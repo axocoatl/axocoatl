@@ -225,6 +225,65 @@ impl SessionDispatchRegistry {
             .transpose()
     }
 
+    /// The network record namespace of a retained native Session, for its
+    /// single writer. Refused while the Session is closing or closed, so a
+    /// released Session's directory lock is never re-taken by its record.
+    pub(crate) fn network_record_namespace(
+        &self,
+        session_id: &str,
+    ) -> Result<axocoatl_session::execution_namespace::OwnedExecutionNamespace> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session dispatch registry failed"))?;
+        if state.closed || state.closing_sessions.contains(session_id) {
+            return Err(failure(
+                "the Session is closing; its network record cannot be opened",
+            ));
+        }
+        if let Some(entry) = state.pending.get(session_id) {
+            return entry.network_record_namespace();
+        }
+        let entry = state
+            .entries
+            .get(session_id)
+            .ok_or_else(|| failure("the Session has no retained native history in this daemon"))?;
+        entry
+            .controller
+            .network_record_namespace()
+            .map_err(|error| failure(error.to_string()))
+    }
+
+    /// Read a retained Session's network record without opening a writer.
+    /// `Ok(None)` when the Session has no record or no native history here.
+    pub(crate) fn read_network_record(
+        &self,
+        session_id: &str,
+        after: Option<u64>,
+        limit: usize,
+        limits: axocoatl_session::network_record::RecordLimits,
+    ) -> Result<
+        Option<(
+            Vec<axocoatl_session::network_record::NetworkLine>,
+            axocoatl_session::network_record::RecordStats,
+        )>,
+    > {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session dispatch registry failed"))?;
+        if let Some(entry) = state.pending.get(session_id) {
+            return entry.read_network_record(after, limit, limits);
+        }
+        match state.entries.get(session_id) {
+            Some(entry) => entry
+                .controller
+                .read_network_record(after, limit, limits)
+                .map_err(|error| failure(error.to_string())),
+            None => Ok(None),
+        }
+    }
+
     /// Human requests enter through the authenticated host and share the same
     /// registry fence as Close/Delete/shutdown. No caller-supplied source tag
     /// or cached read capability can grant an operation.

@@ -680,18 +680,62 @@ fn require_e2b_template_compatible(
     )))
 }
 
+/// Session network records reach canonical Session stores only through the
+/// dispatch registry that owns them.
+struct RegistryNetworkRecords(Arc<session_dispatch::SessionDispatchRegistry>);
+
+impl crate::session_network::RecordNamespaces for RegistryNetworkRecords {
+    fn writer_namespace(
+        &self,
+        session_id: &str,
+    ) -> Result<axocoatl_session::execution_namespace::OwnedExecutionNamespace, String> {
+        self.0
+            .network_record_namespace(session_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn read_existing(
+        &self,
+        session_id: &str,
+        after: Option<u64>,
+        limit: usize,
+        limits: axocoatl_session::network_record::RecordLimits,
+    ) -> Result<
+        Option<(
+            Vec<axocoatl_session::network_record::NetworkLine>,
+            axocoatl_session::network_record::RecordStats,
+        )>,
+        String,
+    > {
+        self.0
+            .read_network_record(session_id, after, limit, limits)
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// Refusal for `network: egress` until Session start runs the egress proxy.
+/// The config accepts the value so the shared policy, record and API can be
+/// built and tested, but no container may start under it yet.
+pub(crate) const EGRESS_NOT_AVAILABLE: &str = "sandbox.network: egress is not available in \
+     this build: Session start does not run the egress proxy yet. Use network: none or \
+     network: bridge";
+
 /// The local container network for `sandbox.network`. Only exact `bridge` and
-/// `none` are accepted; any other value is refused so a misspelled `none` can
+/// `none` map to a container network; `egress` is refused until Session start
+/// supports it, and any other value is refused so a misspelled `none` can
 /// never start a container with a network.
 fn configured_sandbox_network(
     value: &str,
 ) -> Result<axocoatl_isolation::session_sandbox::SandboxNetwork, DaemonError> {
     axocoatl_config::validate_sandbox_network(value)?;
-    Ok(if value == "none" {
-        axocoatl_isolation::session_sandbox::SandboxNetwork::None
-    } else {
-        axocoatl_isolation::session_sandbox::SandboxNetwork::Bridge
-    })
+    match value {
+        "none" => Ok(axocoatl_isolation::session_sandbox::SandboxNetwork::None),
+        "bridge" => Ok(axocoatl_isolation::session_sandbox::SandboxNetwork::Bridge),
+        "egress" => Err(DaemonError::Session(EGRESS_NOT_AVAILABLE.to_string())),
+        other => Err(DaemonError::Session(format!(
+            "sandbox.network {other:?} has no container network mapping"
+        ))),
+    }
 }
 
 fn bounded_setup_output(mut value: String) -> String {
@@ -3493,6 +3537,8 @@ pub struct AxocoatlDaemon {
     session_sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>>,
     /// Retain canonical and process ownership beyond an external check waiter.
     session_dispatch_lifecycles: Arc<session_dispatch::SessionDispatchRegistry>,
+    /// One network record writer per Session, opened on first append.
+    session_network_records: Arc<crate::session_network::SessionNetworkRecords>,
     /// Recovery-only primary handles used while resolving an Attempt set after
     /// restart. They must never enter the ordinary Ready fast path because
     /// they intentionally skip project setup.
@@ -4513,8 +4559,10 @@ impl AxocoatlDaemon {
         reattach_active_ready: bool,
     ) -> Result<Self, DaemonError> {
         // Refuse a network setting other than `bridge` or `none` before any
-        // container or durable state is touched.
+        // container or durable state is touched. `egress` validates but has no
+        // Session runtime yet, so it is refused here too.
         axocoatl_config::validate_sandbox_network(&config.sandbox.network)?;
+        configured_sandbox_network(&config.sandbox.network)?;
         // Runtime cleanup is the first fallible bootstrap responsibility after
         // the durable Session authority becomes available. A later provider,
         // workspace, MCP, or automation failure must not leave an interrupted
@@ -4725,6 +4773,9 @@ impl AxocoatlDaemon {
         }
         for warning in axocoatl_config::no_tools_warnings(&config) {
             tracing::warn!(agent = %warning.agent_id, "{warning}");
+        }
+        for warning in axocoatl_config::network_warnings(&config) {
+            tracing::warn!(field = %warning.field, "{warning}");
         }
 
         // 9b. StreamBus folds frames synchronously while assigning their
@@ -5134,6 +5185,13 @@ impl AxocoatlDaemon {
         let session_dispatch_lifecycles = Arc::new(
             session_dispatch::SessionDispatchRegistry::with_hooks(hook_registry.clone()),
         );
+        let session_network_records = Arc::new(crate::session_network::SessionNetworkRecords::new(
+            Arc::new(RegistryNetworkRecords(session_dispatch_lifecycles.clone())),
+            config.sandbox.egress.as_ref().map_or(
+                axocoatl_session::network_record::DEFAULT_MAX_EVENTS,
+                |egress| u64::from(egress.record_max_events),
+            ),
+        ));
         if let axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(ownership) =
             &data_dir_lease.ownership
         {
@@ -5227,6 +5285,7 @@ impl AxocoatlDaemon {
             pending_interrupts,
             run_store,
             session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            session_network_records,
             session_dispatch_lifecycles,
             attempt_recovery_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             sandbox_starts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -6490,6 +6549,7 @@ impl AxocoatlDaemon {
         } else {
             None
         };
+        self.session_network_records.close(id).await;
         self.session_dispatch_lifecycles
             .complete_session_cleanup(&dispatch_cleanup)?;
         drop(dispatch_cleanup);
@@ -6600,6 +6660,7 @@ impl AxocoatlDaemon {
                 .await
                 .delete_session(id)
                 .map_err(|error| DaemonError::Session(error.to_string()))?;
+            self.session_network_records.close(id).await;
             self.session_dispatch_lifecycles
                 .complete_session_cleanup(&dispatch_cleanup)?;
             return self.session_dispatch_lifecycles.forget_deleted_session(id);
@@ -6665,6 +6726,7 @@ impl AxocoatlDaemon {
             self.clear_attempt_cancellation(id, &set_id).await;
         }
         result?;
+        self.session_network_records.close(id).await;
         self.session_dispatch_lifecycles
             .complete_session_cleanup(&dispatch_cleanup)?;
         self.session_dispatch_lifecycles.forget_deleted_session(id)
@@ -9540,11 +9602,11 @@ impl AxocoatlDaemon {
     }
 
     fn e2b_runtime_config(&self) -> Result<axocoatl_isolation::e2b::E2bConfig, DaemonError> {
-        if self.config.sandbox.network == "none" {
-            return Err(DaemonError::Session(
-                "sandbox.network='none' is enforced only by local Podman; the configured E2B backend cannot prove outbound isolation. Use Podman or change the network policy before preparing a remote Session"
-                    .to_string(),
-            ));
+        if self.config.sandbox.network != "bridge" {
+            return Err(DaemonError::Session(format!(
+                "sandbox.network='{}' is enforced only by local Podman; the configured E2B backend cannot prove outbound isolation. Use Podman or change the network policy before preparing a remote Session",
+                self.config.sandbox.network
+            )));
         }
         self.e2b_runtime_authority_config()
     }
@@ -10572,6 +10634,53 @@ impl AxocoatlDaemon {
             .await?
             .legacy_rows(HistoryVisibility::Visible)
             .map_err(|error| DaemonError::Session(error.to_string()))
+    }
+
+    /// The Session's network mode, egress policy and network record, for
+    /// `GET /api/sessions/{id}/network`. Reading never creates a record.
+    pub async fn session_network(
+        &self,
+        session_id: &str,
+        after: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<crate::session_network::SessionNetworkView, DaemonError> {
+        if self.get_session(session_id).await.is_none() {
+            return Err(DaemonError::Session(format!(
+                "session '{session_id}' not found"
+            )));
+        }
+        let limit = limit.unwrap_or(crate::session_network::DEFAULT_READ_LIMIT);
+        if limit == 0 || limit > axocoatl_session::network_record::MAX_READ_LIMIT {
+            return Err(DaemonError::InvalidRequest(format!(
+                "limit must be 1-{}",
+                axocoatl_session::network_record::MAX_READ_LIMIT
+            )));
+        }
+        let page = self
+            .session_network_records
+            .read_after(session_id, after, limit)
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        let sandbox = &self.config.sandbox;
+        let private_destinations = if sandbox.network == "egress" {
+            sandbox
+                .egress
+                .as_ref()
+                .map(|egress| egress.private_destinations.clone())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        Ok(crate::session_network::SessionNetworkView {
+            session_id: session_id.to_string(),
+            mode: sandbox.network.clone(),
+            sidecar: None,
+            policies: Vec::new(),
+            private_destinations,
+            record: page.stats.into(),
+            events: page.events,
+            next_after: page.next_after,
+        })
     }
 
     /// Inspect one exact retained turn without granting runtime control. The
@@ -22124,6 +22233,7 @@ trap - 0 1 2 15
             if let Some(set_id) = current_set {
                 self.clear_attempt_cancellation(&session.id, &set_id).await;
             }
+            self.session_network_records.close(&session.id).await;
             if let Err(error) = cleanup {
                 failures.push(format!("{}: {error}", session.name));
             } else if let Err(error) = self
@@ -22152,6 +22262,7 @@ trap - 0 1 2 15
     pub async fn shutdown(&self) -> Result<(), DaemonError> {
         let _join = self.shutdown_join.lock().await;
         self.shutdown_session_runtimes_checked().await?;
+        self.session_network_records.close_all().await;
         // Attempt tasks are not ordinary supervised agents: their JoinHandles
         // own metadata writes that must finish before the runtime disappears.
         // Preserve their worktrees/current manifests for recovery, but stop and
@@ -22203,6 +22314,10 @@ trap - 0 1 2 15
     }
 }
 
+#[cfg(all(test, unix))]
+#[path = "bootstrap_session_network_tests.rs"]
+mod session_network_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -22223,10 +22338,24 @@ mod tests {
         for refused in ["None", "off", "disabled", ""] {
             let error = configured_sandbox_network(refused).unwrap_err().to_string();
             assert!(
-                error.contains("sandbox.network") && error.contains("\"bridge\" or \"none\""),
+                error.contains("sandbox.network")
+                    && error.contains("\"bridge\", \"none\" or \"egress\""),
                 "{refused}: {error}"
             );
         }
+        // `egress` validates but has no container mapping until Session start
+        // runs the proxy: it must never fall through to bridge.
+        let error = configured_sandbox_network("egress")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("egress is not available"), "{error}");
+        let mut config = test_config();
+        config.sandbox.network = "egress".to_string();
+        let error = match AxocoatlDaemon::bootstrap_headless(config).await {
+            Ok(_) => panic!("a daemon must not start Sessions under an unimplemented egress mode"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("egress is not available"), "{error}");
 
         // Daemon start refuses it before touching a data root or container.
         let mut config = test_config();

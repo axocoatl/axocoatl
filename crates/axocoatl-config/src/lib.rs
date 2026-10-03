@@ -1,13 +1,20 @@
 pub mod automation;
+pub mod browser;
 mod convert;
+pub mod egress;
+pub mod egress_presets;
 pub mod error;
 pub mod secret;
 pub mod types;
+pub mod web;
 
 pub use automation::*;
+pub use browser::validate_browser;
+pub use egress::{network_warnings, validate_allow_list, validate_egress, ConfigWarning};
 pub use error::*;
 pub use secret::SecretString;
 pub use types::*;
+pub use web::validate_web;
 
 use std::path::Path;
 
@@ -583,6 +590,9 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
     }
 
     validate_sandbox_network(&config.sandbox.network)?;
+    validate_egress(config)?;
+    validate_web(config)?;
+    validate_browser(config)?;
 
     for webhook in &config.webhooks {
         if webhook.name.trim().is_empty() {
@@ -608,11 +618,11 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
 }
 
 /// The only values `sandbox.network` accepts.
-pub const SANDBOX_NETWORK_VALUES: [&str; 2] = ["bridge", "none"];
+pub const SANDBOX_NETWORK_VALUES: [&str; 3] = ["bridge", "none", "egress"];
 
-/// Refuse any `sandbox.network` other than exactly `bridge` or `none`. Any
-/// other spelling (`None`, `off`, `disabled`, ...) is an error rather than a
-/// silent bridge network.
+/// Refuse any `sandbox.network` other than exactly `bridge`, `none` or
+/// `egress`. Any other spelling (`None`, `off`, `disabled`, ...) is an error
+/// rather than a silent bridge network.
 pub fn validate_sandbox_network(value: &str) -> Result<(), ConfigError> {
     if SANDBOX_NETWORK_VALUES.contains(&value) {
         return Ok(());
@@ -620,9 +630,10 @@ pub fn validate_sandbox_network(value: &str) -> Result<(), ConfigError> {
     Err(ConfigError::InvalidField {
         field: "sandbox.network".to_string(),
         value: format!("{value:?}"),
-        reason: "sandbox.network accepts only \"bridge\" or \"none\", in lowercase".to_string(),
-        suggestion: "Set network: none for no container network, or network: bridge to allow \
-                     outbound connections"
+        reason: "sandbox.network accepts only \"bridge\", \"none\" or \"egress\", in lowercase"
+            .to_string(),
+        suggestion: "Set network: none for no container network, network: egress to allow only \
+                     listed hosts, or network: bridge to allow outbound connections"
             .to_string(),
     })
 }
@@ -1676,8 +1687,8 @@ mcp_servers:
     }
 
     #[test]
-    fn sandbox_network_accepts_only_bridge_or_none() {
-        for accepted in ["bridge", "none"] {
+    fn sandbox_network_accepts_only_bridge_none_or_egress() {
+        for accepted in ["bridge", "none", "egress"] {
             let yaml = format!("sandbox:\n  network: {accepted}\n");
             let config = parse_config(&yaml, &PathBuf::from("test.yaml")).unwrap();
             assert_eq!(config.sandbox.network, accepted);
@@ -1698,7 +1709,8 @@ mcp_servers:
             let err = parse_config(&yaml, &PathBuf::from("test.yaml")).unwrap_err();
             let message = err.to_string();
             assert!(
-                message.contains("sandbox.network") && message.contains("\"bridge\" or \"none\""),
+                message.contains("sandbox.network")
+                    && message.contains("\"bridge\", \"none\" or \"egress\""),
                 "{refused}: {message}"
             );
         }
@@ -1779,5 +1791,101 @@ agents:
     fn config_server_section() {
         let config = parse_config(VALID_YAML, &PathBuf::from("test.yaml")).unwrap();
         assert_eq!(config.server.port, 8080);
+    }
+
+    #[test]
+    fn egress_web_browser_and_mcp_blocks_parse_with_defaults() {
+        let yaml = r#"
+sandbox:
+  network: egress
+  egress:
+    allow:
+      - npm
+      - host: api.example.com
+        ports: [443, 8443]
+      - cidr: 10.20.0.0/16
+        ports: [8000]
+    private_destinations: [10.0.0.0/8]
+    sidecar_network: axo-egress-test
+web_search:
+  provider: searxng
+  searxng: {}
+web_fetch: {}
+browser:
+  allow: [github]
+mcp_servers:
+  - name: local
+    transport: stdio
+    command: npx
+    inherit_env: false
+"#;
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        let egress = config.sandbox.egress.as_ref().unwrap();
+        assert_eq!(egress.allow.len(), 3);
+        assert_eq!(egress.max_connections, 128);
+        assert_eq!(egress.record_max_events, 50_000);
+        assert_eq!(egress.sidecar_network.as_deref(), Some("axo-egress-test"));
+        let searxng = config
+            .web_search
+            .as_ref()
+            .unwrap()
+            .searxng
+            .as_ref()
+            .unwrap();
+        assert!(searxng.managed);
+        assert_eq!(searxng.language, "all");
+        assert_eq!(searxng.timeout_secs, 15);
+        let fetch = config.web_fetch.as_ref().unwrap();
+        assert_eq!((fetch.max_bytes, fetch.timeout_secs), (4 * 1024 * 1024, 20));
+        let browser = config.browser.as_ref().unwrap();
+        assert_eq!(
+            (
+                browser.snapshot_max_bytes,
+                browser.timeout_secs,
+                browser.max_parallel
+            ),
+            (16_384, 120, 2)
+        );
+        assert!(!config.mcp_servers[0].inherit_env);
+        let warnings: Vec<String> = network_warnings(&config)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.starts_with("sandbox.egress.allow[0]")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.starts_with("mcp_servers[local].inherit_env")
+                    && w.contains("not applied")),
+            "{warnings:?}"
+        );
+
+        let defaults = parse_config(
+            "mcp_servers:\n  - name: a\n    transport: stdio\n    command: x\n",
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap();
+        assert!(defaults.mcp_servers[0].inherit_env);
+        assert!(defaults.sandbox.egress.is_none());
+        assert!(defaults.web_fetch.is_none() && defaults.browser.is_none());
+
+        for refused in [
+            "sandbox:\n  network: egress\n  egress:\n    allow: [nope]\n",
+            "sandbox:\n  network: egress\n  egress:\n    allowed: []\n",
+            "web_fetch:\n  max_byte: 1\n",
+            "browser:\n  images: x\n",
+            "web_search:\n  provider: searxng\n  searxng:\n    manage: false\n",
+            "sandbox:\n  backend: e2b\n  network: egress\n",
+        ] {
+            assert!(
+                parse_config(refused, &PathBuf::from("test.yaml")).is_err(),
+                "{refused}"
+            );
+        }
     }
 }

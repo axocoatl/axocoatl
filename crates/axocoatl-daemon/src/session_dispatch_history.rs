@@ -44,6 +44,32 @@ impl SessionDispatchController {
 }
 
 impl SessionDispatchController {
+    /// The Session's network record namespace, for its single writer.
+    pub(crate) fn network_record_namespace(
+        &self,
+    ) -> Result<axocoatl_session::execution_namespace::OwnedExecutionNamespace> {
+        let state = self.lock()?;
+        state.ready()?;
+        crate::session_network::writer_namespace(&state.canonical).map_err(error)
+    }
+
+    /// Read the Session's network record without opening a writer.
+    pub(crate) fn read_network_record(
+        &self,
+        after: Option<u64>,
+        limit: usize,
+        limits: axocoatl_session::network_record::RecordLimits,
+    ) -> Result<
+        Option<(
+            Vec<axocoatl_session::network_record::NetworkLine>,
+            axocoatl_session::network_record::RecordStats,
+        )>,
+    > {
+        let state = self.lock()?;
+        state.ready()?;
+        crate::session_network::read_existing(&state.canonical, after, limit, limits).map_err(error)
+    }
+
     /// Exact read through the same retained canonical owner. Earlier v2 turns
     /// and the sealed v1 frontier never fall back to a mutable legacy ledger.
     pub(crate) fn control_plane_for_turn(

@@ -1842,6 +1842,39 @@ pub async fn session_turn_control_plane(
         })
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionNetworkQuery {
+    pub after: Option<u64>,
+    pub limit: Option<usize>,
+}
+
+/// GET /api/sessions/{id}/network — the Session's network mode, egress policy
+/// and network record, `limit` (1-1000, default 200) events after `after`.
+pub async fn session_network(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<SessionNetworkQuery>,
+) -> Result<
+    Json<axocoatl_daemon::session_network::SessionNetworkView>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    state
+        .read()
+        .await
+        .session_network(&id, query.after, query.limit)
+        .await
+        .map(Json)
+        .map_err(|error| match &error {
+            axocoatl_daemon::DaemonError::Session(message)
+                if message == &format!("session '{id}' not found") =>
+            {
+                err(StatusCode::NOT_FOUND, message.clone())
+            }
+            _ => attempt_err(error),
+        })
+}
+
 pub async fn preview_session_graph_edit(
     State(state): State<AppState>,
     Path((id, turn)): Path<(String, String)>,

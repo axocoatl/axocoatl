@@ -877,6 +877,9 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
             for warning in axocoatl_config::no_tools_warnings(&c) {
                 warn(&warning.problem(), axocoatl_config::NoToolsWarning::HINT);
             }
+            for warning in axocoatl_config::network_warnings(&c) {
+                warn(&warning.field, &warning.message);
+            }
             Some(c)
         }
         Err(e) => {
@@ -1002,7 +1005,7 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
 
     // Outbound egress transparency — always surface what leaves the box.
     if let Some(cfg) = &config {
-        pass(&sandbox_network_doctor_line(&cfg.sandbox.network));
+        pass(&sandbox_network_doctor_line(&cfg.sandbox));
         if cfg.webhooks.is_empty() {
             pass("Outbound webhooks: none (no event egress)");
         } else {
@@ -1030,14 +1033,22 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
 }
 
 /// The `doctor` line for a validated `sandbox.network`. Config loading has
-/// already refused anything other than `bridge` or `none`.
-fn sandbox_network_doctor_line(network: &str) -> String {
-    if network == "none" {
-        "Sandbox network: none (local Session containers have no network)".to_string()
-    } else {
-        format!(
-            "Sandbox network: {network} (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)"
-        )
+/// already refused anything other than `bridge`, `none` or `egress`.
+fn sandbox_network_doctor_line(sandbox: &axocoatl_config::SandboxConfigYaml) -> String {
+    match sandbox.network.as_str() {
+        "none" => "Sandbox network: none (local Session containers have no network)".to_string(),
+        "bridge" => "Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)".to_string(),
+        "egress" => {
+            let allow = sandbox
+                .egress
+                .as_ref()
+                .map(|egress| axocoatl_config::egress::allow_summary(&egress.allow))
+                .unwrap_or_else(|| "nothing".to_string());
+            format!(
+                "Sandbox network: egress (Session containers would reach only: {allow}; read-only helpers and checks have none). Not available in this build: the daemon refuses to start with it"
+            )
+        }
+        other => format!("Sandbox network: {other} (unknown; the daemon refuses it)"),
     }
 }
 
@@ -1408,6 +1419,11 @@ fn no_tools_warning_lines(config: &axocoatl_config::AxocoatlConfig) -> Vec<Strin
     axocoatl_config::no_tools_warnings(config)
         .iter()
         .map(|warning| format!("warning: {warning}"))
+        .chain(
+            axocoatl_config::network_warnings(config)
+                .iter()
+                .map(|warning| format!("warning: {warning}")),
+        )
         .collect()
 }
 
@@ -3066,13 +3082,37 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("sandbox.network") && error.contains("\"bridge\" or \"none\""),
+            error.contains("sandbox.network")
+                && error.contains("\"bridge\", \"none\" or \"egress\""),
             "{error}"
         );
 
-        assert!(sandbox_network_doctor_line("none").contains("no network"));
-        assert!(sandbox_network_doctor_line("bridge")
+        let mut sandbox = axocoatl_config::SandboxConfigYaml {
+            network: "none".to_string(),
+            ..Default::default()
+        };
+        assert!(sandbox_network_doctor_line(&sandbox).contains("no network"));
+        sandbox.network = "bridge".to_string();
+        assert!(sandbox_network_doctor_line(&sandbox)
             .contains("set sandbox.network: none for repositories you do not trust"));
+        sandbox.network = "egress".to_string();
+        sandbox.egress = Some(axocoatl_config::EgressConfigYaml {
+            allow: vec![
+                axocoatl_config::EgressAllowYaml::Preset("npm".to_string()),
+                axocoatl_config::EgressAllowYaml::Preset("pypi".to_string()),
+                axocoatl_config::EgressAllowYaml::Host(axocoatl_config::EgressHostYaml {
+                    host: "a.example".to_string(),
+                    ports: None,
+                }),
+            ],
+            ..Default::default()
+        });
+        let line = sandbox_network_doctor_line(&sandbox);
+        assert!(
+            line.contains("reach only: npm, pypi, 1 host;")
+                && line.contains("read-only helpers and checks have none"),
+            "{line}"
+        );
     }
 
     #[test]

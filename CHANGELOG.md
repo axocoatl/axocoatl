@@ -5,6 +5,33 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `sandbox.network` accepts `egress`, with a `sandbox.egress` block: an allowlist of
+  presets (`npm`, `yarn`, `pypi`, `crates`, `go`, `github`, `alpine`, `debian`,
+  `ubuntu`), host names, `*.` subdomain wildcards and IP ranges, plus
+  `private_destinations`, `sidecar_network`, `max_connections` and
+  `record_max_events`. The configuration is validated and `doctor` describes it, but
+  the daemon refuses to start with `network: egress` until Session start runs the
+  egress proxy. `validate`, `doctor` and daemon start warn about wildcard entries,
+  CDN-fronted presets and hosts that accept uploads.
+- Each native Session can keep a network record, an append-only log of egress
+  decisions, connection closes, policy changes and web-tool fetches, and
+  `GET /api/sessions/{id}/network` reads it. Reading never creates a record.
+- The configuration parses `web_search.provider: searxng` with a `searxng` block, and
+  new `web_fetch` and `browser` blocks and `mcp_servers[].inherit_env`, for upcoming
+  tools. They are validated but not yet run.
+
+### Changed
+- `sandbox.backend: e2b` now requires `sandbox.network: bridge` when the configuration
+  loads. Before, `network: none` with E2B was accepted and refused only when a
+  remote Session was prepared.
+
+### Compatibility
+- A data root used with this version may be refused by 1.1.2 and earlier once a
+  Session has a network record, because they do not know the record's directory.
+
 ## [1.1.2] - 2026-10-02
 
 ### Security

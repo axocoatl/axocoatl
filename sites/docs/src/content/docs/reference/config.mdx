@@ -75,6 +75,8 @@ and have no YAML override. See [Data and backup](/operate/data-backup/) and
 | `schedules` | list | Legacy fixed-interval Automation seed |
 | `proactive` | list | Legacy interval/event Automation seed |
 | `web_search` | object/null | Optional Session web-search provider |
+| `web_fetch` | object/null | Optional `web_fetch` tool; present enables it for Agents that list it |
+| `browser` | object/null | Optional `browser` tool; present enables it for Agents that list it |
 | `consolidation` | object | Idle memory-promotion loop |
 | `webhooks` | list | Outbound typed-event delivery |
 | `pricing` | map | Per-model input/output rates for Attempt cost reporting; reasoning uses the output rate |
@@ -250,10 +252,43 @@ repository commands and do not approve setup that needs downloads. The network
 policy prevents in-container provisioning; a Podman image pull is a separate
 host operation.
 
-`backend` is `podman` or `e2b`; `network` is `bridge` (the default) or `none`
-for Podman. Any other `network` value, such as `None` or `off`, is a validation
-error. Axocoatl rejects `network: none` with E2B because the remote backend cannot
-prove that policy. Native repository tools and required checks need local Podman. E2B supports
+`backend` is `podman` or `e2b`; `network` is `bridge` (the default), `none` or
+`egress` for Podman. Any other `network` value, such as `None` or `off`, is a
+validation error. Axocoatl rejects `network: none` and `network: egress` with E2B
+because the remote backend cannot prove that policy.
+
+`network: egress` gives Session containers only the hosts listed under
+`sandbox.egress`, through Axocoatl's proxy. The configuration is validated, but
+this build does not run the proxy yet: the daemon refuses to start with
+`network: egress`.
+
+```yaml
+sandbox:
+  network: egress
+  egress:
+    allow:
+      - npm                      # a preset
+      - host: api.example.com    # ports default to [443]
+        ports: [443]
+      - host: "*.example.org"    # subdomains only, at least two labels after *.
+      - cidr: 10.20.0.0/16       # an IP range, for IP-literal destinations
+        ports: [8000]
+    private_destinations: [10.0.0.0/8]
+    sidecar_network: podman      # optional Podman network for the proxy
+    max_connections: 128         # 8-256
+    record_max_events: 50000     # 1000-1000000
+```
+
+Presets are `npm`, `yarn`, `pypi`, `crates`, `go`, `github`, `alpine`, `debian`
+and `ubuntu`. Their host lists are not yet verified against the live registries.
+A `host` is a name, never an IP address; use `cidr` for addresses. A range that is
+not wholly public must lie inside a `private_destinations` entry, and each
+private destination must be wholly private (such as `10.0.0.0/8` or `fd00::/8`).
+Loopback, link-local, multicast, documentation and other special ranges are refused,
+including IPv4 addresses embedded in IPv6 forms. Validation warns about wildcard
+entries, CDN-fronted presets (a tunnel to them can reach other sites on the same
+CDN) and hosts that accept uploads (`github`, `npm`, `pypi`, `crates`). An `egress`
+block under another network mode is ignored with a warning. Native repository tools and required checks need local Podman. E2B supports
 compatibility execution; it does not implement the native supervised command boundary.
 For E2B:
 
@@ -298,7 +333,10 @@ mcp_servers:
 ```
 
 Persistent transports are `stdio` and `streamable_http`/`http`. Stdio requires
-`command`; HTTP requires `url`. Bootstrap logs connection failure and continues.
+`command`; HTTP requires `url`. `inherit_env` (default `true`) is parsed for stdio
+servers; with `false` a server is meant to receive only `PATH`, `HOME`, `USER`,
+`LANG`, `LC_*`, `TMPDIR` and its `env`. This build parses the key but does not yet
+apply it. Bootstrap logs connection failure and continues.
 Settings catalog connect/remove changes only the live registry and does not
 rewrite this list.
 
@@ -371,6 +409,35 @@ consolidation:
 
 The currently implemented web-search provider ID is `tavily`. When configured,
 normal Session Agents receive the tool; Attempts do not.
+
+The configuration also parses the upcoming self-hosted search and fetch tools. They
+are validated for shape and bounds but not yet run by this build:
+
+```yaml
+web_search:
+  provider: searxng
+  searxng:
+    managed: true        # Axocoatl runs the SearXNG container; false needs url
+    engines: []          # keep only these engines; empty keeps SearXNG's defaults
+    language: all
+    safesearch: 0        # 0-2
+    timeout_secs: 15     # 1-60
+
+web_fetch:
+  max_bytes: 4194304     # 64 KiB-8 MiB
+  timeout_secs: 20       # 1-60
+
+browser:
+  image: localhost/axocoatl-browser:pw1.60.0
+  allow: []              # same entries as sandbox.egress.allow
+  private_destinations: []
+  snapshot_max_bytes: 16384
+  timeout_secs: 120
+  max_parallel: 2
+```
+
+`browser` is refused with `backend: e2b`, and `browser.allow` must be empty with
+`network: none`.
 
 ## Webhooks
 

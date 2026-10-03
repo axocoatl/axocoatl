@@ -175,6 +175,7 @@ pub fn build_router(
             "/api/sessions/{id}/turns/{turn_id}/control-plane",
             get(routes::session_turn_control_plane),
         )
+        .route("/api/sessions/{id}/network", get(routes::session_network))
         .route(
             "/api/sessions/{id}/turns/{turn_id}/graph-edits/preview",
             post(routes::preview_session_graph_edit).layer(DefaultBodyLimit::max(

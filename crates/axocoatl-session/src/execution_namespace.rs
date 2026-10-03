@@ -32,8 +32,15 @@ pub enum ExecutionComponent {
     SessionTeam,
     WaysDecisions,
     InvocationAudit,
-    ControlAuthority { turn_id: LogicalTurnId },
-    ControlCommands { turn_id: LogicalTurnId },
+    ControlAuthority {
+        turn_id: LogicalTurnId,
+    },
+    ControlCommands {
+        turn_id: LogicalTurnId,
+    },
+    /// Session-level egress and web record. A data root that holds it may be
+    /// refused by Axocoatl 1.1.2 and earlier, which do not know this kind.
+    NetworkRecord,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +61,7 @@ impl ExecutionComponent {
             Self::SessionTeam => "session-team".into(),
             Self::WaysDecisions => "ways-decisions".into(),
             Self::InvocationAudit => "invocation-audit".into(),
+            Self::NetworkRecord => "network-record".into(),
             Self::ControlAuthority { turn_id } => format!(
                 "control-authority-{:x}",
                 Sha256::digest(turn_id.as_str().as_bytes())
@@ -293,6 +301,33 @@ impl OwnedExecutionNamespace {
         let bytes = self.dir.read_limited(name, max_bytes)?;
         self.verify_ambient_identity()?;
         Ok(bytes)
+    }
+
+    /// A retained append-only handle to one direct child file, for stores whose
+    /// journal is a log rather than a replaced document. Writes through the
+    /// handle bypass `mutation`; the store must verify identity itself.
+    pub(crate) fn open_append(&self, name: impl AsRef<Path>) -> io::Result<std::fs::File> {
+        let name = direct_name(name.as_ref())?;
+        self.verify_ambient_identity()?;
+        let file = self.mutation(|| self.dir.open_append(name))?;
+        self.verify_ambient_identity()?;
+        Ok(file)
+    }
+
+    /// A bounded read handle to one direct child file.
+    pub(crate) fn open_read(
+        &self,
+        name: impl AsRef<Path>,
+        max_bytes: usize,
+    ) -> io::Result<std::fs::File> {
+        let name = direct_name(name.as_ref())?;
+        if max_bytes > MAX_FILE_BYTES {
+            return Err(bounds());
+        }
+        self.verify_ambient_identity()?;
+        let file = self.dir.open_file_limited(name, max_bytes)?;
+        self.verify_ambient_identity()?;
+        Ok(file)
     }
 
     pub fn atomic_write(&self, name: impl AsRef<Path>, bytes: &[u8]) -> io::Result<()> {
@@ -589,6 +624,67 @@ mod tests {
         )
         .unwrap();
         (root, ownership, store)
+    }
+
+    #[test]
+    fn a_network_record_directory_leaves_every_other_component_openable() {
+        let (_root, _ownership, store) = setup();
+        let record = store
+            .component_namespace(ExecutionComponent::NetworkRecord)
+            .unwrap();
+        record
+            .check_journal_creation("network-record.v1.jsonl")
+            .unwrap();
+        let mut file = record.open_append("network-record.v1.jsonl").unwrap();
+        std::io::Write::write_all(&mut file, b"{}\n").unwrap();
+        record
+            .mark_journal_initialized("network-record.v1.jsonl")
+            .unwrap();
+        assert!(store
+            .path()
+            .parent()
+            .unwrap()
+            .join("network-record")
+            .join("network-record.v1.jsonl")
+            .is_file());
+        let turn_id = LogicalTurnId::new("turn").unwrap();
+        for component in [
+            ExecutionComponent::ActivationState,
+            ExecutionComponent::ExecutionContent,
+            ExecutionComponent::SessionTeam,
+            ExecutionComponent::WaysDecisions,
+            ExecutionComponent::InvocationAudit,
+            ExecutionComponent::ControlAuthority {
+                turn_id: turn_id.clone(),
+            },
+            ExecutionComponent::ControlCommands {
+                turn_id: turn_id.clone(),
+            },
+        ] {
+            let namespace = store.component_namespace(component.clone()).unwrap();
+            namespace.require_root(&component).unwrap();
+        }
+        // The record holds its own writer lock; a second writer is refused,
+        // while the existing reader path still finds the marker.
+        assert!(store
+            .component_namespace(ExecutionComponent::NetworkRecord)
+            .is_err());
+        drop(file);
+        drop(record);
+        let reopened = store
+            .existing_component_namespace(
+                ExecutionComponent::NetworkRecord,
+                Path::new("network-record.v1.jsonl"),
+            )
+            .unwrap();
+        let mut read = reopened.open_read("network-record.v1.jsonl", 1024).unwrap();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut read, &mut bytes).unwrap();
+        assert_eq!(bytes, b"{}\n");
+        assert!(reopened.open_append("../escape").is_err());
+        assert!(reopened
+            .open_read("network-record.v1.jsonl", MAX_FILE_BYTES + 1)
+            .is_err());
     }
 
     #[test]

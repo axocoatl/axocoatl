@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod error;
 pub mod event_feed;
+pub mod netaddr;
 pub mod secure_fs;
 pub mod skill;
 pub mod token;

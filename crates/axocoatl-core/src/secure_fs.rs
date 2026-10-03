@@ -898,6 +898,38 @@ impl SecureDir {
         }
     }
 
+    /// Open or create a regular descendant for appending and return the
+    /// retained handle. Every write lands at the end of the file, including
+    /// after a `set_len` truncation through the same handle. The final
+    /// component is never followed.
+    pub fn open_append(&self, relative: impl AsRef<Path>) -> io::Result<File> {
+        let (parent, name) = self.parent_and_name(relative.as_ref(), true)?;
+        parent.reject_non_regular_target(&name)?;
+        #[cfg(unix)]
+        {
+            let fd = fs::openat(
+                parent.fd.as_ref(),
+                &name,
+                OFlags::WRONLY
+                    | OFlags::APPEND
+                    | OFlags::CREATE
+                    | OFlags::NOFOLLOW
+                    | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )
+            .map_err(io::Error::from)?;
+            ensure_regular_fd(&fd, &parent.path.join(&name))?;
+            Ok(File::from(fd))
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(parent.path.join(name))
+        }
+    }
+
     /// Append bytes to a regular descendant, optionally syncing before return.
     pub fn append(&self, relative: impl AsRef<Path>, bytes: &[u8], sync: bool) -> io::Result<()> {
         let (parent, name) = self.parent_and_name(relative.as_ref(), true)?;
@@ -1321,6 +1353,27 @@ fn ensure_regular_path(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn open_append_retains_one_append_only_handle_and_refuses_links() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = SecureDir::open(temp.path()).unwrap();
+        let mut file = root.open_append("record.jsonl").unwrap();
+        file.write_all(b"one\n").unwrap();
+        file.write_all(b"two\n").unwrap();
+        file.set_len(4).unwrap();
+        file.write_all(b"three\n").unwrap();
+        assert_eq!(root.read("record.jsonl").unwrap(), b"one\nthree\n");
+        let mut again = root.open_append("record.jsonl").unwrap();
+        again.write_all(b"four\n").unwrap();
+        assert_eq!(root.read("record.jsonl").unwrap(), b"one\nthree\nfour\n");
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        symlink(outside.path(), temp.path().join("linked")).unwrap();
+        assert!(root.open_append("linked").is_err());
+        assert!(root.open_append("../escape").is_err());
+    }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]

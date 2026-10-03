@@ -15,6 +15,7 @@ pub mod proactive;
 pub mod scheduler;
 pub mod session_control_plane;
 pub mod session_dispatch;
+pub mod session_network;
 pub mod skill_tool;
 pub mod stream;
 pub mod supervision;

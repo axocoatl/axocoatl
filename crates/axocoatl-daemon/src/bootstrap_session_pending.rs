@@ -145,6 +145,38 @@ impl PendingSessionEntry {
         }
         Ok(())
     }
+    pub(super) fn network_record_namespace(
+        &self,
+    ) -> Result<axocoatl_session::execution_namespace::OwnedExecutionNamespace> {
+        let stores = self
+            .stores
+            .lock()
+            .map_err(|_| failure("retained network record ownership failed"))?;
+        crate::session_network::writer_namespace(stores.canonical()?).map_err(failure)
+    }
+
+    pub(super) fn read_network_record(
+        &self,
+        after: Option<u64>,
+        limit: usize,
+        limits: axocoatl_session::network_record::RecordLimits,
+    ) -> Result<
+        Option<(
+            Vec<axocoatl_session::network_record::NetworkLine>,
+            axocoatl_session::network_record::RecordStats,
+        )>,
+    > {
+        let stores = self
+            .stores
+            .lock()
+            .map_err(|_| failure("retained network record ownership failed"))?;
+        // A Session between Close and Reopen has released its stores.
+        let Ok(canonical) = stores.canonical() else {
+            return Ok(None);
+        };
+        crate::session_network::read_existing(canonical, after, limit, limits).map_err(failure)
+    }
+
     pub(super) fn history_snapshot(
         &self,
     ) -> Result<axocoatl_session::session_history::SessionHistory> {
