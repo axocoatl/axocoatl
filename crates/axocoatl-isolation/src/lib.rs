@@ -4,6 +4,7 @@ pub mod egress_control;
 pub mod error;
 pub mod podman;
 pub mod pty;
+pub mod searxng;
 pub mod session_sandbox;
 mod supervisor_embedded;
 mod supervisor_image;
