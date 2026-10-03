@@ -107,12 +107,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file from the repository (with the files it imports by relative path) or given as
   `script`, with one worker and no retries, and returns each test's status and first
   error. Both run in a per-Session browser container with no network interface other
-  than loopback, a read-only root, no capabilities and no Workspace mount. Under
-  `bridge` and `none` it reaches the Session's exposed ports through Unix sockets
-  served by a separate forwarder container that joins the Session container's network
-  namespace; the Session container never sees the sockets, so a read-only helper's
-  shell cannot reach the apps through them. Under `egress` it uses the sockets the
-  Session container's bridge already serves for Preview. It reaches the hosts listed
+  than loopback, a read-only root, no capabilities and no Workspace mount. It reaches
+  the Session's exposed ports through Unix sockets served by a separate forwarder
+  container that joins the Session container's network namespace (under `egress`, the
+  one that serves Preview); the Session container never sees the sockets, so a
+  read-only helper's shell cannot reach the apps through them. It reaches the hosts listed
   under `browser.allow` only through Axocoatl's egress proxy, which checks each host
   against that list, resolves it on the host, refuses special and unlisted private
   addresses and records every decision. Without declared

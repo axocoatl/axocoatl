@@ -79,22 +79,19 @@ always do, for example `npm run dev` in the Terminal pane.
 - Inside it, Axocoatl listens on `127.0.0.1:<port>` and `[::1]:<port>` for each exposed
   port and forwards each connection to a Unix socket for that port. Any other
   `localhost` port refuses the connection.
-- Under `bridge` and `none`, the sockets come from a small forwarder container,
+- In every network mode, the sockets come from a small forwarder container,
   `axo-svc-<session>`. It joins the Session container's network namespace and nothing
   else of it: no Workspace, no environment and no published port. It connects only to
-  `127.0.0.1:<port>` there. Only the forwarder can write the socket directory, and only
-  the browser container mounts it at all, read-only. The Session container never sees
-  the sockets, so a read-only helper whose shell may not open TCP connections cannot
-  reach the apps through them either.
-- Under `network: egress`, the Session container's own bridge already serves each
-  exposed port as a socket for Preview, so no forwarder starts and the browser uses
-  those sockets. They are in the Session container, so the separation above does not
-  hold: a read-only helper can reach the apps through them.
+  `127.0.0.1:<port>` there. Only the forwarder can write the socket directory; the
+  browser container and, under `network: egress`, the Preview container mount it
+  read-only. The Session container never sees the sockets, so a read-only helper
+  whose shell may not open TCP connections cannot reach the apps through them either.
 - The app must listen on `127.0.0.1` or `0.0.0.0` inside the Session. An app that
   listens only on `::1` is not reached.
-- The first browser call starts the forwarder (`bridge` and `none`). If it stops, or
-  the Session container restarts, the next call starts a new one. It is removed with
-  the Session.
+- Under `bridge` and `none` the first browser call starts the forwarder. Under
+  `network: egress` a Session with exposed ports starts it for Preview, and the
+  browser uses it. If it stops, or the Session container restarts, the next call
+  starts a new one. It is removed with the Session.
 
 ## Declared hosts
 
