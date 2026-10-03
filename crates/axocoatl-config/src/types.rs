@@ -49,6 +49,12 @@ pub struct AxocoatlConfig {
     /// Ollama—is never misreported as costing $0.
     #[serde(default)]
     pub pricing: std::collections::HashMap<String, ModelPriceYaml>,
+    /// Named credentials that `sandbox.egress.routes` add to requests. Each
+    /// names where the daemon reads the value when a request needs it: an
+    /// environment variable of the daemon or an owner-only file. The config
+    /// never holds a credential value.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub credentials: std::collections::BTreeMap<String, CredentialSourceYaml>,
 }
 
 /// Price of one model, in dollars per million tokens.
@@ -760,6 +766,10 @@ pub struct EgressConfigYaml {
     /// 1,000-1,000,000 events in one Session's network record.
     #[serde(default = "default_egress_record_max_events")]
     pub record_max_events: u32,
+    /// Hosts whose HTTPS traffic Axocoatl ends on this computer, checks
+    /// request by request and, with a credential, signs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<EgressRouteYaml>,
 }
 
 impl Default for EgressConfigYaml {
@@ -770,6 +780,7 @@ impl Default for EgressConfigYaml {
             sidecar_network: None,
             max_connections: default_egress_max_connections(),
             record_max_events: default_egress_record_max_events(),
+            routes: Vec::new(),
         }
     }
 }
@@ -779,6 +790,205 @@ fn default_egress_max_connections() -> u32 {
 }
 fn default_egress_record_max_events() -> u32 {
     50_000
+}
+
+/// One entry of `sandbox.egress.routes`: a host whose HTTPS connections
+/// Axocoatl ends with a certificate from the Session's own authority, so it
+/// can check each request against `rules` (or `access`) and add
+/// `credential`. Validation is in [`crate::egress_routes`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EgressRouteYaml {
+    /// Exact host name; no wildcard and no IP address.
+    pub host: String,
+    /// Defaults to `[443]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports: Option<Vec<u16>>,
+    /// Name of a `credentials` entry added to every allowed request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+    /// How the credential is added. Required with `credential`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inject: Option<RouteInjectYaml>,
+    /// Which processes the route serves. Defaults to `[agent]`.
+    #[serde(default, rename = "for", skip_serializing_if = "Option::is_none")]
+    pub bindings: Option<Vec<RouteForYaml>>,
+    /// PEM file with the certificate authority of a private upstream, trusted
+    /// for this route in addition to this computer's own trust settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_ca: Option<String>,
+    /// A preset instead of `rules`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<RouteAccessYaml>,
+    /// Requests the route allows; everything else is refused.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<RouteRuleYaml>,
+    /// Environment variables set to a placeholder in Agents' environments, for
+    /// tools that refuse to run without a token of their own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_placeholders: Vec<String>,
+    /// Pass compressed responses on a credentialed route, which the
+    /// credential-reflection check cannot read.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_encoded_responses: bool,
+    /// Largest request body, in bytes. Defaults to 1 GiB.
+    #[serde(default = "default_route_max_request_bytes")]
+    pub max_request_bytes: u64,
+}
+
+fn default_route_max_request_bytes() -> u64 {
+    1 << 30
+}
+
+/// How a route adds its credential.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteInjectYaml {
+    /// `Authorization: Basic base64(username:credential)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basic: Option<RouteBasicYaml>,
+    /// A header whose value is `format` with `{}` replaced by the credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// Defaults to `"{}"`, the credential alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteBasicYaml {
+    pub username: String,
+}
+
+/// A process kind a route serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteForYaml {
+    /// Agents' tool calls.
+    Agent,
+    /// Terminals you open.
+    Terminal,
+    /// Setup commands.
+    Setup,
+}
+
+/// Request presets for a route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RouteAccessYaml {
+    /// `GET`, `HEAD` and `OPTIONS` on every path.
+    ReadOnly,
+    /// Every method on every path.
+    Full,
+}
+
+/// One allowed request shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteRuleYaml {
+    /// Uppercase method names, such as `[GET, HEAD]`.
+    pub methods: Vec<String>,
+    /// A path glob: `*` matches one segment, `**` any number of segments.
+    pub path: String,
+    /// Query parameters the request must carry, each exactly once, with this
+    /// value (`*` for any value). Other parameters are allowed.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub query: std::collections::BTreeMap<String, String>,
+}
+
+/// Where the daemon reads one credential: exactly one of `env` and `file`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CredentialSourceYaml {
+    /// An environment variable of the daemon, such as `GITHUB_TOKEN`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
+    /// An owner-only file outside every Workspace; absolute or `~/...`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+/// Anything but a mapping is refused without repeating it, since a value
+/// written there is most likely the credential itself.
+impl<'de> Deserialize<'de> for CredentialSourceYaml {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            #[serde(default)]
+            env: Option<String>,
+            #[serde(default)]
+            file: Option<String>,
+        }
+
+        struct SourceVisitor;
+
+        const EXPECTED: &str = "{env: VARIABLE} or {file: /path/to/file}; Axocoatl does not take \
+                                credential values in its config";
+
+        fn refuse<E: serde::de::Error>() -> E {
+            E::custom(format!(
+                "a credential is {EXPECTED} (the value written here is not shown)"
+            ))
+        }
+
+        impl<'de> serde::de::Visitor<'de> for SourceVisitor {
+            type Value = CredentialSourceYaml;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str(EXPECTED)
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let fields =
+                    Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(CredentialSourceYaml {
+                    env: fields.env,
+                    file: fields.file,
+                })
+            }
+
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+                Err(refuse())
+            }
+
+            fn visit_bytes<E: serde::de::Error>(self, _: &[u8]) -> Result<Self::Value, E> {
+                Err(refuse())
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+                Err(refuse())
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+                Err(refuse())
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+                Err(refuse())
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                Err(refuse())
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Err(refuse())
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                _: A,
+            ) -> Result<Self::Value, A::Error> {
+                Err(refuse())
+            }
+        }
+
+        deserializer.deserialize_any(SourceVisitor)
+    }
 }
 
 /// One egress allowlist entry: a preset name, a host name, or an address range.
