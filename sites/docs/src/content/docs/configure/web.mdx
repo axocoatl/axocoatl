@@ -7,10 +7,11 @@ import { Aside } from '@astrojs/starlight/components';
 
 Agents can search the web through a SearXNG instance Axocoatl runs on your
 computer, and read pages with `web_fetch`. Both run on your computer, not in the
-Session container, and only Agents whose `tools` list them get them. Each result
+Session container, and in native Sessions only Agents whose `tools` list them get
+them (legacy Sessions differ; see [below](#legacy-sessions-and-tavily)). Each result
 has a source id for citations, and the URL, time and content hash of every page an
 Agent reads are kept in the Session's network record. `web_fetch` refuses private
-and local addresses and checks every redirect.
+and local addresses, including this computer's own, and checks every redirect.
 
 ## Turn the tools on
 
@@ -76,7 +77,8 @@ one with a **web** badge.
 
 In native Sessions the web tools are refused when `sandbox.network` is `none`:
 they reach the internet from your computer, so they would undo that setting.
-They are also withheld from attempts made with **Explore several ways**.
+They are also withheld from attempts made with **Explore several ways**: an Agent
+that lists them runs its attempt without them, and a call to one is declined.
 
 ## Cite sources
 
@@ -102,17 +104,22 @@ activation is listed as an unknown citation.
 
 ## What is recorded
 
-Each call appends a `web` event to the Session's network record, readable with
-`GET /api/sessions/{id}/network`. The event names the tool, the tool call, the
-activation and the Agent, whether the call was allowed or refused and why, the
-source ids, and the time. A search records the SHA-256 and length of its query,
-not the query text, which is already in the call's recorded arguments, plus the
-result count and the engines that did not answer. A fetch records the URL, the
-final URL and each redirect, the status, the bytes read and the SHA-256 of the
-body and of the extracted text.
+Before a call with valid arguments sends anything, it appends a `web_request`
+event to the Session's network record, readable with
+`GET /api/sessions/{id}/network`: the tool, the tool call, the activation and the
+Agent, with the URL a fetch requests or the SHA-256 and length of a search's query.
+When the call finishes it appends a `web` event naming the same tool call, whether
+it was allowed or refused and why, the source ids, and the time. A search records the SHA-256 and length of its query, not the
+query text, which is already in the call's recorded arguments, plus the result count
+and the engines that did not answer. A fetch records the URL, the final URL and
+each redirect, the status, the bytes read and the SHA-256 of the body and of the
+extracted text. A recorded fetch URL is cut at 1,024 bytes (a search result's at
+512) and then marked as cut; the full URL is in the call's recorded arguments.
 
-If the record cannot be written, for example because it is full, the call fails
-and nothing it found reaches the Agent.
+If the `web_request` event cannot be written, for example because the record is
+full, nothing is sent and the call fails. If the `web` event cannot be written, the
+request already left your computer and is in the record, but the call fails and
+nothing it found reaches the Agent.
 
 ## What leaves your computer
 
@@ -134,11 +141,25 @@ None of this traffic passes through the Session container's network, and
 
 `web_fetch` reads only public pages. It refuses a URL whose host is a private,
 loopback, link-local or other special address, including IPv4 written inside IPv6
-forms such as `::ffff:127.0.0.1` and numeric spellings such as `2130706433`. A host
-name is resolved on your computer, and the fetch is refused if any address it
-resolves to is not public, so a name cannot point it at your network. It follows
-at most five redirects and checks each one the same way, as well as its scheme
-and any `user:password@`. Only `http` and `https` URLs are read.
+forms such as `::ffff:127.0.0.1` and numeric spellings such as `2130706433`.
+
+A public address can still be your computer. Most networks give a computer a
+global IPv6 address, and a server may have a public IPv4 address; either reaches
+every service listening on all interfaces, such as a development server or a
+database. So `web_fetch` also refuses any address of your computer's own network
+interfaces, read again for every fetch, and any address on a network one of them is
+directly connected to (the interface's prefix, such as your home network's `/64`).
+
+A host name is resolved on your computer, and the fetch is refused if any address
+it resolves to is refused, so a name cannot point it at your computer or the
+network it is on. It follows at most five redirects and checks each one the same
+way, as well as its scheme and any `user:password@`. Only `http` and `https` URLs
+are read.
+
+What it cannot tell apart from the internet is a public address that leads back
+into a network you belong to without being directly connected: your router's own
+public IPv4 address, which can forward ports to devices behind it, or another
+subnet of a campus or company network that uses public addresses.
 
 <Aside type="caution">
 A public page can still contain instructions meant for the Agent that reads it.
@@ -148,10 +169,17 @@ did with what it read.
 
 ## Legacy Sessions and Tavily
 
-A legacy (1.0-format) Session gets `web_search` and `web_fetch` when they are
-configured, without network record events. A configuration that still names the
-hosted `tavily` provider keeps working for legacy Sessions only; native Sessions
-refuse it and `validate` warns. Use `provider: searxng`.
+A legacy (1.0-format) Session gets the web tools without network record events:
+
+- `web_search`, when configured, goes to every Agent whose `tools` list is empty
+  (an empty list means every tool the Session offers) or names it, also under
+  `sandbox.network: none`, as in 1.0.
+- `web_fetch`, when configured, goes only to an Agent whose `tools` list names it,
+  and never under `sandbox.network: none`.
+
+A configuration that still names the hosted `tavily` provider keeps working for
+legacy Sessions only; native Sessions refuse it and `validate` warns. Use
+`provider: searxng`.
 
 ## SearXNG
 

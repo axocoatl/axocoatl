@@ -5,17 +5,20 @@
 //! helper or required reviewer is no exception, and a lead cannot grant one
 //! to an ad hoc helper, whose list comes from its approved template.
 //!
-//! Every call appends a `web` event to the Session's network record with the
+//! A call whose arguments are valid first appends a `web_request` event with
+//! the URL it will fetch or its query's hash, and only then sends anything,
+//! so a request is never made unrecorded. When it finishes, every call
+//! appends a `web` event to the Session's network record with the
 //! invocation, activation and Agent that made it, the decision, the source
 //! ids it returned and the hashes of what it read. A search records the
 //! SHA-256 and length of its query, not the query text, which is already in
-//! the audited call arguments. If the record cannot be written, the call
+//! the audited call arguments. If either event cannot be written, the call
 //! fails, so the model never receives a page or result the record lacks.
 //!
 //! The Session control plane joins those events to activations as `sources`
 //! evidence, marking each source the activation's final output cites.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -29,8 +32,8 @@ use axocoatl_session::network_record::{
     MAX_RECORDED_SOURCE_URL_BYTES, MAX_RECORDED_WEB_URL_BYTES,
 };
 use axocoatl_tools::{
-    BuiltinTool, FixedSearxngEndpoint, SearxngEndpoint, SearxngQuerySettings, ToolError,
-    WebFetchReport, WebFetchTool, WebSearchReport, WebSearchTool,
+    BuiltinTool, FixedSearxngEndpoint, PreparedSearch, SearxngEndpoint, SearxngQuerySettings,
+    ToolError, WebFetchReport, WebFetchTool, WebSearchReport, WebSearchTool,
 };
 
 use crate::session_control_plane::{
@@ -51,31 +54,16 @@ const EVIDENCE_SOURCES_MAX: usize = 200;
 /// Most web events read from a record for one projection.
 const PROJECTION_WEB_EVENTS_MAX: usize = 20_000;
 
-/// Where `web` events are written.
+/// Where `web_request` and `web` events are written. An append returns only
+/// once the line is written, so a caller that waits for it has the event in
+/// the record before it acts.
 #[async_trait]
 pub(crate) trait WebRecordSink: Send + Sync {
-    /// Fail when the Session's record cannot take another event, before the
-    /// tool does any work.
-    async fn writable(&self, session: &str) -> Result<(), String>;
     async fn append(&self, session: &str, event: NetworkEvent) -> Result<u64, String>;
 }
 
 #[async_trait]
 impl WebRecordSink for crate::session_network::SessionNetworkRecords {
-    async fn writable(&self, session: &str) -> Result<(), String> {
-        let stats = self
-            .stats(session)
-            .await
-            .map_err(|error| error.to_string())?;
-        if stats.full {
-            return Err(format!(
-                "the Session's network record is full ({} events)",
-                stats.events
-            ));
-        }
-        Ok(())
-    }
-
     async fn append(&self, session: &str, event: NetworkEvent) -> Result<u64, String> {
         crate::session_network::SessionNetworkRecords::append(self, session, event)
             .await
@@ -248,8 +236,14 @@ impl WebTools {
         self.legacy_search.clone()
     }
 
-    /// `web_fetch` for a legacy Session.
-    pub(crate) fn legacy_fetch_tool(&self) -> Option<Arc<WebFetchTool>> {
+    /// `web_fetch` for a legacy Session's Agent with `agent_tools`: only
+    /// when that list names it, so an empty list (which inherits the whole
+    /// executor) never gains it, and never under `network: none`, which
+    /// legacy calls would bypass without any record.
+    pub(crate) fn legacy_fetch_tool(&self, agent_tools: &[String]) -> Option<Arc<WebFetchTool>> {
+        if self.network_refusal().is_some() || !agent_tools.iter().any(|tool| tool == "web_fetch") {
+            return None;
+        }
         self.fetch.clone()
     }
 
@@ -301,12 +295,13 @@ fn record_unavailable(tool: &str, reason: String) -> ToolError {
     }
 }
 
-/// Refusal for web tools in Explore several ways attempts.
+/// Refusal for a call to a web tool in an Explore several ways attempt.
 pub const WAYS_REFUSAL: &str = "is withheld from Explore several ways attempts, like other \
      tools that reach outside the attempt; run this Agent in the Session itself to use it";
 
-/// Host tools that refuse every web call, for controllers whose activations
-/// must not reach the web (Explore several ways attempts).
+/// Web tools withheld from a controller's activations (Explore several ways
+/// attempts): an Agent that lists one runs without it, and a call to one
+/// anyway is declined with [`WAYS_REFUSAL`].
 pub(crate) fn withheld_web_tools() -> Vec<Arc<dyn HostInvocationTool>> {
     ["web_search", "web_fetch"]
         .into_iter()
@@ -332,6 +327,10 @@ impl HostInvocationTool for WithheldWebTool {
 
     fn refusal(&self, _profile: &ExecutionProfile) -> Option<String> {
         Some(format!("{} {WAYS_REFUSAL}", self.0))
+    }
+
+    fn withheld(&self) -> bool {
+        true
     }
 
     fn bind(&self, _context: HostInvocationContext) -> Arc<dyn BuiltinTool> {
@@ -452,16 +451,32 @@ impl BuiltinTool for BoundWebSearch {
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let started = Instant::now();
+        let session = self.context.session_id.as_str();
+        let unavailable = |reason| record_unavailable("web_search", reason);
+        let prepared = match self.tool.prepare_search(&arguments) {
+            Ok(prepared) => prepared,
+            Err((error, report)) => {
+                // Invalid arguments: nothing was sent, and the refusal is
+                // recorded.
+                let event = search_event(&self.context, &report, started.elapsed());
+                self.records
+                    .append(session, event)
+                    .await
+                    .map_err(unavailable)?;
+                return Err(error);
+            }
+        };
+        // Write-ahead: the request is in the record before it is sent.
         self.records
-            .writable(&self.context.session_id)
+            .append(session, search_request_event(&self.context, &prepared))
             .await
-            .map_err(|reason| record_unavailable("web_search", reason))?;
-        let (result, report) = self.tool.search_with_report(arguments).await;
+            .map_err(unavailable)?;
+        let (result, report) = self.tool.run_search(prepared).await;
         let event = search_event(&self.context, &report, started.elapsed());
         self.records
-            .append(&self.context.session_id, event)
+            .append(session, event)
             .await
-            .map_err(|reason| record_unavailable("web_search", reason))?;
+            .map_err(unavailable)?;
         result
     }
 }
@@ -484,16 +499,32 @@ impl BuiltinTool for BoundWebFetch {
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let started = Instant::now();
+        let session = self.context.session_id.as_str();
+        let unavailable = |reason| record_unavailable("web_fetch", reason);
+        let prepared = match self.tool.prepare_fetch(&arguments) {
+            Ok(prepared) => prepared,
+            Err((error, report)) => {
+                // Invalid arguments: nothing was requested, and the refusal
+                // is recorded.
+                let event = fetch_event(&self.context, &report, started.elapsed());
+                self.records
+                    .append(session, event)
+                    .await
+                    .map_err(unavailable)?;
+                return Err(error);
+            }
+        };
+        // Write-ahead: the URL is in the record before it is requested.
         self.records
-            .writable(&self.context.session_id)
+            .append(session, fetch_request_event(&self.context, prepared.url()))
             .await
-            .map_err(|reason| record_unavailable("web_fetch", reason))?;
-        let (result, report) = self.tool.fetch_with_report(arguments).await;
+            .map_err(unavailable)?;
+        let (result, report) = self.tool.run_fetch(prepared).await;
         let event = fetch_event(&self.context, &report, started.elapsed());
         self.records
-            .append(&self.context.session_id, event)
+            .append(session, event)
             .await
-            .map_err(|reason| record_unavailable("web_fetch", reason))?;
+            .map_err(unavailable)?;
         result
     }
 }
@@ -520,6 +551,38 @@ fn decision(refused: bool) -> Decision {
 
 fn millis(elapsed: Duration) -> u64 {
     u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The `web_request` event written before a `web_search` is sent.
+pub(crate) fn search_request_event(
+    context: &HostInvocationContext,
+    prepared: &PreparedSearch,
+) -> NetworkEvent {
+    NetworkEvent::WebRequest {
+        tool: WebTool::WebSearch,
+        invocation_id: context.invocation_id.as_str().to_string(),
+        activation_id: context.activation.activation_id.as_str().to_string(),
+        agent: bounded(&context.agent, RECORDED_AGENT_BYTES).0,
+        url: None,
+        url_truncated: false,
+        query_sha256: prepared.query_sha256().map(str::to_string),
+        query_bytes: prepared.query_bytes(),
+    }
+}
+
+/// The `web_request` event written before a `web_fetch` requests `url`.
+pub(crate) fn fetch_request_event(context: &HostInvocationContext, url: &str) -> NetworkEvent {
+    let (url, url_truncated) = bounded(url, MAX_RECORDED_WEB_URL_BYTES);
+    NetworkEvent::WebRequest {
+        tool: WebTool::WebFetch,
+        invocation_id: context.invocation_id.as_str().to_string(),
+        activation_id: context.activation.activation_id.as_str().to_string(),
+        agent: bounded(&context.agent, RECORDED_AGENT_BYTES).0,
+        url: Some(url),
+        url_truncated,
+        query_sha256: None,
+        query_bytes: None,
+    }
 }
 
 /// The `web` event for one `web_search` call.
@@ -551,9 +614,12 @@ pub(crate) fn search_event(
             .as_deref()
             .map(|reason| bounded(reason, RECORDED_REASON_BYTES).0),
         url: None,
+        url_truncated: false,
         final_url: None,
+        final_url_truncated: false,
         status: None,
         redirects: Vec::new(),
+        redirects_truncated: false,
         query_sha256: report.query_sha256.clone(),
         query_bytes: report.query_bytes,
         results: report.results,
@@ -598,11 +664,29 @@ pub(crate) fn fetch_event(
     report: &WebFetchReport,
     elapsed: Duration,
 ) -> NetworkEvent {
-    let url = |value: &Option<String>| {
-        value
-            .as_deref()
-            .map(|url| bounded(url, MAX_RECORDED_WEB_URL_BYTES).0)
+    // Each URL is bounded; a flag says when one was cut, so a long URL is
+    // never recorded as if it were its prefix.
+    let url = |value: &Option<String>| match value.as_deref() {
+        Some(url) => {
+            let (url, cut) = bounded(url, MAX_RECORDED_WEB_URL_BYTES);
+            (Some(url), cut)
+        }
+        None => (None, false),
     };
+    let (requested, url_truncated) = url(&report.url);
+    let (final_url, final_url_truncated) = url(&report.final_url);
+    let mut redirects_truncated =
+        report.redirects.len() > axocoatl_tools::fetch_guard::MAX_REDIRECTS;
+    let redirects = report
+        .redirects
+        .iter()
+        .take(axocoatl_tools::fetch_guard::MAX_REDIRECTS)
+        .map(|hop| {
+            let (hop, cut) = bounded(hop, MAX_RECORDED_WEB_URL_BYTES);
+            redirects_truncated |= cut;
+            hop
+        })
+        .collect();
     NetworkEvent::Web {
         tool: WebTool::WebFetch,
         invocation_id: context.invocation_id.as_str().to_string(),
@@ -613,15 +697,13 @@ pub(crate) fn fetch_event(
             .reason
             .as_deref()
             .map(|reason| bounded(reason, RECORDED_REASON_BYTES).0),
-        url: url(&report.url),
-        final_url: url(&report.final_url),
+        url: requested,
+        url_truncated,
+        final_url,
+        final_url_truncated,
         status: report.status,
-        redirects: report
-            .redirects
-            .iter()
-            .take(axocoatl_tools::fetch_guard::MAX_REDIRECTS)
-            .map(|hop| bounded(hop, MAX_RECORDED_WEB_URL_BYTES).0)
-            .collect(),
+        redirects,
+        redirects_truncated,
         query_sha256: None,
         query_bytes: None,
         results: None,
@@ -693,15 +775,30 @@ struct SourceRow {
     invocations: BTreeSet<String>,
 }
 
-/// Is this a `web` event that returned sources?
-pub(crate) fn is_web_event(event: &NetworkEvent) -> bool {
+/// Is this an allowed `web` event of one of `activations`?
+pub(crate) fn is_web_event_for(event: &NetworkEvent, activations: &HashSet<String>) -> bool {
     matches!(
         event,
         NetworkEvent::Web {
             decision: Decision::Allow,
+            activation_id,
             ..
-        }
+        } if activations.contains(activation_id)
     )
+}
+
+/// The ids of the exact activations `view` shows.
+pub(crate) fn exact_activation_ids(view: &SessionTurnControlPlane) -> HashSet<String> {
+    view.nodes
+        .iter()
+        .flat_map(|node| &node.activations)
+        .filter_map(|item| match &item.reference {
+            ControlPlaneActivationRef::Exact { activation } => {
+                Some(activation.activation_id.as_str().to_string())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Add `sources` evidence to each activation with `web` events in `lines`:

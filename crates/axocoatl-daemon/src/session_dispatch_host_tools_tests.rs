@@ -485,11 +485,31 @@ struct FailingSink;
 
 #[async_trait]
 impl WebRecordSink for FailingSink {
-    async fn writable(&self, _session: &str) -> std::result::Result<(), String> {
-        Err("the Session's network record is full (50000 events)".into())
-    }
     async fn append(&self, _session: &str, _event: NetworkEvent) -> std::result::Result<u64, String> {
-        Err("unreachable".into())
+        Err("network record is full".into())
+    }
+}
+
+/// A record that takes `room` more events, then is full: it fills between
+/// a call's write-ahead event and its result, as parallel calls can.
+struct FillingSink {
+    room: AtomicUsize,
+    events: Mutex<Vec<NetworkEvent>>,
+}
+
+#[async_trait]
+impl WebRecordSink for FillingSink {
+    async fn append(&self, _session: &str, event: NetworkEvent) -> std::result::Result<u64, String> {
+        if self
+            .room
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |room| room.checked_sub(1))
+            .is_err()
+        {
+            return Err("network record is full".into());
+        }
+        let mut events = self.events.lock().unwrap();
+        events.push(event);
+        Ok(events.len() as u64)
     }
 }
 
@@ -536,7 +556,8 @@ async fn web_calls_are_recorded_with_their_invocation_and_cited_sources_are_mark
     assert!(results.iter().any(|text| text.contains("¶1 Rust is fast.")), "{results:?}");
     assert_eq!(fetcher.calls.load(Ordering::SeqCst), 1);
 
-    // One web event per call, attributed to the audited invocation.
+    // One web event per call, attributed to the audited invocation, each
+    // after the web_request written before the call was sent.
     let page = records.read_after("input-session", None, 100).await.unwrap();
     let web: Vec<&NetworkEvent> = page
         .events
@@ -545,6 +566,42 @@ async fn web_calls_are_recorded_with_their_invocation_and_cited_sources_are_mark
         .filter(|event| event.kind() == "web")
         .collect();
     assert_eq!(web.len(), 2, "{web:?}");
+    let invocation_of = |event: &NetworkEvent| match event {
+        NetworkEvent::WebRequest { invocation_id, .. } | NetworkEvent::Web { invocation_id, .. } => {
+            invocation_id.clone()
+        }
+        _ => unreachable!(),
+    };
+    for event in &web {
+        let invocation = invocation_of(event);
+        let request = page
+            .events
+            .iter()
+            .position(|line| {
+                line.event.kind() == "web_request" && invocation_of(&line.event) == invocation
+            })
+            .expect("a web_request for every call");
+        let result = page
+            .events
+            .iter()
+            .position(|line| line.event.kind() == "web" && invocation_of(&line.event) == invocation)
+            .unwrap();
+        assert!(request < result, "the request is recorded before its result");
+        match &page.events[request].event {
+            NetworkEvent::WebRequest {
+                tool: WebTool::WebFetch,
+                url,
+                ..
+            } => assert_eq!(url.as_deref(), Some(RUST_HOME)),
+            NetworkEvent::WebRequest {
+                tool: WebTool::WebSearch,
+                query_sha256,
+                url,
+                ..
+            } => assert!(query_sha256.is_some() && url.is_none()),
+            other => panic!("{other:?}"),
+        }
+    }
     for event in &web {
         let NetworkEvent::Web {
             tool,
@@ -613,6 +670,38 @@ async fn web_calls_are_recorded_with_their_invocation_and_cited_sources_are_mark
     ));
     drop(view);
     records.close("input-session").await;
+}
+
+#[tokio::test]
+async fn a_record_that_fills_after_the_request_keeps_the_request_and_fails_the_call() {
+    let fixture = input_fixture_with_tools(false, &["web_fetch"]);
+    let fetcher = Arc::new(FixedFetcher::default());
+    let sink = Arc::new(FillingSink {
+        room: AtomicUsize::new(1),
+        events: Mutex::new(Vec::new()),
+    });
+    for tool in web_tools("bridge", fetcher.clone(), sink.clone()).host_tools() {
+        fixture.controller.register_host_invocation_tool(tool).unwrap();
+    }
+    start_input(&fixture.controller, &fixture.parent);
+    let provider = Arc::new(HostToolProvider::new(
+        vec![("web_fetch", serde_json::json!({"url": RUST_HOME}))],
+        "could not read",
+    ));
+    let result = run_with(&fixture.controller, &fixture.parent, provider.clone()).await;
+    assert!(result.accepted, "{:?}", result.failure);
+    // The page was requested, so its URL is in the record; the result could
+    // not be written, so the model gets an error, not the page.
+    assert_eq!(fetcher.calls.load(Ordering::SeqCst), 1);
+    let events = sink.events.lock().unwrap().clone();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(matches!(
+        &events[0],
+        NetworkEvent::WebRequest { tool: WebTool::WebFetch, url: Some(url), .. } if url == RUST_HOME
+    ));
+    let results = provider.results();
+    assert!(results[0].contains("network record unavailable"), "{results:?}");
+    assert!(!results[0].contains("Rust is fast"), "{results:?}");
 }
 
 #[tokio::test]

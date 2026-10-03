@@ -667,6 +667,7 @@ version = "1.1.2"
 dependencies = [
  "axocoatl-core",
  "base64 0.22.1",
+ "memchr",
  "serde",
  "serde_json",
  "sha2",
@@ -704,6 +705,7 @@ dependencies = [
  "axocoatl-session",
  "chrono",
  "encoding_rs",
+ "libc",
  "memchr",
  "reqwest 0.12.28",
  "serde",

@@ -181,14 +181,21 @@ impl DispatchState {
 /// Join the Session network record's `web` events to activations as
 /// `sources` evidence. The record is read without a lock or a writer; a
 /// record that cannot be read leaves a warning instead of that evidence.
+/// Only `web` lines are parsed, only those of this view's activations are
+/// kept, and at the bound the newest are kept.
 fn join_web_sources(
     canonical: &SessionExecutionStore,
     view: &mut crate::session_control_plane::SessionTurnControlPlane,
 ) {
+    let activations = crate::session_dispatch_web::exact_activation_ids(view);
+    if activations.is_empty() {
+        return;
+    }
     match axocoatl_session::network_record::NetworkRecord::read_existing_matching(
         canonical,
         axocoatl_session::network_record::RecordLimits::default(),
-        crate::session_dispatch_web::is_web_event,
+        "web",
+        |event| crate::session_dispatch_web::is_web_event_for(event, &activations),
         crate::session_dispatch_web::projection_web_events_max(),
     ) {
         Ok(Some(lines)) => crate::session_dispatch_web::add_sources_evidence(view, &lines),

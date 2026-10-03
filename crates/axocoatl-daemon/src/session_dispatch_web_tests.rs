@@ -8,9 +8,6 @@ struct NullSink;
 
 #[async_trait]
 impl WebRecordSink for NullSink {
-    async fn writable(&self, _session: &str) -> Result<(), String> {
-        Ok(())
-    }
     async fn append(&self, _session: &str, _event: NetworkEvent) -> Result<u64, String> {
         Ok(1)
     }
@@ -72,7 +69,8 @@ fn configuration_decides_which_web_tools_native_sessions_get() {
     assert!(fetch
         .unwrap()
         .contains("web_fetch is listed for researcher but web_fetch is not configured"));
-    assert!(none.legacy_search_tool().is_none() && none.legacy_fetch_tool().is_none());
+    let lists_fetch = ["read_file".to_string(), "web_fetch".to_string()];
+    assert!(none.legacy_search_tool().is_none() && none.legacy_fetch_tool(&lists_fetch).is_none());
 
     let (_root, managed) =
         tools("web_search:\n  provider: searxng\nweb_fetch:\n  max_bytes: 65536\n");
@@ -82,7 +80,13 @@ fn configuration_decides_which_web_tools_native_sessions_get() {
         managed.legacy_search_tool().unwrap().backend_name(),
         "searxng"
     );
-    assert!(managed.legacy_fetch_tool().is_some());
+    // Legacy web_fetch goes only to an Agent that names it: an empty list,
+    // which inherits the whole legacy executor, does not gain it.
+    assert!(managed.legacy_fetch_tool(&lists_fetch).is_some());
+    assert!(managed.legacy_fetch_tool(&[]).is_none());
+    assert!(managed
+        .legacy_fetch_tool(&["read_file".to_string()])
+        .is_none());
 
     let (_root, unmanaged) = tools(
         "web_search:\n  provider: searxng\n  searxng:\n    managed: false\n    url: http://127.0.0.1:8888\n",
@@ -105,6 +109,10 @@ fn configuration_decides_which_web_tools_native_sessions_get() {
     let (search, fetch) = refusals(&offline);
     assert_eq!(search.as_deref(), Some(NETWORK_NONE_REFUSAL));
     assert_eq!(fetch.as_deref(), Some(NETWORK_NONE_REFUSAL));
+    // Legacy Sessions never get web_fetch under network: none, even when an
+    // Agent lists it; legacy web_search keeps its 1.0 behavior.
+    assert!(offline.legacy_fetch_tool(&lists_fetch).is_none());
+    assert!(offline.legacy_search_tool().is_some());
 }
 
 #[test]
@@ -264,6 +272,9 @@ fn the_largest_search_and_fetch_events_fit_one_record_line() {
     let NetworkEvent::Web {
         redirects,
         url,
+        url_truncated,
+        final_url_truncated,
+        redirects_truncated,
         source_ids,
         ..
     } = &event
@@ -272,21 +283,89 @@ fn the_largest_search_and_fetch_events_fit_one_record_line() {
     };
     assert_eq!(redirects.len(), axocoatl_tools::fetch_guard::MAX_REDIRECTS);
     assert!(url.as_ref().unwrap().len() <= MAX_RECORDED_WEB_URL_BYTES);
+    assert!(*url_truncated && *final_url_truncated && *redirects_truncated);
     assert_eq!(source_ids, &["S1a2b3c4d"]);
+
+    // The write-ahead request events are bounded the same way.
+    let request = fetch_request_event(&big, &long);
+    request.validate().unwrap();
+    let bytes = serde_json::to_vec(&request).unwrap().len();
+    assert!(bytes + 64 < MAX_LINE_BYTES, "{bytes}");
+    assert!(matches!(
+        &request,
+        NetworkEvent::WebRequest { url: Some(url), url_truncated: true, .. }
+            if url.len() <= MAX_RECORDED_WEB_URL_BYTES
+    ));
 }
 
 #[test]
-fn ways_attempts_get_web_tools_that_only_refuse() {
+fn a_cut_url_is_flagged_and_a_short_one_is_not() {
+    let exfiltration = format!("https://collector.example/?d={}", "A".repeat(8 * 1024));
+    let report = WebFetchReport {
+        url: Some(exfiltration.clone()),
+        final_url: Some("https://collector.example/ok".into()),
+        status: Some(200),
+        redirects: vec!["https://collector.example/ok".into()],
+        source_id: Some("S1a2b3c4d".into()),
+        bytes: Some(2),
+        content_sha256: Some("cd".repeat(32)),
+        text_sha256: Some("ef".repeat(32)),
+        retrieved_at_ms: 1,
+        refused: false,
+        reason: None,
+    };
+    let event = fetch_event(&context(), &report, Duration::ZERO);
+    let line = serde_json::to_string(&event).unwrap();
+    assert!(line.contains("\"url_truncated\":true"), "{line}");
+    assert!(!line.contains("final_url_truncated"), "{line}");
+    assert!(!line.contains("redirects_truncated"), "{line}");
+    let NetworkEvent::Web { url, .. } = &event else {
+        unreachable!()
+    };
+    assert_eq!(url.as_ref().unwrap().len(), MAX_RECORDED_WEB_URL_BYTES);
+    // A short URL carries no flag at all.
+    let short = fetch_event(
+        &context(),
+        &WebFetchReport {
+            url: Some("https://example.com/".into()),
+            ..report
+        },
+        Duration::ZERO,
+    );
+    assert!(!serde_json::to_string(&short).unwrap().contains("truncated"));
+    let request = fetch_request_event(&context(), "https://example.com/");
+    assert!(!serde_json::to_string(&request)
+        .unwrap()
+        .contains("truncated"));
+}
+
+#[test]
+fn ways_attempts_withhold_the_web_tools() {
     let withheld = withheld_web_tools();
     let names: Vec<&str> = withheld.iter().map(|tool| tool.name()).collect();
     assert_eq!(names, ["web_search", "web_fetch"]);
+    let listed = profile(&["web_search", "web_fetch"]);
     for tool in &withheld {
-        let reason = tool.refusal(&profile(&[tool.name()])).unwrap();
+        // Withheld: not a reason to stop an activation that lists it...
+        assert!(tool.withheld());
+        // ...but a call to it anyway is declined with this reason.
+        let reason = tool.refusal(&listed).unwrap();
         assert!(
             reason.starts_with(tool.name()) && reason.contains("Explore several ways"),
             "{reason}"
         );
     }
+    let registered = withheld
+        .iter()
+        .map(|tool| (tool.name(), tool.clone()))
+        .collect();
+    assert_eq!(
+        crate::session_dispatch::host_tool_refusal(&registered, &listed),
+        None
+    );
+    // The daemon's own web tools are never withheld.
+    let (_root, managed) = tools("web_search:\n  provider: searxng\nweb_fetch: {}\n");
+    assert!(managed.host_tools().iter().all(|tool| !tool.withheld()));
 }
 
 #[derive(Default)]
@@ -296,9 +375,6 @@ struct MemorySink {
 
 #[async_trait]
 impl WebRecordSink for MemorySink {
-    async fn writable(&self, _session: &str) -> Result<(), String> {
-        Ok(())
-    }
     async fn append(&self, _session: &str, event: NetworkEvent) -> Result<u64, String> {
         let mut events = self.events.lock().unwrap();
         events.push(event);
@@ -388,9 +464,10 @@ async fn live_web_search_and_fetch_through_the_managed_searxng() {
         "{page}"
     );
     let events = sink.events.lock().unwrap().clone();
-    assert_eq!(events.len(), 2);
+    let kinds: Vec<&str> = events.iter().map(NetworkEvent::kind).collect();
+    assert_eq!(kinds, ["web_request", "web", "web_request", "web"]);
     assert!(matches!(
-        &events[0],
+        &events[1],
         NetworkEvent::Web {
             tool: WebTool::WebSearch,
             decision: Decision::Allow,
@@ -399,7 +476,7 @@ async fn live_web_search_and_fetch_through_the_managed_searxng() {
         }
     ));
     assert!(matches!(
-        &events[1],
+        &events[3],
         NetworkEvent::Web {
             tool: WebTool::WebFetch,
             decision: Decision::Allow,
@@ -425,4 +502,33 @@ async fn live_web_search_and_fetch_through_the_managed_searxng() {
         .status()
         .unwrap();
     assert!(!exists.success(), "stop removed the container");
+}
+
+#[test]
+fn a_projection_reads_only_allowed_web_events_of_its_own_activations() {
+    let allowed = search_event(
+        &context(),
+        &WebSearchReport {
+            query_sha256: Some("ab".repeat(32)),
+            query_bytes: Some(1),
+            ..WebSearchReport::default()
+        },
+        Duration::ZERO,
+    );
+    let refused = search_event(
+        &context(),
+        &WebSearchReport {
+            refused: true,
+            reason: Some("invalid_arguments".into()),
+            ..WebSearchReport::default()
+        },
+        Duration::ZERO,
+    );
+    let request = fetch_request_event(&context(), "https://example.com/");
+    let mine: HashSet<String> = ["lead-activation-1".to_string()].into();
+    let other: HashSet<String> = ["helper-activation-1".to_string()].into();
+    assert!(is_web_event_for(&allowed, &mine));
+    assert!(!is_web_event_for(&allowed, &other));
+    assert!(!is_web_event_for(&refused, &mine));
+    assert!(!is_web_event_for(&request, &mine));
 }

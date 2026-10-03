@@ -13,6 +13,10 @@
 //! admitted. The tool the model sees during preparation is a description
 //! only; admission replaces it with [`HostInvocationTool::bind`] for the
 //! admitted invocation.
+//!
+//! A controller may instead withhold a tool ([`HostInvocationTool::withheld`]):
+//! an activation that lists it is prepared without it, as if it were not
+//! listed, and a call to it anyway is declined with its refusal.
 use super::*;
 use axocoatl_tools::{BuiltinTool, ToolError, ToolExecutor};
 
@@ -45,6 +49,12 @@ pub(crate) trait HostInvocationTool: Send + Sync {
     /// Why this tool is not available to an activation with `profile`, or
     /// `None` when it is.
     fn refusal(&self, profile: &ExecutionProfile) -> Option<String>;
+    /// Whether this controller's activations go without this tool: it is
+    /// not offered, and listing it does not stop an activation. A call to it
+    /// anyway is declined with [`Self::refusal`].
+    fn withheld(&self) -> bool {
+        false
+    }
     /// The tool for exactly this invocation.
     fn bind(&self, context: HostInvocationContext) -> Arc<dyn BuiltinTool>;
 }
@@ -99,7 +109,8 @@ impl BuiltinTool for HostToolDefinition {
     }
 }
 
-/// The first reason any host tool listed in `profile` is unavailable.
+/// The first reason any host tool listed in `profile` is unavailable. A
+/// withheld tool is no reason: the activation runs without it.
 pub(crate) fn host_tool_refusal(
     registered: &HashMap<&'static str, Arc<dyn HostInvocationTool>>,
     profile: &ExecutionProfile,
@@ -113,6 +124,7 @@ pub(crate) fn host_tool_refusal(
                 "{tool} is listed for {} but this daemon does not provide {tool}",
                 profile.definition
             )),
+            Some(host) if host.withheld() => None,
             Some(host) => host.refusal(profile),
         })
 }
@@ -141,7 +153,8 @@ impl DispatchState {
         host_tool_refusal(&self.host_tools, profile)
     }
 
-    /// Descriptions of the host tools `profile` lists, for the model.
+    /// Descriptions of the host tools `profile` lists, for the model. A
+    /// withheld tool is not offered.
     pub(super) fn host_tool_definitions(
         &self,
         profile: &ExecutionProfile,
@@ -150,6 +163,7 @@ impl DispatchState {
             .tools
             .iter()
             .filter_map(|tool| self.host_tools.get(tool.as_str()))
+            .filter(|tool| !tool.withheld())
             .map(|tool| (tool.name(), tool.definition()))
             .collect()
     }

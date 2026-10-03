@@ -84,8 +84,12 @@ impl Fixture {
     }
 
     fn service(&self) -> SearxngService {
+        self.service_for(&self.authority)
+    }
+
+    fn service_for(&self, authority: &str) -> SearxngService {
         SearxngService::new(
-            self.authority.clone(),
+            authority.to_string(),
             SEARXNG_IMAGE.into(),
             SearxngSettings::default(),
             &self.root,
@@ -201,16 +205,53 @@ async fn orphaned_searxng_is_reaped_by_authority_and_restarts_after_removal() {
     let second = service.base_url().await.unwrap();
     assert!(exists(&name));
     eprintln!("searxng: restarted after removal, {first} -> {second}");
+    // The service that started it never reaps its own container, so a
+    // startup cleanup racing a first search cannot remove it.
+    assert_eq!(service.reap_orphans().await, 0);
+    assert!(exists(&name));
     // A daemon that exits without stopping leaves an orphan; startup cleanup
     // by authority removes it, and only it.
     drop(service);
     assert!(exists(&name));
     assert_eq!(
-        SearxngService::reap_orphans(&format!("{}-other", fixture.authority)).await,
+        fixture
+            .service_for(&format!("{}-other", fixture.authority))
+            .reap_orphans()
+            .await,
         0
     );
     assert!(exists(&name));
-    assert_eq!(SearxngService::reap_orphans(&fixture.authority).await, 1);
+    assert_eq!(fixture.service().reap_orphans().await, 1);
+    assert!(!exists(&name));
+    cleanup();
+}
+
+#[tokio::test]
+#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test searxng_podman -- --ignored --test-threads=1"]
+async fn a_first_search_racing_startup_cleanup_keeps_its_container() {
+    let fixture = Fixture::new();
+    let name = container_name(&fixture.authority);
+    let service = std::sync::Arc::new(fixture.service());
+    // Startup cleanup and a first search at the same time, as when a turn
+    // resumes right after the daemon restarts.
+    let searching = {
+        let service = service.clone();
+        tokio::spawn(async move { service.base_url().await })
+    };
+    let reaping = {
+        let service = service.clone();
+        tokio::spawn(async move { service.reap_orphans().await })
+    };
+    let base = searching.await.unwrap().unwrap();
+    reaping.await.unwrap();
+    assert!(
+        exists(&name),
+        "cleanup removed the container a search started"
+    );
+    assert!(service.is_running().await);
+    // Still the same healthy instance: no restart was needed.
+    assert_eq!(service.base_url().await.unwrap(), base);
+    service.stop().await;
     assert!(!exists(&name));
     cleanup();
 }

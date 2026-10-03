@@ -8,6 +8,13 @@
 //! checked are exactly the ones the connection may use. Redirects are followed
 //! by hand, at most [`MAX_REDIRECTS`], and every hop is checked again for
 //! scheme, user information, host and resolution.
+//!
+//! A public address can still be this computer: its own global IPv6 address,
+//! or a public IPv4 address bound on a server, reaches every service listening
+//! on all interfaces. So every destination is also checked against the
+//! addresses of this computer's network interfaces, read again for each
+//! check, and refused when it is one of them or is on the same directly
+//! connected network as one of them.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -69,6 +76,9 @@ pub enum FetchErrorKind {
     /// A destination address is loopback, link-local, multicast or another
     /// range Axocoatl never connects to.
     ForbiddenDestination,
+    /// A destination address is one of this computer's own interface
+    /// addresses, or on the network one of them is directly connected to.
+    LocalDestination,
     /// The name did not resolve.
     ResolveFailed,
     /// More than [`MAX_REDIRECTS`] redirects.
@@ -85,6 +95,7 @@ impl FetchErrorKind {
             Self::InvalidUrl => "invalid_url",
             Self::PrivateDestination => "private_destination",
             Self::ForbiddenDestination => "forbidden_destination",
+            Self::LocalDestination => "local_destination",
             Self::ResolveFailed => "resolve_failed",
             Self::TooManyRedirects => "too_many_redirects",
             Self::UnsupportedContentType => "unsupported_content_type",
@@ -100,6 +111,7 @@ impl FetchErrorKind {
             Self::InvalidUrl
                 | Self::PrivateDestination
                 | Self::ForbiddenDestination
+                | Self::LocalDestination
                 | Self::TooManyRedirects
         )
     }
@@ -160,23 +172,248 @@ type TestLookup = Arc<dyn Fn(&str) -> Option<Vec<IpAddr>> + Send + Sync>;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
+/// One address of this computer's network interfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InterfaceAddress {
+    pub address: IpAddr,
+    /// The length of the network prefix the interface is directly
+    /// connected to, when that network is an ordinary one: `None` for a
+    /// point-to-point link or a mask that is not a prefix.
+    pub prefix: Option<u8>,
+}
+
+/// Where this computer's own addresses come from. Production reads them
+/// with `getifaddrs` on every check; tests substitute a fixed set.
+pub type LocalAddresses = Arc<dyn Fn() -> Result<Vec<InterfaceAddress>, String> + Send + Sync>;
+
+/// The addresses of this computer's network interfaces, with each one's
+/// prefix length.
+#[cfg(unix)]
+pub fn interface_addresses() -> std::io::Result<Vec<InterfaceAddress>> {
+    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: on success `getifaddrs` stores a list that stays valid until
+    // the `freeifaddrs` below; nothing read from it outlives this function.
+    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut found = Vec::new();
+    let mut cursor = head;
+    while !cursor.is_null() {
+        // SAFETY: `cursor` is a non-null node of the list `getifaddrs` made.
+        let entry = unsafe { &*cursor };
+        // SAFETY: each pointer is null or points at a socket address of the
+        // length its family (and, on the BSDs, its `sa_len`) says.
+        if let Some(address) = unsafe { socket_ip(entry.ifa_addr) } {
+            let point_to_point = entry.ifa_flags & (libc::IFF_POINTOPOINT as libc::c_uint) != 0;
+            let prefix = if point_to_point {
+                None
+            } else {
+                unsafe { netmask_prefix(entry.ifa_netmask, address) }
+            };
+            found.push(InterfaceAddress { address, prefix });
+        }
+        cursor = entry.ifa_next;
+    }
+    // SAFETY: `head` came from a successful `getifaddrs` and is freed once.
+    unsafe { libc::freeifaddrs(head) };
+    Ok(found)
+}
+
+/// Without `getifaddrs` no interface address is known.
+#[cfg(not(unix))]
+pub fn interface_addresses() -> std::io::Result<Vec<InterfaceAddress>> {
+    Ok(Vec::new())
+}
+
+/// The bytes of a socket address the kernel filled in. On the BSDs and macOS
+/// `sa_len` may be shorter than the structure (a netmask often is); missing
+/// bytes read as zero.
+#[cfg(unix)]
+unsafe fn socket_bytes(socket: *const libc::sockaddr, full: usize) -> Vec<u8> {
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    let length = usize::from((*socket).sa_len).min(full);
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )))]
+    let length = full;
+    let mut bytes = vec![0u8; full];
+    std::ptr::copy_nonoverlapping(socket.cast::<u8>(), bytes.as_mut_ptr(), length);
+    bytes
+}
+
+/// The IP address in an interface's `ifa_addr`.
+#[cfg(unix)]
+unsafe fn socket_ip(socket: *const libc::sockaddr) -> Option<IpAddr> {
+    if socket.is_null() {
+        return None;
+    }
+    match i32::from((*socket).sa_family) {
+        libc::AF_INET => {
+            let bytes = socket_bytes(socket, std::mem::size_of::<libc::sockaddr_in>());
+            let octets: [u8; 4] = bytes[4..8].try_into().ok()?;
+            Some(IpAddr::from(octets))
+        }
+        libc::AF_INET6 => {
+            let bytes = socket_bytes(socket, std::mem::size_of::<libc::sockaddr_in6>());
+            let octets: [u8; 16] = bytes[8..24].try_into().ok()?;
+            Some(IpAddr::from(octets))
+        }
+        _ => None,
+    }
+}
+
+/// The prefix length of an interface's `ifa_netmask`, read in the family of
+/// its address because a netmask's own family field is not always set.
+#[cfg(unix)]
+unsafe fn netmask_prefix(socket: *const libc::sockaddr, address: IpAddr) -> Option<u8> {
+    if socket.is_null() {
+        return None;
+    }
+    let mask: Vec<u8> = match address {
+        IpAddr::V4(_) => {
+            socket_bytes(socket, std::mem::size_of::<libc::sockaddr_in>())[4..8].to_vec()
+        }
+        IpAddr::V6(_) => {
+            socket_bytes(socket, std::mem::size_of::<libc::sockaddr_in6>())[8..24].to_vec()
+        }
+    };
+    prefix_length(&mask)
+}
+
+/// Leading one bits of a contiguous mask, or `None` when the mask has a
+/// one after a zero.
+fn prefix_length(mask: &[u8]) -> Option<u8> {
+    let mut ones = 0u32;
+    let mut ended = false;
+    for byte in mask {
+        for bit in (0..8).rev() {
+            if byte & (1 << bit) != 0 {
+                if ended {
+                    return None;
+                }
+                ones += 1;
+            } else {
+                ended = true;
+            }
+        }
+    }
+    u8::try_from(ones).ok()
+}
+
+/// The production source of this computer's addresses.
+fn system_local_addresses() -> LocalAddresses {
+    Arc::new(|| {
+        interface_addresses()
+            .map_err(|error| format!("listing this computer's network addresses failed: {error}"))
+    })
+}
+
+/// Shortest prefixes treated as a directly connected network. A wider mask
+/// is not an ordinary local network, so only the interface's own address is
+/// refused.
+const MIN_LOCAL_V4_PREFIX: u8 = 16;
+const MIN_LOCAL_V6_PREFIX: u8 = 48;
+
+/// How a destination is this computer or its network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalMatch {
+    /// One of this computer's own addresses.
+    Own,
+    /// On the network `interface/prefix` is directly connected to.
+    SameNetwork { interface: IpAddr, prefix: u8 },
+}
+
+fn same_prefix(left: IpAddr, right: IpAddr, prefix: u8) -> bool {
+    let (left, right, bits): (u128, u128, u32) = match (left, right) {
+        (IpAddr::V4(left), IpAddr::V4(right)) => {
+            (u32::from(left).into(), u32::from(right).into(), 32)
+        }
+        (IpAddr::V6(left), IpAddr::V6(right)) => (left.into(), right.into(), 128),
+        _ => return false,
+    };
+    let prefix = u32::from(prefix).min(bits);
+    if prefix == 0 {
+        return true;
+    }
+    let shift = bits - prefix;
+    (left >> shift) == (right >> shift)
+}
+
+/// Whether `address` is this computer or on a network one of `interfaces`
+/// is directly connected to. An IPv4-mapped IPv6 address is checked as its
+/// IPv4 address too.
+fn local_match(address: IpAddr, interfaces: &[InterfaceAddress]) -> Option<LocalMatch> {
+    let mapped = match address {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4),
+        IpAddr::V4(_) => None,
+    };
+    let candidates = std::iter::once(address).chain(mapped);
+    let mut same_network = None;
+    for candidate in candidates {
+        for interface in interfaces {
+            if interface.address == candidate {
+                return Some(LocalMatch::Own);
+            }
+            let Some(prefix) = interface.prefix else {
+                continue;
+            };
+            let minimum = match interface.address {
+                IpAddr::V4(_) => MIN_LOCAL_V4_PREFIX,
+                IpAddr::V6(_) => MIN_LOCAL_V6_PREFIX,
+            };
+            if same_network.is_none()
+                && prefix >= minimum
+                && same_prefix(candidate, interface.address, prefix)
+            {
+                same_network = Some(LocalMatch::SameNetwork {
+                    interface: interface.address,
+                    prefix,
+                });
+            }
+        }
+    }
+    same_network
+}
+
+/// Why a [`GuardResolver`] refused an address.
+#[derive(Debug, Clone, Copy)]
+enum Refusal {
+    Class(AddrClass),
+    Local(LocalMatch),
+}
+
 /// The refusal a [`GuardResolver`] returns, found again in reqwest's error
 /// chain.
 #[derive(Debug)]
 struct RefusedAddress {
     host: String,
     address: IpAddr,
-    class: AddrClass,
+    refusal: Refusal,
 }
 
 impl std::fmt::Display for RefusedAddress {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let what = match self.refusal {
+            Refusal::Class(class) => class.label(),
+            Refusal::Local(LocalMatch::Own) => "this computer",
+            Refusal::Local(LocalMatch::SameNetwork { .. }) => "this computer's network",
+        };
         write!(
             formatter,
-            "{} resolves to {} ({})",
-            self.host,
-            self.address,
-            self.class.label()
+            "{} resolves to {} ({what})",
+            self.host, self.address
         )
     }
 }
@@ -195,10 +432,11 @@ impl std::fmt::Display for ResolveFailure {
 impl std::error::Error for ResolveFailure {}
 
 /// Resolves names with the host resolver and fails unless every address is
-/// public.
+/// public and none is this computer or on its network.
 struct GuardResolver {
     classify: Classifier,
     lookup: Option<TestLookup>,
+    local: LocalAddresses,
 }
 
 impl GuardResolver {
@@ -229,6 +467,7 @@ impl reqwest::dns::Resolve for GuardResolver {
         let resolver = GuardResolver {
             classify,
             lookup: self.lookup.clone(),
+            local: self.local.clone(),
         };
         Box::pin(async move {
             let addresses = resolver
@@ -247,7 +486,19 @@ impl reqwest::dns::Resolve for GuardResolver {
                     return Err(Box::new(RefusedAddress {
                         host: host.clone(),
                         address: *address,
-                        class,
+                        refusal: Refusal::Class(class),
+                    }) as BoxError);
+                }
+            }
+            // A public answer may still be this computer or its network.
+            let interfaces = (resolver.local)()
+                .map_err(|reason| Box::new(ResolveFailure(reason)) as BoxError)?;
+            for address in &addresses {
+                if let Some(matched) = local_match(*address, &interfaces) {
+                    return Err(Box::new(RefusedAddress {
+                        host: host.clone(),
+                        address: *address,
+                        refusal: Refusal::Local(matched),
                     }) as BoxError);
                 }
             }
@@ -265,6 +516,7 @@ impl reqwest::dns::Resolve for GuardResolver {
 pub struct FetchGuard {
     client: reqwest::Client,
     classify: Classifier,
+    local: LocalAddresses,
     max_bytes: u64,
     timeout: Duration,
 }
@@ -283,7 +535,13 @@ impl FetchGuard {
     /// A guard reading at most `max_bytes` of a body, with `timeout` for the
     /// whole fetch including redirects.
     pub fn new(max_bytes: u64, timeout: Duration) -> Result<Self, String> {
-        Self::build(netaddr::classify, max_bytes, timeout, None)
+        Self::build(
+            netaddr::classify,
+            max_bytes,
+            timeout,
+            None,
+            system_local_addresses(),
+        )
     }
 
     fn build(
@@ -291,8 +549,13 @@ impl FetchGuard {
         max_bytes: u64,
         timeout: Duration,
         lookup: Option<TestLookup>,
+        local: LocalAddresses,
     ) -> Result<Self, String> {
-        let resolver = GuardResolver { classify, lookup };
+        let resolver = GuardResolver {
+            classify,
+            lookup,
+            local: local.clone(),
+        };
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -305,27 +568,51 @@ impl FetchGuard {
         Ok(Self {
             client,
             classify,
+            local,
             max_bytes,
             timeout,
         })
     }
 
     /// Test seam: classify addresses with `classify` instead of
-    /// [`netaddr::classify`], and answer names from `lookup` first.
+    /// [`netaddr::classify`], answer names from `lookup` first, and take this
+    /// computer's addresses from `local` (the real interfaces when `None`).
     #[cfg(test)]
     pub(crate) fn with_classifier(
         classify: Classifier,
         lookup: Option<TestLookup>,
+        local: Option<LocalAddresses>,
         max_bytes: u64,
         timeout: Duration,
     ) -> Self {
-        Self::build(classify, max_bytes, timeout, lookup).unwrap()
+        Self::build(
+            classify,
+            max_bytes,
+            timeout,
+            lookup,
+            local.unwrap_or_else(system_local_addresses),
+        )
+        .unwrap()
     }
 
     /// Check one URL before it is requested: scheme, user information,
-    /// length, host, and the class of an IP-literal host.
+    /// length, host, and for an IP-literal host its class and whether it is
+    /// this computer or on its network.
     pub fn check_url(&self, raw: &str) -> Result<url::Url, FetchError> {
-        check_url_with(raw, self.classify)
+        let url = check_url_with(raw, self.classify)?;
+        let address = match url.host() {
+            Some(url::Host::Ipv4(address)) => Some(IpAddr::V4(address)),
+            Some(url::Host::Ipv6(address)) => Some(IpAddr::V6(address)),
+            _ => None,
+        };
+        if let Some(address) = address {
+            let interfaces = (self.local)()
+                .map_err(|reason| FetchError::new(FetchErrorKind::FetchFailed, reason))?;
+            if let Some(matched) = local_match(address, &interfaces) {
+                return Err(refuse_local(&address.to_string(), address, matched));
+            }
+        }
+        Ok(url)
     }
 
     async fn fetch_inner(
@@ -453,6 +740,20 @@ pub fn check_url_with(raw: &str, classify: Classifier) -> Result<url::Url, Fetch
     Ok(url)
 }
 
+fn refuse_local(host: &str, address: IpAddr, matched: LocalMatch) -> FetchError {
+    let detail = match matched {
+        LocalMatch::Own => format!(
+            "{host} is this computer's own address ({address}); web_fetch never reads from this \
+             computer"
+        ),
+        LocalMatch::SameNetwork { interface, prefix } => format!(
+            "{host} is on this computer's network ({address} is in the network of {interface}/{prefix}); \
+             web_fetch never reads from your network"
+        ),
+    };
+    FetchError::new(FetchErrorKind::LocalDestination, detail)
+}
+
 fn refuse_class(host: &str, address: IpAddr, class: AddrClass) -> Result<(), FetchError> {
     match class {
         AddrClass::Public => Ok(()),
@@ -478,8 +779,11 @@ fn request_error(url: &url::Url, error: &reqwest::Error) -> FetchError {
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(current) = source {
         if let Some(refused) = current.downcast_ref::<RefusedAddress>() {
-            return refuse_class(&refused.host, refused.address, refused.class)
-                .expect_err("a refused address is never public");
+            return match refused.refusal {
+                Refusal::Class(class) => refuse_class(&refused.host, refused.address, class)
+                    .expect_err("a refused address is never public"),
+                Refusal::Local(matched) => refuse_local(&refused.host, refused.address, matched),
+            };
         }
         if let Some(failure) = current.downcast_ref::<ResolveFailure>() {
             return FetchError::new(FetchErrorKind::ResolveFailed, failure.0.clone());
@@ -618,17 +922,30 @@ mod tests {
         (302, vec![("Location".into(), location.into())], Vec::new())
     }
 
+    /// No interface addresses, so the loopback test server is not "this
+    /// computer".
+    fn no_local_addresses() -> LocalAddresses {
+        Arc::new(|| Ok(Vec::new()))
+    }
+
     fn guard(lookup: Option<TestLookup>, max_bytes: u64) -> FetchGuard {
         FetchGuard::with_classifier(
             loopback_is_public,
             lookup,
+            Some(no_local_addresses()),
             max_bytes,
             Duration::from_secs(10),
         )
     }
 
     fn real_guard(lookup: Option<TestLookup>) -> FetchGuard {
-        FetchGuard::with_classifier(netaddr::classify, lookup, 1 << 20, Duration::from_secs(10))
+        FetchGuard::with_classifier(
+            netaddr::classify,
+            lookup,
+            None,
+            1 << 20,
+            Duration::from_secs(10),
+        )
     }
 
     fn table(entries: &[(&str, &[&str])]) -> TestLookup {
@@ -859,6 +1176,217 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(page.content_type, "application/json");
+    }
+
+    fn local_set(entries: &[(&str, Option<u8>)]) -> LocalAddresses {
+        let interfaces: Vec<InterfaceAddress> = entries
+            .iter()
+            .map(|(address, prefix)| InterfaceAddress {
+                address: address.parse().unwrap(),
+                prefix: *prefix,
+            })
+            .collect();
+        Arc::new(move || Ok(interfaces.clone()))
+    }
+
+    fn url_for(address: IpAddr) -> String {
+        match address {
+            IpAddr::V4(v4) => format!("http://{v4}:5000/"),
+            IpAddr::V6(v6) => format!("http://[{v6}]:5000/"),
+        }
+    }
+
+    #[test]
+    fn prefixes_and_local_matches() {
+        assert_eq!(prefix_length(&[255, 255, 255, 0]), Some(24));
+        assert_eq!(prefix_length(&[255, 255, 255, 255]), Some(32));
+        assert_eq!(prefix_length(&[0; 16]), Some(0));
+        assert_eq!(prefix_length(&[255, 0, 255, 0]), None);
+        let mut v6 = [0u8; 16];
+        v6[..8].fill(255);
+        assert_eq!(prefix_length(&v6), Some(64));
+
+        let interfaces = [
+            InterfaceAddress {
+                address: "2a01:4f8:c0c:1234::10".parse().unwrap(),
+                prefix: Some(64),
+            },
+            InterfaceAddress {
+                address: "81.2.69.160".parse().unwrap(),
+                prefix: Some(24),
+            },
+            // A wide mask is not an ordinary local network.
+            InterfaceAddress {
+                address: "81.3.0.1".parse().unwrap(),
+                prefix: Some(8),
+            },
+            // A point-to-point link has no network of its own.
+            InterfaceAddress {
+                address: "81.4.0.1".parse().unwrap(),
+                prefix: None,
+            },
+        ];
+        let matched = |raw: &str| local_match(raw.parse().unwrap(), &interfaces);
+        assert_eq!(matched("2a01:4f8:c0c:1234::10"), Some(LocalMatch::Own));
+        assert_eq!(matched("::ffff:81.2.69.160"), Some(LocalMatch::Own));
+        assert_eq!(matched("81.3.0.1"), Some(LocalMatch::Own));
+        assert_eq!(matched("81.4.0.1"), Some(LocalMatch::Own));
+        assert!(matches!(
+            matched("2a01:4f8:c0c:1234::1"),
+            Some(LocalMatch::SameNetwork { prefix: 64, .. })
+        ));
+        assert!(matches!(
+            matched("81.2.69.7"),
+            Some(LocalMatch::SameNetwork { prefix: 24, .. })
+        ));
+        assert!(matches!(
+            matched("::ffff:81.2.69.7"),
+            Some(LocalMatch::SameNetwork { prefix: 24, .. })
+        ));
+        for other in ["2a01:4f8:c0c:1235::10", "81.2.70.1", "81.3.9.9", "81.4.0.2"] {
+            assert_eq!(matched(other), None, "{other}");
+        }
+    }
+
+    #[tokio::test]
+    async fn this_computer_and_its_network_are_refused_by_literal_name_and_redirect() {
+        let interfaces = local_set(&[
+            ("2a01:4f8:c0c:1234::10", Some(64)),
+            ("81.2.69.160", Some(24)),
+        ]);
+        let lookup = table(&[
+            ("own.test", &["2a01:4f8:c0c:1234::10"]),
+            ("neighbour.test", &["93.184.216.34", "2a01:4f8:c0c:1234::1"]),
+            ("own4.test", &["81.2.69.160"]),
+        ]);
+        let guard = FetchGuard::with_classifier(
+            netaddr::classify,
+            Some(lookup.clone()),
+            Some(interfaces.clone()),
+            1 << 20,
+            Duration::from_secs(10),
+        );
+        for raw in [
+            "http://[2a01:4f8:c0c:1234::10]:5000/",
+            "http://[2a01:4f8:c0c:1234::1]/",
+            "http://81.2.69.160:7000/",
+            "http://81.2.69.7/",
+            "http://[::ffff:81.2.69.160]/",
+        ] {
+            let error = guard.check_url(raw).unwrap_err();
+            assert_eq!(
+                error.kind,
+                FetchErrorKind::LocalDestination,
+                "{raw}: {error}"
+            );
+            assert!(error.kind.is_refusal());
+            assert_eq!(error.kind.code(), "local_destination");
+        }
+        for raw in ["http://[2a01:4f8:c0c:1235::1]/", "http://81.2.70.1/"] {
+            assert!(guard.check_url(raw).is_ok(), "{raw}");
+        }
+        // A name is refused at resolution, before any connection.
+        for host in ["own.test", "neighbour.test", "own4.test"] {
+            let error = guard
+                .fetch(&format!("http://{host}:5000/"))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.kind,
+                FetchErrorKind::LocalDestination,
+                "{host}: {error}"
+            );
+            assert!(error.detail.contains(host), "{error}");
+        }
+        assert!(guard
+            .fetch("http://own.test/")
+            .await
+            .unwrap_err()
+            .detail
+            .contains("this computer's own address"));
+
+        // A redirect hop to this computer is refused the same way.
+        let mut routes = Routes::new();
+        routes.insert("/own".into(), redirect("http://own.test:5000/"));
+        routes.insert("/literal".into(), redirect("http://81.2.69.160:7000/"));
+        let address = serve(routes).await;
+        let guard = FetchGuard::with_classifier(
+            loopback_is_public,
+            Some(lookup),
+            Some(interfaces),
+            1 << 20,
+            Duration::from_secs(10),
+        );
+        for path in ["/own", "/literal"] {
+            let error = guard
+                .fetch(&format!("http://{address}{path}"))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.kind,
+                FetchErrorKind::LocalDestination,
+                "{path}: {error}"
+            );
+            assert_eq!(error.redirects.len(), usize::from(path == "/own"));
+        }
+
+        // Without a list of this computer's addresses nothing is fetched.
+        let failing: LocalAddresses = Arc::new(|| Err("no interfaces".into()));
+        let guard = FetchGuard::with_classifier(
+            netaddr::classify,
+            Some(table(&[("elsewhere.test", &["81.2.70.1"])])),
+            Some(failing),
+            1 << 20,
+            Duration::from_secs(10),
+        );
+        assert_eq!(
+            guard.check_url("http://81.2.70.1/").unwrap_err().kind,
+            FetchErrorKind::FetchFailed
+        );
+        assert_eq!(
+            guard
+                .fetch("http://elsewhere.test/")
+                .await
+                .unwrap_err()
+                .kind,
+            FetchErrorKind::ResolveFailed
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_real_interfaces_are_read_and_their_public_addresses_refused() {
+        let interfaces = interface_addresses().unwrap();
+        assert!(
+            interfaces.iter().any(|interface| interface.address
+                == IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+                && interface.prefix == Some(8)),
+            "{interfaces:?}"
+        );
+        // Whatever public address this machine has is refused by the
+        // production guard.
+        let guard = real_guard(None);
+        let mut public = 0;
+        for interface in &interfaces {
+            if !netaddr::classify(interface.address).is_public() {
+                continue;
+            }
+            public += 1;
+            let error = guard.check_url(&url_for(interface.address)).unwrap_err();
+            assert_eq!(
+                error.kind,
+                FetchErrorKind::LocalDestination,
+                "{interface:?}: {error}"
+            );
+        }
+        let prefixes: Vec<Option<u8>> = interfaces
+            .iter()
+            .filter(|interface| netaddr::classify(interface.address).is_public())
+            .map(|interface| interface.prefix)
+            .collect();
+        eprintln!(
+            "fetch_guard: {public} public interface addresses refused, prefixes {prefixes:?}"
+        );
     }
 
     #[test]

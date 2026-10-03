@@ -214,3 +214,206 @@ esac
         "{calls}"
     );
 }
+
+const LEGACY_CONFIG: &str = r#"
+sandbox:
+  network: NETWORK
+agents:
+  - id: inherits
+    name: Inherits
+    provider: ollama
+    model: fixture-model
+  - id: fetcher
+    name: Fetcher
+    provider: ollama
+    model: fixture-model
+    tools: [read_file, web_fetch]
+  - id: reader
+    name: Reader
+    provider: ollama
+    model: fixture-model
+    tools: [read_file]
+providers:
+  ollama:
+    base_url: http://127.0.0.1:1
+web_search:
+  provider: searxng
+web_fetch: {}
+consolidation:
+  enabled: false
+"#;
+
+/// A sandbox that is never used: building a legacy executor only keeps it.
+struct UnusedSandbox(std::path::PathBuf);
+
+#[async_trait::async_trait]
+impl Sandbox for UnusedSandbox {
+    fn root(&self) -> &std::path::Path {
+        &self.0
+    }
+    async fn exec(
+        &self,
+        _argv: &[&str],
+        _timeout: Duration,
+    ) -> Result<ExecResult, axocoatl_isolation::IsolationError> {
+        unreachable!("the legacy executor test runs no tool")
+    }
+    async fn exec_stdin(
+        &self,
+        _argv: &[&str],
+        _stdin: &str,
+        _timeout: Duration,
+    ) -> Result<ExecResult, axocoatl_isolation::IsolationError> {
+        unreachable!("the legacy executor test runs no tool")
+    }
+    fn spawn_background(&self, _command: &str) -> String {
+        unreachable!("the legacy executor test runs no tool")
+    }
+    fn spawn_pty(
+        &self,
+        _command: &str,
+        _rows: u16,
+        _cols: u16,
+    ) -> Result<Arc<axocoatl_isolation::pty::PtyTerminal>, String> {
+        Err("unused".into())
+    }
+    fn get_terminal(&self, _id: &str) -> Option<Arc<axocoatl_isolation::pty::PtyTerminal>> {
+        None
+    }
+    fn kill_terminal(&self, _id: &str) -> bool {
+        false
+    }
+    fn list_terminals(&self) -> Vec<(String, String, bool)> {
+        Vec::new()
+    }
+    fn list_tasks(&self) -> Vec<axocoatl_isolation::session_sandbox::BgTask> {
+        Vec::new()
+    }
+    fn with_root(&self, root: &std::path::Path) -> Arc<dyn Sandbox> {
+        Arc::new(Self(root.to_path_buf()))
+    }
+    async fn stop(&self) {}
+}
+
+async fn legacy_child_body() {
+    let network = std::env::var("AXOCOATL_TEST_LEGACY_NETWORK").unwrap();
+    let config = axocoatl_config::parse_config(
+        &LEGACY_CONFIG.replace("NETWORK", &network),
+        std::path::Path::new("legacy-web.yaml"),
+    )
+    .unwrap();
+    let daemon = AxocoatlDaemon::bootstrap_headless(config.clone())
+        .await
+        .unwrap();
+    let work = tempfile::tempdir().unwrap();
+    // A legacy (1.0-format) Session, as its record reads.
+    let session: Session = serde_json::from_value(serde_json::json!({
+        "id": "ses-legacy-web",
+        "name": "Legacy web",
+        "working_dir": work.path(),
+        "mode": {"kind": "single_agent", "agent_id": "inherits"},
+        "status": "active",
+        "created_at": 0,
+        "last_active": 0,
+    }))
+    .unwrap();
+    let sandbox: Arc<dyn Sandbox> = Arc::new(UnusedSandbox(work.path().to_path_buf()));
+    let mut offered = std::collections::BTreeMap::new();
+    for agent in &config.agents {
+        let names = daemon
+            .build_session_executor(&session, sandbox.clone(), true, &agent.tools)
+            .await
+            .unwrap()
+            .tool_names();
+        offered.insert(
+            agent.id.clone(),
+            (
+                names.iter().any(|name| name == "web_search"),
+                names.iter().any(|name| name == "web_fetch"),
+            ),
+        );
+    }
+    // (web_search, web_fetch) registered for each Agent's legacy executor.
+    // web_search keeps its 1.0 behavior; an Agent's own list still filters it.
+    let expected: [(&str, (bool, bool)); 3] = if network == "none" {
+        // Under network: none no legacy Agent gets web_fetch, even one that
+        // lists it: an unrecorded fetch from the daemon would bypass it.
+        [
+            ("fetcher", (true, false)),
+            ("inherits", (true, false)),
+            ("reader", (true, false)),
+        ]
+    } else {
+        // Only the Agent that names web_fetch gets it; the empty list, which
+        // inherits the whole executor, does not.
+        [
+            ("fetcher", (true, true)),
+            ("inherits", (true, false)),
+            ("reader", (true, false)),
+        ]
+    };
+    let expected: std::collections::BTreeMap<String, (bool, bool)> = expected
+        .into_iter()
+        .map(|(agent, tools)| (agent.to_string(), tools))
+        .collect();
+    assert_eq!(offered, expected, "network: {network}");
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn legacy_web_fetch_needs_the_agents_list_and_never_runs_under_network_none() {
+    const CHILD: &str = "AXOCOATL_TEST_SESSION_LEGACY_WEB_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        legacy_child_body().await;
+        return;
+    }
+    for network in ["none", "bridge"] {
+        // Bootstrap owns process environment; isolate it from concurrent
+        // tests, one child process per configuration.
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let podman = bin.join("podman");
+        std::fs::write(
+            &podman,
+            r#"#!/bin/sh
+case "$*" in
+  --version) printf 'podman version 5.0.0\n' ;;
+  'machine list --format json') printf '[{"Running":true}]\n' ;;
+  'info --format json') printf '{}\n' ;;
+  'ps '*) ;;
+  'rm '*|'volume rm '*|'network rm '*) ;;
+  *) printf 'unexpected Podman command: %s\n' "$*" >&2; exit 1 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(60),
+            tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "bootstrap::session_web_tests::legacy_web_fetch_needs_the_agents_list_and_never_runs_under_network_none",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("AXOCOATL_TEST_LEGACY_NETWORK", network)
+                .env("AXOCOATL_DATA_DIR", root.path().join("data"))
+                .env("AXOCOATL_SOCKET_PATH", root.path().join("ipc/daemon.sock"))
+                .env("PATH", bin)
+                .current_dir(root.path())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            result.status.success(),
+            "network: {network}\n{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+}

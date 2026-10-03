@@ -142,3 +142,65 @@ async fn native_way_stop_keeps_partial_generation_and_never_calls_provider() {
         .unwrap();
     assert!(fixture.operation.try_lock().is_ok());
 }
+
+/// Ways withhold the web tools: a candidate whose Agent lists them is
+/// prepared and runs without them, and a call to one anyway is declined
+/// instead of failing the Way.
+#[tokio::test]
+async fn a_way_whose_agent_lists_web_tools_runs_without_them() {
+    let mut fixture = fixture().await;
+    let run = run(
+        &mut fixture,
+        &["read_file", "web_search", "web_fetch"],
+        true,
+    );
+    // As prepare_native_ways_execution registers them for every candidate.
+    for tool in crate::session_dispatch_web::withheld_web_tools() {
+        run.controller.register_host_invocation_tool(tool).unwrap();
+    }
+    let provider = Provider::new(vec![(
+        "web_search",
+        serde_json::json!({"query": "rust release notes"}),
+    )]);
+    let prepared = run
+        .controller
+        .prepare_repository_activation(
+            run.activation.clone(),
+            run.resources(provider.clone()),
+            run.resource.clone(),
+        )
+        .expect("a Way that lists a web tool is prepared without it");
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let outcome = crate::bootstrap::native_ways::NativeWayExecution::new(
+        prepared,
+        run.controller.clone(),
+        run.activation.clone(),
+    )
+    .run(trace)
+    .await
+    .unwrap_or_else(|failure| panic!("Way execution failed: {}", failure.error));
+    let axocoatl_actor::AgentRunOutcome::Completed(output) = outcome.outcome else {
+        panic!("the Way completes without its web tools");
+    };
+    assert_eq!(output.content, "repository operation complete");
+    let offered = provider.offered.lock().unwrap()[0].clone();
+    assert!(
+        offered.iter().any(|tool| tool == "read_file"),
+        "{offered:?}"
+    );
+    assert!(
+        !offered
+            .iter()
+            .any(|tool| tool == "web_search" || tool == "web_fetch"),
+        "web tools are not offered in a Way: {offered:?}"
+    );
+    // The model's call to the withheld tool is declined, not run.
+    assert!(
+        provider.saw(1, "`web_search` is not an available tool"),
+        "the model is told its call was declined"
+    );
+    assert_eq!(
+        run.controller.snapshot().unwrap().contract().state(),
+        Some(LogicalTurnState::Completed)
+    );
+}

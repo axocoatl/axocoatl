@@ -421,11 +421,13 @@ consolidation:
 `web_search.provider: searxng` offers `web_search` to Agents whose `tools` list it,
 through a SearXNG instance Axocoatl runs with local Podman (`managed: true`) or one
 at `url` (`managed: false`). The `web_fetch` block's presence offers `web_fetch` the
-same way. Both run on the host, not in the Session container, and each call is
-written to the Session's network record. Native Sessions refuse them under
-`sandbox.network: none`, and attempts made with Explore several ways do not get
-them. See [Web research](/configure/web/) for setup, citations and what leaves the
-machine.
+same way. Both run on the host, not in the Session container, and each call in a
+native Session is written to the Session's network record. Native Sessions refuse
+them under `sandbox.network: none`, and in attempts made with Explore several ways
+an Agent that lists them runs without them. Legacy (1.0-format) Sessions offer
+`web_fetch` only to an Agent that lists it, never under `network: none`, and do not
+record either tool. See [Web research](/configure/web/) for setup, citations and
+what leaves the machine.
 
 `provider: tavily` with an `api_key` still loads for configurations that already use
 it, but only legacy (1.0-format) Sessions use it: native Sessions refuse it and

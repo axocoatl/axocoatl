@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   egress proxy. `validate`, `doctor` and daemon start warn about wildcard entries,
   CDN-fronted presets and hosts that accept uploads.
 - Each native Session can keep a network record, an append-only log of egress
-  decisions, connection closes, policy changes and web-tool fetches, and
+  decisions, connection closes, policy changes and web-tool calls, and
   `GET /api/sessions/{id}/network` reads it. Reading never creates a record.
 - The bundled execution supervisor gains an egress proxy mode, a loopback/Unix-socket
   bridge mode and a socket probe, and the daemon gains the matching egress decision
@@ -32,20 +32,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the first search and removed when the daemon stops), or through your own
   instance with `managed: false` and `url`. A `web_fetch` block enables
   `web_fetch`, which reads one public page as numbered paragraphs. It refuses
-  private, loopback, link-local and other special addresses, including names that
-  resolve to them and every redirect hop (at most five), reads only HTML, text,
-  Markdown, JSON and XML, and caps the body at `max_bytes`. Both run on the host, not
-  in the Session container. Each result and page has a `source_id` for citations
-  (`[S1a2b3c4d]`, `[S1a2b3c4d ¶3]`), and every call appends a `web` event to the
-  Session's network record with the tool call, activation, Agent, source ids and
-  content hashes; a search records its query's hash, not its text. If the record
-  cannot be written the call fails. The turn's control plane adds `sources` evidence
-  per activation, marking which sources its final answer cites, and Team & budget
-  marks Agents that list a web tool with a **web** badge. Native Sessions refuse the
-  web tools under `sandbox.network: none`, and attempts made with Explore several
-  ways do not get them. See Configure > Web research.
-- Legacy (1.0-format) Sessions get `web_fetch` next to `web_search` when it is
-  configured, and `web_search` through SearXNG when `provider: searxng`.
+  private, loopback, link-local and other special addresses, this computer's own
+  interface addresses (such as its global IPv6 address) and addresses on a network
+  it is directly connected to, including names that resolve to them and every
+  redirect hop (at most five), reads only HTML, text, Markdown, JSON and XML, and
+  caps the body at `max_bytes`. Both run on the host, not in the Session container.
+  Each result and page has a `source_id` for citations (`[S1a2b3c4d]`,
+  `[S1a2b3c4d ¶3]`). Before a call sends anything it appends a `web_request` event to
+  the Session's network record with the URL it fetches or its query's hash, and when
+  it finishes a `web` event with the tool call, activation, Agent, source ids and
+  content hashes; a search records its query's hash, not its text. If either cannot
+  be written the call fails. The turn's control plane adds `sources` evidence per
+  activation, marking which sources its final answer cites, and Team & budget marks
+  Agents that list a web tool with a **web** badge. Native Sessions refuse the web
+  tools under `sandbox.network: none`, and in attempts made with Explore several ways
+  an Agent that lists them runs without them. See Configure > Web research.
+- Legacy (1.0-format) Sessions get `web_fetch` for an Agent whose `tools` list names
+  it, never under `sandbox.network: none`, and `web_search` through SearXNG when
+  `provider: searxng`. Legacy calls are not recorded.
 - The configuration parses new `browser` blocks and `mcp_servers[].inherit_env`, for
   upcoming tools. They are validated but not yet run.
 

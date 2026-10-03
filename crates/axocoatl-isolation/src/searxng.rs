@@ -543,10 +543,20 @@ impl SearxngService {
         }
     }
 
-    /// Remove every SearXNG container carrying this runtime authority.
-    /// Best-effort: without Podman, or with its machine stopped, this does
-    /// nothing.
-    pub async fn reap_orphans(runtime_authority: &str) -> usize {
+    /// Remove the SearXNG containers an earlier run with this runtime
+    /// authority left behind. It holds the service's state lock, so a first
+    /// search cannot start a container while it runs, and it never removes
+    /// the container this service started. Best-effort: without Podman, or
+    /// with its machine stopped, this does nothing.
+    pub async fn reap_orphans(&self) -> usize {
+        let state = self.state.lock().await;
+        let own = state.is_some().then(|| self.name());
+        let removed = Self::reap_by_authority(&self.runtime_authority, own.as_deref()).await;
+        drop(state);
+        removed
+    }
+
+    async fn reap_by_authority(runtime_authority: &str, keep: Option<&str>) -> usize {
         if runtime_authority.is_empty() {
             return 0;
         }
@@ -575,7 +585,7 @@ impl SearxngService {
             .stdout
             .lines()
             .map(str::trim)
-            .filter(|name| name.starts_with("axo-searxng-"))
+            .filter(|name| name.starts_with("axo-searxng-") && Some(*name) != keep)
         {
             match podman(
                 &strings(&[

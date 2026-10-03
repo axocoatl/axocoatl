@@ -1,5 +1,5 @@
 //! A Session's network record: every egress decision, connection close,
-//! policy change and web-tool fetch, in order, one JSON line each.
+//! policy change and web-tool call, in order, one JSON line each.
 //!
 //! The record is append-only. [`NetworkRecord::append`] returns only after a
 //! complete `write(2)` of the whole line to the file, so a caller that waits
@@ -289,6 +289,25 @@ pub enum NetworkEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// Written before a web tool's request leaves this computer, so a request
+    /// whose result cannot be recorded is still in the record. The `web`
+    /// event with the same `invocation_id` says how it ended.
+    WebRequest {
+        tool: WebTool,
+        invocation_id: String,
+        activation_id: String,
+        agent: String,
+        /// The URL `web_fetch` requests, bounded to
+        /// [`MAX_RECORDED_WEB_URL_BYTES`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        url_truncated: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query_sha256: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query_bytes: Option<u32>,
+    },
     Web {
         tool: WebTool,
         invocation_id: String,
@@ -297,14 +316,23 @@ pub enum NetworkEvent {
         decision: Decision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        /// Bounded to [`MAX_RECORDED_WEB_URL_BYTES`], like `final_url` and
+        /// each redirect; the `_truncated` flags say when one was cut.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         url: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        url_truncated: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         final_url: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        final_url_truncated: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<u16>,
         #[serde(default)]
         redirects: Vec<String>,
+        /// A redirect was cut, or more were followed than are recorded.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        redirects_truncated: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         query_sha256: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -346,6 +374,7 @@ impl NetworkEvent {
             Self::Unbind { .. } => "unbind",
             Self::Open { .. } => "open",
             Self::Close { .. } => "close",
+            Self::WebRequest { .. } => "web_request",
             Self::Web { .. } => "web",
             Self::Limit { .. } => "limit",
         }
@@ -538,6 +567,56 @@ fn load(bytes: &[u8]) -> Result<Loaded, NetworkRecordError> {
         loaded.good_bytes = position as u64;
     }
     Ok(loaded)
+}
+
+/// The newest lines of event kind `kind` in `bytes` that `keep` accepts, at
+/// most `max`, oldest first. See [`NetworkRecord::read_existing_matching`].
+fn matching_lines(
+    bytes: &[u8],
+    kind: &str,
+    keep: impl Fn(&NetworkEvent) -> bool,
+    max: usize,
+) -> Result<Vec<NetworkLine>, NetworkRecordError> {
+    // Complete lines end with a newline; anything after the last one is a
+    // torn tail.
+    let complete = memchr::memrchr(b'\n', bytes).map_or(0, |end| end + 1);
+    let body = &bytes[..complete];
+    let needle = format!("\"kind\":\"{kind}\"");
+    let mut newest_first = Vec::new();
+    // The start of the line already read, so a second match inside it is
+    // skipped.
+    let mut read_from = body.len();
+    for found in memchr::memmem::rfind_iter(body, needle.as_bytes()) {
+        if newest_first.len() >= max {
+            break;
+        }
+        if found >= read_from {
+            continue;
+        }
+        let start = memchr::memrchr(b'\n', &body[..found]).map_or(0, |newline| newline + 1);
+        let end = found + memchr::memchr(b'\n', &body[found..]).unwrap_or(body.len() - found);
+        read_from = start;
+        let parsed = (end - start < MAX_LINE_BYTES)
+            .then(|| serde_json::from_slice::<NetworkLine>(&body[start..end]).ok())
+            .flatten()
+            .filter(|line| line.v == NETWORK_RECORD_VERSION);
+        let Some(line) = parsed else {
+            // An unparseable last line is an interrupted append.
+            if end + 1 == complete {
+                continue;
+            }
+            return Err(NetworkRecordError::Damaged {
+                line: 0,
+                reason: format!("unparseable {kind} line before the end of the record"),
+            });
+        };
+        // The text can also match a nested `kind` field of another event.
+        if line.event.kind() == kind && keep(&line.event) {
+            newest_first.push(line);
+        }
+    }
+    newest_first.reverse();
+    Ok(newest_first)
 }
 
 impl NetworkRecord {
@@ -775,14 +854,22 @@ impl NetworkRecord {
         Ok(Some((lines, stats)))
     }
 
-    /// Every stored line whose event `keep` accepts, oldest first, at most
-    /// `max`, read in one pass without opening a writer. Like
+    /// The newest stored lines of event kind `kind` that `keep` accepts, at
+    /// most `max`, oldest first, read without opening a writer. Like
     /// [`Self::read_existing`] it takes no lock, recovers nothing, creates
     /// nothing and skips a torn tail. `Ok(None)` when the Session has no
     /// record.
+    ///
+    /// Only lines that may be of that kind are parsed: the file is searched
+    /// once for `"kind":"<kind>"`, which the writer's compact JSON puts at the
+    /// start of every event of that kind (an escaped string value cannot
+    /// contain it), and each match is parsed and its kind checked. Other lines
+    /// are not validated, so a damaged line of another kind is not reported
+    /// here; opening the writer still refuses one.
     pub fn read_existing_matching(
         canonical: &crate::execution_store::SessionExecutionStore,
         limits: RecordLimits,
+        kind: &str,
         keep: impl Fn(&NetworkEvent) -> bool,
         max: usize,
     ) -> Result<Option<Vec<NetworkLine>>, NetworkRecordError> {
@@ -799,25 +886,7 @@ impl NetworkRecord {
             }
             Err(error) => return Err(io::Error::other(error.to_string()).into()),
         };
-        let loaded = load(&bytes)?;
-        let mut lines = Vec::new();
-        for line in bytes[..loaded.good_bytes as usize]
-            .split(|byte| *byte == b'\n')
-            .filter(|line| !line.is_empty())
-        {
-            if lines.len() >= max {
-                break;
-            }
-            let line: NetworkLine =
-                serde_json::from_slice(line).map_err(|error| NetworkRecordError::Damaged {
-                    line: 0,
-                    reason: error.to_string(),
-                })?;
-            if keep(&line.event) {
-                lines.push(line);
-            }
-        }
-        Ok(Some(lines))
+        Ok(Some(matching_lines(&bytes, kind, keep, max)?))
     }
 
     pub fn stats(&self) -> RecordStats {
@@ -1340,6 +1409,16 @@ mod tests {
                 outcome: CloseOutcome::Interrupted,
                 error: Some("channel lost".into()),
             },
+            NetworkEvent::WebRequest {
+                tool: WebTool::WebFetch,
+                invocation_id: "inv".into(),
+                activation_id: "act".into(),
+                agent: "researcher".into(),
+                url: Some("http://10.0.0.1/".into()),
+                url_truncated: false,
+                query_sha256: None,
+                query_bytes: None,
+            },
             NetworkEvent::Web {
                 tool: WebTool::WebFetch,
                 invocation_id: "inv".into(),
@@ -1348,9 +1427,12 @@ mod tests {
                 decision: Decision::Deny,
                 reason: Some("private_destination".into()),
                 url: Some("http://10.0.0.1/".into()),
+                url_truncated: true,
                 final_url: None,
+                final_url_truncated: false,
                 status: None,
                 redirects: vec![],
+                redirects_truncated: false,
                 query_sha256: None,
                 query_bytes: None,
                 results: None,
@@ -1384,7 +1466,17 @@ mod tests {
         let kinds: Vec<&str> = read.iter().map(NetworkEvent::kind).collect();
         assert_eq!(
             kinds,
-            ["policy", "sidecar", "bind", "unbind", "open", "close", "web", "limit"]
+            [
+                "policy",
+                "sidecar",
+                "bind",
+                "unbind",
+                "open",
+                "close",
+                "web_request",
+                "web",
+                "limit"
+            ]
         );
     }
 
@@ -1422,9 +1514,12 @@ mod tests {
             decision: Decision::Allow,
             reason: None,
             url: None,
+            url_truncated: false,
             final_url: None,
+            final_url_truncated: false,
             status: None,
             redirects: vec![],
+            redirects_truncated: false,
             query_sha256: Some("ab".repeat(32)),
             query_bytes: Some(4),
             results: Some(1),
@@ -1443,12 +1538,20 @@ mod tests {
         }
     }
 
+    fn activation(line: &NetworkLine) -> String {
+        match &line.event {
+            NetworkEvent::Web { activation_id, .. } => activation_id.clone(),
+            _ => unreachable!(),
+        }
+    }
+
     #[test]
-    fn read_existing_matching_filters_in_one_pass_and_skips_a_torn_tail() {
+    fn read_existing_matching_keeps_the_newest_of_one_kind_and_skips_a_torn_tail() {
         let (_root, _ownership, store) = setup();
         assert!(NetworkRecord::read_existing_matching(
             &store,
             RecordLimits::default(),
+            "web",
             |_| true,
             10
         )
@@ -1458,6 +1561,18 @@ mod tests {
         for id in 0..2_500 {
             let event = if id % 1_000 == 7 {
                 web_event(&format!("act-{id}"))
+            } else if id % 1_000 == 8 {
+                // A web_request line is another kind, not a `web` match.
+                NetworkEvent::WebRequest {
+                    tool: WebTool::WebFetch,
+                    invocation_id: "inv".into(),
+                    activation_id: format!("act-{id}"),
+                    agent: "researcher".into(),
+                    url: Some("https://example.com/".into()),
+                    url_truncated: false,
+                    query_sha256: None,
+                    query_bytes: None,
+                }
             } else {
                 open_event(id, "registry.npmjs.org")
             };
@@ -1471,31 +1586,122 @@ mod tests {
             .unwrap()
             .write_all(b"{\"v\":1,\"seq\":99999,\"ts_ms\":1,\"event\":{\"kind\":\"web\"")
             .unwrap();
-        let web = NetworkRecord::read_existing_matching(
+        let read = |keep: &dyn Fn(&NetworkEvent) -> bool, max: usize| {
+            NetworkRecord::read_existing_matching(&store, RecordLimits::default(), "web", keep, max)
+                .unwrap()
+                .unwrap()
+        };
+        let all: Vec<String> = read(&|_| true, 100).iter().map(activation).collect();
+        assert_eq!(all, ["act-7", "act-1007", "act-2007"]);
+        // At the bound the newest are kept, oldest first.
+        let newest: Vec<String> = read(&|_| true, 2).iter().map(activation).collect();
+        assert_eq!(newest, ["act-1007", "act-2007"]);
+        // `keep` filters before the bound counts.
+        let one: Vec<String> = read(
+            &|event| matches!(event, NetworkEvent::Web { activation_id, .. } if activation_id == "act-7"),
+            1,
+        )
+        .iter()
+        .map(activation)
+        .collect();
+        assert_eq!(one, ["act-7"]);
+        let requests = NetworkRecord::read_existing_matching(
             &store,
             RecordLimits::default(),
-            |event| matches!(event, NetworkEvent::Web { .. }),
+            "web_request",
+            |_| true,
             100,
         )
         .unwrap()
         .unwrap();
-        let activations: Vec<String> = web
+        assert_eq!(requests.len(), 3);
+        assert!(requests
             .iter()
-            .map(|line| match &line.event {
-                NetworkEvent::Web { activation_id, .. } => activation_id.clone(),
-                _ => unreachable!(),
-            })
-            .collect();
-        assert_eq!(activations, ["act-7", "act-1007", "act-2007"]);
-        let first_two = NetworkRecord::read_existing_matching(
+            .all(|line| line.event.kind() == "web_request"));
+    }
+
+    #[test]
+    fn a_full_record_is_searched_for_its_web_lines_quickly() {
+        // A record at its default event cap, nearly all egress lines, with a
+        // web event every 500 lines: the projection's read parses only those.
+        let (_root, _ownership, store) = setup();
+        drop(open(&store, RecordLimits::default()));
+        let mut bytes = Vec::new();
+        let mut web = 0;
+        for seq in 1..=DEFAULT_MAX_EVENTS {
+            let event = if seq % 500 == 0 {
+                web += 1;
+                web_event(&format!("act-{seq}"))
+            } else {
+                open_event(seq, "registry.npmjs.org")
+            };
+            serde_json::to_writer(
+                &mut bytes,
+                &NetworkLine {
+                    v: NETWORK_RECORD_VERSION,
+                    seq,
+                    ts_ms: seq,
+                    event,
+                },
+            )
+            .unwrap();
+            bytes.push(b'\n');
+        }
+        std::fs::write(file_path(&store), &bytes).unwrap();
+        let started = std::time::Instant::now();
+        let lines = NetworkRecord::read_existing_matching(
             &store,
             RecordLimits::default(),
-            |event| matches!(event, NetworkEvent::Web { .. }),
-            2,
+            "web",
+            |_| true,
+            usize::MAX,
         )
         .unwrap()
         .unwrap();
-        assert_eq!(first_two.len(), 2);
+        let elapsed = started.elapsed();
+        assert_eq!(lines.len(), web);
+        assert_eq!(lines.last().unwrap().seq, DEFAULT_MAX_EVENTS);
+        eprintln!(
+            "network record: {web} web lines found in {} MiB of {DEFAULT_MAX_EVENTS} events in {elapsed:?}",
+            bytes.len() >> 20
+        );
+        let bound = if cfg!(debug_assertions) { 2000 } else { 250 };
+        assert!(elapsed.as_millis() < bound, "{elapsed:?}");
+    }
+
+    #[test]
+    fn a_damaged_line_of_the_kind_read_is_reported_and_others_are_not_read() {
+        let (_root, _ownership, store) = setup();
+        let mut record = open(&store, RecordLimits::default());
+        record.append(1, web_event("act-1")).unwrap();
+        record.sync().unwrap();
+        drop(record);
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(file_path(&store))
+            .unwrap();
+        // Damage in a line of another kind is not this reader's to find.
+        file.write_all(b"{\"v\":1,\"seq\":2,\"ts_ms\":1,\"event\":{\"kind\":\"open\",broken}\n")
+            .unwrap();
+        let read = |kind: &str| {
+            NetworkRecord::read_existing_matching(
+                &store,
+                RecordLimits::default(),
+                kind,
+                |_| true,
+                10,
+            )
+        };
+        assert_eq!(read("web").unwrap().unwrap().len(), 1);
+        // Damage in a line of the kind read, before the end, is reported.
+        file.write_all(b"{\"v\":1,\"seq\":3,\"ts_ms\":1,\"event\":{\"kind\":\"web\",broken}\n")
+            .unwrap();
+        file.write_all(b"{\"v\":1,\"seq\":4,\"ts_ms\":1,\"event\":{\"kind\":\"limit\",\"what\":\"record_full\",\"detail\":\"x\"}}\n")
+            .unwrap();
+        assert!(matches!(
+            read("web"),
+            Err(NetworkRecordError::Damaged { .. })
+        ));
     }
 
     #[test]

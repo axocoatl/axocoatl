@@ -75,7 +75,15 @@ const BLOCK_ELEMENTS: &[&str] = &[
 /// Elements whose whole content is dropped. Their content is markup, so the
 /// tokenizer still reads it, but no text inside reaches the output.
 const DROPPED_CONTAINERS: &[&str] = &[
-    "noscript", "template", "svg", "iframe", "object", "head", "math",
+    "noscript", "template", "svg", "iframe", "object", "head", "math", "noframes",
+];
+
+/// Start tags that may appear inside `head` (the HTML "in head" insertion
+/// mode). Any other start tag, or text that is not whitespace, ends a `head`
+/// whose `</head>` and `<body>` were left out, as both may be.
+const HEAD_CONTENT: &[&str] = &[
+    "base", "basefont", "bgsound", "link", "meta", "title", "noscript", "noframes", "style",
+    "script", "template", "head",
 ];
 
 /// Elements whose content is raw text up to the matching end tag.
@@ -184,8 +192,13 @@ pub fn html_to_paragraphs(input: &str) -> ExtractedPage {
     while index < bytes.len() {
         let next = memchr::memchr(b'<', &bytes[index..]).map_or(bytes.len(), |at| index + at);
         if next > index {
+            let text = &input[index..next];
+            if in_head(&dropped) && !text.bytes().all(is_space) {
+                // Text ends a head whose end was left out.
+                dropped.pop();
+            }
             if dropped.is_empty() {
-                push_decoded(&mut builder, &input[index..next]);
+                push_decoded(&mut builder, text);
             }
             index = next;
             continue;
@@ -219,6 +232,12 @@ pub fn html_to_paragraphs(input: &str) -> ExtractedPage {
         if closing {
             close_tag(&name, &mut builder, &mut dropped);
             continue;
+        }
+
+        if in_head(&dropped) && !HEAD_CONTENT.contains(&name.as_str()) {
+            // A start tag that cannot be in head ends it; the tag is then
+            // read as body content.
+            dropped.pop();
         }
 
         if RAW_TEXT_ELEMENTS.contains(&name.as_str()) || name == "title" {
@@ -271,6 +290,12 @@ pub fn html_to_paragraphs(input: &str) -> ExtractedPage {
     }
 }
 
+/// Whether the innermost open dropped container is `head`, so its content
+/// is read in the "in head" mode.
+fn in_head(dropped: &[&'static str]) -> bool {
+    dropped.last() == Some(&"head")
+}
+
 fn open_tag(name: &str, self_closing: bool, builder: &mut Builder) {
     if BLOCK_ELEMENTS.contains(&name) {
         builder.break_paragraph();
@@ -318,9 +343,11 @@ fn tag_name_end(bytes: &[u8], start: usize) -> usize {
     end
 }
 
-/// Skip a tag's attributes. Returns the index after `>` and whether the tag
-/// ended with `/>`. Quoted attribute values may contain `>`.
-fn tag_end(bytes: &[u8], mut index: usize) -> (usize, bool) {
+/// Skip a tag's attributes, starting after its name. Returns the index after
+/// `>` and whether the tag ended with `/>`. Quoted attribute values may
+/// contain `>`.
+fn tag_end(bytes: &[u8], start: usize) -> (usize, bool) {
+    let mut index = start;
     loop {
         let Some(offset) = memchr::memchr3(b'>', b'"', b'\'', &bytes[index.min(bytes.len())..])
         else {
@@ -332,17 +359,29 @@ fn tag_end(bytes: &[u8], mut index: usize) -> (usize, bool) {
                 let self_closing = at > 0 && bytes[at - 1] == b'/';
                 return (at + 1, self_closing);
             }
-            quote => {
-                // Only a quote that starts an attribute value opens a quoted
-                // run; a stray quote elsewhere is treated the same, which at
-                // worst swallows the rest of a broken tag.
+            quote if starts_attribute_value(bytes, start, at) => {
                 match memchr::memchr(quote, &bytes[at + 1..]) {
                     Some(close) => index = at + 1 + close + 1,
                     None => return (bytes.len(), false),
                 }
             }
+            // A quote anywhere else, such as the apostrophe in an unquoted
+            // `title=Bob's`, is an ordinary character, as browsers read it.
+            _ => index = at + 1,
         }
     }
+}
+
+/// Whether the quote at `at` opens an attribute value: the last byte before
+/// it, past any whitespace and not before `start`, is `=`. Each call steps
+/// back only over the whitespace directly before one quote, so a tag is
+/// still read in linear time.
+fn starts_attribute_value(bytes: &[u8], start: usize, at: usize) -> bool {
+    let mut before = at;
+    while before > start && is_space(bytes[before - 1]) {
+        before -= 1;
+    }
+    before > start && bytes[before - 1] == b'='
 }
 
 /// For a raw-text element starting at `start`, the end of its content and
@@ -776,6 +815,78 @@ mod tests {
             paragraphs("<p title='a>b' data-x=\"c>d\">quoted</p>"),
             ["quoted"]
         );
+        assert_eq!(
+            paragraphs("<p title = 'a>b' data-x=\n\"c>d\">spaced</p>"),
+            ["spaced"]
+        );
+    }
+
+    #[test]
+    fn a_quote_inside_an_unquoted_value_is_an_ordinary_character() {
+        // Browsers read `title=Bob's` as the value `Bob's`; the apostrophe
+        // must not open a quoted run that swallows the rest of the page.
+        assert_eq!(
+            paragraphs(
+                "<p>Before</p><a title=Bob's href=/x>link</a><p>After one</p><p>After two</p>"
+            ),
+            ["Before", "link", "After one", "After two"]
+        );
+        assert_eq!(
+            paragraphs("<img alt=5\"wide src=x.png><p>caption</p><div data-a=it's>tail</div>"),
+            ["caption", "tail"]
+        );
+        // A quote that does start a value still protects a `>` inside it.
+        assert_eq!(
+            paragraphs("<a title=Bob's data-x='y>z'>link</a><p>after</p>"),
+            ["link", "after"]
+        );
+        // One huge tag of whitespace and stray quotes is still read in
+        // linear time.
+        let mut tag = String::from("<a ");
+        while tag.len() < MAX_EXTRACT_INPUT_BYTES - 64 {
+            tag.push_str("   \"   ' =  ");
+        }
+        tag.push_str(">x");
+        let started = std::time::Instant::now();
+        let _ = html_to_paragraphs(&tag);
+        let limit_ms = if cfg!(debug_assertions) { 2000 } else { 200 };
+        assert!(started.elapsed().as_millis() < limit_ms);
+    }
+
+    #[test]
+    fn a_head_left_open_ends_at_body_content() {
+        // Neither </head> nor <body>: both are optional in HTML.
+        let page = html_to_paragraphs(
+            "<html><head><meta charset=utf-8><title>T</title><p>Visible paragraph one.<p>Two.",
+        );
+        assert_eq!(page.title.as_deref(), Some("T"));
+        assert_eq!(page.paragraphs, ["Visible paragraph one.", "Two."]);
+        // Text that is not whitespace ends it too.
+        let page = html_to_paragraphs(
+            "<!DOCTYPE html><html><head>\n  <title>T</title>\n  <link rel=icon href=x>\n\
+             Bare text <b>after</b> the head",
+        );
+        assert_eq!(page.title.as_deref(), Some("T"));
+        assert_eq!(page.paragraphs, ["Bare text after the head"]);
+        // Head content before the body content stays dropped.
+        assert_eq!(
+            paragraphs(
+                "<head><title>T</title><style>p{}</style><script>s()</script>\
+                 <noscript><p>enable js</p></noscript><meta name=a><div>Body</div><p>More</p>"
+            ),
+            ["Body", "More"]
+        );
+        // With <body> and no </head>, and with both, nothing changes.
+        assert_eq!(
+            paragraphs("<head><title>t</title><meta x><body><p>visible</p>"),
+            ["visible"]
+        );
+        assert_eq!(
+            paragraphs("<html><head><title>t</title></head><body><p>visible</p></body></html>"),
+            ["visible"]
+        );
+        // An entity is text too.
+        assert_eq!(paragraphs("<head><title>t</title>&copy; 2026"), ["© 2026"]);
     }
 
     #[test]

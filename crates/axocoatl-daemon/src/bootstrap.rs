@@ -5203,13 +5203,13 @@ impl AxocoatlDaemon {
             )
             .map_err(|error| DaemonError::Provider(format!("web tools: {error}")))?,
         );
-        if web_tools.managed_searxng().is_some() {
+        if let Some(searxng) = web_tools.managed_searxng() {
             // A SearXNG left by a daemon that did not stop cleanly holds
-            // memory until the next search would replace it.
-            let authority = local_runtime_authority.clone();
+            // memory until the next search would replace it. The service
+            // reaps under its own lock, so a first search started meanwhile
+            // keeps its container.
             tokio::spawn(async move {
-                let removed =
-                    axocoatl_isolation::searxng::SearxngService::reap_orphans(&authority).await;
+                let removed = searxng.reap_orphans().await;
                 if removed > 0 {
                     tracing::info!(removed, "removed SearXNG containers left by an earlier run");
                 }
@@ -15172,7 +15172,7 @@ trap - 0 1 2 15
                 ))
             })?;
         let executor = self
-            .build_session_executor(session, sandbox.clone(), false)
+            .build_session_executor(session, sandbox.clone(), false, &agent_yaml.tools)
             .await?;
         // Context path = the in-sandbox worktree (where the tools operate);
         // project instructions still come from the primary session's host repo.
@@ -21919,7 +21919,9 @@ trap - 0 1 2 15
             .await?;
         let sandbox = self.ensure_sandbox(session).await?;
         let context_dir = sandbox.root().to_path_buf();
-        let executor = self.build_session_executor(session, sandbox, true).await?;
+        let executor = self
+            .build_session_executor(session, sandbox, true, &agent_yaml.tools)
+            .await?;
         let actor_checkpoint_store =
             if session_uses_checkpoint_transaction(&self.config, &session.mode) {
                 Arc::new(
@@ -21944,13 +21946,15 @@ trap - 0 1 2 15
 
     /// Build the per-session tool executor: file/shell/terminal tools rooted
     /// at `sandbox`, the session's allowlisted skills (callable as tools), and
-    /// web search when configured. Shared by the primary session actor and
+    /// the web tools when configured. Shared by the primary session actor and
     /// per-variant actors (which pass a worktree-rooted attached sandbox).
+    /// `agent_tools` is the Agent's configured `tools` list.
     async fn build_session_executor(
         &self,
         session: &Session,
         sandbox: Arc<dyn Sandbox>,
         include_integrations: bool,
+        agent_tools: &[String],
     ) -> Result<ToolExecutor, DaemonError> {
         let mut executor = ToolExecutor::new();
         axocoatl_tools::register_session_tools(&mut executor, sandbox);
@@ -21970,12 +21974,15 @@ trap - 0 1 2 15
                 executor.register_builtin(tool.tool_name(), Arc::new(tool));
             }
         }
-        // Web search and fetch — offered when configured. Legacy Sessions
-        // have no network record, so these calls are not recorded.
+        // Web search and fetch. Legacy Sessions have no network record, so
+        // these calls are not recorded. web_search keeps its 1.0 behavior:
+        // offered when configured, also to an Agent whose empty tools list
+        // inherits this executor. web_fetch is new, so it is offered only to
+        // an Agent that names it, and never under network: none.
         if let Some(tool) = self.web_tools.legacy_search_tool() {
             executor.register_builtin("web_search", tool);
         }
-        if let Some(tool) = self.web_tools.legacy_fetch_tool() {
+        if let Some(tool) = self.web_tools.legacy_fetch_tool(agent_tools) {
             executor.register_builtin("web_fetch", tool);
         }
         // Global MCP tools (discovered at bootstrap) are available to session

@@ -505,6 +505,25 @@ pub struct WebSearchReport {
     pub reason: Option<String>,
 }
 
+/// A `web_search` call whose arguments are valid, before it is sent.
+#[derive(Debug, Clone)]
+pub struct PreparedSearch {
+    query: String,
+    max: usize,
+    report: WebSearchReport,
+}
+
+impl PreparedSearch {
+    /// SHA-256 hex of the query, for the record; never the query text.
+    pub fn query_sha256(&self) -> Option<&str> {
+        self.report.query_sha256.as_deref()
+    }
+
+    pub fn query_bytes(&self) -> Option<u32> {
+        self.report.query_bytes
+    }
+}
+
 /// The `web_search` tool — searches the web via the configured backend.
 pub struct WebSearchTool {
     backend: Arc<dyn WebSearchBackend>,
@@ -598,21 +617,52 @@ impl WebSearchTool {
         &self,
         arguments: serde_json::Value,
     ) -> (Result<serde_json::Value, ToolError>, WebSearchReport) {
+        match self.prepare_search(&arguments) {
+            Ok(prepared) => self.run_search(prepared).await,
+            Err((error, report)) => (Err(error), *report),
+        }
+    }
+
+    /// Check one call's arguments. Nothing leaves this computer; a caller
+    /// can record the request before [`Self::run_search`] sends it. An
+    /// invalid call comes back with its error and its report.
+    pub fn prepare_search(
+        &self,
+        arguments: &serde_json::Value,
+    ) -> Result<PreparedSearch, (ToolError, Box<WebSearchReport>)> {
         let mut report = WebSearchReport {
             backend: self.backend.name().to_string(),
             retrieved_at_ms: now_ms(),
             ..WebSearchReport::default()
         };
-        let (query, max) = match Self::arguments(&arguments) {
+        let (query, max) = match Self::arguments(arguments) {
             Ok(parsed) => parsed,
             Err(error) => {
                 report.refused = true;
                 report.reason = Some("invalid_arguments".into());
-                return (Err(error), report);
+                return Err((error, Box::new(report)));
             }
         };
         report.query_sha256 = Some(sha256_hex(query.as_bytes()));
         report.query_bytes = Some(query.len() as u32);
+        Ok(PreparedSearch {
+            query: query.to_string(),
+            max,
+            report,
+        })
+    }
+
+    /// Send a prepared search and say what it did.
+    pub async fn run_search(
+        &self,
+        prepared: PreparedSearch,
+    ) -> (Result<serde_json::Value, ToolError>, WebSearchReport) {
+        let PreparedSearch {
+            query,
+            max,
+            mut report,
+        } = prepared;
+        let query = query.as_str();
 
         let page = match self.backend.search_page(query, max).await {
             Ok(page) => page,
@@ -736,10 +786,26 @@ pub struct WebFetchReport {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone)]
 struct FetchArguments {
     url: String,
     max_chars: usize,
     start_paragraph: usize,
+}
+
+/// A `web_fetch` call whose arguments are valid, before anything is
+/// requested.
+#[derive(Debug, Clone)]
+pub struct PreparedFetch {
+    arguments: FetchArguments,
+    report: WebFetchReport,
+}
+
+impl PreparedFetch {
+    /// The URL that will be requested, as the call gave it.
+    pub fn url(&self) -> &str {
+        &self.arguments.url
+    }
 }
 
 /// The `web_fetch` tool — reads one public page as numbered paragraphs.
@@ -827,6 +893,19 @@ impl WebFetchTool {
         &self,
         arguments: serde_json::Value,
     ) -> (Result<serde_json::Value, ToolError>, WebFetchReport) {
+        match self.prepare_fetch(&arguments) {
+            Ok(prepared) => self.run_fetch(prepared).await,
+            Err((error, report)) => (Err(error), *report),
+        }
+    }
+
+    /// Check one call's arguments. Nothing is requested; a caller can record
+    /// the request before [`Self::run_fetch`] sends it. An invalid call comes
+    /// back with its error and its report.
+    pub fn prepare_fetch(
+        &self,
+        arguments: &serde_json::Value,
+    ) -> Result<PreparedFetch, (ToolError, Box<WebFetchReport>)> {
         let mut report = WebFetchReport {
             url: arguments
                 .get("url")
@@ -835,15 +914,30 @@ impl WebFetchTool {
             retrieved_at_ms: now_ms(),
             ..WebFetchReport::default()
         };
-        let parsed = match Self::arguments(&arguments) {
+        let parsed = match Self::arguments(arguments) {
             Ok(parsed) => parsed,
             Err(error) => {
                 report.refused = true;
                 report.reason = Some("invalid_arguments".into());
-                return (Err(error), report);
+                return Err((error, Box::new(report)));
             }
         };
         report.source_id = source_id(&parsed.url);
+        Ok(PreparedFetch {
+            arguments: parsed,
+            report,
+        })
+    }
+
+    /// Request a prepared fetch and say what it did.
+    pub async fn run_fetch(
+        &self,
+        prepared: PreparedFetch,
+    ) -> (Result<serde_json::Value, ToolError>, WebFetchReport) {
+        let PreparedFetch {
+            arguments: parsed,
+            mut report,
+        } = prepared;
         let page = match self.fetcher.fetch(&parsed.url).await {
             Ok(page) => page,
             Err(error) => {
@@ -1383,6 +1477,39 @@ mod tests {
         }
         assert!(fetcher.calls.lock().unwrap().is_empty());
         assert_eq!(web_fetch_schema()["additionalProperties"], false);
+    }
+
+    #[tokio::test]
+    async fn prepared_calls_request_nothing_until_run() {
+        let fetcher = Arc::new(CannedFetcher::page("text/html", b"<p>x</p>"));
+        let tool = WebFetchTool::new(fetcher.clone());
+        let prepared = tool
+            .prepare_fetch(&serde_json::json!({"url": "https://example.com/a#frag"}))
+            .unwrap();
+        assert_eq!(prepared.url(), "https://example.com/a#frag");
+        assert!(
+            fetcher.calls.lock().unwrap().is_empty(),
+            "nothing requested yet"
+        );
+        let (result, report) = tool.run_fetch(prepared).await;
+        assert!(result.is_ok());
+        assert_eq!(fetcher.calls.lock().unwrap().len(), 1);
+        assert!(report.content_sha256.is_some());
+        let (error, report) = tool
+            .prepare_fetch(&serde_json::json!({"url": "ftp://example.com/"}))
+            .unwrap_err();
+        assert!(matches!(error, ToolError::InvalidArgs { .. }));
+        assert!(report.refused);
+
+        let search = WebSearchTool::new(Arc::new(NullBackend));
+        let prepared = search
+            .prepare_search(&serde_json::json!({"query": "rust"}))
+            .unwrap();
+        assert_eq!(prepared.query_bytes(), Some(4));
+        assert_eq!(prepared.query_sha256(), Some(sha256_hex(b"rust").as_str()));
+        assert!(search
+            .prepare_search(&serde_json::json!({"query": 5}))
+            .is_err());
     }
 
     #[tokio::test]

@@ -275,10 +275,14 @@ misled by what it reads in the repository. See
 `network: none` blocks container egress and Preview ports, but does not block
 the host daemon itself from reaching model providers, MCP servers, web search in
 legacy Sessions, webhooks, a remote sandbox service, or a registry for a Podman
-image pull. Native Sessions refuse the web tools under `network: none`. It
-also prevents readiness/setup processes inside the container from downloading
-missing commands or dependencies, so use an image that already contains the
-required repository command surface.
+image pull. It also prevents readiness/setup processes inside the container from
+downloading missing commands or dependencies, so use an image that already contains
+the required repository command surface.
+
+Native Sessions refuse the web tools under `network: none`. A legacy (1.0-format)
+Session still offers `web_search`, unrecorded, to every Agent whose `tools` list is
+empty or names it. It offers `web_fetch` only to an Agent whose `tools` list names
+it, and never under `network: none`.
 
 ## Inventory egress
 
@@ -289,7 +293,9 @@ Review every path by which content can leave the machine:
 - remote MCP servers and tools;
 - configured web search: a managed SearXNG sends model-written queries to public
   search engines, and `web_fetch` requests public pages from the daemon process
-  (see [Web research](/configure/web/#what-leaves-your-computer));
+  (see [Web research](/configure/web/#what-leaves-your-computer) and what it
+  refuses under
+  [Private and local addresses](/configure/web/#private-and-local-addresses));
 - event webhooks and their headers;
 - package downloads or repository scripts inside a bridged container;
 - embedding-model downloads during first use.

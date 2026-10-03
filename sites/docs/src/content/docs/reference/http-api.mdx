@@ -379,8 +379,8 @@ activity returns an empty list.
 ```
 
 `mode` is `sandbox.network`. Pass `next_after` back as `after` to read on. Each
-event has a `kind`: `policy`, `sidecar`, `bind`, `unbind`, `open`, `close`, `web` or
-`limit`. An `open` event names the destination `host` and `port`, its
+event has a `kind`: `policy`, `sidecar`, `bind`, `unbind`, `open`, `close`,
+`web_request`, `web` or `limit`. An `open` event names the destination `host` and `port`, its
 `conn_kind` (`connect` for a tunnel or `http`), the `decision` (`allow` or `deny`)
 with its `reason` and `status`, the addresses used, and the tool call (`binding`)
 whose credential it presented. Credentials appear only as 16-hex tags. A `close`
@@ -389,21 +389,34 @@ connections are refused; `gaps` counts places where a sequence number was skippe
 `sidecar` and `policies` stay empty until a Session runs under `network: egress`,
 which this build does not start yet.
 
-A `web` event records one `web_search` or `web_fetch` call: the `tool`, its
-`invocation_id`, `activation_id` and `agent`, the `decision` and `reason`, the
-`source_ids` it returned, `retrieved_at_ms` and `ms`. A search adds
-`query_sha256` and `query_bytes` (not the query text), `results`,
-`unresponsive_engines` and `sources` (each `{id, url}`, URLs cut to 512 bytes). A
-fetch adds `url`, `final_url`, `redirects`, `status`, `bytes`, `content_sha256` and
-`text_sha256`.
+A `web_request` event is written before a `web_search` or `web_fetch` call with
+valid arguments sends anything: the `tool`, its `invocation_id`, `activation_id`
+and `agent`, and either the `url` a fetch requests or a search's `query_sha256` and
+`query_bytes`. If it cannot be written, nothing is sent. A `web` event with the same
+`invocation_id` follows when the call finishes; a call with invalid arguments has
+only the `web` event.
+
+A `web` event records how one call ended: the `tool`, its `invocation_id`,
+`activation_id` and `agent`, the `decision` and `reason`, the `source_ids` it
+returned, `retrieved_at_ms` and `ms`. A search adds `query_sha256` and
+`query_bytes` (not the query text), `results`, `unresponsive_engines` and `sources`
+(each `{id, url}`, URLs cut to 512 bytes and then marked `url_truncated`). A fetch
+adds `url`, `final_url`, `redirects`, `status`, `bytes`, `content_sha256` and
+`text_sha256`. Each fetch URL, in `web_request` too, is cut to 1,024 bytes;
+`url_truncated`, `final_url_truncated` and `redirects_truncated` are present and
+`true` only when one was cut. The full URL is in the tool call's recorded
+arguments.
 
 ```json
-{"v": 1, "seq": 7, "ts_ms": 1790000000000, "event": {"kind": "web", "tool": "web_fetch",
+{"v": 1, "seq": 6, "ts_ms": 1790000000000, "event": {"kind": "web_request",
+  "tool": "web_fetch", "invocation_id": "tool-…", "activation_id": "…", "agent": "…",
+  "url": "https://www.rust-lang.org/"}}
+{"v": 1, "seq": 7, "ts_ms": 1790000000412, "event": {"kind": "web", "tool": "web_fetch",
   "invocation_id": "tool-…", "activation_id": "…", "agent": "…", "decision": "allow",
   "url": "https://www.rust-lang.org/", "final_url": "https://www.rust-lang.org/",
   "status": 200, "redirects": [], "unresponsive_engines": [], "bytes": 18234,
   "content_sha256": "…", "text_sha256": "…", "source_ids": ["S1a2b3c4d"],
-  "retrieved_at_ms": 1790000000000, "ms": 412}}
+  "retrieved_at_ms": 1790000000412, "ms": 412}}
 ```
 
 ### Turn control plane
