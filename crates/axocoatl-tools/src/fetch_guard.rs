@@ -846,6 +846,31 @@ async fn read_capped(
     Ok((body, false))
 }
 
+/// Whether `address` is this computer: a loopback or unspecified address,
+/// or one of the addresses of its network interfaces, read again for each
+/// call (an IPv4-mapped IPv6 address is checked as its IPv4 address too).
+/// Unlike `web_fetch`, a destination merely on the same network is not
+/// counted: callers that reach configured private destinations, such as the
+/// egress route broker, decide about those themselves. If the interfaces
+/// cannot be listed every address counts as local, so a caller that refuses
+/// local destinations fails closed.
+pub fn is_local_destination(address: IpAddr) -> bool {
+    let mapped = match address {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4),
+        IpAddr::V4(_) => None,
+    };
+    if std::iter::once(address)
+        .chain(mapped)
+        .any(|candidate| candidate.is_loopback() || candidate.is_unspecified())
+    {
+        return true;
+    }
+    match interface_addresses() {
+        Ok(interfaces) => matches!(local_match(address, &interfaces), Some(LocalMatch::Own)),
+        Err(_) => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

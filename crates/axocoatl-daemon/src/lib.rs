@@ -6,6 +6,7 @@ pub mod automation_store;
 pub mod bootstrap;
 pub mod browser_install;
 pub mod consolidation;
+pub mod egress_broker;
 pub mod error;
 pub mod git;
 pub mod git_host;
