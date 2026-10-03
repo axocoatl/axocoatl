@@ -26,6 +26,8 @@ test('files must be safe repository paths', () => {
   assert.match(checkInput(input({ files: [] })), /1-32 files/);
   assert.match(checkInput(input({ base_url: 'file:///tmp' })), /http or https/);
   assert.match(checkInput(input({ grep: '' })), /grep/);
+  assert.match(checkInput(input({ proxy: { server: 'http://example.com:3128', password: 'x' } })), /proxy must be/);
+  assert.equal(checkInput(input({ proxy: { server: 'http://127.0.0.1:3128', username: 'axo', password: 'x' } })), null);
   const twice = input().files[0];
   assert.match(checkInput(input({ files: [twice, twice] })), /listed twice/);
 });
@@ -37,7 +39,16 @@ test('the configuration runs exactly the entry with one worker and keeps the cre
   });
   assert.match(source, /retries: 0/);
   assert.match(source, /workers: 1/);
-  assert.match(source, /process\.env\.AXO_PROXY_PASSWORD/);
+  // No declared hosts: no proxy at all, only loopback is reachable.
+  assert.doesNotMatch(source, /proxy:/);
+  const proxied = configSource({
+    testDir: '/tmp/axo-check-1/work', entry: 'qa/findings/B07.spec.ts', baseURL: 'http://localhost:8765',
+    testTimeoutMs: 30000, globalTimeoutMs: 100000, reportFile: '/tmp/axo-check-1/report.json', outputDir: '/tmp/axo-check-1/results',
+    proxyServer: 'http://127.0.0.1:3129',
+  });
+  assert.match(proxied, /proxy: \{ server: "http:\/\/127\.0\.0\.1:3129"/);
+  assert.match(proxied, /process\.env\.AXO_PROXY_PASSWORD/);
+  assert.doesNotMatch(proxied, /axe_/);
   assert.doesNotMatch(source, /axe_/);
   const matcher = JSON.parse(/new RegExp\(("[^"]+")\)/.exec(source)[1]);
   const pattern = new RegExp(matcher);

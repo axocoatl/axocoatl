@@ -39,25 +39,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `script`, with one worker and no retries, and returns each test's status and first
   error. Both run in a per-Session browser container with no network interface other
   than loopback, a read-only root, no capabilities and no Workspace mount. It reaches
-  the Session's exposed ports through Unix sockets the Session container serves, and
-  the hosts listed under `browser.allow` only through Axocoatl's egress proxy, which
-  checks each host against that list, resolves it on the host, refuses special and
-  unlisted private addresses and records every decision. Each call gets its own proxy
+  the Session's exposed ports through Unix sockets served by a separate forwarder
+  container that joins the Session container's network namespace; the Session
+  container never sees the sockets, so a read-only helper's shell cannot reach the
+  apps through them. It reaches the hosts listed under `browser.allow` only through
+  Axocoatl's egress proxy, which checks each host against that list, resolves it on
+  the host, refuses special and unlisted private addresses and records every decision.
+  Without declared hosts Chromium gets no proxy at all. Each call gets its own proxy
   credential, passed on the driver's standard input and revoked when the call ends.
-  Read-only helpers and required reviewers get the tools only when their own template
-  lists them.
+  `browser_check` runs alone and the browser container is replaced after it, so
+  nothing its test leaves reaches another call. Read-only helpers and required
+  reviewers get `browser` when their own template lists it; `browser_check` counts as
+  a tool that can change files. The tools are not offered in Ways attempts.
 - Screenshots never reach the model. Each `browser` call, and each failing
-  `browser_check`, keeps a screenshot beside the Session's network record, and a new
-  `browser` event records the call, its tool call, activation and Agent, URLs, status
-  and screenshot digest. `GET /api/sessions/{id}/network/screenshots/{sha256}` returns
-  a screenshot.
+  `browser_check`, keeps a screenshot beside the Session's network record (at most
+  64 MiB per Session), and a new `browser` event records the call, its tool call,
+  activation and Agent, URLs, status and screenshot digest. A call that fails is
+  recorded too, with the reason. `GET /api/sessions/{id}/network/screenshots/{sha256}`
+  returns a screenshot, and `GET /api/sessions/{id}/network` shows the browser's
+  egress sidecar and policy once declared hosts are used.
 - `axocoatl browser install` builds the browser image,
   `localhost/axocoatl-browser:pw1.60.0`, from a Containerfile and lock files embedded in
   Axocoatl (Node 22 by digest, Playwright 1.60.0, Playwright's headless Chromium).
   `axocoatl doctor` reports whether it is present and what the browser can reach.
 - Native Session admission accepts `browser` and `browser_check` in an Agent's `tools`
   and refuses them, with the reason, when no `browser` block is configured or the
-  backend is E2B.
+  backend is E2B, and refuses `browser_check` for an Agent with `writes: []`.
 
 ### Changed
 - `sandbox.backend: e2b` now requires `sandbox.network: bridge` when the configuration
@@ -67,11 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Compatibility
 - A data root used with this version may be refused by 1.1.2 and earlier once a
   Session has a network record, because they do not know the record's directory.
-- With a `browser` block configured, Session containers mount a per-Session
-  `axo-svc-<session>` volume at `/run/axocoatl-svc`. A Session whose container started
-  before `browser` was configured must be restarted before the browser can reach its
-  apps. The browser and egress sidecar containers (`axo-brw-`, `axo-egr-`) and their
-  volumes are removed with the Session.
+- The browser's containers (`axo-brw-`, the `axo-svc-` forwarder and the `axo-egr-`
+  sidecar) and their volumes are removed with the Session. Removing a Session
+  container now also removes containers that joined its network namespace
+  (`podman rm --depend`).
 
 ## [1.1.2] - 2026-10-02
 

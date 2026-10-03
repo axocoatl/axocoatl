@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   boundOutput, boundText, checkInput, checkStep, checkTarget, checkUrl, egressDenial, failureKind,
-  locatorCode, quote, redact, run, stepCode, MAX_STEPS,
+  isLoopbackUrl, locatorCode, quote, redact, run, stepCode, MAX_STEPS,
 } from './driver.mjs';
 
 const input = (fields = {}) => ({ schema: 'axocoatl.browser-input/1', url: 'http://localhost:8765/', ...fields });
@@ -82,6 +82,23 @@ test('text, output and secrets are bounded', () => {
   assert.equal(failureKind('net::ERR_TUNNEL_CONNECTION_FAILED'), 'blocked');
   assert.equal(failureKind('net::ERR_PROXY_CONNECTION_FAILED'), 'blocked');
   assert.equal(failureKind('net::ERR_CONNECTION_REFUSED'), 'failed');
+  // Without declared hosts there is no proxy: a request off loopback has no
+  // route and is blocked, while a refused loopback port is an app failure.
+  assert.equal(failureKind('net::ERR_NAME_NOT_RESOLVED', 'https://fonts.example/a.css', false), 'blocked');
+  assert.equal(failureKind('net::ERR_ADDRESS_UNREACHABLE', 'http://10.0.0.1/', false), 'blocked');
+  assert.equal(failureKind('net::ERR_CONNECTION_REFUSED', 'http://localhost:9999/', false), 'failed');
+  assert.equal(failureKind('net::ERR_CONNECTION_REFUSED', 'http://127.0.0.1:9999/', false), 'failed');
+  assert.equal(failureKind('net::ERR_NAME_NOT_RESOLVED', 'https://fonts.example/a.css', true), 'failed');
+  for (const url of ['http://localhost:1/', 'http://app.localhost/', 'http://127.0.0.1/', 'http://127.1.2.3:8/', 'http://[::1]:5173/']) {
+    assert.ok(isLoopbackUrl(url), url);
+  }
+  for (const url of ['http://example.com/', 'http://10.0.0.1/', 'http://localhost.example/', 'not a url']) {
+    assert.ok(!isLoopbackUrl(url), url);
+  }
+  assert.equal(checkInput(input({ proxy: null })), null);
+  assert.equal(checkInput(input({ proxy: { server: 'http://127.0.0.1:3129', username: 'axo', password: 'axe_x' } })), null);
+  assert.match(checkInput(input({ proxy: { server: 'http://10.0.0.1:3128', username: 'axo', password: 'axe_x' } })), /proxy must be/);
+  assert.match(checkInput(input({ proxy: { server: 'http://127.0.0.1:3128' } })), /proxy must be/);
   assert.equal(egressDenial('denied; reason=not_allowed'), 'not_allowed');
   assert.equal(egressDenial('unavailable'), null);
   const out = {
@@ -114,6 +131,7 @@ test('a run against a fake Chromium records steps, failures and blocked hosts', 
       calls.push(`goto ${url}`);
       handlers.requestfailed?.({ failure: () => ({ errorText: 'net::ERR_PROXY_CONNECTION_FAILED' }), url: () => 'http://cdn.example/x.js', method: () => 'GET' });
       handlers.requestfailed?.({ failure: () => ({ errorText: 'net::ERR_CONNECTION_REFUSED' }), url: () => 'http://localhost:9999/', method: () => 'GET' });
+      handlers.requestfailed?.({ failure: () => ({ errorText: 'net::ERR_NAME_NOT_RESOLVED' }), url: () => 'https://fonts.example/a.css', method: () => 'GET' });
     },
     getByRole: (role, options) => locator(`${role}:${options?.name}`),
     getByLabel: (label) => locator(label),
@@ -128,7 +146,7 @@ test('a run against a fake Chromium records steps, failures and blocked hosts', 
   };
   const chromium = {
     launch: async (options) => {
-      calls.push(`proxy ${options.proxy.server} ${options.proxy.password ?? '-'}`);
+      calls.push(`proxy ${options.proxy?.server ?? 'none'} ${options.proxy?.password ?? '-'}`);
       return { newContext: async () => ({ newPage: async () => page, close: async () => {} }), close: async () => {} };
     },
   };
@@ -147,10 +165,19 @@ test('a run against a fake Chromium records steps, failures and blocked hosts', 
   assert.equal(out.steps[1].ok, false);
   assert.match(out.steps[1].error, /\$99/);
   assert.equal(out.steps_skipped, 1);
-  assert.deepEqual(out.network.blocked, [{ url: 'http://cdn.example/x.js', reason: 'not_allowed' }]);
+  assert.deepEqual(out.network.blocked, [
+    { url: 'http://cdn.example/x.js', reason: 'not_allowed' },
+    { url: 'https://fonts.example/a.css', reason: 'not_allowed' },
+  ]);
   assert.equal(out.network.failed[0].error, 'net::ERR_CONNECTION_REFUSED');
   assert.equal(out.snapshot.text, '- paragraph: "Total: -$20.00"');
   assert.equal(out.screenshot.type, 'jpeg');
   assert.equal(out.title, 'Shop');
-  assert.ok(calls.includes('proxy http://127.0.0.1:3128 -'));
+  // No declared hosts: Chromium gets no proxy at all.
+  assert.ok(calls.includes('proxy none -'));
+
+  // With declared hosts it uses the listener port it was given.
+  calls.length = 0;
+  await run(input({ proxy: { server: 'http://127.0.0.1:3129', username: 'axo', password: 'axe_x' } }), chromium);
+  assert.ok(calls.includes('proxy http://127.0.0.1:3129 axe_x'), calls.join('\n'));
 });

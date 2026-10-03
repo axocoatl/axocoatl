@@ -16,7 +16,6 @@ export const ACTIONS = [
 ];
 export const MAX_STEPS = 40;
 export const MAX_STRING = 4096;
-export const PROXY_SERVER = 'http://127.0.0.1:3128';
 export const PROXY_BYPASS = 'localhost,127.0.0.1,[::1]';
 export const CHROMIUM_ARGS = [
   '--no-sandbox', '--disable-dev-shm-usage', '--disable-quic', '--no-first-run',
@@ -26,6 +25,13 @@ export const CHROMIUM_ARGS = [
 const TARGET_KEYS = ['role', 'label', 'text', 'testid', 'css'];
 const STEP_KEYS = ['action', 'target', 'url', 'value', 'key', 'text', 'timeout_ms'];
 const PROXY_REFUSED = ['net::ERR_TUNNEL_CONNECTION_FAILED', 'net::ERR_PROXY_CONNECTION_FAILED'];
+// How a request to a host that is not loopback fails when the browser
+// container has no route anywhere but loopback (no declared hosts).
+const NO_ROUTE = [
+  'net::ERR_NAME_NOT_RESOLVED', 'net::ERR_ADDRESS_UNREACHABLE', 'net::ERR_NETWORK_UNREACHABLE',
+  'net::ERR_INTERNET_DISCONNECTED', 'net::ERR_NETWORK_ACCESS_DENIED', 'net::ERR_CONNECTION_REFUSED',
+  'net::ERR_NAME_RESOLUTION_FAILED',
+];
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -139,6 +145,12 @@ export function checkInput(input) {
     if (problem) return problem;
   }
   if (!['aria', 'text', 'none'].includes(input.snapshot ?? 'aria')) return 'snapshot must be aria, text or none';
+  if (input.proxy !== null && input.proxy !== undefined) {
+    if (!isObject(input.proxy) || typeof input.proxy.password !== 'string'
+      || !/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(String(input.proxy.server))) {
+      return 'proxy must be {server: http://127.0.0.1:<port>, username, password}';
+    }
+  }
   return null;
 }
 
@@ -202,9 +214,25 @@ export function boundText(text, maxBytes) {
   return { text: buffer.subarray(0, end).toString('utf8'), bytes: buffer.length, truncated: true };
 }
 
-/** Classify a failed request: blocked by the egress path, or failed. */
-export function failureKind(errorText) {
-  return PROXY_REFUSED.includes(errorText) ? 'blocked' : 'failed';
+/** Whether `url` names this container's own loopback, where the apps under
+ * test are. */
+export function isLoopbackUrl(url) {
+  let host;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  return host === 'localhost' || host.endsWith('.localhost') || host === '[::1]'
+    || /^127(?:\.\d{1,3}){3}$/.test(host);
+}
+
+/** Classify a failed request: blocked by the egress path, or failed. With no
+ * proxy, a request that is not to loopback has no route, and is blocked. */
+export function failureKind(errorText, url = null, proxied = true) {
+  if (PROXY_REFUSED.includes(errorText)) return 'blocked';
+  if (!proxied && url !== null && !isLoopbackUrl(url) && NO_ROUTE.includes(errorText)) return 'blocked';
+  return 'failed';
 }
 
 /** The reason in an `X-Axocoatl-Egress: denied; reason=<r>` header, or null. */
@@ -334,9 +362,16 @@ export async function run(input, chromium) {
   const push = (list, item, flag, max) => {
     if (list.length < max) list.push(item); else out.truncated[flag] = true;
   };
-  const proxy = { server: PROXY_SERVER, bypass: PROXY_BYPASS };
-  if (input.proxy) Object.assign(proxy, { username: input.proxy.username, password: input.proxy.password });
-  const browser = await chromium.launch({ headless: true, proxy, args: CHROMIUM_ARGS });
+  // Only declared hosts go through a proxy. Without them nothing but
+  // loopback is reachable, so no proxy is configured at all.
+  const launch = { headless: true, args: CHROMIUM_ARGS };
+  if (input.proxy) {
+    launch.proxy = {
+      server: input.proxy.server, bypass: PROXY_BYPASS,
+      username: input.proxy.username, password: input.proxy.password,
+    };
+  }
+  const browser = await chromium.launch(launch);
   let screenshot = null;
   try {
     const viewport = { width: 1280, height: 720, ...(input.viewport ?? {}) };
@@ -355,8 +390,8 @@ export async function run(input, chromium) {
     page.on('requestfailed', (request) => {
       const error = request.failure()?.errorText ?? 'failed';
       const url = boundText(request.url(), 1000).text;
-      if (failureKind(error) === 'blocked') {
-        const reason = error === 'net::ERR_PROXY_CONNECTION_FAILED' && !input.proxy ? 'not_allowed' : 'proxy_refused';
+      if (failureKind(error, request.url(), Boolean(input.proxy)) === 'blocked') {
+        const reason = input.proxy ? 'proxy_refused' : 'not_allowed';
         push(out.network.blocked, { url, reason }, 'network', limits.network_max);
       } else {
         push(out.network.failed, { url, method: request.method(), error }, 'network', limits.network_max);
@@ -450,12 +485,20 @@ export async function run(input, chromium) {
 
 async function main() {
   let secret = null;
+  // A fresh home for this call: nothing Chromium keeps there outlives it.
+  const fs = await import('node:fs/promises');
+  const home = await fs.mkdtemp('/tmp/axo-home-');
+  Object.assign(process.env, { HOME: home, XDG_CONFIG_HOME: `${home}/.config`, XDG_CACHE_HOME: `${home}/.cache` });
+  const done = async (document, code) => {
+    await fs.rm(home, { recursive: true, force: true }).catch(() => {});
+    emit(document, secret, code);
+  };
   try {
     const input = JSON.parse(await readStdin(1024 * 1024));
     secret = input?.proxy?.password ?? null;
     const problem = checkInput(input);
     if (problem) {
-      emit({ schema: SCHEMA_OUT, ok: false, error: `invalid browser input: ${problem}` }, secret, 2);
+      await done({ schema: SCHEMA_OUT, ok: false, error: `invalid browser input: ${problem}` }, 2);
       return;
     }
     let chromium;
@@ -463,15 +506,15 @@ async function main() {
       const { createRequire } = await import('node:module');
       ({ chromium } = createRequire(PLAYWRIGHT_DIR)('playwright-core'));
     } catch (error) {
-      emit({
+      await done({
         schema: SCHEMA_OUT, ok: false,
         error: `this image has no Playwright ${PLAYWRIGHT_VERSION} at ${PLAYWRIGHT_DIR} (${message(error)}); run axocoatl browser install`,
-      }, secret, 3);
+      }, 3);
       return;
     }
-    emit(await run(input, chromium), secret, 0);
+    await done(await run(input, chromium), 0);
   } catch (error) {
-    emit({ schema: SCHEMA_OUT, ok: false, error: `the browser driver failed: ${message(error)}` }, secret, 1);
+    await done({ schema: SCHEMA_OUT, ok: false, error: `the browser driver failed: ${message(error)}` }, 1);
   }
 }
 

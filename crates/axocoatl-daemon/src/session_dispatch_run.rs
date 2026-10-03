@@ -179,7 +179,10 @@ impl SessionDispatchController {
         };
         // Listed host-invocation tools are offered by definition; admission
         // binds each call to its own executor.
-        let host_tools = state.host_tool_definitions(&profile);
+        let host_tools = state.host_tool_definitions(
+            &profile,
+            super::host_tools::bound_to_attempt(repository.as_ref()),
+        );
         let tools = match repository.as_ref() {
             Some(resource) => resource.preview_tools(&profile, &host_tools)?,
             None if !host_tools.is_empty() => Arc::new(

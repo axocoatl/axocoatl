@@ -28,6 +28,9 @@ pub(crate) struct HostInvocationContext {
     pub read_only: bool,
     /// The host directory of the activation's checkout, when it has one.
     pub checkout: Option<axocoatl_core::SecureDir>,
+    /// The activation runs in a Ways attempt lane, on that attempt's own
+    /// checkout and container.
+    pub attempt: bool,
 }
 
 impl std::fmt::Debug for HostInvocationContext {
@@ -39,6 +42,7 @@ impl std::fmt::Debug for HostInvocationContext {
             .field("activation", &self.activation.activation_id.as_str())
             .field("agent", &self.agent)
             .field("read_only", &self.read_only)
+            .field("attempt", &self.attempt)
             .finish_non_exhaustive()
     }
 }
@@ -50,6 +54,10 @@ pub(crate) trait HostInvocationTool: Send + Sync {
     fn definition(&self) -> Arc<dyn BuiltinTool>;
     /// Why this daemon cannot run the tool for this profile, if it cannot.
     fn refusal(&self, profile: &ExecutionProfile) -> Option<String>;
+    /// Why the tool cannot run in a Ways attempt lane, if it cannot.
+    fn attempt_refusal(&self) -> Option<String> {
+        None
+    }
     /// The tool bound to one exact call.
     fn bind(&self, context: HostInvocationContext) -> Arc<dyn BuiltinTool>;
 }
@@ -90,11 +98,12 @@ impl DispatchState {
     pub(super) fn host_tool_definitions(
         &self,
         profile: &ExecutionProfile,
+        attempt: bool,
     ) -> Vec<(&'static str, Arc<dyn BuiltinTool>)> {
         self.host_tools
             .iter()
             .filter(|tool| profile.tools.iter().any(|listed| listed == tool.name()))
-            .filter(|tool| tool.refusal(profile).is_none())
+            .filter(|tool| host_tool_refused(tool.as_ref(), profile, attempt).is_none())
             .map(|tool| (tool.name(), tool.definition()))
             .collect()
     }
@@ -121,7 +130,11 @@ impl DispatchState {
                 "{tool_name} is listed for {} but this daemon does not provide it",
                 bound.profile.definition
             )),
-            Some(tool) => tool.refusal(&bound.profile),
+            Some(tool) => host_tool_refused(
+                tool.as_ref(),
+                &bound.profile,
+                bound_to_attempt(bound.repository.as_ref()),
+            ),
         })
     }
 
@@ -140,7 +153,8 @@ impl DispatchState {
             .get(&intent.activation.activation_id)
             .filter(|bound| bound.activation == intent.activation)
             .ok_or_else(|| error("invocation has no exact bound executor"))?;
-        if let Some(reason) = tool.refusal(&bound.profile) {
+        let attempt = bound_to_attempt(bound.repository.as_ref());
+        if let Some(reason) = host_tool_refused(tool.as_ref(), &bound.profile, attempt) {
             return Err(error(reason));
         }
         let context = HostInvocationContext {
@@ -155,6 +169,7 @@ impl DispatchState {
                 .repository
                 .as_ref()
                 .map(|resource| resource.host_checkout()),
+            attempt,
         };
         let mut executor = ToolExecutor::new();
         executor.register_builtin(
@@ -168,6 +183,29 @@ impl DispatchState {
         );
         Ok(Some(Arc::new(executor)))
     }
+}
+
+/// Whether an activation bound to `repository` runs in a Ways attempt lane.
+pub(super) fn bound_to_attempt(
+    repository: Option<&super::repository_activation::RepositoryActivationResource>,
+) -> bool {
+    repository.is_some_and(|resource| resource.is_attempt())
+}
+
+/// Why `tool` cannot run for this activation: the tool's own refusal, or its
+/// refusal of Ways attempt lanes.
+fn host_tool_refused(
+    tool: &dyn HostInvocationTool,
+    profile: &ExecutionProfile,
+    attempt: bool,
+) -> Option<String> {
+    tool.refusal(profile).or_else(|| {
+        if attempt {
+            tool.attempt_refusal()
+        } else {
+            None
+        }
+    })
 }
 
 /// Runs the bound tool once, with exactly the admitted arguments, while its

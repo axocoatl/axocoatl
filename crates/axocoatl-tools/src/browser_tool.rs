@@ -46,9 +46,9 @@ pub const OUTPUT_MAX_BYTES: usize = 64 * 1024;
 pub const SCREENSHOT_MAX_BYTES: usize = 1024 * 1024;
 /// Repository path the inline `script` of `browser_check` is written to.
 pub const INLINE_CHECK_ENTRY: &str = "axocoatl-inline.spec.ts";
-/// Where Chromium reaches declared hosts inside the browser container.
-pub const BROWSER_PROXY_SERVER: &str = "http://127.0.0.1:3128";
 pub const BROWSER_PROXY_USER: &str = "axo";
+/// Longest failure reason a call's `browser` event keeps.
+pub const MAX_RECORDED_ERROR_CHARS: usize = 500;
 
 const ACTIONS: [&str; 11] = [
     "goto",
@@ -682,15 +682,37 @@ pub fn check_payload(
     })
 }
 
-/// Serialize a payload for the script's stdin, adding the proxy credential
-/// when the call has one. This is the only place the credential is written.
-pub fn stdin_with_proxy(payload: &Value, password: Option<&str>) -> Result<Vec<u8>, String> {
+/// The egress proxy as Chromium sees it inside the browser container.
+#[derive(Clone, Copy)]
+pub struct ProxyCredential<'a> {
+    /// `http://127.0.0.1:<port>`, the browser container's proxy listener.
+    pub server: &'a str,
+    pub password: &'a str,
+}
+
+impl std::fmt::Debug for ProxyCredential<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProxyCredential")
+            .field("server", &self.server)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Serialize a payload for the script's stdin, adding the proxy and its
+/// credential when the call uses declared hosts. Without them the script
+/// configures no proxy at all, and only loopback is reachable. This is the
+/// only place the credential is written.
+pub fn stdin_with_proxy(
+    payload: &Value,
+    proxy: Option<ProxyCredential<'_>>,
+) -> Result<Vec<u8>, String> {
     let mut payload = payload.clone();
-    payload["proxy"] = match password {
-        Some(password) => json!({
-            "server": BROWSER_PROXY_SERVER,
+    payload["proxy"] = match proxy {
+        Some(proxy) => json!({
+            "server": proxy.server,
             "username": BROWSER_PROXY_USER,
-            "password": password,
+            "password": proxy.password,
         }),
         None => Value::Null,
     };
@@ -737,6 +759,29 @@ pub struct BrowserReport {
     pub screenshot: Option<Screenshot>,
     /// Why a screenshot was not kept, when the script said so.
     pub screenshot_dropped: Option<String>,
+    /// Why the call failed before it produced a result, for a call that
+    /// returns a tool error. Such a call is still recorded.
+    pub error: Option<String>,
+}
+
+impl BrowserReport {
+    /// A call that failed before it produced a result: the runner, the
+    /// container or the script failed, or the call was cancelled or ran out
+    /// of time. It may still have changed the app's state.
+    pub fn failure(job: &BrowserJob, reason: &str, ms: u64) -> Self {
+        Self {
+            tool: job.tool(),
+            ok: false,
+            final_url: None,
+            status: None,
+            check_status: None,
+            ms,
+            result: Value::Null,
+            screenshot: None,
+            screenshot_dropped: None,
+            error: Some(reason.chars().take(MAX_RECORDED_ERROR_CHARS).collect()),
+        }
+    }
 }
 
 /// A screenshot the runner kept.
@@ -751,8 +796,10 @@ pub struct RecordedScreenshot {
 pub trait BrowserRunner: Send + Sync {
     /// Run the job's script and return its output.
     async fn run(&self, job: &BrowserJob) -> Result<RunnerOutput, String>;
-    /// Keep a finished call in the Session's record. An error fails the call,
-    /// so no browser call goes unrecorded.
+    /// Keep a call in the Session's record: every finished call, and every
+    /// call that failed after its arguments were accepted (with
+    /// [`BrowserReport::error`] set). An error fails the call, so no browser
+    /// call goes unrecorded.
     async fn record(
         &self,
         _job: &BrowserJob,
@@ -941,6 +988,7 @@ pub fn parse_drive_output(output: &RunnerOutput) -> Result<BrowserReport, ToolEr
         result: document,
         screenshot,
         screenshot_dropped,
+        error: None,
     })
 }
 
@@ -959,6 +1007,7 @@ pub fn parse_check_output(output: &RunnerOutput) -> Result<BrowserReport, ToolEr
         result: document,
         screenshot,
         screenshot_dropped,
+        error: None,
     })
 }
 
@@ -976,22 +1025,46 @@ fn screenshot_note(report: &BrowserReport, recorded: Option<RecordedScreenshot>)
     }
 }
 
+fn record_unavailable(tool: &str, reason: String) -> ToolError {
+    failed(
+        tool,
+        format!("the Session's record is unavailable, so the result is withheld: {reason}"),
+    )
+}
+
 async fn run_job(runner: &Arc<dyn BrowserRunner>, job: BrowserJob) -> Result<Value, ToolError> {
     let tool = job.tool();
-    let output = runner
-        .run(&job)
-        .await
-        .map_err(|reason| failed(tool, reason))?;
-    let mut report = match &job {
-        BrowserJob::Drive(_) => parse_drive_output(&output)?,
-        BrowserJob::Check(_) => parse_check_output(&output)?,
+    let started = std::time::Instant::now();
+    let parsed = match runner.run(&job).await {
+        Ok(output) => match &job {
+            BrowserJob::Drive(_) => parse_drive_output(&output),
+            BrowserJob::Check(_) => parse_check_output(&output),
+        },
+        Err(reason) => Err(failed(tool, reason)),
     };
-    let recorded = runner.record(&job, &report).await.map_err(|reason| {
-        failed(
-            tool,
-            format!("the Session's record is unavailable, so the result is withheld: {reason}"),
-        )
-    })?;
+    let mut report = match parsed {
+        Ok(report) => report,
+        Err(error) => {
+            // A failed call may still have changed the app's state, so it is
+            // recorded too, with the reason, before the error is returned.
+            let reason = match &error {
+                ToolError::ExecutionFailed { reason, .. } => reason.clone(),
+                other => other.to_string(),
+            };
+            let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            runner
+                .record(&job, &BrowserReport::failure(&job, &reason, ms))
+                .await
+                .map_err(|record| {
+                    record_unavailable(tool, format!("{record}; the call failed: {reason}"))
+                })?;
+            return Err(error);
+        }
+    };
+    let recorded = runner
+        .record(&job, &report)
+        .await
+        .map_err(|reason| record_unavailable(tool, reason))?;
     if let Some(note) = screenshot_note(&report, recorded) {
         report.result["screenshot"] = note;
     }

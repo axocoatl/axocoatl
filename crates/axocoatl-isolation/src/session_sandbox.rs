@@ -314,11 +314,6 @@ pub struct SandboxPolicy {
     /// host directory after resolving the selected image's architecture. This
     /// is mutually exclusive with an explicitly supplied supervisor program.
     pub supervisor_installation: Option<SecureDir>,
-    /// Mount the Session's service-socket volume (`axo-svc-{session}`) at
-    /// `/run/axocoatl-svc`, where a forwarder serves each exposed port as a
-    /// Unix socket for the browser container. Set when the browser tool is
-    /// configured; passive recovery sandboxes never mount it.
-    pub service_sockets: bool,
 }
 
 impl Default for SandboxPolicy {
@@ -334,7 +329,6 @@ impl Default for SandboxPolicy {
             control_plane_roots: Vec::new(),
             supervisor_program: None,
             supervisor_installation: None,
-            service_sockets: false,
         }
     }
 }
@@ -960,14 +954,6 @@ impl SessionSandbox {
         let node_dependency_volume = (!policy.passive_start)
             .then(|| Self::node_dependency_volume(session_id, &working_dir_path))
             .flatten();
-        if policy.service_sockets && !policy.passive_start {
-            crate::browser_container::create_owned_volume(
-                &crate::browser_container::service_socket_volume(session_id),
-                policy.runtime_authority.as_deref(),
-                crate::browser_container::SERVICE_SOCKETS_ROLE,
-            )
-            .await?;
-        }
 
         // Start the long-lived idle container. Resource caps remain a
         // best-effort compatibility toggle. Ports are different: every
@@ -2199,8 +2185,8 @@ impl SessionSandbox {
                 tracing::warn!(container = name, error = %error, "orphan cleanup was incomplete");
             }
         }
-        // Browser and egress containers whose Session container is already
-        // gone are not listed above.
+        // Browser, egress and service-forwarder containers whose Session
+        // container is already gone are not listed above.
         for prefix in crate::browser_container::COMPANION_PREFIXES {
             let mut list = Command::new(PODMAN);
             list.args([
@@ -2227,7 +2213,7 @@ impl SessionSandbox {
                 }
                 tracing::info!(
                     container = name,
-                    "reaping an orphaned browser or egress container"
+                    "reaping an orphaned browser, egress or service-forwarder container"
                 );
                 if let Err(error) = Self::remove_named_with_dependencies(sid).await {
                     tracing::warn!(container = name, error = %error, "orphan cleanup was incomplete");
@@ -2347,16 +2333,6 @@ impl SessionSandbox {
             args.push(format!(
                 "type=volume,source={volume},destination={dir}/node_modules"
             ));
-        }
-        if policy.service_sockets && !policy.passive_start {
-            if let Some(session_id) = container.strip_prefix("axo-ses-") {
-                args.push("--mount".into());
-                args.push(format!(
-                    "type=volume,source={},destination={}",
-                    crate::browser_container::service_socket_volume(session_id),
-                    crate::browser_container::SERVICE_SOCKET_DIR,
-                ));
-            }
         }
 
         // Always-on hardening — safe for normal dev workflows:
@@ -2875,7 +2851,8 @@ impl SessionSandbox {
             self.passive_execution_usable
                 .store(false, std::sync::atomic::Ordering::Release);
         }
-        // The browser and egress containers serve only this Session.
+        // The browser, egress and service-forwarder containers serve only
+        // this Session.
         if let Some(session_id) = self.container.strip_prefix("axo-ses-") {
             let companions = crate::browser_container::companion_containers(session_id);
             let _ =
@@ -3206,12 +3183,17 @@ impl SessionSandbox {
         // still inherits Podman's ten-second graceful-stop delay unless time
         // is explicit; that exactly matched the old product deadline and made
         // a healthy `sleep infinity` lane look stuck at 10.2 seconds on macOS.
+        // `--depend` also removes the containers that joined one being
+        // removed, such as the browser's service forwarder, which shares a
+        // Session container's network namespace; Podman refuses to remove a
+        // container that still has dependents.
         let mut args = vec![
             "rm".to_string(),
             "--force".to_string(),
             "--time".to_string(),
             "0".to_string(),
             "--ignore".to_string(),
+            "--depend".to_string(),
         ];
         args.extend(containers.iter().cloned());
         args
@@ -4696,6 +4678,7 @@ mod tests {
                 "--time",
                 "0",
                 "--ignore",
+                "--depend",
                 "axo-ses-one",
                 "axo-ses-two",
             ]
@@ -5328,14 +5311,10 @@ mod tests {
     }
 
     #[test]
-    fn run_args_mount_the_service_socket_volume_only_when_asked() {
-        let socket_mount = "type=volume,source=axo-svc-x,destination=/run/axocoatl-svc";
+    fn the_session_container_never_mounts_the_service_sockets() {
+        // A read-only helper's shell may not open TCP connections; a socket
+        // in its own mount namespace would let it reach the apps anyway.
         for network in [SandboxNetwork::Bridge, SandboxNetwork::None] {
-            let policy = SandboxPolicy {
-                network,
-                service_sockets: true,
-                ..SandboxPolicy::default()
-            };
             let args = SessionSandbox::build_run_args(
                 "axo-ses-x",
                 "/w",
@@ -5343,45 +5322,22 @@ mod tests {
                 None,
                 false,
                 &[3000],
-                &policy,
+                &SandboxPolicy {
+                    network,
+                    ..SandboxPolicy::default()
+                },
             );
-            assert!(args
-                .windows(2)
-                .any(|pair| pair[0] == "--mount" && pair[1] == socket_mount));
-            // Mounting the socket volume never changes the network posture.
-            assert_eq!(
-                args.windows(2)
-                    .any(|pair| pair[0] == "--network" && pair[1] == "none"),
-                network == SandboxNetwork::None
-            );
+            assert!(!args
+                .iter()
+                .any(|arg| arg.contains("axo-svc-") || arg.contains("/run/axocoatl-svc")));
         }
-        let without = SessionSandbox::build_run_args(
-            "axo-ses-x",
-            "/w",
-            DEFAULT_IMAGE,
-            None,
-            false,
-            &[3000],
-            &SandboxPolicy::default(),
-        );
-        assert!(!without.iter().any(|arg| arg.contains("axo-svc-")));
-        let passive = SessionSandbox::build_run_args(
-            "axo-ses-x",
-            "/w",
-            DEFAULT_IMAGE,
-            None,
-            false,
-            &[],
-            &SandboxPolicy {
-                passive_start: true,
-                service_sockets: true,
-                ..SandboxPolicy::default()
-            },
-        );
-        assert!(!passive.iter().any(|arg| arg.contains("axo-svc-")));
-        // The browser and egress containers go with the Session's container.
+        // The browser, egress and service-forwarder containers go with the
+        // Session's container.
         let names = SessionSandbox::container_names(&["x".to_string()]);
-        assert_eq!(names, vec!["axo-brw-x", "axo-egr-x", "axo-ses-x"]);
+        assert_eq!(
+            names,
+            vec!["axo-brw-x", "axo-egr-x", "axo-ses-x", "axo-svc-x"]
+        );
     }
 
     /// End-to-end: needs podman installed. Run with `--ignored`.

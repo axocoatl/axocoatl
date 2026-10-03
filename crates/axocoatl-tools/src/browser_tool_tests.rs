@@ -143,13 +143,20 @@ fn the_payload_carries_the_credential_only_in_proxy_password() {
     assert_eq!(payload["aut_origins"], json!(["http://localhost:8765"]));
 
     let secret = "axe_c2VjcmV0LXRva2VuLW5ldmVyLWxvZ2dlZA";
-    let bytes = stdin_with_proxy(&payload, Some(secret)).unwrap();
+    let bytes = stdin_with_proxy(
+        &payload,
+        Some(ProxyCredential {
+            server: "http://127.0.0.1:3129",
+            password: secret,
+        }),
+    )
+    .unwrap();
     let text = String::from_utf8(bytes.clone()).unwrap();
     assert_eq!(text.matches(secret).count(), 1);
     let parsed: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(parsed["proxy"]["password"], secret);
     assert_eq!(parsed["proxy"]["username"], "axo");
-    assert_eq!(parsed["proxy"]["server"], "http://127.0.0.1:3128");
+    assert_eq!(parsed["proxy"]["server"], "http://127.0.0.1:3129");
     let mut without = parsed.clone();
     without["proxy"] = Value::Null;
     assert!(!without.to_string().contains(secret));
@@ -261,6 +268,7 @@ struct FakeRunner {
     record: Mutex<Option<Result<Option<RecordedScreenshot>, String>>>,
     jobs: Mutex<Vec<BrowserJob>>,
     recorded: Mutex<Vec<(bool, Option<usize>)>>,
+    errors: Mutex<Vec<Option<String>>>,
 }
 
 #[async_trait::async_trait]
@@ -279,6 +287,7 @@ impl BrowserRunner for FakeRunner {
             report.ok,
             report.screenshot.as_ref().map(|shot| shot.bytes.len()),
         ));
+        self.errors.lock().unwrap().push(report.error.clone());
         self.record.lock().unwrap().take().unwrap_or(Ok(None))
     }
 }
@@ -325,6 +334,11 @@ async fn runner_and_record_errors_become_tool_errors() {
     assert!(
         matches!(&error, ToolError::ExecutionFailed { tool, reason } if tool == "browser" && reason.contains("axocoatl browser install"))
     );
+    // A failed call is still recorded, with its reason.
+    assert_eq!(*runner.recorded.lock().unwrap(), vec![(false, None)]);
+    assert!(runner.errors.lock().unwrap()[0]
+        .as_deref()
+        .is_some_and(|reason| reason.contains("axocoatl browser install")));
 
     *runner.output.lock().unwrap() = Some(Ok(driver_output(document("x"))));
     *runner.record.lock().unwrap() = Some(Err("record full".into()));
@@ -351,6 +365,68 @@ async fn runner_and_record_errors_become_tool_errors() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("not bound"), "{error}");
+}
+
+#[tokio::test]
+async fn every_failed_call_is_recorded_with_a_bounded_reason() {
+    // The script reports an error document: recorded, then a tool error.
+    let runner = Arc::new(FakeRunner::default());
+    *runner.output.lock().unwrap() = Some(Ok(RunnerOutput {
+        exit_code: Some(1),
+        stdout: format!(
+            "{}\n",
+            json!({"schema": "axocoatl.browser-check/1", "ok": false, "status": "error",
+                   "error": format!("the check runner failed: {}", "x".repeat(3000))})
+        )
+        .into_bytes(),
+        stderr: String::new(),
+    }));
+    let error = BrowserCheckTool::with_runner(runner.clone())
+        .execute(json!({"script": "import { test } from '@playwright/test';"}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("check runner failed"), "{error}");
+    assert_eq!(*runner.recorded.lock().unwrap(), vec![(false, None)]);
+    let reason = runner.errors.lock().unwrap()[0].clone().unwrap();
+    assert!(reason.contains("check runner failed"), "{reason}");
+    assert_eq!(reason.chars().count(), MAX_RECORDED_ERROR_CHARS);
+
+    // A call that timed out in the container is recorded too.
+    *runner.output.lock().unwrap() = Some(Err(
+        "browser container: the call ran out of time after 120 s".into(),
+    ));
+    assert!(BrowserTool::with_runner(runner.clone())
+        .execute(json!({"url": "http://localhost:8765/"}))
+        .await
+        .is_err());
+    assert_eq!(runner.recorded.lock().unwrap().len(), 2);
+    assert!(runner.errors.lock().unwrap()[1]
+        .as_deref()
+        .is_some_and(|reason| reason.contains("ran out of time")));
+
+    // When even the failure cannot be recorded, the error says both.
+    *runner.output.lock().unwrap() = Some(Err("the sidecar did not start".into()));
+    *runner.record.lock().unwrap() = Some(Err("record full".into()));
+    let error = BrowserTool::with_runner(runner.clone())
+        .execute(json!({"url": "http://localhost:8765/"}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("record is unavailable")
+            && error.contains("record full")
+            && error.contains("sidecar did not start"),
+        "{error}"
+    );
+
+    // An invalid call is refused before anything runs, and is not recorded.
+    let before = runner.recorded.lock().unwrap().len();
+    assert!(BrowserTool::with_runner(runner.clone())
+        .execute(json!({"url": "file:///etc/passwd"}))
+        .await
+        .is_err());
+    assert_eq!(runner.recorded.lock().unwrap().len(), before);
 }
 
 #[test]

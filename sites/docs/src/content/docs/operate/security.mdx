@@ -236,7 +236,11 @@ configuration in the Session's shared home for later commands. The same restrict
 refuses every TCP connection and every TCP bind, on any address including loopback,
 whatever the sandbox's `network` setting: the helper's shell cannot connect anywhere
 over TCP, with `curl`, `git` or a package manager for example, including to a server
-running in the container. Landlock does not cover UDP, so name lookups and other UDP
+running in the container. The browser tools' sockets for the Session's apps live in a
+separate forwarder container, never in the Session container, so they do not open
+another way in. A helper whose template lists `browser` can still drive those apps
+through the browser, which can do whatever the apps allow; see
+[Browser](/configure/browser/#helpers-and-reviewers). Landlock does not cover UDP, so name lookups and other UDP
 traffic still follow `network`. Nor does it cover a socket that listens without binding
 first, which the kernel gives a random port that the host or other containers may be
 able to reach. `network: none` stops both. The restriction needs Landlock ABI 4 (Linux

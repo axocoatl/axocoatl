@@ -48,9 +48,8 @@ computer.
        tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash, browser, browser_check]
    ```
 
-4. Restart the daemon, then start (or restart) the Session. A Session container
-   started before `browser:` was configured has no socket volume for the browser and
-   the tools say so.
+4. Restart the daemon. Sessions that are already running can use the tools; nothing
+   about the Session container changes.
 
 </Steps>
 
@@ -78,17 +77,25 @@ always do, for example `npm run dev` in the Terminal pane.
 
 - The browser container has no network interface other than loopback.
 - Inside it, Axocoatl listens on `127.0.0.1:<port>` and `[::1]:<port>` for each exposed
-  port and forwards each connection to a Unix socket that the Session container serves
-  from its own `127.0.0.1:<port>`. Any other `localhost` port refuses the connection.
+  port and forwards each connection to a Unix socket for that port. Any other
+  `localhost` port refuses the connection.
+- The sockets come from a small forwarder container, `axo-svc-<session>`. It joins the
+  Session container's network namespace and nothing else of it: no Workspace, no
+  environment and no published port. It connects only to `127.0.0.1:<port>` there.
+  Only the forwarder can write the socket directory, and only the browser container
+  mounts it at all, read-only. The Session container never sees the sockets, so a
+  read-only helper whose shell may not open TCP connections cannot reach the apps
+  through them either.
 - The app must listen on `127.0.0.1` or `0.0.0.0` inside the Session. An app that
   listens only on `::1` is not reached.
-- The forwarder runs inside the Session container. If something in the Session stops
-  it, the next browser call starts it again.
+- The first browser call starts the forwarder. If it stops, or the Session container
+  restarts, the next call starts a new one. It is removed with the Session.
 
 ## Declared hosts
 
-With an empty `allow`, the browser reaches only the Session's exposed ports. Every
-other request fails, and the result lists it under `network.blocked`.
+With an empty `allow`, the browser reaches only the Session's exposed ports. Chromium
+gets no proxy at all, and every other request fails because there is no route. The
+result lists such requests under `network.blocked`.
 
 Hosts the app needs from outside, such as a font or an API, go under `allow`, with the
 same entries as [`sandbox.egress.allow`](/reference/config/#sandbox): presets, host
@@ -111,6 +118,10 @@ and writes each decision to the Session's network record before answering. Each 
 gets its own proxy credential, passed to the driver on its standard input and revoked
 when the call ends. The Session's own `sandbox.egress` list does not apply to the
 browser, and `browser.allow` does not apply to the Session.
+
+With declared hosts, Chromium finds the proxy on `127.0.0.1:3128` inside the browser
+container, or on the next free port when the Session exposes 3128 itself, so an app on
+3128 is never taken for the proxy.
 
 `browser.allow` must be empty with `network: none`. To put the sidecar on a specific
 Podman network, set `sandbox.egress.sidecar_network`.
@@ -152,13 +163,19 @@ browser container's memory-backed `/tmp` and removed when the run ends. The test
 there with the browser container's network: the Session's exposed ports and the
 declared hosts, nothing else.
 
+`browser_check` runs the code the model wrote, as the browser container's user. It
+runs alone: other calls in the Session wait for it, and the browser container is
+replaced after it, so no file or process it leaves behind reaches a later call. The
+call's proxy credential is in its environment, which only its own test can read.
+
 ## What is recorded
 
 Each call adds a `browser` event to the Session's
 [network record](/reference/http-api/#session-network-record): the tool, the tool call,
 activation and Agent, the URL and final URL, the status (or the test status), how many
 requests were blocked, the egress credential's tag when declared hosts were used, and
-the time. Connections to declared hosts appear as `open` and `close` events under the
+the time. A call that fails, runs out of time or is cancelled is recorded too, with
+`ok: false` and the reason in `error`: it may still have changed the app's state. Connections to declared hosts appear as `open` and `close` events under the
 call's `browser` binding. Connections to the app under test do not pass the proxy; the
 tool result summarizes them.
 
@@ -166,19 +183,37 @@ A `browser` call keeps a screenshot of the page as the call left it, and a faili
 `browser_check` keeps its first failing test's screenshot, beside the record. The
 event names it by its SHA-256, and
 `GET /api/sessions/{id}/network/screenshots/{sha256}` returns it. A Session keeps at
-most 2000 screenshots of up to 1 MiB each.
+most 2000 screenshots of up to 1 MiB each, and 64 MiB of screenshots in all. Past
+that, calls still run and are recorded, with `screenshot_dropped: record_full`.
+
+With declared hosts, `GET /api/sessions/{id}/network` also shows the browser's
+sidecar and its `browser` policy once a call has started them.
 
 ## Helpers and reviewers
 
-A read-only helper or required reviewer gets the browser tools only when its own
-template lists them. They are not write tools, so a helper that lists them can still
-take delegated work. The browser can change the app's state, through the app, but not
-the repository's files.
+A read-only helper or required reviewer (`writes: []`) can use `browser` when its own
+template lists it. `browser` is not a write tool, so a helper that lists it can still
+take delegated work.
+
+`browser_check` is different: it runs test code the model writes, and that code can
+send any request to the apps on the exposed ports. Axocoatl treats it like a tool that
+can change files: a helper that lists it cannot take delegated work, a required
+reviewer that lists it is refused, and an Agent with `writes: []` is never offered it.
+Give helpers and reviewers `browser` only.
+
+The browser itself cannot open the repository's files, but it can do whatever the apps
+on the exposed ports allow. If one of them writes files or runs commands (a notebook
+server, for example) or forwards requests elsewhere (a dev server's proxy), the browser
+can do that too, including to the repository. Expose only the ports you want Agents
+to drive.
 
 ## Limits
 
 - `network: egress` Sessions are not available in this build, so the browser runs with
-  `bridge` and `none` Sessions.
+  `bridge` and `none` Sessions. Under `network: egress`, `browser.allow` is refused
+  until the browser uses the Session's own egress proxy.
+- The browser tools are not offered in a Ways attempt: the browser reaches the primary
+  Session container's ports, not the attempt's app.
 - The browser container keeps running until the Session stops, and is removed with it.
-- Each call starts a fresh browser; nothing carries over between calls except what the
-  app itself stores.
+- Each call starts a fresh browser with a fresh home directory; nothing carries over
+  between calls except what the app itself stores.

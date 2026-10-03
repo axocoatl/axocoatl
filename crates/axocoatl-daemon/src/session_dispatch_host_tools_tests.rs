@@ -107,6 +107,7 @@ impl LlmProvider for HostToolProvider {
 #[derive(Default)]
 struct FakeHostTool {
     refusal: Option<String>,
+    attempt_refusal: Option<String>,
     bound: Mutex<Vec<HostInvocationContext>>,
     executed: AtomicUsize,
 }
@@ -148,6 +149,9 @@ impl HostInvocationTool for FakeRegistration {
     }
     fn refusal(&self, _: &ExecutionProfile) -> Option<String> {
         self.0.refusal.clone()
+    }
+    fn attempt_refusal(&self) -> Option<String> {
+        self.0.attempt_refusal.clone()
     }
     fn bind(&self, context: HostInvocationContext) -> Arc<dyn axocoatl_tools::BuiltinTool> {
         self.0.bound.lock().unwrap().push(context.clone());
@@ -202,6 +206,7 @@ async fn a_listed_host_tool_is_offered_and_bound_to_the_exact_call() {
     assert_eq!(bound[0].session_id, "input-session");
     assert!(!bound[0].read_only);
     assert!(bound[0].checkout.is_none());
+    assert!(!bound[0].attempt);
     assert!(provider.results.lock().unwrap()[0].contains(intents[0].as_str()));
     let state = fixture.controller.lock().unwrap();
     assert!(state.canonical.records().unwrap().iter().any(|record| matches!(
@@ -274,6 +279,40 @@ async fn a_listed_host_tool_the_daemon_cannot_run_is_declined_with_its_reason() 
             .unwrap(),
         None
     );
+}
+
+#[test]
+fn a_tool_that_refuses_attempt_lanes_is_offered_only_outside_them() {
+    let fixture = input_fixture_with_tools(false, &["browser"]);
+    let fake = Arc::new(FakeHostTool {
+        attempt_refusal: Some("not in a Ways attempt".into()),
+        ..Default::default()
+    });
+    fixture
+        .controller
+        .register_host_invocation_tool(Arc::new(FakeRegistration(fake.clone())))
+        .unwrap();
+    let profile = ExecutionProfile {
+        definition: "parent".into(),
+        provider: "controlled".into(),
+        model: "controlled-model".into(),
+        isolation: "in-process".into(),
+        tools: vec!["browser".into()],
+        write_scope: None,
+    };
+    let state = fixture.controller.lock().unwrap();
+    let offered = |attempt| {
+        state
+            .host_tool_definitions(&profile, attempt)
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(offered(false), vec!["browser"]);
+    assert!(offered(true).is_empty());
+    // An activation without a repository, or with the Session's own, is
+    // not an attempt.
+    assert!(!crate::session_dispatch::host_tools::bound_to_attempt(None));
 }
 
 #[test]

@@ -8311,9 +8311,6 @@ impl AxocoatlDaemon {
                         self._data_dir_lease.external_root().clone(),
                         self.ipc_root.clone(),
                     ],
-                    // The browser container reaches this Session's exposed
-                    // ports through sockets in the service-socket volume.
-                    service_sockets: self.config.browser.is_some(),
                 };
                 let sandbox = match SessionSandbox::start_in(
                     &session.id,
@@ -9566,7 +9563,6 @@ impl AxocoatlDaemon {
                 self._data_dir_lease.external_root().clone(),
                 self.ipc_root.clone(),
             ],
-            service_sockets: false,
         };
         let started = tokio::select! {
             result = SessionSandbox::start_in(
@@ -10722,11 +10718,17 @@ impl AxocoatlDaemon {
         } else {
             Vec::new()
         };
+        // Until a Session runs under `network: egress`, the only sidecar and
+        // policy are the browser's, once its declared hosts have been used.
+        let (sidecar, policies) = match &self.browser_service {
+            Some(browser) => browser.network_view(session_id).await,
+            None => (None, Vec::new()),
+        };
         Ok(crate::session_network::SessionNetworkView {
             session_id: session_id.to_string(),
             mode: sandbox.network.clone(),
-            sidecar: None,
-            policies: Vec::new(),
+            sidecar,
+            policies,
             private_destinations,
             record: page.stats.into(),
             events: page.events,
@@ -13504,8 +13506,6 @@ trap - 0 1 2 15
                 self._data_dir_lease.external_root().clone(),
                 self.ipc_root.clone(),
             ],
-            // Ways attempt containers have no browser.
-            service_sockets: false,
         };
         let sandbox = SessionSandbox::start_in(
             container_id,

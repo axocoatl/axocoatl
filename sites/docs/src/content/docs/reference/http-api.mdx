@@ -387,16 +387,20 @@ with its `reason` and `status`, the addresses used, and the tool call (`binding`
 whose credential it presented. Credentials appear only as 16-hex tags. A `close`
 event adds the bytes sent and received and the duration. `record.full` means new
 connections are refused; `gaps` counts places where a sequence number was skipped.
-`sidecar` and `policies` stay empty until a Session runs under `network: egress`,
-which this build does not start yet.
+This build does not start Sessions under `network: egress`. Until it does,
+`sidecar` and `policies` describe only the browser's own egress sidecar and its
+`browser` policy, once a browser call with declared hosts (`browser.allow`) has
+started them; otherwise they are empty. `sidecar.state` is `starting`, `ready`,
+`channel_lost`, `stopped` or `failed`.
 
 A `browser` event is one `browser` or `browser_check` call: `tool`, the
 `invocation_id`, `activation_id` and `agent`, `ok`, the `url`, `final_url` and
 `status` (or the `test_path` and `check_status`), the number of `blocked` requests,
 the egress credential's `token` tag when the call used declared hosts, `ms`, and a
 `screenshot` `{sha256, media_type, bytes}` when one was kept (or `screenshot_dropped`
-with the reason). `GET /api/sessions/{id}/network/screenshots/{sha256}` returns the
-image. Screenshots are for people; no model sees them.
+with the reason). A call that failed before it produced a result has `ok: false` and
+the reason in `error`. `GET /api/sessions/{id}/network/screenshots/{sha256}` returns
+the image. Screenshots are for people; no model sees them.
 
 ### Turn control plane
 

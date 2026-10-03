@@ -16,7 +16,6 @@ export const PLAYWRIGHT_MODULES = '/opt/axocoatl/playwright/node_modules';
 export const MAX_FILES = 32;
 export const MAX_FILE_BYTES = 256 * 1024;
 export const MAX_TOTAL_BYTES = 1024 * 1024;
-export const PROXY_SERVER = 'http://127.0.0.1:3128';
 export const PROXY_BYPASS = 'localhost,127.0.0.1,[::1]';
 export const CHROMIUM_ARGS = [
   '--no-sandbox', '--disable-dev-shm-usage', '--disable-quic', '--no-first-run',
@@ -79,6 +78,12 @@ export function checkInput(input) {
     return 'base_url is not an absolute URL';
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'base_url must use http or https';
+  if (input.proxy !== null && input.proxy !== undefined) {
+    if (!isObject(input.proxy) || typeof input.proxy.password !== 'string'
+      || !/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(String(input.proxy.server))) {
+      return 'proxy must be {server: http://127.0.0.1:<port>, username, password}';
+    }
+  }
   return null;
 }
 
@@ -87,12 +92,16 @@ export function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 }
 
-/** The Playwright configuration module for one run. The proxy credential is
- * read from the environment so it is never written to a file. */
-export function configSource({ testDir, entry, baseURL, testTimeoutMs, globalTimeoutMs, reportFile, outputDir }) {
+/** The Playwright configuration module for one run. With declared hosts
+ * (`proxyServer`), Chromium uses the egress proxy, and its credential is read
+ * from the environment so it is never written to a file. Without them no
+ * proxy is configured: only loopback is reachable. */
+export function configSource({ testDir, entry, baseURL, testTimeoutMs, globalTimeoutMs, reportFile, outputDir, proxyServer = null }) {
   const matcher = `^${escapeRegExp(`${testDir}/${entry}`)}$`;
-  return `const password = process.env.AXO_PROXY_PASSWORD;
-export default {
+  const proxy = proxyServer
+    ? `\n    proxy: { server: ${JSON.stringify(proxyServer)}, bypass: ${JSON.stringify(PROXY_BYPASS)}, username: 'axo', password: process.env.AXO_PROXY_PASSWORD },`
+    : '';
+  return `export default {
   testDir: ${JSON.stringify(testDir)},
   testMatch: new RegExp(${JSON.stringify(matcher)}),
   retries: 0,
@@ -107,8 +116,7 @@ export default {
   use: {
     baseURL: ${JSON.stringify(baseURL)},
     headless: true,
-    viewport: { width: 1280, height: 720 },
-    proxy: { server: ${JSON.stringify(PROXY_SERVER)}, bypass: ${JSON.stringify(PROXY_BYPASS)}, ...(password ? { username: 'axo', password } : {}) },
+    viewport: { width: 1280, height: 720 },${proxy}
     launchOptions: { args: ${JSON.stringify(CHROMIUM_ARGS)} },
     serviceWorkers: 'block',
     acceptDownloads: false,
@@ -261,6 +269,7 @@ async function runCheck(fs, spawn, holder) {
     await fs.writeFile(config, configSource({
       testDir: work, entry: input.entry, baseURL: input.base_url, testTimeoutMs: limits.test_timeout_ms,
       globalTimeoutMs: budget, reportFile, outputDir: `${root}/results`,
+      proxyServer: input.proxy ? input.proxy.server : null,
     }), { mode: 0o600 });
     const args = [cli, 'test', '--config', config, '--workers', '1', '--retries', '0'];
     if (input.grep) args.push('--grep', input.grep);

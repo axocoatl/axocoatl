@@ -349,6 +349,15 @@ impl OwnedExecutionNamespace {
         Ok(entries)
     }
 
+    /// The size of one direct child regular file.
+    pub fn file_len(&self, name: impl AsRef<Path>) -> io::Result<u64> {
+        let name = direct_name(name.as_ref())?;
+        self.verify_ambient_identity()?;
+        let len = self.dir.file_len(name)?;
+        self.verify_ambient_identity()?;
+        Ok(len)
+    }
+
     pub fn is_file(&self, name: impl AsRef<Path>) -> io::Result<bool> {
         let name = direct_name(name.as_ref())?;
         self.verify_ambient_identity()?;

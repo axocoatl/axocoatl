@@ -7,12 +7,21 @@
 //! execution supervisor's `--bridge`:
 //!
 //! - for each exposed Session port it listens on `127.0.0.1:{p}` and
-//!   `[::1]:{p}` and forwards to `/run/axocoatl-svc/{p}.sock`, a socket the
-//!   Session container serves from its own `127.0.0.1:{p}`. Any other
+//!   `[::1]:{p}` and forwards to `/run/axocoatl-svc/{p}.sock`. Any other
 //!   `localhost` port refuses in the kernel.
-//! - with declared hosts it also listens on `127.0.0.1:3128` and forwards to
-//!   the egress proxy's socket, so Chromium reaches those hosts only through
-//!   the daemon's egress policy.
+//! - with declared hosts it also listens on a loopback proxy port (3128
+//!   unless the Session exposes that port) and forwards to the egress proxy's
+//!   socket, so Chromium reaches those hosts only through the daemon's
+//!   egress policy. Without declared hosts there is no proxy listener.
+//!
+//! The sockets come from the service forwarder, `axo-svc-{session}`: the
+//! supervisor's `--bridge --unix-to-tcp` in the scratch egress image, in a
+//! container of its own that joins the Session container's network
+//! namespace (`--network container:<id>`). Only it mounts the
+//! `axo-svc-{session}` volume writable, and only the browser container
+//! mounts it at all (read-only). The Session container never sees the
+//! sockets, so a read-only helper whose shell may not open TCP connections
+//! cannot reach the Session's apps through them either.
 //!
 //! Scripts run through the supervisor's `--serve`, like repository tools.
 
@@ -23,26 +32,32 @@ use axocoatl_core::SecureDir;
 use axocoatl_exec::protocol::{
     ExecRequest, ProcessOutcome, ServerMessage, StdinDescriptor, PROTOCOL_VERSION,
 };
-use serde::Deserialize;
 use tokio::process::Command;
 
 use crate::supervisor_image::SupervisorImage;
 use crate::supervisor_program::{SupervisorProgram, SUPERVISOR_CONTAINER_PATH};
 use crate::{IsolationError, SessionSandbox};
 
-/// Where the Session container serves its ports as Unix sockets.
+/// Where the service forwarder and the browser container mount the
+/// service-socket volume. The Session container never mounts it.
 pub const SERVICE_SOCKET_DIR: &str = "/run/axocoatl-svc";
 /// Where the egress sidecar's socket volume is mounted.
 pub const EGRESS_SOCKET_DIR: &str = "/run/axocoatl-egress";
 pub const EGRESS_PROXY_SOCKET: &str = "/run/axocoatl-egress/proxy.sock";
-/// Where Chromium finds the egress proxy inside the browser container.
-pub const BROWSER_PROXY_LISTEN: &str = "127.0.0.1:3128";
+/// The loopback port Chromium finds the egress proxy on, unless the Session
+/// exposes it (see [`browser_proxy_port`]).
+pub const DEFAULT_PROXY_PORT: u16 = 3128;
 pub const ROLE_LABEL: &str = "io.axocoatl.role";
 pub const BROWSER_ROLE: &str = "browser";
 pub const SERVICE_SOCKETS_ROLE: &str = "service-sockets";
 pub const EGRESS_ROLE: &str = "egress";
+/// The ports a service forwarder serves, comma separated.
+pub const SERVICE_PORTS_LABEL: &str = "io.axocoatl.service-ports";
+/// The start time (Unix nanoseconds) of the Session container a service
+/// forwarder joined; a restarted Session container has a new namespace.
+pub const SESSION_STARTED_LABEL: &str = "io.axocoatl.session-started";
 /// Containers that serve exactly one Session and are removed with it.
-pub const COMPANION_PREFIXES: [&str; 2] = ["axo-brw-", "axo-egr-"];
+pub const COMPANION_PREFIXES: [&str; 3] = ["axo-brw-", "axo-egr-", "axo-svc-"];
 const RUNTIME_AUTHORITY_LABEL: &str = "io.axocoatl.runtime-authority";
 const DEFAULT_USER: &str = "1000:1000";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -59,8 +74,14 @@ pub fn browser_container_name(session_id: &str) -> String {
     format!("axo-brw-{session_id}")
 }
 
+/// The service-socket volume. The service forwarder's container has the same
+/// name, as the egress sidecar shares its volume's.
 pub fn service_socket_volume(session_id: &str) -> String {
     format!("axo-svc-{session_id}")
+}
+
+pub fn service_forwarder_name(session_id: &str) -> String {
+    service_socket_volume(session_id)
 }
 
 /// The egress sidecar's container and socket volume share this name.
@@ -68,10 +89,14 @@ pub fn egress_volume(session_id: &str) -> String {
     format!("axo-egr-{session_id}")
 }
 
+/// The containers removed with a Session's container. The service forwarder
+/// joins the Session container's network namespace, so Podman removes it
+/// with that container as a dependent too.
 pub fn companion_containers(session_id: &str) -> Vec<String> {
     vec![
         browser_container_name(session_id),
         egress_volume(session_id),
+        service_forwarder_name(session_id),
     ]
 }
 
@@ -81,6 +106,15 @@ pub fn companion_volumes(session_id: &str) -> Vec<String> {
 
 pub fn service_socket_path(port: u16) -> String {
     format!("{SERVICE_SOCKET_DIR}/{port}.sock")
+}
+
+/// The loopback port the browser container's proxy listener uses: 3128, or
+/// the next port the Session does not expose, so an app on 3128 is never
+/// mistaken for the proxy.
+pub fn browser_proxy_port(exposed_ports: &[u16]) -> u16 {
+    (DEFAULT_PROXY_PORT..=u16::MAX)
+        .find(|port| !exposed_ports.contains(port))
+        .unwrap_or(DEFAULT_PROXY_PORT)
 }
 
 async fn podman(
@@ -139,33 +173,141 @@ pub async fn remove_volumes_if_present(
     Ok(())
 }
 
-/// The forwarder's arguments in the Session container: one Unix socket per
-/// exposed port, each forwarding to the app on `127.0.0.1:{p}` (pure).
-pub fn service_forwarder_args(ports: &[u16]) -> Vec<String> {
-    let mut args = vec!["--bridge".to_string()];
-    for port in ports {
+/// Everything `podman run` needs for one Session's service forwarder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceForwarderSpec {
+    pub session_id: String,
+    pub runtime_authority: String,
+    /// The scratch egress image tag (only the static supervisor).
+    pub image: String,
+    /// The exact Session container whose network namespace it joins.
+    pub session_container_id: String,
+    /// That container's start time, in Unix nanoseconds.
+    pub session_started: String,
+    pub ports: Vec<u16>,
+    pub with_limits: bool,
+    pub labels: Vec<(String, String)>,
+}
+
+fn ports_label(ports: &[u16]) -> String {
+    ports
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The `podman run` arguments for the service forwarder (pure). It joins
+/// the Session container's network namespace and nothing else of it: no
+/// Workspace, no environment, no published port. The socket volume is
+/// writable here and nowhere else.
+pub fn build_forwarder_args(spec: &ServiceForwarderSpec) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "run".into(),
+        "-d".into(),
+        "--name".into(),
+        service_forwarder_name(&spec.session_id),
+        "--pull=never".into(),
+        "--label".into(),
+        format!("{RUNTIME_AUTHORITY_LABEL}={}", spec.runtime_authority),
+        "--label".into(),
+        format!("{ROLE_LABEL}={SERVICE_SOCKETS_ROLE}"),
+        "--label".into(),
+        format!("{SERVICE_PORTS_LABEL}={}", ports_label(&spec.ports)),
+        "--label".into(),
+        format!("{SESSION_STARTED_LABEL}={}", spec.session_started),
+    ];
+    for (key, value) in &spec.labels {
+        args.push("--label".into());
+        args.push(format!("{key}={value}"));
+    }
+    args.push("--network".into());
+    args.push(format!("container:{}", spec.session_container_id));
+    args.extend(
+        [
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--http-proxy=false",
+            "--no-healthcheck",
+            "--image-volume=ignore",
+            "--user",
+            "0:0",
+        ]
+        .map(String::from),
+    );
+    if spec.with_limits {
+        args.extend(["--memory", "128m", "--pids-limit", "512"].map(String::from));
+    }
+    args.push("--mount".into());
+    args.push(format!(
+        "type=volume,source={},destination={SERVICE_SOCKET_DIR}",
+        service_socket_volume(&spec.session_id)
+    ));
+    args.push("--entrypoint".into());
+    args.push(SUPERVISOR_CONTAINER_PATH.into());
+    args.push(spec.image.clone());
+    args.push("--bridge".into());
+    for port in &spec.ports {
         args.push("--unix-to-tcp".into());
         args.push(format!("{}=127.0.0.1:{port}", service_socket_path(*port)));
     }
     args
 }
 
-#[derive(Deserialize)]
-struct MountInspection {
-    #[serde(rename = "Type")]
-    kind: String,
-    #[serde(rename = "Name", default)]
-    name: String,
-    #[serde(rename = "Destination")]
-    destination: String,
+/// How to make sure one Session's ports are served as sockets.
+#[derive(Debug, Clone)]
+pub struct ServiceSocketsLaunch {
+    pub session_id: String,
+    pub runtime_authority: String,
+    /// The scratch egress image tag, from
+    /// [`crate::egress_image::ensure_egress_image`].
+    pub image: String,
+    pub ports: Vec<u16>,
+    pub require_resource_limits: bool,
+    pub labels: Vec<(String, String)>,
+}
+
+/// One line per template field of `podman container inspect`, or `None`
+/// when the container does not exist.
+async fn inspect_lines(
+    container: &str,
+    format: &str,
+) -> Result<Option<Vec<String>>, IsolationError> {
+    let output = podman(
+        &[
+            "container".into(),
+            "inspect".into(),
+            "--format".into(),
+            format.into(),
+            "--".into(),
+            container.into(),
+        ],
+        COMMAND_TIMEOUT,
+    )
+    .await?;
+    if output.timed_out {
+        return Err(failed(format!("inspecting {container} timed out")));
+    }
+    if !output.status.success() {
+        let detail = stderr_text(&output);
+        if detail.contains("no such container") {
+            return Ok(None);
+        }
+        return Err(failed(format!("inspecting {container}: {detail}")));
+    }
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|line| line.trim().to_string())
+            .collect(),
+    ))
 }
 
 async fn probe_socket(container: &str, port: u16) -> Result<bool, IsolationError> {
     let output = podman(
         &[
             "exec".into(),
-            "--user".into(),
-            "0".into(),
             container.into(),
             SUPERVISOR_CONTAINER_PATH.into(),
             "--probe-unix".into(),
@@ -177,71 +319,135 @@ async fn probe_socket(container: &str, port: u16) -> Result<bool, IsolationError
     Ok(!output.timed_out && output.status.success())
 }
 
-/// Make sure the Session container serves each exposed port as a socket in
-/// its `axo-svc-{session}` volume. A forwarder the Session's own processes
-/// stopped is started again; it only ever connects to the Session's
-/// loopback, so stopping it only blocks the browser's view of that app.
-pub async fn ensure_service_sockets(session_id: &str, ports: &[u16]) -> Result<(), IsolationError> {
-    if ports.is_empty() {
-        return Ok(());
-    }
-    let container = format!("axo-ses-{session_id}");
-    let volume = service_socket_volume(session_id);
+async fn remove_forwarder(name: &str) -> Result<(), IsolationError> {
     let output = podman(
         &[
-            "container".into(),
-            "inspect".into(),
-            "--format".into(),
-            "{{json .Mounts}}".into(),
-            "--".into(),
-            container.clone(),
+            "rm".into(),
+            "--force".into(),
+            "--time".into(),
+            "0".into(),
+            "--ignore".into(),
+            name.into(),
         ],
         COMMAND_TIMEOUT,
     )
     .await?;
     if output.timed_out || !output.status.success() {
         return Err(failed(format!(
-            "the Session container is not running: {}",
+            "removing the service forwarder: {}",
             stderr_text(&output)
         )));
     }
-    let mounts: Vec<MountInspection> =
-        serde_json::from_slice(&output.stdout).map_err(|error| failed(error.to_string()))?;
-    if !mounts.iter().any(|mount| {
-        mount.kind == "volume" && mount.name == volume && mount.destination == SERVICE_SOCKET_DIR
-    }) {
-        return Err(failed(
-            "this Session's container was started before the browser was configured, so the browser cannot reach its apps; restart the Session",
-        ));
+    Ok(())
+}
+
+/// Make sure each exposed port of the running Session container is served
+/// as a socket in its `axo-svc-{session}` volume, by a service forwarder
+/// joined to that exact container's network namespace. A forwarder that
+/// stopped, serves other ports or joined an earlier start of the Session
+/// container is replaced. Returns the forwarder's container id.
+pub async fn ensure_service_sockets(
+    launch: &ServiceSocketsLaunch,
+) -> Result<Option<String>, IsolationError> {
+    let ports = dedup_ports(&launch.ports);
+    if ports.is_empty() {
+        return Ok(None);
     }
-    if probe_socket(&container, ports[0]).await? {
-        return Ok(());
+    let session = format!("axo-ses-{}", launch.session_id);
+    let Some(state) = inspect_lines(
+        &session,
+        "{{.Id}}\n{{.State.Running}}\n{{.State.StartedAt.UnixNano}}",
+    )
+    .await?
+    else {
+        return Err(failed("the Session container is not running"));
+    };
+    let (session_id, running, started) = match state.as_slice() {
+        [id, running, started, ..] => (id.clone(), running == "true", started.clone()),
+        _ => return Err(failed("Podman did not describe the Session container")),
+    };
+    if !running {
+        return Err(failed("the Session container is not running"));
     }
-    let mut args: Vec<String> = vec![
-        "exec".into(),
-        "-d".into(),
-        "--user".into(),
-        "0".into(),
-        container.clone(),
-        SUPERVISOR_CONTAINER_PATH.into(),
-    ];
-    args.extend(service_forwarder_args(ports));
-    let output = podman(&args, COMMAND_TIMEOUT).await?;
-    if output.timed_out || !output.status.success() {
-        return Err(failed(format!(
-            "starting the Session's port forwarder: {}",
-            stderr_text(&output)
-        )));
+    let name = service_forwarder_name(&launch.session_id);
+    let expected_network = format!("container:{session_id}");
+    let wanted_ports = ports_label(&ports);
+    let current = inspect_lines(
+        &name,
+        &format!(
+            "{{{{.Id}}}}\n{{{{.State.Running}}}}\n{{{{.HostConfig.NetworkMode}}}}\n{{{{index .Config.Labels \"{SERVICE_PORTS_LABEL}\"}}}}\n{{{{index .Config.Labels \"{SESSION_STARTED_LABEL}\"}}}}"
+        ),
+    )
+    .await?;
+    if let Some(current) = &current {
+        if let [id, running, network, served, joined, ..] = current.as_slice() {
+            if running == "true"
+                && *network == expected_network
+                && *served == wanted_ports
+                && *joined == started
+                && probe_socket(&name, ports[0]).await?
+            {
+                return Ok(Some(id.clone()));
+            }
+        }
+        remove_forwarder(&name).await?;
     }
+    create_owned_volume(
+        &service_socket_volume(&launch.session_id),
+        Some(launch.runtime_authority.as_str()),
+        SERVICE_SOCKETS_ROLE,
+    )
+    .await?;
+    let mut spec = ServiceForwarderSpec {
+        session_id: launch.session_id.clone(),
+        runtime_authority: launch.runtime_authority.clone(),
+        image: launch.image.clone(),
+        session_container_id: session_id,
+        session_started: started,
+        ports: ports.clone(),
+        with_limits: true,
+        labels: launch.labels.clone(),
+    };
+    let id = loop {
+        let output = podman(&build_forwarder_args(&spec), START_TIMEOUT).await?;
+        if !output.timed_out && output.status.success() {
+            break String::from_utf8_lossy(&output.stdout).trim().to_string();
+        }
+        let detail = stderr_text(&output);
+        let _ = remove_forwarder(&name).await;
+        if spec.with_limits && detail.contains("cgroup") && !launch.require_resource_limits {
+            tracing::warn!(
+                "this host cannot apply container resource limits; starting the service forwarder without them"
+            );
+            spec.with_limits = false;
+            continue;
+        }
+        return Err(failed(format!("starting the service forwarder: {detail}")));
+    };
     for _ in 0..30 {
-        if probe_socket(&container, ports[0]).await? {
-            return Ok(());
+        if probe_socket(&name, ports[0]).await? {
+            return Ok(Some(id));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    Err(failed(
-        "the Session's port forwarder did not open its sockets",
-    ))
+    let logs = podman(
+        &["logs".into(), "--tail".into(), "20".into(), name.clone()],
+        COMMAND_TIMEOUT,
+    )
+    .await
+    .map(|output| {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+    .unwrap_or_default();
+    let _ = remove_forwarder(&name).await;
+    Err(failed(format!(
+        "the service forwarder did not open its sockets: {}",
+        logs.trim()
+    )))
 }
 
 /// Everything `podman run` needs for one browser container.
@@ -254,7 +460,8 @@ pub struct BrowserContainerSpec {
     /// `--user`: the image's own non-root user, or 1000:1000.
     pub user: String,
     pub exposed_ports: Vec<u16>,
-    /// Mount the egress socket volume and listen on 127.0.0.1:3128.
+    /// Mount the egress socket volume and listen on the loopback proxy port
+    /// ([`browser_proxy_port`]).
     pub egress: bool,
     /// Host path of the supervisor for the image's architecture.
     pub supervisor_path: PathBuf,
@@ -324,7 +531,10 @@ pub fn build_browser_args(spec: &BrowserContainerSpec) -> Vec<String> {
     args.push("--bridge".into());
     if spec.egress {
         args.push("--tcp-to-unix".into());
-        args.push(format!("{BROWSER_PROXY_LISTEN}={EGRESS_PROXY_SOCKET}"));
+        args.push(format!(
+            "127.0.0.1:{}={EGRESS_PROXY_SOCKET}",
+            browser_proxy_port(&spec.exposed_ports)
+        ));
         args.push("--http-errors".into());
     }
     for port in &spec.exposed_ports {
@@ -793,9 +1003,62 @@ mod tests {
     }
 
     #[test]
-    fn the_forwarder_serves_each_port_from_the_session_loopback() {
+    fn the_forwarder_joins_the_session_namespace_and_alone_writes_the_sockets() {
+        let spec = ServiceForwarderSpec {
+            session_id: "ses-1".into(),
+            runtime_authority: "authority".into(),
+            image: "localhost/axocoatl-egress:866a01dbe5366107-aarch64".into(),
+            session_container_id: "c".repeat(64),
+            session_started: "1790998455827417067".into(),
+            ports: vec![3000, 8765],
+            with_limits: true,
+            labels: vec![("io.axocoatl.test".into(), "browser-1".into())],
+        };
+        let args = build_forwarder_args(&spec);
+        let joined = args.join(" ");
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--name", "axo-svc-ses-1"]));
+        assert!(args.windows(2).any(|pair| pair
+            == [
+                "--network".to_string(),
+                format!("container:{}", "c".repeat(64))
+            ]));
+        for required in [
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--http-proxy=false",
+            "--pull=never",
+            "--image-volume=ignore",
+        ] {
+            assert!(args.contains(&required.to_string()), "{required}");
+        }
+        for label in [
+            "io.axocoatl.role=service-sockets",
+            "io.axocoatl.runtime-authority=authority",
+            "io.axocoatl.service-ports=3000,8765",
+            "io.axocoatl.session-started=1790998455827417067",
+            "io.axocoatl.test=browser-1",
+        ] {
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair[0] == "--label" && pair[1] == label),
+                "{label}"
+            );
+        }
+        // The socket volume is writable only here; no Workspace, environment
+        // or published port.
+        assert!(joined
+            .contains("--mount type=volume,source=axo-svc-ses-1,destination=/run/axocoatl-svc "));
+        assert!(!joined.contains("ro=true"));
+        for refused in ["-e", "--env", "-v", "--volume", "-p", "--publish"] {
+            assert!(!args.contains(&refused.to_string()), "{refused}");
+        }
+        assert!(!joined.contains("type=bind"));
+        let bridge = &args[args.iter().position(|arg| arg == "--bridge").unwrap()..];
         assert_eq!(
-            service_forwarder_args(&[3000, 8765]),
+            bridge,
             [
                 "--bridge",
                 "--unix-to-tcp",
@@ -804,13 +1067,68 @@ mod tests {
                 "/run/axocoatl-svc/8765.sock=127.0.0.1:8765",
             ]
         );
+        assert_eq!(
+            args[args.len() - 6],
+            "localhost/axocoatl-egress:866a01dbe5366107-aarch64"
+        );
+        assert!(joined.contains("--memory 128m --pids-limit 512"));
+        let unlimited = build_forwarder_args(&ServiceForwarderSpec {
+            with_limits: false,
+            ..spec
+        });
+        assert!(!unlimited.contains(&"--memory".to_string()));
+    }
+
+    #[test]
+    fn names_users_and_ports() {
         assert_eq!(browser_user(""), "1000:1000");
         assert_eq!(browser_user("root"), "1000:1000");
         assert_eq!(browser_user("0:0"), "1000:1000");
         assert_eq!(browser_user("node"), "node");
         assert_eq!(browser_user("1001:1001"), "1001:1001");
         assert_eq!(dedup_ports(&[8765, 0, 8765, 3000]), vec![8765, 3000]);
-        assert_eq!(companion_containers("s"), ["axo-brw-s", "axo-egr-s"]);
+        assert_eq!(
+            companion_containers("s"),
+            ["axo-brw-s", "axo-egr-s", "axo-svc-s"]
+        );
         assert_eq!(companion_volumes("s"), ["axo-svc-s", "axo-egr-s"]);
+        assert_eq!(service_forwarder_name("s"), "axo-svc-s");
+        for name in companion_containers("s") {
+            assert!(COMPANION_PREFIXES
+                .iter()
+                .any(|prefix| name.starts_with(prefix)));
+        }
+        // The proxy listener never takes an exposed port.
+        assert_eq!(browser_proxy_port(&[]), 3128);
+        assert_eq!(browser_proxy_port(&[5173, 8765]), 3128);
+        assert_eq!(browser_proxy_port(&[3128]), 3129);
+        assert_eq!(browser_proxy_port(&[3129, 3128, 3130]), 3131);
+    }
+
+    #[test]
+    fn an_exposed_port_3128_is_an_app_not_the_proxy() {
+        let mut with_app = spec(true);
+        with_app.exposed_ports = vec![3128];
+        let args = build_browser_args(&with_app);
+        let bridge = &args[args.iter().position(|arg| arg == "--bridge").unwrap()..];
+        assert_eq!(
+            bridge,
+            [
+                "--bridge",
+                "--tcp-to-unix",
+                "127.0.0.1:3129=/run/axocoatl-egress/proxy.sock",
+                "--http-errors",
+                "--tcp-to-unix",
+                "127.0.0.1:3128=/run/axocoatl-svc/3128.sock",
+                "--tcp-to-unix",
+                "[::1]:3128=/run/axocoatl-svc/3128.sock",
+            ]
+        );
+        // Without declared hosts nothing listens for a proxy at all.
+        with_app.egress = false;
+        let args = build_browser_args(&with_app);
+        assert!(!args
+            .iter()
+            .any(|arg| arg.contains("proxy.sock") || arg.contains(":3129")));
     }
 }

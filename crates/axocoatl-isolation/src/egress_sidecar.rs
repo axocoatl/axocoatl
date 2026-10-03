@@ -135,6 +135,16 @@ struct State {
     failed: Option<String>,
 }
 
+/// A sidecar's phase, generation and restart count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidecarStatus {
+    /// `not_started`, `starting`, `ready`, `channel_lost`, `stopped` or
+    /// `failed`.
+    pub phase: &'static str,
+    pub generation: u32,
+    pub restarts: u32,
+}
+
 /// One Session's sidecar, started on first use.
 pub struct EgressSidecar {
     spec: SidecarSpec,
@@ -164,6 +174,35 @@ impl EgressSidecar {
 
     pub fn spec(&self) -> &SidecarSpec {
         &self.spec
+    }
+
+    /// Where the sidecar is, for status views. A sidecar being started or
+    /// stopped reads as `starting`.
+    pub fn status(&self) -> SidecarStatus {
+        let Ok(state) = self.state.try_lock() else {
+            return SidecarStatus {
+                phase: "starting",
+                generation: 0,
+                restarts: 0,
+            };
+        };
+        let phase = if state.failed.is_some() {
+            "failed"
+        } else {
+            match &state.running {
+                Some(running) if running.control.is_open() && !running.task.is_finished() => {
+                    "ready"
+                }
+                Some(_) => "channel_lost",
+                None if state.generation == 0 => "not_started",
+                None => "stopped",
+            }
+        };
+        SidecarStatus {
+            phase,
+            generation: state.generation,
+            restarts: state.generation.saturating_sub(1),
+        }
     }
 
     /// The running sidecar's control channel, starting or restarting it when

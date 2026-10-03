@@ -98,9 +98,14 @@ impl AxocoatlDaemon {
                     "{tool} is listed for {} but the browser block is not configured; add `browser:` to the config and run `axocoatl browser install`",
                     config.id.0
                 )),
-                Some(browser) => crate::session_dispatch_browser::browser_refusal(
-                    &browser.config().backend,
-                ),
+                Some(_) if tool == "browser_check"
+                    && config.writes.as_ref().is_some_and(Vec::is_empty) =>
+                {
+                    Some(crate::session_dispatch_browser::READ_ONLY_CHECK_REFUSAL.to_string())
+                }
+                Some(browser) => {
+                    crate::session_dispatch_browser::browser_refusal(browser.config())
+                }
             },
             "web_search" | "web_fetch" => Some(format!(
                 "{tool} is listed for {} but native Sessions do not provide it in this build",

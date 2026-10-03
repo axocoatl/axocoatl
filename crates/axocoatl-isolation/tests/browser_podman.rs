@@ -19,8 +19,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axocoatl_core::SecureDir;
+use axocoatl_exec::protocol::{
+    ExecRequest, ProcessOutcome, ServerMessage, WriteRestriction, PROTOCOL_VERSION,
+};
 use axocoatl_isolation::browser_container::{
-    browser_container_name, ensure_service_sockets, BrowserContainer, BrowserLaunch,
+    browser_container_name, ensure_service_sockets, service_forwarder_name, BrowserContainer,
+    BrowserLaunch, ServiceSocketsLaunch,
 };
 use axocoatl_isolation::egress::{
     CloseReport, Decision, EgressAuthority, EgressGrant, GrantSpec, OpenRequest, SidecarEvent,
@@ -118,7 +122,6 @@ impl Fixture {
             network,
             runtime_authority: Some(self.authority.clone()),
             supervisor_installation: Some(self.installation.clone()),
-            service_sockets: true,
             ..SandboxPolicy::default()
         };
         let sandbox = Arc::new(
@@ -148,6 +151,31 @@ impl Fixture {
             require_resource_limits: false,
             labels: vec![test_label()],
         }
+    }
+
+    /// Serve the Session's ports as sockets through its service forwarder;
+    /// returns the forwarder's container id.
+    async fn service_sockets(&self, ports: &[u16]) -> String {
+        let architecture = axocoatl_isolation::egress_image::podman_architecture()
+            .await
+            .unwrap();
+        let image = axocoatl_isolation::egress_image::ensure_egress_image(
+            &architecture,
+            &self.egress_context,
+        )
+        .await
+        .expect("the egress image builds");
+        ensure_service_sockets(&ServiceSocketsLaunch {
+            session_id: self.session_id.clone(),
+            runtime_authority: self.authority.clone(),
+            image,
+            ports: ports.to_vec(),
+            require_resource_limits: false,
+            labels: vec![test_label()],
+        })
+        .await
+        .expect("the service forwarder serves the ports")
+        .expect("a forwarder for exposed ports")
     }
 
     async fn start_demo_app(&self) {
@@ -252,9 +280,20 @@ async fn browser_reaches_exposed_ports_and_nothing_else() {
         let fixture = body;
         let sandbox = fixture.start_session(SandboxNetwork::Bridge, &[8765]).await;
         fixture.start_demo_app().await;
-        ensure_service_sockets(&fixture.session_id, &[8765]).await.unwrap();
+        let forwarder = fixture.service_sockets(&[8765]).await;
         // A second call finds the forwarder alive and starts nothing.
-        ensure_service_sockets(&fixture.session_id, &[8765]).await.unwrap();
+        assert_eq!(fixture.service_sockets(&[8765]).await, forwarder);
+        let forwarder_name = service_forwarder_name(&fixture.session_id);
+        let session_container = format!("axo-ses-{}", fixture.session_id);
+        let session_id = podman_ok(&["container", "inspect", "--format", "{{.Id}}", &session_container]).await;
+        let inspect = podman_ok(&[
+            "container", "inspect", "--format",
+            "{{.HostConfig.NetworkMode}} {{.HostConfig.ReadonlyRootfs}} {{json .Mounts}}",
+            &forwarder_name,
+        ])
+        .await;
+        assert!(inspect.starts_with(&format!("container:{session_id} true")), "{inspect}");
+        assert!(!inspect.contains(fixture.workspace.to_str().unwrap()), "{inspect}");
         let container = BrowserContainer::start(&fixture.launch(&[8765], false))
             .await
             .expect("the browser container starts");
@@ -290,7 +329,8 @@ async fn browser_reaches_exposed_ports_and_nothing_else() {
         let error = out["navigation"]["error"].as_str().unwrap();
         assert!(error.contains("ERR_CONNECTION_REFUSED"), "{error}");
 
-        // 3. With no declared hosts, nothing else is reachable.
+        // 3. With no declared hosts there is no proxy and no route: nothing
+        // else is reachable.
         let out = drive(
             &container,
             driver_input("http://example.com/", json!([]), None),
@@ -299,7 +339,69 @@ async fn browser_reaches_exposed_ports_and_nothing_else() {
         .await;
         assert_eq!(out["ok"], false);
         let error = out["navigation"]["error"].as_str().unwrap();
-        assert!(error.contains("ERR_PROXY_CONNECTION_FAILED"), "{error}");
+        // Chromium sees no network at all; nothing reaches a proxy.
+        assert!(
+            error.contains("ERR_INTERNET_DISCONNECTED") || error.contains("ERR_NAME_NOT_RESOLVED"),
+            "{error}"
+        );
+        assert!(out["network"]["blocked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["reason"] == "not_allowed"), "{out:#}");
+        let out = drive(
+            &container,
+            driver_input("http://10.89.0.1:8000/", json!([]), None),
+            "inv-outside-ip",
+        )
+        .await;
+        assert_eq!(out["ok"], false, "{out:#}");
+        assert!(!out["navigation"]["error"].as_str().unwrap().contains("ERR_PROXY"), "{out:#}");
+
+        // A read-only helper's shell (writable /tmp, /var/tmp and /dev, no
+        // TCP) reaches the app neither by TCP nor through any service
+        // socket: the Session container never mounts them.
+        let probe = "const net=require('net'),fs=require('fs');\
+            const out={};let n=0;const done=()=>{if(++n===2)console.log(JSON.stringify(out))};\
+            try{out.dir=fs.readdirSync('/run/axocoatl-svc')}catch(e){out.dir=e.code}\
+            net.connect(8765,'127.0.0.1').on('connect',function(){out.tcp='connected';this.destroy();done()}).on('error',e=>{out.tcp=e.code;done()});\
+            net.connect('/run/axocoatl-svc/8765.sock').on('connect',function(){out.sock='connected';this.destroy();done()}).on('error',e=>{out.sock=e.code;done()});";
+        let root = sandbox.root().to_string_lossy().into_owned();
+        let run_probe = |restricted: bool| {
+            let sandbox = sandbox.clone();
+            let root = root.clone();
+            async move {
+                let request = ExecRequest {
+                    protocol: PROTOCOL_VERSION,
+                    stdin: None,
+                    invocation_id: format!("inv-helper-probe-{restricted}"),
+                    argv: vec!["node".into(), "-e".into(), probe.into()],
+                    timeout_ms: 30_000,
+                    stdout_bytes: 4096,
+                    stderr_bytes: 4096,
+                    write_restriction: restricted.then(|| WriteRestriction {
+                        writable: vec!["/tmp".into(), "/var/tmp".into(), "/dev".into()],
+                        protected: vec![root],
+                        deny_network: true,
+                    }),
+                };
+                let prepared = sandbox.prepare_supervised_command(request).await.unwrap();
+                let execution = prepared.dispatch().unwrap().finish().await.unwrap();
+                let ServerMessage::Finished { outcome, stdout, stderr, .. } = execution.result() else {
+                    panic!("the probe has no terminal result");
+                };
+                assert_eq!(*outcome, ProcessOutcome::Exited { code: 0 }, "{:?}", stderr.retained_bytes(4096));
+                let text = String::from_utf8(stdout.retained_bytes(4096).unwrap()).unwrap();
+                serde_json::from_str::<Value>(text.trim()).unwrap()
+            }
+        };
+        let open = run_probe(false).await;
+        assert_eq!(open["tcp"], "connected", "{open}");
+        let helper = run_probe(true).await;
+        assert_eq!(helper["tcp"], "EACCES", "{helper}");
+        assert_eq!(helper["dir"], "ENOENT", "{helper}");
+        assert_eq!(helper["sock"], "ENOENT", "{helper}");
+        assert_eq!(open["dir"], "ENOENT", "{open}");
 
         // 5. No Workspace inside, the bridge is PID 1, isolation flags hold.
         let missing = podman(&["exec", &name, "ls", fixture.workspace.to_str().unwrap()]).await;
@@ -370,10 +472,29 @@ async fn browser_reaches_exposed_ports_and_nothing_else() {
         let leftovers = podman_ok(&["exec", &name, "sh", "-c", "ls -A /tmp | grep axo-check || true"]).await;
         assert!(leftovers.is_empty(), "{leftovers}");
 
-        // 6. The browser container goes with the Session.
+        // A restarted Session container has a new network namespace: the
+        // forwarder joined to the old one is replaced.
+        podman_ok(&["restart", "--time", "0", &session_container]).await;
+        fixture.start_demo_app().await;
+        let replaced = fixture.service_sockets(&[8765]).await;
+        assert_ne!(replaced, forwarder);
+        let container = BrowserContainer::start(&fixture.launch(&[8765], false))
+            .await
+            .expect("the browser container starts again");
+        let out = drive(
+            &container,
+            driver_input("http://localhost:8765/", json!([{"action": "wait_for", "text": "ORD-2051"}]), None),
+            "inv-aut-again",
+        )
+        .await;
+        assert_eq!(out["ok"], true, "{out:#}");
+
+        // 6. The browser container and the forwarder go with the Session.
         sandbox.stop_checked().await.unwrap();
         let exists = podman(&["container", "exists", &name]).await;
         assert!(!exists.status.success(), "the browser container must be removed with the Session");
+        let exists = podman(&["container", "exists", &forwarder_name]).await;
+        assert!(!exists.status.success(), "the forwarder must be removed with the Session");
     }, async { fixture.cleanup().await })
     .await;
 }
@@ -449,7 +570,7 @@ async fn declared_hosts_go_through_the_egress_proxy() {
         // The Session's own network mode does not change the browser's: its
         // container has only loopback either way.
         fixture.start_session(SandboxNetwork::Bridge, &[8765]).await;
-        ensure_service_sockets(&fixture.session_id, &[8765]).await.unwrap();
+        fixture.service_sockets(&[8765]).await;
 
         let authority = Arc::new(FakeAuthority::default());
         *authority.allowed.lock().unwrap() = Some((upstream_ip.parse().unwrap(), 8000));

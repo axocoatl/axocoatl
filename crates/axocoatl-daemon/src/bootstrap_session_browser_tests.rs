@@ -52,7 +52,6 @@ async fn browser_sandbox(f: &mut Fixture) -> Arc<axocoatl_isolation::SessionSand
                 .child("execution-supervisors")
                 .unwrap(),
         ),
-        service_sockets: true,
         ..SandboxPolicy::default()
     };
     let sandbox = Arc::new(

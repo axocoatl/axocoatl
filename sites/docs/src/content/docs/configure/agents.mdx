@@ -199,7 +199,9 @@ In a native Session:
 - With `writes: []` the Agent is not offered `write_file` or `edit_file`. Its own `bash`
   commands run under a Linux Landlock restriction (Landlock ABI 4, Linux 6.7 or later):
   they cannot change the repository, open a TCP connection or bind a TCP port, loopback
-  included. Each command gets a fresh home directory instead of the Session's. Landlock
+  included. Listing `browser` lets it drive the Session's apps through the browser
+  container; `browser_check`, which runs test code it writes, makes an Agent count as
+  one that can change files. Each command gets a fresh home directory instead of the Session's. Landlock
   does not cover UDP, so name lookups and other UDP traffic still follow the sandbox's
   `network` setting; see [Security](/operate/security/) for what else it leaves open. Where the runtime cannot apply the whole
   restriction, such as on Linux before 6.7, its `bash` commands do not run and the

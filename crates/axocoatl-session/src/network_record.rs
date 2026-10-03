@@ -159,6 +159,11 @@ pub const SCREENSHOT_DIR: &str = "screenshots";
 pub const MAX_SCREENSHOT_BYTES: usize = 1024 * 1024;
 /// Most screenshots one Session keeps; later ones are not stored.
 pub const MAX_SCREENSHOTS: usize = 2000;
+/// Most bytes of screenshots one Session keeps, beside the record's own
+/// bounds; later ones are not stored.
+pub const MAX_SCREENSHOT_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+/// Longest failure reason a `browser` event keeps.
+pub const MAX_BROWSER_ERROR_CHARS: usize = 500;
 /// Longest URL a `browser` event keeps.
 pub const MAX_RECORDED_URL_CHARS: usize = 2048;
 
@@ -388,6 +393,11 @@ pub enum NetworkEvent {
         screenshot: Option<ScreenshotRef>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         screenshot_dropped: Option<String>,
+        /// Why the call failed before it produced a result: the runner, the
+        /// container or the script failed, or the call was cancelled or ran
+        /// out of time. Such a call may still have changed the app's state.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
         ms: u64,
     },
 }
@@ -455,6 +465,7 @@ impl NetworkEvent {
                 check_status,
                 screenshot_dropped,
                 token,
+                error,
                 ..
             } => {
                 let long = |value: &Option<String>, max: usize| {
@@ -467,6 +478,9 @@ impl NetworkEvent {
                 }
                 if long(test_path, 512) || long(check_status, 32) || long(screenshot_dropped, 200) {
                     return invalid("browser test path or status is too long");
+                }
+                if long(error, MAX_BROWSER_ERROR_CHARS) {
+                    return invalid("a browser failure reason must be at most 500 characters");
                 }
                 if token.as_ref().is_some_and(|token| !tag(token)) {
                     return invalid("token must be a 16-hex tag");
@@ -566,6 +580,8 @@ pub struct NetworkRecord {
     gaps: u64,
     dirty: bool,
     poisoned: bool,
+    /// Screenshots kept and their bytes, counted on first use.
+    screenshots: Option<(usize, u64)>,
 }
 
 impl std::fmt::Debug for NetworkRecord {
@@ -672,6 +688,7 @@ impl NetworkRecord {
             gaps: loaded.gaps,
             dirty: false,
             poisoned: false,
+            screenshots: None,
         };
         if loaded.torn_bytes > 0 {
             record.append_control(
@@ -871,11 +888,27 @@ impl NetworkRecord {
     /// Keep a screenshot beside the record, named by its SHA-256. The bytes
     /// must be a JPEG or PNG of at most [`MAX_SCREENSHOT_BYTES`]. Storing
     /// the same bytes again returns the same reference. Past
-    /// [`MAX_SCREENSHOTS`] it returns `Full`.
+    /// [`MAX_SCREENSHOTS`] screenshots or [`MAX_SCREENSHOT_TOTAL_BYTES`] in
+    /// all it returns `Full`.
     pub fn store_screenshot(
         &mut self,
         media_type: &str,
         bytes: &[u8],
+    ) -> Result<ScreenshotRef, NetworkRecordError> {
+        self.store_screenshot_within(
+            media_type,
+            bytes,
+            MAX_SCREENSHOTS,
+            MAX_SCREENSHOT_TOTAL_BYTES,
+        )
+    }
+
+    fn store_screenshot_within(
+        &mut self,
+        media_type: &str,
+        bytes: &[u8],
+        max_count: usize,
+        max_bytes: u64,
     ) -> Result<ScreenshotRef, NetworkRecordError> {
         let extension = screenshot_extension(media_type).ok_or(
             NetworkRecordError::InvalidEvent("screenshots are JPEG or PNG"),
@@ -904,11 +937,26 @@ impl NetworkRecord {
         if directory.is_file(&name)? {
             return Ok(reference);
         }
-        if directory.entries_limited(MAX_SCREENSHOTS + 1)?.len() >= MAX_SCREENSHOTS {
+        let (count, used) = match self.screenshots {
+            Some(kept) => kept,
+            None => {
+                let entries = directory.entries_limited(MAX_SCREENSHOTS + 1)?;
+                let mut used = 0u64;
+                for entry in &entries {
+                    if entry.file_type == axocoatl_core::SecureEntryType::File {
+                        used = used.saturating_add(directory.file_len(&entry.name)?);
+                    }
+                }
+                (entries.len(), used)
+            }
+        };
+        self.screenshots = Some((count, used));
+        if count >= max_count || used.saturating_add(bytes.len() as u64) > max_bytes {
             return Err(NetworkRecordError::Full);
         }
         directory.atomic_write(&name, bytes)?;
         directory.sync_all()?;
+        self.screenshots = Some((count + 1, used + bytes.len() as u64));
         Ok(reference)
     }
 
@@ -1072,6 +1120,7 @@ mod tests {
             token: None,
             screenshot,
             screenshot_dropped: None,
+            error: None,
             ms: 1834,
         }
     }
@@ -1134,6 +1183,50 @@ mod tests {
             ));
         }
         assert!(record.append(7, long).is_err());
+    }
+
+    #[test]
+    fn screenshots_stop_at_the_byte_budget_across_reopen() {
+        let (_root, _ownership, store) = setup();
+        let jpeg = |fill: u8, len: usize| {
+            let mut bytes = vec![0xff, 0xd8, 0xff, 0xe0];
+            bytes.resize(len, fill);
+            bytes
+        };
+        let mut record = open(&store, RecordLimits::default());
+        record
+            .store_screenshot_within("image/jpeg", &jpeg(1, 4000), 10, 10_000)
+            .unwrap();
+        record
+            .store_screenshot_within("image/jpeg", &jpeg(2, 4000), 10, 10_000)
+            .unwrap();
+        // The third would pass the byte budget though the count allows it.
+        assert!(matches!(
+            record.store_screenshot_within("image/jpeg", &jpeg(3, 4000), 10, 10_000),
+            Err(NetworkRecordError::Full)
+        ));
+        // Bytes already kept are named again without counting twice.
+        record
+            .store_screenshot_within("image/jpeg", &jpeg(1, 4000), 10, 10_000)
+            .unwrap();
+        record
+            .store_screenshot_within("image/jpeg", &jpeg(4, 1000), 10, 10_000)
+            .unwrap();
+        drop(record);
+        // A reopened record counts what is on disk.
+        let mut record = open(&store, RecordLimits::default());
+        assert!(matches!(
+            record.store_screenshot_within("image/jpeg", &jpeg(5, 2000), 10, 10_000),
+            Err(NetworkRecordError::Full)
+        ));
+        record
+            .store_screenshot_within("image/jpeg", &jpeg(6, 1000), 10, 10_000)
+            .unwrap();
+        assert!(matches!(
+            record.store_screenshot_within("image/jpeg", &jpeg(7, 100), 4, 10_000),
+            Err(NetworkRecordError::Full)
+        ));
+        assert_eq!(MAX_SCREENSHOT_TOTAL_BYTES, 64 * 1024 * 1024);
     }
 
     #[test]

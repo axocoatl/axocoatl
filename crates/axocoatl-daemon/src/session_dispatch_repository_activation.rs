@@ -177,6 +177,11 @@ impl RepositoryActivationResource {
         self.owner.host_checkout().clone()
     }
 
+    /// Whether this checkout is a Ways attempt lane's own clone.
+    pub(super) fn is_attempt(&self) -> bool {
+        self.owner.is_attempt()
+    }
+
     pub(super) fn description(&self) -> Result<ActivationEvidenceContent> {
         // The semantic input remains its immutable original description. The
         // separately retained reattachment proof joins it to this live owner.
