@@ -558,14 +558,12 @@ impl SessionEgress {
         result
     }
 
-    /// Remove one binding now: revoke its open connections, delete its env
-    /// file, and record the unbind in the background.
-    fn unbind(&self, hash: &str, reason: UnbindReason) {
+    /// Remove one binding now: revoke its open connections and delete its env
+    /// file. Returns the unbind event to record, if the binding existed.
+    fn release(&self, hash: &str, reason: UnbindReason) -> Option<NetworkEvent> {
         let (binding, ids, control) = {
             let mut state = self.state();
-            let Some(binding) = state.bindings.remove(hash) else {
-                return;
-            };
+            let binding = state.bindings.remove(hash)?;
             let generation = state.control.as_ref().map(ControlHandle::generation);
             let mut ids: Vec<u64> = state
                 .open
@@ -587,9 +585,16 @@ impl SessionEgress {
                 tracing::warn!(session = %self.session_id, %error, "removing an egress env file failed");
             }
         }
-        let event = NetworkEvent::Unbind {
+        Some(NetworkEvent::Unbind {
             token: binding.tag,
             reason,
+        })
+    }
+
+    /// Remove one binding now and record the unbind in the background.
+    fn unbind(&self, hash: &str, reason: UnbindReason) {
+        let Some(event) = self.release(hash, reason) else {
+            return;
         };
         let records = self.records.clone();
         let session = self.session_id.clone();
@@ -603,6 +608,20 @@ impl SessionEgress {
             }
             Err(_) => {
                 tracing::warn!(session = %session, "egress unbind outside a runtime was not recorded")
+            }
+        }
+    }
+
+    /// The Session's runtime stopped: every credential still bound belonged
+    /// to processes that no longer exist. Unbind them all, recorded in order.
+    async fn unbind_all(&self, reason: UnbindReason) {
+        let mut hashes: Vec<String> = self.state().bindings.keys().cloned().collect();
+        hashes.sort();
+        for hash in hashes {
+            if let Some(event) = self.release(&hash, reason) {
+                if let Err(error) = self.records.append_control(event).await {
+                    tracing::warn!(session = %self.session_id, ?error, "recording an egress unbind failed");
+                }
             }
         }
     }
@@ -1081,6 +1100,9 @@ impl EgressAuthority for SessionEgress {
             }
             SidecarEvent::Stopped { generation } => (SidecarState::Stopped, generation, None, None),
         };
+        if state == SidecarState::Stopped {
+            self.unbind_all(UnbindReason::SessionStopped).await;
+        }
         if matches!(
             state,
             SidecarState::ChannelLost | SidecarState::Failed | SidecarState::Stopped

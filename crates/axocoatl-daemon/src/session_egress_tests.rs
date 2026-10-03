@@ -675,6 +675,67 @@ async fn grants_write_env_files_and_unbind_when_dropped() {
 }
 
 #[tokio::test]
+async fn a_stopped_runtime_unbinds_every_live_credential_before_its_stop_is_recorded() {
+    let f = fixture().await;
+    let (agent, _) = granted(&f, agent_spec()).await;
+    let mut terminal_spec = GrantSpec::new(GrantKind::Terminal);
+    terminal_spec.terminal_id = Some("term-1".into());
+    let (terminal, terminal_hash) = granted(&f, terminal_spec).await;
+    let files = [
+        agent.env_file.clone().unwrap(),
+        terminal.env_file.clone().unwrap(),
+    ];
+    assert_eq!(f.egress.live_bindings(), 2);
+    f.egress
+        .sidecar_event(SidecarEvent::Stopped { generation: 1 })
+        .await;
+    assert_eq!(f.egress.live_bindings(), 0);
+    assert!(files.iter().all(|file| !file.exists()));
+    let events = f.record.events();
+    let tail: Vec<&NetworkEvent> = events.iter().rev().take(3).collect();
+    assert!(matches!(
+        tail[0],
+        NetworkEvent::Sidecar {
+            state: SidecarState::Stopped,
+            ..
+        }
+    ));
+    let mut unbound: Vec<(String, UnbindReason)> = tail[1..]
+        .iter()
+        .map(|event| match event {
+            NetworkEvent::Unbind { token, reason } => (token.clone(), *reason),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    unbound.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut expected = vec![
+        (agent.token_tag.clone(), UnbindReason::SessionStopped),
+        (terminal.token_tag.clone(), UnbindReason::SessionStopped),
+    ];
+    expected.sort_by(|left, right| left.0.cmp(&right.0));
+    assert_eq!(unbound, expected);
+    // A swept credential is unknown from then on, and dropping its grant
+    // records nothing more.
+    let refused = f
+        .egress
+        .decide(open(40, "allowed.test", 443, Some(&terminal_hash)))
+        .await;
+    assert_eq!(reason(&refused), (407, "unknown_credential".into()));
+    let before = f.record.events().len();
+    drop((agent, terminal));
+    tokio::task::yield_now().await;
+    assert_eq!(
+        f.record
+            .events()
+            .iter()
+            .skip(before)
+            .filter(|event| matches!(event, NetworkEvent::Unbind { .. }))
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn policy_events_replay_and_reproduce_the_digest() {
     let fixture = fixture().await;
     let initial: Vec<NetworkEvent> = fixture.record.events();
