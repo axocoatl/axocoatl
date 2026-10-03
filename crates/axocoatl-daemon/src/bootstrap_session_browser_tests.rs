@@ -1,6 +1,9 @@
 //! A read-only helper drives the browser through the real native admission
-//! path, the real browser container and the Session's real network record.
-//! Ignored by default: it needs Podman, the browser image and the curated
+//! path, the real browser container and the Session's real network record,
+//! including two calls recorded from gpt-oss: one that writes Playwright code
+//! in a step, refused with what to do instead, and one that gives
+//! `"snapshot": null`, which returns the default snapshot. Ignored by
+//! default: it needs Podman, the browser image and the curated
 //! `docker.io/library/node:20-slim`:
 //!
 //! ```text
@@ -136,13 +139,30 @@ async fn actual_read_only_helper_drives_the_browser_and_the_call_is_recorded() {
     controller
         .register_host_invocation_tool(Arc::new(BrowserHostTool::browser(service.clone())))
         .unwrap();
-    let provider = Provider::new(vec![(
-        "browser",
-        serde_json::json!({
-            "url": "http://localhost:8765/",
-            "steps": [{"action": "wait_for", "text": "ORD-2051"}],
-        }),
-    )]);
+    let provider = Provider::new(vec![
+        (
+            "browser",
+            serde_json::json!({
+                "snapshot": "none", "url": "http://localhost:8765",
+                "steps": [{"code": "await page.content();"}],
+                "viewport": {"height": 800, "width": 1280},
+            }),
+        ),
+        (
+            "browser",
+            serde_json::json!({
+                "snapshot": null, "steps": [], "url": "http://localhost:8765",
+                "viewport": {"height": 800, "width": 1280},
+            }),
+        ),
+        (
+            "browser",
+            serde_json::json!({
+                "url": "http://localhost:8765/",
+                "steps": [{"action": "wait_for", "text": "ORD-2051"}],
+            }),
+        ),
+    ]);
     let resources = AutonomousActivationResources {
         config,
         profile,
@@ -191,11 +211,32 @@ async fn actual_read_only_helper_drives_the_browser_and_the_call_is_recorded() {
     let result = result.unwrap().unwrap();
     assert!(result.accepted, "{:?}", result.failure);
     assert!(provider.offered.lock().unwrap()[0].contains(&"browser".to_string()));
+    // Code in a step is refused before anything runs, with the way to read
+    // the page and a valid call.
+    assert!(provider.saw(1, "steps[0].code is not a step field"));
+    assert!(provider.saw(1, "Steps are actions, not code"));
+    assert!(provider.saw(1, "Example: {"));
+    // `snapshot: null` is the default aria snapshot: the page's heading,
+    // with the level only an aria snapshot shows.
     assert!(
-        provider.saw(1, "ORD-2051"),
+        provider.saw(2, "Order review") && provider.saw(2, "[level=1]"),
+        "the null-snapshot call returned the page's aria snapshot"
+    );
+    assert!(
+        provider.saw(3, "ORD-2051"),
         "the snapshot reached the helper"
     );
     let page = page.unwrap();
+    // The refused call is not recorded; the other two are.
+    assert_eq!(
+        page.events
+            .iter()
+            .filter(|line| matches!(line.event, NetworkEvent::Browser { .. }))
+            .count(),
+        2,
+        "{:?}",
+        page.events
+    );
     let event = page
         .events
         .last()
@@ -231,7 +272,7 @@ async fn actual_read_only_helper_drives_the_browser_and_the_call_is_recorded() {
         .iter()
         .any(|invocation| invocation.invocation_id.as_str() == invocation_id));
     assert!(
-        !provider.saw(1, "base64"),
+        !provider.saw(3, "base64"),
         "no screenshot reaches the model"
     );
 }

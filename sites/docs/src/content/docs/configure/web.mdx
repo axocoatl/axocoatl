@@ -92,7 +92,8 @@ content hashes. Agents cite a claim as `[S1a2b3c4d]`, or a paragraph as
 `[S1a2b3c4d ¶3]`.
 
 A long page comes back in windows of `max_chars` characters (1,000-65,536, default
-32,768); `start_paragraph` reads the next one. HTML is reduced to its text:
+32,768); `start_paragraph` reads the next one. `max_chars`, `start_paragraph` and
+`web_search`'s `max_results` given as `null` take their defaults. HTML is reduced to its text:
 scripts, styles, `head` apart from the title, frames and embedded SVG are
 dropped. Plain text and Markdown split on blank lines; JSON and XML come back as
 one block. Other content types are refused by name.

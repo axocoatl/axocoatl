@@ -145,7 +145,7 @@ fn optional_bounded_str_arg<'a>(
     max_bytes: usize,
 ) -> Result<&'a str, ToolError> {
     match args.get(key) {
-        None => Ok(default),
+        None | Some(serde_json::Value::Null) => Ok(default),
         Some(value) => {
             let value = value.as_str().ok_or_else(|| ToolError::InvalidArgs {
                 tool: tool.to_string(),
@@ -212,7 +212,7 @@ fn terminal_dimension(
     minimum: u16,
     maximum: u16,
 ) -> Result<u16, ToolError> {
-    let Some(value) = args.get(key) else {
+    let Some(value) = args.get(key).filter(|value| !value.is_null()) else {
         return Ok(default);
     };
     let value = value.as_u64().ok_or_else(|| ToolError::InvalidArgs {
@@ -229,7 +229,7 @@ fn terminal_dimension(
 }
 
 fn optional_tail_lines(args: &serde_json::Value) -> Result<Option<usize>, ToolError> {
-    let Some(value) = args.get("tail_lines") else {
+    let Some(value) = args.get("tail_lines").filter(|value| !value.is_null()) else {
         return Ok(None);
     };
     let value = value.as_u64().ok_or_else(|| ToolError::InvalidArgs {
@@ -1682,6 +1682,46 @@ mod tests {
         );
         assert!(optional_tail_lines(&json!({"tail_lines": u64::MAX})).is_err());
         assert!(optional_tail_lines(&json!({"tail_lines": 0})).is_err());
+    }
+
+    #[test]
+    fn null_is_not_given_for_optional_numbers() {
+        assert_eq!(
+            terminal_dimension(&json!({"rows": null}), "rows", 24, 4, 500).unwrap(),
+            24
+        );
+        assert_eq!(
+            optional_tail_lines(&json!({"tail_lines": null})).unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn null_path_is_the_repository_root_for_list_dir_and_grep() {
+        for is_grep in [false, true] {
+            let sandbox = Arc::new(StubSandbox::new("/workspace", vec![result("lib\n", "", 0)]));
+            if is_grep {
+                GrepTool {
+                    sandbox: sandbox.clone(),
+                }
+                .execute(json!({"pattern": "needle", "path": null}))
+                .await
+                .unwrap();
+            } else {
+                ListDirTool {
+                    sandbox: sandbox.clone(),
+                }
+                .execute(json!({"path": null}))
+                .await
+                .unwrap();
+            }
+            let calls = sandbox.exec_calls.lock().unwrap();
+            assert_eq!(
+                calls[0].last().map(String::as_str),
+                Some("."),
+                "grep {is_grep}: {calls:?}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -125,6 +125,475 @@ fn browser_steps_follow_the_driver_rules() {
     }
 }
 
+/// The call a refusal gives as its example, parsed.
+fn example_of(error: &str) -> Value {
+    let (_, example) = error
+        .rsplit_once(" Example: ")
+        .unwrap_or_else(|| panic!("no example in: {error}"));
+    serde_json::from_str(example).unwrap_or_else(|failure| panic!("{failure}: {example}"))
+}
+
+#[test]
+fn null_is_not_given_for_every_optional_browser_field() {
+    let job = drive(json!({
+        "url": "http://localhost:8765/", "steps": null, "snapshot": null, "viewport": null,
+    }))
+    .unwrap();
+    assert_eq!(job.steps, Vec::<Value>::new());
+    assert_eq!(job.snapshot, SnapshotKind::Aria);
+    assert_eq!(job.viewport, None);
+    let job =
+        drive(json!({"url": "http://localhost/", "viewport": {"width": null, "height": 900}}))
+            .unwrap();
+    assert_eq!(job.viewport, Some((1280, 900)));
+    let job =
+        drive(json!({"url": "http://localhost/", "viewport": {"width": 390, "height": null}}))
+            .unwrap();
+    assert_eq!(job.viewport, Some((390, 720)));
+
+    // A model that fills every field of every step: the nulls are dropped
+    // before the driver sees the step.
+    let job = drive(json!({"url": "http://localhost:8765/", "snapshot": null, "steps": [
+        {"action": "click", "url": null, "value": null, "key": null, "text": null, "timeout_ms": null,
+         "target": {"role": "button", "name": "Save", "label": null, "text": null, "testid": null,
+                    "css": null, "nth": null}},
+        {"action": "wait_for", "target": null, "url": null, "text": "Saved"},
+        {"action": "press", "key": "Enter", "target": null},
+    ]}))
+    .unwrap();
+    assert_eq!(
+        job.steps,
+        vec![
+            json!({"action": "click", "target": {"role": "button", "name": "Save"}}),
+            json!({"action": "wait_for", "text": "Saved"}),
+            json!({"action": "press", "key": "Enter"}),
+        ]
+    );
+    let payload = drive_payload(&job, &[], &BrowserSettings::default());
+    assert!(!payload["steps"].to_string().contains("null"), "{payload}");
+    assert_eq!(payload["snapshot"], "aria");
+
+    // A required field given as null is missing, and says so.
+    let error = drive(json!({"url": null})).unwrap_err();
+    assert!(
+        error.contains("url is required") && error.contains("got null"),
+        "{error}"
+    );
+    let error = drive(json!({"url": "http://localhost/", "steps": [
+        {"action": "fill", "target": {"label": "Email"}, "value": null}
+    ]}))
+    .unwrap_err();
+    assert!(error.contains("steps[0]: fill needs value"), "{error}");
+    let error =
+        drive(json!({"url": "http://localhost/", "steps": [{"action": null}]})).unwrap_err();
+    assert!(
+        error.contains("steps[0].action is required") && error.contains("got null"),
+        "{error}"
+    );
+    let error = drive(json!({"url": "http://localhost/", "steps": [
+        {"action": "click", "target": {"role": null, "text": null}}
+    ]}))
+    .unwrap_err();
+    assert!(error.contains("needs exactly one of role"), "{error}");
+
+    // Null still counts as given for a field that does not exist.
+    assert!(drive(json!({"url": "http://localhost/", "evaluate": null})).is_err());
+}
+
+#[test]
+fn null_is_not_given_for_every_optional_browser_check_field() {
+    let parse = |arguments: Value| parse_check_call(&arguments).map_err(|error| error.to_string());
+    let job =
+        parse(json!({"path": "qa/a.spec.ts", "script": null, "grep": null, "base_url": null}))
+            .unwrap();
+    assert_eq!(job.source, CheckSource::Path("qa/a.spec.ts".into()));
+    assert_eq!((job.grep, job.base_url), (None, None));
+    let job =
+        parse(json!({"path": null, "script": "import { test } from '@playwright/test';"})).unwrap();
+    assert!(matches!(job.source, CheckSource::Script(_)));
+    let error = parse(json!({"path": null, "script": null})).unwrap_err();
+    assert!(error.contains("neither was given"), "{error}");
+}
+
+#[test]
+fn browser_refusals_name_the_field_show_what_was_received_and_give_a_valid_call() {
+    let url = "http://localhost:8765/";
+    let cases: Vec<(Value, Vec<&str>)> = vec![
+        (json!("http://localhost:8765/"), vec!["arguments must be a JSON object", "got \"http://localhost:8765/\""]),
+        (json!({}), vec!["url is required", "http://localhost:3000/", "it was not given"]),
+        (json!({"url": 8765}), vec!["url must be a string; got 8765"]),
+        (json!({"url": "javascript:alert(1)"}), vec!["url must use http or https, not javascript", "got \"javascript:alert(1)\"", "http://localhost:<port>"]),
+        (json!({"url": url, "code": "await page.content();"}), vec!["unknown argument \"code\"", "got \"await page.content();\"", "browser takes url (required), steps, snapshot and viewport", "Steps are actions, not code"]),
+        (json!({"url": url, "wait": 5}), vec!["unknown argument \"wait\"; got 5"]),
+        (json!({"url": url, "steps": "await page.click('#buy')"}), vec!["steps must be a list of step objects", "got \"await page.click('#buy')\"", "not code", "A step is an object with an action"]),
+        (json!({"url": url, "steps": [7]}), vec!["steps[0] must be an object; got 7", "A step is an object with an action"]),
+        (json!({"url": url, "steps": [{"selector": "#buy"}]}), vec!["steps[0].selector is not a step field; got \"#buy\"", "Step fields are action, target, url, value, key, text, timeout_ms"]),
+        (json!({"url": url, "steps": [{"target": {"text": "Buy"}}]}), vec!["steps[0].action is required and must be one of goto, click", "it was not given"]),
+        (json!({"url": url, "steps": [{"action": "evaluate", "text": "document.title"}]}), vec!["steps[0].action must be one of goto, click", "got \"evaluate\"", "Steps are actions, not code"]),
+        (json!({"url": url, "steps": [{"action": "hover", "target": {"text": "Buy"}}]}), vec!["got \"hover\""]),
+        (json!({"url": url, "steps": [{"action": "click"}]}), vec!["steps[0]: click needs target such as {\"role\": \"button\", \"name\": \"Save\"}"]),
+        (json!({"url": url, "steps": [{"action": "reload", "url": url}]}), vec!["steps[0]: reload does not take url; got url \"http://localhost:8765/\""]),
+        (json!({"url": url, "steps": [{"action": "goto", "url": "/cart"}]}), vec!["steps[0].url is not an absolute URL; got \"/cart\""]),
+        (json!({"url": url, "steps": [{"action": "click", "target": {"xpath": "//a"}}]}), vec!["steps[0].target.xpath is not a target field; got \"//a\"", "one of role (with an optional name), label, text, testid or css"]),
+        (json!({"url": url, "steps": [{"action": "click", "target": "Buy"}]}), vec!["steps[0].target must be an object such as {\"role\": \"button\", \"name\": \"Save\"}; got \"Buy\""]),
+        (json!({"url": url, "steps": [{"action": "click", "target": {"text": "Buy", "nth": "2"}}]}), vec!["steps[0].target.nth must be a whole number from 0; got \"2\""]),
+        (json!({"url": url, "steps": [{"action": "click", "target": {"text": "Buy"}, "timeout_ms": 60000}]}), vec!["steps[0].timeout_ms must be 100-10000; got 60000"]),
+        (json!({"url": url, "steps": [{"action": "fill", "target": {"label": "Qty"}, "value": 2}]}), vec!["steps[0].value must be a string; got 2"]),
+        (json!({"url": url, "snapshot": "html"}), vec!["snapshot must be \"aria\", \"text\" or \"none\"; got \"html\"", "Leave it out for \"aria\", the default"]),
+        (json!({"url": url, "snapshot": true}), vec!["got true"]),
+        (json!({"url": url, "viewport": {"width": 100}}), vec!["viewport width must be 320-1920 and height 240-1200; got {\"width\":100}"]),
+        (json!({"url": url, "viewport": {"depth": 2}}), vec!["viewport.depth is not a viewport field; got 2"]),
+        (json!({"url": url, "viewport": "1280x800"}), vec!["viewport must be an object such as {\"width\": 390, \"height\": 844}; got \"1280x800\""]),
+    ];
+    for (arguments, expected) in cases {
+        let error = drive(arguments.clone()).unwrap_err();
+        assert!(
+            error.starts_with("Invalid arguments for tool browser: "),
+            "{error}"
+        );
+        for text in expected {
+            assert!(
+                error.contains(text),
+                "{arguments}: missing {text:?} in {error}"
+            );
+        }
+        // Every refusal ends with one call that is accepted, on the call's
+        // own URL when it has a usable one.
+        let example = example_of(&error);
+        drive(example.clone()).unwrap_or_else(|failure| panic!("{example}: {failure}"));
+        let own = arguments
+            .get("url")
+            .and_then(Value::as_str)
+            .filter(|candidate| check_url(candidate, "url").is_ok());
+        assert_eq!(
+            example["url"],
+            own.unwrap_or("http://localhost:3000/"),
+            "{error}"
+        );
+        assert!(error.len() < 1500, "{} bytes: {error}", error.len());
+    }
+    // A long value is cut, not repeated whole.
+    let error = drive(json!({"url": url, "steps": [{"code": "x".repeat(5000)}]})).unwrap_err();
+    assert!(error.contains("xxx...\""), "{error}");
+    assert!(error.len() < 1500, "{error}");
+    let steps: Vec<Value> = std::iter::repeat_n(json!({"action": "back"}), MAX_STEPS + 1).collect();
+    let error = drive(json!({"url": url, "steps": steps})).unwrap_err();
+    assert!(
+        error.contains("steps has 41 entries; at most 40 steps"),
+        "{error}"
+    );
+}
+
+#[test]
+fn browser_check_refusals_name_the_field_show_what_was_received_and_give_a_valid_call() {
+    let parse = |arguments: Value| parse_check_call(&arguments).map_err(|error| error.to_string());
+    let cases: Vec<(Value, Vec<&str>)> = vec![
+        (
+            json!(["qa/a.spec.ts"]),
+            vec!["arguments must be a JSON object; got [\"qa/a.spec.ts\"]"],
+        ),
+        (
+            json!({"path": "qa/a.spec.ts", "workers": 4}),
+            vec![
+                "unknown argument \"workers\"; got 4",
+                "path or script (exactly one)",
+            ],
+        ),
+        (
+            json!({}),
+            vec![
+                "give exactly one of path",
+                "qa/findings/B07.spec.ts",
+                "neither was given",
+            ],
+        ),
+        (
+            json!({"path": "qa/a.spec.ts", "script": "x"}),
+            vec!["not both"],
+        ),
+        (json!({"path": 7}), vec!["path must be a string; got 7"]),
+        (
+            json!({"path": "../outside.spec.ts"}),
+            vec!["without '..'", "got \"../outside.spec.ts\""],
+        ),
+        (
+            json!({"path": "qa/notes.md"}),
+            vec!["path must name a .ts", "got \"qa/notes.md\""],
+        ),
+        (
+            json!({"script": "  "}),
+            vec!["script must be the source of a Playwright test file; got \"  \""],
+        ),
+        (
+            json!({"script": "x".repeat(MAX_CHECK_SCRIPT_BYTES + 1)}),
+            vec!["script must be at most 65536 bytes; got 65537 bytes"],
+        ),
+        (
+            json!({"path": "qa/a.spec.ts", "grep": ""}),
+            vec![
+                "grep must be 1-512 bytes",
+                "got 0 bytes",
+                "Leave it out to run every test",
+            ],
+        ),
+        (
+            json!({"path": "qa/a.spec.ts", "base_url": "file:///tmp"}),
+            vec![
+                "base_url must use http or https, not file",
+                "got \"file:///tmp\"",
+            ],
+        ),
+    ];
+    for (arguments, expected) in cases {
+        let error = parse(arguments.clone()).unwrap_err();
+        assert!(
+            error.starts_with("Invalid arguments for tool browser_check: "),
+            "{error}"
+        );
+        for text in expected {
+            assert!(
+                error.contains(text),
+                "{arguments}: missing {text:?} in {error}"
+            );
+        }
+        let example = example_of(&error);
+        parse(example.clone()).unwrap_or_else(|failure| panic!("{example}: {failure}"));
+    }
+    let error = parse(json!({"script": ""})).unwrap_err();
+    assert!(example_of(&error).get("script").is_some(), "{error}");
+}
+
+/// Recorded `browser` arguments, byte for byte, from two models calling the
+/// tool through Ollama against an app on port 8765, with the SHA-256 the
+/// Session record kept for each, and what Axocoatl 1.2.0 answered.
+const RECORDED_GPT_OSS: [(&str, &str, &str); 7] = [
+    (
+        "9e959462a16c778cb0f8b5c81ce8346f709c192d23b23eff39991de3103591ae",
+        r#"{"snapshot":null,"steps":[],"url":"http://localhost:8765","viewport":{"height":800,"width":1280}}"#,
+        "snapshot must be aria, text or none",
+    ),
+    (
+        "bcdc9971e1165d67617ba44b7befd6f52cf36be28c9ca848b7a6b39d41602978",
+        r#"{"snapshot":"none","steps":[],"url":"http://localhost:8765","viewport":{"height":800,"width":1280}}"#,
+        "",
+    ),
+    (
+        "4bc3daa419752190f3714a258083c3cc4245707db76a20d5c0f128621f78d115",
+        r#"{"snapshot":"none","steps":[{"code":"await page.content();"}],"url":"http://localhost:8765","viewport":{"height":800,"width":1280}}"#,
+        "steps[0].code is not a step field",
+    ),
+    (
+        "ebbb50c92019a74f572711a62e8785c23f28ef4be78c60e769f3cd5707903aa9",
+        r#"{"snapshot":"none","steps":[{"code":"await page.content();","name":"content"}],"url":"http://localhost:8765","viewport":{"height":800,"width":1280}}"#,
+        "steps[0].code is not a step field",
+    ),
+    (
+        "9912da7ec3e3acc9763131c3928d84defbbcf64ca5ddd73474e27ce77dfdbc4c",
+        r#"{"snapshot":"none","steps":["await page.content();"],"url":"http://localhost:8765","viewport":{"height":800,"width":1280}}"#,
+        "steps[0] must be an object",
+    ),
+    (
+        "065fd7a8d42fc6d0da8e116e16ff8910a3b583302ed5705b1b7d2730287d9793",
+        r#"{"snapshot":"none","steps":[{"code":"await page.waitForSelector('h1'); const count = await page.$$eval('h1', els=>els.length); console.log('h1 count', count);"}],"url":"http://localhost:8765","viewport":{"height":800,"width":1280}}"#,
+        "steps[0].code is not a step field",
+    ),
+    (
+        "e2d7fb73d6fe7b8b7f3338335b49b5fab3d58b4931989bc328f0e3ccfdb3ad02",
+        r#"{"snapshot":"none","steps":[{"code":"await page.goto('/'); await page.waitForSelector('.product-card'); const count = await page.locator('.product-card').count(); console.log('cards', count);"}],"url":"http://localhost:8765","viewport":{"height":800,"width":1280}}"#,
+        "steps[0].code is not a step field",
+    ),
+];
+
+/// Every `browser` call qwen3-coder made in the same task; 1.2.0 accepted
+/// all of them.
+const RECORDED_QWEN3_CODER: [(&str, &str); 11] = [
+    (
+        "1d0e3b3e97d549862c9605d9cf22532384d41e0a0455bcfa1b0a98bf0cd4a58c",
+        r#"{"url":"http://localhost:8765"}"#,
+    ),
+    (
+        "08a5cfdb1118f790c21e932bcfd4b72bd68804974d4db023eb8422a2737424aa",
+        r#"{"url":"http://localhost:8765/product/NS-1101"}"#,
+    ),
+    (
+        "87de5cc7e0d4f9e8dfffc72ff9357bf53609a44ae0e52d4905d4193bade368f0",
+        r#"{"steps":[{"action":"click","target":{"name":"Add to cart","role":"button"}}],"url":"http://localhost:8765/product/NS-1101"}"#,
+    ),
+    (
+        "d1df0e74f892f1d8d45bc9021ede7f50493026e32adb9c17c88bf6cc01c856af",
+        r#"{"url":"http://localhost:8765/cart"}"#,
+    ),
+    (
+        "d59ef2f7572ce0030fa2e93198130d145f046c42491ab235e15ef42a7121ff1f",
+        r#"{"steps":[{"action":"goto","url":"http://localhost:8765/"},{"action":"click","target":{"name":"Arc Floor Lamp","role":"link"}},{"action":"click","target":{"name":"Add to cart","role":"button"}},{"action":"click","target":{"name":"Cart (1)","role":"link"}}],"url":"http://localhost:8765/"}"#,
+    ),
+    (
+        "d1df0e74f892f1d8d45bc9021ede7f50493026e32adb9c17c88bf6cc01c856af",
+        r#"{"url":"http://localhost:8765/cart"}"#,
+    ),
+    (
+        "d59ef2f7572ce0030fa2e93198130d145f046c42491ab235e15ef42a7121ff1f",
+        r#"{"steps":[{"action":"goto","url":"http://localhost:8765/"},{"action":"click","target":{"name":"Arc Floor Lamp","role":"link"}},{"action":"click","target":{"name":"Add to cart","role":"button"}},{"action":"click","target":{"name":"Cart (1)","role":"link"}}],"url":"http://localhost:8765/"}"#,
+    ),
+    (
+        "fbd8e15f6ba68e904594f5cb289e8ba159bf634e5a82df5755ba9a3e6628e142",
+        r#"{"steps":[{"action":"goto","url":"http://localhost:8765/"},{"action":"click","target":{"name":"Arc Floor Lamp","role":"link"}},{"action":"click","target":{"name":"Add to cart","role":"button"}},{"action":"goto","url":"http://localhost:8765/cart"}],"url":"http://localhost:8765/"}"#,
+    ),
+    (
+        "2f1a734a84a4ffc8f486506c5d8de3a4e63988a891b7d204bcc926594f2549c7",
+        r#"{"steps":[{"action":"goto","url":"http://localhost:8765/cart"},{"action":"click","target":{"name":"Checkout","role":"link"}}],"url":"http://localhost:8765/cart"}"#,
+    ),
+    (
+        "1e86d72cb768751b0da910e2b07abe335b413f2b15cec52dce14984ff25baa8e",
+        r#"{"steps":[{"action":"goto","url":"http://localhost:8765/"},{"action":"click","target":{"name":"Arc Floor Lamp","role":"link"}},{"action":"click","target":{"name":"Add to cart","role":"button"}},{"action":"click","target":{"name":"Cart (1)","role":"link"}},{"action":"click","target":{"name":"Checkout","role":"link"}}],"url":"http://localhost:8765/"}"#,
+    ),
+    (
+        "15f37da28958cb8fae55d098653e1841da2d444d65a9135667c01f127510ab81",
+        r#"{"steps":[{"action":"goto","url":"http://localhost:8765/orders"}],"url":"http://localhost:8765/orders"}"#,
+    ),
+];
+
+fn recorded(sha256: &str, text: &str) -> Value {
+    use sha2::{Digest, Sha256};
+    assert_eq!(
+        format!("{:x}", Sha256::digest(text.as_bytes())),
+        sha256,
+        "the replayed bytes are the recorded ones"
+    );
+    serde_json::from_str(text).unwrap()
+}
+
+#[test]
+fn recorded_gpt_oss_calls_are_accepted_or_refused_with_a_lesson() {
+    let outcomes: Vec<Result<DriveJob, String>> = RECORDED_GPT_OSS
+        .iter()
+        .map(|(sha256, text, before)| {
+            let outcome = drive(recorded(sha256, text));
+            if let Err(error) = &outcome {
+                // The old one-line reason is still the start of the new one.
+                assert!(error.contains(before), "{error}");
+            }
+            outcome
+        })
+        .collect();
+
+    // 1. `snapshot: null` was refused; it is now the default aria snapshot.
+    let first = outcomes[0].as_ref().unwrap();
+    assert_eq!(first.snapshot, SnapshotKind::Aria);
+    assert_eq!(first.url, "http://localhost:8765");
+    assert_eq!(first.steps, Vec::<Value>::new());
+    assert_eq!(first.viewport, Some((1280, 800)));
+    // 2. An explicit "none" is still honored.
+    assert_eq!(outcomes[1].as_ref().unwrap().snapshot, SnapshotKind::None);
+    // 3-7. Script in steps is still refused, now with what to do instead.
+    for (index, outcome) in outcomes.iter().enumerate().skip(2) {
+        let error = outcome.as_ref().unwrap_err();
+        assert!(
+            error.contains(
+                "Steps are actions, not code: browser runs no JavaScript or Playwright script"
+            ) && error.contains("call with just url and read the snapshot")
+                && error.contains("A step is an object with an action: goto (url); click")
+                && error.contains(
+                    r#"Example: {"url": "http://localhost:8765", "steps": [{"action": "click""#
+                ),
+            "call {}: {error}",
+            index + 1
+        );
+    }
+    let third = outcomes[2].as_ref().unwrap_err();
+    assert!(
+        third.contains(r#"steps[0].code is not a step field; got "await page.content();""#),
+        "{third}"
+    );
+    let fifth = outcomes[4].as_ref().unwrap_err();
+    assert!(
+        fifth.contains(r#"steps[0] must be an object, not a string; got "await page.content();""#),
+        "{fifth}"
+    );
+}
+
+#[test]
+fn recorded_qwen3_coder_calls_are_accepted_unchanged() {
+    for (sha256, text) in RECORDED_QWEN3_CODER {
+        let arguments = recorded(sha256, text);
+        let job = drive(arguments.clone()).unwrap_or_else(|error| panic!("{text}: {error}"));
+        assert_eq!(job.snapshot, SnapshotKind::Aria);
+        assert_eq!(
+            Value::Array(job.steps),
+            arguments.get("steps").cloned().unwrap_or(json!([]))
+        );
+    }
+}
+
+#[test]
+fn the_schemas_state_defaults_and_match_the_parser() {
+    let schema = BrowserTool::schema();
+    let properties = schema["properties"].as_object().unwrap();
+    for (name, property) in properties {
+        assert!(property["type"].is_string(), "{name} has no type");
+        let description = property["description"].as_str().unwrap_or_default();
+        assert!(!description.is_empty(), "{name} has no description");
+    }
+    assert_eq!(schema["required"], json!(["url"]));
+    let mut names: Vec<&str> = properties.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    let mut fields = DRIVE_FIELDS.to_vec();
+    fields.sort_unstable();
+    assert_eq!(names, fields);
+    // Defaults the schema states are the parser's.
+    let defaults = drive(json!({"url": "http://localhost/", "viewport": {}})).unwrap();
+    assert_eq!(properties["snapshot"]["default"], "aria");
+    assert_eq!(defaults.snapshot, SnapshotKind::Aria);
+    assert_eq!(
+        properties["viewport"]["properties"]["width"]["default"],
+        defaults.viewport.unwrap().0
+    );
+    assert_eq!(
+        properties["viewport"]["properties"]["height"]["default"],
+        defaults.viewport.unwrap().1
+    );
+    for kind in properties["snapshot"]["enum"].as_array().unwrap() {
+        drive(json!({"url": "http://localhost/", "snapshot": kind})).unwrap();
+    }
+    let step = &properties["steps"]["items"];
+    assert_eq!(step["properties"]["action"]["type"], "string");
+    assert_eq!(step["properties"]["action"]["enum"], json!(ACTIONS));
+    let mut fields: Vec<&str> = step["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort_unstable();
+    let mut expected = STEP_FIELDS.to_vec();
+    expected.sort_unstable();
+    assert_eq!(fields, expected);
+    // The example step in the steps description is a valid step.
+    let description = properties["steps"]["description"].as_str().unwrap();
+    let start = description.find("{\"action\"").unwrap();
+    let end = description[start..].find("}}").unwrap() + start + 2;
+    check_step(&serde_json::from_str(&description[start..end]).unwrap(), 0).unwrap();
+    for action in ACTIONS {
+        assert!(description.contains(action), "{action}");
+    }
+    // The description makes the common path plain.
+    assert!(BROWSER_DESCRIPTION.contains("Call it with just url"));
+    assert!(BROWSER_DESCRIPTION.contains("Steps are actions, not code"));
+
+    let check = BrowserCheckTool::schema();
+    let mut names: Vec<&str> = check["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    names.sort_unstable();
+    let mut fields = CHECK_FIELDS.to_vec();
+    fields.sort_unstable();
+    assert_eq!(names, fields);
+    assert!(CHECK_DESCRIPTION.contains("exactly one of path"));
+}
+
 #[test]
 fn the_payload_carries_the_credential_only_in_proxy_password() {
     let job = drive(json!({

@@ -192,7 +192,7 @@ impl BuiltinTool for TextSplitTool {
 
         validate_text_bytes(text, "text", "text_split", TEXT_SPLIT_TEXT_MAX_BYTES)?;
         let delimiter = match arguments.get("delimiter") {
-            None => "\n",
+            None | Some(serde_json::Value::Null) => "\n",
             Some(value) => value.as_str().ok_or_else(|| ToolError::InvalidArgs {
                 tool: "text_split".to_string(),
                 reason: "field 'delimiter' must be a string".to_string(),
@@ -263,6 +263,15 @@ mod tests {
             .execute(serde_json::json!({"json": "not an object"}))
             .await;
         assert!(matches!(result, Err(ToolError::InvalidArgs { .. })));
+    }
+
+    #[tokio::test]
+    async fn text_split_reads_a_null_delimiter_as_the_default() {
+        let result = TextSplitTool
+            .execute(serde_json::json!({"text": "a\nb", "delimiter": null}))
+            .await
+            .unwrap();
+        assert_eq!(result["parts"], serde_json::json!(["a", "b"]));
     }
 
     #[tokio::test]

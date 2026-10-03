@@ -182,19 +182,35 @@ sites.
 
 Results are text. No screenshot reaches the model.
 
-`browser` takes a `url`, up to 40 `steps`, `snapshot` (`aria`, `text` or `none`) and an
-optional `viewport`. A step's `target` is one of `role` (with an optional `name`),
-`label`, `text`, `testid` or `css`, and `nth` picks one of several matches. There is no
-step that runs script in the page. Only `http` and `https` URLs without a user name or
-password are opened. The result has the final URL, title and status, each step's
-outcome, time and Playwright line, the snapshot (cut to `snapshot_max_bytes`), console
-errors, page errors, dialogs, and failed, refused and HTTP-error requests.
+`browser` takes a `url`, up to 40 `steps`, `snapshot` and an optional `viewport` (1280
+by 720 when left out). `snapshot` is `aria` when left out: the page's accessibility
+tree, with the roles and names that steps target. `text` returns the page's visible
+text instead, and `none` returns no snapshot. A step is one action: `goto`, `click`,
+`fill`, `select`, `check`, `uncheck`, `press`, `wait_for`, `expect_text`, `reload` or
+`back`. A step's `target` is one of `role` (with an optional `name`), `label`, `text`,
+`testid` or `css`, and `nth` picks one of several matches. There is no step that runs
+script in the page. Only `http` and `https` URLs without a user name or password are
+opened. The result has the final URL, title and status, each step's outcome, time and
+Playwright line, the snapshot (cut to `snapshot_max_bytes`), console errors, page
+errors, dialogs, and failed, refused and HTTP-error requests.
+
+The tool's description tells the model the usual sequence: call with just the `url` and
+read the snapshot, then call again with steps that target what the snapshot showed.
+Each call starts a fresh browser, so a call repeats the steps that bring the page to
+the state it checks.
 
 `browser_check` takes the repository `path` of a test file, or its source as `script`,
 plus an optional `grep` and `base_url` (by default the app on the Session's first
 exposed port). Tests import `test` and `expect` from `@playwright/test`, and
 `page.goto('/')` opens `base_url`. The result has each test's title, line, status, time
 and first error with its location and source snippet, and the counts.
+
+In both tools an optional argument given as `null`, including a field of a step or of
+its target, counts as not given. A call that is still invalid is refused before
+anything runs, and the refusal names the argument, shows what was received, says what
+is accepted and ends with one valid call. A step written as JavaScript or Playwright
+code, such as `{"code": "await page.content();"}`, is refused with the actions a step
+can take and the advice to read the page from the snapshot.
 
 ## What leaves the repository
 

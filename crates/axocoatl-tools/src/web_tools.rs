@@ -591,7 +591,7 @@ impl WebSearchTool {
             });
         }
         let max = match arguments.get("max_results") {
-            None => 5,
+            None | Some(serde_json::Value::Null) => 5,
             Some(value) => {
                 let value = value.as_u64().ok_or_else(|| ToolError::InvalidArgs {
                     tool: "web_search".to_string(),
@@ -859,7 +859,7 @@ impl WebFetchTool {
             .map_err(|error| Self::invalid(error.detail))?;
         let integer = |name: &str, default: u64, min: u64, max: u64| -> Result<u64, ToolError> {
             match object.get(name) {
-                None => Ok(default),
+                None | Some(serde_json::Value::Null) => Ok(default),
                 Some(value) => {
                     let value = value.as_u64().ok_or_else(|| {
                         Self::invalid(format!("field '{name}' must be an integer"))
@@ -1509,6 +1509,30 @@ mod tests {
         assert_eq!(prepared.query_sha256(), Some(sha256_hex(b"rust").as_str()));
         assert!(search
             .prepare_search(&serde_json::json!({"query": 5}))
+            .is_err());
+    }
+
+    #[test]
+    fn null_is_not_given_for_optional_web_arguments() {
+        let search = WebSearchTool::new(Arc::new(NullBackend));
+        let prepared = search
+            .prepare_search(&serde_json::json!({"query": "rust", "max_results": null}))
+            .unwrap();
+        assert_eq!(prepared.max, 5);
+        let tool = WebFetchTool::new(Arc::new(CannedFetcher::page("text/html", b"<p>x</p>")));
+        let prepared = tool
+            .prepare_fetch(&serde_json::json!({
+                "url": "https://example.com/", "max_chars": null, "start_paragraph": null,
+            }))
+            .unwrap();
+        assert_eq!(prepared.arguments.max_chars, WEB_FETCH_DEFAULT_MAX_CHARS);
+        assert_eq!(prepared.arguments.start_paragraph, 1);
+        // The required fields are still required.
+        assert!(search
+            .prepare_search(&serde_json::json!({"query": null}))
+            .is_err());
+        assert!(tool
+            .prepare_fetch(&serde_json::json!({"url": null}))
             .is_err());
     }
 

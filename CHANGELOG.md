@@ -5,6 +5,29 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`browser` and `browser_check` accept `null` for an optional argument and explain
+  every refusal.** A model that gave an optional argument as `null`, such as
+  `"snapshot": null`, had the whole call refused, and a refusal said only which rule
+  was broken, so a model could retry until it found a call that ran but showed it
+  nothing (`"snapshot": "none"`). An optional argument given as `null`, at the top
+  level or in a step, its target or the viewport, now counts as not given, so
+  `"snapshot": null` returns the default `aria` snapshot. Each refusal names the
+  argument, shows what was received, says what is accepted and ends with one valid
+  call, on the call's own URL when it has one. A step written as code, such as
+  `{"code": "await page.content();"}`, is refused with the actions a step can take
+  and the advice to call with just the `url` and read the snapshot. The tool
+  descriptions now give the usual sequence (read the snapshot, then act on what it
+  showed) and say that steps are actions, not code. Every top-level property of the
+  schema has a type and a description that states its default and accepted values, for
+  chat templates that show a model nothing else of the schema.
+- `web_search`'s `max_results`, `web_fetch`'s `max_chars` and `start_paragraph`, the
+  `path` of `list_dir` and `grep`, the `rows` and `cols` of `spawn_terminal`, the
+  `tail_lines` of `read_terminal` and the `delimiter` of `text_split` given as `null`
+  now take their defaults instead of refusing the call.
+
 ## [1.2.0] - 2026-10-03
 
 ### Added
