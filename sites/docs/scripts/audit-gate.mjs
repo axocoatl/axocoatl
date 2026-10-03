@@ -9,9 +9,12 @@
 //   - the package's published `latest` version is still inside the recorded
 //     `vulnerable` range and inside the range npm reports for the advisory, so
 //     a published fix voids the exception;
-//   - every dependency path from this package to an installed copy of the
-//     vulnerable package goes through one of the listed `dependents`, read
-//     from package-lock.json (aliased installs included).
+//   - read from package-lock.json, aliased installs included: every package
+//     that depends directly on an installed copy of the vulnerable package is
+//     one of the listed `dependents`; every dependency path to such a copy,
+//     from this package and from its workspaces and linked folders, goes
+//     through one of them; and every installed copy can be traced to one of
+//     those starting points, so a copy the lockfile does not connect fails.
 //
 // Usage: node scripts/audit-gate.mjs [--package-lock-only]
 // No dependencies; Node 22.
@@ -284,6 +287,14 @@ function parentLocation(location) {
   return index <= 0 ? '' : location.slice(0, index - 1);
 }
 
+// npm leaves out the name of a folder whose package name matches the folder
+// (`tools/tool` is `tool`, `packages/@acme/tool` is `@acme/tool`).
+function nameFromFolder(location) {
+  const base = path.posix.basename(location);
+  const parent = path.posix.basename(path.posix.dirname(location));
+  return parent.startsWith('@') ? `${parent}/${base}` : base;
+}
+
 export function lockGraph(lock) {
   const packages = lock?.packages;
   if (!packages || typeof packages !== 'object' || !packages['']) {
@@ -308,13 +319,17 @@ export function lockGraph(lock) {
       base = parentLocation(base);
     }
   };
-  const nameOf = (location) => (location === ''
-    ? packages[''].name ?? '(root)'
-    : packages[location]?.name ?? installedName(location));
+  const isFolder = (location) => !location.includes('node_modules/');
+  const nameOf = (location) => {
+    if (location === '') return packages[''].name ?? '(root)';
+    const name = packages[location]?.name;
+    if (typeof name === 'string') return name;
+    return isFolder(location) ? nameFromFolder(location) : installedName(location);
+  };
   const edges = (location) => {
     const entry = packages[location] ?? {};
     const fields = ['dependencies', 'optionalDependencies', 'peerDependencies'];
-    if (location === '' || !location.includes('node_modules/')) fields.push('devDependencies');
+    if (isFolder(location)) fields.push('devDependencies');
     const names = new Set(fields.flatMap((field) => Object.keys(entry[field] ?? {})));
     return [...names].map((name) => resolve(location, name)).filter((target) => target !== null);
   };
@@ -326,31 +341,63 @@ export function lockGraph(lock) {
   };
   const locationsOf = (pkg) => Object.keys(packages)
     .filter((location) => location !== '' && !packages[location].link && nameOf(location) === pkg);
-  return { packages, nameOf, labelOf, edges, locationsOf };
+  // Where a search starts: the root, then the folders outside node_modules/
+  // (workspaces and linked folders). npm installs workspaces although the
+  // root lists them under `workspaces`, not as dependencies.
+  const starts = ['', ...Object.keys(packages)
+    .filter((location) => location !== '' && isFolder(location) && !packages[location].link)];
+  return { packages, nameOf, labelOf, edges, locationsOf, starts };
 }
 
-// Finds a dependency path from the root to one of `targets` that passes
-// through none of `dependents`. Returns the path as package names, or null
-// when every path goes through a listed dependent.
-export function pathAvoiding(graph, targets, dependents) {
-  const blocked = new Set(dependents);
-  const parent = new Map([['', null]]);
-  const queue = [''];
-  while (queue.length > 0) {
-    const location = queue.shift();
-    for (const next of graph.edges(location)) {
-      if (parent.has(next)) continue;
-      if (targets.has(next)) {
-        const trail = [next];
-        for (let at = location; at !== null; at = parent.get(at)) trail.push(at);
-        return trail.reverse().map((step) => graph.labelOf(step));
+// Breadth-first search from the root, then from each start the search has not
+// reached yet. Locations whose package is in `blocked` are not entered, except
+// `targets`. Returns a map from each reached location to the location it was
+// reached from (null for a start), in the order they were reached.
+function reach(graph, targets = new Set(), blocked = new Set()) {
+  const enters = (location) => targets.has(location) || !blocked.has(graph.nameOf(location));
+  const parent = new Map();
+  for (const start of graph.starts) {
+    if (parent.has(start) || (start !== '' && !enters(start))) continue;
+    parent.set(start, null);
+    const queue = [start];
+    while (queue.length > 0) {
+      const location = queue.shift();
+      for (const next of graph.edges(location)) {
+        if (parent.has(next) || !enters(next)) continue;
+        parent.set(next, location);
+        queue.push(next);
       }
-      if (blocked.has(graph.nameOf(next))) continue;
-      parent.set(next, location);
-      queue.push(next);
     }
   }
-  return null;
+  return parent;
+}
+
+// Finds a dependency path from the root, a workspace or a linked folder to
+// one of `targets` that passes through none of `dependents`. Returns the path
+// as package names, or null when no such path exists. A target that no path
+// reaches at all also gives null; untraced() finds those.
+export function pathAvoiding(graph, targets, dependents) {
+  const parent = reach(graph, targets, new Set(dependents));
+  const hit = [...parent.keys()].find((location) => targets.has(location));
+  if (hit === undefined) return null;
+  const trail = [];
+  for (let at = hit; at !== null; at = parent.get(at)) trail.push(at);
+  return trail.reverse().map((step) => graph.labelOf(step));
+}
+
+// Returns the targets that no dependency path from the root, a workspace or a
+// linked folder reaches, such as extraneous copies.
+export function untraced(graph, targets) {
+  const parent = reach(graph);
+  return [...targets].filter((location) => !parent.has(location));
+}
+
+// Returns the lock locations that depend directly on one of `targets`, other
+// than the targets themselves.
+export function directDependents(graph, targets) {
+  return Object.keys(graph.packages).filter((location) => !targets.has(location)
+    && !graph.packages[location].link
+    && graph.edges(location).some((next) => targets.has(next)));
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +556,15 @@ export function runGate({
           const trail = pathAvoiding(lock, targets, exception.dependents);
           if (trail) {
             reasons.push(`dependency path ${trail.join(' > ')} does not go through ${exception.dependents.join(' or ')}`);
+          }
+          const unlisted = new Set(directDependents(lock, targets)
+            .filter((location) => !exception.dependents.includes(lock.nameOf(location)))
+            .map((location) => lock.labelOf(location)));
+          for (const label of unlisted) {
+            reasons.push(`${label} depends on ${advisory.package} directly but is not in dependents`);
+          }
+          for (const location of untraced(lock, targets)) {
+            reasons.push(`cannot trace ${location} to the root, a workspace or a linked folder in package-lock.json`);
           }
         }
       } catch (error) {

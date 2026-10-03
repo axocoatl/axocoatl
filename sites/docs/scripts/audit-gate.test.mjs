@@ -11,6 +11,10 @@
 //     critical        plus `minimist@1.2.5`
 //     moderate        plus `postcss@8.5.20`
 //     registry-error  the committed tree audited against an unreachable registry
+//     workspace       a separate project, not trimmed: root `docs` with
+//                     `workspaces: ["tools/*"]` and no dependencies, and the
+//                     workspace `tools/tool` depending on
+//                     `http-cache-semantics@4.2.0`
 //   lock-*.json       the matching package-lock.json, trimmed to the root and
 //                     the packages that can reach http-cache-semantics
 //   dist-tags-*.json  `npm view http-cache-semantics dist-tags --json`
@@ -24,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import {
   advisoryIdFromUrl,
   collectAdvisories,
+  directDependents,
   EXCEPTIONS_FILE,
   GateError,
   lockGraph,
@@ -31,6 +36,7 @@ import {
   pathAvoiding,
   runGate,
   satisfies,
+  untraced,
   utcToday,
   validateExceptions,
 } from './audit-gate.mjs';
@@ -38,6 +44,14 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixtureDir = path.join(here, 'audit-gate-fixtures');
 const fixture = (name) => fs.readFileSync(path.join(fixtureDir, name), 'utf8');
+const NAME = 'GHSA-ch52-4w7c-c8xp http-cache-semantics (high)';
+
+// A recorded fixture, changed by `change` and serialized again.
+function changed(name, change) {
+  const value = JSON.parse(fixture(name));
+  change(value);
+  return JSON.stringify(value);
+}
 
 const EXCEPTION = Object.freeze({
   advisory: 'GHSA-ch52-4w7c-c8xp',
@@ -55,6 +69,7 @@ function gate({
   auditStatus = 1,
   auditStdout,
   lock = 'lock-covered.json',
+  lockText,
   latest,
   viewStatus = 0,
   exceptions = [EXCEPTION],
@@ -80,7 +95,7 @@ function gate({
   };
   const read = (name) => {
     if (name === EXCEPTIONS_FILE) return exceptionsText ?? JSON.stringify(exceptions);
-    if (name === 'package-lock.json') return fixture(lock);
+    if (name === 'package-lock.json') return lockText ?? fixture(lock);
     throw new Error(`unexpected read of ${name}`);
   };
   const result = runGate({
@@ -163,6 +178,7 @@ test('a new dependent path fails', () => {
   const result = gate({ audit: 'audit-new-path.json', lock: 'lock-new-path.json' });
   assert.equal(result.ok, false);
   assert.match(result.failureText, /dependency path docs > make-fetch-happen > http-cache-semantics does not go through astro/);
+  assert.match(result.failureText, /make-fetch-happen depends on http-cache-semantics directly but is not in dependents/);
 });
 
 test('the new path passes once its dependent is reviewed and listed', () => {
@@ -178,12 +194,62 @@ test('a direct dependency on the package fails', () => {
   const result = gate({ audit: 'audit-direct.json', lock: 'lock-direct.json' });
   assert.equal(result.ok, false);
   assert.match(result.failureText, /dependency path docs > http-cache-semantics does not go through astro/);
+  assert.match(result.failureText, /docs depends on http-cache-semantics directly but is not in dependents/);
 });
 
 test('an aliased install of the package fails', () => {
   const result = gate({ audit: 'audit-alias.json', lock: 'lock-alias.json' });
   assert.equal(result.ok, false);
   assert.match(result.failureText, /dependency path docs > hcs \(npm:http-cache-semantics\) does not go through astro/);
+  assert.match(result.failureText, /docs depends on http-cache-semantics directly but is not in dependents/);
+});
+
+test('a new dependent inside a listed dependent\'s dependencies fails', () => {
+  // astro > make-fetch-happen > http-cache-semantics: every path still goes
+  // through astro, but make-fetch-happen was never reviewed.
+  const lockText = changed('lock-covered.json', ({ packages }) => {
+    const astro = packages['node_modules/astro'];
+    delete astro.dependencies['http-cache-semantics'];
+    astro.dependencies['make-fetch-happen'] = '^16.0.1';
+    packages['node_modules/make-fetch-happen'] = JSON.parse(fixture('lock-new-path.json'))
+      .packages['node_modules/make-fetch-happen'];
+  });
+  const result = gate({ lockText });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.failures, [
+    `${NAME}: make-fetch-happen depends on http-cache-semantics directly but is not in dependents`,
+  ]);
+  const listed = gate({ lockText, exceptions: [{ ...EXCEPTION, dependents: ['astro', 'make-fetch-happen'] }] });
+  assert.equal(listed.ok, true, listed.output);
+});
+
+test('a workspace that depends on the package fails', () => {
+  // npm lists workspaces under the root's `workspaces`, not its dependencies.
+  const result = gate({ audit: 'audit-workspace.json', lock: 'lock-workspace.json' });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.failures, [
+    `${NAME}: dependency path tool > http-cache-semantics does not go through astro`,
+    `${NAME}: tool depends on http-cache-semantics directly but is not in dependents`,
+  ]);
+  assert.doesNotMatch(result.output, /exception applied/);
+});
+
+test('an installed copy that no dependency path reaches fails closed', () => {
+  const stale = 'node_modules/astro-expressive-code/node_modules/http-cache-semantics';
+  const lockText = changed('lock-covered.json', ({ packages }) => {
+    packages[stale] = { version: '4.1.1', extraneous: true };
+  });
+  const auditStdout = changed('audit-covered.json', ({ vulnerabilities }) => {
+    vulnerabilities['http-cache-semantics'].nodes.push(stale);
+  });
+  const result = gate({ lockText, auditStdout });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.failures, [
+    `${NAME}: cannot trace ${stale} to the root, a workspace or a linked folder in package-lock.json`,
+  ]);
+  const unreported = gate({ lockText });
+  assert.equal(unreported.ok, false);
+  assert.match(unreported.failureText, /cannot trace node_modules\/astro-expressive-code\/node_modules\/http-cache-semantics/);
 });
 
 test('a missing package-lock.json fails closed', () => {
@@ -281,6 +347,20 @@ test('linked folders are followed, and a link to an unlisted folder fails closed
   assert.equal(pathAvoiding(graph, targets, ['astro', 'tool']), null);
   delete lock.packages['tools/tool'];
   assert.throws(() => lockGraph(lock).edges(''), /links node_modules\/tool to a folder it does not list/);
+});
+
+test('workspaces are searched although the root does not depend on them', () => {
+  const graph = lockGraph(JSON.parse(fixture('lock-workspace.json')));
+  assert.deepEqual(graph.starts, ['', 'tools/tool']);
+  assert.equal(graph.nameOf('tools/tool'), 'tool');
+  const targets = new Set(graph.locationsOf('http-cache-semantics'));
+  assert.deepEqual([...targets], ['node_modules/http-cache-semantics']);
+  assert.deepEqual(pathAvoiding(graph, targets, ['astro']), ['tool', 'http-cache-semantics']);
+  assert.equal(pathAvoiding(graph, targets, ['tool']), null);
+  assert.deepEqual(untraced(graph, targets), []);
+  assert.deepEqual(directDependents(graph, targets), ['tools/tool']);
+  const scoped = lockGraph({ packages: { '': { name: 'docs' }, 'packages/@acme/tool': { version: '1.0.0' } } });
+  assert.equal(scoped.nameOf('packages/@acme/tool'), '@acme/tool');
 });
 
 test('exception validation', () => {

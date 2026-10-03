@@ -40,7 +40,7 @@ records:
 | `advisory` | The GitHub advisory id, for example `GHSA-ch52-4w7c-c8xp`. |
 | `package` | The vulnerable package. |
 | `vulnerable` | The vulnerable range as reviewed, for example `<=4.2.0`. |
-| `dependents` | The packages through which this site depends on it. |
+| `dependents` | The packages that depend on it directly. |
 | `scope` | `build`: the package runs only while the site is built and is not part of the published files. |
 | `reason` | Why the advisory does not apply here. |
 | `reviewed` | The date of the review (`YYYY-MM-DD`, UTC). |
@@ -52,8 +52,11 @@ own:
 - today (UTC) is on or before `expires`;
 - the package's published `latest` version is still inside `vulnerable` and inside
   the range npm reports for the advisory, so a published fix ends the exception;
-- every dependency path in `package-lock.json` from this site to an installed copy
-  of the package, aliased copies included, goes through one of `dependents`.
+- in `package-lock.json`, aliased copies included: every package that depends
+  directly on an installed copy of the package is one of `dependents`; every
+  dependency path to such a copy from this site, its workspaces and its linked
+  folders goes through one of them; and every installed copy can be traced to one
+  of those starting points, so a copy the lockfile does not connect fails the gate.
 
 When the gate fails on an exception, upgrade if a fix exists; otherwise review the
 advisory again and update `vulnerable`, `dependents`, `reviewed` and `expires`.
