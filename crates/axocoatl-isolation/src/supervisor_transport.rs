@@ -185,8 +185,35 @@ impl SessionSandbox {
         request: ExecRequest,
     ) -> Result<PreparedSupervisedCommand, IsolationError> {
         request.validate_stdin(None).map_err(error)?;
-        let (command, runtime, program) = self.supervisor_transport_command()?;
+        let (command, runtime, program) = self.supervisor_transport_command(None)?;
         prepare_command(command, request, runtime, program).await
+    }
+
+    /// Prepare through the owned helper with an environment file for the
+    /// helper and the command it launches (the egress credential's proxy
+    /// settings). The file is read by the Podman client, so no value of it
+    /// appears in any argv.
+    pub async fn prepare_supervised_command_with_env(
+        &self,
+        request: ExecRequest,
+        stdin: Option<Vec<u8>>,
+        env: crate::egress::ProcessEnv<'_>,
+    ) -> Result<PreparedSupervisedCommand, IsolationError> {
+        request.validate_stdin(stdin.as_deref()).map_err(error)?;
+        if let Some(env_file) = env.env_file {
+            if !env_file.is_absolute() {
+                return Err(error("the process environment file must be absolute"));
+            }
+        }
+        let (command, runtime, program) = self.supervisor_transport_command(env.env_file)?;
+        prepare_command_with_stdin(
+            command,
+            request,
+            stdin.map(std::sync::Arc::from),
+            runtime,
+            program,
+        )
+        .await
     }
 
     /// Preserve the caller's exact stdin bytes through the owned helper. The
@@ -198,7 +225,7 @@ impl SessionSandbox {
         stdin: Vec<u8>,
     ) -> Result<PreparedSupervisedCommand, IsolationError> {
         request.validate_stdin(Some(&stdin)).map_err(error)?;
-        let (command, runtime, program) = self.supervisor_transport_command()?;
+        let (command, runtime, program) = self.supervisor_transport_command(None)?;
         prepare_command_with_stdin(
             command,
             request,
@@ -209,11 +236,18 @@ impl SessionSandbox {
         .await
     }
 
-    fn supervisor_transport_command(&self) -> Result<(Command, String, String), IsolationError> {
+    pub(crate) fn supervisor_transport_command(
+        &self,
+        env_file: Option<&std::path::Path>,
+    ) -> Result<(Command, String, String), IsolationError> {
         let (runtime, root, program) = self.supervised_parts()?;
         let mut command = Command::new("podman");
+        command.args(["exec", "-i"]);
+        if let Some(env_file) = env_file {
+            command.arg("--env-file").arg(env_file);
+        }
         command
-            .args(["exec", "-i", "-w"])
+            .arg("-w")
             .arg(root)
             .arg(&runtime)
             .args(["/axocoatl-exec-supervisor", "--serve"]);

@@ -8,6 +8,7 @@ use axocoatl_exec::protocol::{
     ExecRequest, ProcessOutcome, ServerMessage, StdinDescriptor, MAX_FILE_CAPTURE_BYTES,
     PROTOCOL_VERSION,
 };
+use axocoatl_isolation::egress::{GrantKind, GrantSpec, ProcessEnv};
 use axocoatl_isolation::supervisor_transport::{
     RunningSupervisedCommand, SupervisedExecution, SupervisorCancellation,
 };
@@ -611,18 +612,33 @@ impl InvocationScope {
             lease = self.resource.owner.queued_execution_lease() => lease.map_err(isolation_error)?,
             _ = self.control.cancelled() => return Err(isolation_error("repository tool cancelled before process admission")),
         };
-        let write_restriction = {
+        let (write_restriction, writer, agent) = {
             let state = self.controller.lock().map_err(isolation_error)?;
             self.validate(&state).map_err(isolation_error)?;
             let read_only = state
                 .admitted_write_scope(&self.intent.activation)
                 .map_err(isolation_error)?
                 .is_read_only();
-            process_write_restriction(
-                read_only,
-                &self.intent.tool_name,
-                self.require_complete_capture.load(Ordering::Acquire),
-                self.resource.owner.root(),
+            let agent = state
+                .current(&self.intent.activation)
+                .ok()
+                .and_then(|snapshot| {
+                    snapshot
+                        .contract()
+                        .activations()
+                        .iter()
+                        .find(|item| item.activation == self.intent.activation)
+                        .map(|item| item.input.definition.definition_id.as_str().to_string())
+                });
+            (
+                process_write_restriction(
+                    read_only,
+                    &self.intent.tool_name,
+                    self.require_complete_capture.load(Ordering::Acquire),
+                    self.resource.owner.root(),
+                ),
+                !read_only,
+                agent,
             )
         };
         let index = self
@@ -657,23 +673,48 @@ impl InvocationScope {
             write_restriction,
         };
         request.validate().map_err(isolation_error)?;
-        let command = match stdin {
-            Some(bytes) => {
-                lease
-                    .sandbox()
-                    .prepare_supervised_command_with_stdin(
-                        request.clone(),
-                        bytes.as_bytes().to_vec(),
-                    )
-                    .await
+        // Under network: egress only a writer's shell gets a credential, for
+        // exactly this process. Read-only helpers, the host's captures and
+        // digest observations, and the other repository tools (fixed
+        // commands that never need the network) get none.
+        let credentialed = writer
+            && self.intent.tool_name == "bash"
+            && !self.require_complete_capture.load(Ordering::Acquire);
+        let grant = match lease.sandbox().egress_authority() {
+            Some(authority) if credentialed => {
+                let mut spec = GrantSpec::new(GrantKind::Agent);
+                spec.invocation_id = Some(self.intent.invocation_id.as_str().to_string());
+                spec.activation_id =
+                    Some(self.intent.activation.activation_id.as_str().to_string());
+                spec.node_id = Some(self.intent.activation.node_id.as_str().to_string());
+                spec.agent = agent;
+                spec.process = Some(request.invocation_id.clone());
+                match authority.grant(spec).await {
+                    Ok(grant) => Some(grant),
+                    Err(failure) => {
+                        // The process still runs; without a credential the
+                        // proxy refuses every connection it attempts.
+                        tracing::warn!(
+                            invocation = %self.intent.invocation_id.as_str(),
+                            error = %failure,
+                            "no egress credential for this process"
+                        );
+                        None
+                    }
+                }
             }
-            None => {
-                lease
-                    .sandbox()
-                    .prepare_supervised_command(request.clone())
-                    .await
-            }
-        }?;
+            _ => None,
+        };
+        let command = lease
+            .sandbox()
+            .prepare_supervised_command_with_env(
+                request.clone(),
+                stdin.map(|bytes| bytes.as_bytes().to_vec()),
+                ProcessEnv {
+                    env_file: grant.as_ref().and_then(|grant| grant.env_file.as_deref()),
+                },
+            )
+            .await?;
         if command.request() != &request {
             return Err(isolation_error(
                 "supervisor changed the admitted repository process",
@@ -700,6 +741,8 @@ impl InvocationScope {
         let scope = self.clone();
         let task = tokio::spawn(async move {
             let _ticket = ticket;
+            // The credential ends when its process is settled.
+            let _grant = grant;
             scope.finish(lease, running).await
         });
         let result = OwnedProcessWait {

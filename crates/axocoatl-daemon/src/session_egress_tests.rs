@@ -7,14 +7,14 @@ use std::collections::BTreeMap;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 #[derive(Debug, Default)]
-struct FakeRecord {
+pub(crate) struct FakeRecord {
     lines: Mutex<Vec<NetworkLine>>,
     /// Ordinary appends fail with this once set.
     fail: Mutex<Option<RecordFailure>>,
 }
 
 impl FakeRecord {
-    fn events(&self) -> Vec<NetworkEvent> {
+    pub(crate) fn events(&self) -> Vec<NetworkEvent> {
         self.lines
             .lock()
             .unwrap()
@@ -63,13 +63,13 @@ impl EgressRecordSink for FakeRecord {
 
 /// Maps names to fixed answers and logs every query it receives.
 #[derive(Debug, Default)]
-struct FakeResolver {
+pub(crate) struct FakeResolver {
     answers: BTreeMap<String, Vec<IpAddr>>,
     queries: Mutex<Vec<String>>,
 }
 
 impl FakeResolver {
-    fn with(answers: &[(&str, &[&str])]) -> Arc<Self> {
+    pub(crate) fn with(answers: &[(&str, &[&str])]) -> Arc<Self> {
         Arc::new(Self {
             answers: answers
                 .iter()
@@ -84,7 +84,7 @@ impl FakeResolver {
         })
     }
 
-    fn queries(&self) -> Vec<String> {
+    pub(crate) fn queries(&self) -> Vec<String> {
         self.queries.lock().unwrap().clone()
     }
 }

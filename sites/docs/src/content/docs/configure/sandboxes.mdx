@@ -67,11 +67,15 @@ manual setup guidance. It may start an existing stopped VM.
 
 - `bridge` (the default) — outbound access and explicitly published Preview ports;
 - `none` — no container network, which also disables package downloads,
-  remote tools called from the container, and port publication.
+  remote tools called from the container, and port publication;
+- `egress` — no container network except loopback; an Agent's commands reach only
+  the hosts you list under `sandbox.egress`, through Axocoatl's egress proxy. See
+  [Network egress](#network-egress).
 
-Set `network: none` for repositories you do not trust. Any other value, such as
-`None`, `off` or `disabled`, is a configuration error that `axocoatl validate`,
-`axocoatl doctor` and daemon start report; it never falls back to `bridge`.
+Set `network: none` or `network: egress` for repositories you do not trust. Any
+other value, such as `None`, `off` or `disabled`, is a configuration error that
+`axocoatl validate`, `axocoatl doctor` and daemon start report; it never falls back
+to `bridge`.
 
 Axocoatl starts every Podman container with `--http-proxy=false`, so the host's
 `HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY` and `NO_PROXY` variables (in either case)
@@ -87,6 +91,100 @@ When supported by the host, local Session containers request 2 GiB memory, two
 CPUs, and 512 PIDs. With `require_resource_limits: false`, a host that cannot
 apply cgroup limits falls back to an uncapped container and logs a warning.
 Set it to `true` to fail Session creation instead.
+
+## Network egress
+
+```yaml
+sandbox:
+  backend: podman
+  network: egress
+  egress:
+    allow:
+      - npm
+      - pypi
+      - host: api.example.com
+```
+
+With `network: egress`, a Session container has no network interface other than
+loopback. Its only way out is Axocoatl's egress proxy, which connects only to the
+hosts and ports you allow. The proxy checks a host name against your list before
+anything resolves it, and Axocoatl resolves allowed names on your computer, not in
+the container. The container cannot send DNS queries, UDP or IPv6 traffic off the
+machine. See [`sandbox.egress`](/reference/config/#sandbox) for the list format and
+presets.
+
+How a Session runs under it:
+
+- The proxy runs in a second container, `axo-egr-<session>`, started before the
+  Session container. Its image, `localhost/axocoatl-egress:<id>-<arch>`, is built
+  locally from Axocoatl's bundled execution supervisor and contains nothing else: no
+  shell, no resolver and no environment. It needs no download.
+- The Session container runs with `--network none`. Its first process is Axocoatl's
+  bridge, which serves the proxy on `127.0.0.1:3128`, so the image's own
+  `ENTRYPOINT` does not run under `egress`.
+- Each command an Agent runs with `bash`, each approved setup command, readiness
+  provisioning and each terminal you open gets its own proxy credential, in
+  `HTTPS_PROXY`, `HTTP_PROXY`, their lowercase forms, the npm proxy settings,
+  `NO_PROXY` and `NODE_USE_ENV_PROXY=1`. The credential ends when that command,
+  setup step or terminal does. It reaches the process through an environment file
+  that Podman reads, never through a command line.
+- Read-only helpers, required checks, Axocoatl's own repository captures,
+  background tasks and other commands get no credential, so they have no network.
+- Readiness provisioning reaches only the Alpine, Debian and Ubuntu package mirrors.
+  If an image needs another package manager, use an image that already has
+  Axocoatl's required commands.
+
+The proxy refuses loopback, link-local and other special addresses, and private
+addresses unless you list a private range under `private_destinations`. A
+refusal is an HTTP answer the tool can show. For example, a host that is not on
+the list gets:
+
+```text
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+X-Axocoatl-Egress: denied; reason=not_allowed
+
+{"error":"egress_denied","reason":"not_allowed","host":"example.org","port":443,
+ "hint":"example.org:443 is not in this Session's egress allowlist. Ask the user to allow it for this Session in the Network panel or to add it under sandbox.egress.allow."}
+```
+
+A process without a credential gets `407` with reason `no_credential`, and a name
+that resolves to a refused address gets `403` with `private_destination` or
+`forbidden_destination`.
+
+Every connection the proxy allows or refuses is written to the Session's network
+record before it opens, with the host, port and the tool call whose credential it
+presented. Bytes and duration are added when it closes. If the record cannot be
+written, the connection is refused. Read the record with
+[`GET /api/sessions/{id}/network`](/reference/http-api/).
+
+If the proxy's control channel is lost, Axocoatl removes the proxy container and
+starts it again after 1, 5 and then 30 seconds. After five restarts in ten minutes
+it stays stopped, and the bridge answers every proxied request with `502` until the
+Session's runtime is started again. The proxy fails closed: while it is down,
+nothing gets out.
+
+What egress does not cover:
+
+- The proxy cannot see inside TLS. A listed host that serves many sites, such as a
+  CDN, can be used to reach those sites, and a listed host that accepts uploads
+  (`github`, `npm`, `pypi`, `crates`) is a way for data to leave. `validate` and
+  `doctor` warn about both.
+- Traffic from Axocoatl itself is outside the proxy and its record: model providers,
+  MCP servers, web search, webhooks and Podman image pulls.
+- Agents in one Session share its container. A read-only helper cannot connect to
+  the proxy over TCP, but it can read a running writer's credential from that
+  process's environment under `/proc`. Axocoatl does not separate Agents inside one
+  Session container.
+- Programs that ignore the proxy variables cannot connect at all, for example some
+  Go and gRPC clients, and Node's `fetch` before Node supports
+  `NODE_USE_ENV_PROXY`.
+- Preview ports are not published under `egress` in this version; use `bridge` to
+  preview a web app.
+- Ways attempt containers run with no network under `egress`.
+- A Session created before the native Session format cannot use `egress`; start a
+  new Session.
+- `egress` needs local Podman. E2B is refused.
 
 ## Remote E2B backend
 
@@ -169,6 +267,7 @@ before authorizing sensitive code.
 | --- | --- |
 | Default local development | Podman, bridge network, trust flags off |
 | Review untrusted code without Session egress | Podman, `network: none`, an image already containing required commands, trust flags off, limits required if the host supports them; account separately for host-side image pulls |
+| Install packages from known registries only | Podman, `network: egress` with the registries' presets, trust flags off |
 | Run a local web app in Preview | Podman bridge plus an exposed Session port |
 | Remote compatibility execution | E2B Cloud with scoped credentials and an approved template; no Axocoatl Preview ports |
 | Several isolated Ways | Local Podman |

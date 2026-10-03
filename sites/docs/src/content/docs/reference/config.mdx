@@ -258,9 +258,11 @@ validation error. Axocoatl rejects `network: none` and `network: egress` with E2
 because the remote backend cannot prove that policy.
 
 `network: egress` gives Session containers only the hosts listed under
-`sandbox.egress`, through Axocoatl's proxy. The configuration is validated, but
-this build does not run the proxy yet: the daemon refuses to start with
-`network: egress`.
+`sandbox.egress`, through Axocoatl's egress proxy. Only an Agent's `bash`
+commands, approved setup commands, readiness provisioning and terminals get a
+credential for it; read-only helpers and required checks have no network. See
+[Network egress](/configure/sandboxes/#network-egress) for how it runs and what it
+does not cover.
 
 ```yaml
 sandbox:
@@ -275,9 +277,13 @@ sandbox:
         ports: [8000]
     private_destinations: [10.0.0.0/8]
     sidecar_network: podman      # optional Podman network for the proxy
-    max_connections: 128         # 8-256
-    record_max_events: 50000     # 1000-1000000
+    max_connections: 128         # 8-256 connections open at once
+    record_max_events: 50000     # 1000-1000000 events in one Session's record
 ```
+
+`sidecar_network` names the Podman network the proxy container joins; leave it
+unset for Podman's default network. Each allowed name is resolved on your computer
+when a connection asks for it, so an entry must name the host the tool connects to.
 
 Presets are `npm`, `yarn`, `pypi`, `crates`, `go`, `github`, `alpine`, `debian`
 and `ubuntu`. Their host lists are not yet verified against the live registries.

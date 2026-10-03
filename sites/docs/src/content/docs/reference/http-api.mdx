@@ -386,8 +386,13 @@ with its `reason` and `status`, the addresses used, and the tool call (`binding`
 whose credential it presented. Credentials appear only as 16-hex tags. A `close`
 event adds the bytes sent and received and the duration. `record.full` means new
 connections are refused; `gaps` counts places where a sequence number was skipped.
-`sidecar` and `policies` stay empty until a Session runs under `network: egress`,
-which this build does not start yet.
+Under `network: egress`, `sidecar` reports the egress proxy of the Session's running
+runtime (`state` is `starting`, `ready`, `restarting`, `failed` or `stopped`, with its
+`generation` and the number of `restarts`), and `policies` lists each scope's compiled
+policy: `session` (your `sandbox.egress` list plus this Session's allows),
+`provisioning` (the Alpine, Debian and Ubuntu mirrors) and `browser` when the browser
+tool is configured. Each rule has an `id`, its `text` and its `source`. Both are empty
+under `bridge` and `none`, and while the Session has no running runtime.
 
 ### Turn control plane
 

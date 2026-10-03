@@ -77,7 +77,11 @@ const DYNAMIC_PORT_START_RETRIES: usize = 3;
 /// Durable ownership boundary for local Session containers. The daemon supplies
 /// a stable value derived from its canonical data root; orphan cleanup filters
 /// on this label before considering a container name.
-const RUNTIME_AUTHORITY_LABEL: &str = "io.axocoatl.runtime-authority";
+pub(crate) const RUNTIME_AUTHORITY_LABEL: &str = "io.axocoatl.runtime-authority";
+/// Name prefixes of containers that serve one Session from outside it: the
+/// egress sidecar, the browser and the egress Preview. Each ends in the
+/// Session id and is removed with its Session.
+pub(crate) const DEPENDENT_CONTAINER_PREFIXES: [&str; 3] = ["axo-egr-", "axo-brw-", "axo-pvw-"];
 
 /// Commands Axocoatl itself needs in every local repository sandbox. These are
 /// product infrastructure, not a project's language toolchain: Source Control,
@@ -265,6 +269,11 @@ pub enum SandboxNetwork {
     /// No network at all (`--network none`). Cuts off exfiltration / C2 / SSRF
     /// for untrusted code, at the cost of package installs and dev servers.
     None,
+    /// No network interface but loopback (`--network none`); the only way out
+    /// is the egress proxy sidecar, reached through the bridge that runs as
+    /// the container's PID 1. Requires [`SandboxPolicy::egress`] and the
+    /// bundled execution supervisor. Ports are not published.
+    Egress,
 }
 
 /// Trust decisions for a session sandbox. Defaults are secure: project-author
@@ -314,6 +323,13 @@ pub struct SandboxPolicy {
     /// host directory after resolving the selected image's architecture. This
     /// is mutually exclusive with an explicitly supplied supervisor program.
     pub supervisor_installation: Option<SecureDir>,
+    /// The decision point and sidecar settings for [`SandboxNetwork::Egress`].
+    /// Required by that mode and ignored by the others.
+    pub egress: Option<crate::egress::EgressAttachment>,
+    /// Mount the `axo-svc-{session}` volume at `/run/axocoatl-svc`, where each
+    /// exposed port is served as a Unix socket (by PID 1 under egress, or by
+    /// [`SessionSandbox::ensure_service_sockets`] otherwise).
+    pub service_sockets: bool,
 }
 
 impl Default for SandboxPolicy {
@@ -329,6 +345,8 @@ impl Default for SandboxPolicy {
             control_plane_roots: Vec::new(),
             supervisor_program: None,
             supervisor_installation: None,
+            egress: None,
+            service_sockets: false,
         }
     }
 }
@@ -551,10 +569,65 @@ pub struct SessionSandbox {
     passive_exec_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     /// Present only on the actual owner that installed this verified mount.
     supervisor_program: Option<SupervisorProgram>,
+    /// Under `network: egress`, the decision point that mints the
+    /// credentials setup, provisioning, terminals and Agents present.
+    egress: Option<crate::egress::EgressAttachment>,
+    /// The egress proxy sidecar. Only the owning handle holds it; it is
+    /// stopped after the Session container is removed.
+    egress_sidecar: Option<Arc<crate::egress_sidecar::EgressSidecar>>,
+    /// The `axo-svc-{session}` volume and the ports served in it, when the
+    /// container mounts it.
+    service_sockets: Option<ServiceSockets>,
+    /// Serializes starting the service-socket forwarder (bridge and none).
+    service_forwarder: Arc<tokio::sync::Mutex<()>>,
     /// Background tasks started in this container.
     tasks: std::sync::Mutex<Vec<BgTaskHandle>>,
     /// Interactive PTY-backed terminals.
     terminals: std::sync::Mutex<Vec<std::sync::Arc<crate::pty::PtyTerminal>>>,
+}
+
+/// The Session's service sockets: each exposed port, served as
+/// `/run/axocoatl-svc/{port}.sock` in the `volume`, which other containers
+/// (the browser, an egress Preview) mount to reach the Session's apps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceSockets {
+    pub volume: String,
+    pub ports: Vec<u16>,
+    /// Under egress, the container's PID 1 serves them; otherwise a
+    /// forwarder started by [`SessionSandbox::ensure_service_sockets`] does.
+    pub served_by_pid_one: bool,
+}
+
+impl ServiceSockets {
+    /// The socket path for one port, inside any container that mounts the
+    /// volume at `/run/axocoatl-svc`.
+    pub fn socket_path(port: u16) -> String {
+        format!("{}/{port}.sock", crate::egress_sidecar::SERVICE_SOCKET_DIR)
+    }
+}
+
+/// Stops a sidecar started for a Session container that never became usable.
+struct SidecarStartGuard(Option<Arc<crate::egress_sidecar::EgressSidecar>>);
+
+impl SidecarStartGuard {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for SidecarStartGuard {
+    fn drop(&mut self) {
+        if let Some(sidecar) = self.0.take() {
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => {
+                    runtime.spawn(async move { sidecar.stop().await });
+                }
+                // Without a runtime, dropping the sidecar still kills its
+                // Podman client, and the proxy exits on end of input.
+                Err(_) => drop(sidecar),
+            }
+        }
+    }
 }
 
 impl SessionSandbox {
@@ -851,6 +924,26 @@ impl SessionSandbox {
         }
         Self::verify_start_authorities(working_dir, &policy.control_plane_roots)?;
         Self::verify_supervisor_policy(policy)?;
+        let egress_mode = policy.network == SandboxNetwork::Egress && !policy.passive_start;
+        if egress_mode {
+            if policy.egress.is_none() {
+                return Err(IsolationError::OciSetupFailed(
+                    "network: egress needs the daemon's egress decision point".to_string(),
+                ));
+            }
+            if policy.supervisor_program.is_none() && policy.supervisor_installation.is_none() {
+                return Err(IsolationError::OciSetupFailed(
+                    "network: egress needs the bundled execution supervisor".to_string(),
+                ));
+            }
+            // One bridge listener serves the proxy; the rest serve ports.
+            if exposed_ports.len() >= crate::egress_sidecar::MAX_BRIDGE_LISTENERS {
+                return Err(IsolationError::OciSetupFailed(format!(
+                    "network: egress serves at most {} exposed ports",
+                    crate::egress_sidecar::MAX_BRIDGE_LISTENERS - 1
+                )));
+            }
+        }
         let mut control_plane_dirs = policy.control_plane_dirs.clone();
         if let Some(program) = &policy.supervisor_program {
             // A read-only file mount alone is insufficient when the same host
@@ -955,6 +1048,52 @@ impl SessionSandbox {
             .then(|| Self::node_dependency_volume(session_id, &working_dir_path))
             .flatten();
 
+        // Under egress the sidecar must be answering before the Session
+        // container exists, so its bridge never starts without a proxy. The
+        // guard stops the sidecar again if anything below fails.
+        let mut sidecar_guard = SidecarStartGuard(None);
+        if egress_mode {
+            let attachment = policy
+                .egress
+                .as_ref()
+                .expect("egress attachment checked above");
+            let program = effective_policy
+                .supervisor_program
+                .as_ref()
+                .ok_or_else(|| {
+                    IsolationError::OciSetupFailed(
+                        "network: egress needs the bundled execution supervisor".to_string(),
+                    )
+                })?;
+            let image = crate::egress_image::ensure_egress_image(program).await?;
+            let sidecar = crate::egress_sidecar::EgressSidecar::start(
+                crate::egress_sidecar::SidecarSpec {
+                    session_id: session_id.to_string(),
+                    runtime_authority: policy.runtime_authority.clone(),
+                    image,
+                    network: attachment.sidecar_network.clone(),
+                    max_connections: attachment.max_connections,
+                    require_resource_limits: policy.require_resource_limits,
+                    labels: attachment.labels.clone(),
+                },
+                attachment.authority.clone(),
+                crate::egress_control::ControlTiming::default(),
+            )
+            .await?;
+            sidecar_guard.0 = Some(Arc::new(sidecar));
+        } else if policy.service_sockets && !policy.passive_start {
+            crate::egress_sidecar::create_service_volume(
+                session_id,
+                policy.runtime_authority.as_deref(),
+                policy
+                    .egress
+                    .as_ref()
+                    .map(|attachment| attachment.labels.as_slice())
+                    .unwrap_or_default(),
+            )
+            .await?;
+        }
+
         // Start the long-lived idle container. Resource caps remain a
         // best-effort compatibility toggle. Ports are different: every
         // Session receives its own Podman-assigned loopback host ports, and a
@@ -977,6 +1116,7 @@ impl SessionSandbox {
             Self::verify_start_authorities(working_dir, &policy.control_plane_roots)?;
             Self::verify_supervisor_policy(&effective_policy)?;
             match Self::run_container(
+                session_id,
                 &container,
                 &dir,
                 run_image,
@@ -1053,7 +1193,7 @@ impl SessionSandbox {
 
         let expected_mappings: &[u16] = match effective_policy.network {
             SandboxNetwork::Bridge => &publish,
-            SandboxNetwork::None => &[],
+            SandboxNetwork::None | SandboxNetwork::Egress => &[],
         };
         let published_ports =
             match Self::discover_published_ports(&container_id, expected_mappings).await {
@@ -1081,6 +1221,19 @@ impl SessionSandbox {
             passive_execution_usable: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             passive_exec_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             supervisor_program: effective_policy.supervisor_program.clone(),
+            egress: if egress_mode {
+                policy.egress.clone()
+            } else {
+                None
+            },
+            egress_sidecar: sidecar_guard.0.clone(),
+            service_sockets: (!policy.passive_start && (egress_mode || policy.service_sockets))
+                .then(|| ServiceSockets {
+                    volume: crate::egress_sidecar::service_volume_name(session_id),
+                    ports: publish.clone(),
+                    served_by_pid_one: egress_mode,
+                }),
+            service_forwarder: Arc::new(tokio::sync::Mutex::new(())),
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
         };
@@ -1113,7 +1266,7 @@ impl SessionSandbox {
         let readiness = if policy.passive_start {
             Self::ensure_passive_repository_readiness(&container_id, &image).await
         } else {
-            Self::ensure_repository_readiness(&container_id, &image).await
+            Self::ensure_repository_readiness(&container_id, &image, sandbox.egress.as_ref()).await
         };
         if let Err(error) = readiness {
             let cleanup = lifecycle.finish(SandboxLifecycleDisposition::Remove).await;
@@ -1179,6 +1332,7 @@ impl SessionSandbox {
         }
 
         lifecycle.finish(SandboxLifecycleDisposition::Keep).await?;
+        sidecar_guard.disarm();
         Ok(sandbox)
     }
 
@@ -1347,22 +1501,50 @@ impl SessionSandbox {
         })?;
         let lifecycle = Self::supervise_container_lifecycle(container_id.clone());
         let mut results = Vec::with_capacity(commands.len());
-        for command in commands {
+        for (index, command) in commands.iter().enumerate() {
             tracing::info!(
                 container = %self.container,
                 command,
                 "running explicitly-approved project setup command"
             );
+            // Under egress each approved command gets its own credential,
+            // which ends when the command does.
+            let grant = match &self.egress {
+                Some(attachment) => {
+                    let mut spec = crate::egress::GrantSpec::new(crate::egress::GrantKind::Setup);
+                    spec.setup_index = u32::try_from(index).ok();
+                    match attachment.authority.grant(spec).await {
+                        Ok(grant) => Some(grant),
+                        Err(error) => {
+                            let error = IsolationError::OciSetupFailed(format!(
+                                "granting setup egress: {error}"
+                            ));
+                            let cleanup =
+                                lifecycle.finish(SandboxLifecycleDisposition::Remove).await;
+                            return Err(match cleanup {
+                                Ok(()) => error,
+                                Err(cleanup_error) => IsolationError::OciContainerFailed(format!(
+                                    "{error}; removing the failed setup sandbox also failed: {cleanup_error}"
+                                )),
+                            });
+                        }
+                    }
+                }
+                None => None,
+            };
             let mut process = Command::new(PODMAN);
+            process.arg("exec");
+            if let Some(env_file) = grant.as_ref().and_then(|grant| grant.env_file.as_deref()) {
+                process.arg("--env-file").arg(env_file);
+            }
             process
-                .arg("exec")
                 .arg("-w")
                 .arg(&self.working_dir)
                 .arg(&container_id)
                 .args(["sh", "-c", command]);
-            let output = match Self::run_bounded_command(process, SANDBOX_SETUP_COMMAND_TIMEOUT)
-                .await
-            {
+            let output = Self::run_bounded_command(process, SANDBOX_SETUP_COMMAND_TIMEOUT).await;
+            drop(grant);
+            let output = match output {
                 Ok(output) => output,
                 Err(error) => {
                     let cleanup = lifecycle.finish(SandboxLifecycleDisposition::Remove).await;
@@ -1423,6 +1605,10 @@ impl SessionSandbox {
             passive_execution_usable: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             passive_exec_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             supervisor_program: None,
+            egress: None,
+            egress_sidecar: None,
+            service_sockets: None,
+            service_forwarder: Arc::new(tokio::sync::Mutex::new(())),
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
         }
@@ -1674,9 +1860,14 @@ impl SessionSandbox {
         container: &str,
         script: &str,
         timeout: Duration,
+        env_file: Option<&Path>,
     ) -> Result<BoundedCommandOutput, IsolationError> {
         let mut command = Command::new(PODMAN);
-        command.args(["exec", "--user", "0", container, "sh", "-c", script]);
+        command.args(["exec", "--user", "0"]);
+        if let Some(env_file) = env_file {
+            command.arg("--env-file").arg(env_file);
+        }
+        command.args([container, "sh", "-c", script]);
         Self::run_bounded_command(command, timeout).await
     }
 
@@ -1715,6 +1906,7 @@ impl SessionSandbox {
     async fn ensure_repository_readiness(
         container: &str,
         image: &str,
+        egress: Option<&crate::egress::EgressAttachment>,
     ) -> Result<(), IsolationError> {
         let missing = Self::missing_repository_commands(container).await?;
         if missing.is_empty() {
@@ -1727,12 +1919,33 @@ impl SessionSandbox {
             missing = %missing.join(", "),
             "provisioning required Axocoatl repository commands"
         );
+        // Under egress the package manager reaches only the distribution
+        // mirrors, with a credential that ends when provisioning does.
+        let grant = match egress {
+            Some(attachment) => Some(
+                attachment
+                    .authority
+                    .grant(crate::egress::GrantSpec::new(
+                        crate::egress::GrantKind::Provisioning,
+                    ))
+                    .await
+                    .map_err(|error| {
+                        IsolationError::OciSetupFailed(format!(
+                            "granting provisioning egress: {error}"
+                        ))
+                    })?,
+            ),
+            None => None,
+        };
         let provision = Self::podman_exec_shell_as_root(
             container,
             Self::repository_provision_script(),
             SANDBOX_PROVISION_TIMEOUT,
+            grant.as_ref().and_then(|grant| grant.env_file.as_deref()),
         )
-        .await?;
+        .await;
+        drop(grant);
+        let provision = provision?;
         if provision.timed_out {
             return Err(IsolationError::OciContainerFailed(format!(
                 "Session image '{image}' did not become ready: distro-aware provisioning timed out after {} seconds; the sandbox will be removed.",
@@ -1756,8 +1969,14 @@ impl SessionSandbox {
             "Session image '{image}' is not ready for Axocoatl repository work; \
              missing required commands after distro-aware provisioning: {}. \
              Use an image that provides these commands or make its package manager \
-             available ({provision_detail}).",
-            still_missing.join(", ")
+             available ({provision_detail}).{}",
+            still_missing.join(", "),
+            if egress.is_some() {
+                " Under network: egress, provisioning reaches only the Alpine, Debian and \
+                 Ubuntu package mirrors; use an image that already has these commands."
+            } else {
+                ""
+            }
         )))
     }
 
@@ -1786,31 +2005,44 @@ impl SessionSandbox {
             || lc.contains("proxy already running")
     }
 
+    /// `--filter name=…` for Session containers and their dependents. Podman
+    /// joins filters on the same key with OR, and different keys with AND.
+    fn owned_name_filters() -> Vec<String> {
+        std::iter::once("axo-ses-")
+            .chain(DEPENDENT_CONTAINER_PREFIXES)
+            .flat_map(|prefix| ["--filter".to_string(), format!("name={prefix}")])
+            .collect()
+    }
+
+    /// The owned name prefix of a listed container, if any.
+    fn owned_name_prefix(name: &str) -> Option<&'static str> {
+        std::iter::once("axo-ses-")
+            .chain(DEPENDENT_CONTAINER_PREFIXES)
+            .find(|prefix| name.starts_with(prefix) && name.len() > prefix.len())
+    }
+
     fn orphan_list_args(runtime_authority: &str) -> Vec<String> {
-        vec![
-            "ps".into(),
-            "-a".into(),
-            "--filter".into(),
-            "name=axo-ses-".into(),
+        let mut args: Vec<String> = vec!["ps".into(), "-a".into()];
+        args.extend(Self::owned_name_filters());
+        args.extend([
             "--filter".into(),
             format!("label={RUNTIME_AUTHORITY_LABEL}={runtime_authority}"),
             "--format".into(),
             "{{.Names}}".into(),
-        ]
+        ]);
+        args
     }
 
     fn owned_container_list_args(runtime_authority: &str) -> Vec<String> {
-        vec![
-            "ps".into(),
-            "-a".into(),
-            "--no-trunc".into(),
-            "--filter".into(),
-            "name=axo-ses-".into(),
+        let mut args: Vec<String> = vec!["ps".into(), "-a".into(), "--no-trunc".into()];
+        args.extend(Self::owned_name_filters());
+        args.extend([
             "--filter".into(),
             format!("label={RUNTIME_AUTHORITY_LABEL}={runtime_authority}"),
             "--format".into(),
             "{{.ID}}\t{{.Names}}".into(),
-        ]
+        ]);
+        args
     }
 
     fn parse_owned_container_candidates(
@@ -1833,7 +2065,7 @@ impl SessionSandbox {
                 ))
             })?;
             let name = name.trim().trim_start_matches('/');
-            if !name.starts_with("axo-ses-") {
+            if Self::owned_name_prefix(name).is_none() {
                 return Err(IsolationError::OciContainerFailed(format!(
                     "Podman returned non-Session container {name:?} for the owned-Session filter"
                 )));
@@ -2169,9 +2401,28 @@ impl SessionSandbox {
         };
         let names = String::from_utf8_lossy(&out.stdout);
         for name in names.lines().map(str::trim).filter(|n| !n.is_empty()) {
-            let Some(sid) = name.strip_prefix("axo-ses-") else {
+            let Some(prefix) = Self::owned_name_prefix(name) else {
                 continue;
             };
+            let sid = &name[prefix.len()..];
+            if prefix != "axo-ses-" {
+                // A sidecar, browser or Preview of an unknown Session.
+                if !known_ids.iter().any(|known| known == sid) {
+                    tracing::info!(
+                        container = name,
+                        "reaping an orphaned Session dependent container"
+                    );
+                    if let Err(error) = Self::remove_exact_container_names(
+                        &[name.to_string()],
+                        NAMED_REMOVE_COMMAND_TIMEOUT,
+                    )
+                    .await
+                    {
+                        tracing::warn!(container = name, error = %error, "orphan cleanup was incomplete");
+                    }
+                }
+                continue;
+            }
             if known_ids.iter().any(|k| k == sid) {
                 // Belongs to a known session — leave it. `start()` reuses or
                 // replaces it by name when that session is next opened.
@@ -2244,7 +2495,9 @@ impl SessionSandbox {
     /// tested). Carries the always-on hardening (no-new-privileges, capability
     /// drops), the policy-driven network posture, and the optional resource
     /// caps.
+    #[allow(clippy::too_many_arguments)]
     fn build_run_args(
+        session_id: &str,
         container: &str,
         dir: &str,
         image: &str,
@@ -2321,14 +2574,36 @@ impl SessionSandbox {
         } else {
             policy.network
         };
+        let exposed = ports;
         let ports: &[u16] = match network {
-            SandboxNetwork::None => {
+            // Egress has no interface but loopback either; its way out is
+            // the proxy socket below, served on loopback by PID 1.
+            SandboxNetwork::None | SandboxNetwork::Egress => {
                 args.push("--network".into());
                 args.push("none".into());
                 &[]
             }
             SandboxNetwork::Bridge => ports,
         };
+        let egress = network == SandboxNetwork::Egress;
+        if egress {
+            args.push("--mount".into());
+            args.push(format!(
+                "type=volume,source={},destination={},ro=true",
+                crate::egress_sidecar::egress_volume_name(session_id),
+                crate::egress_sidecar::EGRESS_SOCKET_DIR
+            ));
+        }
+        if !policy.passive_start && (egress || policy.service_sockets) {
+            // `U=true` hands the volume to the container's user, so a
+            // non-root image's PID 1 can create the port sockets.
+            args.push("--mount".into());
+            args.push(format!(
+                "type=volume,source={},destination={},U=true",
+                crate::egress_sidecar::service_volume_name(session_id),
+                crate::egress_sidecar::SERVICE_SOCKET_DIR
+            ));
+        }
 
         if with_limits {
             args.extend([
@@ -2350,11 +2625,17 @@ impl SessionSandbox {
         if policy.passive_start {
             args.push("--entrypoint".into());
             args.push("/bin/sh".into());
+        } else if egress {
+            // The bridge is PID 1 and the image ENTRYPOINT does not run.
+            args.push("--entrypoint".into());
+            args.push(SUPERVISOR_CONTAINER_PATH.into());
         }
         args.push(image.into());
         if policy.passive_start {
             args.push("-c".into());
             args.push("exec sleep infinity".into());
+        } else if egress {
+            args.extend(Self::egress_bridge_args(exposed));
         } else {
             args.push("sleep".into());
             args.push("infinity".into());
@@ -2362,10 +2643,36 @@ impl SessionSandbox {
         args
     }
 
+    /// PID 1's arguments under egress: the proxy on loopback, and each
+    /// exposed port as a Unix socket in the service-socket volume.
+    fn egress_bridge_args(exposed: &[u16]) -> Vec<String> {
+        let mut args: Vec<String> = vec![
+            "--bridge".into(),
+            "--tcp-to-unix".into(),
+            format!(
+                "{}={}",
+                crate::egress_sidecar::PROXY_LISTEN,
+                crate::egress_sidecar::EGRESS_PROXY_SOCKET
+            ),
+            "--http-errors".into(),
+        ];
+        let mut seen = HashSet::new();
+        for port in exposed.iter().filter(|port| seen.insert(**port)) {
+            args.push("--unix-to-tcp".into());
+            args.push(format!(
+                "{}/{port}.sock=127.0.0.1:{port}",
+                crate::egress_sidecar::SERVICE_SOCKET_DIR
+            ));
+        }
+        args
+    }
+
     /// `podman run -d` the idle session container. `with_limits` adds
     /// memory/CPU caps. `ports` receive dynamic loopback host mappings. On
     /// failure returns Podman's stderr so the caller can decide how to recover.
+    #[allow(clippy::too_many_arguments)]
     async fn run_container(
+        session_id: &str,
         container: &str,
         dir: &str,
         image: &str,
@@ -2375,6 +2682,7 @@ impl SessionSandbox {
         policy: &SandboxPolicy,
     ) -> Result<String, String> {
         let args = Self::build_run_args(
+            session_id,
             container,
             dir,
             image,
@@ -2755,6 +3063,166 @@ impl SessionSandbox {
         Ok(arc)
     }
 
+    /// Spawn an interactive terminal. Under `network: egress` the terminal
+    /// gets a credential of its own, recorded with its id, which ends when the
+    /// terminal is killed, its process exits, or it is dropped.
+    pub async fn spawn_terminal(
+        &self,
+        command: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<std::sync::Arc<crate::pty::PtyTerminal>, String> {
+        let Some(attachment) = &self.egress else {
+            return self.spawn_pty(command, rows, cols);
+        };
+        if self.passive_start {
+            return Err("interactive terminals are disabled in passive recovery sandboxes".into());
+        }
+        let id = format!(
+            "term-{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        );
+        let alive = Arc::new(Mutex::new(true));
+        let observed = alive.clone();
+        let mut spec = crate::egress::GrantSpec::new(crate::egress::GrantKind::Terminal);
+        spec.terminal_id = Some(id.clone());
+        spec.liveness = Some(Arc::new(move || {
+            observed.lock().map(|alive| *alive).unwrap_or(false)
+        }));
+        let grant = attachment
+            .authority
+            .grant(spec)
+            .await
+            .map_err(|error| format!("granting the terminal egress: {error}"))?;
+        let term = crate::pty::PtyTerminal::spawn_podman_with_env(
+            id,
+            self.runtime_target(),
+            &self.working_dir,
+            command,
+            (rows, cols),
+            grant.env_file.as_deref(),
+            alive,
+        )?;
+        term.hold_egress_grant(grant);
+        let arc = std::sync::Arc::new(term);
+        if let Ok(mut terminals) = self.terminals.lock() {
+            terminals.push(arc.clone());
+        }
+        Ok(arc)
+    }
+
+    /// Make sure every exposed port is served as a Unix socket in the
+    /// Session's service-socket volume, and return where.
+    ///
+    /// Under egress the container's PID 1 serves them from start. Under
+    /// bridge and none a forwarder runs as root next to the Session's
+    /// processes; it is started on first use and again when a socket is
+    /// missing (code in the container can stop it, which blocks only its own
+    /// app). The probe and the forwarder are the bundled supervisor.
+    pub async fn ensure_service_sockets(&self) -> Result<ServiceSockets, IsolationError> {
+        let sockets = self.service_sockets.clone().ok_or_else(|| {
+            IsolationError::OciSetupFailed(
+                "this Session's container has no service-socket volume".to_string(),
+            )
+        })?;
+        if sockets.ports.is_empty() {
+            return Ok(sockets);
+        }
+        let (container, _, _) = self.supervised_parts()?;
+        let _forwarder = self.service_forwarder.lock().await;
+        let missing = Self::missing_service_sockets(&container, &sockets.ports).await?;
+        if missing.is_empty() {
+            return Ok(sockets);
+        }
+        if sockets.served_by_pid_one {
+            return Err(IsolationError::OciContainerFailed(format!(
+                "the Session's bridge is not serving port socket(s) for {}",
+                missing
+                    .iter()
+                    .map(u16::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        let mut command = Command::new(PODMAN);
+        command.args(Self::service_forwarder_args(&container, &missing));
+        let started = Self::run_bounded_command(command, SANDBOX_READINESS_TIMEOUT).await?;
+        if started.timed_out || !started.status.success() {
+            return Err(IsolationError::OciContainerFailed(format!(
+                "starting the service-socket forwarder: {}",
+                String::from_utf8_lossy(&started.stderr).trim()
+            )));
+        }
+        for _ in 0..20 {
+            if Self::missing_service_sockets(&container, &missing)
+                .await?
+                .is_empty()
+            {
+                return Ok(sockets);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Err(IsolationError::OciContainerFailed(
+            "the service-socket forwarder did not create its sockets".to_string(),
+        ))
+    }
+
+    /// `podman exec -d` of the forwarder for these ports (pure).
+    fn service_forwarder_args(container: &str, ports: &[u16]) -> Vec<String> {
+        let mut args: Vec<String> = vec![
+            "exec".into(),
+            "-d".into(),
+            "--user".into(),
+            "0".into(),
+            container.into(),
+            SUPERVISOR_CONTAINER_PATH.into(),
+            "--bridge".into(),
+        ];
+        for port in ports {
+            args.push("--unix-to-tcp".into());
+            args.push(format!(
+                "{}=127.0.0.1:{port}",
+                ServiceSockets::socket_path(*port)
+            ));
+        }
+        args
+    }
+
+    async fn missing_service_sockets(
+        container: &str,
+        ports: &[u16],
+    ) -> Result<Vec<u16>, IsolationError> {
+        let mut missing = Vec::new();
+        for port in ports {
+            let mut probe = Command::new(PODMAN);
+            probe.args([
+                "exec",
+                container,
+                SUPERVISOR_CONTAINER_PATH,
+                "--probe-unix",
+                &ServiceSockets::socket_path(*port),
+            ]);
+            let output = Self::run_bounded_command(probe, NAMED_REMOVE_PROBE_TIMEOUT).await?;
+            if output.timed_out {
+                return Err(IsolationError::Timeout(NAMED_REMOVE_PROBE_TIMEOUT));
+            }
+            match output.status.code() {
+                Some(0) => {}
+                Some(1) => missing.push(*port),
+                _ => {
+                    return Err(IsolationError::OciContainerFailed(format!(
+                        "probing the service socket for port {port}: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    )))
+                }
+            }
+        }
+        Ok(missing)
+    }
+
     /// Find a live terminal by id.
     pub fn get_terminal(&self, id: &str) -> Option<std::sync::Arc<crate::pty::PtyTerminal>> {
         self.terminals
@@ -2774,7 +3242,16 @@ impl SessionSandbox {
             return false;
         };
         let before = ts.len();
-        ts.retain(|t| t.id != id);
+        ts.retain(|t| {
+            if t.id == id {
+                // A subscriber may still hold the terminal; its credential
+                // ends now regardless.
+                t.release_egress_grant();
+                false
+            } else {
+                true
+            }
+        });
         ts.len() < before
     }
 
@@ -2825,6 +3302,10 @@ impl SessionSandbox {
             remove.args(["rm", "-f", &self.container]);
             let _ = Self::run_bounded_command(remove, NAMED_REMOVE_COMMAND_TIMEOUT).await;
         }
+        // The sidecar outlives the Session container, never the reverse.
+        if let Some(sidecar) = &self.egress_sidecar {
+            sidecar.stop().await;
+        }
     }
 
     /// Whether a cached passive-recovery handle can accept another command.
@@ -2844,7 +3325,7 @@ impl SessionSandbox {
             self.passive_execution_usable
                 .store(false, std::sync::atomic::Ordering::Release);
         }
-        if let Some(container_id) = &self.container_id {
+        let removed = if let Some(container_id) = &self.container_id {
             Self::remove_exact_container_identity(container_id, NAMED_REMOVE_COMMAND_TIMEOUT).await
         } else {
             Self::remove_exact_container_names(
@@ -2852,7 +3333,13 @@ impl SessionSandbox {
                 NAMED_REMOVE_COMMAND_TIMEOUT,
             )
             .await
+        };
+        if removed.is_ok() {
+            if let Some(sidecar) = &self.egress_sidecar {
+                sidecar.stop().await;
+            }
         }
+        removed
     }
 
     #[cfg(test)]
@@ -3433,7 +3920,39 @@ impl SessionSandbox {
         // therefore never return while an older cancelled start can still
         // create the deterministic container or dependency volume afterward.
         let _starts = Self::lock_container_starts(&containers).await;
-        Self::remove_exact_container_names(&containers, timeout).await
+        Self::remove_exact_container_names(&containers, timeout).await?;
+        Self::remove_session_dependents(session_ids, timeout).await
+    }
+
+    /// Containers that serve one Session from outside its own container: the
+    /// egress sidecar, the browser and the egress Preview.
+    fn dependent_container_names(session_ids: &[String]) -> Vec<String> {
+        let mut names = session_ids
+            .iter()
+            .flat_map(|session_id| {
+                DEPENDENT_CONTAINER_PREFIXES
+                    .iter()
+                    .map(move |prefix| format!("{prefix}{session_id}"))
+            })
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// After the Session containers are gone: stop this process's sidecars
+    /// for them (so nothing restarts), then remove every dependent container
+    /// by exact name, whoever started it.
+    async fn remove_session_dependents(
+        session_ids: &[String],
+        timeout: Duration,
+    ) -> Result<(), IsolationError> {
+        if session_ids.is_empty() {
+            return Ok(());
+        }
+        crate::egress_sidecar::stop_session_sidecars(session_ids).await;
+        Self::remove_exact_container_names(&Self::dependent_container_names(session_ids), timeout)
+            .await
     }
 
     fn container_names(session_ids: &[String]) -> Vec<String> {
@@ -3498,11 +4017,18 @@ impl SessionSandbox {
         if !containers.is_empty() {
             Self::remove_exact_container_names(&containers, timeout).await?;
         }
+        Self::remove_session_dependents(session_ids, timeout).await?;
 
         let mut seen = HashSet::new();
         let volumes = session_ids
             .iter()
-            .map(|session_id| Self::dependency_volume_name(session_id))
+            .flat_map(|session_id| {
+                [
+                    Self::dependency_volume_name(session_id),
+                    crate::egress_sidecar::egress_volume_name(session_id),
+                    crate::egress_sidecar::service_volume_name(session_id),
+                ]
+            })
             .filter(|volume| seen.insert(volume.clone()))
             .collect::<Vec<_>>();
         if volumes.is_empty() {
@@ -3670,6 +4196,61 @@ pub trait Sandbox: Send + Sync {
         )))
     }
 
+    /// Prepare through the owned supervisor with a process environment file
+    /// (under `network: egress`, the credential's proxy settings). Backends
+    /// that cannot pass one refuse rather than drop it.
+    async fn prepare_supervised_command_with_env(
+        &self,
+        request: axocoatl_exec::protocol::ExecRequest,
+        stdin: Option<Vec<u8>>,
+        env: crate::egress::ProcessEnv<'_>,
+    ) -> Result<crate::supervisor_transport::PreparedSupervisedCommand, IsolationError> {
+        if env.env_file.is_some() {
+            return Err(IsolationError::Io(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "backend cannot pass a process environment file",
+            )));
+        }
+        match stdin {
+            Some(bytes) => {
+                self.prepare_supervised_command_with_stdin(request, bytes)
+                    .await
+            }
+            None => self.prepare_supervised_command(request).await,
+        }
+    }
+
+    /// The egress decision point when this runtime runs under
+    /// `network: egress`; it mints the credentials writers' processes use.
+    fn egress_authority(&self) -> Option<Arc<dyn crate::egress::EgressAuthority>> {
+        None
+    }
+
+    /// The egress sidecar's state, on the handle that owns it.
+    fn egress_status(&self) -> Option<crate::egress_sidecar::SidecarStatus> {
+        None
+    }
+
+    /// Serve each exposed port as a Unix socket in the Session's
+    /// service-socket volume (see [`SessionSandbox::ensure_service_sockets`]).
+    async fn ensure_service_sockets(&self) -> Result<ServiceSockets, IsolationError> {
+        Err(IsolationError::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "backend has no service sockets",
+        )))
+    }
+
+    /// Spawn an interactive terminal; under `network: egress` it gets its own
+    /// credential for as long as it lives.
+    async fn spawn_terminal(
+        &self,
+        command: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<std::sync::Arc<crate::pty::PtyTerminal>, String> {
+        self.spawn_pty(command, rows, cols)
+    }
+
     /// Run a command with `stdin` piped in (used to write file contents).
     async fn exec_stdin(
         &self,
@@ -3747,6 +4328,38 @@ impl Sandbox for SessionSandbox {
         SessionSandbox::prepare_supervised_command_with_stdin(self, request, stdin).await
     }
 
+    async fn prepare_supervised_command_with_env(
+        &self,
+        request: axocoatl_exec::protocol::ExecRequest,
+        stdin: Option<Vec<u8>>,
+        env: crate::egress::ProcessEnv<'_>,
+    ) -> Result<crate::supervisor_transport::PreparedSupervisedCommand, IsolationError> {
+        SessionSandbox::prepare_supervised_command_with_env(self, request, stdin, env).await
+    }
+
+    fn egress_authority(&self) -> Option<Arc<dyn crate::egress::EgressAuthority>> {
+        self.egress
+            .as_ref()
+            .map(|attachment| attachment.authority.clone())
+    }
+
+    fn egress_status(&self) -> Option<crate::egress_sidecar::SidecarStatus> {
+        self.egress_sidecar.as_ref().map(|sidecar| sidecar.status())
+    }
+
+    async fn ensure_service_sockets(&self) -> Result<ServiceSockets, IsolationError> {
+        SessionSandbox::ensure_service_sockets(self).await
+    }
+
+    async fn spawn_terminal(
+        &self,
+        command: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<std::sync::Arc<crate::pty::PtyTerminal>, String> {
+        SessionSandbox::spawn_terminal(self, command, rows, cols).await
+    }
+
     fn execution_identity(&self) -> Option<&str> {
         self.container_id.as_deref()
     }
@@ -3815,6 +4428,12 @@ impl Sandbox for SessionSandbox {
             passive_execution_usable: self.passive_execution_usable.clone(),
             passive_exec_lock: self.passive_exec_lock.clone(),
             supervisor_program: None,
+            // A lane shares the container and its credentials' authority,
+            // but never owns (or stops) the sidecar.
+            egress: self.egress.clone(),
+            egress_sidecar: None,
+            service_sockets: self.service_sockets.clone(),
+            service_forwarder: self.service_forwarder.clone(),
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
         })
@@ -3862,6 +4481,7 @@ mod tests {
         };
         SessionSandbox::verify_supervisor_policy(&policy).unwrap();
         let args = SessionSandbox::build_run_args(
+            "test-session",
             "owned",
             workspace.to_str().unwrap(),
             DEFAULT_IMAGE,
@@ -3894,6 +4514,7 @@ mod tests {
             &[DEFAULT_IMAGE, "sleep", "infinity"]
         );
         let plain = SessionSandbox::build_run_args(
+            "test-session",
             "owned",
             workspace.to_str().unwrap(),
             DEFAULT_IMAGE,
@@ -3925,6 +4546,7 @@ mod tests {
             ..SandboxPolicy::default()
         };
         let args = SessionSandbox::build_run_args(
+            "test-session",
             "owned",
             "/workspace",
             selected.id(),
@@ -4760,6 +5382,7 @@ mod tests {
     #[test]
     fn node_dependency_mount_masks_host_modules_without_copying_them() {
         let args = SessionSandbox::build_run_args(
+            "test-session",
             "axo-ses-primary",
             "/workspace",
             DEFAULT_IMAGE,
@@ -4787,6 +5410,7 @@ mod tests {
             ..SandboxPolicy::default()
         };
         let args = SessionSandbox::build_run_args(
+            "test-session",
             "axo-ses-recovery",
             "/workspace",
             DEFAULT_IMAGE,
@@ -4834,6 +5458,7 @@ mod tests {
         for policy in [&SandboxPolicy::default(), &passive, &isolated] {
             for with_limits in [true, false] {
                 let args = SessionSandbox::build_run_args(
+                    "test-session",
                     "axo-ses-proxy",
                     "/workspace",
                     DEFAULT_IMAGE,
@@ -4901,6 +5526,7 @@ mod tests {
             ..SandboxPolicy::default()
         };
         let args = SessionSandbox::build_run_args(
+            "test-session",
             "axo-ses-control-plane-mask",
             workspace.to_str().unwrap(),
             DEFAULT_IMAGE,
@@ -4973,6 +5599,7 @@ mod tests {
             ..SandboxPolicy::default()
         };
         let args = SessionSandbox::build_run_args(
+            "test-session",
             "axo-ses-all-control-plane-masks",
             broad_workspace.to_str().unwrap(),
             DEFAULT_IMAGE,
@@ -5118,6 +5745,7 @@ mod tests {
     #[test]
     fn run_args_always_apply_hardening() {
         let args = SessionSandbox::build_run_args(
+            "test-session",
             "axo-ses-x",
             "/w",
             DEFAULT_IMAGE,
@@ -5163,6 +5791,7 @@ mod tests {
         };
 
         let run_a = SessionSandbox::build_run_args(
+            "test-session",
             "axo-ses-a",
             "/workspace/a",
             DEFAULT_IMAGE,
@@ -5172,6 +5801,7 @@ mod tests {
             &policy_a,
         );
         let run_b = SessionSandbox::build_run_args(
+            "test-session",
             "axo-ses-b",
             "/workspace/b",
             DEFAULT_IMAGE,
@@ -5210,6 +5840,7 @@ mod tests {
             .any(|argument| argument == &format!("label={label_a}")));
 
         let unmanaged = SessionSandbox::build_run_args(
+            "test-session",
             "axo-ses-unmanaged",
             "/workspace/unmanaged",
             DEFAULT_IMAGE,
@@ -5228,6 +5859,7 @@ mod tests {
             ..SandboxPolicy::default()
         };
         let args = SessionSandbox::build_run_args(
+            "test-session",
             "axo-ses-x",
             "/w",
             DEFAULT_IMAGE,
@@ -5243,6 +5875,310 @@ mod tests {
         assert!(!args.iter().any(|a| a == "-p"));
         // with_limits=false → no caps.
         assert!(!args.iter().any(|a| a == "--pids-limit"));
+    }
+
+    #[derive(Debug)]
+    struct RefusingAuthority;
+
+    #[async_trait::async_trait]
+    impl crate::egress::EgressAuthority for RefusingAuthority {
+        async fn grant(
+            &self,
+            _: crate::egress::GrantSpec,
+        ) -> Result<crate::egress::EgressGrant, String> {
+            Err("not in this test".into())
+        }
+        async fn decide(&self, _: crate::egress::OpenRequest) -> crate::egress::Decision {
+            crate::egress::Decision::deny(403, "not_allowed", "test")
+        }
+        async fn closed(&self, _: crate::egress::CloseReport) {}
+        async fn sidecar_event(&self, _: crate::egress::SidecarEvent) {}
+    }
+
+    fn egress_attachment() -> crate::egress::EgressAttachment {
+        crate::egress::EgressAttachment::new(Arc::new(RefusingAuthority))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_args_egress_has_no_network_and_runs_the_bridge_as_pid_one() {
+        let root = tempfile::tempdir().unwrap();
+        let policy = SandboxPolicy {
+            network: SandboxNetwork::Egress,
+            supervisor_program: Some(installed_test_supervisor(root.path())),
+            egress: Some(egress_attachment()),
+            ..SandboxPolicy::default()
+        };
+        let args = SessionSandbox::build_run_args(
+            "ses-9",
+            "axo-ses-ses-9",
+            "/w",
+            DEFAULT_IMAGE,
+            None,
+            true,
+            &[3000, 5173, 3000],
+            &policy,
+        );
+        let joined = args.join(" ");
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--network" && w[1] == "none"));
+        assert!(!args.iter().any(|a| a == "-p"), "{joined}");
+        assert!(joined.contains(
+            "--mount type=volume,source=axo-egr-ses-9,destination=/run/axocoatl-egress,ro=true"
+        ));
+        assert!(joined.contains(
+            "--mount type=volume,source=axo-svc-ses-9,destination=/run/axocoatl-svc,U=true"
+        ));
+        // The image ENTRYPOINT is replaced by the bridge, which never idles in
+        // `sleep` and serves the proxy plus one socket per distinct port.
+        let image = args.iter().position(|a| a == DEFAULT_IMAGE).unwrap();
+        assert_eq!(
+            args[image - 2..image],
+            ["--entrypoint", SUPERVISOR_CONTAINER_PATH]
+        );
+        assert_eq!(
+            args[image + 1..],
+            [
+                "--bridge",
+                "--tcp-to-unix",
+                "127.0.0.1:3128=/run/axocoatl-egress/proxy.sock",
+                "--http-errors",
+                "--unix-to-tcp",
+                "/run/axocoatl-svc/3000.sock=127.0.0.1:3000",
+                "--unix-to-tcp",
+                "/run/axocoatl-svc/5173.sock=127.0.0.1:5173",
+            ]
+        );
+        assert!(!args.iter().any(|a| a == "sleep"));
+        assert!(joined.contains("--http-proxy=false"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_egress_policy_combination_yields_a_container_network() {
+        let root = tempfile::tempdir().unwrap();
+        let program = installed_test_supervisor(root.path());
+        for passive in [false, true] {
+            for service_sockets in [false, true] {
+                for with_limits in [false, true] {
+                    for supervisor in [None, Some(program.clone())] {
+                        for authority in [None, Some("a".repeat(64))] {
+                            for ports in [&[][..], &[3000][..], &[80, 443, 8080][..]] {
+                                let policy = SandboxPolicy {
+                                    network: SandboxNetwork::Egress,
+                                    passive_start: passive,
+                                    service_sockets,
+                                    supervisor_program: supervisor.clone(),
+                                    runtime_authority: authority.clone(),
+                                    egress: Some(egress_attachment()),
+                                    control_plane_dirs: vec!["/w/data".into()],
+                                    ..SandboxPolicy::default()
+                                };
+                                let args = SessionSandbox::build_run_args(
+                                    "ses-p",
+                                    "axo-ses-ses-p",
+                                    "/w",
+                                    DEFAULT_IMAGE,
+                                    Some("axo-ses-ses-p-node-modules"),
+                                    with_limits,
+                                    ports,
+                                    &policy,
+                                );
+                                assert!(
+                                    args.windows(2)
+                                        .any(|w| w[0] == "--network" && w[1] == "none"),
+                                    "{args:?}"
+                                );
+                                assert_eq!(
+                                    args.iter().filter(|a| *a == "--network").count(),
+                                    1,
+                                    "{args:?}"
+                                );
+                                assert!(!args.iter().any(|a| a == "-p"), "{args:?}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_supervised_exec_command_names_the_env_file_but_never_its_token() {
+        let root = tempfile::tempdir().unwrap();
+        let program = installed_test_supervisor(root.path());
+        let env_file = root.path().join("egress-0123.env");
+        std::fs::write(
+            &env_file,
+            "HTTPS_PROXY=http://axo:axe_secret@127.0.0.1:3128\n",
+        )
+        .unwrap();
+        let mut sandbox = SessionSandbox::attach("axo-ses-s", root.path());
+        sandbox.container_id = Some("immutable-container-id".into());
+        sandbox.supervisor_program = Some(program);
+        let (command, _, _) = sandbox
+            .supervisor_transport_command(Some(&env_file))
+            .unwrap();
+        let argv: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            argv[..4],
+            ["exec", "-i", "--env-file", &env_file.to_string_lossy()]
+        );
+        assert!(argv.iter().all(|arg| !arg.contains("axe_")), "{argv:?}");
+        assert!(argv.ends_with(&[
+            "immutable-container-id".to_string(),
+            "/axocoatl-exec-supervisor".to_string(),
+            "--serve".to_string()
+        ]));
+        let (plain, _, _) = sandbox.supervisor_transport_command(None).unwrap();
+        assert!(!plain.as_std().get_args().any(|arg| arg == "--env-file"));
+    }
+
+    #[tokio::test]
+    async fn egress_start_refuses_without_its_decision_point_or_supervisor() {
+        let workspace = tempfile::tempdir().unwrap();
+        let missing_authority = SandboxPolicy {
+            network: SandboxNetwork::Egress,
+            ..SandboxPolicy::default()
+        };
+        let error = SessionSandbox::start(
+            "egress-refusal",
+            workspace.path(),
+            None,
+            &[],
+            &[],
+            &missing_authority,
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("egress decision point"), "{error}");
+        let missing_supervisor = SandboxPolicy {
+            egress: Some(egress_attachment()),
+            ..missing_authority
+        };
+        let error = SessionSandbox::start(
+            "egress-refusal",
+            workspace.path(),
+            None,
+            &[],
+            &[],
+            &missing_supervisor,
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(
+            error.contains("needs the bundled execution supervisor"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_service_forwarder_runs_the_bundled_bridge_as_root_for_each_port() {
+        assert_eq!(
+            SessionSandbox::service_forwarder_args("abc123", &[3000, 5173]),
+            [
+                "exec",
+                "-d",
+                "--user",
+                "0",
+                "abc123",
+                "/axocoatl-exec-supervisor",
+                "--bridge",
+                "--unix-to-tcp",
+                "/run/axocoatl-svc/3000.sock=127.0.0.1:3000",
+                "--unix-to-tcp",
+                "/run/axocoatl-svc/5173.sock=127.0.0.1:5173",
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn service_sockets_mount_their_volume_in_bridge_mode_without_egress() {
+        let policy = SandboxPolicy {
+            service_sockets: true,
+            ..SandboxPolicy::default()
+        };
+        let args = SessionSandbox::build_run_args(
+            "ses-7",
+            "axo-ses-ses-7",
+            "/w",
+            DEFAULT_IMAGE,
+            None,
+            false,
+            &[3000],
+            &policy,
+        );
+        let joined = args.join(" ");
+        assert!(joined.contains(
+            "--mount type=volume,source=axo-svc-ses-7,destination=/run/axocoatl-svc,U=true"
+        ));
+        assert!(!joined.contains("axo-egr-"));
+        assert!(!joined.contains("--network"));
+        assert!(joined.contains("-p 127.0.0.1::3000"));
+        assert!(joined.ends_with("sleep infinity"));
+        let passive = SessionSandbox::build_run_args(
+            "ses-7",
+            "axo-ses-ses-7",
+            "/w",
+            DEFAULT_IMAGE,
+            None,
+            false,
+            &[],
+            &SandboxPolicy {
+                passive_start: true,
+                ..policy
+            },
+        );
+        assert!(!passive.join(" ").contains("axo-svc-"));
+    }
+
+    #[test]
+    fn lanes_share_the_egress_authority_but_never_own_the_sidecar() {
+        let root = tempfile::tempdir().unwrap();
+        let mut sandbox = SessionSandbox::attach("axo-ses-s", root.path());
+        sandbox.egress = Some(egress_attachment());
+        let lane = Sandbox::with_root(&sandbox, root.path());
+        assert!(lane.egress_authority().is_some());
+        assert!(lane.egress_status().is_none());
+        assert!(Sandbox::egress_authority(&SessionSandbox::attach("x", root.path())).is_none());
+    }
+
+    #[test]
+    fn dependent_containers_and_owned_listings_cover_every_session_role() {
+        assert_eq!(
+            SessionSandbox::dependent_container_names(&["s1".to_string()]),
+            ["axo-brw-s1", "axo-egr-s1", "axo-pvw-s1"]
+        );
+        let args = SessionSandbox::owned_container_list_args(&"a".repeat(64)).join(" ");
+        for prefix in ["axo-ses-", "axo-egr-", "axo-brw-", "axo-pvw-"] {
+            assert!(args.contains(&format!("--filter name={prefix}")), "{args}");
+        }
+        let id = "d".repeat(64);
+        let listed = format!("{id}\taxo-egr-primary\n");
+        assert_eq!(
+            SessionSandbox::parse_owned_container_candidates(listed.as_bytes()).unwrap(),
+            vec![(id, "axo-egr-primary".to_string())]
+        );
+        assert!(SessionSandbox::parse_owned_container_candidates(
+            format!("{}\taxo-egr-\n", "d".repeat(64)).as_bytes()
+        )
+        .is_err());
+        assert_eq!(
+            SessionSandbox::owned_name_prefix("axo-pvw-s"),
+            Some("axo-pvw-")
+        );
+        assert_eq!(SessionSandbox::owned_name_prefix("axo-other-s"), None);
     }
 
     /// End-to-end: needs podman installed. Run with `--ignored`.

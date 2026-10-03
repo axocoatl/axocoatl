@@ -15,10 +15,17 @@ Axocoatl decides who writes, what helpers may do, what a run may spend, and
 whether required checks and review pass. It records all of it in the Session:
 every grant, budget decision, activation, and tool invocation.
 
-It is not a sandbox runtime. Sandbox runtimes, for example NVIDIA OpenShell,
-control what a process can reach: files, network destinations, and credentials.
-Axocoatl runs repository tools in a rootless Podman container with the defaults
-described below, and it does not integrate with sandbox runtimes yet.
+Sandbox runtimes, for example NVIDIA OpenShell, control what a process can reach:
+files, network destinations, and credentials. Axocoatl runs repository tools in a
+rootless Podman container with the defaults described below. With
+`network: egress` it also controls network egress for Session containers: they
+reach only the hosts you list, through a proxy that writes each decision to the
+Session's record before the connection opens. Axocoatl implements this itself,
+rather than running Sessions in a sandbox runtime, so that it works in the Podman
+containers it already manages on macOS and Linux and so each connection is joined
+to the tool call that made it. It does not broker credentials, apply rules to the
+content of HTTPS requests, or tell programs in one container apart. See
+[Control network egress](#control-network-egress).
 
 With local Podman, model provider API keys stay in the Axocoatl daemon and are not
 passed into the container. Files in the Workspace, such as a `.env` file, are
@@ -198,9 +205,9 @@ sandbox:
   require_resource_limits: true
 ```
 
-`network` accepts only `bridge` or `none`. Any other value, such as `None` or
-`off`, is a configuration error: `axocoatl validate`, `axocoatl doctor` and
-daemon start report it instead of starting a container with a network.
+`network` accepts only `bridge`, `none` or `egress`. Any other value, such as
+`None` or `off`, is a configuration error: `axocoatl validate`, `axocoatl doctor`
+and daemon start report it instead of starting a container with a network.
 
 Podman containers do not receive the host's proxy variables (`HTTP_PROXY`,
 `HTTPS_PROXY`, `NO_PROXY` and the others Podman would copy by default), so a
@@ -279,6 +286,47 @@ also prevents readiness/setup processes inside the container from downloading
 missing commands or dependencies, so use an image that already contains the
 required repository command surface.
 
+## Control network egress
+
+`network: egress` sits between `bridge` and `none`: a Session container gets no
+network interface other than loopback, and an Agent's commands reach only the hosts
+and ports listed under `sandbox.egress`. The
+[Sandboxes page](/configure/sandboxes/#network-egress) describes how it runs.
+
+| Threat | What `egress` does |
+| --- | --- |
+| A command connects to an unlisted host | The proxy refuses it with `403 not_allowed`, before anything resolves the name, and records the refusal. |
+| A command skips the proxy (`--noproxy`, raw sockets, a hard-coded address) | There is no route: the container has only loopback. |
+| DNS, UDP or IPv6 used to send data out | No interface carries them off the machine. |
+| An allowed name resolves to loopback, link-local (including the `169.254.169.254` metadata address) or another special address | Refused as `forbidden_destination`, including IPv4 embedded in IPv6 forms. |
+| An allowed name resolves to a private address, such as the Podman VM's host gateway | Refused as `private_destination` unless you list the range. Do not list a range that contains the gateway (`192.168.127.254` in a Podman machine on macOS): through it the proxy can reach services on your computer. |
+| A container's own resolver is poisoned | Not used: names resolve on your computer, after the allowlist check. |
+| A read-only helper or required check uses the network | They get no credential; a helper's TCP connection to the proxy is refused by Landlock, and a direct connection to the proxy's socket gets `407`, which is recorded. |
+| A process started during setup keeps running afterwards | Its credential ended with the setup step; each later attempt gets `407 unknown_credential` and is recorded with the old credential's tag. |
+| The proxy stops or its control channel breaks | Connections are refused (`502` from the bridge, or `503` from the proxy) and connections in progress are recorded as `interrupted`. |
+| The record cannot be written | New connections are refused with `503 record_unavailable`. |
+
+What `egress` does not do:
+
+- It does not see inside TLS. A tunnel to a listed host that fronts other sites, such
+  as a CDN, can reach those sites, and a listed host that accepts uploads is a way
+  for data to leave. The model you use is also a channel.
+- Agents in one Session share its container, so a helper can read a running
+  writer's credential from `/proc`. Per-Agent network limits are not enforced inside
+  one Session container.
+- It does not inject or broker credentials. A `git push` from inside the container
+  still needs a token there.
+- Traffic from Axocoatl itself (model providers, MCP servers, web search,
+  webhooks, Podman image pulls) does not go through the proxy or its record.
+- It is not available with E2B, for Ways attempt containers (they run with no
+  network), or for Sessions created before the native Session format.
+- The image `ENTRYPOINT` does not run under `egress`.
+- The container is otherwise unchanged: it may run as root, its root file system is
+  writable, it uses Podman's default seccomp profile, and on macOS the Podman VM
+  mounts your home directory.
+- It has been tested on macOS with rootless Podman 5.8. Linux hosts, rootful Podman
+  and WSL2 are not tested.
+
 ## Inventory egress
 
 Review every path by which content can leave the machine:
@@ -288,7 +336,8 @@ Review every path by which content can leave the machine:
 - remote MCP servers and tools;
 - configured web search;
 - event webhooks and their headers;
-- package downloads or repository scripts inside a bridged container;
+- package downloads or repository scripts inside a bridged container, or to the
+  hosts listed under `sandbox.egress`;
 - embedding-model downloads during first use.
 
 `axocoatl doctor` prints configured webhook destinations as an egress notice.

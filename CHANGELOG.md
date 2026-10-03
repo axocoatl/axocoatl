@@ -8,24 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `sandbox.network` accepts `egress`, with a `sandbox.egress` block: an allowlist of
-  presets (`npm`, `yarn`, `pypi`, `crates`, `go`, `github`, `alpine`, `debian`,
-  `ubuntu`), host names, `*.` subdomain wildcards and IP ranges, plus
+- `sandbox.network: egress`. A Session container has no network interface other than
+  loopback, and an Agent's commands reach only the hosts and ports listed under
+  `sandbox.egress`, through an egress proxy that runs in its own container
+  (`axo-egr-<session>`, from a local image built from the bundled supervisor). The
+  list takes presets (`npm`, `yarn`, `pypi`, `crates`, `go`, `github`, `alpine`,
+  `debian`, `ubuntu`), host names, `*.` subdomain wildcards and IP ranges, plus
   `private_destinations`, `sidecar_network`, `max_connections` and
-  `record_max_events`. The configuration is validated and `doctor` describes it, but
-  the daemon refuses to start with `network: egress` until Session start runs the
-  egress proxy. `validate`, `doctor` and daemon start warn about wildcard entries,
-  CDN-fronted presets and hosts that accept uploads.
+  `record_max_events`. Each `bash` command of a writing Agent, each approved setup
+  command, readiness provisioning and each terminal gets its own proxy credential
+  through an environment file; read-only helpers, required checks and background
+  tasks get none. Names are checked against the list before they resolve, and
+  resolve on the host. Loopback, link-local and other special addresses are refused,
+  and private ones unless listed. Every allowed or refused connection is written to
+  the Session's network record before it opens. The Session container's first process
+  is Axocoatl's bridge, so the image `ENTRYPOINT` does not run, and Preview ports are
+  not published under `egress` yet. Ways attempts run with no network under `egress`.
+  `validate`, `doctor` and daemon start warn about wildcard entries, CDN-fronted
+  presets and hosts that accept uploads. See the Sandboxes and Security pages for
+  what it does not cover.
 - Each native Session can keep a network record, an append-only log of egress
   decisions, connection closes, policy changes and web-tool fetches, and
   `GET /api/sessions/{id}/network` reads it. Reading never creates a record.
 - The bundled execution supervisor gains an egress proxy mode, a loopback/Unix-socket
-  bridge mode and a socket probe, and the daemon gains the matching egress decision
-  point: it mints per-process proxy credentials, checks each host against the
-  allowlist before resolving it on the host, refuses loopback, link-local and other
-  special addresses (including IPv4 embedded in IPv6 forms) and unlisted private
-  ones, and writes each decision to the Session's network record before answering.
-  Session start does not use them yet.
+  bridge mode and a socket probe, which `network: egress` uses.
 - The configuration parses `web_search.provider: searxng` with a `searxng` block, and
   new `web_fetch` and `browser` blocks and `mcp_servers[].inherit_env`, for upcoming
   tools. They are validated but not yet run.
@@ -38,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Compatibility
 - A data root used with this version may be refused by 1.1.2 and earlier once a
   Session has a network record, because they do not know the record's directory.
+- Removing a Session's runtime now also removes its `axo-egr-`, `axo-brw-` and
+  `axo-pvw-` containers, and deleting it also removes its `axo-egr-` and `axo-svc-`
+  volumes.
 
 ## [1.1.2] - 2026-10-02
 

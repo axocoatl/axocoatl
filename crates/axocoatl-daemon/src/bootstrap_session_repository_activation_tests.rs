@@ -1077,6 +1077,301 @@ async fn actual_read_only_helper_shell_cannot_use_tcp_but_a_writer_can() {
     }
 }
 
+/// An upstream HTTP server on its own Podman network, for egress checks.
+/// Everything carries `io.axocoatl.test=egress-<pid>-daemon` and is removed
+/// on drop.
+struct EgressUpstream {
+    label: String,
+    network: String,
+    container: String,
+    ip: String,
+    subnet: String,
+}
+
+impl EgressUpstream {
+    fn podman(args: &[&str]) -> std::process::Output {
+        std::process::Command::new("podman")
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    fn start() -> Self {
+        let pid = std::process::id();
+        let octet = 100 + pid % 100;
+        let upstream = Self {
+            label: format!("io.axocoatl.test=egress-{pid}-daemon"),
+            network: format!("axo-egress-test-{pid}-daemon"),
+            container: format!("axo-egress-up-{pid}-daemon"),
+            ip: format!("10.95.{octet}.10"),
+            subnet: format!("10.95.{octet}.0/24"),
+        };
+        let _ = Self::podman(&[
+            "rm",
+            "--force",
+            "--time",
+            "0",
+            "--ignore",
+            &upstream.container,
+        ]);
+        let _ = Self::podman(&["network", "rm", "--force", &upstream.network]);
+        let created = Self::podman(&[
+            "network",
+            "create",
+            "--label",
+            &upstream.label,
+            "--subnet",
+            &upstream.subnet,
+            &upstream.network,
+        ]);
+        assert!(created.status.success(), "{created:?}");
+        let started = Self::podman(&[
+            "run", "-d", "--name", &upstream.container, "--label", &upstream.label,
+            "--network", &upstream.network, "--ip", &upstream.ip,
+            "docker.io/library/node:22-alpine", "node", "-e",
+            "require('http').createServer((q,r)=>{console.log('ACCESS '+q.url);r.end('hello '+q.url+'\\n')}).listen(8000)",
+        ]);
+        assert!(started.status.success(), "{started:?}");
+        upstream
+    }
+
+    fn access_log(&self) -> String {
+        String::from_utf8_lossy(&Self::podman(&["logs", &self.container]).stdout).into_owned()
+    }
+}
+
+impl Drop for EgressUpstream {
+    fn drop(&mut self) {
+        let _ = Self::podman(&["rm", "--force", "--time", "0", "--ignore", &self.container]);
+        let _ = Self::podman(&["network", "rm", "--force", &self.network]);
+        // The Sessions' egress and service-socket volumes carry this label.
+        let volumes = Self::podman(&[
+            "volume",
+            "ls",
+            "-q",
+            "--filter",
+            &format!("label={}", self.label),
+        ]);
+        for volume in String::from_utf8_lossy(&volumes.stdout).split_whitespace() {
+            let _ = Self::podman(&["volume", "rm", volume]);
+        }
+    }
+}
+
+async fn actual_egress_sandbox(
+    f: &mut Fixture,
+    upstream: &EgressUpstream,
+    authority: Arc<crate::session_egress::SessionEgress>,
+) -> Arc<axocoatl_isolation::SessionSandbox> {
+    use axocoatl_isolation::{SandboxNetwork, SandboxPolicy, SessionSandbox};
+    use sha2::{Digest, Sha256};
+    let image =
+        std::env::var("AXO_SUPERVISOR_TEST_IMAGE").expect("set the explicit prepared tools image");
+    let policy = SandboxPolicy {
+        allow_untrusted_image: true,
+        network: SandboxNetwork::Egress,
+        runtime_authority: Some(format!(
+            "{:x}",
+            Sha256::digest(f.owner.metadata().session_id.as_bytes())
+        )),
+        supervisor_installation: Some(
+            f.owner
+                .inner
+                .data_root
+                .child("execution-supervisors")
+                .unwrap(),
+        ),
+        egress: Some(axocoatl_isolation::egress::EgressAttachment {
+            authority,
+            sidecar_network: Some(upstream.network.clone()),
+            max_connections: 32,
+            labels: vec![upstream.label.clone()],
+        }),
+        ..SandboxPolicy::default()
+    };
+    let sandbox = Arc::new(
+        SessionSandbox::start(
+            &f.owner.metadata().session_id,
+            f.owner.root(),
+            Some(&image),
+            &[],
+            &[],
+            &policy,
+        )
+        .await
+        .unwrap(),
+    );
+    let registered: Arc<dyn Sandbox> = sandbox.clone();
+    {
+        let inner = Arc::get_mut(&mut f.owner.inner).unwrap();
+        inner.metadata.execution_identity = sandbox.execution_identity().unwrap().to_owned();
+        inner.sandbox = registered.clone();
+        inner
+            .sandboxes
+            .lock()
+            .await
+            .insert(inner.metadata.session_id.clone(), registered);
+    }
+    sandbox
+}
+
+/// Under `network: egress` a writer's shell reaches an allowed host through
+/// the proxy with a credential bound to its own tool call, and the record
+/// holds bind, open, close and unbind in that order. A read-only helper's
+/// shell gets no credential, its proxy connection is refused by Landlock,
+/// and nothing is bound for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION), AXO_SUPERVISOR_TEST_IMAGE and the egress-capable embedded helper"]
+async fn actual_egress_writer_gets_a_bound_credential_and_a_read_only_helper_none() {
+    use crate::session_egress::tests::{FakeRecord, FakeResolver};
+    use crate::session_egress::{EgressPolicyConfig, SessionEgress};
+    use axocoatl_session::network_record::{BindingKind, Decision as Recorded, NetworkEvent};
+    let upstream = EgressUpstream::start();
+    // With its own proxy settings; then the proxy without a credential over
+    // loopback TCP; an unlisted host; and the proxy socket directly.
+    let command = "wget -q -T 5 -O - http://upstream.test:8000/from-agent 2>&1; echo \"rc=$?\"; \
+                   http_proxy=http://127.0.0.1:3128 wget -q -T 5 -O - http://upstream.test:8000/no-credential 2>&1; \
+                   wget -q -T 5 -O - http://not-listed.test/ 2>&1; \
+                   printf 'CONNECT upstream.test:8000 HTTP/1.1\\r\\n\\r\\n' | nc local:/run/axocoatl-egress/proxy.sock | head -1; true";
+    for writes in [None, Some(&[][..])] {
+        let mut f = fixture().await;
+        let record = Arc::new(FakeRecord::default());
+        let resolver = FakeResolver::with(&[("upstream.test", &[upstream.ip.as_str()])]);
+        let egress = SessionEgress::open(
+            f.owner.metadata().session_id.clone(),
+            EgressPolicyConfig {
+                session_allow: vec![axocoatl_config::EgressAllowYaml::Host(
+                    axocoatl_config::EgressHostYaml {
+                        host: "upstream.test".into(),
+                        ports: Some(vec![8000]),
+                    },
+                )],
+                session_private: vec![upstream.subnet.clone()],
+                browser: None,
+            },
+            record.clone(),
+            resolver.clone(),
+            Some(f.owner.inner.data_root.child("egress-env").unwrap()),
+        )
+        .await
+        .unwrap();
+        let sandbox = actual_egress_sandbox(&mut f, &upstream, egress.clone()).await;
+        git_init(f._workspace.path());
+        let r = match writes {
+            Some(writes) => run_scoped(&mut f, &["bash"], writes),
+            None => run(&mut f, &["bash"], true),
+        };
+        let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
+        let result = tokio::time::timeout(Duration::from_secs(120), async {
+            r.controller
+                .prepare_repository_activation(
+                    r.activation.clone(),
+                    r.resources(provider.clone()),
+                    r.resource.clone(),
+                )
+                .unwrap()
+                .run()
+                .await
+        })
+        .await;
+        // Close frames follow the response by a moment.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let idle = f.owner.execution_is_idle();
+        sandbox.stop_checked().await.unwrap();
+        let settled = result.unwrap().unwrap();
+        assert!(idle.unwrap());
+        assert!(settled.accepted, "{writes:?}: {:?}", settled.failure);
+        let events = record.events();
+        let binds: Vec<&NetworkEvent> = events
+            .iter()
+            .filter(|event| matches!(event, NetworkEvent::Bind { .. }))
+            .collect();
+        let refused_without_credential = |events: &[NetworkEvent]| {
+            events.iter().any(|event| {
+                matches!(event, NetworkEvent::Open { decision: Recorded::Deny, reason: Some(reason), token: None, binding: None, .. }
+                    if reason == "no_credential")
+            })
+        };
+        if writes.is_some() {
+            // No credential, no name resolution, and Landlock refuses the
+            // helper's TCP connection to the proxy. The direct socket is the
+            // one path left, and the proxy refuses it for lack of a
+            // credential; that refusal is recorded.
+            assert!(
+                provider.saw(1, "(127.0.0.1): Permission denied"),
+                "{events:?}"
+            );
+            assert!(!provider.saw(1, "hello /"));
+            assert!(provider.saw(1, "HTTP/1.1 407"));
+            assert!(binds.is_empty(), "{binds:?}");
+            assert!(refused_without_credential(&events), "{events:?}");
+            assert!(!events.iter().any(|event| matches!(
+                event,
+                NetworkEvent::Open {
+                    decision: Recorded::Allow,
+                    ..
+                }
+            )));
+            assert!(resolver.queries().is_empty());
+            continue;
+        }
+        assert!(provider.saw(1, "hello /from-agent"), "{events:?}");
+        assert!(provider.saw(1, "rc=0"));
+        assert!(provider.saw(1, "407 Proxy Authentication Required"));
+        assert!(provider.saw(1, "403 Forbidden"));
+        assert!(provider.saw(1, "HTTP/1.1 407"));
+        assert!(refused_without_credential(&events), "{events:?}");
+        // Only the Agent's shell is bound; the host's captures are not.
+        assert_eq!(binds.len(), 1, "{events:?}");
+        let NetworkEvent::Bind { token, binding, .. } = binds[0] else {
+            unreachable!()
+        };
+        assert_eq!(binding.kind, BindingKind::Agent);
+        let invocation = binding.invocation_id.clone().unwrap();
+        assert!(r
+            .controller
+            .snapshot()
+            .unwrap()
+            .contract()
+            .invocations()
+            .iter()
+            .any(|recorded| recorded.invocation_id.as_str() == invocation));
+        assert_eq!(
+            binding.activation_id.as_deref(),
+            Some(r.activation.activation_id.as_str())
+        );
+        assert_eq!(
+            binding.process.as_deref(),
+            Some(format!("{invocation}:0").as_str())
+        );
+        let position =
+            |wanted: &dyn Fn(&NetworkEvent) -> bool| events.iter().position(wanted).unwrap();
+        let bind = position(&|event| matches!(event, NetworkEvent::Bind { .. }));
+        let open = position(&|event| {
+            matches!(event, NetworkEvent::Open { decision: Recorded::Allow, host, token: Some(tag), binding: Some(bound), .. }
+                if host == "upstream.test" && tag == token && bound.invocation_id.as_deref() == Some(invocation.as_str()))
+        });
+        let close =
+            position(&|event| matches!(event, NetworkEvent::Close { down, .. } if *down > 0));
+        let refused = position(&|event| {
+            matches!(event, NetworkEvent::Open { decision: Recorded::Deny, host, reason: Some(reason), .. }
+                if host == "not-listed.test" && reason == "not_allowed")
+        });
+        let unbind = position(
+            &|event| matches!(event, NetworkEvent::Unbind { token: unbound, .. } if unbound == token),
+        );
+        assert!(bind < open && open < close && close < unbind, "{events:?}");
+        assert!(refused < unbind);
+        // The refused name never reached a resolver.
+        assert_eq!(resolver.queries(), ["upstream.test"]);
+        assert_eq!(
+            upstream.access_log().matches("ACCESS /from-agent").count(),
+            1
+        );
+        assert_eq!(egress.live_bindings(), 0);
+    }
+}
+
 /// Configuration a scoped writer's shell writes in the shared home can
 /// neither hide its out-of-scope file from the host's After capture nor make
 /// that capture run a program.

@@ -235,7 +235,7 @@ impl AxocoatlDaemon {
             .session_dispatch_lifecycles
             .prepare_session_cleanup(&session.id, SESSION_DISPATCH_CLEANUP_TIMEOUT)
             .await?;
-        self.session_network_records.close(&session.id).await;
+        self.close_session_network(&session.id).await;
         self.session_dispatch_lifecycles
             .complete_session_cleanup(&cleanup)?;
         drop(cleanup);
@@ -286,7 +286,7 @@ impl AxocoatlDaemon {
             };
             self.stop_session_actors_checked(&peer.id).await?;
             self.stop_session_sandbox_checked(&peer.id).await?;
-            self.session_network_records.close(&peer.id).await;
+            self.close_session_network(&peer.id).await;
             self.session_dispatch_lifecycles
                 .complete_session_cleanup(&cleanup)?;
             drop(cleanup);

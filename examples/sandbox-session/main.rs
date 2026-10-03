@@ -313,13 +313,17 @@ sandbox:
             allow_untrusted_image: sc.allow_untrusted_images,
             network: match sc.network.as_str() {
                 "none" => SandboxNetwork::None,
-                _ => SandboxNetwork::Bridge,
+                "bridge" => SandboxNetwork::Bridge,
+                "egress" => SandboxNetwork::Egress,
+                other => panic!("sandbox.network {other:?} has no container network"),
             },
             require_resource_limits: sc.require_resource_limits,
             passive_start: false,
             runtime_authority: None,
             control_plane_dirs: Vec::new(),
             control_plane_roots: Vec::new(),
+            egress: None,
+            service_sockets: false,
         };
 
         assert!(!policy.allow_post_create);

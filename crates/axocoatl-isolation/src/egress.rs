@@ -87,6 +87,11 @@ pub enum SidecarEvent {
         generation: u32,
         detail: String,
     },
+    /// The restart budget is spent; the sidecar stays down.
+    BudgetSpent {
+        generation: u32,
+        detail: String,
+    },
     Stopped {
         generation: u32,
     },
@@ -231,12 +236,30 @@ pub trait EgressAuthority: Send + Sync + fmt::Debug {
     async fn closed(&self, report: CloseReport);
     /// Record a sidecar lifecycle change.
     async fn sidecar_event(&self, event: SidecarEvent);
+    /// Use this control channel to revoke connections. Each sidecar
+    /// generation attaches its own.
+    fn attach_control(&self, _handle: crate::egress_control::ControlHandle) {}
 }
 
 /// What a sandbox needs to run under `network: egress`.
 #[derive(Clone, Debug)]
 pub struct EgressAttachment {
     pub authority: Arc<dyn EgressAuthority>,
+    /// Podman network for the sidecar; `None` is Podman's default network.
     pub sidecar_network: Option<String>,
     pub max_connections: u32,
+    /// Extra `key=value` labels for the sidecar and its volumes (tests mark
+    /// their objects with `io.axocoatl.test`).
+    pub labels: Vec<String>,
+}
+
+impl EgressAttachment {
+    pub fn new(authority: Arc<dyn EgressAuthority>) -> Self {
+        Self {
+            authority,
+            sidecar_network: None,
+            max_connections: axocoatl_exec::egress::protocol::DEFAULT_MAX_CONNECTIONS,
+            labels: Vec::new(),
+        }
+    }
 }

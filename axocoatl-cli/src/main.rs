@@ -1045,7 +1045,7 @@ fn sandbox_network_doctor_line(sandbox: &axocoatl_config::SandboxConfigYaml) -> 
                 .map(|egress| axocoatl_config::egress::allow_summary(&egress.allow))
                 .unwrap_or_else(|| "nothing".to_string());
             format!(
-                "Sandbox network: egress (Session containers would reach only: {allow}; read-only helpers and checks have none). Not available in this build: the daemon refuses to start with it"
+                "Sandbox network: egress (Session containers reach only: {allow}; read-only helpers and checks have none)"
             )
         }
         other => format!("Sandbox network: {other} (unknown; the daemon refuses it)"),
@@ -3108,10 +3108,10 @@ mod tests {
             ..Default::default()
         });
         let line = sandbox_network_doctor_line(&sandbox);
-        assert!(
-            line.contains("reach only: npm, pypi, 1 host;")
-                && line.contains("read-only helpers and checks have none"),
-            "{line}"
+        assert_eq!(
+            line,
+            "Sandbox network: egress (Session containers reach only: npm, pypi, 1 host; \
+             read-only helpers and checks have none)"
         );
     }
 

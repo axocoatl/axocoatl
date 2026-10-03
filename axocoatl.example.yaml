@@ -112,3 +112,16 @@ skills:
 #   enabled: true
 #   idle_threshold_secs: 120   # how long an agent must be idle before a pass runs
 #   interval_secs: 1800        # minimum time between passes for one agent
+
+# ─── Session sandbox ────────────────────────────────────────────────
+# Local Podman with outbound access (`bridge`) is the default. For a
+# repository you do not trust, use `none`, or `egress` to let Agents' commands
+# reach only the registries and hosts you list (Preview ports are not
+# published under `egress`). See the Sandboxes docs page.
+# sandbox:
+#   network: egress
+#   egress:
+#     allow:
+#       - npm                     # registry.npmjs.org
+#       - pypi                    # pypi.org, files.pythonhosted.org
+#       - host: api.example.com   # ports default to [443]

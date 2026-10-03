@@ -713,17 +713,9 @@ impl crate::session_network::RecordNamespaces for RegistryNetworkRecords {
     }
 }
 
-/// Refusal for `network: egress` until Session start runs the egress proxy.
-/// The config accepts the value so the shared policy, record and API can be
-/// built and tested, but no container may start under it yet.
-pub(crate) const EGRESS_NOT_AVAILABLE: &str = "sandbox.network: egress is not available in \
-     this build: Session start does not run the egress proxy yet. Use network: none or \
-     network: bridge";
-
-/// The local container network for `sandbox.network`. Only exact `bridge` and
-/// `none` map to a container network; `egress` is refused until Session start
-/// supports it, and any other value is refused so a misspelled `none` can
-/// never start a container with a network.
+/// The local container network for `sandbox.network`. Only exact `bridge`,
+/// `none` and `egress` map to a container network; any other value is
+/// refused so a misspelled `none` can never start a container with a network.
 fn configured_sandbox_network(
     value: &str,
 ) -> Result<axocoatl_isolation::session_sandbox::SandboxNetwork, DaemonError> {
@@ -731,12 +723,31 @@ fn configured_sandbox_network(
     match value {
         "none" => Ok(axocoatl_isolation::session_sandbox::SandboxNetwork::None),
         "bridge" => Ok(axocoatl_isolation::session_sandbox::SandboxNetwork::Bridge),
-        "egress" => Err(DaemonError::Session(EGRESS_NOT_AVAILABLE.to_string())),
+        "egress" => Ok(axocoatl_isolation::session_sandbox::SandboxNetwork::Egress),
         other => Err(DaemonError::Session(format!(
             "sandbox.network {other:?} has no container network mapping"
         ))),
     }
 }
+
+/// Ways attempt containers have no egress sidecar in this version: under
+/// `network: egress` an attempt runs with no network at all.
+fn attempt_sandbox_network(
+    value: &str,
+) -> Result<axocoatl_isolation::session_sandbox::SandboxNetwork, DaemonError> {
+    use axocoatl_isolation::session_sandbox::SandboxNetwork;
+    Ok(match configured_sandbox_network(value)? {
+        SandboxNetwork::Egress | SandboxNetwork::None => SandboxNetwork::None,
+        SandboxNetwork::Bridge => SandboxNetwork::Bridge,
+    })
+}
+
+/// Directory under the data root for egress credentials' 0600 env files.
+const EGRESS_ENV_DIR: &str = "egress-env";
+
+/// Refusal for `network: egress` on a Session without native history.
+pub(crate) const EGRESS_NEEDS_NATIVE_SESSION: &str =
+    "network: egress needs a native Session; this Session predates the native Session format";
 
 fn bounded_setup_output(mut value: String) -> String {
     if value.len() <= SESSION_SETUP_OUTPUT_CAP {
@@ -3539,6 +3550,9 @@ pub struct AxocoatlDaemon {
     session_dispatch_lifecycles: Arc<session_dispatch::SessionDispatchRegistry>,
     /// One network record writer per Session, opened on first append.
     session_network_records: Arc<crate::session_network::SessionNetworkRecords>,
+    /// Under `network: egress`, one decision point per running Session.
+    session_egress:
+        Arc<tokio::sync::Mutex<HashMap<String, Arc<crate::session_egress::SessionEgress>>>>,
     /// Recovery-only primary handles used while resolving an Attempt set after
     /// restart. They must never enter the ordinary Ready fast path because
     /// they intentionally skip project setup.
@@ -4558,9 +4572,8 @@ impl AxocoatlDaemon {
         config: AxocoatlConfig,
         reattach_active_ready: bool,
     ) -> Result<Self, DaemonError> {
-        // Refuse a network setting other than `bridge` or `none` before any
-        // container or durable state is touched. `egress` validates but has no
-        // Session runtime yet, so it is refused here too.
+        // Refuse a network setting other than `bridge`, `none` or `egress`
+        // before any container or durable state is touched.
         axocoatl_config::validate_sandbox_network(&config.sandbox.network)?;
         configured_sandbox_network(&config.sandbox.network)?;
         // Runtime cleanup is the first fallible bootstrap responsibility after
@@ -4583,6 +4596,17 @@ impl AxocoatlDaemon {
             data_dir_lease.ownership,
             axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(_)
         );
+        // Egress credentials live only as long as this process; env files a
+        // previous run left behind name bindings that no longer exist.
+        match secure_data_dir.remove_dir_all(EGRESS_ENV_DIR) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(DaemonError::Session(format!(
+                    "removing stale egress credential files: {error}"
+                )))
+            }
+        }
 
         let counter: Arc<dyn TokenCounter> = Arc::new(
             ApproximateCounter::new()
@@ -5286,6 +5310,7 @@ impl AxocoatlDaemon {
             run_store,
             session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             session_network_records,
+            session_egress: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             session_dispatch_lifecycles,
             attempt_recovery_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             sandbox_starts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -6549,7 +6574,7 @@ impl AxocoatlDaemon {
         } else {
             None
         };
-        self.session_network_records.close(id).await;
+        self.close_session_network(id).await;
         self.session_dispatch_lifecycles
             .complete_session_cleanup(&dispatch_cleanup)?;
         drop(dispatch_cleanup);
@@ -6660,7 +6685,7 @@ impl AxocoatlDaemon {
                 .await
                 .delete_session(id)
                 .map_err(|error| DaemonError::Session(error.to_string()))?;
-            self.session_network_records.close(id).await;
+            self.close_session_network(id).await;
             self.session_dispatch_lifecycles
                 .complete_session_cleanup(&dispatch_cleanup)?;
             return self.session_dispatch_lifecycles.forget_deleted_session(id);
@@ -6726,7 +6751,7 @@ impl AxocoatlDaemon {
             self.clear_attempt_cancellation(id, &set_id).await;
         }
         result?;
-        self.session_network_records.close(id).await;
+        self.close_session_network(id).await;
         self.session_dispatch_lifecycles
             .complete_session_cleanup(&dispatch_cleanup)?;
         self.session_dispatch_lifecycles.forget_deleted_session(id)
@@ -7863,7 +7888,8 @@ impl AxocoatlDaemon {
             .ok_or_else(|| DaemonError::Session(format!("unknown session {session_id}")))?;
         let sandbox = self.ensure_sandbox(&session).await?;
         let term = sandbox
-            .spawn_pty(command, rows, cols)
+            .spawn_terminal(command, rows, cols)
+            .await
             .map_err(DaemonError::Session)?;
         Ok(term.id.clone())
     }
@@ -8224,6 +8250,35 @@ impl AxocoatlDaemon {
                         setup_results: Vec::new(),
                     }
                 })?;
+                let network = configured_sandbox_network(&sc.network).map_err(|error| {
+                    SessionEnvironmentPreparationError {
+                        error,
+                        effective_image: None,
+                        runtime: None,
+                        setup_results: Vec::new(),
+                    }
+                })?;
+                let egress = if network
+                    == axocoatl_isolation::session_sandbox::SandboxNetwork::Egress
+                {
+                    let authority = self.session_egress(&session.id).await.map_err(|error| {
+                        SessionEnvironmentPreparationError {
+                            error,
+                            effective_image: None,
+                            runtime: None,
+                            setup_results: Vec::new(),
+                        }
+                    })?;
+                    let settings = sc.egress.clone().unwrap_or_default();
+                    Some(axocoatl_isolation::egress::EgressAttachment {
+                        authority,
+                        sidecar_network: settings.sidecar_network,
+                        max_connections: settings.max_connections,
+                        labels: Vec::new(),
+                    })
+                } else {
+                    None
+                };
                 let policy = axocoatl_isolation::session_sandbox::SandboxPolicy {
                     supervisor_program: None,
                     supervisor_installation: Some(
@@ -8243,14 +8298,7 @@ impl AxocoatlDaemon {
                     // generic hook empty so no second implicit path can run it.
                     allow_post_create: false,
                     allow_untrusted_image: sc.allow_untrusted_images,
-                    network: configured_sandbox_network(&sc.network).map_err(|error| {
-                        SessionEnvironmentPreparationError {
-                            error,
-                            effective_image: None,
-                            runtime: None,
-                            setup_results: Vec::new(),
-                        }
-                    })?,
+                    network,
                     require_resource_limits: sc.require_resource_limits,
                     passive_start: false,
                     runtime_authority: Some(self.local_runtime_authority.clone()),
@@ -8264,6 +8312,9 @@ impl AxocoatlDaemon {
                         self._data_dir_lease.external_root().clone(),
                         self.ipc_root.clone(),
                     ],
+                    // The browser reaches the app under test through them.
+                    service_sockets: egress.is_some() || self.config.browser.is_some(),
+                    egress,
                 };
                 let sandbox = match SessionSandbox::start_in(
                     &session.id,
@@ -9516,6 +9567,8 @@ impl AxocoatlDaemon {
                 self._data_dir_lease.external_root().clone(),
                 self.ipc_root.clone(),
             ],
+            egress: None,
+            service_sockets: false,
         };
         let started = tokio::select! {
             result = SessionSandbox::start_in(
@@ -10636,6 +10689,55 @@ impl AxocoatlDaemon {
             .map_err(|error| DaemonError::Session(error.to_string()))
     }
 
+    /// The Session's egress decision point, opened on first use. Opening it
+    /// replays this Session's allows and revokes from its network record and
+    /// records each scope's policy when it changed. Only a native Session has
+    /// the record that every decision is written to.
+    pub(crate) async fn session_egress(
+        &self,
+        session_id: &str,
+    ) -> Result<Arc<crate::session_egress::SessionEgress>, DaemonError> {
+        let native = self
+            .session_dispatch_lifecycles
+            .retains_session(session_id)
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        if !native {
+            return Err(DaemonError::Session(
+                EGRESS_NEEDS_NATIVE_SESSION.to_string(),
+            ));
+        }
+        let mut decision_points = self.session_egress.lock().await;
+        if let Some(existing) = decision_points.get(session_id) {
+            return Ok(existing.clone());
+        }
+        let env_dir = self.data_root.child(EGRESS_ENV_DIR).map_err(|error| {
+            DaemonError::Session(format!("preparing egress credential storage: {error}"))
+        })?;
+        let egress = crate::session_egress::SessionEgress::open(
+            session_id,
+            crate::session_egress::EgressPolicyConfig::from_config(&self.config),
+            Arc::new(crate::session_egress::SessionRecordSink::new(
+                self.session_network_records.clone(),
+                session_id,
+            )),
+            Arc::new(crate::session_egress::SystemResolver),
+            Some(env_dir),
+        )
+        .await
+        .map_err(|error| {
+            DaemonError::Session(format!("opening the Session's egress policy: {error}"))
+        })?;
+        decision_points.insert(session_id.to_string(), egress.clone());
+        Ok(egress)
+    }
+
+    /// Release a Session's egress decision point and close its network
+    /// record, after its runtime is gone.
+    async fn close_session_network(&self, session_id: &str) {
+        self.session_egress.lock().await.remove(session_id);
+        self.session_network_records.close(session_id).await;
+    }
+
     /// The Session's network mode, egress policy and network record, for
     /// `GET /api/sessions/{id}/network`. Reading never creates a record.
     pub async fn session_network(
@@ -10671,11 +10773,29 @@ impl AxocoatlDaemon {
         } else {
             Vec::new()
         };
+        let policies = self
+            .session_egress
+            .lock()
+            .await
+            .get(session_id)
+            .map(|egress| egress.policy_views())
+            .unwrap_or_default();
+        let sidecar = self
+            .session_sandboxes
+            .lock()
+            .await
+            .get(session_id)
+            .and_then(|sandbox| sandbox.egress_status())
+            .map(|status| crate::session_network::SidecarView {
+                state: status.phase.as_str().to_string(),
+                generation: status.generation,
+                restarts: status.restarts,
+            });
         Ok(crate::session_network::SessionNetworkView {
             session_id: session_id.to_string(),
             mode: sandbox.network.clone(),
-            sidecar: None,
-            policies: Vec::new(),
+            sidecar,
+            policies,
             private_destinations,
             record: page.stats.into(),
             events: page.events,
@@ -13412,7 +13532,7 @@ trap - 0 1 2 15
             )?),
             allow_post_create: false,
             allow_untrusted_image: config.allow_untrusted_images,
-            network: configured_sandbox_network(&config.network)?,
+            network: attempt_sandbox_network(&config.network)?,
             require_resource_limits: config.require_resource_limits,
             passive_start: false,
             runtime_authority: Some(self.local_runtime_authority.clone()),
@@ -13426,6 +13546,8 @@ trap - 0 1 2 15
                 self._data_dir_lease.external_root().clone(),
                 self.ipc_root.clone(),
             ],
+            egress: None,
+            service_sockets: false,
         };
         let sandbox = SessionSandbox::start_in(
             container_id,
@@ -22233,7 +22355,7 @@ trap - 0 1 2 15
             if let Some(set_id) = current_set {
                 self.clear_attempt_cancellation(&session.id, &set_id).await;
             }
-            self.session_network_records.close(&session.id).await;
+            self.close_session_network(&session.id).await;
             if let Err(error) = cleanup {
                 failures.push(format!("{}: {error}", session.name));
             } else if let Err(error) = self
@@ -22262,6 +22384,7 @@ trap - 0 1 2 15
     pub async fn shutdown(&self) -> Result<(), DaemonError> {
         let _join = self.shutdown_join.lock().await;
         self.shutdown_session_runtimes_checked().await?;
+        self.session_egress.lock().await.clear();
         self.session_network_records.close_all().await;
         // Attempt tasks are not ordinary supervised agents: their JoinHandles
         // own metadata writes that must finish before the runtime disappears.
@@ -22343,19 +22466,20 @@ mod tests {
                 "{refused}: {error}"
             );
         }
-        // `egress` validates but has no container mapping until Session start
-        // runs the proxy: it must never fall through to bridge.
-        let error = configured_sandbox_network("egress")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("egress is not available"), "{error}");
-        let mut config = test_config();
-        config.sandbox.network = "egress".to_string();
-        let error = match AxocoatlDaemon::bootstrap_headless(config).await {
-            Ok(_) => panic!("a daemon must not start Sessions under an unimplemented egress mode"),
-            Err(error) => error.to_string(),
-        };
-        assert!(error.contains("egress is not available"), "{error}");
+        // `egress` maps to its own mode and never falls through to bridge;
+        // Ways attempts, which have no sidecar, get no network at all.
+        assert!(matches!(
+            configured_sandbox_network("egress").unwrap(),
+            SandboxNetwork::Egress
+        ));
+        for (configured, attempt) in [
+            ("egress", SandboxNetwork::None),
+            ("none", SandboxNetwork::None),
+            ("bridge", SandboxNetwork::Bridge),
+        ] {
+            assert_eq!(attempt_sandbox_network(configured).unwrap(), attempt);
+        }
+        assert!(attempt_sandbox_network("off").is_err());
 
         // Daemon start refuses it before touching a data root or container.
         let mut config = test_config();
@@ -29770,7 +29894,7 @@ case "$*" in
   'machine list --format json') printf '[{"Running":true}]\n' ;;
   'info --format json') printf '{}\n' ;;
   'ps -a --no-trunc --filter name=axo-ses- --format '* | \
-  'ps -a --no-trunc --filter name=axo-ses- --filter label=io.axocoatl.runtime-authority='*) ;;
+  'ps -a --no-trunc --filter name=axo-ses- --filter name=axo-egr- --filter name=axo-brw- --filter name=axo-pvw- --filter label=io.axocoatl.runtime-authority='*) ;;
   *) printf 'unexpected Podman command: %s\n' "$*" >&2; exit 1 ;;
 esac
 "#,

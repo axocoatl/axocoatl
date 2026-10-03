@@ -120,6 +120,9 @@ pub struct PtyTerminal {
     /// backend captures its resize RPC. Owning the backend handle here also
     /// means dropping the terminal tears that handle (and the child) down.
     resize_hook: Box<dyn Fn(u16, u16) + Send + Sync>,
+    /// Under `network: egress`, the terminal's credential. Released when the
+    /// terminal is killed or dropped.
+    egress_grant: Mutex<Option<crate::egress::EgressGrant>>,
 }
 
 impl PtyTerminal {
@@ -133,6 +136,29 @@ impl PtyTerminal {
         command: &str,
         rows: u16,
         cols: u16,
+    ) -> Result<Self, String> {
+        Self::spawn_podman_with_env(
+            id,
+            container,
+            workdir,
+            command,
+            (rows, cols),
+            None,
+            Arc::new(Mutex::new(true)),
+        )
+    }
+
+    /// [`Self::spawn_podman`] with an optional `--env-file` (the egress
+    /// credential's proxy settings, never in argv) and a caller-owned
+    /// liveness flag, which the reaper sets to `false` when the child exits.
+    pub(crate) fn spawn_podman_with_env(
+        id: String,
+        container: &str,
+        workdir: &std::path::Path,
+        command: &str,
+        (rows, cols): (u16, u16),
+        env_file: Option<&std::path::Path>,
+        alive: Arc<Mutex<bool>>,
     ) -> Result<Self, String> {
         let pty = native_pty_system();
         let pair = pty
@@ -151,7 +177,12 @@ impl PtyTerminal {
         let mut cmd = CommandBuilder::new("podman");
         // `-w` so a terminal opened in a variant lane starts in that lane's
         // worktree rather than the container's default (the session root).
-        cmd.args(["exec", "-i", "-t", "-w"]);
+        cmd.args(["exec", "-i", "-t"]);
+        if let Some(env_file) = env_file {
+            cmd.arg("--env-file");
+            cmd.arg(env_file);
+        }
+        cmd.arg("-w");
         cmd.arg(workdir);
         cmd.args([container, "sh", "-c", command]);
         // No TERM in the parent could otherwise leave vt100 features off.
@@ -176,7 +207,6 @@ impl PtyTerminal {
 
         let output = PtyOutput::new(64);
         let (input_tx, input_rx) = std::sync::mpsc::channel::<Vec<u8>>();
-        let alive = Arc::new(Mutex::new(true));
 
         // Reader: blocking std::io::Read, so run it on a blocking thread.
         {
@@ -241,7 +271,36 @@ impl PtyTerminal {
             input_tx,
             alive,
             resize_hook,
+            egress_grant: Mutex::new(None),
         })
+    }
+
+    /// Keep this terminal's egress credential alive as long as the terminal.
+    pub(crate) fn hold_egress_grant(&self, grant: crate::egress::EgressGrant) {
+        *self
+            .egress_grant
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(grant);
+    }
+
+    /// End this terminal's egress credential now: its connections close and
+    /// later requests are refused.
+    pub fn release_egress_grant(&self) {
+        let grant = self
+            .egress_grant
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        drop(grant);
+    }
+
+    /// The tag of this terminal's egress credential, if it has one.
+    pub fn egress_token_tag(&self) -> Option<String> {
+        self.egress_grant
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|grant| grant.token_tag.clone())
     }
 
     /// Build a terminal from already-wired channels and a backend resize hook.
@@ -263,6 +322,7 @@ impl PtyTerminal {
             input_tx,
             alive,
             resize_hook,
+            egress_grant: Mutex::new(None),
         }
     }
 

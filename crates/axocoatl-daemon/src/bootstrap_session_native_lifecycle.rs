@@ -192,7 +192,7 @@ impl AxocoatlDaemon {
             .await
             .configure_environment(id, image, setup_command, setup_approved, setup_reviewed)
             .map_err(|error| DaemonError::Session(error.to_string()))?;
-        self.session_network_records.close(id).await;
+        self.close_session_network(id).await;
         self.session_dispatch_lifecycles
             .complete_session_cleanup(&cleanup)?;
         drop(cleanup);

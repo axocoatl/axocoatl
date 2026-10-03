@@ -1042,6 +1042,10 @@ impl EgressAuthority for SessionEgress {
         }
     }
 
+    fn attach_control(&self, handle: ControlHandle) {
+        SessionEgress::attach_control(self, handle);
+    }
+
     async fn sidecar_event(&self, event: SidecarEvent) {
         let (state, generation, container, detail) = match event {
             SidecarEvent::Starting {
@@ -1059,6 +1063,20 @@ impl EgressAuthority for SessionEgress {
                 (SidecarState::Restarting, generation, None, None)
             }
             SidecarEvent::Failed { generation, detail } => {
+                (SidecarState::Failed, generation, None, Some(detail))
+            }
+            SidecarEvent::BudgetSpent { generation, detail } => {
+                // The record says why egress stopped, in its control headroom.
+                if let Err(error) = self
+                    .records
+                    .append_control(NetworkEvent::Limit {
+                        what: LimitKind::RestartBudget,
+                        detail: detail.chars().take(512).collect(),
+                    })
+                    .await
+                {
+                    tracing::warn!(session = %self.session_id, ?error, "recording the egress restart budget failed");
+                }
                 (SidecarState::Failed, generation, None, Some(detail))
             }
             SidecarEvent::Stopped { generation } => (SidecarState::Stopped, generation, None, None),
@@ -1096,4 +1114,4 @@ impl EgressAuthority for SessionEgress {
 
 #[cfg(test)]
 #[path = "session_egress_tests.rs"]
-mod tests;
+pub(crate) mod tests;
