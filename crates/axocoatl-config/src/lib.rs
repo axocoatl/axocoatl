@@ -3,6 +3,7 @@ pub mod browser;
 mod convert;
 pub mod egress;
 pub mod egress_presets;
+pub mod egress_routes;
 pub mod error;
 pub mod secret;
 pub mod types;
@@ -12,6 +13,7 @@ pub mod workload;
 pub use automation::*;
 pub use browser::{validate_browser, DEFAULT_BROWSER_IMAGE};
 pub use egress::{network_warnings, validate_allow_list, validate_egress, ConfigWarning};
+pub use egress_routes::{refuse_substitution, validate_egress_routes};
 pub use error::*;
 pub use secret::SecretString;
 pub use types::*;
@@ -132,6 +134,7 @@ pub async fn load_config(path: &Path) -> Result<AxocoatlConfig, ConfigError> {
 
 /// Parse and validate config from a YAML string.
 pub fn parse_config(yaml: &str, source_path: &Path) -> Result<AxocoatlConfig, ConfigError> {
+    refuse_substitution(yaml)?;
     let interpolated = interpolate_env_vars(yaml);
 
     let config: AxocoatlConfig =
@@ -593,6 +596,7 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
     validate_sandbox_network(&config.sandbox.network)?;
     workload::validate_workload(config)?;
     validate_egress(config)?;
+    validate_egress_routes(config)?;
     validate_web(config)?;
     validate_browser(config)?;
 

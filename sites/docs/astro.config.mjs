@@ -99,6 +99,7 @@ export default defineConfig({
             { label: 'Sandboxes', slug: 'configure/sandboxes' },
             { label: 'Browser', slug: 'configure/browser' },
             { label: 'Web research', slug: 'configure/web' },
+            { label: 'Credentials and routes', slug: 'configure/credentials' },
             { label: 'Skills and MCP', slug: 'configure/skills-mcp' },
             { label: 'Automations', slug: 'configure/automations' },
           ],

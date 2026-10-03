@@ -3,8 +3,10 @@
 //! Each activation of a turn gets one `network` evidence item when its tool
 //! calls' credentials opened, or were refused, connections: a one-line
 //! summary such as `registry.npmjs.org:443 allowed ×3 (1.2 MB in);
-//! evil.test:443 refused (not_allowed)`, and up to 200 of the recorded
-//! `open`, `close` and `web` lines. Events are joined to an activation
+//! evil.test:443 refused (not_allowed)`, followed by the requests made on
+//! routes (`github.com POST /acme/app.git/git-receive-pack 200 (credential
+//! github)`), and up to 200 of the recorded `open`, `close`, `request`,
+//! `response` and `web` lines. Events are joined to an activation
 //! through the tool call (`binding.invocation_id`, or a web event's
 //! `invocation_id`) that the turn recorded for it. Session-level and
 //! unattributed events (no credential, setup, terminals) appear only in
@@ -15,7 +17,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use axocoatl_session::network_record::{Decision, NetworkEvent, NetworkLine, MAX_READ_LIMIT};
+use axocoatl_session::network_record::{
+    Decision, NetworkEvent, NetworkLine, ResponseOutcome, MAX_READ_LIMIT,
+};
 use serde_json::{json, Value};
 
 use crate::session_control_plane::{
@@ -27,6 +31,10 @@ use crate::session_network::SessionNetworkRecords;
 pub const MAX_DETAIL_LINES: usize = 200;
 /// Most destinations named in one summary line.
 const MAX_SUMMARY_DESTINATIONS: usize = 8;
+/// Most route requests named in one summary line.
+const MAX_SUMMARY_REQUESTS: usize = 8;
+/// Most route requests kept per tool call for the summary.
+const MAX_KEPT_REQUESTS: usize = 64;
 
 #[derive(Debug, Default, Clone)]
 struct Allowed {
@@ -40,12 +48,24 @@ struct InvocationNetwork {
     allowed: BTreeMap<String, Allowed>,
     refused: BTreeMap<(String, String), u64>,
     web: u64,
+    /// Route requests, in order, such as `github.com GET /x 200`.
+    requests: Vec<String>,
+    /// Route requests past [`MAX_KEPT_REQUESTS`].
+    more_requests: u64,
     details: Vec<NetworkLine>,
     truncated: bool,
     last_ts_ms: u64,
 }
 
 impl InvocationNetwork {
+    fn request(&mut self, text: String) {
+        if self.requests.len() < MAX_KEPT_REQUESTS {
+            self.requests.push(text);
+        } else {
+            self.more_requests += 1;
+        }
+    }
+
     fn keep(&mut self, line: &NetworkLine) {
         self.last_ts_ms = self.last_ts_ms.max(line.ts_ms);
         if self.details.len() < MAX_DETAIL_LINES {
@@ -62,6 +82,20 @@ struct Folded {
     invocations: HashMap<String, InvocationNetwork>,
     /// Allowed connection → (invocation, destination), to attach its close.
     open: HashMap<String, (String, String)>,
+    /// Allowed route request (conn, seq) → (invocation, `host METHOD path`,
+    /// credential name), to attach its response.
+    requests: HashMap<(String, u64), (String, String, Option<String>)>,
+}
+
+fn outcome_name(outcome: ResponseOutcome) -> &'static str {
+    match outcome {
+        ResponseOutcome::Completed => "completed",
+        ResponseOutcome::UpstreamFailed => "upstream_failed",
+        ResponseOutcome::CredentialReflected => "credential_reflected",
+        ResponseOutcome::EncodedResponse => "encoded_response",
+        ResponseOutcome::TooLarge => "too_large",
+        ResponseOutcome::ClientClosed => "client_closed",
+    }
 }
 
 impl Folded {
@@ -104,10 +138,66 @@ impl Folded {
                 let Some((invocation, destination)) = self.open.remove(conn) else {
                     return;
                 };
+                self.requests
+                    .retain(|(request_conn, _), _| request_conn != conn);
                 let entry = self.invocations.entry(invocation).or_default();
                 let allowed = entry.allowed.entry(destination).or_default();
                 allowed.down += down;
                 allowed.up += up;
+                entry.keep(line);
+            }
+            NetworkEvent::Request {
+                conn,
+                seq_in_conn,
+                method,
+                path,
+                host,
+                decision,
+                reason,
+                credential,
+                ..
+            } => {
+                let Some((invocation, _)) = self.open.get(conn) else {
+                    return;
+                };
+                let invocation = invocation.clone();
+                let text = format!("{host} {method} {path}");
+                let entry = self.invocations.entry(invocation.clone()).or_default();
+                match decision {
+                    Decision::Allow => {
+                        self.requests.insert(
+                            (conn.clone(), *seq_in_conn),
+                            (invocation, text, credential.clone()),
+                        );
+                    }
+                    Decision::Deny => entry.request(format!(
+                        "{text} refused ({})",
+                        reason.as_deref().unwrap_or("refused")
+                    )),
+                }
+                entry.keep(line);
+            }
+            NetworkEvent::Response {
+                conn,
+                seq_in_conn,
+                status,
+                outcome,
+                ..
+            } => {
+                let Some((invocation, text, credential)) =
+                    self.requests.remove(&(conn.clone(), *seq_in_conn))
+                else {
+                    return;
+                };
+                let mut summary = format!("{text} {status}");
+                if *outcome != ResponseOutcome::Completed {
+                    summary.push_str(&format!(" [{}]", outcome_name(*outcome)));
+                }
+                if let Some(credential) = credential {
+                    summary.push_str(&format!(" (credential {credential})"));
+                }
+                let entry = self.invocations.entry(invocation).or_default();
+                entry.request(summary);
                 entry.keep(line);
             }
             NetworkEvent::Web { invocation_id, .. } => {
@@ -152,6 +242,15 @@ fn summarize(network: &InvocationNetwork) -> String {
     if more > 0 {
         parts.push(format!("{more} more"));
     }
+    parts.extend(network.requests.iter().take(MAX_SUMMARY_REQUESTS).cloned());
+    let more_requests =
+        network.requests.len().saturating_sub(MAX_SUMMARY_REQUESTS) as u64 + network.more_requests;
+    if more_requests > 0 {
+        parts.push(format!(
+            "{more_requests} more request{}",
+            if more_requests == 1 { "" } else { "s" }
+        ));
+    }
     if network.web > 0 {
         parts.push(format!(
             "{} web call{}",
@@ -173,6 +272,10 @@ fn merge(into: &mut InvocationNetwork, from: &InvocationNetwork) {
         *into.refused.entry(key.clone()).or_default() += count;
     }
     into.web += from.web;
+    for request in &from.requests {
+        into.request(request.clone());
+    }
+    into.more_requests += from.more_requests;
     into.last_ts_ms = into.last_ts_ms.max(from.last_ts_ms);
     into.truncated |= from.truncated;
     for line in &from.details {
@@ -303,6 +406,10 @@ fn evidence_by_activation(
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "session_network_evidence_request_tests.rs"]
+mod request_tests;
 
 #[cfg(test)]
 mod tests {

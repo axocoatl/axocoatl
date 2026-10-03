@@ -1,8 +1,8 @@
 //! A Session's network record: every egress decision, connection close,
-//! policy change, web-tool call and browser call, in order, one JSON line
-//! each. Screenshots the browser tools take are kept beside it, by digest,
-//! in its `screenshots/` directory; they are for people and never reach a
-//! model.
+//! route request and response, policy change, web-tool call and browser
+//! call, in order, one JSON line each. Screenshots the browser tools take
+//! are kept beside it, by digest, in its `screenshots/` directory; they are
+//! for people and never reach a model.
 //!
 //! The record is append-only. [`NetworkRecord::append`] returns only after a
 //! complete `write(2)` of the whole line to the file, so a caller that waits
@@ -185,6 +185,34 @@ pub enum CloseOutcome {
     Revoked,
     IdleTimeout,
 }
+
+/// How a request on a route ended (`response` events).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseOutcome {
+    /// The whole response reached the client.
+    Completed,
+    /// The upstream could not be reached, refused the request or broke off.
+    UpstreamFailed,
+    /// The response carried the route's credential; the connection was
+    /// closed before that part was passed on.
+    CredentialReflected,
+    /// A compressed response on a credentialed route was refused.
+    EncodedResponse,
+    /// The request body was larger than the route's `max_request_bytes`.
+    TooLarge,
+    /// The client went away before the response was complete.
+    ClientClosed,
+}
+
+/// Longest method a `request` event keeps.
+pub const MAX_RECORDED_METHOD_CHARS: usize = 32;
+/// Longest rule, reason or credential name a `request` event keeps.
+pub const MAX_RECORDED_REQUEST_LABEL_CHARS: usize = 128;
+
+#[cfg(all(test, unix))]
+#[path = "network_record_request_tests.rs"]
+mod request_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -463,6 +491,40 @@ pub enum NetworkEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// One HTTP request on a route, written before the request is sent
+    /// upstream; a refused request is recorded with the reason.
+    Request {
+        conn: String,
+        /// 1 for the connection's first request.
+        seq_in_conn: u64,
+        method: String,
+        /// Query stripped, at most 256 characters.
+        path: String,
+        /// The request's `Host`.
+        host: String,
+        /// The route rule that allowed it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule: Option<String>,
+        decision: Decision,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        /// The name of the credential added; never its value.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        credential: Option<String>,
+    },
+    /// How an allowed route request ended.
+    Response {
+        conn: String,
+        seq_in_conn: u64,
+        /// The status the client got.
+        status: u16,
+        /// Request body bytes sent upstream.
+        up: u64,
+        /// Response body bytes passed to the client.
+        down: u64,
+        ms: u64,
+        outcome: ResponseOutcome,
+    },
     /// Written before a web tool's request leaves this computer, so a request
     /// whose result cannot be recorded is still in the record. The `web`
     /// event with the same `invocation_id` says how it ended.
@@ -616,6 +678,8 @@ impl NetworkEvent {
             Self::Unbind { .. } => "unbind",
             Self::Open { .. } => "open",
             Self::Close { .. } => "close",
+            Self::Request { .. } => "request",
+            Self::Response { .. } => "response",
             Self::WebRequest { .. } => "web_request",
             Self::Web { .. } => "web",
             Self::Limit { .. } => "limit",
@@ -666,6 +730,39 @@ impl NetworkEvent {
                 if conn.is_empty() || conn.len() > 32 =>
             {
                 invalid("conn must be 1-32 bytes")
+            }
+            Self::Request { conn, .. } | Self::Response { conn, .. }
+                if conn.is_empty() || conn.len() > 32 =>
+            {
+                invalid("conn must be 1-32 bytes")
+            }
+            Self::Request {
+                method,
+                path,
+                host,
+                rule,
+                reason,
+                credential,
+                ..
+            } => {
+                let long = |value: &Option<String>| {
+                    value.as_ref().is_some_and(|value| {
+                        value.chars().count() > MAX_RECORDED_REQUEST_LABEL_CHARS
+                    })
+                };
+                if host.is_empty() || host.len() > 253 {
+                    invalid("host must be 1-253 bytes")
+                } else if method.is_empty() || method.chars().count() > MAX_RECORDED_METHOD_CHARS {
+                    invalid("method must be 1-32 characters")
+                } else if path.chars().count() > MAX_RECORDED_PATH_CHARS {
+                    invalid("path must be at most 256 characters")
+                } else if long(rule) || long(reason) || long(credential) {
+                    invalid(
+                        "request rule, reason and credential name must be at most 128 characters",
+                    )
+                } else {
+                    Ok(())
+                }
             }
             Self::Policy {
                 change:

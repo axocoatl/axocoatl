@@ -47,11 +47,30 @@ hmac = { workspace = true }
 hex = { workspace = true }
 getrandom = "0.4"
 unicode-normalization = { workspace = true }
+# Egress route broker (`egress_broker`): TLS ends in the daemon with
+# certificates from a per-Session authority signed with ring; requests are
+# served and forwarded with hyper. Only crates already in Cargo.lock.
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-platform-verifier = "0.7"
+rustls-native-certs = "0.8"
+hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+secrecy = "0.10"
+zeroize = "1"
+memchr = "2"
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 wiremock = { workspace = true }
 tempfile = "3.27"
+rustls-webpki = { version = "0.103", default-features = false, features = ["ring", "std"] }
+tracing-subscriber = { workspace = true }
+serde_yaml = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { version = "1.1.4", features = ["fs"] }

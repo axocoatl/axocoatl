@@ -426,9 +426,11 @@ pub fn validate_egress(config: &AxocoatlConfig) -> Result<Vec<ConfigWarning>, Co
 }
 
 /// Every network-related warning for a config that already validated:
-/// egress, web and browser settings, and MCP environment inheritance.
+/// egress, routes and credentials, web and browser settings, and MCP
+/// environment inheritance.
 pub fn network_warnings(config: &AxocoatlConfig) -> Vec<ConfigWarning> {
     let mut warnings = validate_egress(config).unwrap_or_default();
+    warnings.extend(crate::egress_routes::validate_egress_routes(config).unwrap_or_default());
     warnings.extend(crate::web::validate_web(config).unwrap_or_default());
     warnings.extend(crate::browser::validate_browser(config).unwrap_or_default());
     warnings

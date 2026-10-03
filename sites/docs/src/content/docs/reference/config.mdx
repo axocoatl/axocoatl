@@ -39,6 +39,10 @@ Secret fields use redacting wrappers in debug output, but YAML, shell history,
 service definitions, external servers, and backups still need normal secret
 handling.
 
+`${...}` is refused inside `credentials` and `sandbox.egress.routes`, before
+substitution: those blocks name where a credential lives, and substitution would
+copy its value into the configuration. See [Credentials](#credentials).
+
 ## Process data root
 
 The control-plane data root is process configuration, not a YAML key.
@@ -80,6 +84,7 @@ and have no YAML override. See [Data and backup](/operate/data-backup/) and
 | `consolidation` | object | Idle memory-promotion loop |
 | `webhooks` | list | Outbound typed-event delivery |
 | `pricing` | map | Per-model input/output rates for Attempt cost reporting; reasoning uses the output rate |
+| `credentials` | map | Where the daemon reads each credential that `sandbox.egress.routes` add to requests |
 
 Omitted collections default empty. The live daemon does not watch this file;
 restart it to load durable changes.
@@ -326,6 +331,50 @@ different credential flow. Ready E2B Sessions retain their exact runtime ID and
 remote root: Close pauses, Reopen reconnects, and Delete Session or Change/Rebuild
 runtime performs checked deletion.
 
+### sandbox.egress.routes
+
+Routes are hosts whose HTTPS traffic Axocoatl ends on your computer, so it can
+check each request and add a credential. See
+[Credentials and routes](/configure/credentials/) for how they work.
+
+```yaml
+sandbox:
+  network: egress
+  egress:
+    routes:
+      - host: github.com             # one exact name; no wildcard, no IP address
+        ports: [443]                 # default [443]
+        credential: github           # a credentials entry
+        inject: {basic: {username: x-access-token}}   # or {header: Authorization, format: "Bearer {}"}
+        for: [agent, terminal]       # agent, terminal, setup; default [agent]
+        upstream_ca: ~/.config/axocoatl/registry-ca.pem   # optional, owner-only PEM
+        rules:
+          - {methods: [GET], path: "/acme/app.git/info/refs", query: {service: git-upload-pack}}
+          - {methods: [POST], path: "/acme/app.git/git-upload-pack"}
+        env_placeholders: [GITHUB_TOKEN]
+        allow_encoded_responses: false
+        max_request_bytes: 1073741824
+      - host: registry.npmjs.org
+        access: read-only            # GET, HEAD, OPTIONS; or full
+```
+
+Validation refuses: a wildcard or IP address as `host`; a host and port listed by
+two routes; `credential` naming no `credentials` entry; `inject` without a
+credential or a credential without `inject`; `inject` with both or neither of
+`basic` and `header`; a `format` without exactly one `{}`; a header Axocoatl or HTTP
+controls (`Host`, `Content-Length`, `Connection`, `Proxy-Authorization`,
+`Accept-Encoding` and the like); methods that are not uppercase, or `CONNECT`;
+paths that do not start with `/` or have `//`, `.` or `..` segments (also before a
+`;` parameter, as in `..;`), a segment starting with `;`, escaped or twice-escaped
+`/`, `\` or `.`, or a `*` inside a segment; both `access` and `rules`, or neither; a
+placeholder Axocoatl sets itself (proxy, certificate, `AXOCOATL_*` and basic process
+variables); an `upstream_ca` that is not an owner-only regular file holding a PEM
+certificate; and `max_request_bytes` outside 1 KiB-1 TiB. At most 64 routes, 64 rules
+per route, 16 methods and 16 query parameters per rule. It warns when a credentialed
+route allows every path (a `**` rule, `access: read-only` or `access: full`), when it
+passes compressed responses, and when a route's host is also allowed by `allow` or a
+preset.
+
 ### sandbox.workload
 
 ```yaml
@@ -347,6 +396,24 @@ needs rootless Podman: under rootful Podman `auto` falls back to `image` with a
 `doctor` warning, and `hardened` refuses to start a Session. `backend: e2b` refuses
 `hardened`. See [Workload users](/configure/sandboxes/#workload-users).
 
+## Credentials
+
+```yaml
+credentials:
+  github: {env: GITHUB_TOKEN}                                # a variable of the daemon
+  registry: {file: ~/.config/axocoatl/credentials/registry}  # an owner-only file
+```
+
+Each entry is exactly one of `env`, an uppercase variable name, or `file`, an
+absolute or `~/` path. Names are 1-64 letters, digits, `_`, `.` or `-`, and are
+recorded with each request that used them. Values are never in the configuration:
+a plain value is refused without being repeated, and `${...}` is refused before
+substitution. The daemon reads a value each time a request needs it; a file must
+then be a regular file outside every Workspace, owned by the daemon's user and
+readable only by it. At most 64 credentials; validation warns about one no route
+uses, and about each stdio MCP server that inherits the daemon's environment while a
+credential is read from it (`env`), since that server gets the value too.
+
 ## MCP servers
 
 ```yaml
@@ -366,7 +433,8 @@ mcp_servers:
 
 Persistent transports are `stdio` and `streamable_http`/`http`. Stdio requires
 `command`; HTTP requires `url`. A stdio server inherits the daemon's whole
-environment by default, including any provider API keys in it. Set
+environment by default, including any provider API keys and any route credential
+read with `{env: ...}`. Set
 `inherit_env: false` to start it with only `PATH`, `HOME`, `USER`, `LANG`, `LC_*`
 and `TMPDIR` (plus `SYSTEMROOT` on Windows) from that environment, then its `env`;
 we recommend it for every stdio server. A server added from Settings inherits the

@@ -1168,6 +1168,12 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
             Ok(line) => pass(&line),
             Err((line, hint)) => warn(&line, &hint),
         }
+        for line in credentials_doctor_lines(cfg) {
+            match line.hint {
+                None => pass(&line.text),
+                Some(hint) => warn(&line.text, hint),
+            }
+        }
         if let Some(browser) = &cfg.browser {
             let image = browser
                 .image
@@ -1273,6 +1279,87 @@ fn sandbox_workload_doctor_line(
                 .to_string(),
         )),
     }
+}
+
+/// One `doctor` line about egress routes or credentials; a hint makes it
+/// a warning.
+struct CredentialDoctorLine {
+    text: String,
+    hint: Option<&'static str>,
+}
+
+/// The `doctor` lines for `sandbox.egress.routes` and `credentials`. Values
+/// are never read or printed: only whether each source is there.
+fn credentials_doctor_lines(config: &axocoatl_config::AxocoatlConfig) -> Vec<CredentialDoctorLine> {
+    use axocoatl_config::egress_routes::{
+        check_owner_only_file, expand_user_path, MAX_SECRET_FILE_BYTES,
+    };
+    let mut lines = Vec::new();
+    let routes = config
+        .sandbox
+        .egress
+        .as_ref()
+        .map(|egress| egress.routes.as_slice())
+        .unwrap_or_default();
+    if !routes.is_empty() {
+        let names: Vec<String> = routes
+            .iter()
+            .map(|route| match &route.credential {
+                Some(credential) => format!("{} (credential {credential})", route.host),
+                None => route.host.clone(),
+            })
+            .collect();
+        lines.push(CredentialDoctorLine {
+            text: format!(
+                "Egress routes: Axocoatl checks each request to {}",
+                names.join(", ")
+            ),
+            hint: None,
+        });
+    }
+    let mut present = Vec::new();
+    for (name, source) in &config.credentials {
+        let problem = match (&source.env, &source.file) {
+            (Some(variable), _) => {
+                if std::env::var_os(variable).is_some_and(|value| !value.is_empty()) {
+                    present.push(format!("{name} (env {variable}, set in this shell)"));
+                    None
+                } else {
+                    Some(format!(
+                        "Credential {name}: {variable} is not set in this shell"
+                    ))
+                }
+            }
+            (None, Some(path)) => match expand_user_path(path)
+                .and_then(|expanded| check_owner_only_file(&expanded, MAX_SECRET_FILE_BYTES))
+            {
+                Ok(()) => {
+                    present.push(format!("{name} (file {path}, owner-only)"));
+                    None
+                }
+                Err(error) => Some(format!("Credential {name}: {error}")),
+            },
+            (None, None) => Some(format!("Credential {name}: names no source")),
+        };
+        if let Some(text) = problem {
+            lines.push(CredentialDoctorLine {
+                text,
+                hint: Some(
+                    "Set the variable where the daemon starts (the daemon reads its own environment), or create the file and chmod 600 it. Requests on its routes are refused until then.",
+                ),
+            });
+        }
+    }
+    if !present.is_empty() {
+        lines.push(CredentialDoctorLine {
+            text: format!(
+                "Credentials: {}; read by the daemon for each request, never passed to containers",
+                present.join(", ")
+            ),
+            hint: None,
+        });
+    }
+    lines
 }
 
 fn probe_data_dir(path: &std::path::Path) -> std::io::Result<()> {
@@ -3294,6 +3381,49 @@ mod tests {
         symlink(outside.path(), root.path().join(".write_probe")).unwrap();
         probe_data_dir(root.path()).unwrap();
         assert_eq!(std::fs::read(outside.path()).unwrap(), b"safe");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn doctor_names_routes_and_whether_each_credential_is_there() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("registry");
+        std::fs::write(&file, "registry-secret-value").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let open = directory.path().join("open");
+        std::fs::write(&open, "open-secret-value").unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::env::set_var("AXOCOATL_DOCTOR_TEST_TOKEN", "env-secret-value");
+        std::env::remove_var("AXOCOATL_DOCTOR_TEST_UNSET");
+        let yaml = format!(
+            "credentials:\n  github: {{env: AXOCOATL_DOCTOR_TEST_TOKEN}}\n  registry: {{file: '{}'}}\n  \
+             open: {{file: '{}'}}\n  unset: {{env: AXOCOATL_DOCTOR_TEST_UNSET}}\n\
+             sandbox:\n  network: egress\n  egress:\n    routes:\n      \
+             - {{host: github.com, credential: github, inject: {{header: Authorization, format: 'Bearer {{}}'}}, access: read-only}}\n      \
+             - {{host: registry.npmjs.org, access: read-only}}\n",
+            file.display(),
+            open.display()
+        );
+        let config = axocoatl_config::parse_config(&yaml, std::path::Path::new("c.yaml")).unwrap();
+        let lines = credentials_doctor_lines(&config);
+        let text: Vec<String> = lines.iter().map(|line| line.text.clone()).collect();
+        assert_eq!(
+            text[0],
+            "Egress routes: Axocoatl checks each request to github.com (credential github), registry.npmjs.org"
+        );
+        assert!(lines.iter().any(|line| line.hint.is_some()
+            && line.text.starts_with("Credential open:")
+            && line.text.contains("chmod 600")));
+        assert!(lines.iter().any(|line| line.hint.is_some()
+            && line.text
+                == "Credential unset: AXOCOATL_DOCTOR_TEST_UNSET is not set in this shell"));
+        let summary = text.last().unwrap();
+        assert!(summary.starts_with("Credentials: github (env AXOCOATL_DOCTOR_TEST_TOKEN, set in this shell), registry (file "), "{summary}");
+        for line in &text {
+            assert!(!line.contains("secret-value"), "{line}");
+        }
+        assert!(credentials_doctor_lines(&axocoatl_config::AxocoatlConfig::default()).is_empty());
     }
 
     #[test]
