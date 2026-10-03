@@ -330,6 +330,7 @@ mod tests {
             ts_ms: 1000 + seq,
             event: NetworkEvent::Open {
                 conn: conn.into(),
+                peer: None,
                 decision: if allow {
                     Decision::Allow
                 } else {

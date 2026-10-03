@@ -201,6 +201,7 @@ impl EgressAuthority for FakeAuthority {
         let (status, reason) = match &decision {
             Decision::Allow { .. } => (None, None),
             Decision::Deny { status, reason, .. } => (Some(*status), Some(reason.clone())),
+            Decision::Relay => (None, None),
         };
         self.push(Event::Open {
             conn: format!("g{}:{}", open.generation, open.id),

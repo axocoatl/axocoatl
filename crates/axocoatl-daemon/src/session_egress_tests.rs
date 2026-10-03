@@ -180,7 +180,89 @@ fn open(id: u64, host: &str, port: u16, auth: Option<&str>) -> OpenRequest {
         auth: auth.map(str::to_string),
         method: None,
         path: None,
+        peer: None,
     }
+}
+
+/// The program behind a connection, as the sidecar's identity socket
+/// reported it, is recorded with the decision: allowed or refused.
+#[tokio::test]
+async fn the_record_names_the_program_behind_each_connection() {
+    let fixture = fixture().await;
+    let (_grant, hash) = granted(&fixture, agent_spec()).await;
+    let peer = axocoatl_isolation::egress::PeerIdentity {
+        pid: Some(321),
+        uid: Some(1000),
+        gid: Some(1000),
+        exe: Some("/usr/bin/curl".into()),
+        exe_sha256: Some("cd".repeat(32)),
+        ancestors: vec!["/bin/bash".into()],
+        error: None,
+    };
+    for (id, host) in [(1, "allowed.test"), (2, "data.attacker.test")] {
+        fixture
+            .egress
+            .decide(OpenRequest {
+                peer: Some(peer.clone()),
+                ..open(id, host, 443, Some(&hash))
+            })
+            .await;
+    }
+    let unidentified = axocoatl_isolation::egress::PeerIdentity::failed("no_access");
+    fixture
+        .egress
+        .decide(OpenRequest {
+            peer: Some(unidentified),
+            ..open(3, "allowed.test", 443, Some(&hash))
+        })
+        .await;
+    fixture
+        .egress
+        .decide(open(4, "allowed.test", 443, Some(&hash)))
+        .await;
+    let recorded: Vec<_> = fixture
+        .record
+        .opens()
+        .into_iter()
+        .map(|event| match event {
+            NetworkEvent::Open {
+                conn,
+                peer,
+                decision,
+                ..
+            } => (conn, peer, decision),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    let expected = axocoatl_session::network_record::PeerIdentity {
+        pid: Some(321),
+        uid: Some(1000),
+        gid: Some(1000),
+        exe: Some("/usr/bin/curl".into()),
+        exe_sha256: Some("cd".repeat(32)),
+        ancestors: vec!["/bin/bash".into()],
+        error: None,
+    };
+    assert_eq!(
+        recorded,
+        vec![
+            (
+                "g1:1".to_string(),
+                Some(expected.clone()),
+                RecordDecision::Allow
+            ),
+            ("g1:2".to_string(), Some(expected), RecordDecision::Deny),
+            (
+                "g1:3".to_string(),
+                Some(axocoatl_session::network_record::PeerIdentity {
+                    error: Some("no_access".into()),
+                    ..Default::default()
+                }),
+                RecordDecision::Allow
+            ),
+            ("g1:4".to_string(), None, RecordDecision::Allow),
+        ]
+    );
 }
 
 fn agent_spec() -> GrantSpec {
@@ -208,6 +290,7 @@ fn reason(decision: &Decision) -> (u16, String) {
     match decision {
         Decision::Deny { status, reason, .. } => (*status, reason.clone()),
         Decision::Allow { .. } => (200, "allow".into()),
+        Decision::Relay => (200, "relay".into()),
     }
 }
 
@@ -1077,7 +1160,7 @@ async fn attach_sidecar(
     };
     sidecar
         .send(SidecarFrame::Hello {
-            protocol: 1,
+            protocol: axocoatl_exec::egress::protocol::EGRESS_PROTOCOL_VERSION,
             version: "test".into(),
             max_connections: 8,
         })
@@ -1092,7 +1175,12 @@ async fn attach_sidecar(
     .await
     .unwrap();
     egress.attach_control(handle);
-    assert_eq!(sidecar.frame().await, DaemonFrame::HelloAck { protocol: 1 });
+    assert_eq!(
+        sidecar.frame().await,
+        DaemonFrame::HelloAck {
+            protocol: axocoatl_exec::egress::protocol::EGRESS_PROTOCOL_VERSION
+        }
+    );
     (sidecar, task)
 }
 
@@ -1105,6 +1193,7 @@ fn sidecar_open(id: u64, host: &str, port: u16, hash: &str) -> SidecarFrame {
         auth: Some(hash.into()),
         method: None,
         path: None,
+        peer: None,
     }
 }
 

@@ -25,9 +25,23 @@ extern "C" fn cancellation_signal(_: libc::c_int) {
     CANCELLED.store(true, Ordering::Relaxed);
 }
 
+/// How `--serve` launches its command.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ServeOptions {
+    /// `--harden`: the command and its descendants get `PR_SET_NO_NEW_PRIVS`
+    /// and the seccomp denylist of [`crate::harden`], after any Landlock
+    /// restriction and before `execve`.
+    pub harden: bool,
+}
+
 /// Run exactly one request. This must be called by the dedicated helper binary,
 /// never inside a multithreaded host: the helper is the only child reaper.
 pub fn serve() -> Result<(), String> {
+    serve_with(ServeOptions::default())
+}
+
+/// [`serve`] with options.
+pub fn serve_with(options: ServeOptions) -> Result<(), String> {
     establish_supervision()?;
     nonblocking(libc::STDIN_FILENO)?;
     nonblocking(libc::STDOUT_FILENO)?;
@@ -88,6 +102,7 @@ pub fn serve() -> Result<(), String> {
     let terminal = if dispatch {
         execute(
             &request,
+            options,
             payload.as_deref(),
             &mut input,
             deadline,
@@ -195,6 +210,7 @@ struct Terminal {
 
 fn execute(
     request: &ExecRequest,
+    options: ServeOptions,
     payload: Option<&[u8]>,
     input: &mut Input,
     deadline: Instant,
@@ -233,14 +249,23 @@ fn execute(
         }
         None => None,
     };
+    // Also built before fork: the child only installs it.
+    let filter = options.harden.then(crate::harden::Filter::native);
     let mut command = Command::new(&request.argv[0]);
-    if let Some(ruleset) = &restriction {
-        let fd = ruleset.fd();
-        // SAFETY: the closure only makes two async-signal-safe system calls
-        // on an already open descriptor and allocates nothing.
+    if restriction.is_some() || filter.is_some() {
+        let fd = restriction.as_ref().map(landlock::Ruleset::fd);
+        // SAFETY: the closure only makes async-signal-safe system calls on an
+        // already open descriptor (which outlives the spawn below) and on the
+        // filter it owns, and allocates nothing.
         unsafe {
             std::os::unix::process::CommandExt::pre_exec(&mut command, move || {
-                landlock::restrict_self(fd)
+                if let Some(fd) = fd {
+                    landlock::restrict_self(fd)?;
+                }
+                if let Some(filter) = &filter {
+                    filter.install()?;
+                }
+                Ok(())
             });
         }
     }

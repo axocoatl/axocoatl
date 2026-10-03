@@ -7,6 +7,11 @@
 //! fixed at startup: `--unix-to-tcp` targets must be loopback, and
 //! `--tcp-to-unix` listeners must be loopback unless
 //! `--allow-nonloopback-listen` is given (Preview containers only).
+//!
+//! With `--peer-identity` after a `--tcp-to-unix` listener, the bridge writes
+//! one identity line (`AXO-PEER/1 {json}`, see [`super::peer`]) to the Unix
+//! socket before each client's bytes, naming the program that opened the
+//! connection. The proxy accepts that line only on its identity socket.
 
 use std::io::{self, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
@@ -19,6 +24,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use super::http::sidecar_unavailable_response;
+use super::peer::PeerLookup;
 use super::protocol::{
     CONNECT_TIMEOUT_MS, DEFAULT_MAX_CONNECTIONS, IDLE_TIMEOUT_MS, MAX_MAX_CONNECTIONS,
 };
@@ -32,10 +38,13 @@ pub const MAX_LISTENERS: usize = 64;
 pub enum Forward {
     /// Listen on TCP, forward to a Unix socket. With `http_errors`, a missing
     /// or refusing socket gets a 502 JSON answer instead of a bare close.
+    /// With `peer_identity`, each connection starts with the identity line of
+    /// the program that opened it.
     TcpToUnix {
         listen: SocketAddr,
         target: PathBuf,
         http_errors: bool,
+        peer_identity: bool,
     },
     /// Listen on a Unix socket (mode 0666), forward to loopback TCP.
     UnixToTcp { listen: PathBuf, target: SocketAddr },
@@ -98,6 +107,7 @@ impl BridgeConfig {
                         listen: socket_address(listen)?,
                         target: socket_path(target)?,
                         http_errors: false,
+                        peer_identity: false,
                     });
                     index += 2;
                 }
@@ -106,6 +116,17 @@ impl BridgeConfig {
                         Some(Forward::TcpToUnix { http_errors, .. }) => *http_errors = true,
                         _ => {
                             return Err("--http-errors must follow a --tcp-to-unix listener".into())
+                        }
+                    }
+                    index += 1;
+                }
+                "--peer-identity" => {
+                    match config.forwards.last_mut() {
+                        Some(Forward::TcpToUnix { peer_identity, .. }) => *peer_identity = true,
+                        _ => {
+                            return Err(
+                                "--peer-identity must follow a --tcp-to-unix listener".into()
+                            )
                         }
                     }
                     index += 1;
@@ -219,6 +240,7 @@ impl Bridge {
             bound.push((listener, forward.clone()));
         }
         let stop = Arc::new(AtomicBool::new(false));
+        let lookup = Arc::new(PeerLookup::new());
         let slots = Arc::new(Slots {
             max: config.max_connections,
             active: Mutex::new(0),
@@ -229,7 +251,8 @@ impl Bridge {
             .map(|(listener, forward)| {
                 let stop = stop.clone();
                 let slots = slots.clone();
-                std::thread::spawn(move || serve(listener, forward, slots, stop))
+                let lookup = lookup.clone();
+                std::thread::spawn(move || serve(listener, forward, slots, stop, lookup))
             })
             .collect();
         Ok(Self { stop, threads })
@@ -252,7 +275,13 @@ fn accept(listener: &Listener) -> io::Result<Accepted> {
     }
 }
 
-fn serve(listener: Listener, forward: Forward, slots: Arc<Slots>, stop: Arc<AtomicBool>) {
+fn serve(
+    listener: Listener,
+    forward: Forward,
+    slots: Arc<Slots>,
+    stop: Arc<AtomicBool>,
+    lookup: Arc<PeerLookup>,
+) {
     while !stop.load(Ordering::Acquire) {
         {
             let mut active = slots
@@ -290,8 +319,9 @@ fn serve(listener: Listener, forward: Forward, slots: Arc<Slots>, stop: Arc<Atom
             .unwrap_or_else(|poison| poison.into_inner()) += 1;
         let forward = forward.clone();
         let slots = slots.clone();
+        let lookup = lookup.clone();
         std::thread::spawn(move || {
-            connect_and_pump(accepted, &forward);
+            connect_and_pump(accepted, &forward, &lookup);
             let mut active = slots
                 .active
                 .lock()
@@ -302,20 +332,38 @@ fn serve(listener: Listener, forward: Forward, slots: Arc<Slots>, stop: Arc<Atom
     }
 }
 
-fn connect_and_pump(accepted: Accepted, forward: &Forward) {
+/// The identity line for an accepted TCP connection: who holds the other
+/// end of it, found while that program is still connected.
+fn identity_line(accepted: &Accepted, lookup: &PeerLookup) -> Vec<u8> {
+    match accepted {
+        Accepted::Tcp(stream) => match (stream.peer_addr(), stream.local_addr()) {
+            (Ok(client), Ok(server)) => lookup.line(client, server),
+            _ => super::peer::fit_line(super::protocol::PeerIdentity::failed("not_found")),
+        },
+        Accepted::Unix(_) => Vec::new(),
+    }
+}
+
+fn connect_and_pump(accepted: Accepted, forward: &Forward, lookup: &PeerLookup) {
     let never_revoked = AtomicBool::new(false);
     let idle = Duration::from_millis(IDLE_TIMEOUT_MS);
     match forward {
         Forward::TcpToUnix {
             target,
             http_errors,
+            peer_identity,
             ..
         } => match UnixStream::connect(target) {
             Ok(upstream) => {
+                let preamble = if *peer_identity {
+                    identity_line(&accepted, lookup)
+                } else {
+                    Vec::new()
+                };
                 pump(
                     accepted.fd(),
                     upstream.as_raw_fd(),
-                    &[],
+                    &preamble,
                     idle,
                     &never_revoked,
                 );
@@ -440,6 +488,7 @@ mod tests {
                     listen: "127.0.0.1:3128".parse().unwrap(),
                     target: "/run/axocoatl-egress/proxy.sock".into(),
                     http_errors: true,
+                    peer_identity: false,
                 },
                 Forward::UnixToTcp {
                     listen: "/run/axocoatl-svc/5173.sock".into(),
@@ -449,11 +498,33 @@ mod tests {
                     listen: "[::1]:5173".parse().unwrap(),
                     target: "/run/axocoatl-svc/5173.sock".into(),
                     http_errors: false,
+                    peer_identity: false,
                 },
             ]
         );
+        let identity = BridgeConfig::parse(&args(&[
+            "--tcp-to-unix",
+            "127.0.0.1:3128=/run/axocoatl/egress/identity.sock",
+            "--http-errors",
+            "--peer-identity",
+        ]))
+        .unwrap();
+        assert_eq!(
+            identity.forwards,
+            vec![Forward::TcpToUnix {
+                listen: "127.0.0.1:3128".parse().unwrap(),
+                target: "/run/axocoatl/egress/identity.sock".into(),
+                http_errors: true,
+                peer_identity: true,
+            }]
+        );
         for (refused, expected) in [
             (vec!["--http-errors"], "must follow"),
+            (vec!["--peer-identity"], "must follow"),
+            (
+                vec!["--unix-to-tcp", "/x.sock=127.0.0.1:80", "--peer-identity"],
+                "must follow",
+            ),
             (
                 vec!["--unix-to-tcp", "/x.sock=10.0.0.1:80"],
                 "not a loopback target",
@@ -541,6 +612,7 @@ mod tests {
                     listen: front,
                     target: service.clone(),
                     http_errors: false,
+                    peer_identity: false,
                 },
             ],
             max_connections: 16,
@@ -576,6 +648,7 @@ mod tests {
                 listen,
                 target: dir.path().join("proxy.sock"),
                 http_errors: true,
+                peer_identity: false,
             }],
             max_connections: 4,
             allow_nonloopback_listen: false,
@@ -595,6 +668,57 @@ mod tests {
         bridge.stop();
     }
 
+    /// The bridge names the program behind each connection on the Unix
+    /// side before the client's bytes; here that program is this test.
+    #[test]
+    fn peer_identity_starts_each_connection_with_an_identity_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("identity.sock");
+        let proxy = std::os::unix::net::UnixListener::bind(&target).unwrap();
+        let listen = free_tcp();
+        let bridge = Bridge::start(BridgeConfig {
+            forwards: vec![Forward::TcpToUnix {
+                listen,
+                target,
+                http_errors: true,
+                peer_identity: true,
+            }],
+            max_connections: 4,
+            allow_nonloopback_listen: false,
+        })
+        .unwrap();
+        let mut client = TcpStream::connect(listen).unwrap();
+        client
+            .write_all(b"CONNECT a.test:443 HTTP/1.1\r\n\r\n")
+            .unwrap();
+        let (mut accepted, _) = proxy.accept().unwrap();
+        let mut received = Vec::new();
+        let mut byte = [0u8; 1];
+        while !received.ends_with(b"\r\n\r\n") {
+            accepted.read_exact(&mut byte).unwrap();
+            received.push(byte[0]);
+        }
+        let end = received
+            .windows(2)
+            .position(|pair| pair == b"\r\n")
+            .unwrap();
+        let identity = super::super::protocol::PeerIdentity::parse_line(&received[..end]).unwrap();
+        assert_eq!(&received[end + 2..], b"CONNECT a.test:443 HTTP/1.1\r\n\r\n");
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(identity.error, None, "{identity:?}");
+            assert_eq!(identity.pid, Some(std::process::id()));
+            assert_eq!(
+                identity.exe.as_deref(),
+                std::fs::read_link("/proc/self/exe").unwrap().to_str()
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(identity.error.as_deref(), Some("unsupported"));
+        drop(client);
+        bridge.stop();
+    }
+
     #[test]
     fn a_bind_failure_is_a_setup_error() {
         let taken = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -603,6 +727,7 @@ mod tests {
                 listen: taken.local_addr().unwrap(),
                 target: "/tmp/x.sock".into(),
                 http_errors: false,
+                peer_identity: false,
             }],
             max_connections: 4,
             allow_nonloopback_listen: false,
