@@ -22,8 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolve on the host. Loopback, link-local and other special addresses are refused,
   and private ones unless listed. Every allowed or refused connection is written to
   the Session's network record before it opens. The Session container's first process
-  is Axocoatl's bridge, so the image `ENTRYPOINT` does not run, and Preview ports are
-  not published under `egress` yet. Ways attempts run with no network under `egress`.
+  is Axocoatl's bridge, so the image `ENTRYPOINT` does not run. Exposed ports reach
+  Preview through a separate `axo-pvw-<session>` container that publishes each port's
+  socket on host loopback and never connects out. Ways attempts run with no network
+  under `egress`.
   `validate`, `doctor` and daemon start warn about wildcard entries, CDN-fronted
   presets and hosts that accept uploads. See the Sandboxes and Security pages for
   what it does not cover.

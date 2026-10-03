@@ -670,7 +670,7 @@ async fn allowed_unlisted_and_tokenless_requests_are_decided_and_recorded() {
 #[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test egress_podman -- --ignored --test-threads=1"]
 async fn non_root_users_reach_the_proxy_and_serve_port_sockets() {
     with_fixture("b", |fixture| async move {
-        let (session, _sandbox) = fixture
+        let (session, sandbox) = fixture
             .start(&image("AXO_EGRESS_TEST_NONROOT_IMAGE", NONROOT_IMAGE), &[3000])
             .await;
         let container = format!("axo-ses-{session}");
@@ -724,6 +724,36 @@ async fn non_root_users_reach_the_proxy_and_serve_port_sockets() {
             "printf 'GET / HTTP/1.0\\r\\n\\r\\n' | nc local:/run/axocoatl-svc/3000.sock",
         ]).await;
         assert!(reader.contains("svc-ok"), "{reader}");
+
+        // The egress Preview container publishes the port on host loopback;
+        // the Session container itself still has no network.
+        let host_port = sandbox.published_host_port(3000).expect("port 3000 is published");
+        let preview = format!("axo-pvw-{session}");
+        let inspect = podman_async_ok(&[
+            "inspect",
+            "--format",
+            "{{.HostConfig.ReadonlyRootfs}} {{json .Config.Env}} {{json .Mounts}}",
+            &preview,
+        ])
+        .await;
+        assert!(inspect.starts_with("true"), "{inspect}");
+        assert!(!inspect.contains("\"bind\""), "{inspect}");
+        let mut body = String::new();
+        for _ in 0..20 {
+            if let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", host_port)).await {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                stream.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
+                body.clear();
+                let _ = stream.read_to_string(&mut body).await;
+                if body.contains("svc-ok") {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        assert!(body.contains("svc-ok"), "Preview through 127.0.0.1:{host_port}: {body:?}");
+        sandbox.stop_checked().await.unwrap();
+        assert!(!podman_async(&["container", "exists", &preview]).await.status.success());
     })
     .await;
 }

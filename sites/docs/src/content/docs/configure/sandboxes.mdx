@@ -130,6 +130,11 @@ How a Session runs under it:
   that Podman reads, never through a command line.
 - Read-only helpers, required checks, Axocoatl's own repository captures,
   background tasks and other commands get no credential, so they have no network.
+- Exposed ports still work in Preview. The Session container publishes nothing; its
+  first process serves each exposed port as a socket in a volume, and a third
+  container, `axo-pvw-<session>`, from the same image as the proxy, publishes those
+  sockets on your computer's loopback address. It reaches the Session's app only
+  through those sockets and never connects anywhere else.
 - Readiness provisioning reaches only the Alpine, Debian and Ubuntu package mirrors.
   If an image needs another package manager, use an image that already has
   Axocoatl's required commands.
@@ -190,8 +195,6 @@ What egress does not cover:
 - Programs that ignore the proxy variables cannot connect at all, for example some
   Go and gRPC clients, and Node's `fetch` before Node supports
   `NODE_USE_ENV_PROXY`.
-- Preview ports are not published under `egress` in this version; use `bridge` to
-  preview a web app.
 - Ways attempt containers run with no network under `egress`.
 - A Session created before the native Session format cannot use `egress`; start a
   new Session.
@@ -279,7 +282,7 @@ before authorizing sensitive code.
 | Default local development | Podman, bridge network, trust flags off |
 | Review untrusted code without Session egress | Podman, `network: none`, an image already containing required commands, trust flags off, limits required if the host supports them; account separately for host-side image pulls |
 | Install packages from known registries only | Podman, `network: egress` with the registries' presets, trust flags off |
-| Run a local web app in Preview | Podman bridge plus an exposed Session port |
+| Run a local web app in Preview | Podman `bridge` or `egress` plus an exposed Session port |
 | Remote compatibility execution | E2B Cloud with scoped credentials and an approved template; no Axocoatl Preview ports |
 | Several isolated Ways | Local Podman |
 

@@ -116,8 +116,7 @@ skills:
 # ─── Session sandbox ────────────────────────────────────────────────
 # Local Podman with outbound access (`bridge`) is the default. For a
 # repository you do not trust, use `none`, or `egress` to let Agents' commands
-# reach only the registries and hosts you list (Preview ports are not
-# published under `egress`). See the Sandboxes docs page.
+# reach only the registries and hosts you list. See the Sandboxes docs page.
 # sandbox:
 #   network: egress
 #   egress:

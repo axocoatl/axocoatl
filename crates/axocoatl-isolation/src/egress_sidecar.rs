@@ -213,6 +213,90 @@ pub fn volume_create_args(spec: &SidecarSpec, name: &str, role: &str) -> Vec<Str
     args
 }
 
+pub fn preview_container_name(session_id: &str) -> String {
+    format!("axo-pvw-{session_id}")
+}
+
+/// The egress Preview container's `podman run` arguments (pure). It runs the
+/// egress image's bridge on Podman's default network, publishes each port on
+/// host loopback and forwards it to that port's socket in the Session's
+/// service-socket volume, mounted read-only. It never dials out.
+pub fn build_preview_args(spec: &SidecarSpec, ports: &[u16]) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "run".into(),
+        "-d".into(),
+        "--name".into(),
+        preview_container_name(&spec.session_id),
+        "--pull=never".into(),
+    ];
+    args.extend(labels(spec, "preview"));
+    args.extend([
+        "--read-only".into(),
+        "--cap-drop=ALL".into(),
+        "--security-opt=no-new-privileges".into(),
+        "--http-proxy=false".into(),
+        "--no-hosts".into(),
+        "--no-healthcheck".into(),
+        "--image-volume=ignore".into(),
+        "--user".into(),
+        "0:0".into(),
+    ]);
+    for port in ports {
+        args.push("-p".into());
+        args.push(format!("127.0.0.1::{port}"));
+    }
+    args.extend([
+        "--mount".into(),
+        format!(
+            "type=volume,source={},destination={SERVICE_SOCKET_DIR},ro=true",
+            service_volume_name(&spec.session_id)
+        ),
+        "--entrypoint".into(),
+        crate::supervisor_program::SUPERVISOR_CONTAINER_PATH.into(),
+        spec.image.clone(),
+        "--bridge".into(),
+        "--allow-nonloopback-listen".into(),
+    ]);
+    for port in ports {
+        args.push("--tcp-to-unix".into());
+        args.push(format!("0.0.0.0:{port}={SERVICE_SOCKET_DIR}/{port}.sock"));
+    }
+    args
+}
+
+/// Start the egress Preview container and return its immutable id.
+pub(crate) async fn start_preview(
+    spec: &SidecarSpec,
+    ports: &[u16],
+) -> Result<String, IsolationError> {
+    let name = preview_container_name(&spec.session_id);
+    remove_container(&name)
+        .await
+        .map_err(IsolationError::OciContainerFailed)?;
+    let mut command = Command::new("podman");
+    command.args(build_preview_args(spec, ports));
+    let output = SessionSandbox::run_bounded_command(command, COMMAND_TIMEOUT).await?;
+    if output.timed_out || !output.status.success() {
+        let _ = remove_container(&name).await;
+        return Err(IsolationError::OciContainerFailed(format!(
+            "starting the egress Preview container {name}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if id.is_empty() {
+        return Err(IsolationError::OciContainerFailed(format!(
+            "Podman started {name} without reporting its id"
+        )));
+    }
+    Ok(id)
+}
+
+/// Remove the egress Preview container, if it exists.
+pub(crate) async fn remove_preview(session_id: &str) -> Result<(), String> {
+    remove_container(&preview_container_name(session_id)).await
+}
+
 /// Create the Session's service-socket volume when no sidecar does (bridge
 /// and none modes with service sockets).
 pub(crate) async fn create_service_volume(
@@ -864,9 +948,41 @@ mod tests {
     }
 
     #[test]
+    fn the_preview_container_publishes_loopback_ports_and_only_reads_sockets() {
+        let args = build_preview_args(&spec(), &[3000, 5173]);
+        let joined = args.join(" ");
+        assert!(joined.starts_with("run -d --name axo-pvw-ses-1234 --pull=never"));
+        assert!(joined.contains("--label io.axocoatl.role=preview"));
+        assert!(joined.contains("-p 127.0.0.1::3000 -p 127.0.0.1::5173"));
+        assert!(joined.contains(
+            "--mount type=volume,source=axo-svc-ses-1234,destination=/run/axocoatl-svc,ro=true"
+        ));
+        assert!(joined.ends_with(
+            "--bridge --allow-nonloopback-listen --tcp-to-unix 0.0.0.0:3000=/run/axocoatl-svc/3000.sock --tcp-to-unix 0.0.0.0:5173=/run/axocoatl-svc/5173.sock"
+        ));
+        for absent in [
+            "--network",
+            "axo-egr-",
+            "-e",
+            "--env",
+            "type=bind",
+            "--unix-to-tcp",
+        ] {
+            assert!(
+                !args
+                    .iter()
+                    .any(|arg| arg == absent || (absent.len() > 3 && arg.contains(absent))),
+                "{absent} in {joined}"
+            );
+        }
+        assert!(joined.contains("--read-only --cap-drop=ALL"));
+    }
+
+    #[test]
     fn names_derive_from_the_session() {
         assert_eq!(sidecar_container_name("s1"), "axo-egr-s1");
         assert_eq!(egress_volume_name("s1"), "axo-egr-s1");
         assert_eq!(service_volume_name("s1"), "axo-svc-s1");
+        assert_eq!(preview_container_name("s1"), "axo-pvw-s1");
     }
 }

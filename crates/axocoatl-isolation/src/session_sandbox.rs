@@ -578,6 +578,9 @@ pub struct SessionSandbox {
     /// The `axo-svc-{session}` volume and the ports served in it, when the
     /// container mounts it.
     service_sockets: Option<ServiceSockets>,
+    /// Under egress with exposed ports, the `axo-pvw-{session}` container
+    /// that publishes them. Removed after the Session container.
+    preview_container: Option<String>,
     /// Serializes starting the service-socket forwarder (bridge and none).
     service_forwarder: Arc<tokio::sync::Mutex<()>>,
     /// Background tasks started in this container.
@@ -606,26 +609,41 @@ impl ServiceSockets {
     }
 }
 
-/// Stops a sidecar started for a Session container that never became usable.
-struct SidecarStartGuard(Option<Arc<crate::egress_sidecar::EgressSidecar>>);
+/// Stops a sidecar, and removes an egress Preview container, started for a
+/// Session container that never became usable.
+struct SidecarStartGuard(
+    Option<Arc<crate::egress_sidecar::EgressSidecar>>,
+    Option<String>,
+);
 
 impl SidecarStartGuard {
     fn disarm(&mut self) {
         self.0 = None;
+        self.1 = None;
     }
 }
 
 impl Drop for SidecarStartGuard {
     fn drop(&mut self) {
-        if let Some(sidecar) = self.0.take() {
-            match tokio::runtime::Handle::try_current() {
-                Ok(runtime) => {
-                    runtime.spawn(async move { sidecar.stop().await });
-                }
-                // Without a runtime, dropping the sidecar still kills its
-                // Podman client, and the proxy exits on end of input.
-                Err(_) => drop(sidecar),
+        let sidecar = self.0.take();
+        let preview = self.1.take();
+        if sidecar.is_none() && preview.is_none() {
+            return;
+        }
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn(async move {
+                    if let Some(session) = preview {
+                        let _ = crate::egress_sidecar::remove_preview(&session).await;
+                    }
+                    if let Some(sidecar) = sidecar {
+                        sidecar.stop().await;
+                    }
+                });
             }
+            // Without a runtime, dropping the sidecar still kills its Podman
+            // client, and the proxy exits on end of input.
+            Err(_) => drop(sidecar),
         }
     }
 }
@@ -1051,7 +1069,8 @@ impl SessionSandbox {
         // Under egress the sidecar must be answering before the Session
         // container exists, so its bridge never starts without a proxy. The
         // guard stops the sidecar again if anything below fails.
-        let mut sidecar_guard = SidecarStartGuard(None);
+        let mut sidecar_guard = SidecarStartGuard(None, None);
+        let mut egress_image = None;
         if egress_mode {
             let attachment = policy
                 .egress
@@ -1066,6 +1085,7 @@ impl SessionSandbox {
                     )
                 })?;
             let image = crate::egress_image::ensure_egress_image(program).await?;
+            egress_image = Some(image.clone());
             let sidecar = crate::egress_sidecar::EgressSidecar::start(
                 crate::egress_sidecar::SidecarSpec {
                     session_id: session_id.to_string(),
@@ -1195,20 +1215,49 @@ impl SessionSandbox {
             SandboxNetwork::Bridge => &publish,
             SandboxNetwork::None | SandboxNetwork::Egress => &[],
         };
-        let published_ports =
-            match Self::discover_published_ports(&container_id, expected_mappings).await {
-                Ok(mappings) => mappings,
-                Err(error) => {
-                    let cleanup = lifecycle.finish(SandboxLifecycleDisposition::Remove).await;
-                    let error = IsolationError::OciContainerFailed(error);
-                    return Err(match cleanup {
-                        Ok(()) => error,
-                        Err(cleanup_error) => IsolationError::OciContainerFailed(format!(
-                            "{error}; removing the unmapped sandbox also failed: {cleanup_error}"
-                        )),
-                    });
-                }
+        // Under egress the Session container publishes nothing. Its PID 1
+        // serves each exposed port as a socket, and a Preview container on
+        // Podman's default network publishes those sockets on host loopback.
+        let mut preview_container = None;
+        let published = if egress_mode && !publish.is_empty() {
+            let attachment = policy
+                .egress
+                .as_ref()
+                .expect("egress attachment checked above");
+            let spec = crate::egress_sidecar::SidecarSpec {
+                session_id: session_id.to_string(),
+                runtime_authority: policy.runtime_authority.clone(),
+                image: egress_image.clone().unwrap_or_default(),
+                network: None,
+                max_connections: attachment.max_connections,
+                require_resource_limits: policy.require_resource_limits,
+                labels: attachment.labels.clone(),
             };
+            sidecar_guard.1 = Some(session_id.to_string());
+            match crate::egress_sidecar::start_preview(&spec, &publish).await {
+                Ok(preview) => {
+                    preview_container =
+                        Some(crate::egress_sidecar::preview_container_name(session_id));
+                    Self::discover_published_ports(&preview, &publish).await
+                }
+                Err(error) => Err(error.to_string()),
+            }
+        } else {
+            Self::discover_published_ports(&container_id, expected_mappings).await
+        };
+        let published_ports = match published {
+            Ok(mappings) => mappings,
+            Err(error) => {
+                let cleanup = lifecycle.finish(SandboxLifecycleDisposition::Remove).await;
+                let error = IsolationError::OciContainerFailed(error);
+                return Err(match cleanup {
+                    Ok(()) => error,
+                    Err(cleanup_error) => IsolationError::OciContainerFailed(format!(
+                        "{error}; removing the unmapped sandbox also failed: {cleanup_error}"
+                    )),
+                });
+            }
+        };
 
         let sandbox = Self {
             container,
@@ -1234,6 +1283,7 @@ impl SessionSandbox {
                     served_by_pid_one: egress_mode,
                 }),
             service_forwarder: Arc::new(tokio::sync::Mutex::new(())),
+            preview_container,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
         };
@@ -1609,6 +1659,7 @@ impl SessionSandbox {
             egress_sidecar: None,
             service_sockets: None,
             service_forwarder: Arc::new(tokio::sync::Mutex::new(())),
+            preview_container: None,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
         }
@@ -3302,6 +3353,13 @@ impl SessionSandbox {
             remove.args(["rm", "-f", &self.container]);
             let _ = Self::run_bounded_command(remove, NAMED_REMOVE_COMMAND_TIMEOUT).await;
         }
+        if let Some(preview) = &self.preview_container {
+            let _ = Self::remove_exact_container_names(
+                std::slice::from_ref(preview),
+                NAMED_REMOVE_COMMAND_TIMEOUT,
+            )
+            .await;
+        }
         // The sidecar outlives the Session container, never the reverse.
         if let Some(sidecar) = &self.egress_sidecar {
             sidecar.stop().await;
@@ -3333,6 +3391,16 @@ impl SessionSandbox {
                 NAMED_REMOVE_COMMAND_TIMEOUT,
             )
             .await
+        };
+        let removed = match (&removed, &self.preview_container) {
+            (Ok(()), Some(preview)) => {
+                Self::remove_exact_container_names(
+                    std::slice::from_ref(preview),
+                    NAMED_REMOVE_COMMAND_TIMEOUT,
+                )
+                .await
+            }
+            _ => removed,
         };
         if removed.is_ok() {
             if let Some(sidecar) = &self.egress_sidecar {
@@ -4434,6 +4502,7 @@ impl Sandbox for SessionSandbox {
             egress_sidecar: None,
             service_sockets: self.service_sockets.clone(),
             service_forwarder: self.service_forwarder.clone(),
+            preview_container: None,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
         })
