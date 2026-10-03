@@ -8,4 +8,6 @@ pub mod protocol;
 pub const SUPERVISOR_SOURCE_SHA256: &str = env!("AXOCOATL_EXEC_SOURCE_SHA256");
 
 #[cfg(target_os = "linux")]
+pub mod harden;
+#[cfg(target_os = "linux")]
 pub mod supervisor;

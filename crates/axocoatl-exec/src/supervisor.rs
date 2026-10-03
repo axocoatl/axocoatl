@@ -25,9 +25,25 @@ extern "C" fn cancellation_signal(_: libc::c_int) {
     CANCELLED.store(true, Ordering::Relaxed);
 }
 
+/// How `--serve` launches its command.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ServeOptions {
+    /// `--harden`: the command and its descendants run in a Landlock domain
+    /// (the write restriction's, or one that only refuses creating block
+    /// devices), so they get no ptrace access to processes they did not
+    /// start, and get `PR_SET_NO_NEW_PRIVS` and the seccomp denylist of
+    /// [`crate::harden`] before `execve`. Without Landlock nothing launches.
+    pub harden: bool,
+}
+
 /// Run exactly one request. This must be called by the dedicated helper binary,
 /// never inside a multithreaded host: the helper is the only child reaper.
 pub fn serve() -> Result<(), String> {
+    serve_with(ServeOptions::default())
+}
+
+/// [`serve`] with options.
+pub fn serve_with(options: ServeOptions) -> Result<(), String> {
     establish_supervision()?;
     nonblocking(libc::STDIN_FILENO)?;
     nonblocking(libc::STDOUT_FILENO)?;
@@ -88,6 +104,7 @@ pub fn serve() -> Result<(), String> {
     let terminal = if dispatch {
         execute(
             &request,
+            options,
             payload.as_deref(),
             &mut input,
             deadline,
@@ -195,6 +212,7 @@ struct Terminal {
 
 fn execute(
     request: &ExecRequest,
+    options: ServeOptions,
     payload: Option<&[u8]>,
     input: &mut Input,
     deadline: Instant,
@@ -216,13 +234,25 @@ fn execute(
         };
     }
     // Built before fork: the child only applies the prepared ruleset between
-    // fork and exec, so the supervisor itself is never restricted.
-    let restriction = match request.write_restriction.as_ref().map(landlock::prepare) {
-        Some(Ok(ruleset)) => Some(ruleset),
-        Some(Err(message)) => {
+    // fork and exec, so the supervisor itself is never restricted. A hardened
+    // command always gets one, because its Landlock domain is what keeps it
+    // out of processes it did not start (ptrace access, which also guards
+    // /proc/<pid>/mem, environ, maps and fd).
+    let prepared = match (request.write_restriction.as_ref(), options.harden) {
+        (Some(restriction), _) => landlock::prepare(restriction)
+            .map(Some)
+            .map_err(|message| format!("write restriction unavailable: {message}")),
+        (None, true) => landlock::prepare_domain()
+            .map(Some)
+            .map_err(|message| format!("hardening unavailable: {message}")),
+        (None, false) => Ok(None),
+    };
+    let restriction = match prepared {
+        Ok(ruleset) => ruleset,
+        Err(message) => {
             return Terminal {
                 outcome: ProcessOutcome::LaunchFailed {
-                    message: bounded_error(format!("write restriction unavailable: {message}")),
+                    message: bounded_error(message),
                 },
                 primary_exit: None,
                 launched: false,
@@ -231,16 +261,24 @@ fn execute(
                 quiescent: true,
             };
         }
-        None => None,
     };
+    // Also built before fork: the child only installs it.
+    let filter = options.harden.then(crate::harden::Filter::native);
     let mut command = Command::new(&request.argv[0]);
-    if let Some(ruleset) = &restriction {
-        let fd = ruleset.fd();
-        // SAFETY: the closure only makes two async-signal-safe system calls
-        // on an already open descriptor and allocates nothing.
+    if restriction.is_some() || filter.is_some() {
+        let fd = restriction.as_ref().map(landlock::Ruleset::fd);
+        // SAFETY: the closure only makes async-signal-safe system calls on an
+        // already open descriptor (which outlives the spawn below) and on the
+        // filter it owns, and allocates nothing.
         unsafe {
             std::os::unix::process::CommandExt::pre_exec(&mut command, move || {
-                landlock::restrict_self(fd)
+                if let Some(fd) = fd {
+                    landlock::restrict_self(fd)?;
+                }
+                if let Some(filter) = &filter {
+                    filter.install()?;
+                }
+                Ok(())
             });
         }
     }
@@ -915,12 +953,21 @@ mod landlock {
         })
     }
 
-    /// Create the ruleset in the supervisor. Fails when the kernel or the
-    /// container's seccomp policy does not offer Landlock, or offers only a
-    /// version that cannot refuse every write or, when the restriction
-    /// denies the network, every TCP bind and connect.
-    pub(super) fn prepare(restriction: &WriteRestriction) -> Result<Ruleset, String> {
-        restriction.validate()?;
+    /// What a hardened command's own domain handles when it has no write
+    /// restriction: creating block devices, which it then cannot do anywhere,
+    /// and nothing else. The domain exists for Landlock's ptrace rule: a
+    /// process in a domain gets no ptrace access to a process outside it
+    /// (tracing, or reading `/proc/<pid>/mem`, `environ`, `maps` or `fd`),
+    /// while the processes it starts share its domain and stay reachable.
+    /// That rule holds from ABI 1 (Linux 5.13).
+    pub(super) const DOMAIN_ONLY: Handled = Handled {
+        fs: MAKE_BLOCK,
+        net: 0,
+    };
+
+    /// The kernel's Landlock ABI. Fails when the kernel or the container's
+    /// seccomp policy does not offer Landlock.
+    fn abi() -> Result<i64, String> {
         // SAFETY: querying the ABI takes no attribute pointer.
         let abi = unsafe {
             libc::syscall(
@@ -933,7 +980,11 @@ mod landlock {
         if abi < 1 {
             return Err(last_error("Landlock is not available"));
         }
-        let handled = handled_access(abi, restriction.deny_network)?;
+        Ok(abi)
+    }
+
+    /// A ruleset that handles `handled` and allows nothing yet.
+    fn create(handled: Handled) -> Result<Ruleset, String> {
         let attr = RulesetAttr {
             handled_access_fs: handled.fs,
             handled_access_net: handled.net,
@@ -950,7 +1001,25 @@ mod landlock {
         if fd < 0 {
             return Err(last_error("creating the Landlock ruleset"));
         }
-        let ruleset = Ruleset(fd as RawFd);
+        Ok(Ruleset(fd as RawFd))
+    }
+
+    /// The ruleset of a hardened command without a write restriction
+    /// ([`DOMAIN_ONLY`]). Fails without Landlock, so such a command is
+    /// never launched outside a domain.
+    pub(super) fn prepare_domain() -> Result<Ruleset, String> {
+        abi()?;
+        create(DOMAIN_ONLY)
+    }
+
+    /// Create the ruleset in the supervisor. Fails when the kernel or the
+    /// container's seccomp policy does not offer Landlock, or offers only a
+    /// version that cannot refuse every write or, when the restriction
+    /// denies the network, every TCP bind and connect.
+    pub(super) fn prepare(restriction: &WriteRestriction) -> Result<Ruleset, String> {
+        restriction.validate()?;
+        let handled = handled_access(abi()?, restriction.deny_network)?;
+        let ruleset = create(handled)?;
         let home = std::env::var("HOME").ok();
         for root in restriction.effective_writable(home.as_deref()) {
             let path =
@@ -1038,6 +1107,15 @@ mod landlock {
                 assert_eq!(handled.fs & WRITE_FILE, WRITE_FILE);
                 assert_eq!(handled.net, 0);
             }
+        }
+
+        /// A hardened command without a write restriction is put in a domain
+        /// that refuses nothing it needs: only creating block devices, and
+        /// no network right.
+        #[test]
+        fn a_hardened_domain_handles_only_block_devices() {
+            assert_eq!(DOMAIN_ONLY.fs, MAKE_BLOCK);
+            assert_eq!(DOMAIN_ONLY.net, 0);
         }
 
         /// A read-only shell's restriction denies the network. A kernel that

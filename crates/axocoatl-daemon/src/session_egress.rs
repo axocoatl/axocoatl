@@ -1732,6 +1732,29 @@ impl EgressAuthority for SessionEgress {
             .map(|path| path.chars().take(MAX_RECORDED_PATH_CHARS).collect());
         let event = NetworkEvent::Open {
             conn: format!("g{}:{}", open.generation, open.id),
+            // The sidecar checked these bounds; keep the record's own.
+            peer: open.peer.as_ref().map(|peer| {
+                use axocoatl_session::network_record as record;
+                let fits = |path: &String, max: usize| path.chars().count() <= max;
+                record::PeerIdentity {
+                    pid: peer.pid,
+                    uid: peer.uid,
+                    gid: peer.gid,
+                    exe: peer
+                        .exe
+                        .clone()
+                        .filter(|exe| fits(exe, record::MAX_RECORDED_PEER_PATH_CHARS)),
+                    exe_sha256: peer.exe_sha256.clone(),
+                    ancestors: peer
+                        .ancestors
+                        .iter()
+                        .take(record::MAX_RECORDED_PEER_ANCESTORS)
+                        .take_while(|path| fits(path, record::MAX_RECORDED_PEER_ANCESTOR_CHARS))
+                        .cloned()
+                        .collect(),
+                    error: peer.error.clone(),
+                }
+            }),
             decision: if allowed {
                 RecordDecision::Allow
             } else {

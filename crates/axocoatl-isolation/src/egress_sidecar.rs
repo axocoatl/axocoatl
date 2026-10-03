@@ -11,6 +11,12 @@
 //! control channel is lost it is removed and restarted with backoff (1 s,
 //! 5 s, then 30 s), at most five times in ten minutes. After that it stays
 //! down, and every proxied request gets the bridge's 502.
+//!
+//! With [`SidecarOptions::identity_socket`], the proxy also listens on an
+//! identity socket in a second volume (`axo-egi-{session}`), where every
+//! connection must start with the identity line the Session container's
+//! init process writes (its bridge's `--peer-identity`). Only that volume is
+//! meant for Session containers whose Agents cannot reach it themselves.
 
 use std::collections::VecDeque;
 use std::process::Stdio;
@@ -40,6 +46,12 @@ pub const SERVICE_SOCKET_DIR: &str = "/run/axocoatl-svc";
 pub const PROXY_LISTEN: &str = "127.0.0.1:3128";
 /// Label that marks objects created by tests, for cleanup by label only.
 pub const TEST_LABEL: &str = "io.axocoatl.test";
+/// Name prefix of the identity socket's volume.
+pub const IDENTITY_VOLUME_PREFIX: &str = "axo-egi-";
+/// Where the identity socket's volume is mounted in the sidecar.
+pub const IDENTITY_SOCKET_DIR: &str = "/run/axocoatl-egress-id";
+/// The proxy's identity socket.
+pub const IDENTITY_SOCKET: &str = "/run/axocoatl-egress-id/identity.sock";
 
 /// Restart delays: the first restart waits 1 s, the second 5 s, later ones 30 s.
 pub const RESTART_BACKOFF: [Duration; 3] = [
@@ -87,6 +99,19 @@ pub fn egress_volume_name(session_id: &str) -> String {
 
 pub fn service_volume_name(session_id: &str) -> String {
     format!("axo-svc-{session_id}")
+}
+
+pub fn identity_volume_name(session_id: &str) -> String {
+    format!("{IDENTITY_VOLUME_PREFIX}{session_id}")
+}
+
+/// What a sidecar serves beyond its ordinary proxy socket. Kept apart from
+/// [`SidecarSpec`] so its existing users need no change.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SidecarOptions {
+    /// Also listen on [`IDENTITY_SOCKET`] in the `axo-egi-{session}` volume,
+    /// where each connection must start with an identity line.
+    pub identity_socket: bool,
 }
 
 /// What one Session's sidecar runs with.
@@ -173,6 +198,16 @@ fn labels(spec: &SidecarSpec, role: &str) -> Vec<String> {
 /// The sidecar's `podman run` arguments (pure). No environment, no secret and
 /// no bind mount: the only mount is the proxy socket's volume.
 pub fn build_sidecar_args(spec: &SidecarSpec, with_limits: bool) -> Vec<String> {
+    build_sidecar_args_with(spec, SidecarOptions::default(), with_limits)
+}
+
+/// [`build_sidecar_args`] with options: with an identity socket, its volume
+/// is the one other mount.
+pub fn build_sidecar_args_with(
+    spec: &SidecarSpec,
+    options: SidecarOptions,
+    with_limits: bool,
+) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "run".into(),
         "--rm".into(),
@@ -211,15 +246,28 @@ pub fn build_sidecar_args(spec: &SidecarSpec, with_limits: bool) -> Vec<String> 
             "type=volume,source={},destination={EGRESS_SOCKET_DIR}",
             egress_volume_name(&spec.session_id)
         ),
+    ]);
+    if options.identity_socket {
+        args.extend([
+            "--mount".into(),
+            format!(
+                "type=volume,source={},destination={IDENTITY_SOCKET_DIR}",
+                identity_volume_name(&spec.session_id)
+            ),
+        ]);
+    }
+    args.extend([
         "--entrypoint".into(),
         crate::supervisor_program::SUPERVISOR_CONTAINER_PATH.into(),
         spec.image.clone(),
         "--egress-proxy".into(),
         "--socket".into(),
         EGRESS_PROXY_SOCKET.into(),
-        "--max-connections".into(),
-        spec.max_connections.to_string(),
     ]);
+    if options.identity_socket {
+        args.extend(["--identity-socket".into(), IDENTITY_SOCKET.into()]);
+    }
+    args.extend(["--max-connections".into(), spec.max_connections.to_string()]);
     args
 }
 
@@ -354,6 +402,7 @@ struct Generation {
 
 struct Shared {
     spec: SidecarSpec,
+    options: SidecarOptions,
     authority: Arc<dyn EgressAuthority>,
     timing: ControlTiming,
     restarts: RestartPolicy,
@@ -579,7 +628,11 @@ async fn launch(shared: &Shared, number: u32, with_limits: bool) -> Result<Gener
     remove_container(&container).await?;
     let mut command = Command::new("podman");
     command
-        .args(build_sidecar_args(&shared.spec, with_limits))
+        .args(build_sidecar_args_with(
+            &shared.spec,
+            shared.options,
+            with_limits,
+        ))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -659,6 +712,18 @@ impl EgressSidecar {
         timing: ControlTiming,
         restarts: RestartPolicy,
     ) -> Result<Self, IsolationError> {
+        Self::start_with_options(spec, SidecarOptions::default(), authority, timing, restarts).await
+    }
+
+    /// [`Self::start_with_restarts`] with options; with an identity socket,
+    /// its volume is created too.
+    pub async fn start_with_options(
+        spec: SidecarSpec,
+        options: SidecarOptions,
+        authority: Arc<dyn EgressAuthority>,
+        timing: ControlTiming,
+        restarts: RestartPolicy,
+    ) -> Result<Self, IsolationError> {
         spec.validate()?;
         let container = spec.container();
         // The proxy reaches what the sidecar's network reaches, including
@@ -674,10 +739,14 @@ impl EgressSidecar {
         // Connection ids restart with each sidecar process; the generation
         // keeps them apart in a record that outlives this sidecar.
         let first_generation = authority.first_generation().max(1);
-        for (name, role) in [
+        let mut volumes = vec![
             (egress_volume_name(&spec.session_id), "egress"),
             (service_volume_name(&spec.session_id), "service-sockets"),
-        ] {
+        ];
+        if options.identity_socket {
+            volumes.push((identity_volume_name(&spec.session_id), "egress"));
+        }
+        for (name, role) in volumes {
             podman(volume_create_args(&spec, &name, role), COMMAND_TIMEOUT)
                 .await
                 .map_err(|error| {
@@ -689,6 +758,7 @@ impl EgressSidecar {
         let (stop_signal, _) = watch::channel(false);
         let shared = Arc::new(Shared {
             spec,
+            options,
             authority,
             timing,
             restarts,
@@ -1066,7 +1136,43 @@ mod tests {
     }
 
     #[test]
+    fn an_identity_socket_adds_its_volume_and_listener_only() {
+        let plain = build_sidecar_args(&spec(), true);
+        assert_eq!(
+            plain,
+            build_sidecar_args_with(&spec(), SidecarOptions::default(), true)
+        );
+        assert!(!plain.join(" ").contains("axo-egi-"));
+        assert!(!plain.iter().any(|arg| arg == "--identity-socket"));
+        let args = build_sidecar_args_with(
+            &spec(),
+            SidecarOptions {
+                identity_socket: true,
+            },
+            true,
+        );
+        let joined = args.join(" ");
+        assert!(joined.contains(
+            "--mount type=volume,source=axo-egr-ses-1234,destination=/run/axocoatl-egress --mount type=volume,source=axo-egi-ses-1234,destination=/run/axocoatl-egress-id --entrypoint /axocoatl-exec-supervisor"
+        ), "{joined}");
+        assert!(joined.ends_with(
+            "--egress-proxy --socket /run/axocoatl-egress/proxy.sock --identity-socket /run/axocoatl-egress-id/identity.sock --max-connections 128"
+        ), "{joined}");
+        // Still no environment, secret or bind mount.
+        for forbidden in ["-e", "--env", "--env-file", "-v", "--volume"] {
+            assert!(!args.iter().any(|arg| arg == forbidden), "{joined}");
+        }
+        assert!(!joined.contains("type=bind"));
+        assert_eq!(
+            plain.len() + 4,
+            args.len(),
+            "only the volume and the listener are added"
+        );
+    }
+
+    #[test]
     fn names_derive_from_the_session() {
+        assert_eq!(identity_volume_name("s1"), "axo-egi-s1");
         assert_eq!(sidecar_container_name("s1"), "axo-egr-s1");
         assert_eq!(egress_volume_name("s1"), "axo-egr-s1");
         assert_eq!(service_volume_name("s1"), "axo-svc-s1");

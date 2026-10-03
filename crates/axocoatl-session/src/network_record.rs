@@ -324,6 +324,66 @@ pub struct WebSource {
     pub url_truncated: bool,
 }
 
+/// Longest program path an `open` event's `peer` keeps.
+pub const MAX_RECORDED_PEER_PATH_CHARS: usize = 1024;
+/// Longest ancestor path an `open` event's `peer` keeps.
+pub const MAX_RECORDED_PEER_ANCESTOR_CHARS: usize = 256;
+/// Most ancestors an `open` event's `peer` keeps.
+pub const MAX_RECORDED_PEER_ANCESTORS: usize = 8;
+
+/// The program behind a connection, as the Session container's init process
+/// found it when the connection opened: the process, its executable and that
+/// file's SHA-256, its user and group, and its parents' executables (nearest
+/// first). What could not be found is left out, and `error` says why.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeerIdentity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ancestors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl PeerIdentity {
+    fn is_valid(&self) -> bool {
+        let path = |value: &str, max: usize| {
+            !value.is_empty()
+                && value.chars().count() <= max
+                && !value.chars().any(char::is_control)
+        };
+        self.exe
+            .as_deref()
+            .is_none_or(|exe| path(exe, MAX_RECORDED_PEER_PATH_CHARS))
+            && self.exe_sha256.as_deref().is_none_or(is_sha256)
+            && self.ancestors.len() <= MAX_RECORDED_PEER_ANCESTORS
+            && self
+                .ancestors
+                .iter()
+                .all(|ancestor| path(ancestor, MAX_RECORDED_PEER_ANCESTOR_CHARS))
+            && self.error.as_deref().is_none_or(|error| {
+                !error.is_empty()
+                    && error.len() <= 64
+                    && error.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+                    })
+            })
+    }
+}
+
+#[cfg(test)]
+#[path = "network_record_peer_tests.rs"]
+mod peer_tests;
+
 /// One record event. The wire form is the contract for the network API and UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -362,6 +422,10 @@ pub enum NetworkEvent {
     Open {
         /// `"g{generation}:{id}"`.
         conn: String,
+        /// The program that opened the connection, in Sessions whose init
+        /// process reports it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        peer: Option<PeerIdentity>,
         decision: Decision,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
@@ -595,6 +659,9 @@ impl NetworkEvent {
             Self::Open { addrs, .. } if addrs.len() > MAX_RECORDED_ADDRS => {
                 invalid("at most 16 addresses")
             }
+            Self::Open {
+                peer: Some(peer), ..
+            } if !peer.is_valid() => invalid("peer identity is out of bounds"),
             Self::Open { conn, .. } | Self::Close { conn, .. }
                 if conn.is_empty() || conn.len() > 32 =>
             {
@@ -1354,6 +1421,7 @@ mod tests {
     fn open_event(id: u64, host: &str) -> NetworkEvent {
         NetworkEvent::Open {
             conn: format!("g1:{id}"),
+            peer: None,
             decision: Decision::Allow,
             reason: None,
             status: None,

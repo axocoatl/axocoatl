@@ -37,9 +37,29 @@ impl Helper {
     }
 
     fn launch(request: ExecRequest, stdin: Option<&[u8]>, fixture: Option<(&str, &Path)>) -> Self {
+        Self::launch_with(request, stdin, fixture, false)
+    }
+
+    fn start_hardened(request: ExecRequest, fixture: Option<(&str, &Path)>) -> Self {
+        let helper = Self::launch_with(request, None, fixture, true);
+        let ready = helper.next();
+        ready.validate_for(&helper.request).unwrap();
+        assert!(matches!(ready, ServerMessage::Ready { .. }));
+        helper
+    }
+
+    fn launch_with(
+        request: ExecRequest,
+        stdin: Option<&[u8]>,
+        fixture: Option<(&str, &Path)>,
+        harden: bool,
+    ) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_axocoatl-exec-supervisor"));
+        command.arg("--serve");
+        if harden {
+            command.arg("--harden");
+        }
         command
-            .arg("--serve")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
@@ -743,6 +763,233 @@ fn fixture_process() {
             println!("connect={connect} bind={bind}");
             std::process::exit(0);
         }
+        "proc-access" => {
+            // How the kernel answers reads of another process's environment,
+            // memory map and memory through /proc: the process in
+            // `victim-pid`, which this command did not start, and a child of
+            // this command. Both carry the marker in their environment.
+            let victim: u32 = std::fs::read_to_string(directory.join("victim-pid"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let marker = std::fs::read_to_string(directory.join("marker")).unwrap();
+            let answer =
+                |error: std::io::Error| format!("errno-{}", error.raw_os_error().unwrap_or(-1));
+            let environ = |pid: u32| match std::fs::read(format!("/proc/{pid}/environ")) {
+                Ok(bytes) if bytes.windows(marker.len()).any(|w| w == marker.as_bytes()) => {
+                    "marker".to_owned()
+                }
+                Ok(_) => "no-marker".to_owned(),
+                Err(error) => answer(error),
+            };
+            let maps = |pid: u32| match std::fs::read_to_string(format!("/proc/{pid}/maps")) {
+                Ok(_) => "ok".to_owned(),
+                Err(error) => answer(error),
+            };
+            let memory = |pid: u32| -> String {
+                use std::os::unix::fs::FileExt;
+                let file = match std::fs::File::open(format!("/proc/{pid}/mem")) {
+                    Ok(file) => file,
+                    Err(error) => return answer(error),
+                };
+                let Ok(maps) = std::fs::read_to_string(format!("/proc/{pid}/maps")) else {
+                    return "opened-without-maps".to_owned();
+                };
+                let Some(start) = maps.lines().find_map(|line| {
+                    let mut fields = line.split_whitespace();
+                    let span = fields.next()?;
+                    let permissions = fields.next()?;
+                    if !permissions.starts_with('r') {
+                        return None;
+                    }
+                    u64::from_str_radix(span.split('-').next()?, 16).ok()
+                }) else {
+                    return "no-readable-mapping".to_owned();
+                };
+                let mut byte = [0u8; 1];
+                match file.read_at(&mut byte, start) {
+                    Ok(1) => "ok".to_owned(),
+                    Ok(_) => "short".to_owned(),
+                    Err(error) => answer(error),
+                }
+            };
+            // Command::spawn returns after the child's exec, so its
+            // environment is already the one given here.
+            let mut child = Command::new("sleep")
+                .arg("30")
+                .env("AXO_PROC_MARKER", &marker)
+                .spawn()
+                .unwrap();
+            println!(
+                "environ={}\nmaps={}\nmem={}\nchild_environ={}",
+                environ(victim),
+                maps(victim),
+                memory(victim),
+                environ(child.id()),
+            );
+            let _ = child.kill();
+            let _ = child.wait();
+            std::process::exit(0);
+        }
+        "syscalls" => {
+            // How the kernel answers each call `--serve --harden` filters,
+            // plus calls it must leave alone. One `name=result` per line.
+            let answer = |result: libc::c_long| {
+                if result >= 0 {
+                    "ok".to_owned()
+                } else {
+                    format!(
+                        "errno-{}",
+                        std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
+                    )
+                }
+            };
+            let mut lines = Vec::new();
+            let mut probe = |name: &str, result: libc::c_long| {
+                lines.push(format!("{name}={}", answer(result)));
+            };
+            // SAFETY: each call passes scalars or pointers to live locals; a
+            // clone child exits at once without touching shared state.
+            unsafe {
+                // Calls that would change this process (being traced, a new
+                // namespace) run in a forked child that reports its errno.
+                let in_child = |call: fn() -> libc::c_long| -> libc::c_long {
+                    let pid = libc::fork();
+                    if pid == 0 {
+                        let result = call();
+                        let code = if result >= 0 {
+                            0
+                        } else {
+                            std::io::Error::last_os_error()
+                                .raw_os_error()
+                                .unwrap_or(255)
+                        };
+                        libc::_exit(code);
+                    }
+                    let mut status = 0;
+                    libc::waitpid(pid, &mut status, 0);
+                    match libc::WEXITSTATUS(status) {
+                        0 => 0,
+                        errno => {
+                            *libc::__errno_location() = errno;
+                            -1
+                        }
+                    }
+                };
+                probe(
+                    "ptrace",
+                    in_child(|| {
+                        libc::ptrace(
+                            libc::PTRACE_TRACEME,
+                            0,
+                            std::ptr::null_mut::<libc::c_void>(),
+                            std::ptr::null_mut::<libc::c_void>(),
+                        )
+                    }),
+                );
+                let mut byte = [7u8; 1];
+                let mut copy = [0u8; 1];
+                let local = libc::iovec {
+                    iov_base: copy.as_mut_ptr().cast(),
+                    iov_len: 1,
+                };
+                let remote = libc::iovec {
+                    iov_base: byte.as_mut_ptr().cast(),
+                    iov_len: 1,
+                };
+                probe(
+                    "process_vm_readv",
+                    libc::process_vm_readv(libc::getpid(), &local, 1, &remote, 1, 0)
+                        as libc::c_long,
+                );
+                probe("userfaultfd", libc::syscall(libc::SYS_userfaultfd, 0));
+                let mut params = [0u8; 120];
+                probe(
+                    "io_uring_setup",
+                    libc::syscall(libc::SYS_io_uring_setup, 1, params.as_mut_ptr()),
+                );
+                probe(
+                    "clone3",
+                    libc::syscall(libc::SYS_clone3, std::ptr::null::<u8>(), 0),
+                );
+                probe(
+                    "unshare_user",
+                    in_child(|| libc::unshare(libc::CLONE_NEWUSER) as libc::c_long),
+                );
+                probe(
+                    "clone_user",
+                    in_child(|| {
+                        let child = libc::syscall(
+                            libc::SYS_clone,
+                            (libc::CLONE_NEWUSER | libc::SIGCHLD) as libc::c_ulong,
+                            0,
+                            0,
+                            0,
+                            0,
+                        );
+                        if child == 0 {
+                            libc::_exit(0);
+                        }
+                        if child > 0 {
+                            libc::waitpid(child as libc::pid_t, std::ptr::null_mut(), 0);
+                        }
+                        child
+                    }),
+                );
+                probe("keyctl", libc::syscall(libc::SYS_keyctl, 0, -3i64, 0));
+                probe(
+                    "bpf",
+                    libc::syscall(libc::SYS_bpf, 0, std::ptr::null::<u8>(), 0),
+                );
+                let target = std::ffi::CString::new(directory.to_str().unwrap()).unwrap();
+                let tmpfs = std::ffi::CString::new("tmpfs").unwrap();
+                probe(
+                    "mount",
+                    libc::mount(
+                        tmpfs.as_ptr(),
+                        target.as_ptr(),
+                        tmpfs.as_ptr(),
+                        0,
+                        std::ptr::null(),
+                    ) as libc::c_long,
+                );
+                for (name, family, kind) in [
+                    ("socket_packet", libc::AF_PACKET, libc::SOCK_RAW),
+                    ("socket_vsock", libc::AF_VSOCK, libc::SOCK_STREAM),
+                    ("socket_unix", libc::AF_UNIX, libc::SOCK_STREAM),
+                ] {
+                    let fd = libc::socket(family, kind, 0);
+                    probe(name, fd as libc::c_long);
+                    if fd >= 0 {
+                        libc::close(fd);
+                    }
+                }
+                let name = std::ffi::CString::new("probe").unwrap();
+                let fd = libc::syscall(libc::SYS_memfd_create, name.as_ptr(), 0);
+                probe("memfd_create", fd);
+                if fd >= 0 {
+                    libc::close(fd as libc::c_int);
+                }
+            }
+            lines.push(format!(
+                "thread={}",
+                if thread::spawn(|| 7).join().ok() == Some(7) {
+                    "ok"
+                } else {
+                    "failed"
+                }
+            ));
+            lines.push(format!(
+                "spawn={}",
+                match Command::new("/bin/sh").args(["-c", "exit 0"]).status() {
+                    Ok(status) if status.success() => "ok".to_owned(),
+                    Ok(status) => format!("exit-{status}"),
+                    Err(error) => format!("errno-{}", error.raw_os_error().unwrap_or(-1)),
+                }
+            ));
+            println!("{}", lines.join("\n"));
+            std::process::exit(0);
+        }
         "double-root" => {
             let _ = spawn("double-intermediate");
             std::process::exit(7);
@@ -958,5 +1205,254 @@ fn corrupted_or_truncated_stdin_is_refused_before_ready() {
             .unwrap()
             .is_err());
         assert!(!helper.process.wait().unwrap().success());
+    }
+}
+
+fn syscall_answers(hardened: bool) -> std::collections::BTreeMap<String, String> {
+    let directory = tempfile::tempdir().unwrap();
+    fixture_answers("syscalls", directory.path(), hardened)
+}
+
+/// Run fixture `kind` under the supervisor, with or without `--harden`, and
+/// collect its `name=result` lines.
+fn fixture_answers(
+    kind: &str,
+    directory: &Path,
+    hardened: bool,
+) -> std::collections::BTreeMap<String, String> {
+    let mut input = fixture_request(10_000);
+    input.invocation_id = format!("{kind}-{hardened}");
+    input.stdout_bytes = 4096;
+    let mut helper = if hardened {
+        Helper::start_hardened(input.clone(), Some((kind, directory)))
+    } else {
+        Helper::start(input.clone(), Some((kind, directory)))
+    };
+    helper.control(Control::Dispatch);
+    let ServerMessage::Finished {
+        outcome, stdout, ..
+    } = helper.finished()
+    else {
+        panic!("terminal")
+    };
+    assert_eq!(outcome, ProcessOutcome::Exited { code: 0 }, "{hardened}");
+    let stdout = String::from_utf8(stdout.retained_bytes(input.stdout_bytes).unwrap()).unwrap();
+    stdout
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(name, result)| (name.to_string(), result.to_string()))
+        .collect()
+}
+
+/// On a kernel without Landlock, `--serve --harden` refuses to launch
+/// anything (true, and the caller skips its checks); otherwise false.
+fn hardening_refused_without_landlock() -> bool {
+    if landlock_abi() >= 1 {
+        return false;
+    }
+    let mut helper = Helper::start_hardened(shell("true", 5000), None);
+    helper.control(Control::Dispatch);
+    let ServerMessage::Finished {
+        outcome, launched, ..
+    } = helper.finished()
+    else {
+        panic!("terminal")
+    };
+    let ProcessOutcome::LaunchFailed { message } = outcome else {
+        panic!("hardening without Landlock must not launch: {outcome:?}");
+    };
+    assert!(!launched);
+    assert!(message.starts_with("hardening unavailable"), "{message}");
+    eprintln!("Landlock is not available; hardened launches are refused");
+    true
+}
+
+/// `--serve --harden` launches its command under the seccomp denylist: the
+/// listed calls fail with EPERM, clone3 and io_uring with ENOSYS, and
+/// ordinary work (threads, child processes, memfd, Unix sockets) still runs.
+/// Without `--harden` the same probe can trace itself, so the filter is
+/// what refuses it.
+#[test]
+fn hardening_refuses_the_denylist_and_keeps_ordinary_calls() {
+    if hardening_refused_without_landlock() {
+        return;
+    }
+    let plain = syscall_answers(false);
+    let hardened = syscall_answers(true);
+    eprintln!("without --harden: {plain:?}");
+    eprintln!("with --harden: {hardened:?}");
+    let eperm = format!("errno-{}", libc::EPERM);
+    let enosys = format!("errno-{}", libc::ENOSYS);
+    for name in [
+        "ptrace",
+        "process_vm_readv",
+        "userfaultfd",
+        "unshare_user",
+        "clone_user",
+        "keyctl",
+        "bpf",
+        "mount",
+        "socket_packet",
+        "socket_vsock",
+    ] {
+        assert_eq!(hardened.get(name), Some(&eperm), "{name}: {hardened:?}");
+    }
+    for name in ["io_uring_setup", "clone3"] {
+        assert_eq!(hardened.get(name), Some(&enosys), "{name}: {hardened:?}");
+    }
+    for name in ["socket_unix", "memfd_create", "thread", "spawn"] {
+        assert_eq!(hardened.get(name).map(String::as_str), Some("ok"), "{name}");
+        assert_eq!(plain.get(name).map(String::as_str), Some("ok"), "{name}");
+    }
+    // A process may trace itself unless the filter refuses it.
+    assert_eq!(
+        plain.get("ptrace").map(String::as_str),
+        Some("ok"),
+        "{plain:?}"
+    );
+}
+
+/// Real programs still run under the filter: the C library falls back from
+/// clone3 and nothing they need is refused. Programs missing from the image
+/// are skipped and named.
+#[test]
+fn hardened_commands_still_run_ordinary_programs() {
+    if hardening_refused_without_landlock() {
+        return;
+    }
+    let mut ran = Vec::new();
+    for (program, script) in [
+        ("sh", "sh -c true"),
+        ("git", "git --version"),
+        (
+            "python3",
+            "python3 -c 'import subprocess, threading; t = threading.Thread(target=lambda: None); t.start(); t.join(); subprocess.run([\"true\"], check=True)'",
+        ),
+        (
+            "node",
+            "node -e \"require('child_process').execSync('true'); require('fs').readFileSync('/etc/hostname')\"",
+        ),
+        ("unshare", "! unshare -U true 2>/dev/null"),
+    ] {
+        let present = Command::new("/bin/sh")
+            .args(["-c", &format!("command -v {program}")])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        if !present {
+            eprintln!("{program} is not in this image; skipped");
+            continue;
+        }
+        let mut input = shell(script, 20_000);
+        input.invocation_id = format!("hardened-{program}");
+        let mut helper = Helper::start_hardened(input, None);
+        helper.control(Control::Dispatch);
+        let ServerMessage::Finished {
+            outcome, stderr, ..
+        } = helper.finished()
+        else {
+            panic!("terminal")
+        };
+        assert_eq!(
+            outcome,
+            ProcessOutcome::Exited { code: 0 },
+            "{script}: {:?}",
+            String::from_utf8_lossy(&stderr.retained_bytes(4096).unwrap_or_default())
+        );
+        ran.push(program);
+    }
+    assert!(ran.contains(&"sh"), "{ran:?}");
+}
+
+/// The filter comes after the write restriction, so both apply.
+#[test]
+fn hardening_and_a_write_restriction_apply_together() {
+    use axocoatl_exec::protocol::WriteRestriction;
+    if landlock_abi() < 3 {
+        eprintln!(
+            "Landlock ABI {} cannot restrict writes; skipped",
+            landlock_abi()
+        );
+        return;
+    }
+    let protected = tempfile::tempdir().unwrap();
+    let mut input = shell(
+        "echo x > \"$0/blocked\" 2>/dev/null; test ! -e \"$0/blocked\" && ! unshare -U true 2>/dev/null",
+        10_000,
+    );
+    input
+        .argv
+        .push(protected.path().to_string_lossy().into_owned());
+    input.write_restriction = Some(WriteRestriction {
+        writable: vec!["/tmp".into()],
+        protected: vec![protected.path().to_string_lossy().into_owned()],
+        deny_network: false,
+    });
+    let mut helper = Helper::start_hardened(input, None);
+    helper.control(Control::Dispatch);
+    assert!(matches!(
+        helper.finished(),
+        ServerMessage::Finished {
+            outcome: ProcessOutcome::Exited { code: 0 },
+            ..
+        }
+    ));
+}
+
+/// Yama's ptrace scope, 0 when Yama is absent.
+fn yama_ptrace_scope() -> u32 {
+    std::fs::read_to_string("/proc/sys/kernel/yama/ptrace_scope")
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// `--serve --harden` puts its command in a Landlock domain even without a
+/// write restriction, so the command cannot read the environment, memory map
+/// or memory of a process it did not start, even one of the same user (here
+/// a `sleep` started by this test). Its own children stay readable. Without
+/// `--harden` the same command reads the other process's environment.
+#[test]
+fn hardened_commands_cannot_read_other_processes_memory_or_environment() {
+    if hardening_refused_without_landlock() {
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let marker = format!("axo-proc-marker-{}", std::process::id());
+    let mut victim = Command::new("sleep")
+        .arg("30")
+        .env("AXO_PROC_MARKER", &marker)
+        .spawn()
+        .unwrap();
+    std::fs::write(directory.path().join("victim-pid"), victim.id().to_string()).unwrap();
+    std::fs::write(directory.path().join("marker"), &marker).unwrap();
+    let plain = fixture_answers("proc-access", directory.path(), false);
+    let hardened = fixture_answers("proc-access", directory.path(), true);
+    let _ = victim.kill();
+    let _ = victim.wait();
+    eprintln!("without --harden: {plain:?}");
+    eprintln!("with --harden: {hardened:?}");
+    let eacces = format!("errno-{}", libc::EACCES);
+    for name in ["environ", "maps", "mem"] {
+        assert_eq!(hardened.get(name), Some(&eacces), "{name}: {hardened:?}");
+    }
+    assert_eq!(
+        hardened.get("child_environ").map(String::as_str),
+        Some("marker"),
+        "{hardened:?}"
+    );
+    // The same user may read it when nothing restricts the command.
+    assert_eq!(
+        plain.get("environ").map(String::as_str),
+        Some("marker"),
+        "{plain:?}"
+    );
+    if yama_ptrace_scope() == 0 {
+        assert_eq!(
+            plain.get("mem").map(String::as_str),
+            Some("ok"),
+            "{plain:?}"
+        );
     }
 }

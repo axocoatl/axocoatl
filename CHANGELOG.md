@@ -165,6 +165,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   approval is the per-Session allow, recorded with the proposal's id. The tool call
   waits up to `wait_secs` (default 120, at most 600) and returns the decision, or
   `pending`. Nothing approves a request by itself, and no Agent can approve one.
+- The execution supervisor can relay connections to the daemon, report the program
+  behind each proxied connection and harden the commands it runs with a seccomp filter
+  and a Landlock domain that keeps them out of processes they did not start. These are
+  building blocks for later Session settings: the egress control protocol moves to
+  version 2, and a network record's `open` event can carry the program, its user and
+  SHA-256 in a new `peer` field.
 
 ### Changed
 - `web_search.provider` must be `searxng` or the legacy `tavily`; any other non-empty value is

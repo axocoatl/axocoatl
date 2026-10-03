@@ -133,6 +133,24 @@ fn read_into(fd: RawFd, lane: &mut Lane) -> Io {
     }
 }
 
+/// One nonblocking `send` of `bytes` without raising SIGPIPE.
+pub(crate) fn send_some(fd: RawFd, bytes: &[u8]) -> io::Result<usize> {
+    if bytes.is_empty() {
+        return Ok(0);
+    }
+    loop {
+        // SAFETY: the pointer and length describe initialized bytes.
+        let written = unsafe { libc::send(fd, bytes.as_ptr().cast(), bytes.len(), SEND_FLAGS) };
+        if written >= 0 {
+            return Ok(written as usize);
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
 fn write_from(fd: RawFd, lane: &mut Lane) -> Io {
     let pending = &lane.buffer[lane.start..lane.end];
     if pending.is_empty() {

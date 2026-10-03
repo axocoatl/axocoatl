@@ -60,13 +60,13 @@ fn the_proxy_speaks_the_protocol_over_stdio_and_exits_when_stdin_closes() {
             max_connections,
             version,
         } => {
-            assert_eq!((protocol, max_connections), (1, 16));
+            assert_eq!((protocol, max_connections), (2, 16));
             assert_eq!(version, env!("CARGO_PKG_VERSION"));
         }
         other => panic!("{other:?}"),
     }
     stdin
-        .write_all(&protocol::encode_daemon(&DaemonFrame::HelloAck { protocol: 1 }).unwrap())
+        .write_all(&protocol::encode_daemon(&DaemonFrame::HelloAck { protocol: 2 }).unwrap())
         .unwrap();
     // Every user can connect: the socket is created 0666, never chmod-ed.
     assert_eq!(socket_mode(&socket), 0o666);
@@ -117,6 +117,76 @@ fn the_proxy_speaks_the_protocol_over_stdio_and_exits_when_stdin_closes() {
     );
 }
 
+/// The identity socket is a second listener, created 0666 like the first;
+/// a connection on it must start with the identity line, which reaches the
+/// daemon in the `open` frame.
+#[test]
+fn the_identity_socket_carries_the_peer_into_open() {
+    use axocoatl_exec::egress::protocol::PeerIdentity;
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("proxy.sock");
+    let identity_socket = dir.path().join("identity.sock");
+    let mut child = binary()
+        .args(["--egress-proxy", "--socket"])
+        .arg(&socket)
+        .arg("--identity-socket")
+        .arg(&identity_socket)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut frame = || {
+        let mut line = Vec::new();
+        stdout.read_until(b'\n', &mut line).unwrap();
+        protocol::decode_sidecar(&line).unwrap()
+    };
+    assert!(matches!(frame(), SidecarFrame::Hello { protocol: 2, .. }));
+    stdin
+        .write_all(&protocol::encode_daemon(&DaemonFrame::HelloAck { protocol: 2 }).unwrap())
+        .unwrap();
+    assert_eq!(socket_mode(&socket), 0o666);
+    assert_eq!(socket_mode(&identity_socket), 0o666);
+    let peer = PeerIdentity {
+        pid: Some(77),
+        uid: Some(1000),
+        exe: Some("/usr/bin/git".into()),
+        ..PeerIdentity::default()
+    };
+    let mut client = UnixStream::connect(&identity_socket).unwrap();
+    let mut request = peer.line().unwrap();
+    request.extend_from_slice(b"CONNECT github.com:443 HTTP/1.1\r\n\r\n");
+    client.write_all(&request).unwrap();
+    let SidecarFrame::Open {
+        id, peer: carried, ..
+    } = frame()
+    else {
+        panic!("expected open")
+    };
+    assert_eq!(carried, Some(peer));
+    stdin
+        .write_all(
+            &protocol::encode_daemon(&DaemonFrame::Deny {
+                id,
+                status: 403,
+                reason: "not_allowed".into(),
+                hint: "no".into(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    drop(stdin);
+    assert_eq!(
+        wait_with_deadline(&mut child, Duration::from_secs(5)),
+        Some(1)
+    );
+}
+
 #[test]
 fn shutdown_exits_zero() {
     let dir = tempfile::tempdir().unwrap();
@@ -140,7 +210,7 @@ fn shutdown_exits_zero() {
             ..
         }
     ));
-    for frame in [DaemonFrame::HelloAck { protocol: 1 }, DaemonFrame::Shutdown] {
+    for frame in [DaemonFrame::HelloAck { protocol: 2 }, DaemonFrame::Shutdown] {
         stdin
             .write_all(&protocol::encode_daemon(&frame).unwrap())
             .unwrap();
@@ -170,8 +240,33 @@ fn bad_arguments_and_probes() {
             "--max-connections",
             "257",
         ],
+        vec![
+            "--egress-proxy",
+            "--socket",
+            "/tmp/x.sock",
+            "--identity-socket",
+            "/tmp/x.sock",
+        ],
+        vec![
+            "--egress-proxy",
+            "--socket",
+            "/tmp/x.sock",
+            "--identity-socket",
+            "relative.sock",
+        ],
+        vec![
+            "--egress-proxy",
+            "--socket",
+            "/tmp/x.sock",
+            "--socket",
+            "/tmp/y.sock",
+        ],
         vec!["--probe-unix"],
         vec!["--probe-unix", "relative"],
+        vec!["--harden"],
+        vec!["--harden", "--serve"],
+        vec!["--serve", "--harden", "--harden"],
+        vec!["--serve", "--landlock"],
         vec!["--anything"],
         vec![],
     ] {
