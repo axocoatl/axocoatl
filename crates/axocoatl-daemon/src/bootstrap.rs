@@ -30187,7 +30187,7 @@ case "$*" in
   'machine list --format json') printf '[{"Running":true}]\n' ;;
   'info --format json') printf '{}\n' ;;
   'ps -a --no-trunc --filter name=axo-ses- --format '* | \
-  'ps -a --no-trunc --filter name=axo-ses- --filter name=axo-egr- --filter name=axo-brw- --filter name=axo-pvw- --filter label=io.axocoatl.runtime-authority='*) ;;
+  'ps -a --no-trunc --filter name=axo-ses- --filter name=axo-egr- --filter name=axo-brw- --filter name=axo-pvw- --filter name=axo-svc- --filter label=io.axocoatl.runtime-authority='*) ;;
   *) printf 'unexpected Podman command: %s\n' "$*" >&2; exit 1 ;;
 esac
 "#,
