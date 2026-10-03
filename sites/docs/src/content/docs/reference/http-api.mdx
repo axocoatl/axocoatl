@@ -518,7 +518,8 @@ POST /api/sessions/{id}/network/proposals/prop_6f1c0b3e9a2d4c71/approve
   the tool call returns `rejected`.
 - A call that nobody answers in time returns `pending`; the request stays in the list
   and a later call for the same host and ports waits on it again. A request still
-  pending when the daemon stops can be decided after it starts again.
+  pending when the daemon stops is listed again, and can be decided, once the
+  Session's runtime runs after the restart.
 - A decided proposal gets `409`, as does a reused `command_id`. An unknown Session or
   proposal gets `404`, a malformed proposal id or a daemon that does not run
   `network: egress` `400`.
