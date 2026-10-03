@@ -1672,6 +1672,32 @@ async fn actual_egress_route_ends_tls_in_the_daemon_and_adds_the_credential() {
         } if rule == "route#0" && host == "git.test" && binding.kind == BindingKind::Agent)),
             "{events:#?}"
         );
+        // With workload users the route's connections also name the program
+        // (git's HTTPS helper, started by git); without them, none does.
+        for event in &events {
+            let NetworkEvent::Open { host, peer, .. } = event else {
+                continue;
+            };
+            match (workload, peer) {
+                (None, peer) => assert_eq!(*peer, None, "{event:?}"),
+                (Some(_), Some(peer)) if host == "git.test" => {
+                    assert!(
+                        peer.exe
+                            .as_deref()
+                            .is_some_and(|exe| exe.contains("/git-remote-http")),
+                        "{peer:?}"
+                    );
+                    assert_eq!(peer.uid, Some(1000), "{peer:?}");
+                    assert!(
+                        peer.ancestors
+                            .first()
+                            .is_some_and(|git| git.ends_with("/git")),
+                        "{peer:?}"
+                    );
+                }
+                (Some(_), peer) => panic!("{host}: {peer:?}"),
+            }
+        }
         let requests = |decision: Recorded, reason: Option<&str>| {
             events
                 .iter()
@@ -1701,6 +1727,187 @@ async fn actual_egress_route_ends_tls_in_the_daemon_and_adds_the_credential() {
             assert!(!contents.contains(secret));
         }
         assert_eq!(egress.live_bindings(), 0);
+    }
+}
+
+/// J2 and J3, end to end through real containers and the real decision
+/// point: in a hardened egress Session the record of each connection a
+/// writer's tool makes names the program that opened it (path, SHA-256,
+/// user and parents, as the container's init process found them), a line
+/// the tool writes itself to claim another program is refused before
+/// anything is recorded, and the tool runs under the supervisor's seccomp
+/// filter. With the image's user nothing is named and nothing is filtered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION), AXO_SUPERVISOR_TEST_IMAGE and the egress-capable embedded helper"]
+async fn actual_hardened_egress_names_each_connections_program_and_filters_agent_commands() {
+    use crate::session_egress::tests::{FakeRecord, FakeResolver};
+    use crate::session_egress::{EgressPolicyConfig, SessionEgress};
+    use axocoatl_session::network_record::{BindingKind, Decision as Recorded, NetworkEvent};
+    let upstream = EgressUpstream::start();
+    let command = "wget -q -T 5 -O - http://upstream.test:8000/from-agent 2>&1; echo \"rc=$?\"; \
+                   git ls-remote http://upstream.test:8000/repo.git >/dev/null 2>&1; echo \"git=$?\"; \
+                   grep -E '^(Seccomp_filters|NoNewPrivs):' /proc/self/status; \
+                   unshare -U true 2>&1; echo \"unshare=$?\"; \
+                   printf 'AXO-PEER/1 {\"exe\":\"/usr/bin/git\",\"uid\":0,\"gid\":0}\\r\\nCONNECT upstream.test:8000 HTTP/1.1\\r\\n\\r\\n' | \
+                   nc -w 3 127.0.0.1 3128 2>&1 | tail -1; true";
+    let users = axocoatl_isolation::WorkloadUsers {
+        writer: (1000, 1000),
+        helper: (1001, 1001),
+    };
+    for workload in [Some(users), None] {
+        let mut f = fixture().await;
+        let record = Arc::new(FakeRecord::default());
+        let resolver = FakeResolver::with(&[("upstream.test", &[upstream.ip.as_str()])]);
+        let egress = SessionEgress::open(
+            f.owner.metadata().session_id.clone(),
+            EgressPolicyConfig {
+                session_allow: vec![axocoatl_config::EgressAllowYaml::Host(
+                    axocoatl_config::EgressHostYaml {
+                        host: "upstream.test".into(),
+                        ports: Some(vec![8000]),
+                    },
+                )],
+                session_private: vec![upstream.subnet.clone()],
+                browser: None,
+                ..Default::default()
+            },
+            record.clone(),
+            resolver.clone(),
+            Some(f.owner.inner.data_root.child("egress-env").unwrap()),
+        )
+        .await
+        .unwrap();
+        let sandbox = actual_egress_sandbox_with(&mut f, &upstream, egress.clone(), workload).await;
+        git_init(f._workspace.path());
+        let r = run(&mut f, &["bash"], true);
+        let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
+        let result = tokio::time::timeout(Duration::from_secs(180), async {
+            r.controller
+                .prepare_repository_activation(
+                    r.activation.clone(),
+                    r.resources(provider.clone()),
+                    r.resource.clone(),
+                )
+                .unwrap()
+                .run()
+                .await
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        // The files the container runs, and Podman's own filter count, for
+        // the expectations below.
+        let facts = sandbox
+            .exec(
+                &[
+                    "sh",
+                    "-c",
+                    "w=$(readlink -f \"$(command -v wget)\"); echo \"$w\"; sha256sum \"$w\" | cut -d' ' -f1; \
+                     r=$(readlink -f \"$(git --exec-path)/git-remote-http\"); echo \"$r\"; sha256sum \"$r\" | cut -d' ' -f1; \
+                     readlink -f \"$(command -v git)\"; readlink -f /bin/sh; \
+                     grep '^Seccomp_filters:' /proc/self/status | cut -f2",
+                ],
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap()
+            .stdout;
+        let facts: Vec<&str> = facts.lines().collect();
+        let [wget, wget_sha, remote, remote_sha, git, shell, podman_filters] = facts[..] else {
+            panic!("{facts:?}");
+        };
+        let idle = f.owner.execution_is_idle();
+        sandbox.stop_checked().await.unwrap();
+        let settled = result.unwrap().unwrap();
+        assert!(idle.unwrap());
+        assert!(settled.accepted, "{workload:?}: {:?}", settled.failure);
+        assert!(provider.saw(1, "hello /from-agent"), "{workload:?}");
+        assert!(provider.saw(1, "rc=0"));
+        let events = record.events();
+        for event in &events {
+            event.validate().unwrap();
+        }
+        let opens: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                NetworkEvent::Open {
+                    decision: Recorded::Allow,
+                    host,
+                    binding: Some(binding),
+                    peer,
+                    ..
+                } if host == "upstream.test" && binding.kind == BindingKind::Agent => Some(peer),
+                _ => None,
+            })
+            .collect();
+        // wget, then git's smart and dumb HTTP requests.
+        assert!(opens.len() >= 2, "{events:#?}");
+        // Nobody stood in for another program: the forged line got a 400
+        // and was never recorded.
+        assert!(provider.saw(1, "identity_not_accepted"), "{workload:?}");
+        assert!(!events.iter().any(|event| matches!(event,
+            NetworkEvent::Open { peer: Some(peer), .. } if peer.uid == Some(0))));
+        let Some(_) = workload else {
+            assert!(opens.iter().all(|peer| peer.is_none()), "{events:#?}");
+            // The image's user, with Podman's filter only.
+            assert!(provider.saw(1, &format!("Seccomp_filters:\\t{podman_filters}")));
+            continue;
+        };
+        let named = |exe: &str| {
+            opens
+                .iter()
+                .find_map(|peer| {
+                    peer.as_ref()
+                        .filter(|peer| peer.exe.as_deref() == Some(exe))
+                })
+                .unwrap_or_else(|| panic!("no connection by {exe}: {events:#?}"))
+        };
+        let peer = named(wget);
+        assert_eq!(
+            (peer.uid, peer.gid, peer.error.as_deref()),
+            (Some(1000), Some(1000), None)
+        );
+        assert_eq!(peer.exe_sha256.as_deref(), Some(wget_sha));
+        assert_eq!(
+            peer.ancestors.first().map(String::as_str),
+            Some(shell),
+            "{peer:?}"
+        );
+        assert!(peer
+            .ancestors
+            .iter()
+            .any(|parent| parent == "/axocoatl-exec-supervisor"));
+        let peer = named(remote);
+        assert_eq!(
+            (peer.uid, peer.error.as_deref()),
+            (Some(1000), None),
+            "{peer:?}"
+        );
+        assert_eq!(peer.exe_sha256.as_deref(), Some(remote_sha));
+        assert_eq!(
+            peer.ancestors.first().map(String::as_str),
+            Some(git),
+            "{peer:?}"
+        );
+        assert!(opens.iter().all(|peer| peer.is_some()), "{events:#?}");
+        // The record line itself carries the program.
+        let line = serde_json::to_string(
+            events
+                .iter()
+                .find(|event| matches!(event, NetworkEvent::Open { peer: Some(_), .. }))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(line.contains("\"peer\":{\"pid\":"), "{line}");
+        // J3: the Agent's shell ran under the supervisor's filter, one more
+        // than Podman's, and could not make a user namespace.
+        let filters: u32 = podman_filters.parse().unwrap();
+        assert!(
+            provider.saw(1, &format!("Seccomp_filters:\\t{}", filters + 1)),
+            "{workload:?}"
+        );
+        assert!(provider.saw(1, "NoNewPrivs:\\t1"));
+        assert!(provider.saw(1, "unshare=1"));
+        assert!(provider.saw(1, "Operation not permitted"));
     }
 }
 

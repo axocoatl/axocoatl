@@ -196,6 +196,65 @@ test('requests on egress routes show what each asked for and how it ended', asyn
   }
 });
 
+test('connections are listed newest first, and in a hardened Session each names its program', async () => {
+  const curl = { pid: 412, uid: 1000, gid: 1000, exe: '/usr/bin/curl', exe_sha256: 'ab'.repeat(32), ancestors: ['/bin/bash', '/axocoatl-exec-supervisor'] };
+  const git = { pid: 413, uid: 1000, gid: 1000, exe: '/usr/libexec/git-core/git-remote-http', exe_sha256: 'cd'.repeat(32), ancestors: ['/usr/bin/git', '/bin/bash'] };
+  const extra = [
+    line(10, { kind: 'open', conn: 'g1:8', peer: git, decision: 'allow', rule: 'route#0', host: 'git.example.com', port: 443, conn_kind: 'connect', addrs: ['192.0.2.7'], token: '0123456789abcdef', binding: agent, scope: 'session', policy_revision: 1 }),
+    line(11, { kind: 'request', conn: 'g1:8', seq_in_conn: 1, method: 'GET', path: '/acme/app.git/info/refs', host: 'git.example.com', rule: 'route#0.rules[0]', decision: 'allow', credential: 'git' }),
+    line(12, { kind: 'open', conn: 'g1:9', peer: curl, decision: 'deny', reason: 'not_allowed', status: 403, host: 'paste.example.net', port: 443, conn_kind: 'connect', addrs: [], token: '0123456789abcdef', binding: agent, scope: 'session', policy_revision: 1 }),
+    line(13, { kind: 'open', conn: 'g1:10', peer: { pid: 77, uid: 1000, error: 'foreign_namespace', exe_sha256: 'ef'.repeat(32) }, decision: 'allow', rule: 'preset:npm/registry.npmjs.org', host: 'registry.npmjs.org', port: 443, conn_kind: 'connect', addrs: ['104.16.0.35'], token: '0123456789abcdef', binding: agent, scope: 'session', policy_revision: 1 }),
+  ];
+  const { context, page, calls, errors } = await setup({ extra });
+  try {
+    const dialog = page.getByRole('dialog', { name: 'Session network', exact: true });
+    await dialog.getByRole('heading', { name: 'Connections', exact: true }).waitFor();
+    const connections = dialog.locator('table.connections');
+    assert.deepEqual(await connections.locator('th').allTextContents(), ['Time', 'Agent', 'Program', 'Destination', 'Traffic']);
+    const rows = connections.locator('tbody tr');
+    // Newest first: the unnamed npm connection, the git route, then the
+    // first connection, recorded before identities and closed.
+    assert.equal(await rows.count(), 3);
+    assert.deepEqual(await rows.evaluateAll((all) => all.map((row) => row.dataset.conn)), ['g1:10', 'g1:8', 'g1:1']);
+    await rows.nth(0).getByText('unknown program', { exact: true }).waitFor();
+    await rows.nth(0).getByText('mount namespace of its own', { exact: false }).waitFor();
+    await rows.nth(1).getByText('/usr/libexec/git-core/git-remote-http', { exact: true }).waitFor();
+    await rows.nth(1).getByText('user 1000:1000 · started by /usr/bin/git (under /bin/bash) · SHA-256 cdcdcdcdcdcd…', { exact: true }).waitFor();
+    assert.equal(await rows.nth(1).locator('code').getAttribute('title'), `SHA-256 ${'cd'.repeat(32)}`);
+    await rows.nth(1).getByText('open', { exact: true }).waitFor();
+    await rows.nth(2).getByText('not named', { exact: true }).waitFor();
+    await rows.nth(2).getByText('1.2 MB received, 900 B sent', { exact: true }).waitFor();
+    // The refused row and the route's request name their programs too.
+    const refused = dialog.locator('table.refused');
+    assert.deepEqual(await refused.locator('th').allTextContents(), ['Time', 'Agent', 'Program', 'Destination', 'Reason', '']);
+    const paste = refused.locator('tbody tr', { hasText: 'paste.example.net:443' });
+    await paste.getByText('/usr/bin/curl', { exact: true }).waitFor();
+    await paste.getByText('started by /bin/bash (under /axocoatl-exec-supervisor)', { exact: false }).waitFor();
+    const request = dialog.locator('table.requests tbody tr');
+    assert.equal(await request.count(), 1);
+    await request.getByText('/usr/libexec/git-core/git-remote-http', { exact: true }).waitFor();
+    assert.equal(calls.length, 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+});
+
+test('without program identities the panel has no program column', async () => {
+  const { context, page, errors } = await setup();
+  try {
+    const dialog = page.getByRole('dialog', { name: 'Session network', exact: true });
+    const connections = dialog.locator('table.connections');
+    await connections.waitFor();
+    assert.deepEqual(await connections.locator('th').allTextContents(), ['Time', 'Agent', 'Destination', 'Traffic']);
+    assert.deepEqual(await dialog.locator('table.refused th').allTextContents(), ['Time', 'Agent', 'Destination', 'Reason', '']);
+    assert.equal(await dialog.locator('td.program').count(), 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+});
+
 test('a lost allow is resent with the same command id and a 409 for it counts as applied', async () => {
   const { context, page, calls, errors } = await setup({ loseFirstAllow: true });
   try {

@@ -1,7 +1,9 @@
 //! Podman checks of the workload layout: port sockets outside the Session
 //! container under `network: egress`, hardened workload users (a non-root
-//! writer and a separate helper, neither with capabilities), and Ways
-//! attempts that use their Session's egress proxy.
+//! writer and a separate helper, neither with capabilities), the program
+//! behind each connection of a hardened egress Session, the seccomp filter on
+//! hardened workload users' commands, and Ways attempts that use their
+//! Session's egress proxy.
 //!
 //! The decision point is a fake that maps names to the fixture's upstream and
 //! records every event. Objects the fixture creates directly (network,
@@ -19,6 +21,9 @@
 //! `AXO_WORKLOAD_TEST_IMAGE` names a local image that already has Axocoatl's
 //! repository commands plus `wget` and `nc` (default: the supervisor's root
 //! test image), and `AXO_WORKLOAD_UPSTREAM_IMAGE` one with `node`. The
+//! seccomp case runs in `AXO_WORKLOAD_CURATED_IMAGE` (default
+//! `docker.io/library/rust:bookworm`, which has Git, Python and Cargo) with
+//! Node and npm copied from `docker.io/library/node:22-bookworm-slim`. The
 //! Unix-socket case copies that image's `/usr/local/bin/node`, `libstdc++` and
 //! `libgcc_s` into a Session container, so both must use the same C library
 //! (musl with the defaults).
@@ -39,7 +44,7 @@ use axocoatl_exec::protocol::{
 };
 use axocoatl_isolation::egress::{
     CloseReport, Decision, EgressAttachment, EgressAuthority, EgressGrant, GrantKind, GrantSpec,
-    OpenRequest, ProcessEnv, SidecarEvent,
+    OpenRequest, PeerIdentity, ProcessEnv, SidecarEvent,
 };
 use axocoatl_isolation::{
     ExecIdentity, Sandbox, SandboxNetwork, SandboxPolicy, SessionSandbox, WorkloadUsers,
@@ -48,6 +53,10 @@ use sha2::{Digest, Sha256};
 
 const TEST_IMAGE: &str = "localhost/axocoatl-supervisor-test-root:20260914";
 const UPSTREAM_IMAGE: &str = "docker.io/library/node:22-alpine";
+/// A curated image with Git, Python, Perl, Bash and Cargo.
+const CURATED_IMAGE: &str = "docker.io/library/rust:bookworm";
+/// Node and npm for the curated image (both glibc).
+const NODE_IMAGE: &str = "docker.io/library/node:22-bookworm-slim";
 const UPSTREAM_SERVER: &str = "require('http').createServer((q,r)=>{console.log('ACCESS '+q.method+' '+q.url);r.end('hello '+q.method+' '+q.url+'\\n')}).listen(8000)";
 const USERS: WorkloadUsers = WorkloadUsers {
     writer: (1000, 1000),
@@ -74,6 +83,8 @@ enum Event {
         host: String,
         status: Option<u16>,
         tag: Option<String>,
+        /// The program behind the connection, as PID 1 named it.
+        peer: Option<PeerIdentity>,
     },
 }
 
@@ -174,6 +185,7 @@ impl EgressAuthority for FakeAuthority {
             host: open.host,
             status,
             tag,
+            peer: open.peer,
         });
         decision
     }
@@ -312,13 +324,31 @@ impl Fixture {
         setup: &[String],
         policy: SandboxPolicy,
     ) -> Arc<SessionSandbox> {
+        self.start_image(
+            session,
+            &image("AXO_WORKLOAD_TEST_IMAGE", TEST_IMAGE),
+            ports,
+            setup,
+            policy,
+        )
+        .await
+    }
+
+    async fn start_image(
+        &self,
+        session: &str,
+        session_image: &str,
+        ports: &[u16],
+        setup: &[String],
+        policy: SandboxPolicy,
+    ) -> Arc<SessionSandbox> {
         self.sessions.lock().unwrap().push(session.to_string());
         let workspace = self.workspace(session);
         let sandbox = Arc::new(
             SessionSandbox::start(
                 session,
                 &workspace,
-                Some(&image("AXO_WORKLOAD_TEST_IMAGE", TEST_IMAGE)),
+                Some(session_image),
                 ports,
                 setup,
                 &policy,
@@ -371,6 +401,7 @@ impl Fixture {
             }
             for volume in [
                 format!("axo-egr-{session}"),
+                format!("axo-egi-{session}"),
                 format!("axo-svc-{session}"),
                 format!("axo-ses-{session}-node-modules"),
             ] {
@@ -517,6 +548,46 @@ const UNIX_PROBE: &str = "const net=require('net');\
     (async()=>{for(const [name,address] of [['abstract',String.fromCharCode(0)+'axo-workload-app'],\
     ['open','/tmp/app-open.sock'],['private','/tmp/app-private.sock']])\
     console.log(name+'='+await reach(address))})()";
+
+/// One capability set (`CapEff`, `CapBnd`, ...) of process `pid` in
+/// `container`, read as root.
+async fn capability_set(container: &str, pid: &str, field: &str) -> u64 {
+    let status = podman_ok(&[
+        "exec",
+        "--user",
+        "0",
+        container,
+        "cat",
+        &format!("/proc/{pid}/status"),
+    ])
+    .await;
+    let value = status
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{field}:")))
+        .unwrap_or_else(|| panic!("no {field} in {status}"));
+    u64::from_str_radix(value.trim(), 16).unwrap()
+}
+
+/// How many seccomp filters a process `podman exec --user <user>` starts in
+/// `container` has: Podman's own profile, without Axocoatl's.
+async fn seccomp_filters(container: &str, user: &str) -> u32 {
+    let line = podman_ok(&[
+        "exec",
+        "--user",
+        user,
+        container,
+        "grep",
+        "^Seccomp_filters:",
+        "/proc/self/status",
+    ])
+    .await;
+    line.trim()
+        .strip_prefix("Seccomp_filters:")
+        .unwrap_or_else(|| panic!("{line}"))
+        .trim()
+        .parse()
+        .unwrap()
+}
 
 fn assert_unprivileged(ran: &Ran, uid: u32, home: &str) {
     let lines: Vec<&str> = ran.stdout.lines().collect();
@@ -736,9 +807,11 @@ async fn hardened_writers_and_helpers_are_separate_users_without_capabilities() 
         let workspace = sandbox.root().to_path_buf();
         let container = format!("axo-ses-{session}");
 
-        // PID 1 (the bridge) is root; the workload users have nothing.
+        // PID 1 (the bridge) is root and holds CAP_SYS_PTRACE, to name the
+        // program behind each connection; the workload users have nothing.
         let pid1 = podman_ok(&["exec", "--user", "0", &container, "grep", "^Uid:", "/proc/1/status"]).await;
         assert!(pid1.starts_with("Uid:\t0\t0"), "{pid1}");
+        assert!(capability_set(&container, "1", "CapEff").await & (1 << 19) != 0);
         let writer = supervised(sandbox.as_ref(), ExecIdentity::Writer, STATUS, None, None).await;
         assert_unprivileged(&writer, 1000, "/home/axocoatl");
         let helper = supervised(sandbox.as_ref(), ExecIdentity::Helper, STATUS, None, None).await;
@@ -859,17 +932,20 @@ async fn hardened_writers_and_helpers_are_separate_users_without_capabilities() 
         .await;
         assert_eq!(fetched.stdout.trim(), "hello GET /writer", "{}", fetched.stderr);
         assert!(fixture.authority.events().iter().any(|event| matches!(event,
-            Event::Open { host, status: None, tag: Some(tag) } if host == "upstream.test" && *tag == grant.token_tag)));
+            Event::Open { host, status: None, tag: Some(tag), .. } if host == "upstream.test" && *tag == grant.token_tag)));
 
         // Neither user can reach the proxy's socket: the directory that holds
-        // it is root's alone.
+        // it is root's alone, and it holds only the identity socket, where
+        // every connection starts with PID 1's line.
+        let listed = podman_ok(&["exec", "--user", "0", &container, "ls", "/run/axocoatl/egress"]).await;
+        assert_eq!(listed.trim(), "identity.sock");
         for identity in [ExecIdentity::Writer, ExecIdentity::Helper] {
             let ran = supervised(
                 sandbox.as_ref(),
                 identity,
                 "ls /run/axocoatl 2>&1; echo ls=$?; \
                  printf 'CONNECT upstream.test:8000 HTTP/1.1\\r\\n\\r\\n' | \
-                 nc -w 2 local:/run/axocoatl/egress/proxy.sock 2>&1; echo nc=$?",
+                 nc -w 2 local:/run/axocoatl/egress/identity.sock 2>&1; echo nc=$?",
                 None,
                 None,
             )
@@ -932,13 +1008,29 @@ async fn hardened_writers_and_helpers_are_separate_users_without_capabilities() 
         assert!(probe.stdout.lines().any(|line| line == "0"), "{}", probe.stdout);
         assert!(probe.stdout.contains("exe=1"), "{}", probe.stdout);
         assert!(!probe.stdout.contains(&token) && !probe.stderr.contains(&token));
-        // The writer itself still sees its own credential: the separation is
-        // between users, not a broken environment.
+        // Another writer command cannot read it either: each hardened command
+        // runs in a Landlock domain of its own, which refuses ptrace access,
+        // and with it `/proc/<pid>/environ`, to processes outside it.
+        let other = supervised(
+            sandbox.as_ref(),
+            ExecIdentity::Writer,
+            "pid=$(pgrep -u 1000 -x sleep | head -1); echo pid=$pid; \
+             cat /proc/$pid/environ >/dev/null 2>/tmp/writer-environ-error; echo environ=$?; \
+             cat /tmp/writer-environ-error",
+            None,
+            None,
+        )
+        .await;
+        assert!(!other.stdout.contains("pid=\n"), "{}", other.stdout);
+        assert!(other.stdout.contains("environ=1"), "{}", other.stdout);
+        assert!(other.stdout.contains("Permission denied"), "{}", other.stdout);
+        // A command still sees its own credential: the separation is between
+        // processes, not a broken environment.
         let own = supervised(
             sandbox.as_ref(),
             ExecIdentity::Writer,
-            "pid=$(pgrep -u 1000 -x sleep | head -1); tr '\\0' '\\n' < /proc/$pid/environ | grep -c '^HTTPS_PROXY='",
-            None,
+            "cat /proc/self/environ | tr '\\0' '\\n' | grep -c '^HTTPS_PROXY='",
+            Some(&env),
             None,
         )
         .await;
@@ -960,15 +1052,16 @@ async fn an_attempt_reaches_allowed_hosts_through_its_sessions_proxy() {
         // One daemon: the Session and its attempt share a runtime authority,
         // so neither start treats the other's supervisor mount as foreign.
         let policy = fixture.policy(Some(USERS));
-        let parent = fixture
-            .start_with(&session, &[], &[], policy.clone())
-            .await;
+        let parent = fixture.start_with(&session, &[], &[], policy.clone()).await;
         let attempt = format!("attempt-{}-0", uuid::Uuid::new_v4().simple());
         let sandbox = fixture
             .start_with(
                 &attempt,
                 &[],
-                &["wget -q -O /tmp/setup-fetch http://upstream.test:8000/attempt-setup".to_string()],
+                &[
+                    "wget -q -O /tmp/setup-fetch http://upstream.test:8000/attempt-setup"
+                        .to_string(),
+                ],
                 SandboxPolicy {
                     allow_post_create: true,
                     shared_sidecar_session: Some(session.clone()),
@@ -977,8 +1070,18 @@ async fn an_attempt_reaches_allowed_hosts_through_its_sessions_proxy() {
             )
             .await;
         // No proxy or volume of the attempt's own; it mounts the Session's.
-        assert!(!podman(&["container", "exists", &format!("axo-egr-{attempt}")]).await.status.success());
-        assert!(!podman(&["volume", "exists", &format!("axo-egr-{attempt}")]).await.status.success());
+        assert!(
+            !podman(&["container", "exists", &format!("axo-egr-{attempt}")])
+                .await
+                .status
+                .success()
+        );
+        assert!(
+            !podman(&["volume", "exists", &format!("axo-egr-{attempt}")])
+                .await
+                .status
+                .success()
+        );
         let mounts = podman_ok(&[
             "inspect",
             "--format",
@@ -986,12 +1089,26 @@ async fn an_attempt_reaches_allowed_hosts_through_its_sessions_proxy() {
             &format!("axo-ses-{attempt}"),
         ])
         .await;
-        assert!(mounts.contains(&format!("axo-egr-{session}=/run/axocoatl/egress")), "{mounts}");
+        // A hardened attempt reaches its Session's proxy through the
+        // identity socket, so its connections name their programs too.
+        assert!(
+            mounts.contains(&format!("axo-egi-{session}=/run/axocoatl/egress")),
+            "{mounts}"
+        );
+        assert!(!mounts.contains("axo-egr-"), "{mounts}");
         assert!(sandbox.egress_status().is_none());
         assert!(parent.egress_status().is_some());
 
         // The setup command used an attempt credential.
-        let setup = podman_ok(&["exec", "--user", "0", &format!("axo-ses-{attempt}"), "cat", "/tmp/setup-fetch"]).await;
+        let setup = podman_ok(&[
+            "exec",
+            "--user",
+            "0",
+            &format!("axo-ses-{attempt}"),
+            "cat",
+            "/tmp/setup-fetch",
+        ])
+        .await;
         assert_eq!(setup.trim(), "hello GET /attempt-setup");
         // An Agent's credential, minted through the attempt's authority.
         let authority = Sandbox::egress_authority(sandbox.as_ref()).expect("an egress authority");
@@ -1006,24 +1123,38 @@ async fn an_attempt_reaches_allowed_hosts_through_its_sessions_proxy() {
             None,
         )
         .await;
-        assert_eq!(fetched.stdout.trim(), "hello GET /attempt-agent", "{}", fetched.stderr);
+        assert_eq!(
+            fetched.stdout.trim(),
+            "hello GET /attempt-agent",
+            "{}",
+            fetched.stderr
+        );
         let events = fixture.authority.events();
         let attempt_tags: Vec<(String, GrantKind)> = events
             .iter()
             .filter_map(|event| match event {
-                Event::Bind { tag, kind, attempt: Some(found) } if *found == attempt => Some((tag.clone(), *kind)),
+                Event::Bind {
+                    tag,
+                    kind,
+                    attempt: Some(found),
+                } if *found == attempt => Some((tag.clone(), *kind)),
                 _ => None,
             })
             .collect();
         assert_eq!(
-            attempt_tags.iter().map(|(_, kind)| *kind).collect::<Vec<_>>(),
+            attempt_tags
+                .iter()
+                .map(|(_, kind)| *kind)
+                .collect::<Vec<_>>(),
             [GrantKind::Setup, GrantKind::Agent],
             "{events:?}"
         );
         for (tag, _) in &attempt_tags {
             assert!(
                 events.iter().any(|event| matches!(event,
-                    Event::Open { host, status: None, tag: Some(used) } if host == "upstream.test" && used == tag)),
+                    Event::Open { host, status: None, tag: Some(used), peer: Some(peer) }
+                        if host == "upstream.test" && used == tag
+                            && peer.uid == Some(1000) && peer.exe.is_some())),
                 "{tag}: {events:?}"
             );
         }
@@ -1033,7 +1164,11 @@ async fn an_attempt_reaches_allowed_hosts_through_its_sessions_proxy() {
             .grant(GrantSpec::new(GrantKind::Agent))
             .await
             .unwrap();
-        assert!(fixture.authority.events().iter().any(|event| matches!(event,
+        assert!(fixture
+            .authority
+            .events()
+            .iter()
+            .any(|event| matches!(event,
             Event::Bind { tag, attempt: None, .. } if *tag == session_grant.token_tag)));
         // The attempt's container also has no network of its own.
         let direct = supervised(
@@ -1055,7 +1190,12 @@ async fn an_attempt_reaches_allowed_hosts_through_its_sessions_proxy() {
             None,
         )
         .await;
-        assert_eq!(after.stdout.trim(), "hello GET /after-attempt", "{}", after.stderr);
+        assert_eq!(
+            after.stdout.trim(),
+            "hello GET /after-attempt",
+            "{}",
+            after.stderr
+        );
         let log = podman_ok(&["logs", &fixture.upstream]).await;
         for path in ["/attempt-setup", "/attempt-agent", "/after-attempt"] {
             assert!(log.contains(&format!("ACCESS GET {path}")), "{log}");
@@ -1125,6 +1265,35 @@ async fn image_mode_keeps_the_image_user_and_an_attempt_needs_its_sessions_proxy
             !volumes.contains("/run/axocoatl/egress") && !volumes.contains("/run/axocoatl-svc"),
             "{volumes}"
         );
+        // Without workload users the proxy has no identity socket, nothing
+        // keeps CAP_SYS_PTRACE, commands are not hardened, and connections
+        // name no program.
+        assert!(!podman(&["volume", "exists", &format!("axo-egi-{session}")]).await.status.success());
+        assert_eq!(capability_set(&container, "1", "CapBnd").await & (1 << 19), 0);
+        let grant = fixture
+            .authority
+            .grant(GrantSpec::new(GrantKind::Agent))
+            .await
+            .unwrap();
+        let fetched = supervised(
+            sandbox.as_ref(),
+            ExecIdentity::Writer,
+            "wget -q -O - http://upstream.test:8000/image-mode; grep '^Seccomp_filters:' /proc/self/status",
+            grant.env_file.as_deref(),
+            None,
+        )
+        .await;
+        let baseline = seccomp_filters(&container, "0").await;
+        assert_eq!(
+            fetched.stdout.lines().collect::<Vec<_>>(),
+            ["hello GET /image-mode".to_string(), format!("Seccomp_filters:\t{baseline}")],
+            "{}",
+            fetched.stderr
+        );
+        assert!(fixture.authority.events().iter().any(|event| matches!(event,
+            Event::Open { host, status: None, tag: Some(tag), peer: None }
+                if host == "upstream.test" && *tag == grant.token_tag)));
+        drop(grant);
 
         let orphan = format!("attempt-{}-0", uuid::Uuid::new_v4().simple());
         fixture.sessions.lock().unwrap().push(orphan.clone());
@@ -1319,6 +1488,318 @@ async fn hardened_bridge_sessions_publish_ports_and_run_as_the_writer() {
         assert!(owner.trim_start().starts_with("axocoatl") || owner.trim_start().starts_with("1000"), "{owner}");
         let writer = supervised(sandbox.as_ref(), ExecIdentity::Writer, STATUS, None, None).await;
         assert_unprivileged(&writer, 1000, "/home/axocoatl");
+        // The writer's commands run under the supervisor's filter here too;
+        // outside egress nothing names programs, so PID 1 keeps no
+        // CAP_SYS_PTRACE.
+        let filters = supervised(
+            sandbox.as_ref(),
+            ExecIdentity::Writer,
+            "grep '^Seccomp_filters:' /proc/self/status",
+            None,
+            None,
+        )
+        .await;
+        let baseline = seccomp_filters(&container, "1000:1000").await;
+        assert_eq!(filters.stdout.trim(), format!("Seccomp_filters:\t{}", baseline + 1));
+        assert_eq!(capability_set(&container, "1", "CapBnd").await & (1 << 19), 0);
+    })
+    .await;
+}
+
+/// The peer identity of one recorded connection to the fixture's upstream,
+/// from the events after `before`, opened by `exe`.
+fn peer_of(fixture: &Fixture, before: usize, exe: &str) -> PeerIdentity {
+    let events = fixture.authority.events();
+    events[before..]
+        .iter()
+        .find_map(|event| match event {
+            Event::Open {
+                host,
+                peer: Some(peer),
+                ..
+            } if host == "upstream.test" && peer.exe.as_deref() == Some(exe) => Some(peer.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no connection by {exe}: {:#?}", &events[before..]))
+}
+
+/// Gap 4, identity (J2): in a hardened egress Session the container reaches
+/// the proxy only through its identity socket, so every connection the
+/// decision point hears of names the program that opened it: its path,
+/// SHA-256, user and parents, as PID 1 found them. A writer's tool, the
+/// program a tool started, a helper and a terminal are told apart; a line a
+/// process writes itself is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test workload_podman -- --ignored --test-threads=1"]
+async fn hardened_egress_names_the_program_behind_each_connection() {
+    with_fixture(7, |fixture| async move {
+        let session = session_name();
+        let sandbox = fixture
+            .start_with(&session, &[], &[], fixture.policy(Some(USERS)))
+            .await;
+        let container = format!("axo-ses-{session}");
+        assert!(podman(&["volume", "exists", &format!("axo-egi-{session}")]).await.status.success());
+        let pid1 = podman_ok(&["exec", "--user", "0", &container, "cat", "/proc/1/cmdline"]).await;
+        assert!(
+            pid1.contains("127.0.0.1:3128=/run/axocoatl/egress/identity.sock\0--http-errors\0--peer-identity"),
+            "{pid1:?}"
+        );
+        let grant = fixture
+            .authority
+            .grant(GrantSpec::new(GrantKind::Agent))
+            .await
+            .unwrap();
+        let env = grant.env_file.clone().unwrap();
+
+        // A tool's own program, and a program it started (git's HTTP helper).
+        let before = fixture.authority.events().len();
+        let ran = supervised(
+            sandbox.as_ref(),
+            ExecIdentity::Writer,
+            "wget -q -O - http://upstream.test:8000/wget; \
+             git ls-remote http://upstream.test:8000/repo.git >/dev/null 2>&1; echo git=$?; \
+             for f in \"$(readlink -f \"$(command -v wget)\")\" \"$(readlink -f /bin/sh)\" \
+                      \"$(readlink -f \"$(git --exec-path)/git-remote-http\")\" \"$(readlink -f \"$(command -v git)\")\"; do \
+               echo \"$f $(sha256sum \"$f\" | cut -d' ' -f1)\"; done",
+            Some(&env),
+            None,
+        )
+        .await;
+        let lines: Vec<&str> = ran.stdout.lines().collect();
+        assert_eq!(lines[0], "hello GET /wget", "{}", ran.stderr);
+        assert!(lines[1].starts_with("git="), "{}", ran.stdout);
+        let file = |line: &str| {
+            let (path, digest) = line.split_once(' ').unwrap();
+            (path.to_string(), digest.to_string())
+        };
+        let (wget, wget_sha) = file(lines[2]);
+        let (shell, _) = file(lines[3]);
+        let (remote_http, remote_http_sha) = file(lines[4]);
+        let (git, _) = file(lines[5]);
+        let peer = peer_of(&fixture, before, &wget);
+        assert_eq!((peer.uid, peer.gid, peer.error.as_deref()), (Some(1000), Some(1000), None), "{peer:?}");
+        assert!(peer.pid.is_some_and(|pid| pid > 1), "{peer:?}");
+        assert_eq!(peer.exe_sha256.as_deref(), Some(wget_sha.as_str()), "{peer:?}");
+        assert_eq!(peer.ancestors.first(), Some(&shell), "{peer:?}");
+        assert!(peer.ancestors.iter().any(|parent| parent == "/axocoatl-exec-supervisor"), "{peer:?}");
+        let peer = peer_of(&fixture, before, &remote_http);
+        assert_eq!((peer.uid, peer.error.as_deref()), (Some(1000), None), "{peer:?}");
+        assert_eq!(peer.exe_sha256.as_deref(), Some(remote_http_sha.as_str()), "{peer:?}");
+        // git runs its HTTP helper through `git remote-http`.
+        assert_eq!(peer.ancestors.first(), Some(&git), "{peer:?}");
+        assert!(peer.ancestors.contains(&shell), "{peer:?}");
+        assert!(peer.ancestors.iter().any(|parent| parent == "/axocoatl-exec-supervisor"), "{peer:?}");
+
+        // Every connection from the container is named, including a helper's
+        // without a credential (refused) and a terminal's.
+        let before = fixture.authority.events().len();
+        supervised(
+            sandbox.as_ref(),
+            ExecIdentity::Helper,
+            "http_proxy=http://127.0.0.1:3128 wget -q -T 5 -O - http://upstream.test:8000/helper 2>&1; true",
+            None,
+            None,
+        )
+        .await;
+        let helper = peer_of(&fixture, before, &wget);
+        assert_eq!((helper.uid, helper.gid), (Some(1001), Some(1001)), "{helper:?}");
+        assert!(fixture.authority.events()[before..].iter().any(|event| matches!(event,
+            Event::Open { status: Some(407), peer: Some(peer), .. } if peer.uid == Some(1001))));
+        let before = fixture.authority.events().len();
+        let terminal = Sandbox::spawn_terminal(
+            sandbox.as_ref(),
+            "wget -q -O /tmp/terminal-fetch http://upstream.test:8000/terminal; sleep 5",
+            24,
+            80,
+        )
+        .await
+        .unwrap();
+        let mut named = None;
+        for _ in 0..50 {
+            named = fixture.authority.events()[before..].iter().find_map(|event| match event {
+                Event::Open { host, peer: Some(peer), status: None, .. } if host == "upstream.test" => Some(peer.clone()),
+                _ => None,
+            });
+            if named.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(Sandbox::kill_terminal(sandbox.as_ref(), &terminal.id));
+        let named = named.expect("the terminal's connection was named");
+        assert_eq!((named.uid, named.exe.as_deref()), (Some(1000), Some(wget.as_str())), "{named:?}");
+        assert!(!named.ancestors.iter().any(|parent| parent == "/axocoatl-exec-supervisor"), "{named:?}");
+
+        // A process cannot stand in for another: on the TCP listener PID 1's
+        // own line comes first, so a line the client writes is refused
+        // before the decision point hears of the connection.
+        let before = fixture.authority.events().len();
+        let forged = supervised(
+            sandbox.as_ref(),
+            ExecIdentity::Writer,
+            "printf 'AXO-PEER/1 {\"exe\":\"/usr/bin/git\",\"uid\":0,\"gid\":0}\\r\\nCONNECT upstream.test:8000 HTTP/1.1\\r\\n\\r\\n' | \
+             nc -w 3 127.0.0.1 3128 2>&1; true",
+            Some(&env),
+            None,
+        )
+        .await;
+        assert!(forged.stdout.starts_with("HTTP/1.1 400"), "{}", forged.stdout);
+        assert!(forged.stdout.contains("identity_not_accepted"), "{}", forged.stdout);
+        assert_eq!(fixture.authority.events().len(), before);
+        drop(grant);
+    })
+    .await;
+}
+
+/// The probe for `hardened_commands_run_under_the_seccomp_filter`: each
+/// call's result, or its errno's name.
+const SYSCALL_PROBE: &str = r#"
+import ctypes, errno, platform
+libc = ctypes.CDLL(None, use_errno=True)
+arm = platform.machine() == "aarch64"
+numbers = {
+    "ptrace": 117 if arm else 101,
+    "process_vm_readv": 270 if arm else 310,
+    "keyctl": 219 if arm else 250,
+    "unshare_user": 97 if arm else 272,
+    "clone3": 435,
+    "io_uring_setup": 425,
+    "userfaultfd": 282 if arm else 323,
+    "bpf": 280 if arm else 321,
+}
+arguments = {
+    "ptrace": (0, 0, 0, 0),
+    "process_vm_readv": (__import__("os").getpid(), None, 0, None, 0, 0),
+    "keyctl": (0, 0, 0, 0, 0),
+    "unshare_user": (0x10000000,),
+    "clone3": (None, 0),
+    "io_uring_setup": (1, ctypes.create_string_buffer(120)),
+    "userfaultfd": (0,),
+    "bpf": (5, None, 0),
+}
+for name, number in numbers.items():
+    values = [ctypes.c_long(value) if isinstance(value, int) else value for value in arguments[name]]
+    result = libc.syscall(ctypes.c_long(number), *values)
+    error = ctypes.get_errno()
+    print(f"{name}={result if result >= 0 else errno.errorcode.get(error, error)}")
+"#;
+
+/// Gap 4, seccomp (J3): a hardened Session's writers' and helpers' commands
+/// run under the supervisor's seccomp filter (one more filter than Podman's
+/// own), which refuses ptrace, cross-process memory, keyrings, new user
+/// namespaces, clone3 and io_uring, while Git, Python, Perl, Cargo, Node and
+/// npm in a curated image still work. The same user without the supervisor
+/// (as a terminal runs) is not filtered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test workload_podman -- --ignored --test-threads=1"]
+async fn hardened_commands_run_under_the_seccomp_filter() {
+    // Case 9: case 8's subnet would be Podman's default network's.
+    with_fixture(9, |fixture| async move {
+        let session = session_name();
+        let sandbox = fixture
+            .start_image(
+                &session,
+                &image("AXO_WORKLOAD_CURATED_IMAGE", CURATED_IMAGE),
+                &[],
+                &[],
+                fixture.policy(Some(USERS)),
+            )
+            .await;
+        let container = format!("axo-ses-{session}");
+        let probe = format!(
+            "probe=/tmp/probe-$(id -u).py; cat > $probe <<'PROBE'\n{SYSCALL_PROBE}\nPROBE\n\
+             python3 $probe; grep -E '^(Seccomp_filters|NoNewPrivs):' /proc/self/status; \
+             unshare -U true 2>&1; echo unshare=$?"
+        );
+        let baseline = seccomp_filters(&container, "1000:1000").await;
+        for identity in [ExecIdentity::Writer, ExecIdentity::Helper] {
+            let ran = supervised(sandbox.as_ref(), identity, &probe, None, None).await;
+            let seen: Vec<&str> = ran.stdout.lines().collect();
+            for expected in [
+                "ptrace=EPERM",
+                "process_vm_readv=EPERM",
+                "keyctl=EPERM",
+                "unshare_user=EPERM",
+                "clone3=ENOSYS",
+                "io_uring_setup=ENOSYS",
+                "userfaultfd=EPERM",
+                "bpf=EPERM",
+                "NoNewPrivs:\t1",
+                "unshare=1",
+            ] {
+                assert!(seen.contains(&expected), "{identity:?}: {expected}: {}", ran.stdout);
+            }
+            assert!(
+                seen.contains(&format!("Seccomp_filters:\t{}", baseline + 1).as_str()),
+                "{identity:?}: {}",
+                ran.stdout
+            );
+            assert!(ran.stdout.contains("Operation not permitted"), "{}", ran.stdout);
+        }
+        // The same user outside the supervisor (as terminals run): only
+        // Podman's profile, which allows what the filter refuses here.
+        let unfiltered = podman_ok(&[
+            "exec", "--user", "1000:1000", &container, "sh", "-c",
+            "python3 /tmp/probe-1000.py; unshare -U true; echo unshare=$?",
+        ])
+        .await;
+        for expected in ["ptrace=0", "process_vm_readv=0", "unshare_user=0", "clone3=EINVAL", "unshare=0"] {
+            assert!(unfiltered.lines().any(|line| line == expected), "{expected}: {unfiltered}");
+        }
+        assert!(!unfiltered.contains("keyctl=EPERM"), "{unfiltered}");
+
+        // Ordinary work still runs under the filter: Git in the Workspace,
+        // Python with threads and a child process, Perl, Bash, Cargo, and
+        // Node and npm (copied from the Node image, same C library).
+        let node_from = format!("axo-workload-node-{}", std::process::id());
+        podman_ok(&["create", "--name", &node_from, "--label", &fixture.label, NODE_IMAGE]).await;
+        podman_ok(&["exec", "--user", "0", &container, "mkdir", "-p", "/opt/node/bin", "/opt/node/lib/node_modules"]).await;
+        for (from, to) in [
+            ("/usr/local/bin/node", "/opt/node/bin/node"),
+            ("/usr/local/lib/node_modules/npm", "/opt/node/lib/node_modules/npm"),
+        ] {
+            podman_ok(&["cp", &format!("{node_from}:{from}"), &format!("{container}:{to}")]).await;
+        }
+        podman_ok(&["rm", &node_from]).await;
+        let work = supervised(
+            sandbox.as_ref(),
+            ExecIdentity::Writer,
+            "set -e; git init -q . && git add public.txt && git status --short public.txt; \
+             python3 -c 'import subprocess, threading; t = threading.Thread(target=lambda: None); t.start(); t.join(); subprocess.run([\"true\"], check=True); print(\"python ok\")'; \
+             perl -e 'print \"perl ok\\n\"'; bash -c 'echo bash ok'; cargo --version >/dev/null && echo cargo ok; \
+             /opt/node/bin/node -e \"require('child_process').execSync('true'); new (require('worker_threads').Worker)('1',{eval:true}).on('exit',c=>{console.log('node ok');process.exit(c)})\"; \
+             PATH=/opt/node/bin:$PATH /opt/node/bin/node /opt/node/lib/node_modules/npm/bin/npm-cli.js --version >/dev/null && echo npm ok",
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(work.code, 0, "{}\n{}", work.stdout, work.stderr);
+        assert_eq!(
+            work.stdout.lines().collect::<Vec<_>>(),
+            ["A  public.txt", "python ok", "perl ok", "bash ok", "cargo ok", "node ok", "npm ok"],
+            "{}",
+            work.stderr
+        );
+        // Terminals run as the writer without the filter.
+        let terminal = Sandbox::spawn_terminal(
+            sandbox.as_ref(),
+            "grep '^Seccomp_filters:' /proc/self/status; sleep 5",
+            24,
+            80,
+        )
+        .await
+        .unwrap();
+        let expected = format!("Seccomp_filters:\t{baseline}");
+        let mut seen = String::new();
+        for _ in 0..50 {
+            seen = String::from_utf8_lossy(&terminal.snapshot()).into_owned();
+            if seen.contains(&expected) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(Sandbox::kill_terminal(sandbox.as_ref(), &terminal.id));
+        assert!(seen.contains(&expected), "terminal: {seen:?}");
     })
     .await;
 }

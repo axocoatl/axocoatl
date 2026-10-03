@@ -2,8 +2,10 @@
 //!
 //! Each activation of a turn gets one `network` evidence item when its tool
 //! calls' credentials opened, or were refused, connections: a one-line
-//! summary such as `registry.npmjs.org:443 allowed ×3 (1.2 MB in);
-//! evil.test:443 refused (not_allowed)`, followed by the requests made on
+//! summary such as `registry.npmjs.org:443 allowed ×3 (1.2 MB in) by node;
+//! evil.test:443 refused (not_allowed) by curl` (the programs are named in
+//! hardened egress Sessions, whose record holds each connection's `peer`),
+//! followed by the requests made on
 //! routes (`github.com POST /acme/app.git/git-receive-pack 200 (credential
 //! github)`), and up to 200 of the recorded `open`, `close`, `request`,
 //! `response` and `web` lines. Events are joined to an activation
@@ -15,10 +17,10 @@
 //! The index folds each Session's record incrementally: a request reads only
 //! the events appended since the last one.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use axocoatl_session::network_record::{
-    Decision, NetworkEvent, NetworkLine, ResponseOutcome, MAX_READ_LIMIT,
+    Decision, NetworkEvent, NetworkLine, PeerIdentity, ResponseOutcome, MAX_READ_LIMIT,
 };
 use serde_json::{json, Value};
 
@@ -35,6 +37,55 @@ const MAX_SUMMARY_DESTINATIONS: usize = 8;
 const MAX_SUMMARY_REQUESTS: usize = 8;
 /// Most route requests kept per tool call for the summary.
 const MAX_KEPT_REQUESTS: usize = 64;
+/// Most program names kept per destination for the summary.
+const MAX_SUMMARY_PROGRAMS: usize = 4;
+
+/// The file name of the program behind a connection, when its record names
+/// one.
+fn program_name(peer: Option<&PeerIdentity>) -> Option<String> {
+    let exe = peer?.exe.as_deref()?;
+    let name = exe.rsplit('/').next().filter(|name| !name.is_empty())?;
+    Some(name.chars().take(64).collect())
+}
+
+/// Program names seen for one destination, bounded.
+#[derive(Debug, Default, Clone)]
+struct Programs {
+    names: BTreeSet<String>,
+    more: bool,
+}
+
+impl Programs {
+    fn add(&mut self, name: String) {
+        if self.names.contains(&name) {
+            return;
+        }
+        if self.names.len() < MAX_SUMMARY_PROGRAMS {
+            self.names.insert(name);
+        } else {
+            self.more = true;
+        }
+    }
+
+    fn merge(&mut self, other: &Programs) {
+        for name in &other.names {
+            self.add(name.clone());
+        }
+        self.more |= other.more;
+    }
+
+    /// ` by curl, git` (or nothing).
+    fn suffix(&self) -> String {
+        if self.names.is_empty() {
+            return String::new();
+        }
+        let mut names: Vec<&str> = self.names.iter().map(String::as_str).collect();
+        if self.more {
+            names.push("others");
+        }
+        format!(" by {}", names.join(", "))
+    }
+}
 
 #[derive(Debug, Default, Clone)]
 struct Allowed {
@@ -47,6 +98,10 @@ struct Allowed {
 struct InvocationNetwork {
     allowed: BTreeMap<String, Allowed>,
     refused: BTreeMap<(String, String), u64>,
+    /// Programs that opened the allowed connections, per destination.
+    allowed_programs: BTreeMap<String, Programs>,
+    /// Programs whose connections were refused, per destination and reason.
+    refused_programs: BTreeMap<(String, String), Programs>,
     web: u64,
     /// Route requests, in order, such as `github.com GET /x 200`.
     requests: Vec<String>,
@@ -104,6 +159,7 @@ impl Folded {
         match &line.event {
             NetworkEvent::Open {
                 conn,
+                peer,
                 decision,
                 reason,
                 host,
@@ -116,20 +172,33 @@ impl Folded {
                     return;
                 };
                 let destination = format!("{host}:{port}");
+                let program = program_name(peer.as_ref());
                 let entry = self.invocations.entry(invocation.clone()).or_default();
                 match decision {
                     Decision::Allow => {
                         entry.allowed.entry(destination.clone()).or_default().count += 1;
+                        if let Some(program) = program {
+                            entry
+                                .allowed_programs
+                                .entry(destination.clone())
+                                .or_default()
+                                .add(program);
+                        }
                         self.open.insert(conn.clone(), (invocation, destination));
                     }
                     Decision::Deny => {
-                        *entry
-                            .refused
-                            .entry((
-                                destination,
-                                reason.clone().unwrap_or_else(|| "refused".into()),
-                            ))
-                            .or_default() += 1;
+                        let key = (
+                            destination,
+                            reason.clone().unwrap_or_else(|| "refused".into()),
+                        );
+                        if let Some(program) = program {
+                            entry
+                                .refused_programs
+                                .entry(key.clone())
+                                .or_default()
+                                .add(program);
+                        }
+                        *entry.refused.entry(key).or_default() += 1;
                     }
                 }
                 entry.keep(line);
@@ -223,18 +292,22 @@ fn megabytes(bytes: u64) -> String {
 /// The summary line for one activation's network activity.
 fn summarize(network: &InvocationNetwork) -> String {
     let mut parts = Vec::new();
+    let programs = |found: Option<&Programs>| found.map(Programs::suffix).unwrap_or_default();
     for (destination, allowed) in &network.allowed {
         parts.push(format!(
-            "{destination} allowed ×{} ({} in)",
+            "{destination} allowed ×{} ({} in){}",
             allowed.count,
-            megabytes(allowed.down)
+            megabytes(allowed.down),
+            programs(network.allowed_programs.get(destination))
         ));
     }
-    for ((destination, reason), count) in &network.refused {
+    for (key, count) in &network.refused {
+        let (destination, reason) = key;
+        let by = programs(network.refused_programs.get(key));
         parts.push(if *count == 1 {
-            format!("{destination} refused ({reason})")
+            format!("{destination} refused ({reason}){by}")
         } else {
-            format!("{destination} refused ×{count} ({reason})")
+            format!("{destination} refused ×{count} ({reason}){by}")
         });
     }
     let more = parts.len().saturating_sub(MAX_SUMMARY_DESTINATIONS);
@@ -270,6 +343,18 @@ fn merge(into: &mut InvocationNetwork, from: &InvocationNetwork) {
     }
     for (key, count) in &from.refused {
         *into.refused.entry(key.clone()).or_default() += count;
+    }
+    for (destination, programs) in &from.allowed_programs {
+        into.allowed_programs
+            .entry(destination.clone())
+            .or_default()
+            .merge(programs);
+    }
+    for (key, programs) in &from.refused_programs {
+        into.refused_programs
+            .entry(key.clone())
+            .or_default()
+            .merge(programs);
     }
     into.web += from.web;
     for request in &from.requests {
@@ -539,6 +624,78 @@ mod tests {
         };
         assert_eq!(details["events"].as_array().unwrap().len(), 3);
         assert_eq!(details["truncated"], false);
+    }
+
+    /// In a hardened egress Session the summary names the programs behind
+    /// each destination, bounded; identities without a path add nothing.
+    #[test]
+    fn summaries_name_the_programs_behind_connections() {
+        let with_peer = |mut line: NetworkLine, exe: Option<&str>| {
+            if let NetworkEvent::Open { peer, .. } = &mut line.event {
+                *peer = Some(PeerIdentity {
+                    pid: Some(7),
+                    uid: Some(1000),
+                    exe: exe.map(str::to_string),
+                    error: exe.is_none().then(|| "foreign_namespace".into()),
+                    ..PeerIdentity::default()
+                });
+            }
+            line
+        };
+        let mut folded = Folded::default();
+        for line in [
+            with_peer(
+                open(1, "g1:1", "registry.npmjs.org", true, Some("tool-a")),
+                Some("/usr/local/bin/node"),
+            ),
+            close(2, "g1:1", 2048),
+            with_peer(
+                open(3, "g1:2", "registry.npmjs.org", true, Some("tool-a")),
+                Some("/usr/local/bin/node"),
+            ),
+            with_peer(
+                open(4, "g1:3", "registry.npmjs.org", true, Some("tool-a")),
+                Some("/usr/bin/curl"),
+            ),
+            with_peer(
+                open(5, "g1:4", "registry.npmjs.org", true, Some("tool-a")),
+                None,
+            ),
+            with_peer(
+                open(6, "g1:5", "evil.test", false, Some("tool-a")),
+                Some("/usr/bin/curl"),
+            ),
+            open(7, "g1:6", "plain.test", false, Some("tool-a")),
+        ] {
+            folded.fold(&line);
+        }
+        assert_eq!(
+            summarize(&folded.invocations["tool-a"]),
+            "registry.npmjs.org:443 allowed ×4 (2.0 KB in) by curl, node; \
+             evil.test:443 refused (not_allowed) by curl; plain.test:443 refused (not_allowed)"
+        );
+        let mut many = Programs::default();
+        for name in ["a", "b", "c", "d", "e", "a"] {
+            many.add(name.into());
+        }
+        assert_eq!(many.suffix(), " by a, b, c, d, others");
+        let mut merged = InvocationNetwork::default();
+        merge(&mut merged, &folded.invocations["tool-a"]);
+        merge(&mut merged, &folded.invocations["tool-a"]);
+        assert!(
+            summarize(&merged)
+                .starts_with("registry.npmjs.org:443 allowed ×8 (4.0 KB in) by curl, node;"),
+            "{}",
+            summarize(&merged)
+        );
+        assert_eq!(program_name(None), None);
+        assert_eq!(
+            program_name(Some(&PeerIdentity {
+                exe: Some("/".into()),
+                ..PeerIdentity::default()
+            })),
+            None
+        );
     }
 
     #[test]

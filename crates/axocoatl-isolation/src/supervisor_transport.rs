@@ -273,9 +273,27 @@ impl SessionSandbox {
             .arg("-w")
             .arg(root)
             .arg(&runtime)
-            .args(["/axocoatl-exec-supervisor", "--serve"]);
+            .args(supervisor_serve_args(
+                self.workload_users().is_some(),
+                identity,
+            ));
         Ok((command, runtime, program.sha256().to_owned()))
     }
+}
+
+/// The supervisor's arguments for one supervised exec. In a hardened
+/// container the workload users' commands (writers' and helpers') get
+/// `--harden`: no new privileges, the supervisor's seccomp denylist and a
+/// Landlock domain of their own. Root's (readiness and provisioning) do not.
+fn supervisor_serve_args(hardened: bool, identity: crate::ExecIdentity) -> Vec<&'static str> {
+    let mut args = vec![
+        crate::supervisor_program::SUPERVISOR_CONTAINER_PATH,
+        "--serve",
+    ];
+    if hardened && identity != crate::ExecIdentity::Root {
+        args.push("--harden");
+    }
+    args
 }
 
 async fn prepare_command(

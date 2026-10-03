@@ -680,3 +680,27 @@ printf dispatched > "$MARKER"
     );
     assert!(!marker.exists());
 }
+
+/// J3: in a hardened container the workload users' supervised commands run
+/// under `--harden`; root's, and every command of an image-mode container,
+/// run without it.
+#[test]
+fn only_the_workload_users_commands_of_a_hardened_container_are_hardened() {
+    use crate::ExecIdentity::{Helper, Root, Writer};
+    for identity in [Writer, Helper] {
+        assert_eq!(
+            supervisor_serve_args(true, identity),
+            ["/axocoatl-exec-supervisor", "--serve", "--harden"]
+        );
+        assert_eq!(
+            supervisor_serve_args(false, identity),
+            ["/axocoatl-exec-supervisor", "--serve"]
+        );
+    }
+    for hardened in [true, false] {
+        assert_eq!(
+            supervisor_serve_args(hardened, Root),
+            ["/axocoatl-exec-supervisor", "--serve"]
+        );
+    }
+}

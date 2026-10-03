@@ -388,12 +388,23 @@ pub enum ExecIdentity {
 /// The writer user's home directory in a hardened Session container.
 pub const WRITER_HOME: &str = "/home/axocoatl";
 /// A root-only (0700) tmpfs in a hardened egress Session container. The
-/// egress socket's volume is mounted inside it, so only PID 1 reaches it.
+/// proxy's identity socket volume is mounted inside it, so only PID 1 reaches
+/// it.
 pub const HARDENED_RUN_DIR: &str = "/run/axocoatl";
-/// Where a hardened egress Session container mounts the egress socket volume.
+/// Where a hardened egress Session container mounts the proxy's identity
+/// socket volume (`axo-egi-{session}`).
 pub const HARDENED_EGRESS_SOCKET_DIR: &str = "/run/axocoatl/egress";
-/// The proxy socket in a hardened egress Session container.
-pub const HARDENED_EGRESS_PROXY_SOCKET: &str = "/run/axocoatl/egress/proxy.sock";
+/// The proxy's identity socket in a hardened egress Session container. PID 1
+/// (`--peer-identity`) starts every connection on it with the identity of the
+/// program that opened it; the proxy accepts no connection there without one.
+pub const HARDENED_EGRESS_IDENTITY_SOCKET: &str = "/run/axocoatl/egress/identity.sock";
+
+/// Capabilities a hardened egress Session container keeps that others drop:
+/// PID 1 needs `SYS_PTRACE` to read the `/proc/<pid>/fd` and `exe` of the
+/// workload users' processes when it names the program behind a connection.
+/// `podman exec` gives the workload users no capabilities, and
+/// no-new-privileges keeps them from gaining any.
+const HARDENED_EGRESS_KEPT_CAPS: &[&str] = &["SYS_PTRACE"];
 
 /// `podman exec` options that select the user for `identity`. Without
 /// workload users only root is named; the image's user runs the rest.
@@ -1280,8 +1291,14 @@ impl SessionSandbox {
         let mut egress_image = None;
         if let Some(parent) = &shared_sidecar {
             // The Session's own start created the volume that holds its
-            // proxy's socket; without it there is no proxy to share.
-            let volume = crate::egress_sidecar::egress_volume_name(parent);
+            // proxy's socket; without it there is no proxy to share. A
+            // hardened attempt uses the identity socket's volume, which only
+            // a hardened Session's proxy has.
+            let volume = if workload.is_some() {
+                crate::egress_sidecar::identity_volume_name(parent)
+            } else {
+                crate::egress_sidecar::egress_volume_name(parent)
+            };
             let mut exists = Command::new(PODMAN);
             exists.args(["volume", "exists", &volume]);
             let output = Self::run_bounded_command(exists, NAMED_REMOVE_PROBE_TIMEOUT).await?;
@@ -1315,7 +1332,9 @@ impl SessionSandbox {
                 })?;
             let image = crate::egress_image::ensure_egress_image(program).await?;
             egress_image = Some(image.clone());
-            let sidecar = crate::egress_sidecar::EgressSidecar::start(
+            // A hardened Session's container reaches the proxy only through
+            // its identity socket, so every connection names its program.
+            let sidecar = crate::egress_sidecar::EgressSidecar::start_with_options(
                 crate::egress_sidecar::SidecarSpec {
                     session_id: session_id.to_string(),
                     runtime_authority: policy.runtime_authority.clone(),
@@ -1325,8 +1344,12 @@ impl SessionSandbox {
                     require_resource_limits: policy.require_resource_limits,
                     labels: attachment.labels.clone(),
                 },
+                crate::egress_sidecar::SidecarOptions {
+                    identity_socket: workload.is_some(),
+                },
                 attachment.authority.clone(),
                 crate::egress_control::ControlTiming::default(),
+                crate::egress_sidecar::RestartPolicy::default(),
             )
             .await?;
             sidecar_guard.0 = Some(Arc::new(sidecar));
@@ -2975,14 +2998,36 @@ impl SessionSandbox {
             ));
         }
 
+        let workload = policy.workload.filter(|_| !policy.passive_start);
+        let network = if policy.passive_start {
+            SandboxNetwork::None
+        } else {
+            policy.network
+        };
+        let egress = network == SandboxNetwork::Egress;
+        // A hardened egress container's PID 1 names the program behind each
+        // proxied connection (see `HARDENED_EGRESS_IDENTITY_SOCKET`).
+        let peer_identity = egress && workload.is_some();
+
         // Always-on hardening — safe for normal dev workflows:
         //   * no-new-privileges: setuid binaries can't escalate beyond the
         //     starting cap set.
         //   * drop escape/recon capabilities the container never needs.
         args.push("--security-opt=no-new-privileges".into());
         for cap in DROPPED_CAPS {
+            if peer_identity && HARDENED_EGRESS_KEPT_CAPS.contains(cap) {
+                continue;
+            }
             args.push("--cap-drop".into());
             args.push((*cap).into());
+        }
+        if peer_identity {
+            // Not in Podman's default set. Only PID 1 and root's execs
+            // (readiness and provisioning) hold it.
+            for cap in HARDENED_EGRESS_KEPT_CAPS {
+                args.push("--cap-add".into());
+                args.push((*cap).into());
+            }
         }
         // Podman copies the host's proxy variables (`HTTP_PROXY`, ...) into
         // the container by default, and they can carry credentials.
@@ -2991,7 +3036,6 @@ impl SessionSandbox {
         // users can stop it or stand in for it, and every exec names its
         // user. `keep-id` maps the Workspace owner to the writer's id, so
         // the writer, not root, owns and changes it.
-        let workload = policy.workload.filter(|_| !policy.passive_start);
         if let Some(users) = &workload {
             args.push("--user".into());
             args.push("0:0".into());
@@ -3004,11 +3048,6 @@ impl SessionSandbox {
         // Network posture. Bridge is podman's default (no flag needed); `none`
         // cuts off all networking for untrusted code. Publishing ports requires
         // a network, so drop port mapping when networking is off.
-        let network = if policy.passive_start {
-            SandboxNetwork::None
-        } else {
-            policy.network
-        };
         let ports: &[u16] = match network {
             // Egress has no interface but loopback either; its way out is
             // the proxy socket below, served on loopback by PID 1.
@@ -3019,33 +3058,35 @@ impl SessionSandbox {
             }
             SandboxNetwork::Bridge => ports,
         };
-        let egress = network == SandboxNetwork::Egress;
         // The port sockets are never mounted here: the service forwarder
         // serves them from a container of its own.
         let proxy_socket = if egress {
             // A Ways attempt mounts its Session's socket volume.
-            let volume = crate::egress_sidecar::egress_volume_name(
-                policy
-                    .shared_sidecar_session
-                    .as_deref()
-                    .unwrap_or(session_id),
-            );
-            if workload.is_some() {
+            let proxy_session = policy
+                .shared_sidecar_session
+                .as_deref()
+                .unwrap_or(session_id);
+            if peer_identity {
                 // Root-only: the workload users have no path to the socket,
-                // so their only way to the proxy is PID 1's TCP listener.
+                // so their only way to the proxy is PID 1's TCP listener. The
+                // volume holds only the proxy's identity socket, where every
+                // connection starts with PID 1's identity line; the ordinary
+                // socket (the browser's) is not mounted here at all.
                 args.push("--mount".into());
                 args.push(format!(
                     "type=tmpfs,destination={HARDENED_RUN_DIR},tmpfs-mode=0700"
                 ));
                 args.push("--mount".into());
                 args.push(format!(
-                    "type=volume,source={volume},destination={HARDENED_EGRESS_SOCKET_DIR},ro=true"
+                    "type=volume,source={},destination={HARDENED_EGRESS_SOCKET_DIR},ro=true",
+                    crate::egress_sidecar::identity_volume_name(proxy_session)
                 ));
-                HARDENED_EGRESS_PROXY_SOCKET
+                HARDENED_EGRESS_IDENTITY_SOCKET
             } else {
                 args.push("--mount".into());
                 args.push(format!(
-                    "type=volume,source={volume},destination={},ro=true",
+                    "type=volume,source={},destination={},ro=true",
+                    crate::egress_sidecar::egress_volume_name(proxy_session),
                     crate::egress_sidecar::EGRESS_SOCKET_DIR
                 ));
                 crate::egress_sidecar::EGRESS_PROXY_SOCKET
@@ -3101,7 +3142,7 @@ impl SessionSandbox {
             args.push("-c".into());
             args.push("exec sleep infinity".into());
         } else if egress {
-            args.extend(Self::egress_bridge_args(proxy_socket));
+            args.extend(Self::egress_bridge_args(proxy_socket, peer_identity));
         } else {
             args.push("sleep".into());
             args.push("infinity".into());
@@ -3111,14 +3152,20 @@ impl SessionSandbox {
 
     /// PID 1's arguments under egress: the proxy at `proxy_socket`, served
     /// on loopback. Nothing else listens; the exposed ports are served by the
-    /// service forwarder.
-    fn egress_bridge_args(proxy_socket: &str) -> Vec<String> {
-        vec![
+    /// service forwarder. With `peer_identity` (the proxy's identity socket),
+    /// PID 1 starts each connection with the identity of the program that
+    /// opened it.
+    fn egress_bridge_args(proxy_socket: &str, peer_identity: bool) -> Vec<String> {
+        let mut args: Vec<String> = vec![
             "--bridge".into(),
             "--tcp-to-unix".into(),
             format!("{}={proxy_socket}", crate::egress_sidecar::PROXY_LISTEN),
             "--http-errors".into(),
-        ]
+        ];
+        if peer_identity {
+            args.push("--peer-identity".into());
+        }
+        args
     }
 
     /// `podman run -d` the idle session container. `with_limits` adds
@@ -4433,7 +4480,8 @@ impl SessionSandbox {
     }
 
     /// Every volume named after these Sessions: the Node dependency volume,
-    /// the egress socket and service-socket volumes, and the trust volume.
+    /// the egress socket, identity socket and service-socket volumes, and the
+    /// trust volume.
     fn session_volume_names(session_ids: &[String]) -> Vec<String> {
         let mut seen = HashSet::new();
         session_ids
@@ -4442,6 +4490,7 @@ impl SessionSandbox {
                 [
                     Self::dependency_volume_name(session_id),
                     crate::egress_sidecar::egress_volume_name(session_id),
+                    crate::egress_sidecar::identity_volume_name(session_id),
                     crate::egress_sidecar::service_volume_name(session_id),
                     crate::session_trust::trust_volume_name(session_id),
                 ]
@@ -6463,6 +6512,7 @@ mod tests {
             [
                 "axo-ses-s1-node-modules",
                 "axo-egr-s1",
+                "axo-egi-s1",
                 "axo-svc-s1",
                 "axo-ca-s1"
             ]
@@ -6554,12 +6604,17 @@ mod tests {
             // The always-on hardening stays.
             assert!(args.contains(&"--security-opt=no-new-privileges".to_string()));
             assert!(args.windows(2).any(|w| w == ["--cap-drop", "SYS_ADMIN"]));
+            let ptrace_dropped = args.windows(2).any(|w| w == ["--cap-drop", "SYS_PTRACE"]);
+            let ptrace_added = args.windows(2).any(|w| w == ["--cap-add", "SYS_PTRACE"]);
             match network {
                 SandboxNetwork::Egress => {
+                    // The proxy's identity socket only, in the root-only
+                    // directory; PID 1 names each connection's program.
                     assert!(joined.contains(
                         "--mount type=tmpfs,destination=/run/axocoatl,tmpfs-mode=0700 \
-                         --mount type=volume,source=axo-egr-ses-h,destination=/run/axocoatl/egress,ro=true"
+                         --mount type=volume,source=axo-egi-ses-h,destination=/run/axocoatl/egress,ro=true"
                     ), "{joined}");
+                    assert!(!joined.contains("axo-egr-"), "{joined}");
                     assert!(!joined.contains("/run/axocoatl-egress"), "{joined}");
                     let image = args.iter().position(|a| a == DEFAULT_IMAGE).unwrap();
                     assert_eq!(
@@ -6567,14 +6622,27 @@ mod tests {
                         [
                             "--bridge",
                             "--tcp-to-unix",
-                            "127.0.0.1:3128=/run/axocoatl/egress/proxy.sock",
+                            "127.0.0.1:3128=/run/axocoatl/egress/identity.sock",
                             "--http-errors",
+                            "--peer-identity",
                         ]
                     );
+                    // PID 1 reads the workload users' /proc entries.
+                    assert!(ptrace_added && !ptrace_dropped, "{joined}");
+                    for cap in DROPPED_CAPS.iter().filter(|cap| **cap != "SYS_PTRACE") {
+                        assert!(
+                            args.windows(2)
+                                .any(|w| w[0] == "--cap-drop" && w[1] == *cap),
+                            "{cap}: {joined}"
+                        );
+                    }
                 }
                 SandboxNetwork::Bridge | SandboxNetwork::None => {
                     assert!(!joined.contains("axo-egr-"), "{joined}");
+                    assert!(!joined.contains("axo-egi-"), "{joined}");
                     assert!(!joined.contains("/run/axocoatl"), "{joined}");
+                    assert!(!joined.contains("--peer-identity"), "{joined}");
+                    assert!(ptrace_dropped && !ptrace_added, "{joined}");
                     assert!(args.ends_with(&["sleep".to_string(), "infinity".to_string()]));
                 }
             }
@@ -6628,9 +6696,13 @@ mod tests {
                                 ..SandboxPolicy::default()
                             },
                         );
+                        // The ordinary proxy socket's volume is never
+                        // mounted; the identity socket's only in the
+                        // root-only directory.
+                        assert!(!args.iter().any(|a| a.contains("axo-egr-")), "{args:?}");
                         let mounts: Vec<&String> = args
                             .windows(2)
-                            .filter(|w| w[0] == "--mount" && w[1].contains("axo-egr-"))
+                            .filter(|w| w[0] == "--mount" && w[1].contains("axo-egi-"))
                             .map(|w| &w[1])
                             .collect();
                         assert_eq!(mounts.len(), 1, "{args:?}");
@@ -6645,10 +6717,20 @@ mod tests {
                         assert!(args[tmpfs].ends_with("tmpfs-mode=0700"));
                         assert!(!args.iter().any(|a| a.contains("/run/axocoatl-egress")));
                         let expected_volume = format!(
-                            "source=axo-egr-{},",
+                            "source=axo-egi-{},",
                             shared.as_deref().unwrap_or("attempt-p-1-0")
                         );
                         assert!(mounts[0].contains(&expected_volume), "{args:?}");
+                        // PID 1 reaches that socket only with each
+                        // connection's identity.
+                        assert!(
+                            args.ends_with(&[
+                                "127.0.0.1:3128=/run/axocoatl/egress/identity.sock".to_string(),
+                                "--http-errors".to_string(),
+                                "--peer-identity".to_string(),
+                            ]),
+                            "{args:?}"
+                        );
                     }
                 }
             }
@@ -6732,7 +6814,7 @@ mod tests {
         sandbox.container_id = Some("immutable-container-id".into());
         sandbox.supervisor_program = Some(installed_test_supervisor(root.path()));
         sandbox.workload = Some(test_users());
-        let argv = |identity| -> Vec<String> {
+        fn argv_of(sandbox: &SessionSandbox, identity: ExecIdentity) -> Vec<String> {
             let (command, _, _) = sandbox
                 .supervisor_transport_command(None, identity)
                 .unwrap();
@@ -6741,7 +6823,8 @@ mod tests {
                 .get_args()
                 .map(|arg| arg.to_string_lossy().into_owned())
                 .collect()
-        };
+        }
+        let argv = |identity| argv_of(&sandbox, identity);
         let writer = argv(ExecIdentity::Writer);
         assert_eq!(
             writer[..6],
@@ -6759,14 +6842,27 @@ mod tests {
             helper[..6],
             ["exec", "-i", "--user", "1001:1001", "--env", "HOME=/tmp"]
         );
+        // Both run under the supervisor's seccomp filter and a Landlock
+        // domain of their own.
         for argv in [&writer, &helper] {
+            assert!(argv.ends_with(&[
+                "immutable-container-id".to_string(),
+                "/axocoatl-exec-supervisor".to_string(),
+                "--serve".to_string(),
+                "--harden".to_string()
+            ]));
+        }
+        assert_eq!(sandbox.workload_users(), Some(test_users()));
+        // Without workload users nothing is hardened.
+        sandbox.workload = None;
+        for identity in [ExecIdentity::Writer, ExecIdentity::Helper] {
+            let argv = argv_of(&sandbox, identity);
             assert!(argv.ends_with(&[
                 "immutable-container-id".to_string(),
                 "/axocoatl-exec-supervisor".to_string(),
                 "--serve".to_string()
             ]));
         }
-        assert_eq!(sandbox.workload_users(), Some(test_users()));
     }
 
     #[test]

@@ -2,7 +2,9 @@ import { adopt } from './sheets.js';
 
 /**
  * `<ax-session-network>`: the Session's network mode, egress policy and
- * network record, with each request on an egress route and how it ended. A
+ * network record: the latest connections, the refused ones, and each request
+ * on an egress route and how it ended. In a hardened egress Session every
+ * row names the program that opened the connection (the record's `peer`). A
  * person can allow a refused host for this Session, and approve or reject
  * the hosts Agents asked for with `request_network_access`.
  *
@@ -16,6 +18,17 @@ import { adopt } from './sheets.js';
 
 const PAGE = 1000;
 const MAX_PAGES = 20;
+/** Most allowed connections listed, newest first. */
+const MAX_CONNECTION_ROWS = 100;
+
+/** Why a connection's program could not be named. */
+const PEER_ERRORS = {
+  no_access: 'The container\'s init process could not look into the process.',
+  not_found: 'No process held the connection any more.',
+  timeout: 'Looking for the process took too long.',
+  foreign_namespace: 'The process ran in a mount namespace of its own, so its path cannot be trusted.',
+  unsupported: 'This system cannot name programs.',
+};
 
 const REASONS = {
   not_allowed: 'Not in the allowlist.',
@@ -70,6 +83,9 @@ table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm, 12.5px);
 th, td { text-align: left; vertical-align: top; padding: 6px 8px 6px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
 th { color: var(--muted); font-weight: 500; }
 code { font-family: var(--font-mono, monospace); font-size: var(--fs-xs, 11px); }
+td.program { width: 40%; }
+td.who { min-width: 8ch; }
+td.destination { min-width: 20ch; }
 @media (max-width: 560px) { thead { display: none; } tr { display: grid; padding: 6px 0; border-top: 1px solid var(--border); }
   td { border: 0; padding: 2px 0; } }
 `;
@@ -97,6 +113,35 @@ function who(binding) {
   return binding.kind || 'unknown';
 }
 
+/** The program behind a connection, as the Session's init process named it. */
+function programOf(peer) {
+  if (!peer) return null;
+  const text = peer.exe || 'unknown program';
+  const details = [];
+  if (peer.uid !== undefined) details.push(`user ${peer.uid}${peer.gid !== undefined ? `:${peer.gid}` : ''}`);
+  if (peer.ancestors?.length) {
+    const [parent, ...rest] = peer.ancestors;
+    details.push(`started by ${parent}${rest.length ? ` (under ${rest.join(', ')})` : ''}`);
+  }
+  if (peer.exe_sha256) details.push(`SHA-256 ${peer.exe_sha256.slice(0, 12)}…`);
+  if (peer.error) details.push(PEER_ERRORS[peer.error] || peer.error);
+  return { text, detail: details.join(' · '), sha256: peer.exe_sha256 || '' };
+}
+
+function programCell(peer) {
+  const cell = element('td', 'program');
+  const program = programOf(peer);
+  if (!program) {
+    cell.append(element('span', 'muted', 'not named'));
+    return cell;
+  }
+  const name = element('code', '', program.text);
+  if (program.sha256) name.title = `SHA-256 ${program.sha256}`;
+  cell.append(name);
+  if (program.detail) cell.append(element('div', 'muted', program.detail));
+  return cell;
+}
+
 function bytes(count) {
   if (count >= 1024 * 1024) return `${(count / (1024 * 1024)).toFixed(1)} MB`;
   if (count >= 1024) return `${(count / 1024).toFixed(1)} KB`;
@@ -105,24 +150,42 @@ function bytes(count) {
 
 /** Fold network record lines into what the panel shows. Exported for tests. */
 export function summarizeNetwork(lines) {
-  const summary = { allowed: 0, refused: 0, bytesIn: 0, bytesOut: 0, refusedRows: [], web: [], requests: [] };
+  const summary = {
+    allowed: 0, refused: 0, bytesIn: 0, bytesOut: 0, refusedRows: [], web: [], requests: [],
+    connections: [], moreConnections: 0, programs: false,
+  };
   const owners = new Map();
+  const peers = new Map();
   const responses = new Map();
+  const closes = new Map();
   for (const line of lines) {
     const event = line?.event;
     if (!event) continue;
-    if (event.kind === 'open') owners.set(event.conn, who(event.binding));
+    if (event.kind === 'open') {
+      owners.set(event.conn, who(event.binding));
+      if (event.peer) { peers.set(event.conn, event.peer); summary.programs = true; }
+    }
     if (event.kind === 'request') summary.requests.push({ seq: line.seq, at: line.ts_ms, ...event });
     if (event.kind === 'response') responses.set(`${event.conn}#${event.seq_in_conn}`, event);
-    if (event.kind === 'open' && event.decision === 'allow') summary.allowed += 1;
+    if (event.kind === 'open' && event.decision === 'allow') {
+      summary.allowed += 1;
+      summary.connections.push({
+        seq: line.seq, at: line.ts_ms, conn: event.conn, who: who(event.binding), host: event.host,
+        port: event.port, rule: event.rule || null, peer: event.peer || null,
+      });
+    }
     if (event.kind === 'open' && event.decision === 'deny') {
       summary.refused += 1;
       summary.refusedRows.push({
         seq: line.seq, at: line.ts_ms, who: who(event.binding), host: event.host, port: event.port,
-        reason: event.reason || 'refused', scope: event.scope || null,
+        reason: event.reason || 'refused', scope: event.scope || null, peer: event.peer || null,
       });
     }
-    if (event.kind === 'close') { summary.bytesIn += event.down || 0; summary.bytesOut += event.up || 0; }
+    if (event.kind === 'close') {
+      summary.bytesIn += event.down || 0;
+      summary.bytesOut += event.up || 0;
+      closes.set(event.conn, event);
+    }
     if (event.kind === 'web') summary.web.push({ seq: line.seq, at: line.ts_ms, ...event });
   }
   summary.refusedRows.reverse();
@@ -130,8 +193,14 @@ export function summarizeNetwork(lines) {
     .map((request) => ({
       ...request,
       who: owners.get(request.conn) || 'unknown',
+      peer: peers.get(request.conn) || null,
       response: responses.get(`${request.conn}#${request.seq_in_conn}`) || null,
     }))
+    .reverse();
+  summary.moreConnections = Math.max(0, summary.connections.length - MAX_CONNECTION_ROWS);
+  summary.connections = summary.connections
+    .slice(-MAX_CONNECTION_ROWS)
+    .map((connection) => ({ ...connection, close: closes.get(connection.conn) || null }))
     .reverse();
   return summary;
 }
@@ -298,6 +367,40 @@ class AxSessionNetwork extends HTMLElement {
       body.append(table);
     }
 
+    const programs = summary.programs;
+    if (summary.connections.length) {
+      body.append(element('h3', '', 'Connections'));
+      body.append(element('p', 'muted', programs
+        ? 'The latest allowed connections, newest first. The program is the one the Session container\'s init process found holding the connection when it opened.'
+        : 'The latest allowed connections, newest first.'));
+      const table = element('table', 'connections');
+      const head = element('thead');
+      const headRow = element('tr');
+      for (const label of ['Time', 'Agent', ...(programs ? ['Program'] : []), 'Destination', 'Traffic']) headRow.append(element('th', '', label));
+      head.append(headRow);
+      const rows = element('tbody');
+      for (const connection of summary.connections) {
+        const tr = element('tr');
+        tr.dataset.seq = String(connection.seq);
+        tr.dataset.conn = connection.conn;
+        tr.append(element('td', 'muted', when(connection.at)), element('td', 'who', connection.who));
+        if (programs) tr.append(programCell(connection.peer));
+        const destination = element('td', 'destination', `${connection.host}:${connection.port}`);
+        if (connection.rule) destination.append(element('div', 'muted', connection.rule));
+        tr.append(destination);
+        const close = connection.close;
+        tr.append(element('td', close ? '' : 'muted', close
+          ? `${bytes(close.down || 0)} received, ${bytes(close.up || 0)} sent`
+          : 'open'));
+        rows.append(tr);
+      }
+      table.append(head, rows);
+      body.append(table);
+      if (summary.moreConnections) {
+        body.append(element('p', 'muted', `${summary.moreConnections} earlier connection${summary.moreConnections === 1 ? '' : 's'} not shown.`));
+      }
+    }
+
     body.append(element('h3', '', 'Refused connections'));
     if (!summary.refusedRows.length) {
       body.append(element('p', 'muted', 'None recorded.'));
@@ -305,14 +408,15 @@ class AxSessionNetwork extends HTMLElement {
       const table = element('table', 'refused');
       const head = element('thead');
       const headRow = element('tr');
-      for (const label of ['Time', 'Agent', 'Destination', 'Reason', '']) headRow.append(element('th', '', label));
+      for (const label of ['Time', 'Agent', ...(programs ? ['Program'] : []), 'Destination', 'Reason', '']) headRow.append(element('th', '', label));
       head.append(headRow);
       const rows = element('tbody');
       for (const row of summary.refusedRows) {
         const tr = element('tr');
         tr.dataset.seq = String(row.seq);
-        tr.append(element('td', 'muted', when(row.at)), element('td', '', row.who),
-          element('td', '', `${row.host}:${row.port}`));
+        tr.append(element('td', 'muted', when(row.at)), element('td', 'who', row.who));
+        if (programs) tr.append(programCell(row.peer));
+        tr.append(element('td', 'destination', `${row.host}:${row.port}`));
         const reason = element('td');
         reason.append(element('code', '', row.reason), element('div', 'muted', REASONS[row.reason] || ''));
         tr.append(reason);
@@ -339,15 +443,16 @@ class AxSessionNetwork extends HTMLElement {
       const table = element('table', 'requests');
       const head = element('thead');
       const headRow = element('tr');
-      for (const label of ['Time', 'Agent', 'Request', 'Result']) headRow.append(element('th', '', label));
+      for (const label of ['Time', 'Agent', ...(programs ? ['Program'] : []), 'Request', 'Result']) headRow.append(element('th', '', label));
       head.append(headRow);
       const rows = element('tbody');
       for (const request of summary.requests) {
         const tr = element('tr');
         tr.dataset.seq = String(request.seq);
         tr.dataset.decision = request.decision;
-        tr.append(element('td', 'muted', when(request.at)), element('td', '', request.who),
-          element('td', '', `${request.method} ${request.host}${request.path}`));
+        tr.append(element('td', 'muted', when(request.at)), element('td', 'who', request.who));
+        if (programs) tr.append(programCell(request.peer));
+        tr.append(element('td', '', `${request.method} ${request.host}${request.path}`));
         const result = element('td');
         if (request.decision === 'allow') {
           const response = request.response;
