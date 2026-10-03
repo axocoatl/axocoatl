@@ -17,6 +17,7 @@ fn route_open(seq: u64, conn: &str, invocation: &str) -> NetworkLine {
         seq,
         NetworkEvent::Open {
             conn: conn.into(),
+            peer: None,
             decision: Decision::Allow,
             reason: None,
             status: None,

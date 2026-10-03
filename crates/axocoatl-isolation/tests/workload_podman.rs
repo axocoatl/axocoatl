@@ -167,7 +167,7 @@ impl EgressAuthority for FakeAuthority {
             Decision::deny(403, "not_allowed", "not allowed")
         };
         let status = match &decision {
-            Decision::Allow { .. } => None,
+            Decision::Allow { .. } | Decision::Relay => None,
             Decision::Deny { status, .. } => Some(*status),
         };
         self.state.lock().unwrap().events.push(Event::Open {
