@@ -1,0 +1,134 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "@astrojs/mdx": {
+      "name": "@astrojs/mdx",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "astro"
+      ],
+      "effects": [],
+      "range": "<=0.0.0-vercel-upgrade-20230905174957 || >=1.0.0-beta.0",
+      "nodes": [
+        "node_modules/@astrojs/mdx"
+      ],
+      "fixAvailable": true
+    },
+    "@astrojs/starlight": {
+      "name": "@astrojs/starlight",
+      "severity": "high",
+      "isDirect": true,
+      "via": [
+        "@astrojs/mdx",
+        "astro",
+        "astro-expressive-code"
+      ],
+      "effects": [],
+      "range": ">=0.9.0",
+      "nodes": [
+        "node_modules/@astrojs/starlight"
+      ],
+      "fixAvailable": {
+        "name": "@astrojs/starlight",
+        "version": "0.8.1",
+        "isSemVerMajor": true
+      }
+    },
+    "astro": {
+      "name": "astro",
+      "severity": "high",
+      "isDirect": true,
+      "via": [
+        "http-cache-semantics"
+      ],
+      "effects": [
+        "@astrojs/mdx",
+        "@astrojs/starlight",
+        "astro-expressive-code"
+      ],
+      "range": "<=0.0.0-head-body-content-20240329190922 || >=2.10.10",
+      "nodes": [
+        "node_modules/astro"
+      ],
+      "fixAvailable": {
+        "name": "astro",
+        "version": "2.10.9",
+        "isSemVerMajor": true
+      }
+    },
+    "astro-expressive-code": {
+      "name": "astro-expressive-code",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "astro"
+      ],
+      "effects": [
+        "@astrojs/starlight"
+      ],
+      "range": ">=0.30.0",
+      "nodes": [
+        "node_modules/astro-expressive-code"
+      ],
+      "fixAvailable": {
+        "name": "@astrojs/starlight",
+        "version": "0.8.1",
+        "isSemVerMajor": true
+      }
+    },
+    "http-cache-semantics": {
+      "name": "http-cache-semantics",
+      "severity": "high",
+      "isDirect": true,
+      "via": [
+        {
+          "source": 1240991,
+          "name": "http-cache-semantics",
+          "dependency": "http-cache-semantics",
+          "title": "http-cache-semantics max-stale handling can disclose cross-user cached responses",
+          "url": "https://github.com/advisories/GHSA-ch52-4w7c-c8xp",
+          "severity": "high",
+          "cwe": [
+            "CWE-524"
+          ],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+          },
+          "range": "<=4.2.0"
+        }
+      ],
+      "effects": [
+        "astro"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/http-cache-semantics"
+      ],
+      "fixAvailable": {
+        "name": "astro",
+        "version": "2.10.9",
+        "isSemVerMajor": true
+      }
+    }
+  },
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 5,
+      "critical": 0,
+      "total": 5
+    },
+    "dependencies": {
+      "prod": 353,
+      "dev": 0,
+      "optional": 137,
+      "peer": 2,
+      "peerOptional": 0,
+      "total": 489
+    }
+  }
+}

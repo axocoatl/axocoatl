@@ -1,0 +1,12 @@
+[
+  {
+    "advisory": "GHSA-ch52-4w7c-c8xp",
+    "package": "http-cache-semantics",
+    "vulnerable": "<=4.2.0",
+    "dependents": ["astro"],
+    "scope": "build",
+    "reason": "astro uses it only in dist/assets/build/remote.js to compute cache lifetimes of remote images during a build; the docs site configures no remote images and ships static files; the flaw needs a shared cache serving several users. No fixed version is published.",
+    "reviewed": "2026-10-02",
+    "expires": "2026-11-01"
+  }
+]
