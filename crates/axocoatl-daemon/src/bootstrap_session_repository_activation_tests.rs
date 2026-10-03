@@ -1657,6 +1657,9 @@ async fn actual_repository_edit_refuses_invalid_utf8_without_rewriting_existing_
 #[path = "bootstrap_session_repository_driver_tests.rs"]
 mod driver_tests;
 
+#[path = "bootstrap_session_browser_tests.rs"]
+mod browser_tests;
+
 #[path = "bootstrap_native_ways_tests.rs"]
 mod ways_tests;
 

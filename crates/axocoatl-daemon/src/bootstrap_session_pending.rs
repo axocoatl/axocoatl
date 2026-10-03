@@ -177,6 +177,20 @@ impl PendingSessionEntry {
         crate::session_network::read_existing(canonical, after, limit, limits).map_err(failure)
     }
 
+    pub(super) fn read_network_screenshot(
+        &self,
+        sha256: &str,
+    ) -> Result<Option<(String, Vec<u8>)>> {
+        let stores = self
+            .stores
+            .lock()
+            .map_err(|_| failure("retained network record ownership failed"))?;
+        let Ok(canonical) = stores.canonical() else {
+            return Ok(None);
+        };
+        crate::session_network::read_screenshot(canonical, sha256).map_err(failure)
+    }
+
     pub(super) fn history_snapshot(
         &self,
     ) -> Result<axocoatl_session::session_history::SessionHistory> {

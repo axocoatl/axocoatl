@@ -110,6 +110,7 @@ impl SessionDispatchController {
             driver: None,
             hooks: None,
             knowledge: None,
+            host_tools: Vec::new(),
             human_waits: HashMap::new(),
             execution_admission_closed: false,
             execution_lifetimes: Arc::new(execution_lifetime::ExecutionLifetimes::default()),

@@ -7,6 +7,9 @@ mod driver_tests;
 #[path = "session_dispatch_knowledge_tests.rs"]
 mod knowledge_tests;
 
+#[path = "session_dispatch_host_tools_tests.rs"]
+mod host_tools_tests;
+
 const REQUEST: &str = "Produce and verify the requested change";
 const PARENT_V1: &str = "parent-final-generation-one";
 const PARENT_V2: &str = "parent-final-generation-two";

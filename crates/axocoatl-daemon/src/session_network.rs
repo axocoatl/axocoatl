@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use axocoatl_session::execution_namespace::OwnedExecutionNamespace;
 use axocoatl_session::network_record::{
     NetworkEvent, NetworkLine, NetworkRecord, NetworkRecordError, RecordLimits, RecordStats,
-    DEFAULT_MAX_BYTES, MAX_READ_LIMIT,
+    ScreenshotRef, DEFAULT_MAX_BYTES, MAX_READ_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -41,6 +41,16 @@ pub(crate) trait RecordNamespaces: Send + Sync + 'static {
         limit: usize,
         limits: RecordLimits,
     ) -> Result<Option<(Vec<NetworkLine>, RecordStats)>, String>;
+
+    /// Read a stored screenshot without opening a writer. `Ok(None)` when the
+    /// Session has no record or no such screenshot.
+    fn read_screenshot(
+        &self,
+        _session_id: &str,
+        _sha256: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, String> {
+        Ok(None)
+    }
 }
 
 /// [`RecordNamespaces::writer_namespace`] for one canonical Session store.
@@ -62,6 +72,14 @@ pub(crate) fn read_existing(
     limits: RecordLimits,
 ) -> Result<Option<(Vec<NetworkLine>, RecordStats)>, String> {
     NetworkRecord::read_existing(canonical, after, limit, limits).map_err(|error| error.to_string())
+}
+
+/// [`RecordNamespaces::read_screenshot`] for one canonical Session store.
+pub(crate) fn read_screenshot(
+    canonical: &axocoatl_session::execution_store::SessionExecutionStore,
+    sha256: &str,
+) -> Result<Option<(String, Vec<u8>)>, String> {
+    NetworkRecord::read_screenshot_existing(canonical, sha256).map_err(|error| error.to_string())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -104,6 +122,11 @@ enum Command {
         after: Option<u64>,
         limit: usize,
         reply: Reply<RecordPage>,
+    },
+    StoreScreenshot {
+        media_type: String,
+        bytes: Vec<u8>,
+        reply: Reply<ScreenshotRef>,
     },
     Close {
         reply: oneshot::Sender<()>,
@@ -191,6 +214,17 @@ fn run_writer(mut record: NetworkRecord, commands: std_mpsc::Receiver<Command>, 
                 reply,
             }) => {
                 let _ = reply.send(page(&record, after, limit));
+            }
+            Ok(Command::StoreScreenshot {
+                media_type,
+                bytes,
+                reply,
+            }) => {
+                let result = match &failed {
+                    Some(_) => Err(NetworkRecordError::Poisoned),
+                    None => record.store_screenshot(&media_type, &bytes),
+                };
+                let _ = reply.send(result);
             }
             Ok(Command::Close { reply }) => {
                 if let Err(error) = record.sync() {
@@ -372,6 +406,48 @@ impl SessionNetworkRecords {
         })
     }
 
+    /// Keep a screenshot beside the Session's record, through its single
+    /// writer. Creates the record on first use.
+    pub async fn store_screenshot(
+        &self,
+        session: &str,
+        media_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<ScreenshotRef, RecordServiceError> {
+        let sender = self.writer(session).await?;
+        let (reply, receive) = oneshot::channel();
+        sender
+            .send(Command::StoreScreenshot {
+                media_type: media_type.to_string(),
+                bytes,
+                reply,
+            })
+            .map_err(|_| RecordServiceError::Stopped)?;
+        Ok(receive.await.map_err(|_| RecordServiceError::Stopped)??)
+    }
+
+    /// A stored screenshot's media type and bytes. Screenshots are written
+    /// once and never change, so this reads them from disk without a writer.
+    pub async fn read_screenshot(
+        &self,
+        session: &str,
+        sha256: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, RecordServiceError> {
+        let namespaces = self.namespaces.clone();
+        let owned_session = session.to_string();
+        let sha256 = sha256.to_string();
+        tokio::task::spawn_blocking(move || namespaces.read_screenshot(&owned_session, &sha256))
+            .await
+            .map_err(|error| RecordServiceError::Unavailable {
+                session: session.to_string(),
+                reason: error.to_string(),
+            })?
+            .map_err(|reason| RecordServiceError::Unavailable {
+                session: session.to_string(),
+                reason,
+            })
+    }
+
     /// Current counts, without creating a record.
     pub async fn stats(&self, session: &str) -> Result<RecordStats, RecordServiceError> {
         Ok(self.read_after(session, Some(u64::MAX), 1).await?.stats)
@@ -464,7 +540,7 @@ pub struct SessionNetworkView {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use axocoatl_session::execution_ownership::{LegacyFormatOwnership, UpgradedFormatOwnership};
     use axocoatl_session::execution_store::{ExecutionStoreOwner, SessionExecutionStore};
@@ -472,14 +548,15 @@ mod tests {
     use axocoatl_session::turn_contract::SessionId;
     use std::sync::Mutex;
 
-    struct Stores {
+    /// Real Session stores for record tests, by Session id.
+    pub(crate) struct Stores {
         _root: tempfile::TempDir,
         _ownership: Arc<UpgradedFormatOwnership>,
         stores: Mutex<HashMap<String, SessionExecutionStore>>,
     }
 
     impl Stores {
-        fn new(sessions: &[&str]) -> Arc<Self> {
+        pub(crate) fn new(sessions: &[&str]) -> Arc<Self> {
             let root = tempfile::tempdir().unwrap();
             let ownership = Arc::new(
                 LegacyFormatOwnership::acquire(root.path())
@@ -529,6 +606,45 @@ mod tests {
             let store = stores.get(session_id).ok_or("not a native Session")?;
             read_existing(store, after, limit, limits)
         }
+
+        fn read_screenshot(
+            &self,
+            session_id: &str,
+            sha256: &str,
+        ) -> Result<Option<(String, Vec<u8>)>, String> {
+            let stores = self.stores.lock().unwrap();
+            let store = stores.get(session_id).ok_or("not a native Session")?;
+            read_screenshot(store, sha256)
+        }
+    }
+
+    #[tokio::test]
+    async fn screenshots_are_stored_through_the_writer_and_read_without_one() {
+        let stores = Stores::new(&["s"]);
+        let records = SessionNetworkRecords::new(stores, 50_000);
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend([1u8; 64]);
+        let stored = records
+            .store_screenshot("s", "image/png", png.clone())
+            .await
+            .unwrap();
+        assert_eq!(stored.bytes, 72);
+        records.close("s").await;
+        let (media, bytes) = records
+            .read_screenshot("s", &stored.sha256)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((media.as_str(), bytes), ("image/png", png));
+        assert!(records
+            .read_screenshot("s", &"f".repeat(64))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(records
+            .store_screenshot("s", "image/png", b"GIF89a".to_vec())
+            .await
+            .is_err());
     }
 
     fn sidecar(state: SidecarState) -> NetworkEvent {

@@ -422,6 +422,31 @@ impl SessionExecutionStore {
         Ok(bytes)
     }
 
+    /// Read one file in a subdirectory of an existing component without a
+    /// writer, such as a screenshot kept beside the network record.
+    pub(crate) fn read_existing_component_file(
+        &self,
+        component: &ExecutionComponent,
+        primary: &std::path::Path,
+        child: &std::path::Path,
+        name: &std::path::Path,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, ExecutionStoreError> {
+        self.verify()?;
+        let bytes = crate::execution_namespace::read_existing_component_file(
+            &self.dir,
+            &self.ownership,
+            &self.identity()?,
+            component,
+            primary,
+            child,
+            name,
+            max_bytes,
+        )?;
+        self.verify()?;
+        Ok(bytes)
+    }
+
     pub fn path(&self) -> PathBuf {
         self.dir.path().join(FILE)
     }

@@ -374,14 +374,74 @@ impl SessionEgress {
         env_dir: Option<SecureDir>,
         classify: fn(IpAddr) -> AddrClass,
     ) -> Result<Arc<Self>, String> {
-        let history = records
-            .history()
-            .await
-            .map_err(|error| format!("reading the network record: {error:?}"))?;
         let mut scopes = vec![EgressScope::Session, EgressScope::Provisioning];
         if config.browser.is_some() {
             scopes.push(EgressScope::Browser);
         }
+        Self::open_scopes_with_classifier(
+            session_id, config, records, resolver, env_dir, classify, &scopes,
+        )
+        .await
+    }
+
+    /// A decision point for the browser's declared hosts alone, for a
+    /// Session that does not run under `network: egress`. Only the browser
+    /// scope is compiled and recorded; every other credential kind is refused.
+    pub async fn open_browser_only(
+        session_id: impl Into<String>,
+        config: EgressPolicyConfig,
+        records: Arc<dyn EgressRecordSink>,
+        resolver: Arc<dyn EgressResolver>,
+    ) -> Result<Arc<Self>, String> {
+        if config.browser.is_none() {
+            return Err("the browser is not configured".into());
+        }
+        Self::open_scopes_with_classifier(
+            session_id,
+            config,
+            records,
+            resolver,
+            None,
+            netaddr::classify,
+            &[EgressScope::Browser],
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn open_browser_only_with_classifier(
+        session_id: impl Into<String>,
+        config: EgressPolicyConfig,
+        records: Arc<dyn EgressRecordSink>,
+        resolver: Arc<dyn EgressResolver>,
+        classify: fn(IpAddr) -> AddrClass,
+    ) -> Result<Arc<Self>, String> {
+        Self::open_scopes_with_classifier(
+            session_id,
+            config,
+            records,
+            resolver,
+            None,
+            classify,
+            &[EgressScope::Browser],
+        )
+        .await
+    }
+
+    async fn open_scopes_with_classifier(
+        session_id: impl Into<String>,
+        config: EgressPolicyConfig,
+        records: Arc<dyn EgressRecordSink>,
+        resolver: Arc<dyn EgressResolver>,
+        env_dir: Option<SecureDir>,
+        classify: fn(IpAddr) -> AddrClass,
+        scopes: &[EgressScope],
+    ) -> Result<Arc<Self>, String> {
+        let history = records
+            .history()
+            .await
+            .map_err(|error| format!("reading the network record: {error:?}"))?;
+        let scopes = scopes.to_vec();
         let mut states = HashMap::new();
         for scope in scopes {
             let mut session_rules: Vec<SessionRule> = Vec::new();

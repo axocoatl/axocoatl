@@ -177,8 +177,18 @@ impl SessionDispatchController {
                 &resolved,
             )?,
         };
+        // Listed host-invocation tools are offered by definition; admission
+        // binds each call to its own executor.
+        let host_tools = state.host_tool_definitions(&profile);
         let tools = match repository.as_ref() {
-            Some(resource) => resource.preview_tools(&profile)?,
+            Some(resource) => resource.preview_tools(&profile, &host_tools)?,
+            None if !host_tools.is_empty() => Arc::new(
+                tools.extended(
+                    host_tools
+                        .iter()
+                        .map(|(name, definition)| ((*name).to_string(), definition.clone())),
+                ),
+            ),
             None => tools,
         };
         let control = state.child_run_control(&activation)?;

@@ -320,6 +320,7 @@ sandbox:
             runtime_authority: None,
             control_plane_dirs: Vec::new(),
             control_plane_roots: Vec::new(),
+            service_sockets: false,
         };
 
         assert!(!policy.allow_post_create);

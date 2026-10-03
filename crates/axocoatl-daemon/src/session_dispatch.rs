@@ -68,6 +68,9 @@ mod delegate;
 pub(crate) use delegate::changing_tools;
 #[path = "session_dispatch_driver.rs"]
 mod driver;
+#[path = "session_dispatch_host_tools.rs"]
+mod host_tools;
+pub(crate) use host_tools::{HostInvocationContext, HostInvocationTool, HOST_INVOCATION_TOOLS};
 #[path = "session_dispatch_knowledge.rs"]
 mod knowledge;
 pub(crate) use coordinator::{NativeCoordinatorWorker, COORDINATOR_CHILD, DELEGATE_CHILD};
@@ -159,6 +162,7 @@ struct DispatchState {
     driver: Option<String>,
     hooks: Option<Arc<axocoatl_tools::HookRegistry>>,
     knowledge: Option<knowledge::SharedKnowledge>,
+    host_tools: host_tools::HostTools,
     human_waits: HashMap<BlockerId, human_wait::LiveHumanWait>,
     stream_bus: Option<crate::stream::StreamBus>,
     execution_admission_closed: bool,
@@ -452,6 +456,8 @@ struct InvocationAdmission {
     intent: InvocationIntent,
     authority_ref: EvidenceRef,
     repository: Option<repository_activation::RepositoryInvocation>,
+    /// The bound executor of a host-invocation tool call.
+    host_executor: Option<Arc<axocoatl_tools::ToolExecutor>>,
     _execution: execution_lifetime::ExecutionTicket,
 }
 
@@ -570,6 +576,11 @@ impl SessionDispatchController {
                 return Ok(Err(repository_snapshot::reserve_message(reserve)));
             }
         }
+        // A listed host tool this daemon cannot run is declined with its
+        // reason before anything is recorded.
+        if let Some(reason) = state.host_tool_refusal(activation, &request.tool_call.name)? {
+            return Ok(Err(reason));
+        }
         let (arguments, intent, authority_ref) = state.admit(activation, request)?;
         let repository = repository_activation::RepositoryInvocation::for_admission(
             &state,
@@ -577,12 +588,15 @@ impl SessionDispatchController {
             &intent,
         );
         let repository = state.fail_closed(repository)?;
+        let host_executor = state.host_invocation_executor(self, &intent);
+        let host_executor = state.fail_closed(host_executor)?;
         Ok(Ok(InvocationAdmission {
             controller: self.clone(),
             arguments,
             intent,
             authority_ref,
             repository,
+            host_executor,
             _execution: state.acquire_execution_ticket(self)?,
         }))
     }
@@ -594,6 +608,7 @@ impl AdmittedToolInvocation for InvocationAdmission {
         self.repository
             .as_ref()
             .map(|repository| repository.executor())
+            .or_else(|| self.host_executor.clone())
     }
 
     async fn record_outcome(

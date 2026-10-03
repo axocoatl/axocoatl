@@ -1,6 +1,9 @@
+pub mod browser_container;
 pub mod e2b;
 pub mod egress;
 pub mod egress_control;
+pub mod egress_image;
+pub mod egress_sidecar;
 pub mod error;
 pub mod podman;
 pub mod pty;

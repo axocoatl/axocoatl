@@ -40,6 +40,9 @@ impl AxocoatlDaemon {
         initial_limits: GrantLimits,
     ) -> Result<CapturedNativeDefinition, DaemonError> {
         crate::session_dispatch::validate_repository_tools(&config.tools).map_err(native_error)?;
+        if let Some(reason) = self.native_host_tool_refusal(&config) {
+            return Err(native_error(reason));
+        }
         let credentials = self.configured_native_provider_credentials();
         let config = native_agent_config(&self.config, &self.provider_registry, config)?;
         let preparation =
@@ -63,6 +66,20 @@ impl AxocoatlDaemon {
         controller
             .attach_workspace_knowledge(self.workspace_knowledge_store(&workspace_id)?)
             .map_err(native_error)?;
+        if let Some(browser) = &self.browser_service {
+            controller
+                .register_host_invocation_tool(Arc::new(
+                    crate::session_dispatch_browser::BrowserHostTool::browser(browser.clone()),
+                ))
+                .map_err(native_error)?;
+            controller
+                .register_host_invocation_tool(Arc::new(
+                    crate::session_dispatch_browser::BrowserHostTool::browser_check(
+                        browser.clone(),
+                    ),
+                ))
+                .map_err(native_error)?;
+        }
         controller
             .native_provider_factory(
                 &self.data_root,
@@ -70,6 +87,27 @@ impl AxocoatlDaemon {
                 self.counter.clone(),
             )
             .map_err(native_error)
+    }
+
+    /// Why a native Agent's listed host-invocation tool cannot run on this
+    /// daemon. Checked when the team is admitted; each call checks again.
+    pub(crate) fn native_host_tool_refusal(&self, config: &AgentConfig) -> Option<String> {
+        config.tools.iter().find_map(|tool| match tool.as_str() {
+            "browser" | "browser_check" => match &self.browser_service {
+                None => Some(format!(
+                    "{tool} is listed for {} but the browser block is not configured; add `browser:` to the config and run `axocoatl browser install`",
+                    config.id.0
+                )),
+                Some(browser) => crate::session_dispatch_browser::browser_refusal(
+                    &browser.config().backend,
+                ),
+            },
+            "web_search" | "web_fetch" => Some(format!(
+                "{tool} is listed for {} but native Sessions do not provide it in this build",
+                config.id.0
+            )),
+            _ => None,
+        })
     }
 
     fn configured_native_provider_credentials(&self) -> NativeProviderCredentials {

@@ -1,5 +1,8 @@
 //! A Session's network record: every egress decision, connection close,
-//! policy change and web-tool fetch, in order, one JSON line each.
+//! policy change, web-tool fetch and browser call, in order, one JSON line
+//! each. Screenshots the browser tools take are kept beside it, by digest,
+//! in its `screenshots/` directory; they are for people and never reach a
+//! model.
 //!
 //! The record is append-only. [`NetworkRecord::append`] returns only after a
 //! complete `write(2)` of the whole line to the file, so a caller that waits
@@ -140,6 +143,48 @@ pub enum CloseOutcome {
 pub enum WebTool {
     WebSearch,
     WebFetch,
+}
+
+/// The browser tool that made a `browser` event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserTool {
+    Browser,
+    BrowserCheck,
+}
+
+/// Directory, beside the record, that holds screenshots by digest.
+pub const SCREENSHOT_DIR: &str = "screenshots";
+/// Largest screenshot kept.
+pub const MAX_SCREENSHOT_BYTES: usize = 1024 * 1024;
+/// Most screenshots one Session keeps; later ones are not stored.
+pub const MAX_SCREENSHOTS: usize = 2000;
+/// Longest URL a `browser` event keeps.
+pub const MAX_RECORDED_URL_CHARS: usize = 2048;
+
+/// A stored screenshot, named by the SHA-256 of its bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScreenshotRef {
+    pub sha256: String,
+    /// `image/jpeg` or `image/png`.
+    pub media_type: String,
+    pub bytes: u64,
+}
+
+fn screenshot_extension(media_type: &str) -> Option<&'static str> {
+    match media_type {
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        _ => None,
+    }
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -312,6 +357,39 @@ pub enum NetworkEvent {
         what: LimitKind,
         detail: String,
     },
+    /// One `browser` or `browser_check` call. App traffic inside the browser
+    /// container does not pass the egress proxy and is summarized here;
+    /// declared-host traffic appears as `open`/`close` under the call's
+    /// browser binding.
+    Browser {
+        tool: BrowserTool,
+        invocation_id: String,
+        activation_id: String,
+        agent: String,
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        final_url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<u16>,
+        /// `browser_check`: the test file run and its status.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        test_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        check_status: Option<String>,
+        /// Requests the browser could not make because no route allowed them.
+        #[serde(default)]
+        blocked: u32,
+        /// The tag of the egress credential the call used, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        screenshot: Option<ScreenshotRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        screenshot_dropped: Option<String>,
+        ms: u64,
+    },
 }
 
 impl NetworkEvent {
@@ -326,6 +404,7 @@ impl NetworkEvent {
             Self::Close { .. } => "close",
             Self::Web { .. } => "web",
             Self::Limit { .. } => "limit",
+            Self::Browser { .. } => "browser",
         }
     }
 
@@ -368,6 +447,42 @@ impl NetworkEvent {
                 if conn.is_empty() || conn.len() > 32 =>
             {
                 invalid("conn must be 1-32 bytes")
+            }
+            Self::Browser {
+                url,
+                final_url,
+                test_path,
+                check_status,
+                screenshot_dropped,
+                token,
+                ..
+            } => {
+                let long = |value: &Option<String>, max: usize| {
+                    value
+                        .as_ref()
+                        .is_some_and(|value| value.chars().count() > max)
+                };
+                if long(url, MAX_RECORDED_URL_CHARS) || long(final_url, MAX_RECORDED_URL_CHARS) {
+                    return invalid("browser URLs must be at most 2048 characters");
+                }
+                if long(test_path, 512) || long(check_status, 32) || long(screenshot_dropped, 200) {
+                    return invalid("browser test path or status is too long");
+                }
+                if token.as_ref().is_some_and(|token| !tag(token)) {
+                    return invalid("token must be a 16-hex tag");
+                }
+                match self {
+                    Self::Browser {
+                        screenshot: Some(shot),
+                        ..
+                    } if !is_sha256(&shot.sha256)
+                        || screenshot_extension(&shot.media_type).is_none()
+                        || shot.bytes as usize > MAX_SCREENSHOT_BYTES =>
+                    {
+                        invalid("screenshot must name a stored JPEG or PNG by SHA-256")
+                    }
+                    _ => Ok(()),
+                }
             }
             _ => Ok(()),
         }
@@ -753,6 +868,80 @@ impl NetworkRecord {
         Ok(Some((lines, stats)))
     }
 
+    /// Keep a screenshot beside the record, named by its SHA-256. The bytes
+    /// must be a JPEG or PNG of at most [`MAX_SCREENSHOT_BYTES`]. Storing
+    /// the same bytes again returns the same reference. Past
+    /// [`MAX_SCREENSHOTS`] it returns `Full`.
+    pub fn store_screenshot(
+        &mut self,
+        media_type: &str,
+        bytes: &[u8],
+    ) -> Result<ScreenshotRef, NetworkRecordError> {
+        let extension = screenshot_extension(media_type).ok_or(
+            NetworkRecordError::InvalidEvent("screenshots are JPEG or PNG"),
+        )?;
+        let magic = match extension {
+            "jpg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+            _ => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        };
+        if !magic || bytes.len() > MAX_SCREENSHOT_BYTES {
+            return Err(NetworkRecordError::InvalidEvent(
+                "a screenshot must be a JPEG or PNG of at most 1 MiB",
+            ));
+        }
+        if self.poisoned {
+            return Err(NetworkRecordError::Poisoned);
+        }
+        use sha2::Digest;
+        let sha256 = format!("{:x}", sha2::Sha256::digest(bytes));
+        let name = format!("{sha256}.{extension}");
+        let directory = self.namespace.child(SCREENSHOT_DIR)?;
+        let reference = ScreenshotRef {
+            sha256,
+            media_type: media_type.to_string(),
+            bytes: bytes.len() as u64,
+        };
+        if directory.is_file(&name)? {
+            return Ok(reference);
+        }
+        if directory.entries_limited(MAX_SCREENSHOTS + 1)?.len() >= MAX_SCREENSHOTS {
+            return Err(NetworkRecordError::Full);
+        }
+        directory.atomic_write(&name, bytes)?;
+        directory.sync_all()?;
+        Ok(reference)
+    }
+
+    /// Read a stored screenshot without opening a writer. `Ok(None)` when the
+    /// Session has no record or no such screenshot.
+    pub fn read_screenshot_existing(
+        canonical: &crate::execution_store::SessionExecutionStore,
+        sha256: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, NetworkRecordError> {
+        if !is_sha256(sha256) {
+            return Ok(None);
+        }
+        for media_type in ["image/jpeg", "image/png"] {
+            let name = format!(
+                "{sha256}.{}",
+                screenshot_extension(media_type).unwrap_or("x")
+            );
+            match canonical.read_existing_component_file(
+                &ExecutionComponent::NetworkRecord,
+                Path::new(NETWORK_RECORD_FILE),
+                Path::new(SCREENSHOT_DIR),
+                Path::new(&name),
+                MAX_SCREENSHOT_BYTES,
+            ) {
+                Ok(bytes) => return Ok(Some((media_type.to_string(), bytes))),
+                Err(crate::execution_store::ExecutionStoreError::Io(error))
+                    if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(io::Error::other(error.to_string()).into()),
+            }
+        }
+        Ok(None)
+    }
+
     pub fn stats(&self) -> RecordStats {
         let events = self.index.len() as u64;
         RecordStats {
@@ -865,6 +1054,86 @@ mod tests {
             what: LimitKind::RecordFull,
             detail: "cap reached".into(),
         }
+    }
+
+    fn browser_event(screenshot: Option<ScreenshotRef>) -> NetworkEvent {
+        NetworkEvent::Browser {
+            tool: BrowserTool::Browser,
+            invocation_id: "inv-7".into(),
+            activation_id: "act-2".into(),
+            agent: "qa-scout".into(),
+            ok: false,
+            url: Some("http://localhost:8765/".into()),
+            final_url: Some("http://localhost:8765/cart".into()),
+            status: Some(200),
+            test_path: None,
+            check_status: None,
+            blocked: 1,
+            token: None,
+            screenshot,
+            screenshot_dropped: None,
+            ms: 1834,
+        }
+    }
+
+    #[test]
+    fn browser_events_and_screenshots_are_kept_beside_the_record() {
+        let (_root, _ownership, store) = setup();
+        let mut record = open(&store, RecordLimits::default());
+        let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe0];
+        jpeg.extend(std::iter::repeat_n(9u8, 1000));
+        let shot = record.store_screenshot("image/jpeg", &jpeg).unwrap();
+        assert_eq!(shot.bytes, 1004);
+        assert_eq!(shot.media_type, "image/jpeg");
+        // The same bytes are stored once.
+        assert_eq!(record.store_screenshot("image/jpeg", &jpeg).unwrap(), shot);
+        let seq = record.append(5, browser_event(Some(shot.clone()))).unwrap();
+        let lines = record.read_after(Some(seq - 1), 10).unwrap();
+        assert_eq!(lines[0].event, browser_event(Some(shot.clone())));
+        let wire = serde_json::to_value(&lines[0]).unwrap();
+        assert_eq!(wire["event"]["kind"], "browser");
+        assert_eq!(wire["event"]["tool"], "browser");
+        assert_eq!(wire["event"]["screenshot"]["sha256"], shot.sha256);
+        record.sync().unwrap();
+        drop(record);
+
+        let (media, bytes) = NetworkRecord::read_screenshot_existing(&store, &shot.sha256)
+            .unwrap()
+            .unwrap();
+        assert_eq!((media.as_str(), bytes), ("image/jpeg", jpeg));
+        assert!(
+            NetworkRecord::read_screenshot_existing(&store, &"0".repeat(64))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            NetworkRecord::read_screenshot_existing(&store, "../network-record.v1.jsonl")
+                .unwrap()
+                .is_none()
+        );
+
+        let mut record = open(&store, RecordLimits::default());
+        for (media, bytes) in [
+            ("image/svg+xml", b"<svg/>".to_vec()),
+            ("image/jpeg", b"<svg/>".to_vec()),
+            ("image/png", vec![0x89; MAX_SCREENSHOT_BYTES + 1]),
+        ] {
+            assert!(record.store_screenshot(media, &bytes).is_err(), "{media}");
+        }
+        let forged = ScreenshotRef {
+            sha256: "not-a-digest".into(),
+            media_type: "image/jpeg".into(),
+            bytes: 4,
+        };
+        assert!(record.append(6, browser_event(Some(forged))).is_err());
+        let mut long = browser_event(None);
+        if let NetworkEvent::Browser { url, .. } = &mut long {
+            *url = Some(format!(
+                "http://localhost/{}",
+                "a".repeat(MAX_RECORDED_URL_CHARS)
+            ));
+        }
+        assert!(record.append(7, long).is_err());
     }
 
     #[test]

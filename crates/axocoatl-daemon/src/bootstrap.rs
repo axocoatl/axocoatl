@@ -711,6 +711,16 @@ impl crate::session_network::RecordNamespaces for RegistryNetworkRecords {
             .read_network_record(session_id, after, limit, limits)
             .map_err(|error| error.to_string())
     }
+
+    fn read_screenshot(
+        &self,
+        session_id: &str,
+        sha256: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, String> {
+        self.0
+            .read_network_screenshot(session_id, sha256)
+            .map_err(|error| error.to_string())
+    }
 }
 
 /// Refusal for `network: egress` until Session start runs the egress proxy.
@@ -3539,6 +3549,8 @@ pub struct AxocoatlDaemon {
     session_dispatch_lifecycles: Arc<session_dispatch::SessionDispatchRegistry>,
     /// One network record writer per Session, opened on first append.
     session_network_records: Arc<crate::session_network::SessionNetworkRecords>,
+    /// The browser tools' runtime, present when `browser:` is configured.
+    browser_service: Option<Arc<crate::session_dispatch_browser::BrowserService>>,
     /// Recovery-only primary handles used while resolving an Attempt set after
     /// restart. They must never enter the ordinary Ready fast path because
     /// they intentionally skip project setup.
@@ -5192,6 +5204,36 @@ impl AxocoatlDaemon {
                 |egress| u64::from(egress.record_max_events),
             ),
         ));
+        let browser_service =
+            match crate::session_dispatch_browser::BrowserServiceConfig::from_config(
+                &config,
+                local_runtime_authority.clone(),
+            ) {
+                Some(browser) => {
+                    let storage = |name: &str| {
+                        secure_data_dir.child(name).map_err(|error| {
+                            DaemonError::Session(format!(
+                                "preparing browser storage {name}: {error}"
+                            ))
+                        })
+                    };
+                    Some(Arc::new(
+                        crate::session_dispatch_browser::BrowserService::new(
+                            browser,
+                            storage("execution-supervisors")?,
+                            storage("egress-image")?,
+                            vec![
+                                secure_data_dir.path().to_path_buf(),
+                                data_dir_lease.external_root().path().to_path_buf(),
+                                ipc_root.path().to_path_buf(),
+                            ],
+                            session_network_records.clone(),
+                            session_store.clone(),
+                        ),
+                    ))
+                }
+                None => None,
+            };
         if let axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(ownership) =
             &data_dir_lease.ownership
         {
@@ -5286,6 +5328,7 @@ impl AxocoatlDaemon {
             run_store,
             session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             session_network_records,
+            browser_service,
             session_dispatch_lifecycles,
             attempt_recovery_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             sandbox_starts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -6745,6 +6788,10 @@ impl AxocoatlDaemon {
         // exact id cannot be lost. Wait for that owned task before reading the
         // durable identity or returning a lifecycle operation.
         axocoatl_isolation::e2b::E2bSandbox::wait_for_owned_start(id).await;
+        // Stop the Session's egress sidecar before its containers go.
+        if let Some(browser) = &self.browser_service {
+            browser.forget(id).await;
+        }
         let session = self.get_session(id).await;
         let mut runtime_to_confirm = None;
         let primary_present = primary.is_some();
@@ -8264,6 +8311,9 @@ impl AxocoatlDaemon {
                         self._data_dir_lease.external_root().clone(),
                         self.ipc_root.clone(),
                     ],
+                    // The browser container reaches this Session's exposed
+                    // ports through sockets in the service-socket volume.
+                    service_sockets: self.config.browser.is_some(),
                 };
                 let sandbox = match SessionSandbox::start_in(
                     &session.id,
@@ -9516,6 +9566,7 @@ impl AxocoatlDaemon {
                 self._data_dir_lease.external_root().clone(),
                 self.ipc_root.clone(),
             ],
+            service_sockets: false,
         };
         let started = tokio::select! {
             result = SessionSandbox::start_in(
@@ -10681,6 +10732,33 @@ impl AxocoatlDaemon {
             events: page.events,
             next_after: page.next_after,
         })
+    }
+
+    /// One screenshot a browser tool kept beside the Session's network
+    /// record: its media type and bytes, or `None`.
+    pub async fn session_network_screenshot(
+        &self,
+        session_id: &str,
+        sha256: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, DaemonError> {
+        if self.get_session(session_id).await.is_none() {
+            return Err(DaemonError::Session(format!(
+                "session '{session_id}' not found"
+            )));
+        }
+        if sha256.len() != 64
+            || !sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(DaemonError::InvalidRequest(
+                "a screenshot is named by 64 lowercase hex digits".into(),
+            ));
+        }
+        self.session_network_records
+            .read_screenshot(session_id, sha256)
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))
     }
 
     /// Inspect one exact retained turn without granting runtime control. The
@@ -13426,6 +13504,8 @@ trap - 0 1 2 15
                 self._data_dir_lease.external_root().clone(),
                 self.ipc_root.clone(),
             ],
+            // Ways attempt containers have no browser.
+            service_sockets: false,
         };
         let sandbox = SessionSandbox::start_in(
             container_id,

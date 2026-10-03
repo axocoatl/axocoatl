@@ -165,6 +165,22 @@ enum Commands {
         #[command(subcommand)]
         command: ServiceCommands,
     },
+
+    /// The browser tools' container image
+    Browser {
+        #[command(subcommand)]
+        command: BrowserCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum BrowserCommands {
+    /// Build the browser image (Chromium and Playwright 1.60.0) with Podman
+    Install {
+        /// Image name to build
+        #[arg(long, default_value = axocoatl_daemon::browser_install::DEFAULT_BROWSER_IMAGE)]
+        image: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -407,6 +423,30 @@ async fn main() {
             ServiceCommands::Status => cmd_service_status(),
             ServiceCommands::Uninstall => cmd_service_uninstall(),
         },
+        Commands::Browser { command } => match command {
+            BrowserCommands::Install { image } => cmd_browser_install(&image).await,
+        },
+    }
+}
+
+/// `axocoatl browser install`: build the browser tools' image.
+async fn cmd_browser_install(image: &str) {
+    println!(
+        "Building {image}: Chromium and Playwright 1.60.0 for the browser tools. \
+         This downloads the Node base image, the locked Playwright packages and \
+         Playwright's Chromium build."
+    );
+    match axocoatl_daemon::browser_install::install(image).await {
+        Ok(id) => {
+            println!("{id}");
+            if image != axocoatl_daemon::browser_install::DEFAULT_BROWSER_IMAGE {
+                println!("Set browser.image: {image} in the config to use it.");
+            }
+        }
+        Err(error) => {
+            eprintln!("Building the browser image failed: {error}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -1006,6 +1046,29 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
     // Outbound egress transparency — always surface what leaves the box.
     if let Some(cfg) = &config {
         pass(&sandbox_network_doctor_line(&cfg.sandbox));
+        if let Some(browser) = &cfg.browser {
+            let image = browser
+                .image
+                .clone()
+                .unwrap_or_else(|| axocoatl_config::DEFAULT_BROWSER_IMAGE.to_string());
+            match axocoatl_daemon::browser_install::image_present(&image).await {
+                Ok(true) => pass(&format!("Browser: image {image} present")),
+                Ok(false) => warn(
+                    &format!("Browser: image {image} missing"),
+                    "Run `axocoatl browser install` before Agents use the browser tools.",
+                ),
+                Err(error) => warn(&format!("Browser: image {image} not checked"), &error),
+            }
+            pass(&if browser.allow.is_empty() {
+                "Browser network: the browser container reaches only the Session's exposed ports"
+                    .to_string()
+            } else {
+                format!(
+                    "Browser network: the browser container reaches the Session's exposed ports and, through Axocoatl's egress proxy, only: {}",
+                    axocoatl_config::egress::allow_summary(&browser.allow)
+                )
+            });
+        }
         if cfg.webhooks.is_empty() {
             pass("Outbound webhooks: none (no event egress)");
         } else {

@@ -177,6 +177,10 @@ pub fn build_router(
         )
         .route("/api/sessions/{id}/network", get(routes::session_network))
         .route(
+            "/api/sessions/{id}/network/screenshots/{sha256}",
+            get(routes::session_network_screenshot),
+        )
+        .route(
             "/api/sessions/{id}/turns/{turn_id}/graph-edits/preview",
             post(routes::preview_session_graph_edit).layer(DefaultBodyLimit::max(
                 axocoatl_session::control_command::MAX_CONTROL_REQUEST_BYTES,

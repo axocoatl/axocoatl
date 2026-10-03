@@ -314,6 +314,11 @@ pub struct SandboxPolicy {
     /// host directory after resolving the selected image's architecture. This
     /// is mutually exclusive with an explicitly supplied supervisor program.
     pub supervisor_installation: Option<SecureDir>,
+    /// Mount the Session's service-socket volume (`axo-svc-{session}`) at
+    /// `/run/axocoatl-svc`, where a forwarder serves each exposed port as a
+    /// Unix socket for the browser container. Set when the browser tool is
+    /// configured; passive recovery sandboxes never mount it.
+    pub service_sockets: bool,
 }
 
 impl Default for SandboxPolicy {
@@ -329,6 +334,7 @@ impl Default for SandboxPolicy {
             control_plane_roots: Vec::new(),
             supervisor_program: None,
             supervisor_installation: None,
+            service_sockets: false,
         }
     }
 }
@@ -954,6 +960,14 @@ impl SessionSandbox {
         let node_dependency_volume = (!policy.passive_start)
             .then(|| Self::node_dependency_volume(session_id, &working_dir_path))
             .flatten();
+        if policy.service_sockets && !policy.passive_start {
+            crate::browser_container::create_owned_volume(
+                &crate::browser_container::service_socket_volume(session_id),
+                policy.runtime_authority.as_deref(),
+                crate::browser_container::SERVICE_SOCKETS_ROLE,
+            )
+            .await?;
+        }
 
         // Start the long-lived idle container. Resource caps remain a
         // best-effort compatibility toggle. Ports are different: every
@@ -2185,6 +2199,41 @@ impl SessionSandbox {
                 tracing::warn!(container = name, error = %error, "orphan cleanup was incomplete");
             }
         }
+        // Browser and egress containers whose Session container is already
+        // gone are not listed above.
+        for prefix in crate::browser_container::COMPANION_PREFIXES {
+            let mut list = Command::new(PODMAN);
+            list.args([
+                "ps".to_string(),
+                "-a".into(),
+                "--filter".into(),
+                format!("name={prefix}"),
+                "--filter".into(),
+                format!("label={RUNTIME_AUTHORITY_LABEL}={runtime_authority}"),
+                "--format".into(),
+                "{{.Names}}".into(),
+            ]);
+            let out = match Self::run_bounded_command(list, NAMED_REMOVE_COMMAND_TIMEOUT).await {
+                Ok(output) if output.status.success() && !output.timed_out => output,
+                _ => continue,
+            };
+            let names = String::from_utf8_lossy(&out.stdout);
+            for name in names.lines().map(str::trim) {
+                let Some(sid) = name.strip_prefix(prefix) else {
+                    continue;
+                };
+                if known_ids.iter().any(|known| known == sid) {
+                    continue;
+                }
+                tracing::info!(
+                    container = name,
+                    "reaping an orphaned browser or egress container"
+                );
+                if let Err(error) = Self::remove_named_with_dependencies(sid).await {
+                    tracing::warn!(container = name, error = %error, "orphan cleanup was incomplete");
+                }
+            }
+        }
     }
 
     /// Parse `podman port <container>` output, for example:
@@ -2298,6 +2347,16 @@ impl SessionSandbox {
             args.push(format!(
                 "type=volume,source={volume},destination={dir}/node_modules"
             ));
+        }
+        if policy.service_sockets && !policy.passive_start {
+            if let Some(session_id) = container.strip_prefix("axo-ses-") {
+                args.push("--mount".into());
+                args.push(format!(
+                    "type=volume,source={},destination={}",
+                    crate::browser_container::service_socket_volume(session_id),
+                    crate::browser_container::SERVICE_SOCKET_DIR,
+                ));
+            }
         }
 
         // Always-on hardening — safe for normal dev workflows:
@@ -2816,6 +2875,12 @@ impl SessionSandbox {
             self.passive_execution_usable
                 .store(false, std::sync::atomic::Ordering::Release);
         }
+        // The browser and egress containers serve only this Session.
+        if let Some(session_id) = self.container.strip_prefix("axo-ses-") {
+            let companions = crate::browser_container::companion_containers(session_id);
+            let _ =
+                Self::remove_container_names_once(&companions, NAMED_REMOVE_COMMAND_TIMEOUT).await;
+        }
         if let Some(container_id) = &self.container_id {
             let _ =
                 Self::remove_exact_container_identity(container_id, NAMED_REMOVE_COMMAND_TIMEOUT)
@@ -2843,6 +2908,10 @@ impl SessionSandbox {
         if self.passive_start {
             self.passive_execution_usable
                 .store(false, std::sync::atomic::Ordering::Release);
+        }
+        if let Some(session_id) = self.container.strip_prefix("axo-ses-") {
+            let companions = crate::browser_container::companion_containers(session_id);
+            Self::remove_exact_container_names(&companions, NAMED_REMOVE_COMMAND_TIMEOUT).await?;
         }
         if let Some(container_id) = &self.container_id {
             Self::remove_exact_container_identity(container_id, NAMED_REMOVE_COMMAND_TIMEOUT).await
@@ -3436,10 +3505,15 @@ impl SessionSandbox {
         Self::remove_exact_container_names(&containers, timeout).await
     }
 
+    /// Each Session's container and the browser and egress containers that
+    /// serve only it, which are removed with it.
     fn container_names(session_ids: &[String]) -> Vec<String> {
         let mut containers = session_ids
             .iter()
-            .map(|session_id| Self::container_name(session_id))
+            .flat_map(|session_id| {
+                std::iter::once(Self::container_name(session_id))
+                    .chain(crate::browser_container::companion_containers(session_id))
+            })
             .collect::<Vec<_>>();
         containers.sort();
         containers.dedup();
@@ -3505,6 +3579,14 @@ impl SessionSandbox {
             .map(|session_id| Self::dependency_volume_name(session_id))
             .filter(|volume| seen.insert(volume.clone()))
             .collect::<Vec<_>>();
+        // Service-socket and egress volumes exist only for Sessions that used
+        // the browser; remove the ones that do, after their containers.
+        let companion_volumes = session_ids
+            .iter()
+            .flat_map(|session_id| crate::browser_container::companion_volumes(session_id))
+            .filter(|volume| seen.insert(volume.clone()))
+            .collect::<Vec<_>>();
+        crate::browser_container::remove_volumes_if_present(&companion_volumes, timeout).await?;
         if volumes.is_empty() {
             return Ok(());
         }
@@ -5243,6 +5325,63 @@ mod tests {
         assert!(!args.iter().any(|a| a == "-p"));
         // with_limits=false → no caps.
         assert!(!args.iter().any(|a| a == "--pids-limit"));
+    }
+
+    #[test]
+    fn run_args_mount_the_service_socket_volume_only_when_asked() {
+        let socket_mount = "type=volume,source=axo-svc-x,destination=/run/axocoatl-svc";
+        for network in [SandboxNetwork::Bridge, SandboxNetwork::None] {
+            let policy = SandboxPolicy {
+                network,
+                service_sockets: true,
+                ..SandboxPolicy::default()
+            };
+            let args = SessionSandbox::build_run_args(
+                "axo-ses-x",
+                "/w",
+                DEFAULT_IMAGE,
+                None,
+                false,
+                &[3000],
+                &policy,
+            );
+            assert!(args
+                .windows(2)
+                .any(|pair| pair[0] == "--mount" && pair[1] == socket_mount));
+            // Mounting the socket volume never changes the network posture.
+            assert_eq!(
+                args.windows(2)
+                    .any(|pair| pair[0] == "--network" && pair[1] == "none"),
+                network == SandboxNetwork::None
+            );
+        }
+        let without = SessionSandbox::build_run_args(
+            "axo-ses-x",
+            "/w",
+            DEFAULT_IMAGE,
+            None,
+            false,
+            &[3000],
+            &SandboxPolicy::default(),
+        );
+        assert!(!without.iter().any(|arg| arg.contains("axo-svc-")));
+        let passive = SessionSandbox::build_run_args(
+            "axo-ses-x",
+            "/w",
+            DEFAULT_IMAGE,
+            None,
+            false,
+            &[],
+            &SandboxPolicy {
+                passive_start: true,
+                service_sockets: true,
+                ..SandboxPolicy::default()
+            },
+        );
+        assert!(!passive.iter().any(|arg| arg.contains("axo-svc-")));
+        // The browser and egress containers go with the Session's container.
+        let names = SessionSandbox::container_names(&["x".to_string()]);
+        assert_eq!(names, vec!["axo-brw-x", "axo-egr-x", "axo-ses-x"]);
     }
 
     /// End-to-end: needs podman installed. Run with `--ignored`.

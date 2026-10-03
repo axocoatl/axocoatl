@@ -230,7 +230,7 @@ async fn prepare_command(
     prepare_command_with_stdin(command, request, None, runtime_identity, program_sha256).await
 }
 
-async fn prepare_command_with_stdin(
+pub(crate) async fn prepare_command_with_stdin(
     mut command: Command,
     request: ExecRequest,
     stdin: Option<std::sync::Arc<[u8]>>,

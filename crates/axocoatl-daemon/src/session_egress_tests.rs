@@ -1316,3 +1316,95 @@ async fn the_proxy_control_loop_and_decision_point_work_end_to_end() {
     );
     assert_eq!(task.await.unwrap(), egress_control::ControlEnd::Shutdown);
 }
+
+#[tokio::test]
+async fn a_browser_only_decision_point_serves_only_the_browser_scope() {
+    let record = Arc::new(FakeRecord::default());
+    let resolver = FakeResolver::with(&[
+        ("docs.test", &["93.184.216.34"]),
+        ("allowed.test", &["93.184.216.35"]),
+    ]);
+    let egress = SessionEgress::open_browser_only_with_classifier(
+        "ses-1",
+        config(),
+        record.clone(),
+        resolver.clone(),
+        netaddr::classify,
+    )
+    .await
+    .unwrap();
+    // Only the browser policy is compiled and recorded.
+    let scopes: Vec<EgressScope> = record
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            NetworkEvent::Policy { scope, .. } => Some(*scope),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(scopes, vec![EgressScope::Browser]);
+    for kind in [GrantKind::Agent, GrantKind::Setup, GrantKind::Provisioning] {
+        assert!(
+            egress.grant(GrantSpec::new(kind)).await.is_err(),
+            "{kind:?}"
+        );
+    }
+    let grant = egress
+        .grant(GrantSpec::new(GrantKind::Browser))
+        .await
+        .unwrap();
+    assert!(grant.env_file.is_none());
+    let token = grant
+        .proxy_url_for_stdin
+        .as_ref()
+        .unwrap()
+        .expose()
+        .trim_start_matches("http://axo:")
+        .trim_end_matches("@127.0.0.1:3128")
+        .to_string();
+    let hash = credential_hash(&token);
+    assert!(matches!(
+        egress.decide(open(1, "docs.test", 443, Some(&hash))).await,
+        Decision::Allow { .. }
+    ));
+    // The Session's own allowlist does not apply to the browser.
+    assert_eq!(
+        reason(
+            &egress
+                .decide(open(2, "allowed.test", 443, Some(&hash)))
+                .await
+        ),
+        (403, "not_allowed".into())
+    );
+    assert_eq!(resolver.queries(), vec!["docs.test".to_string()]);
+    drop(grant);
+    // The unbind is recorded by a task the drop spawns.
+    for _ in 0..100 {
+        if record
+            .events()
+            .iter()
+            .any(|event| matches!(event, NetworkEvent::Unbind { .. }))
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(record.events().iter().any(|event| matches!(
+        event,
+        NetworkEvent::Unbind {
+            reason: UnbindReason::BrowserDone,
+            ..
+        }
+    )));
+    // Without a browser block there is nothing to serve.
+    let mut without = config();
+    without.browser = None;
+    assert!(SessionEgress::open_browser_only(
+        "ses-2",
+        without,
+        Arc::new(FakeRecord::default()),
+        resolver,
+    )
+    .await
+    .is_err());
+}
