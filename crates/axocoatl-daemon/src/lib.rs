@@ -11,6 +11,8 @@ pub mod git;
 pub mod git_host;
 pub mod interrupt;
 pub mod ipc;
+#[cfg(test)]
+mod lock_inheritance_tests;
 pub mod mcp_approval_hook;
 pub mod proactive;
 pub mod scheduler;
