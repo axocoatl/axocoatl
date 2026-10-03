@@ -27,8 +27,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ones, and writes each decision to the Session's network record before answering.
   Session start does not use them yet.
 - The configuration parses `web_search.provider: searxng` with a `searxng` block, and
-  new `web_fetch` and `browser` blocks and `mcp_servers[].inherit_env`, for upcoming
-  tools. They are validated but not yet run.
+  a new `web_fetch` block and `mcp_servers[].inherit_env`, for upcoming tools. They are
+  validated but not yet run.
+- **Browser tools for native Sessions.** With a `browser` block in the configuration,
+  Agents whose `tools` list them get `browser` and `browser_check`. `browser` opens a
+  URL in a fresh headless Chromium, runs up to 40 steps (click, fill, select, check,
+  press, wait, expect text, reload, back; no script step), and returns the page's
+  accessibility snapshot, console errors, dialogs and failed or refused requests as
+  text, with the Playwright line for each step. `browser_check` runs one Playwright test
+  file from the repository (with the files it imports by relative path) or given as
+  `script`, with one worker and no retries, and returns each test's status and first
+  error. Both run in a per-Session browser container with no network interface other
+  than loopback, a read-only root, no capabilities and no Workspace mount. It reaches
+  the Session's exposed ports through Unix sockets the Session container serves, and
+  the hosts listed under `browser.allow` only through Axocoatl's egress proxy, which
+  checks each host against that list, resolves it on the host, refuses special and
+  unlisted private addresses and records every decision. Each call gets its own proxy
+  credential, passed on the driver's standard input and revoked when the call ends.
+  Read-only helpers and required reviewers get the tools only when their own template
+  lists them.
+- Screenshots never reach the model. Each `browser` call, and each failing
+  `browser_check`, keeps a screenshot beside the Session's network record, and a new
+  `browser` event records the call, its tool call, activation and Agent, URLs, status
+  and screenshot digest. `GET /api/sessions/{id}/network/screenshots/{sha256}` returns
+  a screenshot.
+- `axocoatl browser install` builds the browser image,
+  `localhost/axocoatl-browser:pw1.60.0`, from a Containerfile and lock files embedded in
+  Axocoatl (Node 22 by digest, Playwright 1.60.0, Playwright's headless Chromium).
+  `axocoatl doctor` reports whether it is present and what the browser can reach.
+- Native Session admission accepts `browser` and `browser_check` in an Agent's `tools`
+  and refuses them, with the reason, when no `browser` block is configured or the
+  backend is E2B.
 
 ### Changed
 - `sandbox.backend: e2b` now requires `sandbox.network: bridge` when the configuration
@@ -38,6 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Compatibility
 - A data root used with this version may be refused by 1.1.2 and earlier once a
   Session has a network record, because they do not know the record's directory.
+- With a `browser` block configured, Session containers mount a per-Session
+  `axo-svc-<session>` volume at `/run/axocoatl-svc`. A Session whose container started
+  before `browser` was configured must be restarted before the browser can reach its
+  apps. The browser and egress sidecar containers (`axo-brw-`, `axo-egr-`) and their
+  volumes are removed with the Session.
 
 ## [1.1.2] - 2026-10-02
 

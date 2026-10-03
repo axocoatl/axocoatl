@@ -112,3 +112,14 @@ skills:
 #   enabled: true
 #   idle_threshold_secs: 120   # how long an agent must be idle before a pass runs
 #   interval_secs: 1800        # minimum time between passes for one agent
+
+# ─── Browser tools ──────────────────────────────────────────────────
+# `browser` and `browser_check` run a headless Chromium in a container of its
+# own that reaches this Session's exposed ports and nothing else, unless you
+# declare hosts. Build the image once with `axocoatl browser install`, then
+# list the tools in an Agent's `tools`.
+# browser:
+#   allow: []                 # declared hosts, reached through Axocoatl's egress proxy
+#   snapshot_max_bytes: 16384
+#   timeout_secs: 120
+#   max_parallel: 2

@@ -287,6 +287,8 @@ Review every path by which content can leave the machine:
 - E2B Cloud remote sandboxes, including repository transfer;
 - remote MCP servers and tools;
 - configured web search;
+- hosts declared under `browser.allow`, which the browser container reaches through
+  Axocoatl's egress proxy, and the downloads `axocoatl browser install` makes;
 - event webhooks and their headers;
 - package downloads or repository scripts inside a bridged container;
 - embedding-model downloads during first use.

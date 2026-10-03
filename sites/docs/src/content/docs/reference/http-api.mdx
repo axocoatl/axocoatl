@@ -221,6 +221,7 @@ below.
 | GET | `/api/sessions/{id}/turns/{turn_id}` | One canonical turn owned by this Session, in the same [form](#session-history-versions) as the list |
 | GET | `/api/sessions/{id}/turns/{turn_id}/control-plane` | Versioned read-only execution evidence for the exact Session and turn |
 | GET | `/api/sessions/{id}/network?after=<seq>&limit=<1-1000>` | The Session's [network record](#session-network-record): mode, egress policy and recorded events after `after` (default `limit` 200) |
+| GET | `/api/sessions/{id}/network/screenshots/{sha256}` | One screenshot a browser tool kept beside the Session's network record, as `image/jpeg` or `image/png`; 404 when absent |
 | GET | `/api/session-turns/search?q=…&session_id=…` | Literal case-insensitive search; omit Session ID for all |
 | GET | `/api/sessions/{id}/export?format=markdown` | Markdown by default; accepts `markdown`, `md`, or `json` |
 | POST | `/api/sessions/{id}/rewind` | `{keep_through_turn_id?}`; legacy `{keep}` is raw message count |
@@ -379,8 +380,8 @@ activity returns an empty list.
 ```
 
 `mode` is `sandbox.network`. Pass `next_after` back as `after` to read on. Each
-event has a `kind`: `policy`, `sidecar`, `bind`, `unbind`, `open`, `close`, `web` or
-`limit`. An `open` event names the destination `host` and `port`, its
+event has a `kind`: `policy`, `sidecar`, `bind`, `unbind`, `open`, `close`, `web`,
+`browser` or `limit`. An `open` event names the destination `host` and `port`, its
 `conn_kind` (`connect` for a tunnel or `http`), the `decision` (`allow` or `deny`)
 with its `reason` and `status`, the addresses used, and the tool call (`binding`)
 whose credential it presented. Credentials appear only as 16-hex tags. A `close`
@@ -388,6 +389,14 @@ event adds the bytes sent and received and the duration. `record.full` means new
 connections are refused; `gaps` counts places where a sequence number was skipped.
 `sidecar` and `policies` stay empty until a Session runs under `network: egress`,
 which this build does not start yet.
+
+A `browser` event is one `browser` or `browser_check` call: `tool`, the
+`invocation_id`, `activation_id` and `agent`, `ok`, the `url`, `final_url` and
+`status` (or the `test_path` and `check_status`), the number of `blocked` requests,
+the egress credential's `token` tag when the call used declared hosts, `ms`, and a
+`screenshot` `{sha256, media_type, bytes}` when one was kept (or `screenshot_dropped`
+with the reason). `GET /api/sessions/{id}/network/screenshots/{sha256}` returns the
+image. Screenshots are for people; no model sees them.
 
 ### Turn control plane
 

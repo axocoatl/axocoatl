@@ -163,6 +163,16 @@ start the service or load dotenv files. If onboarding left a hosted-provider
 environment reference instead of storing a supplied key, inject that variable
 through the service manager; see [Run as a service](/operate/service/).
 
+## Browser image
+
+| Command | Purpose |
+| --- | --- |
+| `axocoatl browser install [--image IMAGE]` | Build the browser tools' image with Podman from the Containerfile and lock files embedded in Axocoatl: Node 22, Playwright 1.60.0 and Playwright's headless Chromium. `IMAGE` defaults to `localhost/axocoatl-browser:pw1.60.0`. Prints the image id |
+
+The build downloads the pinned Node image, the locked Playwright packages and
+Chromium. It is network access you start, on the host; Agents never trigger it. See
+[Browser](/configure/browser/).
+
 ## Global help and version
 
 ```sh
