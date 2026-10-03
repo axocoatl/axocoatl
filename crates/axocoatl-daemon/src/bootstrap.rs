@@ -711,6 +711,16 @@ impl crate::session_network::RecordNamespaces for RegistryNetworkRecords {
             .read_network_record(session_id, after, limit, limits)
             .map_err(|error| error.to_string())
     }
+
+    fn read_screenshot(
+        &self,
+        session_id: &str,
+        sha256: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, String> {
+        self.0
+            .read_network_screenshot(session_id, sha256)
+            .map_err(|error| error.to_string())
+    }
 }
 
 /// The local container network for `sandbox.network`. Only exact `bridge`,
@@ -3583,6 +3593,8 @@ pub struct AxocoatlDaemon {
     config_path: StdMutex<Option<std::path::PathBuf>>,
     /// `web_search` and `web_fetch`, and the managed SearXNG behind search.
     web_tools: Arc<crate::session_dispatch_web::WebTools>,
+    /// The browser tools' runtime, present when `browser:` is configured.
+    browser_service: Option<Arc<crate::session_dispatch_browser::BrowserService>>,
     /// Recovery-only primary handles used while resolving an Attempt set after
     /// restart. They must never enter the ordinary Ready fast path because
     /// they intentionally skip project setup.
@@ -5268,6 +5280,35 @@ impl AxocoatlDaemon {
                 }
             });
         }
+        let browser_service =
+            match crate::session_dispatch_browser::BrowserServiceConfig::from_config(
+                &config,
+                local_runtime_authority.clone(),
+            ) {
+                Some(browser) => {
+                    let storage = |name: &str| {
+                        secure_data_dir.child(name).map_err(|error| {
+                            DaemonError::Session(format!(
+                                "preparing browser storage {name}: {error}"
+                            ))
+                        })
+                    };
+                    Some(Arc::new(
+                        crate::session_dispatch_browser::BrowserService::new(
+                            browser,
+                            storage("execution-supervisors")?,
+                            vec![
+                                secure_data_dir.path().to_path_buf(),
+                                data_dir_lease.external_root().path().to_path_buf(),
+                                ipc_root.path().to_path_buf(),
+                            ],
+                            session_network_records.clone(),
+                            session_store.clone(),
+                        ),
+                    ))
+                }
+                None => None,
+            };
         if let axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(ownership) =
             &data_dir_lease.ownership
         {
@@ -5368,6 +5409,7 @@ impl AxocoatlDaemon {
                 crate::session_network_evidence::NetworkEvidenceIndex::default(),
             ),
             web_tools,
+            browser_service,
             session_dispatch_lifecycles,
             attempt_recovery_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             sandbox_starts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -6827,6 +6869,11 @@ impl AxocoatlDaemon {
         // exact id cannot be lost. Wait for that owned task before reading the
         // durable identity or returning a lifecycle operation.
         axocoatl_isolation::e2b::E2bSandbox::wait_for_owned_start(id).await;
+        // Stop the browser's own egress sidecar and container before the
+        // Session's containers go.
+        if let Some(browser) = &self.browser_service {
+            browser.forget(id).await;
+        }
         let session = self.get_session(id).await;
         let mut runtime_to_confirm = None;
         let primary_present = primary.is_some();
@@ -8373,7 +8420,6 @@ impl AxocoatlDaemon {
                         self.ipc_root.clone(),
                     ],
                     // The browser reaches the app under test through them.
-                    service_sockets: egress.is_some() || self.config.browser.is_some(),
                     egress,
                 };
                 let sandbox = match SessionSandbox::start_in(
@@ -9628,7 +9674,6 @@ impl AxocoatlDaemon {
                 self.ipc_root.clone(),
             ],
             egress: None,
-            service_sockets: false,
         };
         let started = tokio::select! {
             result = SessionSandbox::start_in(
@@ -10982,6 +11027,15 @@ impl AxocoatlDaemon {
                 generation: status.generation,
                 restarts: status.restarts,
             });
+        // A Session that does not run under `network: egress` has no
+        // sidecar or policy of its own; the browser's, once its declared
+        // hosts have been used, are shown instead.
+        let (sidecar, policies) = match (&self.browser_service, sidecar, policies) {
+            (Some(browser), None, policies) if policies.is_empty() => {
+                browser.network_view(session_id).await
+            }
+            (_, sidecar, policies) => (sidecar, policies),
+        };
         Ok(crate::session_network::SessionNetworkView {
             session_id: session_id.to_string(),
             mode: sandbox.network.clone(),
@@ -10993,6 +11047,33 @@ impl AxocoatlDaemon {
             next_after: page.next_after,
             warnings,
         })
+    }
+
+    /// One screenshot a browser tool kept beside the Session's network
+    /// record: its media type and bytes, or `None`.
+    pub async fn session_network_screenshot(
+        &self,
+        session_id: &str,
+        sha256: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, DaemonError> {
+        if self.get_session(session_id).await.is_none() {
+            return Err(DaemonError::Session(format!(
+                "session '{session_id}' not found"
+            )));
+        }
+        if sha256.len() != 64
+            || !sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(DaemonError::InvalidRequest(
+                "a screenshot is named by 64 lowercase hex digits".into(),
+            ));
+        }
+        self.session_network_records
+            .read_screenshot(session_id, sha256)
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))
     }
 
     /// Inspect one exact retained turn without granting runtime control. The
@@ -13746,7 +13827,6 @@ trap - 0 1 2 15
                 self.ipc_root.clone(),
             ],
             egress: None,
-            service_sockets: false,
         };
         let sandbox = SessionSandbox::start_in(
             container_id,

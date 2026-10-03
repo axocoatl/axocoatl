@@ -70,6 +70,16 @@ impl SessionDispatchController {
         crate::session_network::read_existing(&state.canonical, after, limit, limits).map_err(error)
     }
 
+    /// Read one screenshot kept beside the Session's network record.
+    pub(crate) fn read_network_screenshot(
+        &self,
+        sha256: &str,
+    ) -> Result<Option<(String, Vec<u8>)>> {
+        let state = self.lock()?;
+        state.ready()?;
+        crate::session_network::read_screenshot(&state.canonical, sha256).map_err(error)
+    }
+
     /// Exact read through the same retained canonical owner. Earlier v2 turns
     /// and the sealed v1 frontier never fall back to a mutable legacy ledger.
     pub(crate) fn control_plane_for_turn(

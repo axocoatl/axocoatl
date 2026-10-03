@@ -78,8 +78,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Legacy (1.0-format) Sessions get `web_fetch` for an Agent whose `tools` list names
   it, never under `sandbox.network: none`, and `web_search` through SearXNG when
   `provider: searxng`. Legacy calls are not recorded.
-- The configuration parses a new `browser` block, for an upcoming tool. It is
-  validated but not yet run.
+- **Browser tools for native Sessions.** With a `browser` block in the configuration,
+  Agents whose `tools` list them get `browser` and `browser_check`. `browser` opens a
+  URL in a fresh headless Chromium, runs up to 40 steps (click, fill, select, check,
+  press, wait, expect text, reload, back; no script step), and returns the page's
+  accessibility snapshot, console errors, dialogs and failed or refused requests as
+  text, with the Playwright line for each step. `browser_check` runs one Playwright test
+  file from the repository (with the files it imports by relative path) or given as
+  `script`, with one worker and no retries, and returns each test's status and first
+  error. Both run in a per-Session browser container with no network interface other
+  than loopback, a read-only root, no capabilities and no Workspace mount. Under
+  `bridge` and `none` it reaches the Session's exposed ports through Unix sockets
+  served by a separate forwarder container that joins the Session container's network
+  namespace; the Session container never sees the sockets, so a read-only helper's
+  shell cannot reach the apps through them. Under `egress` it uses the sockets the
+  Session container's bridge already serves for Preview. It reaches the hosts listed
+  under `browser.allow` only through Axocoatl's egress proxy, which checks each host
+  against that list, resolves it on the host, refuses special and unlisted private
+  addresses and records every decision; under `network: egress`, `browser.allow` is
+  refused until the browser uses the Session's own egress proxy. Without declared
+  hosts Chromium gets no proxy at all. Each call gets its own proxy
+  credential, passed on the driver's standard input and revoked when the call ends.
+  `browser_check` runs alone and the browser container is replaced after it, so
+  nothing its test leaves reaches another call. Read-only helpers and required
+  reviewers get `browser` when their own template lists it; `browser_check` counts as
+  a tool that can change files. The tools are not offered in Ways attempts.
+- Screenshots never reach the model. Each `browser` call, and each failing
+  `browser_check`, keeps a screenshot beside the Session's network record (at most
+  64 MiB per Session), and a new `browser` event records the call, its tool call,
+  activation and Agent, URLs, status and screenshot digest. A call that fails is
+  recorded too, with the reason. `GET /api/sessions/{id}/network/screenshots/{sha256}`
+  returns a screenshot, and `GET /api/sessions/{id}/network` shows the browser's
+  egress sidecar and policy once declared hosts are used.
+- `axocoatl browser install` builds the browser image,
+  `localhost/axocoatl-browser:pw1.60.0`, from a Containerfile and lock files embedded in
+  Axocoatl (Node 22 by digest, Playwright 1.60.0, Playwright's headless Chromium).
+  `axocoatl doctor` reports whether it is present and what the browser can reach.
+- Native Session admission accepts `browser` and `browser_check` in an Agent's `tools`
+  and refuses them, with the reason, when no `browser` block is configured, the
+  backend is E2B or `browser.allow` lists hosts under `network: egress`, and refuses
+  `browser_check` for an Agent with `writes: []`.
 
 ### Changed
 - `web_search.provider` must be `searxng` or the legacy `tavily`; any other non-empty value is
@@ -92,9 +130,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Compatibility
 - A data root used with this version may be refused by 1.1.2 and earlier once a
   Session has a network record, because they do not know the record's directory.
-- Removing a Session's runtime now also removes its `axo-egr-`, `axo-brw-` and
-  `axo-pvw-` containers, and deleting it also removes its `axo-egr-` and `axo-svc-`
-  volumes.
+- Removing a Session's runtime now also removes its `axo-egr-`, `axo-brw-`, `axo-pvw-`
+  and `axo-svc-` containers, and deleting it also removes its `axo-egr-` and `axo-svc-`
+  volumes. Removing a Session container also removes containers that joined its
+  network namespace (`podman rm --depend`).
 
 ## [1.1.2] - 2026-10-02
 

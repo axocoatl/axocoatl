@@ -76,7 +76,7 @@ and have no YAML override. See [Data and backup](/operate/data-backup/) and
 | `proactive` | list | Legacy interval/event Automation seed |
 | `web_search` | object/null | Optional Session web-search provider |
 | `web_fetch` | object/null | Optional `web_fetch` tool; present enables it for Agents that list it |
-| `browser` | object/null | Optional `browser` tool; present enables it for Agents that list it |
+| `browser` | object/null | Optional `browser` and `browser_check` tools; present enables them for Agents that list them |
 | `consolidation` | object | Idle memory-promotion loop |
 | `webhooks` | list | Outbound typed-event delivery |
 | `pricing` | map | Per-model input/output rates for Attempt cost reporting; reasoning uses the output rate |
@@ -438,8 +438,9 @@ through a SearXNG instance Axocoatl runs with local Podman (`managed: true`) or 
 at `url` (`managed: false`). The `web_fetch` block's presence offers `web_fetch` the
 same way. Both run on the host, not in the Session container, and each call in a
 native Session is written to the Session's network record. Native Sessions refuse
-them under `sandbox.network: none`, and in attempts made with Explore several ways
-an Agent that lists them runs without them. Legacy (1.0-format) Sessions offer
+them under `sandbox.network: none`; under `egress` they run as under `bridge`, and
+`sandbox.egress` does not limit them. In attempts made with Explore several ways an
+Agent that lists them runs without them. Legacy (1.0-format) Sessions offer
 `web_fetch` only to an Agent that lists it, never under `network: none`, and do not
 record either tool. See [Web research](/configure/web/) for setup, citations and
 what leaves the machine.
@@ -448,21 +449,28 @@ what leaves the machine.
 it, but only legacy (1.0-format) Sessions use it: native Sessions refuse it and
 `validate` warns. Any other provider is an error.
 
-The configuration also parses the upcoming browser tool. It is validated for shape
-and bounds but not yet run by this build:
+## Browser
 
 ```yaml
 browser:
   image: localhost/axocoatl-browser:pw1.60.0
-  allow: []              # same entries as sandbox.egress.allow
-  private_destinations: []
-  snapshot_max_bytes: 16384
-  timeout_secs: 120
-  max_parallel: 2
+  allow: []                 # same entries as sandbox.egress.allow
+  private_destinations: []  # private ranges allow entries may reach
+  snapshot_max_bytes: 16384 # 1024-65536
+  timeout_secs: 120         # 10-170, per call
+  max_parallel: 2           # 1-4 calls at once per Session
 ```
 
-`browser` is refused with `backend: e2b`, and `browser.allow` must be empty with
-`network: none`.
+A `browser` block turns on the `browser` and `browser_check` tools for Agents whose
+`tools` list them; see [Browser](/configure/browser/). `image` defaults to the image
+`axocoatl browser install` builds; another image should be pinned by digest, and
+`validate` and `doctor` warn about a tag. `allow` and `private_destinations` take the
+same entries and rules as `sandbox.egress`, and are reached only through Axocoatl's
+egress proxy. `browser` is refused with `backend: e2b`, and `browser.allow` must be
+empty with `network: none`; under `network: egress` it is refused until the browser
+uses the Session's own egress proxy. An Agent that lists `browser` or `browser_check`
+when no `browser` block is configured is refused when its team is admitted, and so is
+an Agent with `writes: []` that lists `browser_check`.
 
 ## Webhooks
 
@@ -505,13 +513,15 @@ remains unknown.
 
 `axocoatl validate` checks structural invariants such as duplicate IDs,
 non-empty Agent provider/model strings, dependency and role constraints,
-token-budget relationships, MCP transport shape, webhook URL shape, and that
-`sandbox.network` is exactly `bridge` or `none`. It does not prove that:
+token-budget relationships, MCP transport shape, webhook URL shape, that
+`sandbox.network` is exactly `bridge`, `none` or `egress`, and the bounds of the
+`sandbox.egress` and `browser` blocks. It does not prove that:
 
 - a provider ID has a registered adapter or credentials;
 - a hosted model is reachable or entitled;
 - sandbox backend/network strings are operational on this host;
 - an MCP process/URL connects;
+- the browser image exists (`axocoatl doctor` checks that);
 - an Automation in the separate canonical store is valid.
 
 <Aside type="caution" title="Settings has mixed persistence">

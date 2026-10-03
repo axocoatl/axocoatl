@@ -315,35 +315,6 @@ pub(crate) async fn remove_preview(session_id: &str) -> Result<(), String> {
     remove_container(&preview_container_name(session_id)).await
 }
 
-/// Create the Session's service-socket volume when no sidecar does (bridge
-/// and none modes with service sockets).
-pub(crate) async fn create_service_volume(
-    session_id: &str,
-    runtime_authority: Option<&str>,
-    labels: &[String],
-) -> Result<(), IsolationError> {
-    let spec = SidecarSpec {
-        session_id: session_id.to_string(),
-        runtime_authority: runtime_authority.map(str::to_string),
-        image: String::new(),
-        network: None,
-        max_connections: axocoatl_exec::egress::protocol::DEFAULT_MAX_CONNECTIONS,
-        require_resource_limits: false,
-        labels: labels.to_vec(),
-    };
-    let name = service_volume_name(session_id);
-    podman(
-        volume_create_args(&spec, &name, "service-sockets"),
-        COMMAND_TIMEOUT,
-    )
-    .await
-    .map_err(|error| {
-        IsolationError::OciSetupFailed(format!(
-            "creating the service-socket volume {name}: {error}"
-        ))
-    })
-}
-
 /// Where the sidecar is in its lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidecarPhase {

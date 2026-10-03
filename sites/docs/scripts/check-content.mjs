@@ -110,6 +110,7 @@ for (const [group, name] of [
   ['mcp', 'McpCommands'],
   ['workflow', 'WorkflowCommands'],
   ['tokens', 'TokenCommands'],
+  ['browser', 'BrowserCommands'],
 ]) {
   for (const command of variants(name)) {
     if (!cliReference.includes(`axocoatl ${group} ${command}`)) {

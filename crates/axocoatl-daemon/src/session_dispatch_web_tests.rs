@@ -27,6 +27,8 @@ fn context() -> HostInvocationContext {
         },
         agent: "researcher".into(),
         read_only: true,
+        checkout: None,
+        attempt: false,
     }
 }
 

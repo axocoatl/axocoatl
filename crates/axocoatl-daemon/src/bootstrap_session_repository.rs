@@ -435,6 +435,10 @@ impl SessionRepositoryOwner {
             None => &self.inner.workspace_root,
         }
     }
+    /// Whether this owner is a Ways attempt lane's, not the Session's own.
+    pub(crate) fn is_attempt(&self) -> bool {
+        self.inner.attempt.is_some()
+    }
     pub fn execution_identity(&self) -> &str {
         &self.inner.metadata.execution_identity
     }

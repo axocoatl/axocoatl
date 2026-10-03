@@ -243,7 +243,14 @@ configuration in the Session's shared home for later commands. The same restrict
 refuses every TCP connection and every TCP bind, on any address including loopback,
 whatever the sandbox's `network` setting: the helper's shell cannot connect anywhere
 over TCP, with `curl`, `git` or a package manager for example, including to a server
-running in the container. Landlock does not cover UDP, so name lookups and other UDP
+running in the container. Under `bridge` and `none` the browser tools' sockets for the
+Session's apps live in a separate forwarder container, never in the Session container,
+so they do not open another way in. Under `network: egress` the Session container's own
+bridge serves those sockets for Preview in `/run/axocoatl-svc`, and Landlock does not
+stop a connection to a Unix socket, so a helper can reach the Session's apps through
+them. A helper whose template lists `browser` can still drive those apps
+through the browser, which can do whatever the apps allow; see
+[Browser](/configure/browser/#helpers-and-reviewers). Landlock does not cover UDP, so name lookups and other UDP
 traffic still follow `network`. Nor does it cover a socket that listens without binding
 first, which the kernel gives a random port that the host or other containers may be
 able to reach. `network: none` stops both. The restriction needs Landlock ABI 4 (Linux
@@ -312,7 +319,7 @@ and ports listed under `sandbox.egress`. The
 | A credential ends, or a host is revoked, while a connection is being decided | The connection is refused before its tunnel opens (`407 binding_ended`, `403 not_allowed` or `403 revoked`). |
 | The proxy stops or its control channel breaks | Connections are refused (`502` from the bridge, or `503` from the proxy) and connections in progress are recorded as `interrupted`. |
 | The record cannot be written | New connections are refused with `503 record_unavailable`. The cap holds for the Session's lifetime; setup commands, provisioning and terminals still run, without network. |
-| A process in the container replaces a port socket with a symlink | Under `bridge` and `none`, the port forwarder runs as the container's user, not root, and creates each socket with its final mode instead of changing it afterwards. |
+| A process in the container replaces a port socket with a symlink | The bridge creates each port socket with its final mode instead of changing it afterwards. Under `bridge` and `none`, the browser's port sockets are made in a separate forwarder container that the Session container cannot reach. |
 | Axocoatl's config file is inside the Workspace | Agents can read it, and under `egress` send it to an allowed host that accepts uploads. **Session network** warns about it; keep secrets in environment variables. |
 
 What `egress` does not do:
@@ -350,6 +357,8 @@ Review every path by which content can leave the machine:
   (see [Web research](/configure/web/#what-leaves-your-computer) and what it
   refuses under
   [Private and local addresses](/configure/web/#private-and-local-addresses));
+- hosts declared under `browser.allow`, which the browser container reaches through
+  Axocoatl's egress proxy, and the downloads `axocoatl browser install` makes;
 - event webhooks and their headers;
 - package downloads or repository scripts inside a bridged container, or to the
   hosts listed under `sandbox.egress`;

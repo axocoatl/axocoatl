@@ -1,8 +1,9 @@
 //! Host invocation tools through real native actor admission: offered only
 //! when listed, bound to the exact admitted invocation, settled and audited
-//! like any tool, and refused with a reason when unavailable. Then the real
-//! `web_search` and `web_fetch` host tools through the same path, with their
-//! network record events and the `sources` evidence they produce.
+//! like any tool, refused with a reason when unavailable, and left out of
+//! Ways attempt lanes that a tool refuses. Then the real `web_search` and
+//! `web_fetch` host tools through the same path, with their network record
+//! events and the `sources` evidence they produce.
 use super::*;
 use crate::session_dispatch_web::{WebRecordSink, WebTools, NETWORK_NONE_REFUSAL};
 use axocoatl_session::network_record::{NetworkEvent, WebTool};
@@ -759,4 +760,336 @@ async fn web_tools_are_refused_under_network_none_and_when_unconfigured() {
         refused.contains("web_search is listed for parent but web_search.provider is not configured"),
         "{refused}"
     );
+}
+
+// --- Tools that refuse a daemon or a Ways attempt lane -------------------
+
+/// Calls `tool` once with `arguments`, then answers with text.
+struct CallingProvider {
+    tool: &'static str,
+    arguments: serde_json::Value,
+    expect_offered: bool,
+    call: bool,
+    expect_result: &'static str,
+    calls: AtomicUsize,
+    results: Mutex<Vec<String>>,
+}
+
+impl CallingProvider {
+    fn new(
+        tool: &'static str,
+        expect_offered: bool,
+        expect_result: &'static str,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            tool,
+            arguments: serde_json::json!({"url": "http://localhost:8765/"}),
+            expect_offered,
+            call: expect_offered,
+            expect_result,
+            calls: AtomicUsize::new(0),
+            results: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+#[async_trait]
+impl LlmProvider for CallingProvider {
+    fn provider_id(&self) -> &str {
+        "controlled"
+    }
+    fn model_id(&self) -> &str {
+        "controlled-model"
+    }
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            streaming: true,
+            tool_calling: true,
+            ..Default::default()
+        }
+    }
+    fn execution_bounds(&self, _: &ChatRequest) -> Option<ProviderExecutionBounds> {
+        Some(ProviderExecutionBounds {
+            token_limit: 100,
+            cost_microunits: 0,
+            response_bytes: 8192,
+        })
+    }
+    async fn chat(&self, _: ChatRequest) -> std::result::Result<ChatResponse, ProviderError> {
+        unreachable!("the actual autonomous actor streams")
+    }
+    async fn chat_stream(
+        &self,
+        request: ChatRequest,
+    ) -> std::result::Result<
+        Pin<Box<dyn Stream<Item = std::result::Result<StreamEvent, ProviderError>> + Send>>,
+        ProviderError,
+    > {
+        let round = self.calls.fetch_add(1, Ordering::SeqCst);
+        let offered = request.tools.iter().any(|tool| tool.name == self.tool);
+        assert_eq!(offered, self.expect_offered, "offered tools: {:?}", request.tools.iter().map(|tool| &tool.name).collect::<Vec<_>>());
+        let call = self.call && round == 0;
+        let mut events = if call {
+            vec![Ok(StreamEvent::ToolCallDelta {
+                index: Some(0),
+                id: "host-tool-call".into(),
+                name: Some(self.tool.into()),
+                args_delta: self.arguments.to_string(),
+            })]
+        } else {
+            if self.call {
+                let result = request
+                    .messages
+                    .iter()
+                    .find(|message| message.tool_call_id.as_deref() == Some("host-tool-call"))
+                    .and_then(|message| message.text_content())
+                    .expect("the acknowledged host tool result")
+                    .to_owned();
+                assert!(result.contains(self.expect_result), "{result}");
+                self.results.lock().unwrap().push(result);
+            }
+            vec![Ok(StreamEvent::TextDelta {
+                delta: "done".into(),
+            })]
+        };
+        events.push(Ok(StreamEvent::Usage(TokenUsageStats::new(10, 2))));
+        events.push(Ok(StreamEvent::Done {
+            finish_reason: if call {
+                FinishReason::ToolUse
+            } else {
+                FinishReason::Stop
+            },
+        }));
+        Ok(Box::pin(tokio_stream::iter(events)))
+    }
+}
+
+#[derive(Default)]
+struct FakeHostTool {
+    refusal: Option<String>,
+    attempt_refusal: Option<String>,
+    bound: Mutex<Vec<HostInvocationContext>>,
+    executed: AtomicUsize,
+}
+
+struct BoundFake {
+    owner: Arc<FakeHostTool>,
+    context: HostInvocationContext,
+}
+
+#[async_trait]
+impl axocoatl_tools::BuiltinTool for BoundFake {
+    fn description(&self) -> &str {
+        "fake browser"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    async fn execute(
+        &self,
+        arguments: serde_json::Value,
+    ) -> std::result::Result<serde_json::Value, axocoatl_tools::ToolError> {
+        self.owner.executed.fetch_add(1, Ordering::SeqCst);
+        Ok(serde_json::json!({
+            "invocation": self.context.invocation_id.as_str(),
+            "agent": self.context.agent,
+            "url": arguments["url"],
+        }))
+    }
+}
+
+struct FakeRegistration(Arc<FakeHostTool>);
+
+impl HostInvocationTool for FakeRegistration {
+    fn name(&self) -> &'static str {
+        "browser"
+    }
+    fn definition(&self) -> Arc<dyn axocoatl_tools::BuiltinTool> {
+        Arc::new(axocoatl_tools::BrowserTool::definition())
+    }
+    fn refusal(&self, _: &ExecutionProfile) -> Option<String> {
+        self.0.refusal.clone()
+    }
+    fn attempt_refusal(&self) -> Option<String> {
+        self.0.attempt_refusal.clone()
+    }
+    fn bind(&self, context: HostInvocationContext) -> Arc<dyn axocoatl_tools::BuiltinTool> {
+        self.0.bound.lock().unwrap().push(context.clone());
+        Arc::new(BoundFake {
+            owner: self.0.clone(),
+            context,
+        })
+    }
+}
+
+fn intents(controller: &SessionDispatchController) -> Vec<InvocationId> {
+    let state = controller.lock().unwrap();
+    state
+        .canonical
+        .records()
+        .unwrap()
+        .iter()
+        .filter_map(|record| match &record.event {
+            TurnContractEvent::RecordIntent { invocation_id, .. } => Some(invocation_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_listed_host_tool_is_offered_and_bound_to_the_exact_call() {
+    let fixture = input_fixture_with_tools(false, &["browser"]);
+    let fake = Arc::new(FakeHostTool::default());
+    fixture
+        .controller
+        .register_host_invocation_tool(Arc::new(FakeRegistration(fake.clone())))
+        .unwrap();
+    start_input(&fixture.controller, &fixture.parent);
+    let mut resources = input_resources(&fixture.parent, InputProvider::new("unused", false, false));
+    let provider = CallingProvider::new("browser", true, "\"agent\":\"parent\"");
+    resources.provider = provider.clone();
+    let result = fixture
+        .controller
+        .prepare_autonomous_activation(fixture.parent.input.activation.clone(), resources)
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    assert!(result.accepted, "{:?}", result.failure);
+    assert_eq!(fake.executed.load(Ordering::SeqCst), 1);
+    let bound = fake.bound.lock().unwrap().clone();
+    assert_eq!(bound.len(), 1);
+    let intents = intents(&fixture.controller);
+    assert_eq!(intents.len(), 1);
+    assert_eq!(bound[0].invocation_id, intents[0]);
+    assert_eq!(bound[0].activation, fixture.parent.input.activation);
+    assert_eq!(bound[0].session_id, "input-session");
+    assert!(!bound[0].read_only);
+    assert!(bound[0].checkout.is_none());
+    assert!(!bound[0].attempt);
+    assert!(provider.results.lock().unwrap()[0].contains(intents[0].as_str()));
+    let state = fixture.controller.lock().unwrap();
+    assert!(state.canonical.records().unwrap().iter().any(|record| matches!(
+        &record.event,
+        TurnContractEvent::RecordOutcome { outcome: InvocationOutcome::Succeeded, invocation_id, .. }
+            if *invocation_id == intents[0]
+    )));
+}
+
+#[tokio::test]
+async fn an_unlisted_host_tool_is_not_offered() {
+    let fixture = input_fixture_with_tools(false, &["effect"]);
+    let fake = Arc::new(FakeHostTool::default());
+    fixture
+        .controller
+        .register_host_invocation_tool(Arc::new(FakeRegistration(fake.clone())))
+        .unwrap();
+    start_input(&fixture.controller, &fixture.parent);
+    let mut resources = input_resources(&fixture.parent, InputProvider::new("unused", false, false));
+    resources.provider = CallingProvider::new("browser", false, "");
+    let result = fixture
+        .controller
+        .prepare_autonomous_activation(fixture.parent.input.activation.clone(), resources)
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    assert!(result.accepted, "{:?}", result.failure);
+    assert!(fake.bound.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_listed_host_tool_the_daemon_cannot_run_fails_preparation_with_its_reason() {
+    let fixture = input_fixture_with_tools(false, &["browser"]);
+    let fake = Arc::new(FakeHostTool {
+        refusal: Some("the browser block is not configured".into()),
+        ..Default::default()
+    });
+    fixture
+        .controller
+        .register_host_invocation_tool(Arc::new(FakeRegistration(fake.clone())))
+        .unwrap();
+    start_input(&fixture.controller, &fixture.parent);
+    let mut resources = input_resources(&fixture.parent, InputProvider::new("unused", false, false));
+    let provider = CallingProvider::new("browser", false, "");
+    resources.provider = provider.clone();
+    let refused = fixture
+        .controller
+        .prepare_autonomous_activation(fixture.parent.input.activation.clone(), resources)
+        .err()
+        .expect("refused")
+        .to_string();
+    assert!(refused.contains("the browser block is not configured"), "{refused}");
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0, "no model call");
+    assert!(fake.bound.lock().unwrap().is_empty());
+    assert_eq!(fake.executed.load(Ordering::SeqCst), 0);
+    assert!(intents(&fixture.controller).is_empty(), "nothing is recorded");
+}
+
+#[test]
+fn a_tool_that_refuses_attempt_lanes_is_offered_only_outside_them() {
+    let fixture = input_fixture_with_tools(false, &["browser"]);
+    let fake = Arc::new(FakeHostTool {
+        attempt_refusal: Some("not in a Ways attempt".into()),
+        ..Default::default()
+    });
+    fixture
+        .controller
+        .register_host_invocation_tool(Arc::new(FakeRegistration(fake.clone())))
+        .unwrap();
+    let profile = ExecutionProfile {
+        definition: "parent".into(),
+        provider: "controlled".into(),
+        model: "controlled-model".into(),
+        isolation: "in-process".into(),
+        tools: vec!["browser".into()],
+        write_scope: None,
+    };
+    let state = fixture.controller.lock().unwrap();
+    let offered = |attempt| {
+        state
+            .host_tool_definitions(&profile, attempt)
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(offered(false), vec!["browser"]);
+    assert!(offered(true).is_empty());
+    // Left out of an attempt, it is no reason to refuse the activation.
+    assert_eq!(state.host_tool_refusal(&profile, false), None);
+    assert_eq!(state.host_tool_refusal(&profile, true), None);
+    // An activation without a repository, or with the Session's own, is
+    // not an attempt.
+    assert!(!crate::session_dispatch::host_tools::bound_to_attempt(None));
+}
+
+#[test]
+fn only_host_invocation_names_can_be_registered() {
+    struct Named;
+    impl HostInvocationTool for Named {
+        fn name(&self) -> &'static str {
+            "bash"
+        }
+        fn definition(&self) -> Arc<dyn axocoatl_tools::BuiltinTool> {
+            Arc::new(axocoatl_tools::BrowserTool::definition())
+        }
+        fn refusal(&self, _: &ExecutionProfile) -> Option<String> {
+            None
+        }
+        fn bind(&self, _: HostInvocationContext) -> Arc<dyn axocoatl_tools::BuiltinTool> {
+            Arc::new(axocoatl_tools::BrowserTool::definition())
+        }
+    }
+    let fixture = input_fixture();
+    assert!(fixture
+        .controller
+        .register_host_invocation_tool(Arc::new(Named))
+        .is_err());
+    crate::session_dispatch::validate_repository_tools(&[
+        "read_file".into(),
+        "browser".into(),
+        "browser_check".into(),
+    ])
+    .unwrap();
+    assert!(crate::session_dispatch::validate_repository_tools(&["selenium".into()]).is_err());
 }

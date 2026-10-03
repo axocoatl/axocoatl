@@ -323,7 +323,6 @@ sandbox:
             control_plane_dirs: Vec::new(),
             control_plane_roots: Vec::new(),
             egress: None,
-            service_sockets: false,
         };
 
         assert!(!policy.allow_post_create);

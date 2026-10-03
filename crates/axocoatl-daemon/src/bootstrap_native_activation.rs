@@ -40,8 +40,8 @@ impl AxocoatlDaemon {
         initial_limits: GrantLimits,
     ) -> Result<CapturedNativeDefinition, DaemonError> {
         crate::session_dispatch::validate_repository_tools(&config.tools).map_err(native_error)?;
-        // A listed host tool (web_search, web_fetch, browser) must be
-        // available before the team is admitted.
+        // A listed host tool (web_search, web_fetch, browser, browser_check)
+        // must be available before the team is admitted.
         if let Some(reason) = self.host_tool_refusal(&config, &definition_id) {
             return Err(DaemonError::Session(reason));
         }
@@ -60,11 +60,21 @@ impl AxocoatlDaemon {
         .await
     }
 
-    /// The host tools native Session controllers register.
+    /// The host tools native Session controllers register: the web tools
+    /// and, when `browser:` is configured, `browser` and `browser_check`.
     pub(crate) fn host_invocation_tools(
         &self,
     ) -> Vec<Arc<dyn crate::session_dispatch::HostInvocationTool>> {
-        self.web_tools.host_tools()
+        let mut tools = self.web_tools.host_tools();
+        if let Some(browser) = &self.browser_service {
+            tools.push(Arc::new(
+                crate::session_dispatch_browser::BrowserHostTool::browser(browser.clone()),
+            ));
+            tools.push(Arc::new(
+                crate::session_dispatch_browser::BrowserHostTool::browser_check(browser.clone()),
+            ));
+        }
+        tools
     }
 
     /// Why an Agent with `config` cannot have a host tool it lists.
@@ -80,11 +90,6 @@ impl AxocoatlDaemon {
         {
             return None;
         }
-        let registered = self
-            .host_invocation_tools()
-            .into_iter()
-            .map(|tool| (tool.name(), tool))
-            .collect();
         // The refusal names the Agent the person configured; the definition
         // id is an internal identity.
         let label = if config.name.trim().is_empty() {
@@ -92,6 +97,22 @@ impl AxocoatlDaemon {
         } else {
             config.name.clone()
         };
+        if self.browser_service.is_none() {
+            if let Some(tool) = config
+                .tools
+                .iter()
+                .find(|tool| matches!(tool.as_str(), "browser" | "browser_check"))
+            {
+                return Some(format!(
+                    "{tool} is listed for {label} but the browser block is not configured; add `browser:` to the config and run `axocoatl browser install`"
+                ));
+            }
+        }
+        let registered = self
+            .host_invocation_tools()
+            .into_iter()
+            .map(|tool| (tool.name(), tool))
+            .collect();
         let profile = axocoatl_session::control_authority::ExecutionProfile {
             definition: label,
             provider: config.provider.clone(),

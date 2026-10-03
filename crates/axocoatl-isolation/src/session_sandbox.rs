@@ -79,9 +79,10 @@ const DYNAMIC_PORT_START_RETRIES: usize = 3;
 /// on this label before considering a container name.
 pub(crate) const RUNTIME_AUTHORITY_LABEL: &str = "io.axocoatl.runtime-authority";
 /// Name prefixes of containers that serve one Session from outside it: the
-/// egress sidecar, the browser and the egress Preview. Each ends in the
-/// Session id and is removed with its Session.
-pub(crate) const DEPENDENT_CONTAINER_PREFIXES: [&str; 3] = ["axo-egr-", "axo-brw-", "axo-pvw-"];
+/// egress sidecar, the browser, the egress Preview and the browser's service
+/// forwarder. Each ends in the Session id and is removed with its Session.
+pub(crate) const DEPENDENT_CONTAINER_PREFIXES: [&str; 4] =
+    ["axo-egr-", "axo-brw-", "axo-pvw-", "axo-svc-"];
 
 /// Commands Axocoatl itself needs in every local repository sandbox. These are
 /// product infrastructure, not a project's language toolchain: Source Control,
@@ -326,10 +327,6 @@ pub struct SandboxPolicy {
     /// The decision point and sidecar settings for [`SandboxNetwork::Egress`].
     /// Required by that mode and ignored by the others.
     pub egress: Option<crate::egress::EgressAttachment>,
-    /// Mount the `axo-svc-{session}` volume at `/run/axocoatl-svc`, where each
-    /// exposed port is served as a Unix socket (by PID 1 under egress, or by
-    /// [`SessionSandbox::ensure_service_sockets`] otherwise).
-    pub service_sockets: bool,
 }
 
 impl Default for SandboxPolicy {
@@ -346,7 +343,6 @@ impl Default for SandboxPolicy {
             supervisor_program: None,
             supervisor_installation: None,
             egress: None,
-            service_sockets: false,
         }
     }
 }
@@ -575,38 +571,13 @@ pub struct SessionSandbox {
     /// The egress proxy sidecar. Only the owning handle holds it; it is
     /// stopped after the Session container is removed.
     egress_sidecar: Option<Arc<crate::egress_sidecar::EgressSidecar>>,
-    /// The `axo-svc-{session}` volume and the ports served in it, when the
-    /// container mounts it.
-    service_sockets: Option<ServiceSockets>,
     /// Under egress with exposed ports, the `axo-pvw-{session}` container
     /// that publishes them. Removed after the Session container.
     preview_container: Option<String>,
-    /// Serializes starting the service-socket forwarder (bridge and none).
-    service_forwarder: Arc<tokio::sync::Mutex<()>>,
     /// Background tasks started in this container.
     tasks: std::sync::Mutex<Vec<BgTaskHandle>>,
     /// Interactive PTY-backed terminals.
     terminals: std::sync::Mutex<Vec<std::sync::Arc<crate::pty::PtyTerminal>>>,
-}
-
-/// The Session's service sockets: each exposed port, served as
-/// `/run/axocoatl-svc/{port}.sock` in the `volume`, which other containers
-/// (the browser, an egress Preview) mount to reach the Session's apps.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServiceSockets {
-    pub volume: String,
-    pub ports: Vec<u16>,
-    /// Under egress, the container's PID 1 serves them; otherwise a
-    /// forwarder started by [`SessionSandbox::ensure_service_sockets`] does.
-    pub served_by_pid_one: bool,
-}
-
-impl ServiceSockets {
-    /// The socket path for one port, inside any container that mounts the
-    /// volume at `/run/axocoatl-svc`.
-    pub fn socket_path(port: u16) -> String {
-        format!("{}/{port}.sock", crate::egress_sidecar::SERVICE_SOCKET_DIR)
-    }
 }
 
 /// Stops a sidecar, and removes an egress Preview container, started for a
@@ -1101,17 +1072,6 @@ impl SessionSandbox {
             )
             .await?;
             sidecar_guard.0 = Some(Arc::new(sidecar));
-        } else if policy.service_sockets && !policy.passive_start {
-            crate::egress_sidecar::create_service_volume(
-                session_id,
-                policy.runtime_authority.as_deref(),
-                policy
-                    .egress
-                    .as_ref()
-                    .map(|attachment| attachment.labels.as_slice())
-                    .unwrap_or_default(),
-            )
-            .await?;
         }
 
         // Start the long-lived idle container. Resource caps remain a
@@ -1276,13 +1236,6 @@ impl SessionSandbox {
                 None
             },
             egress_sidecar: sidecar_guard.0.clone(),
-            service_sockets: (!policy.passive_start && (egress_mode || policy.service_sockets))
-                .then(|| ServiceSockets {
-                    volume: crate::egress_sidecar::service_volume_name(session_id),
-                    ports: publish.clone(),
-                    served_by_pid_one: egress_mode,
-                }),
-            service_forwarder: Arc::new(tokio::sync::Mutex::new(())),
             preview_container,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
@@ -1654,8 +1607,6 @@ impl SessionSandbox {
             supervisor_program: None,
             egress: None,
             egress_sidecar: None,
-            service_sockets: None,
-            service_forwarder: Arc::new(tokio::sync::Mutex::new(())),
             preview_container: None,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
@@ -2648,7 +2599,7 @@ impl SessionSandbox {
                 crate::egress_sidecar::EGRESS_SOCKET_DIR
             ));
         }
-        if !policy.passive_start && (egress || policy.service_sockets) {
+        if !policy.passive_start && egress {
             // `U=true` hands the volume to the container's user, so a
             // non-root image's PID 1 can create the port sockets.
             args.push("--mount".into());
@@ -3178,116 +3129,6 @@ impl SessionSandbox {
         Ok(arc)
     }
 
-    /// Make sure every exposed port is served as a Unix socket in the
-    /// Session's service-socket volume, and return where.
-    ///
-    /// Under egress the container's PID 1 serves them from start. Under
-    /// bridge and none a forwarder runs as the container's user next to the
-    /// Session's processes; it is started on first use and again when a
-    /// socket is missing (code in the container can stop it, which blocks
-    /// only its own app). The probe and the forwarder are the bundled
-    /// supervisor.
-    pub async fn ensure_service_sockets(&self) -> Result<ServiceSockets, IsolationError> {
-        let sockets = self.service_sockets.clone().ok_or_else(|| {
-            IsolationError::OciSetupFailed(
-                "this Session's container has no service-socket volume".to_string(),
-            )
-        })?;
-        if sockets.ports.is_empty() {
-            return Ok(sockets);
-        }
-        let (container, _, _) = self.supervised_parts()?;
-        let _forwarder = self.service_forwarder.lock().await;
-        let missing = Self::missing_service_sockets(&container, &sockets.ports).await?;
-        if missing.is_empty() {
-            return Ok(sockets);
-        }
-        if sockets.served_by_pid_one {
-            return Err(IsolationError::OciContainerFailed(format!(
-                "the Session's bridge is not serving port socket(s) for {}",
-                missing
-                    .iter()
-                    .map(u16::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )));
-        }
-        let mut command = Command::new(PODMAN);
-        command.args(Self::service_forwarder_args(&container, &missing));
-        let started = Self::run_bounded_command(command, SANDBOX_READINESS_TIMEOUT).await?;
-        if started.timed_out || !started.status.success() {
-            return Err(IsolationError::OciContainerFailed(format!(
-                "starting the service-socket forwarder: {}",
-                String::from_utf8_lossy(&started.stderr).trim()
-            )));
-        }
-        for _ in 0..20 {
-            if Self::missing_service_sockets(&container, &missing)
-                .await?
-                .is_empty()
-            {
-                return Ok(sockets);
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        Err(IsolationError::OciContainerFailed(
-            "the service-socket forwarder did not create its sockets".to_string(),
-        ))
-    }
-
-    /// `podman exec -d` of the forwarder for these ports (pure). It runs as
-    /// the container's own user, who owns the socket volume (`U=true`), never
-    /// as root: code in the container controls that directory.
-    fn service_forwarder_args(container: &str, ports: &[u16]) -> Vec<String> {
-        let mut args: Vec<String> = vec![
-            "exec".into(),
-            "-d".into(),
-            container.into(),
-            SUPERVISOR_CONTAINER_PATH.into(),
-            "--bridge".into(),
-        ];
-        for port in ports {
-            args.push("--unix-to-tcp".into());
-            args.push(format!(
-                "{}=127.0.0.1:{port}",
-                ServiceSockets::socket_path(*port)
-            ));
-        }
-        args
-    }
-
-    async fn missing_service_sockets(
-        container: &str,
-        ports: &[u16],
-    ) -> Result<Vec<u16>, IsolationError> {
-        let mut missing = Vec::new();
-        for port in ports {
-            let mut probe = Command::new(PODMAN);
-            probe.args([
-                "exec",
-                container,
-                SUPERVISOR_CONTAINER_PATH,
-                "--probe-unix",
-                &ServiceSockets::socket_path(*port),
-            ]);
-            let output = Self::run_bounded_command(probe, NAMED_REMOVE_PROBE_TIMEOUT).await?;
-            if output.timed_out {
-                return Err(IsolationError::Timeout(NAMED_REMOVE_PROBE_TIMEOUT));
-            }
-            match output.status.code() {
-                Some(0) => {}
-                Some(1) => missing.push(*port),
-                _ => {
-                    return Err(IsolationError::OciContainerFailed(format!(
-                        "probing the service socket for port {port}: {}",
-                        String::from_utf8_lossy(&output.stderr).trim()
-                    )))
-                }
-            }
-        }
-        Ok(missing)
-    }
-
     /// Find a live terminal by id.
     pub fn get_terminal(&self, id: &str) -> Option<std::sync::Arc<crate::pty::PtyTerminal>> {
         self.terminals
@@ -3378,6 +3219,21 @@ impl SessionSandbox {
         if let Some(sidecar) = &self.egress_sidecar {
             sidecar.stop().await;
         }
+        // The browser, its service forwarder and a browser egress sidecar
+        // serve only this Session.
+        if let Some(session_id) = self.dependents_session_id() {
+            let _ =
+                Self::remove_session_dependents(&[session_id], NAMED_REMOVE_COMMAND_TIMEOUT).await;
+        }
+    }
+
+    /// The Session whose dependent containers go with this container: the
+    /// owner of `axo-ses-{session}`, never a lane sharing it.
+    fn dependents_session_id(&self) -> Option<String> {
+        self.container
+            .strip_prefix("axo-ses-")
+            .filter(|session| !session.is_empty())
+            .map(str::to_string)
     }
 
     /// Whether a cached passive-recovery handle can accept another command.
@@ -3421,7 +3277,13 @@ impl SessionSandbox {
                 sidecar.stop().await;
             }
         }
-        removed
+        removed?;
+        match self.dependents_session_id() {
+            Some(session_id) => {
+                Self::remove_session_dependents(&[session_id], NAMED_REMOVE_COMMAND_TIMEOUT).await
+            }
+            None => Ok(()),
+        }
     }
 
     #[cfg(test)]
@@ -3706,12 +3568,17 @@ impl SessionSandbox {
         // still inherits Podman's ten-second graceful-stop delay unless time
         // is explicit; that exactly matched the old product deadline and made
         // a healthy `sleep infinity` lane look stuck at 10.2 seconds on macOS.
+        // `--depend` also removes the containers that joined one being
+        // removed, such as the browser's service forwarder, which shares a
+        // Session container's network namespace; Podman refuses to remove a
+        // container that still has dependents.
         let mut args = vec![
             "rm".to_string(),
             "--force".to_string(),
             "--time".to_string(),
             "0".to_string(),
             "--ignore".to_string(),
+            "--depend".to_string(),
         ];
         args.extend(containers.iter().cloned());
         args
@@ -4007,7 +3874,8 @@ impl SessionSandbox {
     }
 
     /// Containers that serve one Session from outside its own container: the
-    /// egress sidecar, the browser and the egress Preview.
+    /// egress sidecar, the browser, the egress Preview and the browser's
+    /// service forwarder.
     fn dependent_container_names(session_ids: &[String]) -> Vec<String> {
         let mut names = session_ids
             .iter()
@@ -4313,15 +4181,6 @@ pub trait Sandbox: Send + Sync {
         None
     }
 
-    /// Serve each exposed port as a Unix socket in the Session's
-    /// service-socket volume (see [`SessionSandbox::ensure_service_sockets`]).
-    async fn ensure_service_sockets(&self) -> Result<ServiceSockets, IsolationError> {
-        Err(IsolationError::Io(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "backend has no service sockets",
-        )))
-    }
-
     /// Spawn an interactive terminal; under `network: egress` it gets its own
     /// credential for as long as it lives.
     async fn spawn_terminal(
@@ -4429,10 +4288,6 @@ impl Sandbox for SessionSandbox {
         self.egress_sidecar.as_ref().map(|sidecar| sidecar.status())
     }
 
-    async fn ensure_service_sockets(&self) -> Result<ServiceSockets, IsolationError> {
-        SessionSandbox::ensure_service_sockets(self).await
-    }
-
     async fn spawn_terminal(
         &self,
         command: &str,
@@ -4514,8 +4369,6 @@ impl Sandbox for SessionSandbox {
             // but never owns (or stops) the sidecar.
             egress: self.egress.clone(),
             egress_sidecar: None,
-            service_sockets: self.service_sockets.clone(),
-            service_forwarder: self.service_forwarder.clone(),
             preview_container: None,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
@@ -5319,6 +5172,7 @@ mod tests {
                 "--time",
                 "0",
                 "--ignore",
+                "--depend",
                 "axo-ses-one",
                 "axo-ses-two",
             ]
@@ -6043,43 +5897,40 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let program = installed_test_supervisor(root.path());
         for passive in [false, true] {
-            for service_sockets in [false, true] {
-                for with_limits in [false, true] {
-                    for supervisor in [None, Some(program.clone())] {
-                        for authority in [None, Some("a".repeat(64))] {
-                            for ports in [&[][..], &[3000][..], &[80, 443, 8080][..]] {
-                                let policy = SandboxPolicy {
-                                    network: SandboxNetwork::Egress,
-                                    passive_start: passive,
-                                    service_sockets,
-                                    supervisor_program: supervisor.clone(),
-                                    runtime_authority: authority.clone(),
-                                    egress: Some(egress_attachment()),
-                                    control_plane_dirs: vec!["/w/data".into()],
-                                    ..SandboxPolicy::default()
-                                };
-                                let args = SessionSandbox::build_run_args(
-                                    "ses-p",
-                                    "axo-ses-ses-p",
-                                    "/w",
-                                    DEFAULT_IMAGE,
-                                    Some("axo-ses-ses-p-node-modules"),
-                                    with_limits,
-                                    ports,
-                                    &policy,
-                                );
-                                assert!(
-                                    args.windows(2)
-                                        .any(|w| w[0] == "--network" && w[1] == "none"),
-                                    "{args:?}"
-                                );
-                                assert_eq!(
-                                    args.iter().filter(|a| *a == "--network").count(),
-                                    1,
-                                    "{args:?}"
-                                );
-                                assert!(!args.iter().any(|a| a == "-p"), "{args:?}");
-                            }
+            for with_limits in [false, true] {
+                for supervisor in [None, Some(program.clone())] {
+                    for authority in [None, Some("a".repeat(64))] {
+                        for ports in [&[][..], &[3000][..], &[80, 443, 8080][..]] {
+                            let policy = SandboxPolicy {
+                                network: SandboxNetwork::Egress,
+                                passive_start: passive,
+                                supervisor_program: supervisor.clone(),
+                                runtime_authority: authority.clone(),
+                                egress: Some(egress_attachment()),
+                                control_plane_dirs: vec!["/w/data".into()],
+                                ..SandboxPolicy::default()
+                            };
+                            let args = SessionSandbox::build_run_args(
+                                "ses-p",
+                                "axo-ses-ses-p",
+                                "/w",
+                                DEFAULT_IMAGE,
+                                Some("axo-ses-ses-p-node-modules"),
+                                with_limits,
+                                ports,
+                                &policy,
+                            );
+                            assert!(
+                                args.windows(2)
+                                    .any(|w| w[0] == "--network" && w[1] == "none"),
+                                "{args:?}"
+                            );
+                            assert_eq!(
+                                args.iter().filter(|a| *a == "--network").count(),
+                                1,
+                                "{args:?}"
+                            );
+                            assert!(!args.iter().any(|a| a == "-p"), "{args:?}");
                         }
                     }
                 }
@@ -6166,67 +6017,6 @@ mod tests {
     }
 
     #[test]
-    fn the_service_forwarder_runs_the_bundled_bridge_as_the_container_user_for_each_port() {
-        let args = SessionSandbox::service_forwarder_args("abc123", &[3000, 5173]);
-        assert!(!args.iter().any(|arg| arg == "--user"), "{args:?}");
-        assert_eq!(
-            args,
-            [
-                "exec",
-                "-d",
-                "abc123",
-                "/axocoatl-exec-supervisor",
-                "--bridge",
-                "--unix-to-tcp",
-                "/run/axocoatl-svc/3000.sock=127.0.0.1:3000",
-                "--unix-to-tcp",
-                "/run/axocoatl-svc/5173.sock=127.0.0.1:5173",
-            ]
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn service_sockets_mount_their_volume_in_bridge_mode_without_egress() {
-        let policy = SandboxPolicy {
-            service_sockets: true,
-            ..SandboxPolicy::default()
-        };
-        let args = SessionSandbox::build_run_args(
-            "ses-7",
-            "axo-ses-ses-7",
-            "/w",
-            DEFAULT_IMAGE,
-            None,
-            false,
-            &[3000],
-            &policy,
-        );
-        let joined = args.join(" ");
-        assert!(joined.contains(
-            "--mount type=volume,source=axo-svc-ses-7,destination=/run/axocoatl-svc,U=true"
-        ));
-        assert!(!joined.contains("axo-egr-"));
-        assert!(!joined.contains("--network"));
-        assert!(joined.contains("-p 127.0.0.1::3000"));
-        assert!(joined.ends_with("sleep infinity"));
-        let passive = SessionSandbox::build_run_args(
-            "ses-7",
-            "axo-ses-ses-7",
-            "/w",
-            DEFAULT_IMAGE,
-            None,
-            false,
-            &[],
-            &SandboxPolicy {
-                passive_start: true,
-                ..policy
-            },
-        );
-        assert!(!passive.join(" ").contains("axo-svc-"));
-    }
-
-    #[test]
     fn lanes_share_the_egress_authority_but_never_own_the_sidecar() {
         let root = tempfile::tempdir().unwrap();
         let mut sandbox = SessionSandbox::attach("axo-ses-s", root.path());
@@ -6241,10 +6031,10 @@ mod tests {
     fn dependent_containers_and_owned_listings_cover_every_session_role() {
         assert_eq!(
             SessionSandbox::dependent_container_names(&["s1".to_string()]),
-            ["axo-brw-s1", "axo-egr-s1", "axo-pvw-s1"]
+            ["axo-brw-s1", "axo-egr-s1", "axo-pvw-s1", "axo-svc-s1"]
         );
         let args = SessionSandbox::owned_container_list_args(&"a".repeat(64)).join(" ");
-        for prefix in ["axo-ses-", "axo-egr-", "axo-brw-", "axo-pvw-"] {
+        for prefix in ["axo-ses-", "axo-egr-", "axo-brw-", "axo-pvw-", "axo-svc-"] {
             assert!(args.contains(&format!("--filter name={prefix}")), "{args}");
         }
         let id = "d".repeat(64);
@@ -6262,6 +6052,46 @@ mod tests {
             Some("axo-pvw-")
         );
         assert_eq!(SessionSandbox::owned_name_prefix("axo-other-s"), None);
+        assert_eq!(
+            SessionSandbox::owned_name_prefix("axo-svc-s"),
+            Some("axo-svc-")
+        );
+    }
+
+    #[test]
+    fn the_session_container_never_mounts_the_service_sockets() {
+        // A read-only helper's shell may not open TCP connections; a socket
+        // in its own mount namespace would let it reach the apps anyway.
+        // Under bridge and none the browser's service forwarder serves them
+        // from a container of its own.
+        for network in [SandboxNetwork::Bridge, SandboxNetwork::None] {
+            let args = SessionSandbox::build_run_args(
+                "x",
+                "axo-ses-x",
+                "/w",
+                DEFAULT_IMAGE,
+                None,
+                false,
+                &[3000],
+                &SandboxPolicy {
+                    network,
+                    ..SandboxPolicy::default()
+                },
+            );
+            assert!(!args
+                .iter()
+                .any(|arg| arg.contains("axo-svc-") || arg.contains("/run/axocoatl-svc")));
+        }
+        // The browser, egress, Preview and service-forwarder containers go
+        // after the Session's container.
+        assert_eq!(
+            SessionSandbox::container_names(&["x".to_string()]),
+            vec!["axo-ses-x"]
+        );
+        assert_eq!(
+            SessionSandbox::dependent_container_names(&["x".to_string()]),
+            ["axo-brw-x", "axo-egr-x", "axo-pvw-x", "axo-svc-x"]
+        );
     }
 
     /// End-to-end: needs podman installed. Run with `--ignored`.

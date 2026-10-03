@@ -36,8 +36,9 @@ const FOREGROUND_STREAM_BYTES: usize = 1024 * 1024;
 /// Definition admission and activation preparation share the exact foreground
 /// capability boundary. Reject unsupported names before provider observation.
 /// `workspace_knowledge` is the host's own port, offered only when listed.
-/// Host invocation tools (`web_search`, `web_fetch`, `browser`) are accepted
-/// here by name; whether one is available is its registered tool's decision.
+/// Host invocation tools (`web_search`, `web_fetch`, `browser`,
+/// `browser_check`) are accepted here by name; whether one is available is its
+/// registered tool's decision.
 pub(crate) fn validate_repository_tools(tools: &[String]) -> Result<()> {
     if let Some(tool) = tools.iter().find(|tool| {
         !SUPPORTED_TOOLS.contains(&tool.as_str())
@@ -176,6 +177,11 @@ impl RepositoryActivationResource {
     /// The host directory holding this checkout's files.
     pub(super) fn host_checkout(&self) -> axocoatl_core::SecureDir {
         self.owner.host_checkout().clone()
+    }
+
+    /// Whether this checkout is a Ways attempt lane's own clone.
+    pub(super) fn is_attempt(&self) -> bool {
+        self.owner.is_attempt()
     }
 
     pub(super) fn description(&self) -> Result<ActivationEvidenceContent> {

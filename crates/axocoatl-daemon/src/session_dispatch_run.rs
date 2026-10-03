@@ -178,11 +178,13 @@ impl SessionDispatchController {
             )?,
         };
         // A listed host tool must be available to this Agent; the reason is
-        // the activation's failure, before any reservation.
-        if let Some(reason) = state.host_tool_refusal(&profile) {
+        // the activation's failure, before any reservation. A tool left out
+        // of a Ways attempt is not offered and is no reason.
+        let attempt = super::host_tools::bound_to_attempt(repository.as_ref());
+        if let Some(reason) = state.host_tool_refusal(&profile, attempt) {
             return Err(error(reason));
         }
-        let host_definitions = state.host_tool_definitions(&profile);
+        let host_definitions = state.host_tool_definitions(&profile, attempt);
         let tools = match repository.as_ref() {
             Some(resource) => resource.preview_tools(&profile, host_definitions)?,
             None if host_definitions.is_empty() => tools,

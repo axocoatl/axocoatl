@@ -895,80 +895,6 @@ async fn a_lost_proxy_fails_closed_restarts_and_stops_with_its_session() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test egress_podman -- --ignored --test-threads=1"]
-async fn bridge_mode_service_sockets_start_on_demand_and_come_back() {
-    with_fixture("f", |fixture| async move {
-        let session = format!("egress-test-{}", uuid::Uuid::new_v4().simple());
-        fixture.sessions.lock().unwrap().push(session.clone());
-        let workspace = fixture.root.child(&session).unwrap();
-        let identity = uuid::Uuid::new_v4().simple().to_string();
-        let policy = SandboxPolicy {
-            allow_untrusted_image: true,
-            network: SandboxNetwork::Bridge,
-            service_sockets: true,
-            runtime_authority: Some(format!("{:x}", Sha256::digest(identity.as_bytes()))),
-            supervisor_installation: Some(fixture.installation.clone()),
-            ..SandboxPolicy::default()
-        };
-        let sandbox = Arc::new(
-            SessionSandbox::start(
-                &session,
-                workspace.path(),
-                Some(&image("AXO_EGRESS_TEST_IMAGE", ROOT_IMAGE)),
-                &[3000],
-                &[],
-                &policy,
-            )
-            .await
-            .unwrap(),
-        );
-        fixture.sandboxes.lock().unwrap().push(sandbox.clone());
-        let container = format!("axo-ses-{session}");
-        exec(
-            &container,
-            None,
-            None,
-            "nohup sh -c 'while :; do printf \"HTTP/1.0 200 OK\\r\\n\\r\\nsvc-ok\" | nc -l -p 3000 >/dev/null; done' >/dev/null 2>&1 &",
-        )
-        .await;
-        let read = |label: String, session: String| async move {
-            podman_async_ok(&[
-                "run",
-                "--rm",
-                "--label",
-                &label,
-                "--network",
-                "none",
-                "--mount",
-                &format!("type=volume,source=axo-svc-{session},destination=/run/axocoatl-svc,ro=true"),
-                "--entrypoint",
-                "/bin/sh",
-                &image("AXO_EGRESS_TEST_IMAGE", ROOT_IMAGE),
-                "-c",
-                "printf 'GET / HTTP/1.0\\r\\n\\r\\n' | nc local:/run/axocoatl-svc/3000.sock",
-            ])
-            .await
-        };
-        let sockets = Sandbox::ensure_service_sockets(sandbox.as_ref()).await.unwrap();
-        assert_eq!(sockets.volume, format!("axo-svc-{session}"));
-        assert_eq!(sockets.ports, [3000]);
-        assert!(!sockets.served_by_pid_one);
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        assert!(read(fixture.label.clone(), session.clone()).await.contains("svc-ok"));
-        // Code in the container removes the socket; the next call notices and
-        // starts the forwarder again.
-        exec(&container, None, Some("0"), "rm -f /run/axocoatl-svc/3000.sock").await;
-        Sandbox::ensure_service_sockets(sandbox.as_ref()).await.unwrap();
-        assert!(read(fixture.label.clone(), session.clone()).await.contains("svc-ok"));
-        // The bridge-mode Session keeps its network and published port.
-        let (_, links) = exec(&container, None, None, "ip -o link | awk -F': ' '{print $2}'").await;
-        assert!(links.lines().count() > 1, "{links}");
-        assert!(sandbox.published_host_port(3000).is_some());
-    })
-    .await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test egress_podman -- --ignored --test-threads=1"]
 async fn setup_provisioning_and_terminals_get_credentials_of_their_own() {
     with_fixture("g", |fixture| async move {
         let kinds = |events: &[Event]| -> Vec<GrantKind> {
@@ -1499,58 +1425,6 @@ async fn names_udp_host_argv_and_the_fronting_residual() {
         assert_eq!(fronted_open, Some(None), "{events:?}");
         assert!(!events.iter().any(|event| matches!(event, Event::Open { host, .. } if host == "evil.test")));
         drop(grant);
-    })
-    .await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test egress_podman -- --ignored --test-threads=1"]
-async fn the_bridge_mode_forwarder_runs_as_the_image_user() {
-    with_fixture("l", |fixture| async move {
-        let session = format!("egress-test-{}", uuid::Uuid::new_v4().simple());
-        fixture.sessions.lock().unwrap().push(session.clone());
-        let workspace = fixture.root.child(&session).unwrap();
-        std::fs::set_permissions(
-            workspace.path(),
-            std::os::unix::fs::PermissionsExt::from_mode(0o777),
-        )
-        .unwrap();
-        let identity = uuid::Uuid::new_v4().simple().to_string();
-        let policy = SandboxPolicy {
-            allow_untrusted_image: true,
-            network: SandboxNetwork::Bridge,
-            service_sockets: true,
-            runtime_authority: Some(format!("{:x}", Sha256::digest(identity.as_bytes()))),
-            supervisor_installation: Some(fixture.installation.clone()),
-            ..SandboxPolicy::default()
-        };
-        let sandbox = Arc::new(
-            SessionSandbox::start(
-                &session,
-                workspace.path(),
-                Some(&image("AXO_EGRESS_TEST_NONROOT_IMAGE", NONROOT_IMAGE)),
-                &[3000],
-                &[],
-                &policy,
-            )
-            .await
-            .unwrap(),
-        );
-        fixture.sandboxes.lock().unwrap().push(sandbox.clone());
-        let container = format!("axo-ses-{session}");
-        Sandbox::ensure_service_sockets(sandbox.as_ref()).await.unwrap();
-        // The socket is created connectable by everyone and belongs to the
-        // image user, and the forwarder runs as that user, not as root.
-        let (_, socket) = exec(&container, None, None, "stat -c '%u %a %F' /run/axocoatl-svc/3000.sock").await;
-        assert_eq!(socket.trim(), "1024 666 socket", "{socket}");
-        let (_, users) = exec(
-            &container,
-            None,
-            None,
-            "for p in /proc/[0-9]*; do if tr '\\0' ' ' < $p/cmdline 2>/dev/null | grep -q '^/axocoatl-exec-supervisor --bridge --unix-to-tcp'; then awk '/^Uid:/{print $2}' $p/status; fi; done",
-        )
-        .await;
-        assert_eq!(users.trim(), "1024", "{users}");
     })
     .await;
 }

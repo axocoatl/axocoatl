@@ -25,13 +25,17 @@ const FOLLOW_UP_CALLS: u32 = 2;
 /// Tools that change the workspace or run commands. A helper takes delegated
 /// work only when it is read-only: none of these, or a write scope that allows
 /// no path (`writes: []`), which withholds the file-writing tools and runs its
-/// `bash` where it cannot change the repository.
-const WRITE_TOOLS: [&str; 5] = [
+/// `bash` where it cannot change the repository. `browser_check` runs test
+/// code the model writes against the apps on the exposed ports, which can do
+/// whatever those apps allow, including writing files; `browser`, which runs
+/// no model-written code, is not here.
+const WRITE_TOOLS: [&str; 6] = [
     "write_file",
     "edit_file",
     "bash",
     "bash_background",
     "spawn_terminal",
+    "browser_check",
 ];
 /// The write tools an empty write scope withholds (`write_file`, `edit_file`)
 /// or confines (`bash`).

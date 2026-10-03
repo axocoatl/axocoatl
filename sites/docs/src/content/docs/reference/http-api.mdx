@@ -223,6 +223,7 @@ below.
 | GET | `/api/sessions/{id}/network?after=<seq>&limit=<1-1000>` | The Session's [network record](#session-network-record): mode, egress policy and recorded events after `after` (default `limit` 200) |
 | POST | `/api/sessions/{id}/network/allow` | `{command_id, scope, host, ports?}`; under `network: egress`, allow one exact host for this Session. Returns `{revision, digest}` |
 | POST | `/api/sessions/{id}/network/revoke` | `{command_id, scope, host}`; remove this Session's allows for one host and close the connections they admitted. Returns `{revision, digest}` |
+| GET | `/api/sessions/{id}/network/screenshots/{sha256}` | One screenshot a browser tool kept beside the Session's network record, as `image/jpeg` or `image/png`; 404 when absent |
 | GET | `/api/session-turns/search?q=…&session_id=…` | Literal case-insensitive search; omit Session ID for all |
 | GET | `/api/sessions/{id}/export?format=markdown` | Markdown by default; accepts `markdown`, `md`, or `json` |
 | POST | `/api/sessions/{id}/rewind` | `{keep_through_turn_id?}`; legacy `{keep}` is raw message count |
@@ -383,7 +384,7 @@ activity returns an empty list.
 
 `mode` is `sandbox.network`. Pass `next_after` back as `after` to read on. Each
 event has a `kind`: `policy`, `sidecar`, `bind`, `unbind`, `open`, `close`,
-`web_request`, `web` or `limit`. An `open` event names the destination `host` and `port`, its
+`web_request`, `web`, `browser` or `limit`. An `open` event names the destination `host` and `port`, its
 `conn_kind` (`connect` for a tunnel or `http`), the `decision` (`allow` or `deny`)
 with its `reason` and `status`, the addresses used, and the tool call (`binding`)
 whose credential it presented. Credentials appear only as 16-hex tags. A `close`
@@ -398,10 +399,12 @@ file being inside its Workspace.
 Under `network: egress`, `sidecar` reports the egress proxy of the Session's running
 runtime (`state` is `starting`, `ready`, `restarting`, `failed` or `stopped`, with its
 `generation` and the number of `restarts`), and `policies` lists each scope's compiled
-policy: `session` (your `sandbox.egress` list plus this Session's allows),
-`provisioning` (the Alpine, Debian and Ubuntu mirrors) and `browser` when the browser
-tool is configured. Each rule has an `id`, its `text` and its `source`. Both are empty
-under `bridge` and `none`, and while the Session has no running runtime.
+policy: `session` (your `sandbox.egress` list plus this Session's allows) and
+`provisioning` (the Alpine, Debian and Ubuntu mirrors). Each rule has an `id`, its
+`text` and its `source`. Under `bridge` and `none`, `sidecar` and `policies` describe
+only the browser's own egress sidecar and its `browser` policy, once a browser call
+with declared hosts (`browser.allow`) has started them. Otherwise, and while an
+`egress` Session has no running runtime, they are empty.
 
 A `web_request` event is written before a `web_search` or `web_fetch` call with
 valid arguments sends anything: the `tool`, its `invocation_id`, `activation_id`
@@ -433,6 +436,15 @@ arguments.
   "retrieved_at_ms": 1790000000412, "ms": 412}}
 ```
 
+A `browser` event is one `browser` or `browser_check` call: `tool`, the
+`invocation_id`, `activation_id` and `agent`, `ok`, the `url`, `final_url` and
+`status` (or the `test_path` and `check_status`), the number of `blocked` requests,
+the egress credential's `token` tag when the call used declared hosts, `ms`, and a
+`screenshot` `{sha256, media_type, bytes}` when one was kept (or `screenshot_dropped`
+with the reason). A call that failed before it produced a result has `ok: false` and
+the reason in `error`. `GET /api/sessions/{id}/network/screenshots/{sha256}` returns
+the image. Screenshots are for people; no model sees them.
+
 #### Allow or revoke a host for one Session
 
 Under `network: egress`, a person can allow a host that the Session's list refuses,
@@ -445,7 +457,7 @@ POST /api/sessions/{id}/network/allow
 {"revision": 4, "digest": "9f47a9dc…"}
 ```
 
-- `scope` is `session` or, when the browser tool is configured, `browser`.
+- `scope` is `session`. The browser's declared hosts are not changed here.
 - `host` is one exact host name. A wildcard, an IP address or a private range is
   refused; put those under `sandbox.egress` instead. `ports` defaults to `[443]`.
 - The change is written to the Session's network record as a `policy` event with
@@ -470,10 +482,11 @@ and causal evidence. Evidence values carry an explicit `status`: `available`,
 preview includes its original byte length. Clients must not turn unavailable usage
 into zero or missing output into a successful empty answer.
 
-Under `network: egress`, an activation whose tool calls opened or were refused
-connections has one evidence item of kind `network`. Its `summary` names each
-destination, such as `registry.npmjs.org:443 allowed ×3 (1.2 MB in); evil.test:443
-refused (not_allowed)`, and its `details` holds up to 200 of the matching `open`,
+An activation whose tool calls opened or were refused connections through an egress
+proxy (under `network: egress`, or through the browser's declared hosts), or called
+`web_search` or `web_fetch`, has one evidence item of kind `network`. Its `summary`
+names each destination, such as `registry.npmjs.org:443 allowed ×3 (1.2 MB in);
+evil.test:443 refused (not_allowed)`, and counts web calls; its `details` holds up to 200 of the matching `open`,
 `close` and `web` lines from the [network record](#session-network-record), with
 `truncated` set when there were more. Events are joined to the activation through the
 tool call whose credential they presented. Setup, terminal and unattributed events

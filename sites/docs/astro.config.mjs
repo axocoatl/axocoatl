@@ -97,6 +97,7 @@ export default defineConfig({
             { label: 'Agents and budgets', slug: 'configure/agents' },
             { label: 'Cross-model review', slug: 'configure/cross-model-review' },
             { label: 'Sandboxes', slug: 'configure/sandboxes' },
+            { label: 'Browser', slug: 'configure/browser' },
             { label: 'Web research', slug: 'configure/web' },
             { label: 'Skills and MCP', slug: 'configure/skills-mcp' },
             { label: 'Automations', slug: 'configure/automations' },

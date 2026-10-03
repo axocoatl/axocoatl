@@ -284,6 +284,28 @@ impl SessionDispatchRegistry {
         }
     }
 
+    /// Read one screenshot kept beside a retained Session's network record.
+    pub(crate) fn read_network_screenshot(
+        &self,
+        session_id: &str,
+        sha256: &str,
+    ) -> Result<Option<(String, Vec<u8>)>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session dispatch registry failed"))?;
+        if let Some(entry) = state.pending.get(session_id) {
+            return entry.read_network_screenshot(sha256);
+        }
+        match state.entries.get(session_id) {
+            Some(entry) => entry
+                .controller
+                .read_network_screenshot(sha256)
+                .map_err(|error| failure(error.to_string())),
+            None => Ok(None),
+        }
+    }
+
     /// Human requests enter through the authenticated host and share the same
     /// registry fence as Close/Delete/shutdown. No caller-supplied source tag
     /// or cached read capability can grant an operation.

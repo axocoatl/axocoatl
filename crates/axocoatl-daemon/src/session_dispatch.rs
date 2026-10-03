@@ -166,7 +166,7 @@ struct DispatchState {
     hooks: Option<Arc<axocoatl_tools::HookRegistry>>,
     knowledge: Option<knowledge::SharedKnowledge>,
     /// Host tools this controller's activations may list, by name.
-    host_tools: HashMap<&'static str, Arc<dyn host_tools::HostInvocationTool>>,
+    host_tools: host_tools::HostTools,
     human_waits: HashMap<BlockerId, human_wait::LiveHumanWait>,
     stream_bus: Option<crate::stream::StreamBus>,
     execution_admission_closed: bool,
@@ -460,7 +460,8 @@ struct InvocationAdmission {
     intent: InvocationIntent,
     authority_ref: EvidenceRef,
     repository: Option<repository_activation::RepositoryInvocation>,
-    /// The bound host tool for a `web_search`, `web_fetch` or `browser` call.
+    /// The bound host tool for a `web_search`, `web_fetch`, `browser` or
+    /// `browser_check` call.
     host_executor: Option<Arc<axocoatl_tools::ToolExecutor>>,
     _execution: execution_lifetime::ExecutionTicket,
 }
@@ -591,7 +592,7 @@ impl SessionDispatchController {
             &intent,
         );
         let repository = state.fail_closed(repository)?;
-        let host_executor = state.host_invocation_executor(&intent);
+        let host_executor = state.host_invocation_executor(self, &intent);
         let host_executor = state.fail_closed(host_executor)?;
         Ok(Ok(InvocationAdmission {
             controller: self.clone(),

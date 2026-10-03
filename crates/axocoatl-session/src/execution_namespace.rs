@@ -349,6 +349,15 @@ impl OwnedExecutionNamespace {
         Ok(entries)
     }
 
+    /// The size of one direct child regular file.
+    pub fn file_len(&self, name: impl AsRef<Path>) -> io::Result<u64> {
+        let name = direct_name(name.as_ref())?;
+        self.verify_ambient_identity()?;
+        let len = self.dir.file_len(name)?;
+        self.verify_ambient_identity()?;
+        Ok(len)
+    }
+
     pub fn is_file(&self, name: impl AsRef<Path>) -> io::Result<bool> {
         let name = direct_name(name.as_ref())?;
         self.verify_ambient_identity()?;
@@ -439,6 +448,58 @@ pub(crate) fn read_existing_component(
             "historical component initialization changed during read",
         ));
     }
+    Ok(bytes)
+}
+
+/// Read one file from a direct subdirectory of an already initialized
+/// component, with the same guarantees as [`read_existing_component`]: no
+/// writer lock, no directory or marker creation, no recovery.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn read_existing_component_file(
+    session: &SecureDir,
+    ownership: &UpgradedFormatOwnership,
+    identity: &DurableSessionIdentity,
+    component: &ExecutionComponent,
+    primary: &Path,
+    child: &Path,
+    name: &Path,
+    max_bytes: usize,
+) -> io::Result<Vec<u8>> {
+    if max_bytes == 0 || max_bytes > MAX_FILE_BYTES {
+        return Err(bounds());
+    }
+    let primary = journal_primary_name(primary)?;
+    let child = direct_name(child)?;
+    let name = direct_name(name)?;
+    ownership.verify_installed().map_err(io::Error::other)?;
+    session.verify_ambient_identity()?;
+    require_private(session)?;
+    let root = session.existing_child(component.directory_name())?;
+    root.verify_ambient_identity()?;
+    require_private(&root)?;
+    let marker = root.read_limited(JOURNAL_INITIALIZED_FILE, MAX_INITIALIZATION_BYTES)?;
+    let actual: JournalInitialization = serde_json::from_slice(&marker)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let expected = JournalInitialization {
+        schema_version: 1,
+        journal_id: identity.journal_id().into(),
+        owner: identity.owner().clone(),
+        component: component.clone(),
+        primary: primary.into(),
+    };
+    if actual != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "historical component initialization differs from canonical identity",
+        ));
+    }
+    let directory = root.existing_child(child)?;
+    require_private(&directory)?;
+    let bytes = directory.read_limited(name, max_bytes)?;
+    directory.verify_ambient_identity()?;
+    root.verify_ambient_identity()?;
+    session.verify_ambient_identity()?;
+    ownership.verify_installed().map_err(io::Error::other)?;
     Ok(bytes)
 }
 

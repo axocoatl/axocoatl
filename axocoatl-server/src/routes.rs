@@ -1941,6 +1941,44 @@ pub async fn revoke_session_network_host(
         .map_err(|error| network_policy_err(&id, error))
 }
 
+/// GET /api/sessions/{id}/network/screenshots/{sha256} — one screenshot a
+/// browser tool kept in the Session's record. Screenshots are for people;
+/// no model sees them.
+pub async fn session_network_screenshot(
+    State(state): State<AppState>,
+    Path((id, sha256)): Path<(String, String)>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let found = state
+        .read()
+        .await
+        .session_network_screenshot(&id, &sha256)
+        .await
+        .map_err(|error| match &error {
+            axocoatl_daemon::DaemonError::Session(message)
+                if message == &format!("session '{id}' not found") =>
+            {
+                err(StatusCode::NOT_FOUND, message.clone())
+            }
+            _ => attempt_err(error),
+        })?;
+    let Some((media_type, bytes)) = found else {
+        return Err(err(StatusCode::NOT_FOUND, "screenshot not found"));
+    };
+    let mut response = Response::new(axum::body::Body::from(bytes));
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, media_type.parse().unwrap());
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
+    headers.insert(
+        header::CACHE_CONTROL,
+        "private, max-age=31536000, immutable".parse().unwrap(),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        "default-src 'none'".parse().unwrap(),
+    );
+    Ok(response)
+}
+
 pub async fn preview_session_graph_edit(
     State(state): State<AppState>,
     Path((id, turn)): Path<(String, String)>,

@@ -703,6 +703,7 @@ dependencies = [
  "axocoatl-llm",
  "axocoatl-mcp",
  "axocoatl-session",
+ "base64 0.22.1",
  "chrono",
  "encoding_rs",
  "libc",

@@ -189,6 +189,43 @@ pub async fn ensure_egress_image(program: &SupervisorProgram) -> Result<String, 
     Ok(tag)
 }
 
+/// The supervisor's name (`x86_64` or `aarch64`) for an architecture Podman
+/// reports.
+fn supervisor_architecture(reported: &str) -> Result<&'static str, IsolationError> {
+    match reported {
+        "amd64" | "x86_64" => Ok("x86_64"),
+        "arm64" | "aarch64" => Ok("aarch64"),
+        other => Err(failed(format!("no bundled supervisor for {other:?}"))),
+    }
+}
+
+/// The Linux architecture of the machine Podman runs containers on, in the
+/// supervisor's naming (`x86_64` or `aarch64`).
+pub async fn podman_architecture() -> Result<String, IsolationError> {
+    let mut info = Command::new("podman");
+    info.args(["info", "--format", "{{.Host.Arch}}"]);
+    let output = SessionSandbox::run_bounded_command(info, INSPECT_TIMEOUT).await?;
+    if output.timed_out || !output.status.success() {
+        return Err(failed(format!(
+            "reading Podman's architecture: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    supervisor_architecture(String::from_utf8_lossy(&output.stdout).trim()).map(str::to_string)
+}
+
+/// [`ensure_egress_image`] for the machine Podman runs containers on, with
+/// the bundled supervisor installed under `installation`. Containers that
+/// are not built on a Session's image, such as the browser's service
+/// forwarder and its egress sidecar, run this image.
+pub async fn ensure_egress_image_for_podman(
+    installation: &axocoatl_core::SecureDir,
+) -> Result<String, IsolationError> {
+    let architecture = podman_architecture().await?;
+    let program = SupervisorProgram::install_embedded_async(&architecture, installation).await?;
+    ensure_egress_image(&program).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +244,9 @@ mod tests {
         assert!(joined.ends_with("--file /data/ctx/Containerfile /data/ctx"));
         assert_eq!(platform("x86_64").unwrap(), "linux/amd64");
         assert!(platform("riscv64").is_err());
+        assert_eq!(supervisor_architecture("arm64").unwrap(), "aarch64");
+        assert_eq!(supervisor_architecture("amd64").unwrap(), "x86_64");
+        assert!(supervisor_architecture("riscv64").is_err());
     }
 
     #[test]
