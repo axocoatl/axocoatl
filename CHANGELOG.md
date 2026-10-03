@@ -135,6 +135,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   volumes. Removing a Session container also removes containers that joined its
   network namespace (`podman rm --depend`).
 
+### Security
+- The docs site's build dependency `http-cache-semantics`, used by `astro`, has a
+  high-severity advisory (GHSA-ch52-4w7c-c8xp) with no fixed version published. The
+  flaw needs a shared cache serving several users; `astro` uses the package only to
+  compute cache lifetimes of remote images during a build, and the docs site has
+  none. The docs dependency audit now accepts reviewed exceptions from
+  `sites/docs/audit-exceptions.json`, and this one lapses on 2026-11-01, as soon as a
+  fixed version is published, or when another package starts to depend on it. It is
+  not part of the shipped binary.
+
 ## [1.1.2] - 2026-10-02
 
 ### Security
