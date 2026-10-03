@@ -13,8 +13,8 @@ readme.workspace = true
 description = "OpenAI provider implementation for Axocoatl LLM abstraction"
 
 [dependencies]
-axocoatl-core = { version = "1.1.2", path = "../axocoatl-core" }
-axocoatl-llm = { version = "1.1.2", path = "../axocoatl-llm" }
+axocoatl-core = { version = "1.2.0", path = "../axocoatl-core" }
+axocoatl-llm = { version = "1.2.0", path = "../axocoatl-llm" }
 async-openai = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
@@ -29,8 +29,8 @@ async-stream = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 wiremock = { workspace = true }
-axocoatl-config = { version = "1.1.2", path = "../axocoatl-config" }
-axocoatl-token = { version = "1.1.2", path = "../axocoatl-token" }
+axocoatl-config = { version = "1.2.0", path = "../axocoatl-config" }
+axocoatl-token = { version = "1.2.0", path = "../axocoatl-token" }
 
 [features]
 default = []

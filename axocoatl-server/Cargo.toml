@@ -21,16 +21,16 @@ include = [
 ]
 
 [dependencies]
-axocoatl-core = { version = "1.1.2", path = "../crates/axocoatl-core" }
-axocoatl-config = { version = "1.1.2", path = "../crates/axocoatl-config" }
-axocoatl-daemon = { version = "1.1.2", path = "../crates/axocoatl-daemon" }
-axocoatl-actor = { version = "1.1.2", path = "../crates/axocoatl-actor" }
-axocoatl-llm = { version = "1.1.2", path = "../crates/axocoatl-llm" }
-axocoatl-session = { version = "1.1.2", path = "../crates/axocoatl-session" }
-axocoatl-memory = { version = "1.1.2", path = "../crates/axocoatl-memory", default-features = false }
-axocoatl-mcp = { version = "1.1.2", path = "../crates/axocoatl-mcp" }
-axocoatl-a2a = { version = "1.1.2", path = "../crates/axocoatl-a2a" }
-axocoatl-isolation = { version = "1.1.2", path = "../crates/axocoatl-isolation" }
+axocoatl-core = { version = "1.2.0", path = "../crates/axocoatl-core" }
+axocoatl-config = { version = "1.2.0", path = "../crates/axocoatl-config" }
+axocoatl-daemon = { version = "1.2.0", path = "../crates/axocoatl-daemon" }
+axocoatl-actor = { version = "1.2.0", path = "../crates/axocoatl-actor" }
+axocoatl-llm = { version = "1.2.0", path = "../crates/axocoatl-llm" }
+axocoatl-session = { version = "1.2.0", path = "../crates/axocoatl-session" }
+axocoatl-memory = { version = "1.2.0", path = "../crates/axocoatl-memory", default-features = false }
+axocoatl-mcp = { version = "1.2.0", path = "../crates/axocoatl-mcp" }
+axocoatl-a2a = { version = "1.2.0", path = "../crates/axocoatl-a2a" }
+axocoatl-isolation = { version = "1.2.0", path = "../crates/axocoatl-isolation" }
 axum = { workspace = true }
 tokio-stream = { workspace = true }
 tokio = { workspace = true }

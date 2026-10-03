@@ -116,6 +116,46 @@
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
 
       <article class="release">
+        <span class="release-tag">v1.2.0</span>
+        <span class="release-date">2026-10-03</span>
+        <h2>Agents' commands reach only the hosts you list.</h2>
+
+        <p>With <code>sandbox.network: egress</code> a Session container has no network
+          interface other than loopback. An Agent's commands reach only the hosts and ports
+          listed under <code>sandbox.egress</code>, through a proxy in its own container; the
+          daemon decides each connection and writes every connection it allows to the
+          Session's network record before the connection opens.</p>
+
+        <h3>Added</h3>
+        <ul>
+          <li>Routes under <code>sandbox.egress.routes</code>: the daemon ends TLS for the
+              route's host, checks each request's method, path and query, and adds the
+              route's credential as a header. The credential never enters a container.</li>
+          <li>Workload users (<code>sandbox.workload</code>, the default under
+              <code>egress</code> with rootless Podman): Agents' commands run as a non-root
+              user and read-only helpers as another, with no capabilities. Agents' tool calls
+              and required checks also run under a seccomp filter from the execution
+              supervisor, on top of Podman's profile.</li>
+          <li><code>web_search</code> through a SearXNG container that Axocoatl runs with local
+              Podman, or through your own instance, and <code>web_fetch</code>, which reads one
+              public page and refuses private and local addresses. In native Sessions each
+              call is written to the network record.</li>
+          <li>The <code>browser</code> and <code>browser_check</code> tools: headless Chromium in
+              a per-Session container with no network interface other than loopback and no
+              Workspace mount. <code>axocoatl browser install</code> builds its image.</li>
+        </ul>
+
+        <h3>Fixed</h3>
+        <ul>
+          <li><code>axocoatl onboard</code> and <code>axocoatl doctor</code> check the Ollama
+              server the way native Sessions do, and onboarding suggests installed models
+              instead of defaulting to <code>llama3.2</code>.</li>
+          <li><code>axocoatl service install</code> records where Podman is and, on macOS,
+              keeps a log in <code>~/Library/Logs/Axocoatl/daemon.log</code>.</li>
+        </ul>
+      </article>
+
+      <article class="release">
         <span class="release-tag">v1.1.2</span>
         <span class="release-date">2026-10-02</span>
         <h2>The local API asks for a token.</h2>

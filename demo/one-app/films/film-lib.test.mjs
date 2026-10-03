@@ -58,8 +58,8 @@ test('source content digest is representation-independent and preserves recordin
 test('versioned recordings require matching canonical media and provenance without replacing historical paths', async () => {
   const {loadPortfolio, validatePortfolio, filmSourceDirectory} = await import('./film-lib.mjs');
   const portfolio = loadPortfolio();
-  assert.equal(portfolio.recording_version, 'v1.1.2');
-  assert.match(filmSourceDirectory(portfolio, portfolio.films[0].slug), /\/source\/v1\.1\.2\/session-workbench$/);
+  assert.equal(portfolio.recording_version, 'v1.2.0');
+  assert.match(filmSourceDirectory(portfolio, portfolio.films[0].slug), /\/source\/v1\.2\.0\/session-workbench$/);
   for (const version of ['../v1.1.0', 'v1.1.0/extra', '1.1.0', 'v01.1.0']) {
     assert.throws(() => validatePortfolio({...portfolio, recording_version:version}), /recording_version/);
   }

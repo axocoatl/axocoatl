@@ -25,7 +25,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.1.2"
+version = "1.2.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -146,10 +146,10 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-axocoatl-core = { version = "1.1.2", path = "crates/axocoatl-core" }
-axocoatl-token = { version = "1.1.2", path = "crates/axocoatl-token" }
-axocoatl-isolation = { version = "1.1.2", path = "crates/axocoatl-isolation" }
-axocoatl-actor = { version = "1.1.2", path = "crates/axocoatl-actor" }
+axocoatl-core = { version = "1.2.0", path = "crates/axocoatl-core" }
+axocoatl-token = { version = "1.2.0", path = "crates/axocoatl-token" }
+axocoatl-isolation = { version = "1.2.0", path = "crates/axocoatl-isolation" }
+axocoatl-actor = { version = "1.2.0", path = "crates/axocoatl-actor" }
 tokio = { workspace = true }
 ractor = { workspace = true }
 async-trait = { workspace = true }
