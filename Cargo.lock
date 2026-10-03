@@ -394,6 +394,7 @@ dependencies = [
  "hmac",
  "ractor",
  "reqwest 0.12.28",
+ "rustix",
  "serde",
  "serde_json",
  "sha1",

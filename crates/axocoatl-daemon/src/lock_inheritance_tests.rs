@@ -9,8 +9,8 @@
 //!
 //! The test below opens terminals in a loop through the production PTY path
 //! so that other tests can run beside it in the same process. It does nothing
-//! unless asked to. With `$STUB` a directory holding an executable `podman`
-//! that exits 0, run the daemon's test binary (as built by
+//! unless asked to. With `$STUB` the absolute path of a directory holding an
+//! executable `podman` that exits 0, run the daemon's test binary (as built by
 //! `cargo test -p axocoatl-daemon --lib --no-run`) with this test and the
 //! tests under pressure, for example:
 //!
@@ -26,7 +26,7 @@
 //! tests), 18 runs failed with os error 35 or a busy lease before store opens
 //! waited, and none after.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use axocoatl_isolation::pty::PtyTerminal;
@@ -34,20 +34,53 @@ use axocoatl_isolation::pty::PtyTerminal;
 const LOOP_ENV: &str = "AXOCOATL_TEST_PTY_LOOP_MS";
 const FAKE_PODMAN_ENV: &str = "AXOCOATL_TEST_FAKE_PODMAN_DIR";
 
-/// Refuse to start real `podman exec` processes: the stub must be the first
-/// `podman` on `PATH`.
+/// Refuse to start real `podman exec` processes: the `podman` that
+/// `portable_pty` will run must be the stub.
+///
+/// This follows `portable_pty`'s own search (`CommandBuilder::search_path`):
+/// the first `PATH` entry whose `podman` is not a directory and passes
+/// `access(X_OK)` wins, and a relative entry is resolved against the child's
+/// working directory, which is `$HOME` because `spawn_podman` sets none. A
+/// stub that is not executable is skipped by that search, and a relative
+/// entry names a different directory than it does here, so both are refused.
 fn require_fake_podman() {
     let fake = std::env::var_os(FAKE_PODMAN_ENV)
+        .map(PathBuf::from)
         .unwrap_or_else(|| panic!("{LOOP_ENV} needs {FAKE_PODMAN_ENV}"));
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let first = std::env::split_paths(&path)
-        .find(|dir| dir.join("podman").is_file())
-        .unwrap_or_else(|| panic!("no podman stub on PATH"));
-    assert_eq!(
-        first,
-        Path::new(&fake),
-        "the first podman on PATH must be the stub in {FAKE_PODMAN_ENV}"
+    assert!(
+        fake.is_absolute(),
+        "{FAKE_PODMAN_ENV} must be an absolute path, not {}",
+        fake.display()
     );
+    let stub = fake.join("podman");
+    assert!(
+        stub.is_file() && executable(&stub),
+        "{} must be an executable regular file",
+        stub.display()
+    );
+    let path = std::env::var_os("PATH").unwrap_or_else(|| panic!("PATH is not set"));
+    for dir in std::env::split_paths(&path) {
+        assert!(
+            dir.is_absolute(),
+            "PATH entry {dir:?} comes before the stub and is relative; \
+             portable_pty would resolve it against $HOME"
+        );
+        let candidate = dir.join("podman");
+        if candidate.is_dir() || !executable(&candidate) {
+            continue;
+        }
+        assert_eq!(
+            dir, fake,
+            "the first podman on PATH must be the stub in {FAKE_PODMAN_ENV}"
+        );
+        return;
+    }
+    panic!("{} is not on PATH", fake.display());
+}
+
+/// `access(X_OK)`, the check `portable_pty` applies to each candidate.
+fn executable(path: &Path) -> bool {
+    rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
 }
 
 #[test]
