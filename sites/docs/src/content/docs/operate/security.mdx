@@ -459,15 +459,19 @@ For OpenRouter that bound is computed from the exact request (its bytes plus a f
 template allowance for the prompt, and its output limit plus a reasoning allowance for
 the response) at the highest input and output prices the endpoint lists, including
 cache writes and every price tier. A response that reports more than its reservation
-is refused and keeps its reported spend. See
+is refused and keeps its reported spend. The response bound relies on `max_tokens`
+capping reasoning and visible output together, which OpenRouter documents for most
+providers, not all: a provider that bills reasoning beyond `max_tokens` is caught only
+after the call, so its overrun is spent. See
 [What each request reserves](/configure/providers/#what-each-request-reserves).
 
 What leaves your computer with a native OpenRouter request is its messages, tool
 definitions and tool results, and, for a reasoning model, the reasoning blocks of
 earlier tool turns, which Axocoatl sends back unmodified and keeps in the Session's
-history. The request turns OpenRouter's web plugin off and offers no OpenRouter server
-tools, so OpenRouter does not search the web or fetch pages for it; a response that
-shows otherwise is refused. Your OpenRouter account settings still apply: an account
+history. The request turns OpenRouter's web plugin and context compression off and
+offers no OpenRouter server tools, so OpenRouter does not search the web, fetch pages or
+drop messages for it; a response that shows otherwise is refused. It never opts into a
+service tier, and a response served at another tier is refused. Your OpenRouter account settings still apply: an account
 that forces a plugin with **Prevent overrides**, or connects BYOK provider keys, breaks
 this contract, and Axocoatl cannot change or always detect those settings.
 

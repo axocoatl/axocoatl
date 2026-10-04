@@ -31,9 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider's chat template, plus the reasoning tokens of earlier tool turns it sends
   back, capped at the endpoint's prompt limit; plus its output limit and reasoning
   allowance. It still settles to OpenRouter's reported usage and cost, and usage beyond
-  the reservation is refused with its spend kept. Team & budget checks that the smallest
+  the reservation is refused with its spend kept (OpenRouter documents that `max_tokens`
+  caps reasoning on most providers, not all). Team & budget checks that the smallest
   call fits the approved tokens and money; without `sampling.max_tokens`, the response
-  allowance takes at most half of the whole-call capacity.
+  allowance takes at most half of the whole-call capacity. An output limit and effort
+  whose sum passes the endpoint's output limit, or whose streamed text could pass the
+  1 MiB a Session keeps of one response, is refused by name rather than cut; reasoning
+  text streams in merged deltas. An Agent's `token_budget` with `abort` reserves the
+  whole response, reasoning included, and the replayed reasoning in its input estimate.
+  Because a call reserves more as its prompt grows, an Agent asks for its final answer
+  while it can pay for this call and a next one grown by this call's response, and a
+  lead starts a helper only when it can still pay for the call that reads the answer.
 - **Native OpenRouter prices every component it can be billed for.** An endpoint was
   refused when it priced anything beyond prompt, completion and cache reads, which
   excluded every current frontier model (cache writes and `web_search` are priced on
@@ -44,11 +52,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   image and audio prices are retained as features the request cannot start: it sends
   text and function tools only, no server tools, no `modalities` or
   `web_search_options`, refuses `:online` model ids, and turns the web plugin off
-  explicitly, which overrides an account default. A response that reports a server
-  tool, web citations, or image or audio output is refused. An endpoint that charges
-  for anything else is refused and the error names the component. A provider tag such
-  as `anthropic` qualifies when no other variant shares it, and the cheapest qualifying
-  endpoint is selected first. Profiles retained by 1.2.0 keep working unchanged.
+  explicitly, which overrides an account default. Context compression is turned off the
+  same way. `max_price` leaves out image and audio, which OpenRouter filters on even
+  for text. A response that reports a server tool, web citations, or image or audio
+  output is refused. An endpoint that charges for anything else is refused and the
+  error names the component. A provider tag such as `openai` qualifies when no other
+  variant shares it; service-tier endpoints (`openai/flex`, `openai/fast`) are never
+  selected and never shadow a provider tag, `:nitro` and `:floor` ids are refused, and
+  a response at another tier is refused. The cheapest qualifying endpoint that accepts
+  the Agent's sampling settings is selected first; a setting no endpoint accepts is
+  named. Profiles retained by 1.2.0 keep working unchanged.
 - **`browser` and `browser_check` accept `null` for an optional argument and explain
   every refusal.** A model that gave an optional argument as `null`, such as
   `"snapshot": null`, had the whole call refused, and a refusal said only which rule

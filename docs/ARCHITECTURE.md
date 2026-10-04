@@ -200,12 +200,14 @@ reasoning contract for a reasoning model, and two decimal price ceilings: the hi
 input rate (prompt, cache read, cache write, every tier) and the highest output rate
 (completion, internal reasoning, every tier), plus any per-request fee. Priced features a
 native request cannot start (web search, image and audio) are retained by name. Those
-metadata are revalidated before each request; the wire request pins the endpoint,
-disables fallbacks and the web plugin, sends the Agent's resolved `reasoning` setting,
-and supplies `max_tokens` and price limits. Each call reserves a bound of its own
-request: the body's bytes plus a template allowance and any replayed reasoning tokens
-for the prompt, and the output limit plus the effort's reasoning allowance for the
-response, at those rates. Streaming retains terminal measured tokens (reasoning as
+metadata are revalidated before each request; the wire request pins the endpoint (never
+a service-tier endpoint), disables fallbacks, the web plugin and context compression,
+sends the Agent's resolved `reasoning` setting, and supplies `max_tokens` and prompt,
+completion and request price limits. Each call reserves a bound of its own request:
+the body's bytes plus a template allowance and any replayed reasoning tokens for the
+prompt, and the output limit plus the effort's reasoning allowance for the response, at
+those rates. Admission refuses an output and effort whose sum passes the endpoint's
+output limit or the per-call response byte bound, rather than clamping it. Streaming retains terminal measured tokens (reasoning as
 output) and billed cost independently of accepted output and settles the reservation to
 them; usage beyond the reservation is a contract breach that keeps the spend; incomplete
 responses keep the reservation and unknown usage. Reasoning blocks of a tool-calling
@@ -694,8 +696,9 @@ guard and can further constrain a native call; it cannot weaken a native grant:
 - `warn` — log and continue past this actor guard; native authority still applies
 
 Before each provider call, Axocoatl makes a local reservation from the estimated
-input plus the explicit or resolved bounded completion. With `abort`, a call is
-not dispatched when that reservation cannot fit either limit. Provider-reported
+input plus the explicit or resolved bounded completion, including the reasoning a
+provider allows on top of the output (`LlmProvider::response_tokens`). With `abort`, a
+call is not dispatched when that reservation cannot fit either limit. Provider-reported
 usage, including provider-reported reasoning tokens, is recorded after a response; an overrun stops the turn immediately, but
 those remote tokens may already have been incurred. Providers can tokenize
 differently, misreport usage, or ignore an output limit, so this is a local token

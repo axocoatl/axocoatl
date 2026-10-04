@@ -314,8 +314,9 @@ different provider and model from the lead; see
 The YAML `token_budget` is a local guard on actor calls. It also applies when a
 native activation uses that actor, but cannot weaken the separately approved
 native allowance. Budgets are local preflight controls. Before each model call, Axocoatl reserves
-the estimated input plus the explicit or resolved bounded completion and
-compares that reservation with both limits:
+the estimated input plus the explicit or resolved bounded completion, including any
+reasoning the provider allows on top of it, and compares that reservation with both
+limits:
 
 - `per_call` caps one call's local reservation;
 - `per_execution` caps cumulative recorded usage plus the next reservation for

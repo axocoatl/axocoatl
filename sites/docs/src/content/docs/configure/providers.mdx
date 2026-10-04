@@ -96,12 +96,13 @@ BYOK provider keys while using this execution path; Axocoatl cannot prevent chan
 made in your OpenRouter account.
 
 Before Send, review **Team & budget**. Axocoatl reads the model's entry in OpenRouter's
-catalog and its endpoints, selects the cheapest qualifying endpoint that fits the
-Agent's budget, and retains its capabilities, context and output limits, prices and,
-for a reasoning model, its reasoning contract. Every request pins that endpoint,
-disables automatic retries and fallbacks, and carries its price ceilings as
-`max_price`. The retained contract is checked again before each request; a changed or
-unsupported profile is refused before inference.
+catalog and its endpoints, selects the cheapest qualifying endpoint that accepts the
+Agent's sampling settings and fits its budget, and retains its capabilities, context
+and output limits, prices and, for a reasoning model, its reasoning contract. Every
+request pins that endpoint, disables automatic retries and fallbacks, and carries its
+prompt, completion and per-request price ceilings as `max_price`. The retained contract
+is checked again before each request; a changed or unsupported profile is refused
+before inference.
 
 ### What each request reserves
 
@@ -114,8 +115,10 @@ context window:
   these models' byte-level tokenizers covers at least one byte of text, so the request's
   bytes bound the tokens of its own text; the allowance covers what the provider adds.
 - **Response:** the call's output limit (`sampling.max_tokens`) plus its reasoning
-  allowance. The sum is sent as `max_tokens`, which caps reasoning and visible output
-  together.
+  allowance. The sum is sent as `max_tokens`. OpenRouter documents that on most
+  providers this caps reasoning and visible output together; a provider that does not
+  count reasoning against `max_tokens` can bill past the reservation, and that call is
+  then refused as a breach after it was billed, with its spend kept.
 - **Cost:** the prompt bound at the endpoint's highest input price, the response at its
   highest output price, and any per-request fee. The input price is the highest of the
   prompt, cache read and cache write prices; the output price is the higher of the
@@ -134,6 +137,19 @@ call (no request bytes, only the template allowance and the response allowance) 
 the approved budget for Team & budget to admit the Agent. Without `sampling.max_tokens`,
 the response allowance takes at most half of the Agent's whole-call token capacity.
 
+Because later calls reserve more than earlier ones, an Agent asks for its final answer
+while it can still pay for this call and the one after it, with that one's prompt grown
+by this call's whole response and as much again for the tool results. A lead starts a
+helper only when, after the helper's limits, it can still pay for the call that reads
+the helper's answer: the lead's latest call grown by the reasoning it sends back, the
+turn it returned and the answer.
+
+An Agent's own `token_budget` with `abort` counts the whole response too: before each
+call it reserves the estimated input, including reasoning tokens sent back, plus the
+output limit and its reasoning allowance. When it derives the output limit from what
+is left, it picks the largest output whose response still fits, and refuses the call
+when not even the smallest response fits.
+
 ### Reasoning models
 
 For a model whose catalog entry describes reasoning, Axocoatl sends the documented
@@ -149,6 +165,12 @@ output limit, `medium` once, `low` a quarter. It is never less than OpenRouter's
 1,024-token minimum reasoning budget while reasoning is on, and `none` adds nothing.
 With `max_tokens: 4096` at `high`, each call may produce 20,480 tokens.
 
+The sum is never cut to fit. Team & budget refuses, by name, an output limit and effort
+whose sum passes the endpoint's own output limit (8,192 at `xhigh` asks for 163,840 on
+an endpoint that allows 128,000), or whose streamed text could pass the 1 MiB a Session
+keeps of one response, counted at 10 bytes per token (5,300 at `max` is 106,000 tokens).
+Without `sampling.max_tokens`, the derived output stops below both.
+
 When a reasoning model calls tools, its reasoning blocks are kept on the tool call and
 sent back unmodified with the tool results, as OpenRouter documents for tool use, so the
 model continues the same line of reasoning. They stay in the Session's history.
@@ -160,15 +182,30 @@ cannot start them: it sends text and function tools only, no OpenRouter server t
 no `modalities` or `web_search_options`, an exact model id (a `:online` id is refused),
 and it turns the web plugin off explicitly, which overrides an account default. A
 response that reports a server tool, web citations, or image or audio output is refused.
-An account setting that forces the web plugin with **Prevent overrides** is
-incompatible with this execution path.
+`max_price` leaves out image and audio prices: OpenRouter filters endpoints on their
+listed image and audio prices even for a text request, so a zero cap there would
+refuse every call to a model that lists them. An account setting that forces the web
+plugin with **Prevent overrides** is incompatible with this execution path.
 
-Eligible endpoints need an exact tag (a provider tag such as `anthropic` qualifies only
-when no other variant shares it), text output, tool calling, `max_tokens`, `reasoning`
-for a reasoning model, and prices Axocoatl can bound. An endpoint that charges for
-anything else is refused, and the error names the component. Dynamic router aliases and
-custom OpenRouter endpoints are unsupported. A model Axocoatl cannot run says why when
-Team & budget is applied.
+The request also turns OpenRouter's context compression off, which endpoints of 8,192
+tokens or less use by default and an account can turn on: the model sees the exact
+conversation the Session recorded, including the reasoning it sends back, never one
+with messages dropped from the middle.
+
+A request never opts into a service tier. Tier endpoints such as `openai/flex`,
+`openai/fast` or `google-vertex/flex` trade latency, availability or price, serve only a
+request that asks for them, and are never selected; `:nitro` and `:floor` model ids,
+which opt into them, are refused. A response that reports a tier other than the
+standard one is refused.
+
+Eligible endpoints need an exact tag (a provider tag such as `openai` qualifies when no
+regional or other variant shares it; tier endpoints do not count, because a provider
+tag never selects them), text output, tool calling, `max_tokens`, `reasoning` for a
+reasoning model, every sampling setting the Agent sends (`temperature`, `top_p`,
+`response_format`), and prices Axocoatl can bound. An endpoint that charges for
+anything else is refused, and the error names the component; a sampling setting no
+endpoint accepts is named too. Dynamic router aliases and custom OpenRouter endpoints
+are unsupported. A model Axocoatl cannot run says why when Team & budget is applied.
 
 ## Configure Ollama
 
