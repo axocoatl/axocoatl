@@ -35,10 +35,10 @@ impl ExecutionContentStore {
     pub fn repository_reattachment(
         &self,
         reference: &EvidenceRef,
-    ) -> Result<&RepositoryReattachment, ExecutionContentError> {
+    ) -> Result<RepositoryReattachment, ExecutionContentError> {
         self.healthy()?;
-        match self.record(reference).map(|record| &record.body) {
-            Some(Body::RepositoryReattachment(proof)) => Ok(proof),
+        match self.record(reference)?.as_ref().map(|record| &record.body) {
+            Some(Body::RepositoryReattachment(proof)) => Ok(proof.clone()),
             _ => Err(ExecutionContentError::Invalid(
                 "missing repository reattachment proof",
             )),
@@ -50,8 +50,7 @@ impl ExecutionContentStore {
         snapshot: &DurableTurnSnapshot,
     ) -> Result<Vec<RepositoryReattachmentView>, ExecutionContentError> {
         self.require_snapshot(snapshot)?;
-        self.data
-            .records
+        self.keyed(&segments::reattachment_key(snapshot.turn_id()))?
             .iter()
             .filter_map(|record| match &record.body {
                 Body::RepositoryReattachment(proof) if &proof.turn_id == snapshot.turn_id() => {

@@ -148,7 +148,7 @@ impl DispatchState {
                 "human response must bind its exact authenticated request body",
             ));
         }
-        let ActivationEvidenceContent::Guidance { text } = self
+        let ActivationEvidenceContent::Guidance { text } = &self
             .content
             .resolve_activation_evidence(reference)
             .map_err(error)?
@@ -293,7 +293,7 @@ impl DispatchState {
         &self,
         evidence: &EvidenceRef,
     ) -> Result<String> {
-        let ActivationEvidenceContent::Guidance { text } = self
+        let ActivationEvidenceContent::Guidance { text } = &self
             .content
             .resolve_activation_evidence(evidence)
             .map_err(error)?

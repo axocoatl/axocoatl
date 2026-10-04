@@ -267,10 +267,10 @@ impl AxocoatlDaemon {
                     { continue; }
                 }
                 let grant_ref = slot.grant.as_ref().ok_or_else(|| failed("The Session team has no approved execution grant; open Team and budget"))?;
-                let ActivationEvidenceContent::Grant {policy} = content.resolve_activation_evidence(grant_ref).map_err(failed)? else {
+                let ActivationEvidenceContent::Grant {policy} = &content.resolve_activation_evidence(grant_ref).map_err(failed)? else {
                     return Err(failed("The Session execution grant has the wrong evidence type"));
                 };
-                let ActivationEvidenceContent::Definition {profile, ..} = content.resolve_activation_evidence(&slot.definition.snapshot).map_err(failed)? else {
+                let ActivationEvidenceContent::Definition {profile, ..} = &content.resolve_activation_evidence(&slot.definition.snapshot).map_err(failed)? else {
                     return Err(failed("The selected Agent definition is unavailable"));
                 };
                 if source.model_override.as_ref().is_some_and(|model| model != &profile.model)

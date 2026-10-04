@@ -164,7 +164,7 @@ impl AxocoatlDaemon {
             for reference in references {
                 if !seen.insert(reference){continue;}
                 let reference=axocoatl_session::turn_contract::EvidenceRef::new(reference).map_err(archive_error)?;
-                let axocoatl_session::execution_content::ActivationEvidenceContent::Attachment{reference_id,media_type,text}=content.resolve_activation_evidence(&reference).map_err(archive_error)? else{return Err(archive_error("Shared preparation reference has the wrong type"))};
+                let axocoatl_session::execution_content::ActivationEvidenceContent::Attachment{reference_id,media_type,text}=&content.resolve_activation_evidence(&reference).map_err(archive_error)? else{return Err(archive_error("Shared preparation reference has the wrong type"))};
                 if !reference_id.starts_with("ways-preparation-")||media_type!="application/vnd.axocoatl.ways-preparation+json"{return Err(archive_error("Reference is not retained shared preparation"));}
                 let receipt:WaysPreparationReceipt=serde_json::from_str(text).map_err(archive_error)?;
                 if receipt.schema_version!=1||receipt.session_id!=session_id||receipt.task.as_deref().is_some_and(|value|value!=task)||receipt.instruction.as_deref().is_some_and(|value|value.trim()!=instruction.trim()) {

@@ -71,7 +71,7 @@ fn wait_parameters(
     content: &ExecutionContentStore,
     reference: &EvidenceRef,
 ) -> Result<(NativeHumanWait, String)> {
-    let ActivationEvidenceContent::Guidance { text } = content
+    let ActivationEvidenceContent::Guidance { text } = &content
         .resolve_activation_evidence(reference)
         .map_err(error)?
     else {
@@ -101,7 +101,7 @@ pub(super) fn validate_retained_human_waits(
             .find(|record| record.activation == item.blocker.activation)
             .ok_or_else(|| error("human wait has no exact retained activation"))?
             .input;
-        let ActivationEvidenceContent::Definition { profile, .. } = content
+        let ActivationEvidenceContent::Definition { profile, .. } = &content
             .resolve_activation_evidence(&input.definition.snapshot)
             .map_err(error)?
         else {

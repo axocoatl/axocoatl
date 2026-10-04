@@ -93,15 +93,14 @@ impl ExecutionContentStore {
         &self,
         canonical: &SessionExecutionStore,
         definition: &EvidenceRef,
-    ) -> Result<Option<(&EvidenceRef, &RetainedProviderProfile)>, ExecutionContentError> {
+    ) -> Result<Option<(EvidenceRef, RetainedProviderProfile)>, ExecutionContentError> {
         self.verify_provider_profile_owner(canonical)?;
         let selected = self
-            .data
-            .records
+            .keyed(&definition_key(definition))?
             .iter()
             .find_map(|record| match &record.body {
                 Body::ProviderProfile(profile) if &profile.definition == definition => {
-                    Some((&record.reference, profile))
+                    Some((record.reference.clone(), profile.clone()))
                 }
                 _ => None,
             });
@@ -110,7 +109,7 @@ impl ExecutionContentStore {
                 "definition was admitted without a retained native provider profile",
             ));
         }
-        if let Some((_, profile)) = selected {
+        if let Some((_, profile)) = &selected {
             if profile.captured_after_records > canonical.record_count() as usize
                 || first_definition_use(canonical, definition)?
                     .is_some_and(|first| profile.captured_after_records > first)
@@ -166,4 +165,22 @@ pub(super) fn validate_provider_next(
         ));
     }
     Ok(())
+}
+
+fn definition_key(definition: &EvidenceRef) -> String {
+    format!("provider:{}", definition.as_str())
+}
+
+/// The key a provider profile is found by: its definition.
+pub(super) fn profile_key(profile: &RetainedProviderProfile) -> String {
+    definition_key(&profile.definition)
+}
+
+/// What `validate_provider_next` may consult: profiles of the same
+/// definition and the definition itself.
+pub(super) fn profile_dependency_keys(profile: &RetainedProviderProfile) -> Vec<String> {
+    vec![
+        definition_key(&profile.definition),
+        segments::reference_key(&profile.definition),
+    ]
 }

@@ -618,7 +618,7 @@ fn copied_identity_on_standalone_content_cannot_authorize_session_configuration(
         assert_eq!(retained.reference(), reference);
         assert_eq!(
             copied.resolve_activation_evidence(reference).unwrap(),
-            &actual
+            actual
         );
     }
     let mut store = fixture.store();

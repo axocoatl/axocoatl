@@ -135,7 +135,7 @@ impl SessionDispatchController {
                 .content
                 .resolve_activation_evidence(&node.definition.snapshot)
                 .map_err(error)?;
-            if !matches!(definition, ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &node.definition.definition_id)
+            if !matches!(&definition, ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &node.definition.definition_id)
             {
                 return Err(error(
                     "successor definition evidence differs from its graph",
@@ -404,7 +404,7 @@ impl SessionDispatchController {
                     .content
                     .resolve_activation_evidence(&node.definition.snapshot)
                     .map_err(error)?;
-                if !matches!(definition, ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &node.definition.definition_id)
+                if !matches!(&definition, ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &node.definition.definition_id)
                 {
                     return Err(error(
                         "successor definition evidence differs from its graph",

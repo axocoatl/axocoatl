@@ -170,7 +170,7 @@ impl DispatchState {
             .grant
             .as_ref()
             .ok_or_else(|| error("missing graph grant"))?;
-        let ActivationEvidenceContent::Grant { policy } = self
+        let ActivationEvidenceContent::Grant { policy } = &self
             .content
             .resolve_activation_evidence(&reference.evidence)
             .map_err(error)?
@@ -287,7 +287,7 @@ impl DispatchState {
                         .authority
                         .grant_status(grant.grant_id.as_str())
                         .map_err(error)?;
-                    let ActivationEvidenceContent::Grant { policy } = self
+                    let ActivationEvidenceContent::Grant { policy } = &self
                         .content
                         .resolve_activation_evidence(&grant.evidence)
                         .map_err(error)?
@@ -351,7 +351,7 @@ impl SessionDispatchController {
         else {
             return Err(error("graph command belongs to another source"));
         };
-        let ActivationEvidenceContent::Guidance { text } = state
+        let ActivationEvidenceContent::Guidance { text } = &state
             .content
             .resolve_activation_evidence(request_evidence)
             .map_err(error)?
@@ -414,7 +414,7 @@ impl SessionDispatchController {
             .map_err(error)?
             .reference()
             .clone();
-        let profile = match state
+        let profile = match &state
             .content
             .resolve_activation_evidence(&definition.snapshot)
             .map_err(error)?
@@ -740,7 +740,7 @@ pub(crate) fn pending_human_graph_receipt(
     if session_id != &request.session_id || turn_id != &request.turn_id {
         return Err(error("graph command belongs to another owner"));
     }
-    let ActivationEvidenceContent::Guidance { text } = content
+    let ActivationEvidenceContent::Guidance { text } = &content
         .resolve_activation_evidence(request_evidence)
         .map_err(error)?
     else {

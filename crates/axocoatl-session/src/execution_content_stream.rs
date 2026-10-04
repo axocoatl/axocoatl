@@ -86,8 +86,7 @@ impl ExecutionContentStore {
     ) -> Result<Vec<ActivationStreamView>, ExecutionContentError> {
         self.require_activation(snapshot, activation)?;
         Ok(self
-            .data
-            .records
+            .keyed(&segments::stream_key(activation))?
             .iter()
             .filter_map(|record| match &record.body {
                 Body::ActivationStream(content) if &content.activation == activation => {
@@ -161,14 +160,22 @@ pub(super) fn validate_stream_next(
     records: &[Record],
     content: &ActivationStreamContent,
 ) -> Result<(), ExecutionContentError> {
-    let preceding = records
-        .iter()
-        .filter(|record| {
+    // Sequences are contiguous from zero, so this event follows exactly the
+    // events before it when its predecessor is retained and its own sequence
+    // is not. That needs two events, not the whole stream.
+    let retained = |sequence: u64| {
+        records.iter().any(|record| {
             matches!(&record.body,
-        Body::ActivationStream(old) if old.activation == content.activation)
+                Body::ActivationStream(old)
+                    if old.activation == content.activation && old.sequence == sequence)
         })
-        .count();
-    if content.sequence != preceding as u64 {
+    };
+    if retained(content.sequence)
+        || content
+            .sequence
+            .checked_sub(1)
+            .is_some_and(|previous| !retained(previous))
+    {
         return Err(ExecutionContentError::Conflict);
     }
     // No new live observation can be appended after the actor's terminal body.

@@ -261,7 +261,7 @@ impl AxocoatlDaemon {
                 if revision.graph.slots.len()!=1 {return Err(error("Rewind currently requires a single autonomous Agent Session team".into()));}
                 let slot=&revision.graph.slots[0];
                 let ActivationEvidenceContent::Definition{configuration,..}=content.resolve_activation_evidence(&slot.definition.snapshot).map_err(|e|error(e.to_string()))? else {return Err(error("The exact Session Agent definition is unavailable".into()));};
-                let config:axocoatl_core::AgentConfig=serde_json::from_str(configuration).map_err(|e|error(e.to_string()))?;
+                let config:axocoatl_core::AgentConfig=serde_json::from_str(&configuration).map_err(|e|error(e.to_string()))?;
                 if config.role!=axocoatl_core::AgentRole::Autonomous {return Err(error("Rewind currently requires an autonomous Agent".into()));}
                 vec![slot.conversation_id.clone()]
             }else {

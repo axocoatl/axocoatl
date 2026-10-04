@@ -367,7 +367,7 @@ impl AutonomousActivationFactory for ReviewFactory {
                     configuration,
                     profile,
                     ..
-                } = content
+                } = &content
                     .resolve_activation_evidence(&input.definition.snapshot)
                     .unwrap()
                 else {
@@ -523,7 +523,7 @@ fn review_observations(
             let proof = run
                 .controller
                 .with_team_stores(|_, content, _| {
-                    let ActivationEvidenceContent::Guidance { text } = content
+                    let ActivationEvidenceContent::Guidance { text } = &content
                         .resolve_activation_evidence(&observation.evidence)
                         .unwrap()
                     else {

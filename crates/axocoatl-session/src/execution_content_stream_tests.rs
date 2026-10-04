@@ -27,13 +27,13 @@ fn stream_identity_sequence_and_reopen_preserve_exact_observations_without_accep
     let mut canonical = canonical(&root);
     let dir = tempfile::tempdir().unwrap();
     let identity = canonical.identity().unwrap();
-    let mut content = store(dir.path(), identity.clone(), Limits::default());
+    let mut content = store(dir.path(), identity.clone());
     let snapshot = streaming_fixture(&mut canonical, &mut content);
     let event = observation(&snapshot, 0);
     let receipt = content
         .record_activation_stream(&snapshot, event.clone())
         .unwrap();
-    let bytes = std::fs::read(dir.path().join(FILE)).unwrap();
+    let bytes = stored(dir.path());
     assert_eq!(
         content
             .record_activation_stream(&snapshot, event.clone())
@@ -65,7 +65,7 @@ fn stream_identity_sequence_and_reopen_preserve_exact_observations_without_accep
             "{case}"
         );
         assert_eq!(
-            std::fs::read(dir.path().join(FILE)).unwrap(),
+            stored(dir.path()),
             bytes,
             "{case}"
         );
@@ -80,7 +80,7 @@ fn stream_identity_sequence_and_reopen_preserve_exact_observations_without_accep
         ActivationState::Running
     );
     drop(content);
-    let reopened = store(dir.path(), identity, Limits::default());
+    let reopened = store(dir.path(), identity);
     assert_eq!(
         reopened
             .activation_stream(&snapshot, &event.activation)
@@ -91,91 +91,103 @@ fn stream_identity_sequence_and_reopen_preserve_exact_observations_without_accep
         reopened.project(&snapshot).unwrap().activations[0].output
             == ContentResolution::NotRecorded
     );
-    assert_eq!(std::fs::read(dir.path().join(FILE)).unwrap(), bytes);
+    assert_eq!(stored(dir.path()), bytes);
 }
 
 #[test]
-fn stream_capacity_cannot_spend_terminal_reservation_and_terminal_prevents_later_streams() {
-    for count_limit in [true, false] {
-        let root = tempfile::tempdir().unwrap();
-        let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
-        let mut content = store(dir.path(), canonical.identity().unwrap(), Limits::default());
-        let snapshot = streaming_fixture(&mut canonical, &mut content);
-        let mut event = observation(&snapshot, 0);
-        let reservation = content
-            .reserve_activation_output(
-                &snapshot,
-                &event.activation,
-                ActivationOutputLimits {
-                    partial_records: 0,
-                    partial_bytes: 0,
-                    settlement_bytes: 128,
-                },
-            )
-            .unwrap();
-        if count_limit {
-            content.limits.records = content.data.records.len() + 2;
-        } else {
-            // A known finite byte allowance, with the actual same terminal
-            // reservation charged by validate_capacity, rather than a mock gate.
-            content.limits.bytes = encode_bounded(&content.data, MAX_BYTES).unwrap().len()
-                + 128 * 6
-                + OUTPUT_OVERHEAD
-                + 2048;
-        }
-        let mut admitted = 0;
-        loop {
-            event.sequence = admitted;
-            let before = std::fs::read(dir.path().join(FILE)).unwrap();
-            match content.record_activation_stream(&snapshot, event.clone()) {
-                Ok(_) => {
-                    admitted += 1;
-                    assert!(admitted < 20);
-                }
-                Err(ExecutionContentError::Capacity) => {
-                    assert_eq!(std::fs::read(dir.path().join(FILE)).unwrap(), before);
-                    break;
-                }
-                other => panic!("unexpected stream admission: {other:?}"),
-            }
-        }
-        assert!(admitted > 0);
-        let final_output = content
-            .settle_activation_output(
-                &reservation,
-                ActivationOutputContent {
-                    activation: event.activation.clone(),
-                    recorded_at_unix_ms: 101,
-                    text: "terminal partial".into(),
-                    kind: OutputKind::Partial,
-                    usage: ExecutionUsage::Unknown {
-                        known_subtotal: TokenUsageStats::new(2, 0),
-                    },
-                },
-            )
-            .unwrap();
-        assert!(final_output.complete_output().is_none());
-        let before = std::fs::read(dir.path().join(FILE)).unwrap();
-        assert!(content
+fn long_streams_cross_segments_and_terminal_prevents_later_streams() {
+    let root = tempfile::tempdir().unwrap();
+    let mut canonical = canonical(&root);
+    let dir = tempfile::tempdir().unwrap();
+    let mut content = store(dir.path(), canonical.identity().unwrap());
+    let snapshot = streaming_fixture(&mut canonical, &mut content);
+    let mut event = observation(&snapshot, 0);
+    let reservation = content
+        .reserve_activation_output(
+            &snapshot,
+            &event.activation,
+            ActivationOutputLimits {
+                partial_records: 0,
+                partial_bytes: 0,
+                settlement_bytes: 128,
+            },
+        )
+        .unwrap();
+    // Far more events than one segment holds; each append consults only the
+    // event before it, never the whole stream.
+    let events = 5 * segments::SPEC.segment_records + 3;
+    for sequence in 0..events {
+        event.sequence = sequence;
+        content
             .record_activation_stream(&snapshot, event.clone())
-            .is_err());
-        assert_eq!(std::fs::read(dir.path().join(FILE)).unwrap(), before);
-        let identity = canonical.identity().unwrap();
-        drop(content);
-        let restored = store(dir.path(), identity, Limits::default());
-        assert_eq!(
-            restored
-                .activation_stream(&snapshot, &event.activation)
-                .unwrap()
-                .len(),
-            admitted as usize
-        );
-        assert_eq!(
-            restored.activation_output_settlement(&reservation).unwrap(),
-            Some(final_output)
-        );
+            .unwrap();
     }
+    assert!(content.sealed_segments().0 >= 5);
+    // A retained sequence with another body, or a gap, is refused unwritten;
+    // an exact repeat is the retained event.
+    let mut rewritten = event.clone();
+    rewritten.payload = ActivationStreamPayload::Text {
+        delta: "rewritten".into(),
+    };
+    for (sequence, candidate) in [
+        (0, &rewritten),
+        (1, &rewritten),
+        (events / 2, &rewritten),
+        (events + 1, &event),
+    ] {
+        let mut candidate = candidate.clone();
+        candidate.sequence = sequence;
+        let before = stored(dir.path());
+        assert!(matches!(
+            content.record_activation_stream(&snapshot, candidate),
+            Err(ExecutionContentError::Conflict)
+        ));
+        assert_eq!(stored(dir.path()), before, "{sequence}");
+    }
+    event.sequence = 1;
+    let before = stored(dir.path());
+    content
+        .record_activation_stream(&snapshot, event.clone())
+        .unwrap();
+    assert_eq!(stored(dir.path()), before);
+    let final_output = content
+        .settle_activation_output(
+            &reservation,
+            ActivationOutputContent {
+                activation: event.activation.clone(),
+                recorded_at_unix_ms: 101,
+                text: "terminal partial".into(),
+                kind: OutputKind::Partial,
+                usage: ExecutionUsage::Unknown {
+                    known_subtotal: TokenUsageStats::new(2, 0),
+                },
+            },
+        )
+        .unwrap();
+    assert!(final_output.complete_output().is_none());
+    event.sequence = events;
+    let before = stored(dir.path());
+    assert!(content
+        .record_activation_stream(&snapshot, event.clone())
+        .is_err());
+    assert_eq!(stored(dir.path()), before);
+    let identity = canonical.identity().unwrap();
+    drop(content);
+    let restored = store(dir.path(), identity);
+    let retained = restored
+        .activation_stream(&snapshot, &event.activation)
+        .unwrap();
+    assert_eq!(
+        retained
+            .iter()
+            .map(|view| view.content.sequence)
+            .collect::<Vec<_>>(),
+        (0..events).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        restored.activation_output_settlement(&reservation).unwrap(),
+        Some(final_output)
+    );
 }
 
 #[test]
@@ -184,21 +196,18 @@ fn uncertain_stream_acknowledgement_requires_reopen_and_keeps_immutable_event_id
     let mut canonical = canonical(&root);
     let dir = tempfile::tempdir().unwrap();
     let identity = canonical.identity().unwrap();
-    let mut content = store(dir.path(), identity.clone(), Limits::default());
+    let mut content = store(dir.path(), identity.clone());
     let snapshot = streaming_fixture(&mut canonical, &mut content);
     let event = observation(&snapshot, 0);
     assert!(matches!(
-        content.append_with(Body::ActivationStream(event.clone()), |storage, bytes| {
-            storage.write(bytes)?;
-            Err(io::Error::other("lost stream acknowledgement"))
-        }),
+        content.append_losing_ack(Body::ActivationStream(event.clone())),
         Err(ExecutionContentError::RecoveryRequired)
     ));
     assert!(content
         .record_activation_stream(&snapshot, event.clone())
         .is_err());
     drop(content);
-    let mut restored = store(dir.path(), identity, Limits::default());
+    let mut restored = store(dir.path(), identity);
     let retained = restored
         .activation_stream(&snapshot, &event.activation)
         .unwrap();

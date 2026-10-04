@@ -639,7 +639,7 @@ impl AutonomousActivationFactory for DelegateFactory {
                     configuration,
                     profile,
                     ..
-                } = content
+                } = &content
                     .resolve_activation_evidence(&input.definition.snapshot)
                     .unwrap()
                 else {

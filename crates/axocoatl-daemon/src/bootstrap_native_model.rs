@@ -67,7 +67,7 @@ impl AxocoatlDaemon {
                         profile,
                         configuration,
                         ..
-                    } = content
+                    } = &content
                         .resolve_activation_evidence(&slot.definition.snapshot)
                         .map_err(failure)?
                     else {
@@ -77,7 +77,7 @@ impl AxocoatlDaemon {
                         .grant
                         .as_ref()
                         .ok_or_else(|| failure("The Agent has no approved execution limits"))?;
-                    let ActivationEvidenceContent::Grant { policy } = content
+                    let ActivationEvidenceContent::Grant { policy } = &content
                         .resolve_activation_evidence(grant)
                         .map_err(failure)?
                     else {
@@ -168,7 +168,7 @@ pub(super) fn selected_definition(
     let ActivationEvidenceContent::Definition {
         configuration: original,
         ..
-    } = content
+    } = &content
         .resolve_activation_evidence(&slot.definition.snapshot)
         .map_err(failure)?
     else {
@@ -179,7 +179,7 @@ pub(super) fn selected_definition(
         revision,
         configuration,
         profile,
-    } = content
+    } = &content
         .resolve_activation_evidence(&selection.definition.snapshot)
         .map_err(failure)?
     else {

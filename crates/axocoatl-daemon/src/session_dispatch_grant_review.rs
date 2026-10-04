@@ -55,7 +55,7 @@ fn retained_proposal(
     content: &ExecutionContentStore,
     item: &ContractBlocker,
 ) -> Result<Option<SessionGrantChange>> {
-    let ActivationEvidenceContent::Guidance { text } = content
+    let ActivationEvidenceContent::Guidance { text } = &content
         .resolve_activation_evidence(&item.blocker.parameters)
         .map_err(error)?
     else {
@@ -78,7 +78,7 @@ fn retained_proposal(
     {
         return Err(error("grant proposal differs from its exact typed wait"));
     }
-    let ActivationEvidenceContent::Grant { policy } = content
+    let ActivationEvidenceContent::Grant { policy } = &content
         .resolve_activation_evidence(&proposal.grant.evidence)
         .map_err(error)?
     else {

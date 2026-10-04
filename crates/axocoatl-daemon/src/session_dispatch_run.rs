@@ -177,14 +177,14 @@ impl SessionDispatchController {
             Some(resource) => super::input::project_repository_input(
                 manifest,
                 snapshot.request_ref().unwrap(),
-                request,
+                &request,
                 &resolved,
                 resource,
             )?,
             None => super::input::project_text_input(
                 manifest,
                 snapshot.request_ref().unwrap(),
-                request,
+                &request,
                 &resolved,
             )?,
         };

@@ -1087,7 +1087,7 @@ impl SessionDispatchRegistry {
                 .expect("verified content")
                 .resolve_activation_evidence(&node.definition.snapshot)
                 .map_err(|error| failure(error.to_string()))?;
-            if !matches!(definition, axocoatl_session::execution_content::ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &node.definition.definition_id)
+            if !matches!(&definition, axocoatl_session::execution_content::ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &node.definition.definition_id)
             {
                 return Err(failure(
                     "first Begin definition evidence differs from its graph",

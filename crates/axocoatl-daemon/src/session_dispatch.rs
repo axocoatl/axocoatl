@@ -791,7 +791,7 @@ impl DispatchState {
                         .grant
                         .as_ref()
                         .ok_or_else(|| error("retained outcome has no captured grant"))?;
-                    let ActivationEvidenceContent::Grant { policy } = self
+                    let ActivationEvidenceContent::Grant { policy } = &self
                         .content
                         .resolve_activation_evidence(&grant.evidence)
                         .map_err(error)?

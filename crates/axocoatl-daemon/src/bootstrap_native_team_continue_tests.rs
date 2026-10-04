@@ -168,7 +168,7 @@ impl AutonomousActivationFactory for ScriptedFactory {
                     configuration,
                     profile,
                     ..
-                } = content
+                } = &content
                     .resolve_activation_evidence(&input.definition.snapshot)
                     .unwrap()
                 else {

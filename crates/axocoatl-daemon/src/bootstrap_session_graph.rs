@@ -220,7 +220,7 @@ impl AxocoatlDaemon {
                     .iter()
                     .find(|slot| slot.slot_id.as_str() == slot_id)
                     .ok_or_else(|| graph_error("That Agent is no longer in this Session's team"))?;
-                match content
+                match &content
                     .resolve_activation_evidence(&slot.definition.snapshot)
                     .map_err(graph_error)?
                 {

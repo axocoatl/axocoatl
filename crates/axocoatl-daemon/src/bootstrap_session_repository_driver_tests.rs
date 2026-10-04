@@ -322,7 +322,7 @@ fn readiness_proof(controller: &SessionDispatchController) -> Option<serde_json:
         .clone();
     controller
         .with_team_stores(|_, content, _| {
-            let ActivationEvidenceContent::Guidance { text } = content
+            let ActivationEvidenceContent::Guidance { text } = &content
                 .resolve_activation_evidence(&observation.evidence)
                 .unwrap()
             else {

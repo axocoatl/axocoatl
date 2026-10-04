@@ -100,7 +100,7 @@ impl DispatchState {
         item: &ContractActivation,
         phase: RepositorySnapshotPhase,
     ) -> Result<Option<Option<ActivationRepositorySnapshot>>> {
-        let ActivationEvidenceContent::Definition { profile, .. } = self
+        let ActivationEvidenceContent::Definition { profile, .. } = &self
             .content
             .resolve_activation_evidence(&item.input.definition.snapshot)
             .map_err(error)?
@@ -146,7 +146,7 @@ impl DispatchState {
             let observation = contract
                 .current_condition(&id)
                 .ok_or_else(|| error("the required checks have no current readiness"))?;
-            let ActivationEvidenceContent::Guidance { text } = self
+            let ActivationEvidenceContent::Guidance { text } = &self
                 .content
                 .resolve_activation_evidence(&observation.evidence)
                 .map_err(error)?

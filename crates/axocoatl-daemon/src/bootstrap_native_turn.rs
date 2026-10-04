@@ -429,7 +429,7 @@ pub(super) fn prepare_admission(
             let ActivationEvidenceContent::Definition {
                 profile: approved_profile,
                 ..
-            } = content
+            } = &content
                 .resolve_activation_evidence(&slot.definition.snapshot)
                 .map_err(failure)?
             else {
@@ -440,7 +440,7 @@ pub(super) fn prepare_admission(
                 revision: definition_revision,
                 profile,
                 configuration,
-            } = content
+            } = &content
                 .resolve_activation_evidence(&effective_definition.snapshot)
                 .map_err(failure)?
             else {
@@ -474,7 +474,7 @@ pub(super) fn prepare_admission(
                 .grant
                 .as_ref()
                 .ok_or_else(|| failure("team slot has no explicit approved execution grant"))?;
-            let ActivationEvidenceContent::Grant { policy: approved } = content
+            let ActivationEvidenceContent::Grant { policy: approved } = &content
                 .resolve_activation_evidence(grant_reference)
                 .map_err(failure)?
             else {
@@ -487,7 +487,7 @@ pub(super) fn prepare_admission(
                     "native request grant differs from the applied approved team policy",
                 ));
             }
-            let ActivationEvidenceContent::Budget { limits } = content
+            let ActivationEvidenceContent::Budget { limits } = &content
                 .resolve_activation_evidence(&slot.budget)
                 .map_err(failure)?
             else {
@@ -819,7 +819,7 @@ fn inject_review(
         profile,
         configuration,
         ..
-    } = content
+    } = &content
         .resolve_activation_evidence(&review.definition.snapshot)
         .map_err(failure)?
     else {

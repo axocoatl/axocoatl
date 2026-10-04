@@ -1206,7 +1206,7 @@ impl ControlAuthority {
         else {
             return Err(AuthorityError::Denied);
         };
-        if retained_policy != policy {
+        if &retained_policy != policy {
             return Err(AuthorityError::Denied);
         }
         let definition = arguments.definition();

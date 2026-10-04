@@ -623,7 +623,7 @@ fn validate_revision(
         }
     }
     for slot in &record.graph.slots {
-        match content.resolve_activation_evidence(&slot.definition.snapshot)? {
+        match &content.resolve_activation_evidence(&slot.definition.snapshot)? {
             ActivationEvidenceContent::Definition {
                 definition_id,
                 revision,
@@ -655,14 +655,14 @@ fn validate_revision(
                 ));
             };
             let ActivationEvidenceContent::Definition { profile, .. } =
-                content.resolve_activation_evidence(&slot.definition.snapshot)?
+                &content.resolve_activation_evidence(&slot.definition.snapshot)?
             else {
                 return Err(SessionTeamError::Invalid(
                     "slot grant has no retained definition profile",
                 ));
             };
             let ActivationEvidenceContent::Budget { limits } =
-                content.resolve_activation_evidence(&slot.budget)?
+                &content.resolve_activation_evidence(&slot.budget)?
             else {
                 return Err(SessionTeamError::Invalid(
                     "slot grant has no retained budget",

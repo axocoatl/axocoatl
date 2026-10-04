@@ -364,8 +364,8 @@ impl SessionTurnControlPlane {
                     revision,
                     profile,
                     configuration,
-                }) if definition_id == &node.definition.definition_id => {
-                    let fields = serde_json::from_str::<Value>(configuration).ok();
+                }) if definition_id == node.definition.definition_id => {
+                    let fields = serde_json::from_str::<Value>(&configuration).ok();
                     let fields = fields.as_ref().and_then(Value::as_object);
                     EvidenceValue::available(ControlPlaneDefinition {
                         name: EvidenceValue::from_option(
@@ -382,7 +382,7 @@ impl SessionTurnControlPlane {
                             .and_then(|fields| text(fields, &["system_prompt"]))
                             .map_or(EvidenceValue::NotRecorded, bounded_text),
                         tools: EvidenceValue::available(profile.tools.clone()),
-                        configuration_revision: EvidenceValue::available(*revision),
+                        configuration_revision: EvidenceValue::available(revision),
                         snapshot: EvidenceValue::available(
                             node.definition.snapshot.as_str().into(),
                         ),
@@ -469,7 +469,7 @@ impl SessionTurnControlPlane {
                                 // Resource preparation can fail before an output
                                 // reservation exists. The driver retains that exact
                                 // reason as Guidance and binds it in FailActivation.
-                                None => match content.resolve_activation_evidence(reference) {
+                                None => match &content.resolve_activation_evidence(reference) {
                                     Ok(ActivationEvidenceContent::Guidance { text }) => {
                                         bounded_text(text)
                                     }
@@ -495,7 +495,7 @@ impl SessionTurnControlPlane {
                 };
                 let guidance = contract.guidance().iter().filter(|item| item.activation == activation.activation)
                     .map(|item| {
-                        let text = match content.resolve_activation_evidence(&item.instruction) {
+                        let text = match &content.resolve_activation_evidence(&item.instruction) {
                             Ok(ActivationEvidenceContent::Guidance { text }) => bounded_text(text),
                             Ok(_) => EvidenceValue::Unavailable { reason: "Guidance reference has another evidence role.".into() },
                             Err(error) => EvidenceValue::Unavailable { reason: error.to_string() },
@@ -535,7 +535,7 @@ impl SessionTurnControlPlane {
                     .filter(|item| item.blocker.activation == activation.activation)
                 {
                     let parameters =
-                        match content.resolve_activation_evidence(&blocker.blocker.parameters) {
+                        match &content.resolve_activation_evidence(&blocker.blocker.parameters) {
                             Ok(value) => bounded_json(json!(value)),
                             Err(error) => EvidenceValue::Unavailable {
                                 reason: error.to_string(),
@@ -729,7 +729,7 @@ fn delegated_by(
     node: &TurnNodeId,
 ) -> Option<(ActivationRef, String)> {
     let Ok(ActivationEvidenceContent::Grant { policy }) =
-        content.resolve_activation_evidence(admission)
+        &content.resolve_activation_evidence(admission)
     else {
         return None;
     };
@@ -737,7 +737,7 @@ fn delegated_by(
         return None;
     }
     let Ok(ActivationEvidenceContent::Guidance { text }) =
-        content.resolve_activation_evidence(&policy.issuer_evidence)
+        &content.resolve_activation_evidence(&policy.issuer_evidence)
     else {
         return None;
     };
@@ -800,7 +800,7 @@ pub(crate) fn required_checks(
             }
         };
         checks.push(
-            project_check(snapshot, content, &condition.condition_id, definition).unwrap_or_else(
+            project_check(snapshot, content, &condition.condition_id, &definition).unwrap_or_else(
                 |failure| {
                     TurnCheckView::unavailable(
                         definition.argv.clone(),

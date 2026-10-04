@@ -268,7 +268,7 @@ impl NativeDefinitionPreparation {
             || content
                 .resolve_activation_evidence(&definition.snapshot)
                 .map_err(error)?
-                != &self.definition_content()?
+                != self.definition_content()?
         {
             return Err(error(
                 "native capture differs from the exact retained definition",

@@ -261,7 +261,7 @@ impl SessionDispatchController {
             if session_id != &request.session_id || turn_id != &request.turn_id {
                 return Err(error("control command ID belongs to another owner"));
             }
-            let ActivationEvidenceContent::Guidance { text } = state
+            let ActivationEvidenceContent::Guidance { text } = &state
                 .content
                 .resolve_activation_evidence(request_evidence)
                 .map_err(error)?

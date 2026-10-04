@@ -222,7 +222,7 @@ impl DispatchState {
             if worker.template_id.starts_with("adhoc-") {
                 continue;
             }
-            let ActivationEvidenceContent::Definition { profile, .. } = self
+            let ActivationEvidenceContent::Definition { profile, .. } = &self
                 .content
                 .resolve_activation_evidence(&worker.definition.snapshot)
                 .map_err(error)?
@@ -561,7 +561,7 @@ impl DispatchState {
         else {
             return Ok(false);
         };
-        let ActivationEvidenceContent::Guidance { text } = self
+        let ActivationEvidenceContent::Guidance { text } = &self
             .content
             .resolve_activation_evidence(policy_ref)
             .map_err(error)?
@@ -885,7 +885,7 @@ impl SessionDispatchController {
         else {
             panic!("delegate intent must reconcile before replay")
         };
-        let ActivationEvidenceContent::Guidance { text } = state
+        let ActivationEvidenceContent::Guidance { text } = &state
             .content
             .resolve_activation_evidence(policy_ref)
             .unwrap()

@@ -84,7 +84,7 @@ impl DispatchState {
             ));
         }
         if !preview {
-            let ActivationEvidenceContent::Guidance { text } = self
+            let ActivationEvidenceContent::Guidance { text } = &self
                 .content
                 .resolve_activation_evidence(approval)
                 .map_err(error)?

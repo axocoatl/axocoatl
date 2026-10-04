@@ -424,7 +424,7 @@ impl DispatchState {
             .ok_or_else(|| error("canonical request is not bound"))?;
         match &input.repository {
             RepositoryInput::Unavailable => {
-                super::input::project_text_input(input, request_ref, request, &resolved)?;
+                super::input::project_text_input(input, request_ref, &request, &resolved)?;
             }
             RepositoryInput::Recorded {
                 snapshot: repository_ref,
@@ -433,7 +433,7 @@ impl DispatchState {
                 super::input::project_repository_input(
                     input,
                     request_ref,
-                    request,
+                    &request,
                     &resolved,
                     &repository,
                 )?;
@@ -771,7 +771,7 @@ impl DispatchState {
                     .find(|item| item.activation == *activation)
                     .ok_or_else(|| error("unbound Stop has no canonical activation"))?
                     .input;
-                let ActivationEvidenceContent::Definition { profile, .. } = self
+                let ActivationEvidenceContent::Definition { profile, .. } = &self
                     .content
                     .resolve_activation_evidence(&input.definition.snapshot)
                     .map_err(error)?
