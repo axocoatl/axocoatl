@@ -458,7 +458,7 @@ async fn a_session_with_no_room_for_tool_calls_ends_with_an_answer() {
     assert!(requests[3].tools.is_empty());
     let note = requests[3].messages.last().unwrap().text_content().unwrap();
     assert!(
-        note.contains("the Session can record no more tool calls, so tools are no longer available"),
+        note.contains("this turn can record no more tool calls, so tools are no longer available"),
         "{note}"
     );
 }

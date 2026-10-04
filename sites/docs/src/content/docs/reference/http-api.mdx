@@ -376,7 +376,7 @@ activity returns an empty list.
   "sidecar": null,
   "policies": [],
   "private_destinations": [],
-  "record": {"events": 3, "bytes": 412, "max_events": 50000, "full": false, "gaps": 0},
+  "record": {"events": 3, "bytes": 412, "gaps": 0},
   "events": [
     {"v": 1, "seq": 1, "ts_ms": 1790000000000, "event": {"kind": "sidecar", "state": "ready", "generation": 1}}
   ],
@@ -407,8 +407,10 @@ route, each HTTP request is a `request` event written before the request is sent
 allowed it, `decision`, `reason`, and the `credential`'s name, never its value), and
 a `response` event says how an allowed one ended (`status`, `up`, `down`, `ms`,
 `outcome`, and `cookies_dropped` when a credentialed route removed `Set-Cookie` or
-`Set-Cookie2` fields). `record.full` means new
-connections are refused; `gaps` counts places where a sequence number was skipped.
+`Set-Cookie2` fields). `record` counts the events kept and the bytes of their lines;
+`gaps` counts places where a sequence number was skipped. The record keeps every
+event for the Session's life, so the `max_events` and `full` fields of 1.2.0 are
+gone.
 An `open` or `close` event's `conn` is `g<generation>:<id>`; generations continue
 across proxy restarts and runtime starts, so `conn` is unique in one record. A
 `limit` event with `what: "unrecorded_refusals"` counts refusals of connections

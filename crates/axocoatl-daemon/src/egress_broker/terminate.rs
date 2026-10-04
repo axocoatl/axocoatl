@@ -946,7 +946,7 @@ impl Connection {
                 &refusal(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "record_unavailable",
-                    "the Session's network record is full or unavailable".into(),
+                    "the Session's network record is unavailable".into(),
                     "New requests are refused until the record can be written.",
                     true,
                 ),

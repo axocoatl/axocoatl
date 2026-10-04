@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Session data is converted to segment files when a Session is first opened.** Each
+  journal's single file is checked against the bounds it was written under, its records
+  are copied into segments, and a small head file replaces it last, so a crash during
+  the conversion leaves the old file to convert again. Once converted, a Session cannot
+  be opened by 1.2.0 or earlier, which refuses the new head file rather than misread it.
+- `sandbox.egress.record_max_events` is ignored: a Session's network record keeps every
+  event. It is still accepted, and `axocoatl validate`, `axocoatl doctor` and daemon start
+  warn that it can be removed. `GET /api/sessions/{id}/network` returns `record` as
+  `{events, bytes, gaps}`, without `max_events` and `full`, and a `record_unavailable`
+  refusal now means only that the record could not be written.
+- The Ways decision history's `records` and `aggregate_bytes` limits count the decisions
+  kept and their stored bytes; deleted decisions no longer count toward them, so deleting
+  one frees room. One stored change (patch) may be up to 64 MiB, and the total is bounded
+  only by `aggregate_bytes`.
+
 ### Fixed
 - **`browser` and `browser_check` accept `null` for an optional argument and explain
   every refusal.** A model that gave an optional argument as `null`, such as
@@ -36,13 +52,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   activation (N rounds)", classed `round_limit` with **Continue** as the suggested next
   step, where it was classed `other` with "inspect"; failures written by 1.2.0 are read
   the same way.
-- **A Session whose tool-call record is full keeps running.** A Session records at most
-  256 tool calls and repository captures over its life, and the call after that left
-  its runtime needing recovery ("invocation audit capacity exhausted"). Each Agent is
-  now asked for its final answer without tools once the record has no room, as when its
-  budget runs out; an Agent's call it cannot record is declined before anything is
-  written, and a capture it cannot record is kept as unavailable. Start a new Session to
-  give its Agents tools again.
+- **A long Session no longer runs out of room to record its work.** A Session recorded
+  at most 256 tool calls and repository captures over its life, and the call after that
+  left its runtime needing recovery ("invocation audit capacity exhausted"). Its other
+  journals had lifetime caps too: 4,096 content records or 64 MiB, 65,536 turn records
+  or 256 turns, 4,096 Team revisions, saved Agent state for 4,096 activations, and
+  50,000 network events or 2,000 screenshots, past which new connections were refused. A
+  Session now keeps every record for as long as it exists. Each journal appends to an
+  open segment file and, once it holds its bounded number of records or bytes, seals it
+  with a SHA-256 digest that the next segment names, so a reordered, removed or changed
+  segment is refused; a write cut short by a crash is dropped on open and an interrupted
+  seal is completed. Memory holds the open segment and a small index per sealed one, not
+  the whole history. Bounds that apply to one turn or one record stay: a turn records up
+  to 4,096 steps and 8 MiB and up to 4,096 budget claims, about 2,000 tool calls. When a
+  turn has no room for another tool call, each Agent is asked for its final answer
+  without tools, as when its budget runs out, an Agent's call it cannot record is
+  declined before anything is written, and a capture it cannot record is kept as
+  unavailable; the next turn starts with fresh room.
 - **Continuing a Team turn runs the work that depends on the restarted Agents.** When a
   lead depended on two helpers that failed on a provider error, Continue restarted the
   helpers but left the lead, which had never started, blocked, so the turn stopped

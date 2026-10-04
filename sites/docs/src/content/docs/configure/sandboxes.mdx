@@ -177,12 +177,13 @@ host, port and the tool call whose credential it presented. Bytes and duration a
 added when it closes. If the record cannot be written, the connection is refused.
 Refusals of connections without a valid credential, which any process in the
 container can cause, are recorded one by one up to 20 at once and then one every 5
-seconds; the others are counted in a `limit` event once a minute, so they cannot fill
-the record. The record's cap
-(`record_max_events`) applies to the Session for as long as it exists, across
-runtime restarts. Once it is reached, new connections get `503 record_unavailable`
-until you raise the cap and restart the daemon; setup commands, provisioning and
-terminals still run, without network.
+seconds; the others are counted in a `limit` event once a minute, so they do not
+flood the record. The record keeps every event for the life of the Session, across
+runtime restarts, with no cap on how many: it is written in segments of up to 4 MiB
+or 16,384 events, and a full segment is sealed with a SHA-256 digest that the next
+one names. If the record cannot be written, new connections get
+`503 record_unavailable`; setup commands, provisioning and terminals still run,
+without network.
 
 If Axocoatl's config file is inside the Session's Workspace, its Agents can read
 it, and **Session network** says so. Keep secrets in environment variables. Read the record with

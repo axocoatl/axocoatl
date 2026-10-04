@@ -290,7 +290,6 @@ sandbox:
     private_destinations: [10.0.0.0/8]
     sidecar_network: podman      # optional Podman network for the proxy
     max_connections: 128         # 8-256 connections open at once
-    record_max_events: 50000     # 1000-1000000 events in one Session's record, for its lifetime
 ```
 
 `sidecar_network` names the Podman network the proxy container joins; leave it
@@ -312,8 +311,10 @@ entries, CDN-fronted presets (a tunnel to them can reach other sites on the same
 CDN) and hosts that accept uploads (`github`, `npm`, `pypi`, `crates`). Under
 another network mode, `allow`, `private_destinations` and `routes` do nothing, and
 validation warns about them. The browser's own proxy still uses `sidecar_network` and
-`max_connections` there (see [Browser](/configure/browser/)), and `record_max_events`
-caps the Session network record in every mode. Native repository tools and required checks need local Podman. E2B supports
+`max_connections` there (see [Browser](/configure/browser/)). The Session network
+record keeps every event in every mode; `record_max_events`, which capped it in 1.2.0,
+is still accepted but ignored, and `axocoatl validate`, `axocoatl doctor` and daemon
+start warn that it can be removed. Native repository tools and required checks need local Podman. E2B supports
 compatibility execution; it does not implement the native supervised command boundary.
 For E2B:
 

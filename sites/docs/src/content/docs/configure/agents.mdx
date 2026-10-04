@@ -191,10 +191,12 @@ suggested next step is **Continue**, which runs the Agent again on the same requ
 it changed stay changed.
 
 A Session keeps a record of every tool call and every repository capture the host makes,
-for the life of the Session, and that record holds at most 256 of them. When it can hold
-no more, each Agent is asked for its final answer without tools, as when its budget runs
-out, and in a later turn of that Session Agents cannot use tools and the host cannot
-observe their changes. Start a new Session to give its Agents tools again.
+for the life of the Session, with no limit on how many. One turn has room for about 2,000
+tool calls: its record holds up to 4,096 steps and 8 MiB, and a tool call takes two steps,
+its start and its outcome; its budget record holds up to 4,096 claims, and a tool round
+takes two, the model call and the tool call. When
+a turn has no room for another tool call, each Agent is asked for its final answer
+without tools, as when its budget runs out; the next turn starts with fresh room.
 
 ## Limit which files an Agent may change
 

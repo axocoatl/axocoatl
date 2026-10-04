@@ -1598,7 +1598,7 @@ impl DefaultAgentBehavior {
             ));
         }
         if allowance.tool_calls == Some(0) {
-            return Some("the Session can record no more tool calls".to_string());
+            return Some("this turn can record no more tool calls".to_string());
         }
         let bounds = self.provider.execution_bounds(request)?;
         if let Some(left) = allowance

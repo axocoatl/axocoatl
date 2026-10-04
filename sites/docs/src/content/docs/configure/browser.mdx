@@ -243,9 +243,10 @@ tool result summarizes them.
 A `browser` call keeps a screenshot of the page as the call left it, and a failing
 `browser_check` keeps its first failing test's screenshot, beside the record. The
 event names it by its SHA-256, and
-`GET /api/sessions/{id}/network/screenshots/{sha256}` returns it. A Session keeps at
-most 2000 screenshots of up to 1 MiB each, and 64 MiB of screenshots in all. Past
-that, calls still run and are recorded, with `screenshot_dropped: record_full`.
+`GET /api/sessions/{id}/network/screenshots/{sha256}` returns it. A screenshot is
+kept when it is at most 1 MiB, and a Session keeps every one, with no cap on how many.
+Records written by 1.2.0 may show `screenshot_dropped: record_full` from when a
+Session kept at most 2,000.
 
 With declared hosts, `GET /api/sessions/{id}/network` also shows the `browser`
 policy: under `network: egress` beside the Session's own policies, and under `bridge`
