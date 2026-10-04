@@ -956,8 +956,13 @@ fn segment_filter<'a>(revisions: impl IntoIterator<Item = &'a SessionTeamRevisio
 /// The number of records in the canonical journal. With [`canonical_graphs`]
 /// it is the only way this store reads the canonical journal.
 fn canonical_len(canonical: &SessionExecutionStore) -> Result<u64, SessionTeamError> {
-    Ok(canonical.records()?.len() as u64)
+    // Reading the turn index proves the store still holds its journal.
+    canonical.turn_ids()?;
+    Ok(canonical.record_count())
 }
+
+/// Canonical records read into memory at once by [`canonical_graphs`].
+const CANONICAL_CHUNK: u64 = 1024;
 
 /// Hand `visit` each graph a Begin or ReviseGraph declares in canonical
 /// records `[from, to)` (zero-based positions), in order, with its position.
@@ -969,20 +974,24 @@ fn canonical_graphs(
     to: u64,
     mut visit: impl FnMut(u64, &LogicalTurnId, &TurnGraphSnapshot) -> Result<(), SessionTeamError>,
 ) -> Result<(), SessionTeamError> {
-    let records = canonical.records()?;
-    let range = usize::try_from(from)
-        .ok()
-        .zip(usize::try_from(to).ok())
-        .and_then(|(from, to)| records.get(from..to))
-        .ok_or(SessionTeamError::Invalid(
+    if from > to || to > canonical_len(canonical)? {
+        return Err(SessionTeamError::Invalid(
             "configuration canonical prefix is absent or moves backward",
-        ))?;
-    for (position, event) in (from..).zip(range) {
-        if let TurnContractEvent::Begin { graph, .. }
-        | TurnContractEvent::ReviseGraph { graph, .. } = &event.event
-        {
-            visit(position, &event.turn_id, graph)?;
+        ));
+    }
+    // Position p is canonical sequence p + 1. Read a chunk at a time so that
+    // memory stays bounded however long the journal is.
+    let mut start = from;
+    while start < to {
+        let end = start.saturating_add(CANONICAL_CHUNK).min(to);
+        for (sequence, event) in canonical.records_in(start + 1, end)? {
+            if let TurnContractEvent::Begin { graph, .. }
+            | TurnContractEvent::ReviseGraph { graph, .. } = &event.event
+            {
+                visit(sequence - 1, &event.turn_id, graph)?;
+            }
         }
+        start = end;
     }
     Ok(())
 }
