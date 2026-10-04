@@ -500,12 +500,7 @@ impl ActivationStateStore {
         conversation: &NodeConversationId,
     ) -> Result<Option<Vec<u8>>> {
         self.ready()?;
-        let Some(baseline) = self
-            .state
-            .baselines
-            .iter()
-            .find(|item| item.reference.conversation_id == *conversation)
-        else {
+        let Some(baseline) = self.projection.baseline(conversation) else {
             return Ok(None);
         };
         baseline

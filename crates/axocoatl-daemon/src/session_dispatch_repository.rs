@@ -337,7 +337,7 @@ pub(super) fn validate_retained_repository(
         .resolve_activation_evidence(repository)
         .map_err(error)?;
     let current = repository_description(owner)?;
-    if original != &current {
+    if original != current {
         let proof_ref = state
             .repository_reattachments
             .get(repository)
@@ -355,13 +355,13 @@ pub(super) fn validate_retained_repository(
                 .content
                 .resolve_activation_evidence(&proof.acquired)
                 .map_err(error)?
-                != &current
+                != current
         {
             return Err(error(
                 "repository reattachment does not name this exact acquired owner",
             ));
         }
-        validate_reattachment_descriptions(original, &current)?;
+        validate_reattachment_descriptions(&original, &current)?;
     }
     Ok(())
 }

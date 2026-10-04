@@ -454,7 +454,7 @@ fn request_retained_before_begin_is_recoverable_without_fabricating_new_timestam
         .unwrap()
         .unwrap();
     assert_eq!(restored, receipt);
-    assert_eq!(body, &request());
+    assert_eq!(body, request());
     store
         .begin_with_request(initial_events()[0].clone(), &restored)
         .unwrap();
@@ -806,15 +806,23 @@ fn unknown_schema_and_changed_body_digest_fail_closed_on_reopen() {
         let mut content = ExecutionContentStore::open(dir.path(), identity.clone()).unwrap();
         content.retain_request(request()).unwrap();
         drop(content);
-        let file = dir.path().join("execution-content.v1.json");
-        let mut value: serde_json::Value =
-            serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
         if mutation == "schema" {
+            let file = dir.path().join("execution-content.v1.json");
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
             value["schema_version"] = 99.into();
+            fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
         } else {
-            value["records"][0]["body"]["display_input"] = "tampered".into();
+            // Records live in the active segment, one JSON line each after
+            // the segment header.
+            let file = dir.path().join("execution-content.active.jsonl");
+            let text = fs::read_to_string(&file).unwrap();
+            let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+            let mut value: serde_json::Value = serde_json::from_str(&lines[1]).unwrap();
+            value["record"]["body"]["display_input"] = "tampered".into();
+            lines[1] = serde_json::to_string(&value).unwrap();
+            fs::write(&file, lines.join("\n") + "\n").unwrap();
         }
-        fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(ExecutionContentStore::open(dir.path(), identity).is_err());
     }
 }
@@ -854,7 +862,14 @@ fn missing_owned_primary_cannot_reset_retained_content_with_only_marker_remainin
     let primary = content_root.join("execution-content.v1.json");
     let original = fs::read(&primary).unwrap();
     fs::remove_file(&primary).unwrap();
-    assert_eq!(fs::read_dir(&content_root).unwrap().count(), 1);
+    // The initialization marker and the record log remain.
+    let mut remaining: Vec<String> = fs::read_dir(&content_root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    remaining.sort();
+    assert_eq!(remaining.len(), 2, "{remaining:?}");
+    assert!(remaining.contains(&"execution-content.active.jsonl".to_string()));
     let namespace = store
         .component_namespace(ExecutionComponent::ExecutionContent)
         .unwrap();

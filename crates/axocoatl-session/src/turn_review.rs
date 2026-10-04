@@ -103,7 +103,7 @@ pub fn review_criterion(
         return Ok(None);
     };
     let ActivationEvidenceContent::Guidance { text } =
-        content.resolve_activation_evidence(criterion)?
+        &content.resolve_activation_evidence(criterion)?
     else {
         return Err(ExecutionContentError::Invalid(
             "the review criterion is not retained guidance",
@@ -383,7 +383,7 @@ pub fn project_review(
     });
     if let Some(observation) = latest {
         let ActivationEvidenceContent::Guidance { text } =
-            content.resolve_activation_evidence(&observation.evidence)?
+            &content.resolve_activation_evidence(&observation.evidence)?
         else {
             return Err(ExecutionContentError::Invalid(
                 "the review proof is not retained guidance",

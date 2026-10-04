@@ -120,10 +120,9 @@ async fn actual_read_only_helper_drives_the_browser_and_the_call_is_recorded() {
         profile,
     } = r;
     let registry = Arc::new(registry);
-    let records = Arc::new(SessionNetworkRecords::new(
-        Arc::new(crate::bootstrap::RegistryNetworkRecords(registry.clone())),
-        50_000,
-    ));
+    let records = Arc::new(SessionNetworkRecords::new(Arc::new(
+        crate::bootstrap::RegistryNetworkRecords(registry.clone()),
+    )));
     let browser = axocoatl_config::AxocoatlConfig {
         browser: Some(axocoatl_config::BrowserConfigYaml::default()),
         ..Default::default()

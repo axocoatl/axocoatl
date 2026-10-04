@@ -97,15 +97,13 @@ impl SessionDispatchController {
             || spec.request.turn_id != spec.turn_id
             || state
                 .canonical
-                .turn(&spec.turn_id)
+                .contains_turn(&spec.turn_id)
                 .map_err(error)?
-                .is_some()
             || state
                 .canonical
-                .records()
+                .command_record(&spec.command_id)
                 .map_err(error)?
-                .iter()
-                .any(|record| record.command_id == spec.command_id)
+                .is_some()
         {
             return Err(error(
                 "successor identity is occupied, mismatched, or Session work is unfinished",
@@ -137,7 +135,7 @@ impl SessionDispatchController {
                 .content
                 .resolve_activation_evidence(&node.definition.snapshot)
                 .map_err(error)?;
-            if !matches!(definition, ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &node.definition.definition_id)
+            if !matches!(&definition, ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &node.definition.definition_id)
             {
                 return Err(error(
                     "successor definition evidence differs from its graph",
@@ -368,15 +366,13 @@ impl SessionDispatchController {
                 || spec.request.turn_id != spec.turn_id
                 || state
                     .canonical
-                    .turn(&spec.turn_id)
+                    .contains_turn(&spec.turn_id)
                     .map_err(error)?
-                    .is_some()
                 || state
                     .canonical
-                    .records()
+                    .command_record(&spec.command_id)
                     .map_err(error)?
-                    .iter()
-                    .any(|record| record.command_id == spec.command_id)
+                    .is_some()
             {
                 return Err(error(
                     "successor identity is occupied, mismatched, or Session work is unfinished",
@@ -408,7 +404,7 @@ impl SessionDispatchController {
                     .content
                     .resolve_activation_evidence(&node.definition.snapshot)
                     .map_err(error)?;
-                if !matches!(definition, ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &node.definition.definition_id)
+                if !matches!(&definition, ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &node.definition.definition_id)
                 {
                     return Err(error(
                         "successor definition evidence differs from its graph",
@@ -570,14 +566,10 @@ impl DispatchState {
     /// Recover exact closed decisions in canonical Begin order, never filename
     /// or checkpoint-version order. A newer frozen graph is not silently rebased.
     pub(super) fn reconcile_promotions(&mut self) -> Result<()> {
-        let mut seen = HashSet::new();
-        let mut turns = Vec::new();
-        for record in self.canonical.records().map_err(error)? {
-            if seen.insert(record.turn_id.clone()) {
-                turns.push(self.canonical.snapshot(&record.turn_id).map_err(error)?);
-            }
-        }
-        for (index, snapshot) in turns.iter().enumerate() {
+        // One turn's fold at a time: a Session may hold any number of turns.
+        let turns = self.canonical.turn_ids().map_err(error)?.to_vec();
+        for (index, turn) in turns.iter().enumerate() {
+            let snapshot = &self.canonical.snapshot(turn).map_err(error)?;
             if !snapshot
                 .contract()
                 .state()
@@ -588,6 +580,7 @@ impl DispatchState {
             }
             let promotion = self.memory.preview_promotion(snapshot).map_err(error)?;
             for newer in &turns[index + 1..] {
+                let newer = self.canonical.snapshot(newer).map_err(error)?;
                 if let Some(graph) = newer.contract().graph() {
                     for node in &graph.nodes {
                         if let Some(entry) = promotion

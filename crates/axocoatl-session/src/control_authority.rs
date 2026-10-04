@@ -1206,7 +1206,7 @@ impl ControlAuthority {
         else {
             return Err(AuthorityError::Denied);
         };
-        if retained_policy != policy {
+        if &retained_policy != policy {
             return Err(AuthorityError::Denied);
         }
         let definition = arguments.definition();
@@ -1752,6 +1752,12 @@ impl ControlAuthority {
 
     pub fn revision(&self) -> Result<u64, AuthorityError> {
         Ok(self.lock()?.data.revision)
+    }
+
+    /// Dispatch claims this turn's authority can still record: tool calls,
+    /// model calls and check runs each take one.
+    pub fn remaining_claims(&self) -> Result<usize, AuthorityError> {
+        Ok(MAX_CLAIMS.saturating_sub(total_claims(&self.lock()?.data)))
     }
 
     /// Current retained policy for exact host-side input validation. Reading a

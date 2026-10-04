@@ -334,15 +334,29 @@ fn protected_arguments_are_distinct_from_preview_and_invalid_metadata_cannot_ack
     ));
 }
 
+/// The active segment of the audit's log, beside its head file.
+fn active_segment(audit: &InvocationAudit) -> std::path::PathBuf {
+    audit
+        .path()
+        .parent()
+        .unwrap()
+        .join("invocation-audit.active.jsonl")
+}
+
 #[test]
 fn corrupted_or_future_journals_fail_closed_without_rewriting_their_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
     audit.record_intent(intent()).unwrap();
-    let path = audit.path();
+    let head_path = audit.path();
+    let active_path = active_segment(&audit);
     drop(audit);
-    let original: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let head: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&head_path).unwrap()).unwrap();
+    let active = String::from_utf8(std::fs::read(&active_path).unwrap()).unwrap();
+    let lines: Vec<&str> = active.lines().collect();
+    assert_eq!(lines.len(), 2, "a header and one record");
+    let record: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     for kind in [
         "future",
         "duplicate",
@@ -351,34 +365,42 @@ fn corrupted_or_future_journals_fail_closed_without_rewriting_their_bytes() {
         "unknown_field",
         "owner",
     ] {
-        let mut corrupted = original.clone();
+        let mut corrupted_head = head.clone();
+        let mut corrupted = record.clone();
+        let mut extra = None;
         match kind {
-            "future" => {
-                corrupted["schema_version"] = 99.into();
-                corrupted["records"] = "future-language".into();
-            }
+            "future" => corrupted_head["schema_version"] = 99.into(),
             "duplicate" => {
-                let mut extra = corrupted["records"][0].clone();
-                extra["sequence"] = 2.into();
-                corrupted["records"].as_array_mut().unwrap().push(extra);
+                let mut repeat = record.clone();
+                repeat["record"]["sequence"] = 2.into();
+                extra = Some(repeat);
             }
-            "sequence" => corrupted["records"][0]["sequence"] = 3.into(),
-            "revision" => corrupted["records"][0]["invocation_revision"] = 2.into(),
-            "unknown_field" => corrupted["records"][0]["hidden_authority"] = true.into(),
-            "owner" => corrupted["owner"]["workspace_id"] = "other-workspace".into(),
+            "sequence" => corrupted["record"]["sequence"] = 3.into(),
+            "revision" => corrupted["record"]["invocation_revision"] = 2.into(),
+            "unknown_field" => corrupted["record"]["hidden_authority"] = true.into(),
+            "owner" => corrupted_head["owner"]["workspace_id"] = "other-workspace".into(),
             _ => unreachable!(),
         }
-        let bytes = serde_json::to_vec(&corrupted).unwrap();
-        std::fs::write(&path, &bytes).unwrap();
+        let head_bytes = serde_json::to_vec(&corrupted_head).unwrap();
+        let mut active_bytes = format!("{}\n{}\n", lines[0], corrupted);
+        if let Some(extra) = extra {
+            active_bytes.push_str(&format!("{extra}\n"));
+        }
+        std::fs::write(&head_path, &head_bytes).unwrap();
+        std::fs::write(&active_path, &active_bytes).unwrap();
         assert!(
             InvocationAudit::open(dir.path(), owner()).is_err(),
             "accepted {kind}"
         );
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(std::fs::read(&head_path).unwrap(), head_bytes);
+        assert_eq!(
+            std::fs::read(&active_path).unwrap(),
+            active_bytes.as_bytes()
+        );
     }
-    std::fs::write(&path, b"{partial").unwrap();
+    std::fs::write(&head_path, b"{partial").unwrap();
     assert!(InvocationAudit::open(dir.path(), owner()).is_err());
-    assert_eq!(std::fs::read(path).unwrap(), b"{partial");
+    assert_eq!(std::fs::read(head_path).unwrap(), b"{partial");
 }
 
 #[cfg(unix)]
@@ -387,20 +409,19 @@ fn ownership_lock_and_failed_storage_never_issue_dispatch_acknowledgements() {
     use std::os::unix::fs::{symlink, PermissionsExt};
     let dir = tempfile::tempdir().unwrap();
     let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
-    assert_eq!(
-        std::fs::metadata(audit.path())
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o600
-    );
+    for path in [audit.path(), active_segment(&audit)] {
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
     assert!(InvocationAudit::open(dir.path(), owner()).is_err());
-    let snapshot = std::fs::read(audit.path()).unwrap();
+    let active = active_segment(&audit);
+    let snapshot = std::fs::read(&active).unwrap();
     let outside = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(outside.path(), b"untouched").unwrap();
-    std::fs::remove_file(audit.path()).unwrap();
-    symlink(outside.path(), audit.path()).unwrap();
+    std::fs::remove_file(&active).unwrap();
+    symlink(outside.path(), &active).unwrap();
     assert!(matches!(
         audit.record_intent(intent()),
         Err(InvocationAuditError::Io(_))
@@ -410,11 +431,10 @@ fn ownership_lock_and_failed_storage_never_issue_dispatch_acknowledgements() {
         Err(InvocationAuditError::RecoveryRequired)
     ));
     assert_eq!(std::fs::read(outside.path()).unwrap(), b"untouched");
-    let path = audit.path();
     drop(audit);
     assert!(InvocationAudit::open(dir.path(), owner()).is_err());
-    std::fs::remove_file(&path).unwrap();
-    std::fs::write(&path, snapshot).unwrap();
+    std::fs::remove_file(&active).unwrap();
+    std::fs::write(&active, snapshot).unwrap();
     let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
     audit.record_intent(intent()).unwrap();
     assert_eq!(audit.records().unwrap().len(), 1);

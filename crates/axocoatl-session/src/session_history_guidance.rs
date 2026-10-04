@@ -19,7 +19,8 @@ pub(super) fn join_delivery(
     receipts: Option<&[CommandReceiptView]>,
 ) {
     let identity = canonical.identity();
-    let records = canonical.records();
+    // Delivery is recorded in the view's own turn.
+    let records = canonical.turn_records(&view.turn_id);
     for activation in &mut view.activations {
         for item in &mut activation.guidance {
             item.delivery = match (&identity, &records, receipts) {

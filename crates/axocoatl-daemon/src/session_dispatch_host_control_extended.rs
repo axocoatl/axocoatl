@@ -251,6 +251,7 @@ impl DispatchState {
                 let epoch = ExecutionEpochId::new(format!("epoch-{:x}", Sha256::digest(bytes)))
                     .map_err(error)?;
                 let mut seen = HashSet::new();
+                let awaiting = awaiting_restarted_work(contract, &selected.restart)?;
                 let mut selections = Vec::with_capacity(graph.nodes.len());
                 for node in &graph.nodes {
                     let previous = contract
@@ -323,6 +324,11 @@ impl DispatchState {
                             return Err(error(
                                 "Continue cannot invent an input for unmaterialized work",
                             ))
+                        }
+                        (None, None) if awaiting.contains(&node.node_id) => {
+                            selections.push(ContinuationSelection::AwaitDependencies {
+                                node_id: node.node_id.clone(),
+                            })
                         }
                         (None, None) => {
                             selections.push(ContinuationSelection::LeaveUnmaterializedBlocked {
@@ -542,6 +548,62 @@ pub(in crate::session_dispatch) fn revision_selections(
         }
     }
     Ok(selections)
+}
+
+/// The never-started nodes that a Continue restarting `restart` lets run in
+/// its epoch: each depends on restarted work, directly or through other such
+/// nodes, and each of its other parents is accepted. The driver starts one
+/// once all its parents are accepted again. A node with a parent left blocked
+/// stays blocked with it, and one with no restarted work above it has nothing
+/// new to wait for.
+fn awaiting_restarted_work(
+    contract: &TurnContract,
+    restart: &[ActivationRef],
+) -> Result<HashSet<TurnNodeId>> {
+    let graph = contract
+        .graph()
+        .ok_or_else(|| error("turn graph is unavailable"))?;
+    let latest = |node: &TurnNodeId| {
+        contract
+            .activations()
+            .iter()
+            .rev()
+            .find(|item| item.activation.node_id == *node)
+    };
+    let restarted = restart
+        .iter()
+        .map(|activation| &activation.node_id)
+        .collect::<HashSet<_>>();
+    let mut awaiting = HashSet::new();
+    loop {
+        let before = awaiting.len();
+        for node in &graph.nodes {
+            if awaiting.contains(&node.node_id) || latest(&node.node_id).is_some() {
+                continue;
+            }
+            let (mut waits, mut runnable) = (false, true);
+            for edge in graph
+                .dependencies
+                .iter()
+                .filter(|edge| edge.child == node.node_id)
+            {
+                if restarted.contains(&edge.parent) || awaiting.contains(&edge.parent) {
+                    waits = true;
+                } else if !latest(&edge.parent)
+                    .is_some_and(|item| item.state == ActivationState::Accepted)
+                {
+                    runnable = false;
+                }
+            }
+            if waits && runnable {
+                awaiting.insert(node.node_id.clone());
+            }
+        }
+        if awaiting.len() == before {
+            break;
+        }
+    }
+    Ok(awaiting)
 }
 
 /// Selecting any condition of the graph's check group, or restarting any

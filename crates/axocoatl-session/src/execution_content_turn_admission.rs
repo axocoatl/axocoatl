@@ -43,19 +43,18 @@ impl ExecutionContentStore {
         &self,
         canonical: &SessionExecutionStore,
         turn: &LogicalTurnId,
-    ) -> Result<Option<(&EvidenceRef, &TurnAdmissionContent)>, ExecutionContentError> {
+    ) -> Result<Option<(EvidenceRef, TurnAdmissionContent)>, ExecutionContentError> {
         self.verify_provider_profile_owner(canonical)?;
-        let selected = self
-            .data
-            .records
-            .iter()
-            .find_map(|record| match &record.body {
-                Body::TurnAdmission(content) if &content.turn_id == turn => {
-                    Some((&record.reference, content))
-                }
-                _ => None,
-            });
-        if let Some((_, content)) = selected {
+        let selected =
+            self.keyed(&admission_turn_key(turn))?
+                .iter()
+                .find_map(|record| match &record.body {
+                    Body::TurnAdmission(content) if &content.turn_id == turn => {
+                        Some((record.reference.clone(), content.clone()))
+                    }
+                    _ => None,
+                });
+        if let Some((_, content)) = &selected {
             validate_canonical(canonical, content)?;
         }
         Ok(selected)
@@ -66,7 +65,9 @@ impl ExecutionContentStore {
         content: TurnAdmissionContent,
     ) -> Result<DurableActivationEvidence, ExecutionContentError> {
         self.verify_provider_profile_owner(canonical)?;
-        if let Some(record)=self.data.records.iter().find(|record|matches!(&record.body,
+        let mut existing = self.keyed(&admission_turn_key(&content.turn_id))?;
+        existing.extend(self.keyed(&admission_command_key(&content.command_id))?);
+        if let Some(record)=existing.iter().find(|record|matches!(&record.body,
             Body::TurnAdmission(old) if old.turn_id==content.turn_id || old.command_id==content.command_id))
         {
             if record.body!=Body::TurnAdmission(content.clone()) { return Err(ExecutionContentError::Conflict); }
@@ -74,9 +75,8 @@ impl ExecutionContentStore {
             return Ok(DurableActivationEvidence{identity:self.identity.clone(),reference:record.reference.clone()});
         }
         if canonical
-            .turn(&content.turn_id)
+            .contains_turn(&content.turn_id)
             .map_err(canonical_error)?
-            .is_some()
         {
             return Err(ExecutionContentError::Invalid(
                 "first-turn source was not retained before Begin",
@@ -96,10 +96,13 @@ impl ExecutionContentStore {
         let Some((admission, _)) = self.turn_admission(canonical, turn)? else {
             return Ok(false);
         };
-        Ok(self.data.records.iter().any(|record| {
-            matches!(&record.body,
-            Body::DriverHandoff(handoff) if &handoff.admission==admission)
-        }))
+        Ok(self
+            .keyed(&driver_handoff_key(&admission))?
+            .iter()
+            .any(|record| {
+                matches!(&record.body,
+            Body::DriverHandoff(handoff) if handoff.admission==admission)
+            }))
     }
     /// The host calls only after acquiring the real existing driver. This is
     /// immutable evidence of that transfer, never permission to replay it.
@@ -113,15 +116,13 @@ impl ExecutionContentStore {
                 .ok_or(ExecutionContentError::Invalid(
                     "driver lacks retained first-turn source",
                 ))?;
-        if canonical.turn(turn).map_err(canonical_error)?.is_none() {
+        if !canonical.contains_turn(turn).map_err(canonical_error)? {
             return Err(ExecutionContentError::Invalid(
                 "driver handoff requires exact Begin",
             ));
         }
-        validate_canonical(canonical, content)?;
-        let body = Body::DriverHandoff(DriverHandoff {
-            admission: admission.clone(),
-        });
+        validate_canonical(canonical, &content)?;
+        let body = Body::DriverHandoff(DriverHandoff { admission });
         let reference = self.append(body)?;
         Ok(DurableActivationEvidence {
             identity: self.identity.clone(),
@@ -136,11 +137,18 @@ fn validate_canonical(
     canonical: &SessionExecutionStore,
     content: &TurnAdmissionContent,
 ) -> Result<(), ExecutionContentError> {
-    let records = canonical.records().map_err(canonical_error)?;
-    if let Some(begin) = records
-        .iter()
-        .find(|record| record.turn_id == content.turn_id)
+    let begin = match canonical
+        .turn_sequences(&content.turn_id)
+        .map_err(canonical_error)?
     {
+        Some((first, _)) => canonical
+            .records_in(first, first)
+            .map_err(canonical_error)?
+            .pop()
+            .map(|(_, record)| record),
+        None => None,
+    };
+    if let Some(begin) = begin {
         if begin.command_id != content.command_id
             || !matches!(&begin.event,
             TurnContractEvent::Begin{epoch_id,graph,..} if epoch_id==&content.epoch_id && graph==&content.graph)
@@ -332,10 +340,13 @@ impl ExecutionContentStore {
         let Some((admission, _)) = self.turn_admission(canonical, turn)? else {
             return Ok(false);
         };
-        Ok(self.data.records.iter().any(|record| {
-            matches!(&record.body,Body::ControlDriverHandoff(handoff)
-            if &handoff.admission==admission && &handoff.command_id==command)
-        }))
+        Ok(self
+            .keyed(&control_handoff_key(&admission, command))?
+            .iter()
+            .any(|record| {
+                matches!(&record.body,Body::ControlDriverHandoff(handoff)
+            if handoff.admission==admission && &handoff.command_id==command)
+            }))
     }
     pub fn retain_control_driver_handoff(
         &mut self,
@@ -350,12 +361,10 @@ impl ExecutionContentStore {
                     "control driver lacks native admission",
                 ))?;
         if !canonical
-            .records()
+            .command_record(&canonical_command)
             .map_err(canonical_error)?
-            .iter()
-            .any(|event| {
+            .is_some_and(|(_, event)| {
                 &event.turn_id == turn
-                    && event.command_id == canonical_command
                     && matches!(
                         event.event,
                         TurnContractEvent::Continue { .. }
@@ -397,4 +406,71 @@ pub(super) fn validate_control_handoff_next(
         return Err(ExecutionContentError::Conflict);
     }
     Ok(())
+}
+
+fn admission_turn_key(turn: &LogicalTurnId) -> String {
+    format!("admission-turn:{}", turn.as_str())
+}
+
+fn admission_command_key(command: &CommandId) -> String {
+    format!("admission-command:{}", command.as_str())
+}
+
+fn driver_handoff_key(admission: &EvidenceRef) -> String {
+    format!("driver-handoff:{}", admission.as_str())
+}
+
+fn control_handoff_key(admission: &EvidenceRef, command: &CommandId) -> String {
+    format!(
+        "control-handoff:{}:{}",
+        admission.as_str(),
+        command.as_str()
+    )
+}
+
+/// The keys an admission is found by.
+pub(super) fn admission_keys(content: &TurnAdmissionContent) -> Vec<String> {
+    vec![
+        admission_turn_key(&content.turn_id),
+        admission_command_key(&content.command_id),
+    ]
+}
+
+/// What `validate_admission_next` may consult: admissions it may conflict
+/// with and every record it must find by reference.
+pub(super) fn admission_dependency_keys(content: &TurnAdmissionContent) -> Vec<String> {
+    let mut keys = admission_keys(content);
+    keys.push(segments::reference_key(&content.request));
+    for node in &content.graph.nodes {
+        keys.push(segments::reference_key(&node.definition.snapshot));
+    }
+    for node in &content.nodes {
+        keys.push(segments::reference_key(&node.budget));
+        keys.push(segments::reference_key(&node.grant.evidence));
+        keys.extend(node.guidance.iter().map(segments::reference_key));
+        keys.extend(node.attachments.iter().map(segments::reference_key));
+    }
+    keys
+}
+
+pub(super) fn driver_handoff_keys(handoff: &DriverHandoff) -> Vec<String> {
+    vec![driver_handoff_key(&handoff.admission)]
+}
+
+pub(super) fn driver_handoff_dependency_keys(handoff: &DriverHandoff) -> Vec<String> {
+    vec![
+        driver_handoff_key(&handoff.admission),
+        segments::reference_key(&handoff.admission),
+    ]
+}
+
+pub(super) fn control_handoff_keys(handoff: &ControlDriverHandoff) -> Vec<String> {
+    vec![control_handoff_key(&handoff.admission, &handoff.command_id)]
+}
+
+pub(super) fn control_handoff_dependency_keys(handoff: &ControlDriverHandoff) -> Vec<String> {
+    vec![
+        control_handoff_key(&handoff.admission, &handoff.command_id),
+        segments::reference_key(&handoff.admission),
+    ]
 }

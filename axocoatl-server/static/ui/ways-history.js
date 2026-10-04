@@ -4,7 +4,7 @@ const fields = [
   ['field_bytes', 'Each review detail (KiB)', 1024],
   ['record_bytes', 'Each decision (MiB)', 1024 * 1024],
   ['aggregate_bytes', 'Total retained storage (MiB)', 1024 * 1024],
-  ['records', 'Total decisions, including deleted records', 1],
+  ['records', 'Decisions kept at once (deleted ones do not count)', 1],
   ['candidates', 'Candidates in each decision', 1],
   ['items_per_field', 'Paths, tools, and cleanup details per list', 1],
 ];

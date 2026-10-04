@@ -159,7 +159,6 @@ impl PendingSessionEntry {
         &self,
         after: Option<u64>,
         limit: usize,
-        limits: axocoatl_session::network_record::RecordLimits,
     ) -> Result<
         Option<(
             Vec<axocoatl_session::network_record::NetworkLine>,
@@ -174,7 +173,7 @@ impl PendingSessionEntry {
         let Ok(canonical) = stores.canonical() else {
             return Ok(None);
         };
-        crate::session_network::read_existing(canonical, after, limit, limits).map_err(failure)
+        crate::session_network::read_existing(canonical, after, limit).map_err(failure)
     }
 
     pub(super) fn read_network_screenshot(
@@ -680,12 +679,9 @@ impl SessionDispatchRegistry {
         stores.verify()?;
         let latest = stores
             .canonical()?
-            .records()
+            .latest_turn()
             .map_err(|error| failure(error.to_string()))?
-            .iter()
-            .rev()
-            .find(|record| matches!(record.event, TurnContractEvent::Begin { .. }))
-            .map(|record| record.turn_id.clone());
+            .cloned();
         drop(stores);
         Ok(latest.map(|turn| (token, turn)))
     }
@@ -803,12 +799,8 @@ impl SessionDispatchRegistry {
             || !owner.execution_is_idle()?
             || stores
                 .canonical()?
-                .records()
+                .latest_turn()
                 .map_err(|error| failure(error.to_string()))?
-                .iter()
-                .rev()
-                .find(|record| matches!(record.event, TurnContractEvent::Begin { .. }))
-                .map(|record| &record.turn_id)
                 != Some(&turn_id)
         {
             return Err(failure(
@@ -1019,10 +1011,9 @@ impl SessionDispatchRegistry {
         }
         let prior = stores
             .canonical()?
-            .records()
+            .latest_turn()
             .map_err(|error| failure(error.to_string()))?
-            .last()
-            .map(|record| record.turn_id.clone());
+            .cloned();
         let predecessor = match prior {
             Some(prior) if prior != spec.turn_id && allow_predecessor => {
                 if stores
@@ -1095,7 +1086,7 @@ impl SessionDispatchRegistry {
                 .expect("verified content")
                 .resolve_activation_evidence(&node.definition.snapshot)
                 .map_err(|error| failure(error.to_string()))?;
-            if !matches!(definition, axocoatl_session::execution_content::ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &node.definition.definition_id)
+            if !matches!(&definition, axocoatl_session::execution_content::ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &node.definition.definition_id)
             {
                 return Err(failure(
                     "first Begin definition evidence differs from its graph",

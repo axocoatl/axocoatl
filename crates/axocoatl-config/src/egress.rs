@@ -19,8 +19,6 @@ pub const MAX_ENTRY_PORTS: usize = 64;
 pub const DEFAULT_ALLOW_PORTS: [u16; 1] = [443];
 pub const MIN_MAX_CONNECTIONS: u32 = 8;
 pub const MAX_MAX_CONNECTIONS: u32 = 256;
-pub const MIN_RECORD_EVENTS: u32 = 1_000;
-pub const MAX_RECORD_EVENTS: u32 = 1_000_000;
 
 /// Addresses that lead from a Podman container to the computer running
 /// Podman: gvproxy's gateway and host-loopback addresses in a Podman machine,
@@ -345,8 +343,13 @@ pub fn valid_network_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
 }
 
+/// The warning for `sandbox.egress.record_max_events`, which no longer
+/// limits anything.
+pub const RECORD_MAX_EVENTS_WARNING: &str = "ignored; a Session's network record no longer has an \
+     event cap and keeps every event for the Session's life. Remove it";
+
 fn validate_egress_block(egress: &EgressConfigYaml) -> Result<Vec<ConfigWarning>, ConfigError> {
-    let warnings = validate_allow_list(
+    let mut warnings = validate_allow_list(
         "sandbox.egress",
         &egress.allow,
         &egress.private_destinations,
@@ -359,13 +362,11 @@ fn validate_egress_block(egress: &EgressConfigYaml) -> Result<Vec<ConfigWarning>
             "Omit it for the default 128.",
         ));
     }
-    if !(MIN_RECORD_EVENTS..=MAX_RECORD_EVENTS).contains(&egress.record_max_events) {
-        return Err(invalid(
-            "sandbox.egress.record_max_events".into(),
-            egress.record_max_events,
-            format!("must be {MIN_RECORD_EVENTS}-{MAX_RECORD_EVENTS}"),
-            "Omit it for the default 50000.",
-        ));
+    if egress.record_max_events.is_some() {
+        warnings.push(ConfigWarning {
+            field: "sandbox.egress.record_max_events".into(),
+            message: RECORD_MAX_EVENTS_WARNING.into(),
+        });
     }
     if let Some(network) = &egress.sidecar_network {
         if !valid_network_name(network) {
@@ -383,8 +384,7 @@ fn validate_egress_block(egress: &EgressConfigYaml) -> Result<Vec<ConfigWarning>
 /// The warning for `sandbox.egress` fields that do nothing under `bridge`
 /// or `none`. `allow`, `private_destinations` and `routes` apply only to
 /// `network: egress`. The browser's own proxy also reads `sidecar_network`
-/// and `max_connections` in those modes, and `record_max_events` caps the
-/// Session network record, which web and browser events use, in every mode.
+/// and `max_connections` in those modes.
 fn unused_egress_fields(
     egress: &EgressConfigYaml,
     browser: bool,
@@ -750,16 +750,17 @@ mod tests {
             assert_eq!(validate_egress(&config).is_ok(), ok, "{max_connections}");
         }
         config.sandbox.egress.as_mut().unwrap().max_connections = 128;
-        for (events, ok) in [
-            (999, false),
-            (1_000, true),
-            (1_000_000, true),
-            (1_000_001, false),
-        ] {
-            config.sandbox.egress.as_mut().unwrap().record_max_events = events;
-            assert_eq!(validate_egress(&config).is_ok(), ok, "{events}");
+        // record_max_events no longer limits the record: any value is
+        // accepted with a warning that it is ignored.
+        for events in [0, 999, 50_000, 1_000_001, u32::MAX] {
+            config.sandbox.egress.as_mut().unwrap().record_max_events = Some(events);
+            let warnings = validate_egress(&config).unwrap();
+            assert_eq!(warnings.len(), 1, "{events}");
+            assert_eq!(warnings[0].field, "sandbox.egress.record_max_events");
+            assert_eq!(warnings[0].message, RECORD_MAX_EVENTS_WARNING);
         }
-        config.sandbox.egress.as_mut().unwrap().record_max_events = 50_000;
+        config.sandbox.egress.as_mut().unwrap().record_max_events = None;
+        assert!(validate_egress(&config).unwrap().is_empty());
         for (network, ok) in [
             ("podman", true),
             ("axo-egress-test-1", true),
@@ -776,8 +777,7 @@ mod tests {
         config.sandbox.egress.as_mut().unwrap().sidecar_network = None;
 
         // Under bridge only the fields that do nothing there are named. The
-        // browser's own proxy reads sidecar_network and max_connections, and
-        // record_max_events caps the record in every mode.
+        // browser's own proxy reads sidecar_network and max_connections.
         config.sandbox.network = "bridge".into();
         let ignored = |config: &AxocoatlConfig| -> Vec<String> {
             validate_egress(config)
@@ -787,8 +787,6 @@ mod tests {
                 .map(|w| w.message)
                 .collect()
         };
-        assert!(ignored(&config).is_empty());
-        config.sandbox.egress.as_mut().unwrap().record_max_events = 2_000;
         assert!(ignored(&config).is_empty());
         config.sandbox.egress.as_mut().unwrap().sidecar_network = Some("axo-net".into());
         config.sandbox.egress.as_mut().unwrap().max_connections = 64;

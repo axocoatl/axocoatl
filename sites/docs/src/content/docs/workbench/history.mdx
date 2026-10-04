@@ -74,8 +74,10 @@ For native Sessions, use **Guide current work** in the composer or open the Agen
 graph and select an exact activation. The host exposes only actions allowed for
 that recorded generation. Guide and Revise retain the instruction, selected context,
 and attachments. Retry creates a new generation; it does not erase the failed one.
-Continue explicitly resumes an interrupted logical turn, and normal Finish waits
-for required work and conditions. Stop prevents new dispatch while started work
+Continue explicitly resumes an interrupted logical turn: the work you select runs
+again, and work that never started because it depends on it runs once it finishes.
+Work that depends on failed work you did not select stays blocked until you continue
+that too. Normal Finish waits for required work and conditions. Stop prevents new dispatch while started work
 settles; none of these actions rolls back completed effects.
 
 Attach recorded evidence from the inspector to a follow-up request. Its saved

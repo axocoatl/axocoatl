@@ -97,20 +97,34 @@ impl EgressResolver for SystemResolver {
     }
 }
 
-/// Why a record write failed.
+/// Why a record write failed. The record has no cap, so it fails only when
+/// it cannot be written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordFailure {
-    Full,
     Unavailable(String),
 }
+
+/// The kinds of recorded lines a reopened decision point replays.
+pub const REPLAYED_KINDS: &[&str] = &["policy", "proposal"];
 
 /// Where a Session's egress events go.
 #[async_trait::async_trait]
 pub trait EgressRecordSink: Send + Sync + fmt::Debug {
     async fn append(&self, event: NetworkEvent) -> Result<u64, RecordFailure>;
+    /// Append an event the decision point writes about itself: a `policy`,
+    /// `sidecar`, `unbind` or `limit` event, or a person's decision on a
+    /// proposal. The Session's record takes it like any other.
     async fn append_control(&self, event: NetworkEvent) -> Result<u64, RecordFailure>;
-    /// Every recorded line, for replaying per-Session policy changes.
-    async fn history(&self) -> Result<Vec<NetworkLine>, RecordFailure>;
+    /// Hand every recorded `policy` and `proposal` line ([`REPLAYED_KINDS`])
+    /// to `visit`, oldest first, for replaying per-Session policy changes and
+    /// proposals, and return the highest sidecar generation the record names
+    /// ([`NetworkEvent::generation`]). Lines of other kinds may be handed
+    /// over too. The Session's record is read one segment at a time, so
+    /// nothing is kept but what `visit` keeps.
+    async fn replay(
+        &self,
+        visit: &mut (dyn for<'line> FnMut(&'line NetworkLine) + Send),
+    ) -> Result<u32, RecordFailure>;
 }
 
 /// The daemon's sink: one Session's network record.
@@ -130,11 +144,7 @@ impl SessionRecordSink {
 }
 
 fn record_failure(error: crate::session_network::RecordServiceError) -> RecordFailure {
-    if error.is_full() {
-        RecordFailure::Full
-    } else {
-        RecordFailure::Unavailable(error.to_string())
-    }
+    RecordFailure::Unavailable(error.to_string())
 }
 
 #[async_trait::async_trait]
@@ -147,31 +157,39 @@ impl EgressRecordSink for SessionRecordSink {
     }
 
     async fn append_control(&self, event: NetworkEvent) -> Result<u64, RecordFailure> {
-        self.records
-            .append_control(&self.session, event)
-            .await
-            .map_err(record_failure)
+        self.append(event).await
     }
 
-    async fn history(&self) -> Result<Vec<NetworkLine>, RecordFailure> {
-        let mut lines = Vec::new();
+    async fn replay(
+        &self,
+        visit: &mut (dyn for<'line> FnMut(&'line NetworkLine) + Send),
+    ) -> Result<u32, RecordFailure> {
         let mut after = None;
         loop {
             let page = self
                 .records
-                .read_after(
+                .read_kinds_after(
                     &self.session,
                     after,
+                    REPLAYED_KINDS,
                     axocoatl_session::network_record::MAX_READ_LIMIT,
                 )
                 .await
                 .map_err(record_failure)?;
-            if page.events.is_empty() {
-                return Ok(lines);
+            for line in &page.lines {
+                visit(line);
             }
-            after = page.events.last().map(|line| line.seq);
-            lines.extend(page.events);
+            if page.done {
+                break;
+            }
+            after = page.next_after;
         }
+        Ok(self
+            .records
+            .stats(&self.session)
+            .await
+            .map_err(record_failure)?
+            .max_generation)
     }
 }
 
@@ -300,6 +318,14 @@ struct ScopeState {
     revision: u64,
 }
 
+/// One scope's policy as the record left it.
+#[derive(Default)]
+struct RecordedScope {
+    rules: Vec<SessionRule>,
+    revision: u64,
+    digest: Option<String>,
+}
+
 struct Binding {
     tag: String,
     binding: EgressBinding,
@@ -397,7 +423,6 @@ struct State {
     open: HashMap<(u32, u64), OpenConnection>,
     control: Option<ControlHandle>,
     commands: HashSet<String>,
-    record_full_reported: bool,
     unattributed: UnattributedRefusals,
     /// Addresses refused whatever the policy lists (host gateways).
     forbidden: HashSet<IpAddr>,
@@ -512,7 +537,7 @@ fn hint(reason: &str, host: &str, port: u16) -> String {
         "no_credential" => "This process has no egress credential. Under network: egress, read-only helpers, required checks and processes started outside a tool call have no network.".into(),
         "unknown_credential" => "This credential is not valid here; the tool call, setup step or terminal it belonged to has ended.".into(),
         "binding_ended" => "The terminal or tool call this credential belonged to has ended.".into(),
-        "record_unavailable" => "The Session's network record is full or unavailable, so new connections are refused.".into(),
+        "record_unavailable" => "The Session's network record is unavailable, so new connections are refused.".into(),
         "invalid_host" => format!("{host} is not a valid host name or IP address."),
         "resolve_failed" => format!("{host} could not be resolved."),
         "tls_required" => format!(
@@ -522,18 +547,6 @@ fn hint(reason: &str, host: &str, port: u16) -> String {
             "{host}:{port} is an egress route that does not serve this kind of process. Add the kind to the route's for: list in sandbox.egress.routes."
         ),
         _ => "Axocoatl refused this connection.".into(),
-    }
-}
-
-/// The sidecar generation an event belongs to, if it names one.
-fn recorded_generation(event: &NetworkEvent) -> Option<u32> {
-    match event {
-        NetworkEvent::Sidecar { generation, .. } => Some(*generation),
-        NetworkEvent::Open { conn, .. } | NetworkEvent::Close { conn, .. } => conn
-            .strip_prefix('g')
-            .and_then(|rest| rest.split_once(':'))
-            .and_then(|(generation, _)| generation.parse().ok()),
-        _ => None,
     }
 }
 
@@ -732,48 +745,36 @@ impl SessionEgress {
     ) -> Result<Arc<Self>, String> {
         let session_id = session_id.into();
         let workspaces = (route_settings.workspaces)();
-        let history = records
-            .history()
-            .await
-            .map_err(|error| format!("reading the network record: {error:?}"))?;
-        // Command ids already applied, so a resend after a restart is refused.
-        let commands: HashSet<String> = history
-            .iter()
-            .filter_map(|line| match &line.event {
-                NetworkEvent::Policy {
-                    change: Some(change),
-                    ..
-                } => change.command_id.clone(),
-                _ => None,
-            })
-            .collect();
-        let scopes = scopes.to_vec();
-        let mut states = HashMap::new();
-        for scope in scopes {
-            let mut session_rules: Vec<SessionRule> = Vec::new();
-            let mut revision = 0;
-            let mut digest = None;
-            for line in &history {
+        // Replay the record's policy changes and proposals, one segment at a
+        // time: command ids already applied, so a resend after a restart is
+        // refused, and each scope's revision, digest and per-Session rules.
+        let mut commands: HashSet<String> = HashSet::new();
+        let mut recorded: HashMap<EgressScope, RecordedScope> = HashMap::new();
+        let mut proposals = ProposalBook::default();
+        let last_generation = records
+            .replay(&mut |line: &NetworkLine| {
+                proposals.apply(line);
                 let NetworkEvent::Policy {
-                    scope: event_scope,
-                    revision: event_revision,
-                    digest: event_digest,
+                    scope,
+                    revision,
+                    digest,
                     source,
                     change,
                     ..
                 } = &line.event
                 else {
-                    continue;
+                    return;
                 };
-                if *event_scope != scope {
-                    continue;
+                if let Some(command_id) = change.as_ref().and_then(|c| c.command_id.clone()) {
+                    commands.insert(command_id);
                 }
-                revision = *event_revision;
-                digest = Some(event_digest.clone());
+                let state = recorded.entry(*scope).or_default();
+                state.revision = *revision;
+                state.digest = Some(digest.clone());
                 match (source, change) {
                     (PolicySource::SessionAllow, Some(change)) if change.op == PolicyOp::Allow => {
-                        session_rules.push(SessionRule {
-                            revision: *event_revision,
+                        state.rules.push(SessionRule {
+                            revision: *revision,
                             host: change.host.clone(),
                             ports: change.ports.clone(),
                         })
@@ -781,11 +782,21 @@ impl SessionEgress {
                     (PolicySource::SessionRevoke, Some(change))
                         if change.op == PolicyOp::Revoke =>
                     {
-                        session_rules.retain(|rule| rule.host != change.host)
+                        state.rules.retain(|rule| rule.host != change.host)
                     }
                     _ => {}
                 }
-            }
+            })
+            .await
+            .map_err(|error| format!("reading the network record: {error:?}"))?;
+        let scopes = scopes.to_vec();
+        let mut states = HashMap::new();
+        for scope in scopes {
+            let RecordedScope {
+                rules: session_rules,
+                mut revision,
+                digest,
+            } = recorded.remove(&scope).unwrap_or_default();
             let (policy, routes) =
                 Self::compile_scope(&config, scope, &session_rules, &workspaces)?;
             if digest.as_deref() != Some(policy.digest()) {
@@ -819,12 +830,6 @@ impl SessionEgress {
             }
             _ => None,
         };
-        let last_generation = history
-            .iter()
-            .filter_map(|line| recorded_generation(&line.event))
-            .max()
-            .unwrap_or(0);
-        let proposals = ProposalBook::replay(&history);
         Ok(Arc::new_cyclic(|this| Self {
             session_id,
             config: Mutex::new(config),
@@ -1048,29 +1053,7 @@ impl SessionEgress {
     }
 
     async fn record_open(&self, event: NetworkEvent) -> Result<u64, RecordFailure> {
-        let result = self.records.append(event).await;
-        if result == Err(RecordFailure::Full) {
-            self.report_record_full().await;
-        }
-        result
-    }
-
-    /// Say once, in the control headroom, that the record reached its cap.
-    async fn report_record_full(&self) {
-        let report = {
-            let mut state = self.state();
-            !std::mem::replace(&mut state.record_full_reported, true)
-        };
-        if report {
-            let _ = self
-                .records
-                .append_control(NetworkEvent::Limit {
-                    what: LimitKind::RecordFull,
-                    detail: "the network record reached its cap; new connections are refused"
-                        .into(),
-                })
-                .await;
-        }
+        self.records.append(event).await
     }
 
     /// Whether to record a refusal of a connection without a valid
@@ -2032,9 +2015,6 @@ impl EgressAuthority for SessionEgress {
             if let (Some(dir), Some(name)) = (&self.env_dir, &env_file) {
                 let _ = dir.remove_file(name);
             }
-            if error == RecordFailure::Full {
-                self.report_record_full().await;
-            }
             return Err(format!("recording the egress binding failed: {error:?}"));
         }
         self.state().bindings.insert(
@@ -2068,12 +2048,6 @@ impl EgressAuthority for SessionEgress {
         let kind = caller.binding.as_ref().map(|binding| binding.kind);
         let mut verdict = match refusal {
             None => self.verdict(&open, scope, kind).await,
-            // Without a credential nothing can be recorded once the record
-            // is full; say so rather than blame the missing credential (a
-            // setup step or terminal goes ahead without one then).
-            Some((_, "no_credential")) if self.state().record_full_reported => {
-                Verdict::deny(503, "record_unavailable", &open.host, open.port)
-            }
             Some((status, reason)) => Verdict::deny(status, reason, &open.host, open.port),
         };
         let key = (open.generation, open.id);
@@ -2289,7 +2263,7 @@ fn with_broker_error(mut report: CloseReport, error: Option<String>) -> CloseRep
 }
 
 /// The broker's `request` and `response` events go to the Session's
-/// network record, like its connections, and count against its cap.
+/// network record, like its connections.
 struct RouteRecordSink {
     egress: Arc<SessionEgress>,
 }
@@ -2301,10 +2275,7 @@ impl BrokerRecordSink for RouteRecordSink {
             .record_open(event)
             .await
             .map(|_| ())
-            .map_err(|error| match error {
-                RecordFailure::Full => "the network record is full".to_string(),
-                RecordFailure::Unavailable(error) => error,
-            })
+            .map_err(|RecordFailure::Unavailable(error)| error)
     }
 }
 

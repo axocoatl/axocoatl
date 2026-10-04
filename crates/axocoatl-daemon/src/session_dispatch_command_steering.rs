@@ -17,7 +17,7 @@ impl DispatchState {
         let snapshot = self.current(activation)?;
         self.steer_owner(activation, now_ms()?)?;
         if !instruction_preview {
-            let ActivationEvidenceContent::Guidance { text } = self
+            let ActivationEvidenceContent::Guidance { text } = &self
                 .content
                 .resolve_activation_evidence(instruction)
                 .map_err(error)?
@@ -169,7 +169,7 @@ impl DispatchState {
         if view.request.execution_epoch_id != activation.execution_epoch_id {
             return Err(error("guidance belongs to a lost epoch"));
         }
-        let ActivationEvidenceContent::Guidance { text } = self
+        let ActivationEvidenceContent::Guidance { text } = &self
             .content
             .resolve_activation_evidence(instruction)
             .map_err(error)?
@@ -244,10 +244,9 @@ impl DispatchState {
         )?;
         if !self
             .canonical
-            .records()
+            .command_record(&envelope.command_id)
             .map_err(error)?
-            .iter()
-            .any(|record| record == &envelope)
+            .is_some_and(|(_, record)| record == envelope)
         {
             return Err(error(
                 "guidance acknowledgement has no exact durable canonical handoff",

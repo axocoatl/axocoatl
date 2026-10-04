@@ -22,6 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answer. Reasoning tokens are output in usage, grants and cost. The reasoning blocks of
   a tool-calling response are kept on its first tool call and sent back unmodified with
   the tool results, as OpenRouter documents, and reasoning text streams to the Session.
+### Changed
+- **Session data is converted to segment files when a Session is first opened.** Each
+  journal's single file is checked against the bounds it was written under, its records
+  are copied into segments, and a small head file replaces it last, so a crash during
+  the conversion leaves the old file to convert again. Once converted, a Session cannot
+  be opened by 1.2.0 or earlier, which refuses the new head file rather than misread it.
+- `sandbox.egress.record_max_events` is ignored: a Session's network record keeps every
+  event. It is still accepted, and `axocoatl validate`, `axocoatl doctor` and daemon start
+  warn that it can be removed. `GET /api/sessions/{id}/network` returns `record` as
+  `{events, bytes, gaps}`, without `max_events` and `full`, and a `record_unavailable`
+  refusal now means only that the record could not be written.
+- The Ways decision history's `records` and `aggregate_bytes` limits count the decisions
+  kept and their stored bytes; deleted decisions no longer count toward them, so deleting
+  one frees room. One stored change (patch) may be up to 64 MiB, and the total is bounded
+  only by `aggregate_bytes`.
 
 ### Fixed
 - **Native OpenRouter reserves each call's own request, not the context window.** A
@@ -81,6 +96,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `path` of `list_dir` and `grep`, the `rows` and `cols` of `spawn_terminal`, the
   `tail_lines` of `read_terminal` and the `delimiter` of `text_split` given as `null`
   now take their defaults instead of refusing the call.
+- **A native Agent is no longer stopped at 128 tool rounds while its budget has room.**
+  A lead could stop at exactly 128 rounds with tokens, spending and time left. An
+  activation may now run one tool round per invocation its grant allows, up to 1,024,
+  so the grant normally ends a long run before the round limit does. An Agent's new
+  `max_tool_rounds` (1 to 1,024) sets a lower limit for its activations. An activation
+  that reaches its limit fails with "This Agent reached its tool-round limit for this
+  activation (N rounds)", classed `round_limit` with **Continue** as the suggested next
+  step, where it was classed `other` with "inspect"; failures written by 1.2.0 are read
+  the same way.
+- **A long Session no longer runs out of room to record its work.** A Session recorded
+  at most 256 tool calls and repository captures over its life, and the call after that
+  left its runtime needing recovery ("invocation audit capacity exhausted"). Its other
+  journals had lifetime caps too: 4,096 content records or 64 MiB, 65,536 turn records
+  or 256 turns, 4,096 Team revisions, saved Agent state for 4,096 activations, and
+  50,000 network events or 2,000 screenshots, past which new connections were refused. A
+  Session now keeps every record for as long as it exists. Each journal appends to an
+  open segment file and, once it holds its bounded number of records or bytes, seals it
+  with a SHA-256 digest that the next segment names, so a reordered, removed or changed
+  segment is refused; a write cut short by a crash is dropped on open and an interrupted
+  seal is completed. Memory holds the open segment and a small index per sealed one, not
+  the whole history. Bounds that apply to one turn or one record stay: a turn records up
+  to 4,096 steps and 8 MiB and up to 4,096 budget claims, about 2,000 tool calls. When a
+  turn has no room for another tool call, each Agent is asked for its final answer
+  without tools, as when its budget runs out, an Agent's call it cannot record is
+  declined before anything is written, and a capture it cannot record is kept as
+  unavailable; the next turn starts with fresh room.
+- **Continuing a Team turn runs the work that depends on the restarted Agents.** When a
+  lead depended on two helpers that failed on a provider error, Continue restarted the
+  helpers but left the lead, which had never started, blocked, so the turn stopped
+  again with nothing left to continue. Work that never started and depends on restarted
+  work now waits for it in the new epoch and runs once it is accepted; work that also
+  depends on failed work left unselected stays blocked until that is continued too.
 
 ## [1.2.0] - 2026-10-03
 

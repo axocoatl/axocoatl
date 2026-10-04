@@ -502,7 +502,7 @@ impl DispatchState {
                 // As in driver interruption, positively account for a factory
                 // wait before replacing Running with Interrupted. Missing
                 // authority records alone can never be treated as zero usage.
-                let ActivationEvidenceContent::Definition { profile, .. } = self
+                let ActivationEvidenceContent::Definition { profile, .. } = &self
                     .content
                     .resolve_activation_evidence(&item.input.definition.snapshot)
                     .map_err(error)?

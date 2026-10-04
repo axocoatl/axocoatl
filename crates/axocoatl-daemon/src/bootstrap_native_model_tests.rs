@@ -21,7 +21,7 @@ fn choose_model(f: &mut NativeFixture, model: &str, widen_output: bool) {
             .unwrap();
             let slot = team.current().unwrap().unwrap().graph.slots[0].clone();
             drop(team);
-            let ActivationEvidenceContent::Definition { configuration, .. } = content
+            let ActivationEvidenceContent::Definition { configuration, .. } = &content
                 .resolve_activation_evidence(&slot.definition.snapshot)
                 .unwrap()
             else {
@@ -106,7 +106,7 @@ async fn per_turn_model_selection_preserves_limits_and_future_team_and_exact_rep
     );
     f.registry
         .with_session_team_stores(&token, |canonical, content, _| {
-            let ActivationEvidenceContent::Grant { policy } = content
+            let ActivationEvidenceContent::Grant { policy } = &content
                 .resolve_activation_evidence(&setup.content.nodes[0].grant.evidence)
                 .unwrap()
             else {

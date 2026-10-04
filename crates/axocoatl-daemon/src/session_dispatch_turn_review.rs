@@ -100,7 +100,7 @@ impl DispatchState {
         item: &ContractActivation,
         phase: RepositorySnapshotPhase,
     ) -> Result<Option<Option<ActivationRepositorySnapshot>>> {
-        let ActivationEvidenceContent::Definition { profile, .. } = self
+        let ActivationEvidenceContent::Definition { profile, .. } = &self
             .content
             .resolve_activation_evidence(&item.input.definition.snapshot)
             .map_err(error)?
@@ -146,7 +146,7 @@ impl DispatchState {
             let observation = contract
                 .current_condition(&id)
                 .ok_or_else(|| error("the required checks have no current readiness"))?;
-            let ActivationEvidenceContent::Guidance { text } = self
+            let ActivationEvidenceContent::Guidance { text } = &self
                 .content
                 .resolve_activation_evidence(&observation.evidence)
                 .map_err(error)?
@@ -170,7 +170,7 @@ impl DispatchState {
                     .filter(|capture| capture.tree_sha256.is_some()));
             }
         } else {
-            let records = self.canonical.records().map_err(error)?;
+            let records = self.canonical.turn_records(&self.turn_id).map_err(error)?;
             let last = records.iter().rev().find_map(|record| match &record.event {
                 TurnContractEvent::AcceptActivation { activation, .. }
                     if record.turn_id == self.turn_id =>

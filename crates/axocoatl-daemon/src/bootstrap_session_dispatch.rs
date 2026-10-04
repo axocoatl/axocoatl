@@ -261,7 +261,6 @@ impl SessionDispatchRegistry {
         session_id: &str,
         after: Option<u64>,
         limit: usize,
-        limits: axocoatl_session::network_record::RecordLimits,
     ) -> Result<
         Option<(
             Vec<axocoatl_session::network_record::NetworkLine>,
@@ -273,12 +272,12 @@ impl SessionDispatchRegistry {
             .lock()
             .map_err(|_| failure("Session dispatch registry failed"))?;
         if let Some(entry) = state.pending.get(session_id) {
-            return entry.read_network_record(after, limit, limits);
+            return entry.read_network_record(after, limit);
         }
         match state.entries.get(session_id) {
             Some(entry) => entry
                 .controller
-                .read_network_record(after, limit, limits)
+                .read_network_record(after, limit)
                 .map_err(|error| failure(error.to_string())),
             None => Ok(None),
         }

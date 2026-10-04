@@ -37,7 +37,7 @@ const REASONS = {
   no_credential: 'The process had no egress credential: a read-only helper, a check or a command started outside a tool call.',
   unknown_credential: 'The credential had already ended with its tool call, setup step or terminal.',
   binding_ended: 'The terminal or tool call the credential belonged to had ended.',
-  record_unavailable: 'The network record was full or unavailable, so new connections were refused.',
+  record_unavailable: 'The network record was unavailable, so new connections were refused.',
   invalid_host: 'Not a valid host name or IP address.',
   resolve_failed: 'The name did not resolve on this computer.',
   tls_required: 'An egress route: Axocoatl reads its requests only over HTTPS.',
@@ -298,9 +298,6 @@ class AxSessionNetwork extends HTMLElement {
       if (sidecar?.state === 'failed') {
         body.append(element('p', 'banner', 'The egress proxy stopped after repeated failures. Connections are refused until the Session\'s runtime starts again.'));
       }
-    }
-    if (view.record?.full) {
-      body.append(element('p', 'banner', 'The network record is full, so new connections are refused.'));
     }
     for (const warning of view.warnings || []) body.append(element('p', 'banner warning', warning));
     const proposals = view.proposals || [];

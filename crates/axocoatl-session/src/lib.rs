@@ -22,6 +22,7 @@ pub mod invocation_audit;
 pub mod native_history;
 pub mod network_record;
 pub mod path_scope;
+pub mod segment_log;
 pub mod session_attachment;
 pub mod session_history;
 pub mod session_team;

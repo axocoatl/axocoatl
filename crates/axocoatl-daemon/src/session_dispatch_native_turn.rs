@@ -168,7 +168,7 @@ impl SessionDispatchController {
             repository::validate_retained_repository(&state, owner, &repository)?;
             let mut grants = Vec::new();
             for node in &admission.nodes {
-                let ActivationEvidenceContent::Grant { policy } = state
+                let ActivationEvidenceContent::Grant { policy } = &state
                     .content
                     .resolve_activation_evidence(&node.grant.evidence)
                     .map_err(error)?

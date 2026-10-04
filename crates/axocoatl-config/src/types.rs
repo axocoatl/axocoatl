@@ -401,6 +401,11 @@ pub struct AgentConfigYaml {
     /// Sampling controls threaded into each LLM request this agent makes.
     #[serde(default)]
     pub sampling: SamplingConfigYaml,
+    /// The most tool rounds one activation of this Agent may run, 1 to
+    /// 1,024. Absent, a native activation may run as many rounds as its
+    /// grant has invocations, up to 1,024.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_rounds: Option<u32>,
 }
 
 /// Per-agent sampling controls. All optional; an unset field leaves the
@@ -748,8 +753,7 @@ pub struct SandboxConfigYaml {
     /// Egress allowlist for `network: egress`. Under other network modes
     /// `allow`, `private_destinations` and `routes` are ignored with a
     /// warning; the browser's own proxy still reads `sidecar_network` and
-    /// `max_connections`, and `record_max_events` caps the Session network
-    /// record in every mode.
+    /// `max_connections`.
     #[serde(default)]
     pub egress: Option<EgressConfigYaml>,
     /// Which users run Agents' commands and read-only helpers' processes in
@@ -815,9 +819,11 @@ pub struct EgressConfigYaml {
     /// proxy too, under `bridge` and `none`).
     #[serde(default = "default_egress_max_connections")]
     pub max_connections: u32,
-    /// 1,000-1,000,000 events in one Session's network record.
-    #[serde(default = "default_egress_record_max_events")]
-    pub record_max_events: u32,
+    /// No longer used: a Session's network record keeps every event for the
+    /// Session's life. Still read so `validate`, `doctor` and daemon start
+    /// can warn that it is ignored instead of refusing the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_max_events: Option<u32>,
     /// Hosts whose HTTPS traffic Axocoatl ends on this computer, checks
     /// request by request and, with a credential, signs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -831,7 +837,7 @@ impl Default for EgressConfigYaml {
             private_destinations: Vec::new(),
             sidecar_network: None,
             max_connections: default_egress_max_connections(),
-            record_max_events: default_egress_record_max_events(),
+            record_max_events: None,
             routes: Vec::new(),
         }
     }
@@ -839,9 +845,6 @@ impl Default for EgressConfigYaml {
 
 fn default_egress_max_connections() -> u32 {
     128
-}
-fn default_egress_record_max_events() -> u32 {
-    50_000
 }
 
 /// One entry of `sandbox.egress.routes`: a host whose HTTPS connections

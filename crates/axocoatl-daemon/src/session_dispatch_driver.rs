@@ -645,7 +645,7 @@ pub(super) fn record_undispatched(
     snapshot: &DurableTurnSnapshot,
     input: &ActivationInputManifest,
 ) -> Result<()> {
-    let ActivationEvidenceContent::Definition { profile, .. } = state
+    let ActivationEvidenceContent::Definition { profile, .. } = &state
         .content
         .resolve_activation_evidence(&input.definition.snapshot)
         .map_err(error)?

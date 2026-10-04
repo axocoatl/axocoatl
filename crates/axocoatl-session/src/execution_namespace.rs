@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::execution_ownership::{OwnershipError, UpgradedFormatOwnership};
 use crate::execution_store::{DurableSessionIdentity, ExecutionStoreOwner};
+use crate::segment_log::{SegmentError, SegmentLog, SegmentSpec};
 use crate::turn_contract::{LogicalTurnId, TURN_CONTRACT_SCHEMA_VERSION};
 
 const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
@@ -330,6 +331,40 @@ impl OwnedExecutionNamespace {
         Ok(file)
     }
 
+    /// Open a segmented log in this component root, for a store outside this
+    /// crate whose records live in one. The log keeps its own descriptor of
+    /// the root and its writes bypass `mutation`, as with `open_append`: the
+    /// store verifies this namespace before each write and treats a failed
+    /// write as uncertain until it reopens.
+    pub fn open_segment_log<R, E>(
+        &self,
+        spec: SegmentSpec,
+        meta: serde_json::Value,
+        create: bool,
+        visit: impl FnMut(u64, R) -> Result<(), E>,
+    ) -> Result<SegmentLog, E>
+    where
+        R: serde::de::DeserializeOwned,
+        E: From<SegmentError>,
+    {
+        self.require_root(self.component())
+            .map_err(|error| E::from(SegmentError::Io(error)))?;
+        SegmentLog::open(self.dir.clone(), spec, meta, create, visit)
+    }
+
+    /// Whether this component root holds any part of a segmented log.
+    pub fn segment_log_exists(&self, spec: &SegmentSpec) -> io::Result<bool> {
+        self.require_root(self.component())?;
+        SegmentLog::exists(&self.dir, spec)
+    }
+
+    /// Remove a segmented log whose content can be produced again, such as
+    /// one left by an interrupted migration from a single-file store.
+    pub fn remove_segment_log(&self, spec: &SegmentSpec) -> io::Result<()> {
+        self.require_root(self.component())?;
+        self.mutation(|| SegmentLog::remove(&self.dir, spec))
+    }
+
     pub fn atomic_write(&self, name: impl AsRef<Path>, bytes: &[u8]) -> io::Result<()> {
         let name = direct_name(name.as_ref())?;
         if bytes.len() > MAX_FILE_BYTES {
@@ -449,6 +484,43 @@ pub(crate) fn read_existing_component(
         ));
     }
     Ok(bytes)
+}
+
+/// The root of an already initialized component, for a reader of a
+/// segmented journal, with the same guarantees as [`read_existing_component`]:
+/// no writer lock, no directory or marker creation, no recovery. The reader
+/// must not write through it.
+pub(crate) fn existing_component_root(
+    session: &SecureDir,
+    ownership: &UpgradedFormatOwnership,
+    identity: &DurableSessionIdentity,
+    component: &ExecutionComponent,
+    primary: &Path,
+) -> io::Result<SecureDir> {
+    let primary = journal_primary_name(primary)?;
+    ownership.verify_installed().map_err(io::Error::other)?;
+    session.verify_ambient_identity()?;
+    require_private(session)?;
+    let root = session.existing_child(component.directory_name())?;
+    root.verify_ambient_identity()?;
+    require_private(&root)?;
+    let marker = root.read_limited(JOURNAL_INITIALIZED_FILE, MAX_INITIALIZATION_BYTES)?;
+    let actual: JournalInitialization = serde_json::from_slice(&marker)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let expected = JournalInitialization {
+        schema_version: 1,
+        journal_id: identity.journal_id().into(),
+        owner: identity.owner().clone(),
+        component: component.clone(),
+        primary: primary.into(),
+    };
+    if actual != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "historical component initialization differs from canonical identity",
+        ));
+    }
+    Ok(root)
 }
 
 /// Read one file from a direct subdirectory of an already initialized

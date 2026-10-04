@@ -471,7 +471,6 @@ impl crate::session_network::RecordNamespaces for ControllerRecords {
         _session_id: &str,
         after: Option<u64>,
         limit: usize,
-        limits: axocoatl_session::network_record::RecordLimits,
     ) -> std::result::Result<
         Option<(
             Vec<axocoatl_session::network_record::NetworkLine>,
@@ -480,7 +479,7 @@ impl crate::session_network::RecordNamespaces for ControllerRecords {
         String,
     > {
         self.0
-            .read_network_record(after, limit, limits)
+            .read_network_record(after, limit)
             .map_err(|error| error.to_string())
     }
 }
@@ -535,7 +534,6 @@ async fn web_calls_are_recorded_with_their_invocation_and_cited_sources_are_mark
     let fixture = input_fixture_with_tools(false, &["web_search", "web_fetch"]);
     let records = Arc::new(crate::session_network::SessionNetworkRecords::new(
         Arc::new(ControllerRecords(fixture.controller.clone())),
-        50_000,
     ));
     let fetcher = Arc::new(FixedFetcher::default());
     for tool in web_tools("bridge", fetcher.clone(), records.clone()).host_tools() {

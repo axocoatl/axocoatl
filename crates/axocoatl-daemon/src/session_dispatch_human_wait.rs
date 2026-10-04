@@ -71,7 +71,7 @@ fn wait_parameters(
     content: &ExecutionContentStore,
     reference: &EvidenceRef,
 ) -> Result<(NativeHumanWait, String)> {
-    let ActivationEvidenceContent::Guidance { text } = content
+    let ActivationEvidenceContent::Guidance { text } = &content
         .resolve_activation_evidence(reference)
         .map_err(error)?
     else {
@@ -101,7 +101,7 @@ pub(super) fn validate_retained_human_waits(
             .find(|record| record.activation == item.blocker.activation)
             .ok_or_else(|| error("human wait has no exact retained activation"))?
             .input;
-        let ActivationEvidenceContent::Definition { profile, .. } = content
+        let ActivationEvidenceContent::Definition { profile, .. } = &content
             .resolve_activation_evidence(&input.definition.snapshot)
             .map_err(error)?
         else {
@@ -538,13 +538,16 @@ impl DispatchState {
             return Ok(());
         };
         let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
-        let record = self
+        let (_, last) = self
             .canonical
-            .records()
+            .turn_sequences(&self.turn_id)
             .map_err(error)?
-            .iter()
-            .rev()
-            .find(|record| record.turn_id == self.turn_id)
+            .ok_or_else(|| error("human wait invalidation has no durable canonical record"))?;
+        let (_, record) = self
+            .canonical
+            .records_in(last, last)
+            .map_err(error)?
+            .pop()
             .ok_or_else(|| error("human wait invalidation has no durable canonical record"))?;
         let _ = bus.send(crate::stream::StreamFrame::ActivationControlChanged {
             activation: activation.clone(),

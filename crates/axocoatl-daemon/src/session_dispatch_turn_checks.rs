@@ -93,7 +93,7 @@ impl DispatchState {
         let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
         let condition_id = ConditionId::new(CheckGroup::required().ready_id()).map_err(error)?;
         if let Some(existing) = snapshot.contract().current_condition(&condition_id) {
-            if matches!(self.content.resolve_activation_evidence(&existing.evidence).map_err(error)?, ActivationEvidenceContent::Guidance {text} if text == &proof)
+            if matches!(self.content.resolve_activation_evidence(&existing.evidence).map_err(error)?, ActivationEvidenceContent::Guidance {text} if text == proof)
             {
                 return Ok(false);
             }
@@ -154,7 +154,7 @@ pub(super) fn agent_name(
     graph
         .and_then(|graph| graph.nodes.iter().find(|item| item.node_id == *node))
         .and_then(
-            |item| match content.resolve_activation_evidence(&item.definition.snapshot) {
+            |item| match &content.resolve_activation_evidence(&item.definition.snapshot) {
                 Ok(ActivationEvidenceContent::Definition { configuration, .. }) => {
                     serde_json::from_str::<serde_json::Value>(configuration)
                         .ok()?
@@ -227,7 +227,7 @@ impl SessionDispatchController {
                 .nodes
                 .iter()
                 .map(|node| {
-                    match state
+                    match &state
                         .content
                         .resolve_activation_evidence(&node.grant.evidence)
                         .map_err(error)?
@@ -587,10 +587,10 @@ impl SessionDispatchController {
                 .or_else(|| {
                     before_run
                         .as_ref()
-                        .zip(state.canonical.records().ok())
+                        .zip(state.canonical.turn_records(snapshot.turn_id()).ok())
                         .is_some_and(|(before_run, records)| {
                             accepted_after_capture(
-                                records,
+                                &records,
                                 snapshot.turn_id(),
                                 before_run,
                                 &current,

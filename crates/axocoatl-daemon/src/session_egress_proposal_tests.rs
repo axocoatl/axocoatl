@@ -73,8 +73,12 @@ impl EgressRecordSink for Record {
         Ok(self.push(event))
     }
 
-    async fn history(&self) -> Result<Vec<NetworkLine>, RecordFailure> {
-        Ok(self.lines.lock().unwrap().clone())
+    async fn replay(
+        &self,
+        visit: &mut (dyn for<'line> FnMut(&'line NetworkLine) + Send),
+    ) -> Result<u32, RecordFailure> {
+        let lines = self.lines.lock().unwrap().clone();
+        Ok(crate::session_egress::tests::replay_lines(&lines, visit))
     }
 }
 
@@ -386,10 +390,11 @@ async fn invalid_and_excess_proposals_are_refused_and_not_recorded() {
         .unwrap_err();
     assert!(matches!(error, EgressPolicyError::Conflict(_)), "{error:?}");
     assert_eq!(proposals(&record).len(), MAX_PENDING_PROPOSALS);
-    // A full record refuses a proposal: nothing is kept that is not recorded.
+    // A record that cannot be written refuses a proposal: nothing is kept
+    // that is not recorded.
     let full = Arc::new(Record::default());
     let (crowded, _dir) = opened(full.clone()).await;
-    *full.fail.lock().unwrap() = Some(RecordFailure::Full);
+    *full.fail.lock().unwrap() = Some(RecordFailure::Unavailable("disk full".into()));
     assert!(matches!(
         crowded.propose(request("api.test", &[443])).await,
         Err(EgressPolicyError::Unavailable(_))
@@ -577,7 +582,7 @@ async fn a_decision_that_cannot_be_recorded_leaves_the_proposal_decidable() {
     let record = Arc::new(Record::default());
     let (egress, _dir) = opened(record.clone()).await;
     let proposed = egress.propose(request("api.test", &[443])).await.unwrap();
-    *record.fail_control.lock().unwrap() = Some(RecordFailure::Full);
+    *record.fail_control.lock().unwrap() = Some(RecordFailure::Unavailable("disk full".into()));
     for _ in 0..2 {
         let error = egress
             .reject_proposal(&proposed.view.id, "human", "c-1")

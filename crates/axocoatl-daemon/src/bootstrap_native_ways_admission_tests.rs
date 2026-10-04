@@ -41,7 +41,7 @@ fn admit_ways(
             let mut candidates = vec![];
             let mut inputs = vec![];
             for (index, slot) in current.graph.slots.iter().enumerate() {
-                let ActivationEvidenceContent::Grant { policy } = content
+                let ActivationEvidenceContent::Grant { policy } = &content
                     .resolve_activation_evidence(slot.grant.as_ref().unwrap())
                     .unwrap()
                 else {
@@ -52,7 +52,7 @@ fn admit_ways(
                     revision: policy.revision,
                     evidence: slot.grant.clone().unwrap(),
                 };
-                let ActivationEvidenceContent::Definition { profile, .. } = content
+                let ActivationEvidenceContent::Definition { profile, .. } = &content
                     .resolve_activation_evidence(&slot.definition.snapshot)
                     .unwrap()
                 else {
@@ -347,7 +347,7 @@ async fn failed_way_keeps_actual_accepted_peer_available_to_existing_keep_valida
                 profile,
                 configuration,
                 ..
-            } = content
+            } = &content
                 .resolve_activation_evidence(&graph.nodes[0].definition.snapshot)
                 .unwrap()
             else {
@@ -679,7 +679,7 @@ async fn cleaned_incomplete_ways_require_exact_decision_and_preserve_explicit_st
                         recorded_at_unix_ms: 2,
                     };
                     archive.record_progress(record.clone()).unwrap();
-                    record = archive.get(&record.decision_id).unwrap().unwrap().clone();
+                    record = archive.get(&record.decision_id).unwrap().unwrap();
                     Ok(())
                 })
                 .unwrap();
@@ -767,7 +767,7 @@ async fn isolated_way_tool_observations_keep_matching_legacy_occurrences_after_d
                 profile,
                 configuration,
                 ..
-            } = content
+            } = &content
                 .resolve_activation_evidence(&graph.nodes[0].definition.snapshot)
                 .unwrap()
             else {
@@ -1071,7 +1071,7 @@ async fn recovered_running_ways_freeze_interrupted_under_cleanup_lease_and_close
                 recorded_at_unix_ms: 2,
             };
             archive.record_progress(record.clone()).unwrap();
-            Ok(archive.get(&record.decision_id).unwrap().unwrap().clone())
+            Ok(archive.get(&record.decision_id).unwrap().unwrap())
         })
         .unwrap();
     f.registry
@@ -1160,7 +1160,7 @@ async fn completed_ways_keep_knowledge_private_until_exact_candidate_is_selected
                     profile,
                     configuration,
                     ..
-                } = content
+                } = &content
                     .resolve_activation_evidence(&graph.nodes[index].definition.snapshot)
                     .unwrap()
                 else {

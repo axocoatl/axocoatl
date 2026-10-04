@@ -121,7 +121,7 @@ pub fn admitted_check_definitions(
     let recorded = content.resolve_repository_check_definition(recorded)?;
     for capture in CAPTURE_COMMANDS {
         let definitions = check_definitions_with(checks, capture)?;
-        if definitions.first() == Some(recorded) {
+        if definitions.first() == Some(&recorded) {
             return Ok(definitions);
         }
     }
@@ -420,7 +420,7 @@ pub fn project_readiness(
             }
         });
     };
-    let proof = match content.resolve_activation_evidence(&observation.evidence)? {
+    let proof = match &content.resolve_activation_evidence(&observation.evidence)? {
         crate::execution_content::ActivationEvidenceContent::Guidance { text } => {
             serde_json::from_str::<serde_json::Value>(text).unwrap_or_default()
         }

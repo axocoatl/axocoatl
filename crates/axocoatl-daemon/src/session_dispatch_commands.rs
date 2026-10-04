@@ -65,9 +65,14 @@ impl SessionDispatchController {
                 }
             }
         }
-        for event in state.canonical.records().map_err(error)? {
-            if state.canonical_control_evidence(event)? == *reference {
-                return serde_json::to_value(event).map(Some).map_err(error);
+        // Control evidence belongs to this controller's turn.
+        for event in state
+            .canonical
+            .turn_records(&state.turn_id)
+            .map_err(error)?
+        {
+            if state.canonical_control_evidence(&event)? == *reference {
+                return serde_json::to_value(&event).map(Some).map_err(error);
             }
         }
         Ok(None)
@@ -238,20 +243,14 @@ impl DispatchState {
         event: TurnContractEvent,
     ) -> Result<TurnContractEnvelope> {
         let command_id = self.control_stage_id(view, "canonical")?;
-        if let Some(existing) = self
-            .canonical
-            .records()
-            .map_err(error)?
-            .iter()
-            .find(|item| item.command_id == command_id)
-        {
+        if let Some((_, existing)) = self.canonical.command_record(&command_id).map_err(error)? {
             if existing.event != event
                 || existing.turn_id != view.request.turn_id
                 || existing.session_id != view.request.session_id
             {
                 return Err(error("control canonical identity has conflicting content"));
             }
-            return Ok(existing.clone());
+            return Ok(existing);
         }
         let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
         Ok(TurnContractEnvelope {
@@ -425,7 +424,7 @@ impl DispatchState {
             .ok_or_else(|| error("canonical request is not bound"))?;
         match &input.repository {
             RepositoryInput::Unavailable => {
-                super::input::project_text_input(input, request_ref, request, &resolved)?;
+                super::input::project_text_input(input, request_ref, &request, &resolved)?;
             }
             RepositoryInput::Recorded {
                 snapshot: repository_ref,
@@ -434,7 +433,7 @@ impl DispatchState {
                 super::input::project_repository_input(
                     input,
                     request_ref,
-                    request,
+                    &request,
                     &resolved,
                     &repository,
                 )?;
@@ -680,17 +679,16 @@ impl DispatchState {
         let id = self.control_stage_id(view, "canonical")?;
         let found = self
             .canonical
-            .records()
+            .command_record(&id)
             .map_err(error)?
-            .iter()
-            .find(|record| record.command_id == id);
+            .map(|(_, record)| record);
         match found {
             Some(record)
                 if record.event == event
                     && record.session_id == view.request.session_id
                     && record.turn_id == view.request.turn_id =>
             {
-                Ok(Some(record.clone()))
+                Ok(Some(record))
             }
             Some(_) => Err(error(
                 "retained control operation conflicts with its request",
@@ -773,7 +771,7 @@ impl DispatchState {
                     .find(|item| item.activation == *activation)
                     .ok_or_else(|| error("unbound Stop has no canonical activation"))?
                     .input;
-                let ActivationEvidenceContent::Definition { profile, .. } = self
+                let ActivationEvidenceContent::Definition { profile, .. } = &self
                     .content
                     .resolve_activation_evidence(&input.definition.snapshot)
                     .map_err(error)?
@@ -913,19 +911,17 @@ impl DispatchState {
         if snapshot.contract().state() == Some(LogicalTurnState::Finished) {
             let closure = self
                 .canonical
-                .records()
+                .turn_records(&self.turn_id)
                 .map_err(error)?
-                .iter()
+                .into_iter()
                 .find(|record| {
-                    record.turn_id == self.turn_id
-                        && matches!(
-                            record.event,
-                            TurnContractEvent::Close {
-                                closure: TurnClosure::Finished
-                            }
-                        )
+                    matches!(
+                        record.event,
+                        TurnContractEvent::Close {
+                            closure: TurnClosure::Finished
+                        }
+                    )
                 })
-                .cloned()
                 .ok_or_else(|| error("partial Finish lacks its safe closure"))?;
             self.close_and_promote(closure.clone())?;
             self.command_update(
@@ -1036,9 +1032,9 @@ impl DispatchState {
             }
             let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
             if let ControlParameters::StopActivation { activation } = &view.request.parameters {
-                let terminal = self.canonical.records().map_err(error)?.iter().find(|record| {
-                    record.turn_id == self.turn_id && matches!(&record.event, TurnContractEvent::FailActivation { activation: target, .. } if target == activation)
-                }).cloned();
+                let terminal = self.canonical.turn_records(&self.turn_id).map_err(error)?.into_iter().find(|record| {
+                    matches!(&record.event, TurnContractEvent::FailActivation { activation: target, .. } if target == activation)
+                });
                 if let Some(terminal) = terminal {
                     self.settle_control_event(view, &terminal)?;
                     continue;

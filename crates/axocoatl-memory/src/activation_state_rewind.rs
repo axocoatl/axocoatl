@@ -1,5 +1,5 @@
 //! Explicit conversation rewind retains raw evidence and incurred usage.
-//! One atomic memory-journal write selects prior heads and hides exact rows.
+//! One journal record selects prior heads and hides exact rows.
 use super::*;
 use axocoatl_session::session_history::{HistoryVisibility, SessionHistory, SessionHistoryEntry};
 
@@ -27,45 +27,16 @@ pub(super) struct RewindProjection {
     pub payload_bytes: usize,
 }
 
-pub(super) fn effective_reference<'a>(
-    state: &'a StoreState,
-    conversation: &NodeConversationId,
-    count: usize,
-) -> Option<&'a CheckpointRef> {
-    let latest = state.rewinds.iter().rev().find_map(|rewind| {
-        (rewind.after_promotions <= count)
-            .then(|| {
-                rewind
-                    .conversations
-                    .iter()
-                    .find(|entry| &entry.conversation_id == conversation)
-                    .map(|entry| (rewind.after_promotions, entry))
-            })
-            .flatten()
-    });
-    let start = latest.map_or(0, |(start, _)| start);
-    let promoted = state.promotions[..count]
-        .iter()
-        .skip(start)
-        .rev()
-        .flat_map(|promotion| promotion.selected.iter())
-        .find(|entry| &entry.committed.conversation_id == conversation)
-        .map(|entry| &entry.committed);
-    promoted.or_else(|| match latest {
-        Some((_, entry)) => entry.checkpoint.as_ref(),
-        None => state
-            .baselines
-            .iter()
-            .find(|baseline| &baseline.reference.conversation_id == conversation)
-            .map(|baseline| &baseline.reference),
-    })
-}
-fn rewind_id(state: &StoreState, rewind: &SessionRewind) -> Result<String> {
+pub(super) fn rewind_id(
+    session_id: &SessionId,
+    journal: Option<&CanonicalJournal>,
+    rewind: &SessionRewind,
+) -> Result<String> {
     Ok(format!(
         "rewind:{}",
         digest(&(
-            &state.session_id,
-            &state.journal,
+            session_id,
+            journal,
             &rewind.keep_through_turn_id,
             &rewind.superseded_turn_ids,
             rewind.after_promotions,
@@ -73,16 +44,17 @@ fn rewind_id(state: &StoreState, rewind: &SessionRewind) -> Result<String> {
         ))?
     ))
 }
-fn projection_reference(
-    state: &StoreState,
+pub(super) fn projection_reference(
+    session_id: &SessionId,
+    journal: Option<&CanonicalJournal>,
     conversation: &NodeConversationId,
     projection: &RewindProjection,
 ) -> Result<CheckpointRef> {
-    let key = digest(&(&state.session_id, &state.journal, conversation, projection))?;
+    let key = digest(&(session_id, journal, conversation, projection))?;
     Ok(CheckpointRef {
         checkpoint_id: CheckpointId::new(format!("rewind-baseline:{key}"))
             .map_err(|error| invalid_error(error.to_string()))?,
-        session_id: state.session_id.clone(),
+        session_id: session_id.clone(),
         conversation_id: conversation.clone(),
         source: CheckpointSource::Committed {
             evidence: EvidenceRef::new(format!("rewind-baseline:{key}"))
@@ -90,79 +62,12 @@ fn projection_reference(
         },
     })
 }
-pub(super) fn validate_rewinds(state: &StoreState) -> Result<()> {
-    if state.rewinds.len() > MAX_PROMOTIONS {
-        return Err(ActivationStateError::Capacity);
-    }
-    let mut last = 0;
-    let mut ids = HashSet::new();
-    for rewind in &state.rewinds {
-        if rewind.after_promotions < last
-            || rewind.after_promotions > state.promotions.len()
-            || rewind.rewind_id != rewind_id(state, rewind)?
-            || !ids.insert(&rewind.rewind_id)
-            || rewind.conversations.len() > MAX_BASELINES
-            || rewind.superseded_turn_ids.len() > MAX_INPUTS
-            || rewind
-                .superseded_turn_ids
-                .iter()
-                .collect::<HashSet<_>>()
-                .len()
-                != rewind.superseded_turn_ids.len()
-        {
-            return invalid("rewind journal identity, ordering or bounds differ");
-        }
-        last = rewind.after_promotions;
-        let mut conversations = HashSet::new();
-        for entry in &rewind.conversations {
-            if !conversations.insert(&entry.conversation_id) {
-                return invalid("rewind repeats a conversation");
-            }
-            if let Some(reference) = &entry.checkpoint {
-                if reference.session_id != state.session_id
-                    || reference.conversation_id != entry.conversation_id
-                {
-                    return invalid("rewind checkpoint belongs to another conversation");
-                }
-                if let Some(projection) = &entry.projection {
-                    if reference
-                        != &projection_reference(state, &entry.conversation_id, projection)?
-                        || !is_digest(&projection.payload_sha256)
-                        || projection.payload_bytes > MAX_CHECKPOINT_BYTES
-                        || projection.retained_turn_ids.len() > MAX_BASELINE_TURNS
-                    {
-                        return invalid("rewind projection differs from its retained source");
-                    }
-                } else if !state.promotions[..rewind.after_promotions]
-                    .iter()
-                    .flat_map(|promotion| &promotion.selected)
-                    .any(|selected| &selected.committed == reference)
-                    && !state
-                        .baselines
-                        .iter()
-                        .any(|baseline| &baseline.reference == reference)
-                    && !state
-                        .rewinds
-                        .iter()
-                        .take_while(|prior| prior.rewind_id != rewind.rewind_id)
-                        .flat_map(|prior| &prior.conversations)
-                        .any(|prior| prior.checkpoint.as_ref() == Some(reference))
-                {
-                    return invalid("rewind names an uncommitted or future checkpoint");
-                }
-            } else if entry.projection.is_some() {
-                return invalid("empty rewind cannot carry checkpoint payload");
-            }
-        }
-    }
-    Ok(())
-}
 impl ActivationStateStore {
     /// Exact imported identities, for a migrated Session before its first Team Apply.
     pub fn legacy_conversations(&self) -> Result<Vec<NodeConversationId>> {
         self.ready()?;
         Ok(self
-            .state
+            .projection
             .baselines
             .iter()
             .map(|baseline| baseline.reference.conversation_id.clone())
@@ -171,10 +76,11 @@ impl ActivationStateStore {
     pub fn superseded_turn_ids(&self) -> Result<Vec<String>> {
         self.ready()?;
         let mut result = vec![];
-        for rewind in &self.state.rewinds {
-            for turn in &rewind.superseded_turn_ids {
-                if !result.contains(turn) {
-                    result.push(turn.clone());
+        let mut seen = HashSet::new();
+        for rewind in self.rewinds()? {
+            for turn in rewind.superseded_turn_ids {
+                if seen.insert(turn.clone()) {
+                    result.push(turn);
                 }
             }
         }
@@ -187,14 +93,16 @@ impl ActivationStateStore {
         let Some(reference) = self.committed_reference(conversation)? else {
             return Ok(None);
         };
+        let Some(promotion) = journal::committed_promotion(&reference) else {
+            return Ok(None);
+        };
         Ok(self
-            .state
-            .promotions
-            .iter()
-            .flat_map(|promotion| &promotion.selected)
+            .promotion_by_id(promotion)?
+            .into_iter()
+            .flat_map(|manifest| manifest.selected)
             .find(|selected| selected.committed == reference)
-            .and_then(|selected| match &selected.accepted.source {
-                CheckpointSource::Accepted { activation } => Some(activation.clone()),
+            .and_then(|selected| match selected.accepted.source {
+                CheckpointSource::Accepted { activation } => Some(activation),
                 _ => None,
             }))
     }
@@ -210,7 +118,7 @@ impl ActivationStateStore {
         content
             .verify_canonical_owner(canonical)
             .map_err(|error| invalid_error(error.to_string()))?;
-        if canonical.unfinished_turn()?.is_some() || self.state.pending.is_some() {
+        if canonical.unfinished_turn()?.is_some() || self.projection.pending.is_some() {
             return invalid("rewind requires settled canonical work and conversation promotion");
         }
         if conversations.len() > MAX_BASELINES
@@ -250,10 +158,9 @@ impl ActivationStateStore {
             .iter()
             .map(|entry| entry.turn_id().to_owned())
             .collect::<Vec<_>>();
+        let rewinds = self.rewinds()?;
         if superseded.is_empty() {
-            if let Some(previous) = self
-                .state
-                .rewinds
+            if let Some(previous) = rewinds
                 .iter()
                 .rev()
                 .find(|entry| entry.keep_through_turn_id.as_deref() == keep_through)
@@ -274,17 +181,10 @@ impl ActivationStateStore {
             .collect::<Vec<_>>();
         let mut selected = vec![];
         let mut payloads = vec![];
+        let journal = self.bound_journal()?;
+        let mut kept_selections = self.latest_kept_selections(&kept, conversations)?;
         for conversation in conversations {
-            let reference = self
-                .state
-                .promotions
-                .iter()
-                .rev()
-                .filter(|promotion| kept.contains(promotion.closure.turn_id().as_str()))
-                .flat_map(|promotion| &promotion.selected)
-                .find(|entry| &entry.committed.conversation_id == conversation)
-                .map(|entry| entry.committed.clone());
-            if let Some(reference) = reference {
+            if let Some(reference) = kept_selections.remove(conversation) {
                 self.load_reference(&reference)?;
                 selected.push(RewindConversation {
                     conversation_id: conversation.clone(),
@@ -294,7 +194,7 @@ impl ActivationStateStore {
                 continue;
             }
             if !legacy.is_empty() {
-                if self.state.baselines.iter().any(|baseline| {
+                if self.projection.baselines.iter().any(|baseline| {
                     &baseline.reference.conversation_id == conversation
                         && baseline
                             .checkpoint_projection
@@ -333,7 +233,12 @@ impl ActivationStateStore {
                     payload_sha256: digest_bytes(&payload),
                     payload_bytes: payload.len(),
                 };
-                let reference = projection_reference(&self.state, conversation, &projection)?;
+                let reference = projection_reference(
+                    self.session_id(),
+                    Some(&journal),
+                    conversation,
+                    &projection,
+                )?;
                 payloads.push((reference.clone(), payload));
                 selected.push(RewindConversation {
                     conversation_id: conversation.clone(),
@@ -352,21 +257,18 @@ impl ActivationStateStore {
             rewind_id: String::new(),
             keep_through_turn_id: keep_through.map(str::to_owned),
             superseded_turn_ids: superseded,
-            after_promotions: self.state.promotions.len(),
+            after_promotions: self.projection.promotions,
             conversations: selected,
         };
-        rewind.rewind_id = rewind_id(&self.state, &rewind)?;
-        if let Some(previous) = self
-            .state
-            .rewinds
-            .iter()
+        rewind.rewind_id = rewind_id(self.session_id(), Some(&journal), &rewind)?;
+        if let Some(previous) = rewinds
+            .into_iter()
             .find(|entry| entry.rewind_id == rewind.rewind_id)
         {
-            return Ok(previous.clone());
+            return Ok(previous);
         }
-        let mut next = self.state.clone();
-        next.rewinds.push(rewind.clone());
-        self.admit(&next)?;
+        let event = Event::Rewind(rewind.clone());
+        let admitted = self.admit(&event, &journal)?;
         self.uncertain = true;
         for (reference, payload) in payloads {
             let name = object_name(&reference);
@@ -377,7 +279,7 @@ impl ActivationStateStore {
             }
             self.objects.atomic_write(name, &payload)?;
         }
-        self.persist(next)?;
+        self.append(event, admitted)?;
         Ok(rewind)
     }
 }

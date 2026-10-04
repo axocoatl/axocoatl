@@ -15,7 +15,7 @@ use crate::execution_content::{
     ExecutionTurnView,
 };
 use crate::execution_store::{ExecutionStoreError, SessionExecutionStore};
-use crate::turn_contract::{ActivationState, LogicalTurnId, TurnContractEvent};
+use crate::turn_contract::{ActivationState, LogicalTurnId};
 
 #[path = "session_history_guidance.rs"]
 mod guidance;
@@ -206,28 +206,23 @@ impl SessionHistory {
         };
         // Journal Begin order is canonical even when a later request contains
         // an older clock timestamp. Continuation never creates a second row.
-        for record in canonical.records()? {
-            if matches!(record.event, TurnContractEvent::Begin { .. }) {
-                let snapshot = canonical.snapshot(&record.turn_id)?;
-                let mut view = content.project(&snapshot)?;
-                if view
-                    .activations
-                    .iter()
-                    .any(|activation| !activation.guidance.is_empty())
-                {
-                    let receipts = match current_commands {
-                        Some((turn_id, commands)) if turn_id == snapshot.turn_id() => {
-                            commands.read_owned_views(canonical, turn_id)
-                        }
-                        _ => ControlCommandStore::read_historical_views(
-                            canonical,
-                            snapshot.turn_id(),
-                        ),
-                    };
-                    guidance::join_delivery(canonical, &mut view, receipts.as_deref().ok());
-                }
-                entries.push(SessionHistoryEntry::ExecutionV2(Box::new(view)));
+        for turn_id in canonical.turn_ids()? {
+            let snapshot = canonical.snapshot(turn_id)?;
+            let mut view = content.project(&snapshot)?;
+            if view
+                .activations
+                .iter()
+                .any(|activation| !activation.guidance.is_empty())
+            {
+                let receipts = match current_commands {
+                    Some((turn_id, commands)) if turn_id == snapshot.turn_id() => {
+                        commands.read_owned_views(canonical, turn_id)
+                    }
+                    _ => ControlCommandStore::read_historical_views(canonical, snapshot.turn_id()),
+                };
+                guidance::join_delivery(canonical, &mut view, receipts.as_deref().ok());
             }
+            entries.push(SessionHistoryEntry::ExecutionV2(Box::new(view)));
         }
         Self::checked(canonical.owner().session_id.as_str().to_string(), entries)
     }

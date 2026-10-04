@@ -80,7 +80,7 @@ fn capture(
     if request.context.is_none() {
         return Ok(None);
     }
-    let ActivationEvidenceContent::Guidance { text } = content
+    let ActivationEvidenceContent::Guidance { text } = &content
         .resolve_activation_evidence(instruction)
         .map_err(error)?
     else {
@@ -115,7 +115,7 @@ pub(super) fn delivery(
         request_evidence, ..
     } = &view.source
     else {
-        let ActivationEvidenceContent::Guidance { text } = content
+        let ActivationEvidenceContent::Guidance { text } = &content
             .resolve_activation_evidence(instruction)
             .map_err(error)?
         else {
@@ -133,7 +133,7 @@ pub(super) fn delivery(
     let request = if plain_turn_request {
         None
     } else {
-        let ActivationEvidenceContent::Guidance { text } = content
+        let ActivationEvidenceContent::Guidance { text } = &content
             .resolve_activation_evidence(request_evidence)
             .map_err(error)?
         else {
@@ -146,7 +146,7 @@ pub(super) fn delivery(
         None => None,
     };
     let Some(captured) = captured else {
-        let ActivationEvidenceContent::Guidance { text } = content
+        let ActivationEvidenceContent::Guidance { text } = &content
             .resolve_activation_evidence(instruction)
             .map_err(error)?
         else {
@@ -156,7 +156,7 @@ pub(super) fn delivery(
     };
     let mut attachments = Vec::new();
     for reference in &captured.attachments {
-        let ActivationEvidenceContent::BinaryAttachment { attachment } = content
+        let ActivationEvidenceContent::BinaryAttachment { attachment } = &content
             .resolve_activation_evidence(reference)
             .map_err(error)?
         else {
@@ -223,7 +223,7 @@ fn validate_existing_receipt(
     if session_id != &request.session_id || turn_id != &request.turn_id {
         return Err(error("Command belongs to another owner"));
     }
-    let ActivationEvidenceContent::Guidance { text } = content
+    let ActivationEvidenceContent::Guidance { text } = &content
         .resolve_activation_evidence(request_evidence)
         .map_err(error)?
     else {

@@ -100,7 +100,6 @@ fn request_and_response_have_a_stable_wire_form() {
     }
     assert_eq!(request("/").kind(), "request");
     assert_eq!(response().kind(), "response");
-    assert!(!request("/").is_control() && !response().is_control());
     // A value field is not part of the event: an unknown field is refused.
     assert!(serde_json::from_value::<NetworkEvent>(serde_json::json!({
         "kind": "request", "conn": "g1:7", "seq_in_conn": 1, "method": "GET", "path": "/",
@@ -159,14 +158,14 @@ fn request_events_are_stored_and_read_back_in_order() {
             .component_namespace(ExecutionComponent::NetworkRecord)
             .unwrap()
     };
-    let mut record = NetworkRecord::open(namespace(), RecordLimits::default()).unwrap();
+    let mut record = NetworkRecord::open(namespace()).unwrap();
     record
         .append(1, request("/acme/app.git/git-receive-pack"))
         .unwrap();
     record.append(2, response()).unwrap();
     record.sync().unwrap();
     drop(record);
-    let reopened = NetworkRecord::open(namespace(), RecordLimits::default()).unwrap();
+    let reopened = NetworkRecord::open(namespace()).unwrap();
     let lines = reopened.read_after(None, 10).unwrap();
     let kinds: Vec<&str> = lines.iter().map(|line| line.event.kind()).collect();
     assert_eq!(kinds, ["request", "response"]);

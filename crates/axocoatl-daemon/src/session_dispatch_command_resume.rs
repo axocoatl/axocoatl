@@ -148,7 +148,7 @@ impl DispatchState {
                 "human response must bind its exact authenticated request body",
             ));
         }
-        let ActivationEvidenceContent::Guidance { text } = self
+        let ActivationEvidenceContent::Guidance { text } = &self
             .content
             .resolve_activation_evidence(reference)
             .map_err(error)?
@@ -254,10 +254,9 @@ impl DispatchState {
         let envelope = self.resume_envelope(&view)?;
         if !self
             .canonical
-            .records()
+            .command_record(&envelope.command_id)
             .map_err(error)?
-            .iter()
-            .any(|record| record == &envelope)
+            .is_some_and(|(_, record)| record == envelope)
         {
             return Err(error("human response has no durable canonical predecessor"));
         }
@@ -294,7 +293,7 @@ impl DispatchState {
         &self,
         evidence: &EvidenceRef,
     ) -> Result<String> {
-        let ActivationEvidenceContent::Guidance { text } = self
+        let ActivationEvidenceContent::Guidance { text } = &self
             .content
             .resolve_activation_evidence(evidence)
             .map_err(error)?

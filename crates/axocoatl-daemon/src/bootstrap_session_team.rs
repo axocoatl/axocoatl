@@ -223,7 +223,7 @@ fn slot_tools(
     slot: &SessionTeamSlot,
     content: &ExecutionContentStore,
 ) -> Result<Vec<String>, DaemonError> {
-    let ActivationEvidenceContent::Definition { configuration, .. } = content
+    let ActivationEvidenceContent::Definition { configuration, .. } = &content
         .resolve_activation_evidence(&slot.definition.snapshot)
         .map_err(team_error)?
     else {
@@ -334,13 +334,13 @@ fn approval_for_slot(
     let Some(reference) = &slot.grant else {
         return Ok(None);
     };
-    let ActivationEvidenceContent::Grant { policy } = content
+    let ActivationEvidenceContent::Grant { policy } = &content
         .resolve_activation_evidence(reference)
         .map_err(team_error)?
     else {
         return Err(team_error("Session grant is unavailable"));
     };
-    let ActivationEvidenceContent::Guidance { text } = content
+    let ActivationEvidenceContent::Guidance { text } = &content
         .resolve_activation_evidence(&policy.issuer_evidence)
         .map_err(team_error)?
     else {
@@ -418,7 +418,7 @@ pub(crate) fn approved_coordinator_policy(
     content: &ExecutionContentStore,
     grant: &AuthorityGrant,
 ) -> Result<Option<ApprovedCoordinatorPolicy>, DaemonError> {
-    let ActivationEvidenceContent::Guidance { text } = content
+    let ActivationEvidenceContent::Guidance { text } = &content
         .resolve_activation_evidence(&grant.issuer_evidence)
         .map_err(team_error)?
     else {
@@ -451,7 +451,7 @@ fn review_profiles(
     let mut profiles = Vec::new();
     let mut toolless_slots = Vec::new();
     for slot in &graph.slots {
-        let ActivationEvidenceContent::Definition { profile, .. } = content
+        let ActivationEvidenceContent::Definition { profile, .. } = &content
             .resolve_activation_evidence(&slot.definition.snapshot)
             .map_err(team_error)?
         else {
@@ -464,7 +464,7 @@ fn review_profiles(
             .grant
             .as_ref()
             .ok_or_else(|| team_error("Reviewed grant is missing"))?;
-        let ActivationEvidenceContent::Grant { policy } = content
+        let ActivationEvidenceContent::Grant { policy } = &content
             .resolve_activation_evidence(reference)
             .map_err(team_error)?
         else {
@@ -562,21 +562,21 @@ fn slot_edit(
     slot: &SessionTeamSlot,
     content: &ExecutionContentStore,
 ) -> Result<SessionTeamSlotEdit, DaemonError> {
-    let ActivationEvidenceContent::Definition { configuration, .. } = content
+    let ActivationEvidenceContent::Definition { configuration, .. } = &content
         .resolve_activation_evidence(&slot.definition.snapshot)
         .map_err(team_error)?
     else {
         return Err(team_error("Session definition is unavailable"));
     };
     let config: AgentConfig = serde_json::from_str(configuration).map_err(team_error)?;
-    let ActivationEvidenceContent::Budget { limits } = content
+    let ActivationEvidenceContent::Budget { limits } = &content
         .resolve_activation_evidence(&slot.budget)
         .map_err(team_error)?
     else {
         return Err(team_error("Session budget is unavailable"));
     };
     let expires_at_ms = match &slot.grant {
-        Some(reference) => match content
+        Some(reference) => match &content
             .resolve_activation_evidence(reference)
             .map_err(team_error)?
         {
@@ -867,7 +867,7 @@ impl AxocoatlDaemon {
                 self.session_dispatch_lifecycles.with_session_team_stores(
                     token,
                     |_, content, _| {
-                        let ActivationEvidenceContent::Definition { configuration, .. } = content
+                        let ActivationEvidenceContent::Definition { configuration, .. } = &content
                             .resolve_activation_evidence(&prior.definition.snapshot)
                             .map_err(team_error)?
                         else {
@@ -992,7 +992,7 @@ impl AxocoatlDaemon {
                 };
                 let worker_writes = self.session_dispatch_lifecycles.with_session_team_stores(
                     token,
-                    |_, content, _| match content
+                    |_, content, _| match &content
                         .resolve_activation_evidence(&definition.snapshot)
                         .map_err(team_error)?
                     {
@@ -1151,13 +1151,7 @@ impl AxocoatlDaemon {
                     None,
                 )
                 .map_err(team_error)?;
-                for revision in 1..=store.configuration_revision().map_err(team_error)? {
-                    let Some(record) = store.get(revision).map_err(team_error)? else {
-                        return Err(team_error("Saved Session configuration is missing"));
-                    };
-                    if record.command_id != command_id {
-                        continue;
-                    }
+                if let Some(record) = store.find_command(&command_id).map_err(team_error)? {
                     let first = record
                         .graph
                         .slots
@@ -1242,8 +1236,7 @@ impl AxocoatlDaemon {
                     store
                         .get(edit.expected_configuration_revision)
                         .map_err(team_error)?
-                        .cloned()
-                        .map(Some)
+                        .map(|record| Some(record.as_ref().clone()))
                         .ok_or_else(|| {
                             team_error("Session configuration changed; refresh the team")
                         })
@@ -1350,7 +1343,7 @@ impl AxocoatlDaemon {
                 .map(|slot| {
                     self.session_dispatch_lifecycles.with_session_team_stores(
                         &token,
-                        |_, content, _| match content
+                        |_, content, _| match &content
                             .resolve_activation_evidence(&slot.definition.snapshot)
                             .map_err(team_error)?
                         {
@@ -1437,7 +1430,7 @@ impl AxocoatlDaemon {
             let (budget, grant) = self.session_dispatch_lifecycles.with_session_team_stores(
                 &token,
                 |_, content, _| {
-                    let profile = match content
+                    let profile = match &content
                         .resolve_activation_evidence(&definition.snapshot)
                         .map_err(team_error)?
                     {
@@ -1464,7 +1457,7 @@ impl AxocoatlDaemon {
                         .find(|(slot, _)| slot == &proposed.slot_id)
                     {
                         for worker in &approved.workers {
-                            let ActivationEvidenceContent::Definition { profile, .. } = content
+                            let ActivationEvidenceContent::Definition { profile, .. } = &content
                                 .resolve_activation_evidence(&worker.definition.snapshot)
                                 .map_err(team_error)?
                             else {

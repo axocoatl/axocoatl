@@ -315,10 +315,16 @@ async fn partial_promotion_failure_blocks_owner_and_reopen_finishes_recorded_hea
         .controller
         .close_and_promote(closing(&fixture.controller, TurnClosure::Completed))
         .is_err());
-    let bytes: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join("activation-state.json")).unwrap())
-            .unwrap();
-    assert!(bytes["pending"].is_object());
+    // The durable decision is the journal's last record; its completion is not.
+    let journal = std::fs::read(root.join("activation-state.active.jsonl")).unwrap();
+    let last: serde_json::Value = serde_json::from_slice(
+        journal
+            .split(|byte| *byte == b'\n')
+            .rfind(|line| !line.is_empty())
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(last["record"]["promotion_prepared"].is_object());
     let Fixture {
         _root,
         ownership,
@@ -453,7 +459,7 @@ async fn missing_older_promotion_cannot_move_a_newer_admitted_baseline() {
             .path()
             .parent()
             .unwrap()
-            .join("activation-state/activation-state.json");
+            .join("activation-state/activation-state.active.jsonl");
         let request = state.content.retain_request(next.request.clone()).unwrap();
         let session_id = state.canonical.owner().session_id.clone();
         state

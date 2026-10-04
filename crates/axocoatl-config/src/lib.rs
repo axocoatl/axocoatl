@@ -311,6 +311,24 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
             validate_writes(&agent.id, writes)?;
         }
 
+        if let Some(rounds) = agent
+            .max_tool_rounds
+            .filter(|rounds| !(1..=axocoatl_core::MAX_TOOL_ROUNDS).contains(rounds))
+        {
+            return Err(ConfigError::InvalidField {
+                field: format!("agents[{}].max_tool_rounds", agent.id),
+                value: rounds.to_string(),
+                reason: format!(
+                    "One activation runs from 1 to {} tool rounds",
+                    axocoatl_core::MAX_TOOL_ROUNDS
+                ),
+                suggestion: format!(
+                    "Set max_tool_rounds between 1 and {}, or remove it to let the grant's invocations set the limit",
+                    axocoatl_core::MAX_TOOL_ROUNDS
+                ),
+            });
+        }
+
         if !seen_ids.insert(agent.id.to_ascii_lowercase()) {
             return Err(ConfigError::DuplicateId {
                 field: "agents[].id".to_string(),
@@ -827,6 +845,45 @@ agents:
     }
 
     #[test]
+    fn parse_max_tool_rounds() {
+        let yaml = r#"
+agents:
+  - id: open
+    name: "Open"
+    provider: ollama
+    model: llama3
+  - id: capped
+    name: "Capped"
+    provider: ollama
+    model: llama3
+    max_tool_rounds: 300
+"#;
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        assert_eq!(config.agents[0].max_tool_rounds, None);
+        assert_eq!(config.agents[0].to_core().max_tool_rounds, None);
+        assert_eq!(config.agents[1].to_core().max_tool_rounds, Some(300));
+        // An Agent without the key writes back without it.
+        let written = serde_yaml::to_string(&config.agents[0]).unwrap();
+        assert!(!written.contains("max_tool_rounds"), "{written}");
+
+        for bad in [0, axocoatl_core::MAX_TOOL_ROUNDS + 1] {
+            let yaml = format!(
+                "agents:\n  - id: bad\n    name: Bad\n    provider: ollama\n    model: llama3\n    max_tool_rounds: {bad}\n"
+            );
+            let err = parse_config(&yaml, &PathBuf::from("test.yaml")).unwrap_err();
+            assert!(
+                matches!(err, ConfigError::InvalidField { ref field, .. } if field == "agents[bad].max_tool_rounds"),
+                "{bad}: {err:?}"
+            );
+        }
+        let yaml = format!(
+            "agents:\n  - id: most\n    name: Most\n    provider: ollama\n    model: llama3\n    max_tool_rounds: {}\n",
+            axocoatl_core::MAX_TOOL_ROUNDS
+        );
+        assert!(parse_config(&yaml, &PathBuf::from("test.yaml")).is_ok());
+    }
+
+    #[test]
     fn removed_activation_keys_still_parse_so_they_can_be_reported() {
         let yaml = r#"
 agents:
@@ -947,6 +1004,33 @@ workflows:
             config.workflows[0].htn_methods_file.as_deref(),
             Some("methods.yaml")
         );
+    }
+
+    #[test]
+    fn record_max_events_still_parses_and_is_reported_as_ignored() {
+        // It capped a Session's network record in 1.2.0; the record now
+        // keeps every event, so a file that sets it loads with a warning,
+        // even with a value 1.2.0 refused.
+        for network in ["egress", "bridge"] {
+            let yaml =
+                format!("sandbox:\n  network: {network}\n  egress:\n    record_max_events: 500\n");
+            let config = parse_config(&yaml, &PathBuf::from("test.yaml")).unwrap();
+            let egress = config.sandbox.egress.as_ref().unwrap();
+            assert_eq!(egress.record_max_events, Some(500));
+            let warnings: Vec<String> = network_warnings(&config)
+                .iter()
+                .filter(|warning| warning.field == "sandbox.egress.record_max_events")
+                .map(ToString::to_string)
+                .collect();
+            assert_eq!(
+                warnings,
+                [format!(
+                    "sandbox.egress.record_max_events: {}",
+                    egress::RECORD_MAX_EVENTS_WARNING
+                )],
+                "{network}"
+            );
+        }
     }
 
     #[test]
@@ -1829,7 +1913,7 @@ mcp_servers:
         let egress = config.sandbox.egress.as_ref().unwrap();
         assert_eq!(egress.allow.len(), 3);
         assert_eq!(egress.max_connections, 128);
-        assert_eq!(egress.record_max_events, 50_000);
+        assert_eq!(egress.record_max_events, None);
         assert_eq!(egress.sidecar_network.as_deref(), Some("axo-egress-test"));
         let searxng = config
             .web_search

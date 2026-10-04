@@ -58,7 +58,6 @@ impl SessionDispatchController {
         &self,
         after: Option<u64>,
         limit: usize,
-        limits: axocoatl_session::network_record::RecordLimits,
     ) -> Result<
         Option<(
             Vec<axocoatl_session::network_record::NetworkLine>,
@@ -67,7 +66,7 @@ impl SessionDispatchController {
     > {
         let state = self.lock()?;
         state.ready()?;
-        crate::session_network::read_existing(&state.canonical, after, limit, limits).map_err(error)
+        crate::session_network::read_existing(&state.canonical, after, limit).map_err(error)
     }
 
     /// Read one screenshot kept beside the Session's network record.
@@ -140,22 +139,10 @@ impl DispatchState {
                 .iter()
                 .any(|turn| turn == snapshot.turn_id().as_str()),
         );
-        let mut audited = Vec::new();
-        for record in self.audit.records().map_err(error)? {
-            if let axocoatl_session::invocation_audit::InvocationAuditCommand::Intent(command) =
-                &record.command
-            {
-                if &command.intent.activation.turn_id == snapshot.turn_id() {
-                    audited.push(
-                        self.audit
-                            .invocation(&command.intent.invocation_id)
-                            .map_err(error)?
-                            .ok_or_else(|| error("recorded invocation has no audit projection"))?
-                            .clone(),
-                    );
-                }
-            }
-        }
+        let audited = self
+            .audit
+            .turn_invocations(snapshot.turn_id())
+            .map_err(error)?;
         join_invocation_evidence(&mut view, snapshot, audited)?;
         view.commands = if current {
             crate::session_control_plane::EvidenceValue::Available {
@@ -203,7 +190,6 @@ fn join_web_sources(
     }
     match axocoatl_session::network_record::NetworkRecord::read_existing_matching(
         canonical,
-        axocoatl_session::network_record::RecordLimits::default(),
         "web",
         |event| crate::session_dispatch_web::is_web_event_for(event, &activations),
         crate::session_dispatch_web::projection_web_events_max(),

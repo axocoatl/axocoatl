@@ -106,14 +106,14 @@ impl DispatchState {
             .grant
             .as_ref()
             .ok_or_else(|| error("child has no grant"))?;
-        let ActivationEvidenceContent::Grant { policy } = self
+        let ActivationEvidenceContent::Grant { policy } = &self
             .content
             .resolve_activation_evidence(&grant.evidence)
             .map_err(error)?
         else {
             return Err(error("child grant is missing"));
         };
-        let ActivationEvidenceContent::Guidance { text } = self
+        let ActivationEvidenceContent::Guidance { text } = &self
             .content
             .resolve_activation_evidence(&policy.issuer_evidence)
             .map_err(error)?
@@ -228,7 +228,7 @@ impl DispatchState {
             .grant
             .as_ref()
             .ok_or_else(|| error("child grant is missing"))?;
-        let ActivationEvidenceContent::Grant { policy } = self
+        let ActivationEvidenceContent::Grant { policy } = &self
             .content
             .resolve_activation_evidence(&grant.evidence)
             .map_err(error)?
@@ -290,7 +290,7 @@ impl DispatchState {
             .grant
             .as_ref()
             .ok_or_else(|| error("child grant is missing"))?;
-        let ActivationEvidenceContent::Grant { policy } = self
+        let ActivationEvidenceContent::Grant { policy } = &self
             .content
             .resolve_activation_evidence(&grant.evidence)
             .map_err(error)?
@@ -459,7 +459,7 @@ impl SessionDispatchController {
                 profile,
                 configuration,
                 ..
-            } = state
+            } = &state
                 .content
                 .resolve_activation_evidence(&template.definition.snapshot)
                 .map_err(error)?
@@ -532,7 +532,7 @@ impl SessionDispatchController {
             .map_err(error)?
             .reference()
             .clone();
-        let ActivationEvidenceContent::Definition { profile, .. } = state
+        let ActivationEvidenceContent::Definition { profile, .. } = &state
             .content
             .resolve_activation_evidence(&worker.definition.snapshot)
             .map_err(error)?

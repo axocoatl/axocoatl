@@ -435,6 +435,9 @@ pub struct ProviderAllowance {
     pub tokens: Option<u64>,
     /// Monetary allowance left; every model call reserves `cost_microunits`.
     pub cost_microunits: Option<u64>,
+    /// Tool calls the host can still record for the caller, after those it
+    /// holds back for itself. A tool round needs at least one.
+    pub tool_calls: Option<u64>,
 }
 
 /// What a specific provider+model combination can do.

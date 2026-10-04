@@ -22,6 +22,17 @@ use axocoatl_tools::ToolExecutor;
 /// result each round is what exhausts a small local model's context.
 const KEPT_TOOL_ROUNDS: usize = 3;
 
+/// The most tool rounds one activation may run: the Agent template's
+/// `max_tool_rounds` when it sets one, and never more than its grant's
+/// invocations. Every round needs at least one model call, so by default the
+/// grant runs out before the rounds do. The actor also holds it to
+/// `axocoatl_core::MAX_TOOL_ROUNDS`.
+fn tool_round_limit(config: &AgentConfig, limits: &GrantLimits) -> u32 {
+    config
+        .max_tool_rounds
+        .map_or(limits.invocations, |rounds| rounds.min(limits.invocations))
+}
+
 /// The repository's instructions for its Agents, at the root of a checkout.
 const PROJECT_INSTRUCTIONS_FILE: &str = "AXOCOATL.md";
 
@@ -166,14 +177,14 @@ impl SessionDispatchController {
             Some(resource) => super::input::project_repository_input(
                 manifest,
                 snapshot.request_ref().unwrap(),
-                request,
+                &request,
                 &resolved,
                 resource,
             )?,
             None => super::input::project_text_input(
                 manifest,
                 snapshot.request_ref().unwrap(),
-                request,
+                &request,
                 &resolved,
             )?,
         };
@@ -312,7 +323,7 @@ impl SessionDispatchController {
         // A Coordinator template runs here as a lead like any other Agent: its
         // approved Worker templates are reachable only through `delegate`.
         let mut behavior = DefaultAgentBehavior::new(provider, counter)
-            .with_tool_round_limit(policy.limits.invocations)
+            .with_tool_round_limit(tool_round_limit(&config, &policy.limits))
             .with_tool_executor(tools)
             .with_executor_tool_allowlist(offered_tools)
             .with_activation_checkpoint_port(port.clone())
@@ -791,21 +802,6 @@ impl DispatchState {
         conversation: &NodeConversationId,
         unbound: Option<&ActivationRef>,
     ) -> Result<MeasuredTokenUsage> {
-        // Prepared generations can become Superseded without ever starting.
-        // The immutable journal, rather than a missing authority record or the
-        // latest state label, establishes whether dispatch was ever possible.
-        let started = self
-            .canonical
-            .records()
-            .map_err(error)?
-            .iter()
-            .filter_map(|record| match &record.event {
-                TurnContractEvent::StartActivation { input } => Some(&input.activation),
-                TurnContractEvent::StartPreparedActivation { activation } => Some(activation),
-                _ => None,
-            })
-            .map(|activation| ((&activation.turn_id, &activation.activation_id), activation))
-            .collect::<HashMap<_, _>>();
         let mut total = match self
             .memory
             .legacy_baseline_checkpoint(conversation)
@@ -817,12 +813,23 @@ impl DispatchState {
             },
             None => MeasuredTokenUsage::known(TokenUsageStats::default()),
         };
-        let mut turns = HashSet::new();
-        for record in self.canonical.records().map_err(error)? {
-            if !turns.insert(record.turn_id.clone()) {
-                continue;
-            }
-            let snapshot = self.canonical.snapshot(&record.turn_id).map_err(error)?;
+        // One turn at a time: a Session may hold any number of turns.
+        for turn_id in self.canonical.turn_ids().map_err(error)? {
+            // Prepared generations can become Superseded without ever
+            // starting. The immutable journal, rather than a missing authority
+            // record or the latest state label, establishes whether dispatch
+            // was ever possible.
+            let records = self.canonical.turn_records(turn_id).map_err(error)?;
+            let started = records
+                .iter()
+                .filter_map(|record| match &record.event {
+                    TurnContractEvent::StartActivation { input } => Some(&input.activation),
+                    TurnContractEvent::StartPreparedActivation { activation } => Some(activation),
+                    _ => None,
+                })
+                .map(|activation| ((&activation.turn_id, &activation.activation_id), activation))
+                .collect::<HashMap<_, _>>();
+            let snapshot = self.canonical.snapshot(turn_id).map_err(error)?;
             let activations = snapshot
                 .contract()
                 .activations()
@@ -839,7 +846,7 @@ impl DispatchState {
             if activations.is_empty() {
                 continue;
             }
-            if record.turn_id == self.turn_id {
+            if turn_id == &self.turn_id {
                 for activation in &activations {
                     merge_usage(
                         &mut total,
@@ -862,7 +869,7 @@ impl DispatchState {
                 let namespace = self
                     .canonical
                     .component_namespace(ExecutionComponent::ControlAuthority {
-                        turn_id: record.turn_id.clone(),
+                        turn_id: turn_id.clone(),
                     })
                     .map_err(error)?;
                 let usage = ControlAuthority::read_provider_usage_owned(namespace, &activations)
@@ -896,4 +903,27 @@ fn merge_usage(total: &mut MeasuredTokenUsage, next: MeasuredTokenUsage) -> Resu
     };
     total.complete &= next.complete;
     Ok(())
+}
+
+#[cfg(test)]
+mod round_limit_tests {
+    use super::*;
+
+    #[test]
+    fn the_grant_sets_the_round_limit_and_a_template_can_only_lower_it() {
+        let limits = GrantLimits {
+            activations: 16,
+            invocations: 400,
+            tokens: 2_000_000,
+            cost_microunits: 7_000_000,
+        };
+        let template = |rounds| AgentConfig {
+            max_tool_rounds: rounds,
+            ..Default::default()
+        };
+        // The benchmark lead's grant: 400 rounds, no longer capped at 128.
+        assert_eq!(tool_round_limit(&template(None), &limits), 400);
+        assert_eq!(tool_round_limit(&template(Some(50)), &limits), 50);
+        assert_eq!(tool_round_limit(&template(Some(1_000)), &limits), 400);
+    }
 }

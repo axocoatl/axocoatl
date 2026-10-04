@@ -46,6 +46,7 @@ agents:
 | `role` | `autonomous`, `coordinator`, or `worker` |
 | `activation_threshold`, `activation_decay` | Removed in 1.1.0. The daemon warns and ignores them; events never start Agents |
 | `sampling` | Optional request-generation controls for autonomous Agents, Coordinators, and declared Workers |
+| `max_tool_rounds` | The most tool rounds one activation of this Agent may run in a native Session, from 1 to 1,024. Omit it to let the Agent's grant set the limit: one round per invocation the grant allows, up to 1,024. See [How long an Agent may work](#how-long-an-agent-may-work) |
 | `memory` | Tier 1–4 tuning for autonomous Agents and declared Workers; a Coordinator itself uses Tier 1 plus orchestration checkpointing |
 
 A Coordinator must be the `entry_point` of exactly one workflow and must appear in that
@@ -161,6 +162,43 @@ with finite inference bounds. Axocoatl verifies the actual backend and
 model capabilities; an OpenAI-compatible endpoint is not itself an enforcement
 standard. Local API cost can be known zero while token usage remains incomplete.
 This does not promise a cap on an unrelated provider's bill.
+
+## How long an Agent may work
+
+An activation works in tool rounds: the model asks for tools, they run, and it reads
+their results. In a native Session the Agent's grant sets how many rounds one activation
+may run: one for each invocation the grant allows, up to 1,024. Every round spends at
+least one invocation, so the grant normally runs out first, and when what is left cannot
+pay for another round and an answer, the Agent is asked for its final answer without
+tools.
+
+Set `max_tool_rounds` on an Agent to stop its activations sooner, for example a helper
+that should look around briefly:
+
+```yaml
+agents:
+  - id: scout
+    name: Scout
+    provider: ollama
+    model: qwen2.5-coder:14b
+    tools: [read_file, list_dir, grep, glob]
+    writes: []
+    role: worker
+    max_tool_rounds: 40
+```
+
+An activation that reaches its limit while the model still asks for tools stops, and the
+calls it asked for do not run. Its failure says so, with the class `round_limit`, and the
+suggested next step is **Continue**, which runs the Agent again on the same request; files
+it changed stay changed.
+
+A Session keeps a record of every tool call and every repository capture the host makes,
+for the life of the Session, with no limit on how many. One turn has room for about 2,000
+tool calls: its record holds up to 4,096 steps and 8 MiB, and a tool call takes two steps,
+its start and its outcome; its budget record holds up to 4,096 claims, and a tool round
+takes two, the model call and the tool call. When
+a turn has no room for another tool call, each Agent is asked for its final answer
+without tools, as when its budget runs out; the next turn starts with fresh room.
 
 ## Limit which files an Agent may change
 

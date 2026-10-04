@@ -1864,7 +1864,7 @@ impl SessionSandbox {
             );
             // Under egress each approved command gets its own credential,
             // which ends when the command does. When none can be granted
-            // (the network record is full or unavailable), the command runs
+            // (the network record is unavailable), the command runs
             // without one and the proxy refuses its connections.
             let grant = match &self.egress {
                 Some(attachment) => {
@@ -2291,7 +2291,7 @@ impl SessionSandbox {
         );
         // Under egress the package manager reaches only the distribution
         // mirrors, with a credential that ends when provisioning does.
-        // Without a credential (the network record is full or unavailable)
+        // Without a credential (the network record is unavailable)
         // provisioning still runs, and the proxy refuses its downloads.
         let grant = match egress {
             Some(attachment) => match attachment
@@ -3618,7 +3618,7 @@ impl SessionSandbox {
         spec.liveness = Some(Arc::new(move || {
             observed.lock().map(|alive| *alive).unwrap_or(false)
         }));
-        // Without a credential (the network record is full or unavailable)
+        // Without a credential (the network record is unavailable)
         // the terminal still opens, and the proxy refuses its connections.
         let grant = match attachment.authority.grant(spec).await {
             Ok(grant) => Some(grant),

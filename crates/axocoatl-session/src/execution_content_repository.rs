@@ -174,7 +174,11 @@ impl ExecutionContentStore {
         if snapshot.contract().state() != Some(LogicalTurnState::Completed) {
             return Ok(None);
         }
-        for record in self.data.records.iter().rev() {
+        for record in self
+            .keyed(&segments::turn_repository_snapshot_key(snapshot.turn_id()))?
+            .iter()
+            .rev()
+        {
             let Body::RepositorySnapshot(observation) = &record.body else {
                 continue;
             };
@@ -231,7 +235,10 @@ impl ExecutionContentStore {
     ) -> Result<Vec<ActivationRepositorySnapshotView>, ExecutionContentError> {
         self.require_activation(snapshot, activation)?;
         let mut result = Vec::new();
-        for record in &self.data.records {
+        for record in self
+            .keyed(&segments::repository_snapshot_key(activation))?
+            .iter()
+        {
             let Body::RepositorySnapshot(observation) = &record.body else {
                 continue;
             };

@@ -527,11 +527,12 @@ impl DefaultAgentBehavior {
         self
     }
 
-    /// Bound native tool iteration by already-approved invocation capacity.
-    /// This does not authorize any invocation or replace host accounting. The
-    /// ceiling also bounds a misbehaving provider with an unusually large grant.
+    /// Bound native tool iteration by already-approved invocation capacity
+    /// or the Agent template's own limit. This does not authorize any
+    /// invocation or replace host accounting. `MAX_TOOL_ROUNDS` also bounds
+    /// a misbehaving provider with an unusually large grant.
     pub fn with_tool_round_limit(mut self, limit: u32) -> Self {
-        self.tool_round_limit = limit.clamp(1, 128) as usize;
+        self.tool_round_limit = limit.clamp(1, axocoatl_core::MAX_TOOL_ROUNDS) as usize;
         self
     }
 
@@ -1607,6 +1608,9 @@ impl DefaultAgentBehavior {
             return Some(format!(
                 "the Session budget allows only {left} more model or tool call(s)"
             ));
+        }
+        if allowance.tool_calls == Some(0) {
+            return Some("this turn can record no more tool calls".to_string());
         }
         let bounds = self.provider.execution_bounds(request)?;
         // The next call reserves more when its prompt grows: it adds this
@@ -3970,11 +3974,9 @@ impl AgentBehavior for DefaultAgentBehavior {
             } else {
                 pending.join(", ")
             };
-            return Err(AgentError::ToolFailed {
-                tool: "agent tool loop".to_string(),
-                reason: format!(
-                    "the model still requested tools after the safety limit of {tool_round_limit} rounds (pending: {pending}); those pending calls were not executed. Retry with a more capable model or narrow the task"
-                ),
+            return Err(AgentError::ToolRoundLimit {
+                limit: tool_round_limit,
+                pending,
             });
         }
 
@@ -8308,6 +8310,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_tool_round_limit_is_held_to_one_through_the_hard_bound() {
+        let limit = |rounds| {
+            DefaultAgentBehavior::new(Arc::new(MockLlm::new("x", 1, 1)), simple_counter())
+                .with_tool_round_limit(rounds)
+                .tool_round_limit
+        };
+        assert_eq!(limit(0), 1);
+        // A granted activation is no longer stopped at 128 rounds.
+        assert_eq!(limit(400), 400);
+        assert_eq!(limit(axocoatl_core::MAX_TOOL_ROUNDS), 1_024);
+        assert_eq!(limit(u32::MAX), 1_024);
+    }
+
     #[tokio::test]
     async fn terminal_tool_loop_rejects_pending_calls_after_safety_limit() {
         use crate::behavior::AgentStreamChunk;
@@ -8334,14 +8350,16 @@ mod tests {
             .await
             .unwrap_err();
 
-        let AgentError::ToolFailed { tool, reason } = error else {
+        let AgentError::ToolRoundLimit { limit, pending } = &error else {
             panic!("unexpected terminal error: {error}");
         };
-        assert_eq!(tool, "agent tool loop");
-        assert!(reason.contains("safety limit of 10 rounds"));
-        assert!(reason.contains("pending: always_fail"));
-        assert!(reason.contains("pending calls were not executed"));
-        assert!(reason.contains("Retry with a more capable model or narrow the task"));
+        assert_eq!(*limit, 10);
+        assert_eq!(pending, "always_fail");
+        let reason = error.to_string();
+        assert!(reason.starts_with(
+            "This Agent reached its tool-round limit for this activation (10 rounds)"
+        ));
+        assert!(reason.contains("still asked for always_fail; those calls did not run"));
         assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 11);
 
         let mut evidence = Vec::new();

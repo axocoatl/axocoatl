@@ -713,7 +713,7 @@ impl BrowserRunner for BrowserCallRunner {
         report: &BrowserReport,
     ) -> Result<Option<RecordedScreenshot>, String> {
         let session_id = self.context.session_id.as_str();
-        let mut dropped = report.screenshot_dropped.clone();
+        let dropped = report.screenshot_dropped.clone();
         let stored = match &report.screenshot {
             Some(shot) => match self
                 .service
@@ -722,10 +722,6 @@ impl BrowserRunner for BrowserCallRunner {
                 .await
             {
                 Ok(stored) => Some(stored),
-                Err(error) if error.is_full() => {
-                    dropped = Some("record_full".into());
-                    None
-                }
                 Err(error) => return Err(error.to_string()),
             },
             None => None,
@@ -940,7 +936,7 @@ pub(crate) mod tests {
             ports: None,
         })];
         let stores = crate::session_network::tests::Stores::new(&["ses-1"]);
-        let records = Arc::new(SessionNetworkRecords::new(stores, 50_000));
+        let records = Arc::new(SessionNetworkRecords::new(stores));
         let dir = SecureDir::open_or_create_all(root.join("service")).unwrap();
         Arc::new(BrowserService::new(
             resolved,
@@ -1034,7 +1030,7 @@ pub(crate) mod tests {
         use crate::session_egress::tests::{FakeRecord, FakeResolver};
         let root = tempfile::tempdir().unwrap();
         let stores = crate::session_network::tests::Stores::new(&["ses-1"]);
-        let records = Arc::new(SessionNetworkRecords::new(stores, 50_000));
+        let records = Arc::new(SessionNetworkRecords::new(stores));
         let service = service(root.path(), records, Vec::new());
         assert!(!service.declared_hosts());
         let docs = vec![EgressAllowYaml::Host(axocoatl_config::EgressHostYaml {
@@ -1138,7 +1134,7 @@ pub(crate) mod tests {
     async fn a_finished_call_is_recorded_with_its_screenshot() {
         let root = tempfile::tempdir().unwrap();
         let stores = crate::session_network::tests::Stores::new(&["ses-1"]);
-        let records = Arc::new(SessionNetworkRecords::new(stores, 50_000));
+        let records = Arc::new(SessionNetworkRecords::new(stores));
         let runner = BrowserCallRunner {
             service: service(root.path(), records.clone(), Vec::new()),
             context: context(None),
@@ -1233,7 +1229,7 @@ pub(crate) mod tests {
     async fn an_attempt_lane_is_refused_before_anything_starts_and_still_recorded() {
         let root = tempfile::tempdir().unwrap();
         let stores = crate::session_network::tests::Stores::new(&["ses-1"]);
-        let records = Arc::new(SessionNetworkRecords::new(stores, 50_000));
+        let records = Arc::new(SessionNetworkRecords::new(stores));
         let service = service(root.path(), records.clone(), Vec::new());
         let host = BrowserHostTool::browser(service.clone());
         assert_eq!(host.attempt_refusal().as_deref(), Some(ATTEMPT_REFUSAL));
@@ -1267,7 +1263,7 @@ pub(crate) mod tests {
     fn browser_check_is_not_for_read_only_agents() {
         let root = tempfile::tempdir().unwrap();
         let stores = crate::session_network::tests::Stores::new(&["ses-1"]);
-        let records = Arc::new(SessionNetworkRecords::new(stores, 50_000));
+        let records = Arc::new(SessionNetworkRecords::new(stores));
         let service = service(root.path(), records, Vec::new());
         let profile = |writes: Option<Vec<String>>| ExecutionProfile {
             definition: "qa-scout".into(),
@@ -1323,7 +1319,7 @@ pub(crate) mod tests {
         .unwrap();
         let checkout = SecureDir::open(&checkout_path).unwrap();
         let stores = crate::session_network::tests::Stores::new(&["ses-1"]);
-        let records = Arc::new(SessionNetworkRecords::new(stores, 50_000));
+        let records = Arc::new(SessionNetworkRecords::new(stores));
         let service = service(root.path(), records, vec![checkout_path.join("data")]);
         let files = service
             .check_files(checkout.clone(), "qa/a.spec.ts".into())
@@ -1409,7 +1405,7 @@ pub(crate) mod tests {
         .expect("the Session container starts");
 
         let stores = crate::session_network::tests::Stores::new(&[session_id.as_str()]);
-        let records = Arc::new(SessionNetworkRecords::new(stores, 50_000));
+        let records = Arc::new(SessionNetworkRecords::new(stores));
         let config = axocoatl_config::AxocoatlConfig {
             browser: Some(axocoatl_config::BrowserConfigYaml::default()),
             ..Default::default()

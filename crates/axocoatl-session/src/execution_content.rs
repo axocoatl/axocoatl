@@ -17,6 +17,7 @@
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::Arc;
 
 use axocoatl_core::{SecureDir, TokenUsageStats};
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,10 @@ pub use repository_snapshot::{
 #[path = "execution_content_reattachment.rs"]
 mod reattachment;
 pub use reattachment::{RepositoryReattachment, RepositoryReattachmentView};
+
+#[path = "execution_content_segments.rs"]
+mod segments;
+use segments::ContentRecords;
 
 const SCHEMA: u32 = 1;
 const FILE: &str = "execution-content.v1.json";
@@ -354,10 +359,25 @@ pub enum ExecutionContentError {
     OwnerMismatch,
     #[error("immutable execution content conflicts with retained evidence")]
     Conflict,
-    #[error("execution content admission would consume reserved settlement capacity")]
+    #[error("execution content exceeds its size bound or its reserved slots")]
     Capacity,
     #[error("execution content write is uncertain; reopen before further use")]
     RecoveryRequired,
+    #[error("execution content segments: {0}")]
+    Segment(String),
+}
+
+impl From<crate::segment_log::SegmentError> for ExecutionContentError {
+    fn from(error: crate::segment_log::SegmentError) -> Self {
+        use crate::segment_log::SegmentError;
+        match error {
+            SegmentError::Io(error) => Self::Io(error),
+            SegmentError::Json(error) => Self::Json(error),
+            SegmentError::RecoveryRequired => Self::RecoveryRequired,
+            SegmentError::RecordTooLarge => Self::Capacity,
+            error => Self::Segment(error.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -819,8 +839,8 @@ pub struct ExecutionActivationView {
 /// The step is a suggestion for a person; nothing runs by itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ActivationFailureView {
-    /// provider_incomplete | provider_error | budget_limited | context_limit |
-    /// scope_violation | capture_unavailable | admission | other
+    /// provider_incomplete | provider_error | budget_limited | round_limit |
+    /// context_limit | scope_violation | capture_unavailable | admission | other
     pub class: &'static str,
     pub explanation: String,
     /// continue | finish_partial | review_then_finish | inspect
@@ -871,6 +891,33 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
             "The Session budget for this Agent ran out before it answered.",
             "finish_partial",
         )
+    } else if let Some(rounds) = line
+        .strip_prefix("This Agent reached its tool-round limit for this activation (")
+        .and_then(|rest| rest.split_once(" rounds)"))
+        // 1.2.0 and earlier wrote it as a failure of the agent tool loop.
+        .or_else(|| {
+            line.strip_prefix(
+                "Tool call failed: agent tool loop - the model still requested tools after the \
+                 safety limit of ",
+            )
+            .and_then(|rest| rest.split_once(" rounds"))
+        })
+        .map(|(rounds, _)| rounds)
+        .filter(|rounds| {
+            !rounds.is_empty()
+                && rounds
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b',')
+        })
+    {
+        return Some(ActivationFailureView {
+            class: "round_limit",
+            explanation: format!(
+                "The Agent used all {rounds} tool rounds one activation may run and still asked \
+                 for more; those calls did not run. Its budget was not used up."
+            ),
+            next_step: "continue",
+        });
     } else if line.starts_with("Current request needs") {
         (
             "context_limit",
@@ -1012,6 +1059,12 @@ impl Storage {
             Self::Owned(dir) => dir.check_journal_creation(FILE),
         }
     }
+    fn dir(&self) -> io::Result<SecureDir> {
+        match self {
+            Self::Standalone(dir) => Ok(dir.clone()),
+            Self::Owned(dir) => dir.secure_dir(),
+        }
+    }
     fn mark_initialized(&self, identity: &DurableSessionIdentity) -> io::Result<()> {
         match self {
             Self::Standalone(dir) => mark_journal_initialized(
@@ -1025,6 +1078,8 @@ impl Storage {
     }
 }
 
+/// Bounds of the single-file layout written before segmentation, which such
+/// a journal still meets when it is read and migrated.
 #[derive(Clone, Copy)]
 struct Limits {
     bytes: usize,
@@ -1039,11 +1094,14 @@ impl Default for Limits {
     }
 }
 
+/// The Session's retained content. Records live in a segment log beside the
+/// head file, so a Session retains any amount of content over its life;
+/// memory holds the active segment, a key filter per sealed segment and a
+/// few decoded segments.
 pub struct ExecutionContentStore {
     storage: Storage,
     identity: DurableSessionIdentity,
-    data: Journal,
-    limits: Limits,
+    records: ContentRecords,
     poisoned: bool,
 }
 
@@ -1064,46 +1122,51 @@ impl ExecutionContentStore {
             "content requires directory locking",
         )
         .into());
-        Self::open_at(Storage::Standalone(dir), identity, Limits::default())
+        Self::open_at(Storage::Standalone(dir), identity)
     }
 
     pub fn open_owned(namespace: OwnedExecutionNamespace) -> Result<Self, ExecutionContentError> {
         namespace.require_root(&ExecutionComponent::ExecutionContent)?;
         let identity = namespace.identity().clone();
-        Self::open_at(Storage::Owned(namespace), identity, Limits::default())
+        Self::open_at(Storage::Owned(namespace), identity)
     }
 
     fn open_at(
         storage: Storage,
         identity: DurableSessionIdentity,
-        limits: Limits,
     ) -> Result<Self, ExecutionContentError> {
         storage.verify()?;
-        let data = match storage.read(limits.bytes) {
-            Ok(bytes) => serde_json::from_slice::<Journal>(&bytes)?,
+        let dir = storage.dir()?;
+        let head = match storage.read(Limits::default().bytes) {
+            Ok(bytes) => match segments::parse_stored(&bytes)? {
+                segments::StoredContent::Head(head) => head,
+                segments::StoredContent::Legacy(journal) => {
+                    validate_journal(&journal, &identity, Limits::default())?;
+                    segments::migrate(&storage, &dir, &identity, journal)?
+                }
+            },
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 storage.check_creation()?;
-                Journal {
-                    schema_version: SCHEMA,
-                    journal_id: identity.journal_id().into(),
-                    owner: identity.owner().clone(),
-                    records: vec![],
-                }
+                let head = segments::ContentHead::new(&identity);
+                // The marker first: losing the head must never look like a
+                // new store.
+                storage.mark_initialized(&identity)?;
+                ContentRecords::create(dir.clone(), &head)?;
+                storage.write(&serde_json::to_vec(&head)?)?;
+                head
             }
             Err(error) => return Err(error.into()),
         };
-        validate_journal(&data, &identity, limits)?;
-        let bytes = encode_bounded(&data, limits.bytes)?;
+        if head.journal_id != identity.journal_id() || &head.owner != identity.owner() {
+            return Err(ExecutionContentError::OwnerMismatch);
+        }
         storage.mark_initialized(&identity)?;
-        // Recovery must acknowledge the directory sync even if the previous
-        // process disappeared after rename but before acknowledging its write.
-        storage.write(&bytes)?;
+        let records = ContentRecords::open(dir, &identity, &head)?;
         storage.verify()?;
         Ok(Self {
             storage,
             identity,
-            data,
-            limits,
+            records,
             poisoned: false,
         })
     }
@@ -1129,12 +1192,11 @@ impl ExecutionContentStore {
     pub fn retained_request(
         &self,
         turn_id: &LogicalTurnId,
-    ) -> Result<Option<(DurableExecutionRequest, &ExecutionRequestContent)>, ExecutionContentError>
+    ) -> Result<Option<(DurableExecutionRequest, ExecutionRequestContent)>, ExecutionContentError>
     {
         self.healthy()?;
         Ok(self
-            .data
-            .records
+            .keyed(&segments::request_key(turn_id))?
             .iter()
             .find_map(|record| match &record.body {
                 Body::Request(content) if &content.turn_id == turn_id => Some((
@@ -1143,7 +1205,7 @@ impl ExecutionContentStore {
                         turn_id: turn_id.clone(),
                         reference: record.reference.clone(),
                     },
-                    content,
+                    content.clone(),
                 )),
                 _ => None,
             }))
@@ -1193,8 +1255,7 @@ impl ExecutionContentStore {
     ) -> Result<Vec<crate::ways_decision::WaysSelectedSessionTurn>, ExecutionContentError> {
         self.verify_canonical_owner(canonical)?;
         Ok(self
-            .data
-            .records
+            .keyed(segments::WAYS_SELECTION_KEY)?
             .iter()
             .filter_map(|record| match &record.body {
                 Body::WaysSelection { selection, .. } => Some(selection.clone()),
@@ -1211,8 +1272,7 @@ impl ExecutionContentStore {
     ) -> Result<Vec<ActivationRef>, ExecutionContentError> {
         self.verify_canonical_owner(canonical)?;
         Ok(self
-            .data
-            .records
+            .keyed(segments::WAYS_SELECTION_KEY)?
             .iter()
             .filter_map(|record| match &record.body {
                 Body::WaysSelection { activation, .. } => Some(activation.clone()),
@@ -1238,11 +1298,14 @@ impl ExecutionContentStore {
         definition: &RepositoryCheckDefinition,
     ) -> Result<Option<EvidenceRef>, ExecutionContentError> {
         self.healthy()?;
+        // A record's reference is the digest of its body.
+        let reference = content_reference(
+            &self.identity,
+            &Body::RepositoryCheckDefinition(definition.clone()),
+        )?;
         Ok(self
-            .data
-            .records
-            .iter()
-            .find_map(|record| match &record.body {
+            .record(&reference)?
+            .and_then(|record| match &record.body {
                 Body::RepositoryCheckDefinition(actual) if actual == definition => {
                     Some(record.reference.clone())
                 }
@@ -1265,10 +1328,10 @@ impl ExecutionContentStore {
     pub fn resolve_repository_check_definition(
         &self,
         reference: &EvidenceRef,
-    ) -> Result<&RepositoryCheckDefinition, ExecutionContentError> {
+    ) -> Result<RepositoryCheckDefinition, ExecutionContentError> {
         self.healthy()?;
-        match self.record(reference).map(|record| &record.body) {
-            Some(Body::RepositoryCheckDefinition(definition)) => Ok(definition),
+        match self.record(reference)?.as_ref().map(|record| &record.body) {
+            Some(Body::RepositoryCheckDefinition(definition)) => Ok(definition.clone()),
             _ => Err(ExecutionContentError::Invalid(
                 "missing or wrong role check definition",
             )),
@@ -1374,7 +1437,7 @@ impl ExecutionContentStore {
             &Arguments {
                 run,
                 definition_ref,
-                definition,
+                definition: &definition,
                 repository_ref,
                 inputs,
             },
@@ -1383,10 +1446,14 @@ impl ExecutionContentStore {
         let arguments: ConditionArguments = serde_json::from_slice(&encoded)?;
         // An acknowledged identical reservation remains available after a lost
         // caller acknowledgement. It neither creates another run nor a lease.
-        if let Some(record) = self.data.records.iter().find(|record| {
-            matches!(&record.body,
+        if let Some(record) = self
+            .keyed(&segments::run_key(&run.run_id))?
+            .iter()
+            .find(|record| {
+                matches!(&record.body,
             Body::ConditionArguments(old) if old.run.run_id == run.run_id)
-        }) {
+            })
+        {
             return match &record.body {
                 Body::ConditionArguments(old) if old == &arguments => {
                     self.condition_arguments_receipt(record.reference.clone(), old)
@@ -1421,7 +1488,7 @@ impl ExecutionContentStore {
         run_id: &ConditionRunId,
     ) -> Result<Option<DurableConditionArguments>, ExecutionContentError> {
         self.require_snapshot(snapshot)?;
-        for record in &self.data.records {
+        for record in self.keyed(&segments::run_key(run_id))?.iter() {
             if let Body::ConditionArguments(arguments) = &record.body {
                 if &arguments.run.run_id == run_id {
                     if &arguments.run.turn_id != snapshot.turn_id() {
@@ -1486,7 +1553,10 @@ impl ExecutionContentStore {
         arguments: &DurableConditionArguments,
     ) -> Result<Option<DurableConditionResult>, ExecutionContentError> {
         self.require_condition_arguments(arguments)?;
-        for record in &self.data.records {
+        for record in self
+            .keyed(&segments::reserved_key(arguments.reference()))?
+            .iter()
+        {
             if let Body::ConditionResult(result) = &record.body {
                 if &result.reservation_ref == arguments.reference() {
                     return self
@@ -1505,10 +1575,10 @@ impl ExecutionContentStore {
     pub fn resolve_activation_evidence(
         &self,
         reference: &EvidenceRef,
-    ) -> Result<&ActivationEvidenceContent, ExecutionContentError> {
+    ) -> Result<ActivationEvidenceContent, ExecutionContentError> {
         self.healthy()?;
-        match self.record(reference).map(|record| &record.body) {
-            Some(Body::ActivationEvidence(content)) => Ok(content),
+        match self.record(reference)?.as_ref().map(|record| &record.body) {
+            Some(Body::ActivationEvidence(content)) => Ok(content.clone()),
             _ => Err(ExecutionContentError::Invalid(
                 "missing or wrong role activation evidence",
             )),
@@ -1556,7 +1626,7 @@ impl ExecutionContentStore {
             return Err(ExecutionContentError::OwnerMismatch);
         }
         let definition = self.resolve_activation_evidence(&input.definition.snapshot)?;
-        if !matches!(definition, ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &input.definition.definition_id)
+        if !matches!(&definition, ActivationEvidenceContent::Definition { definition_id, .. } if definition_id == &input.definition.definition_id)
         {
             return Err(ExecutionContentError::Invalid(
                 "definition evidence identity mismatch",
@@ -1584,7 +1654,7 @@ impl ExecutionContentStore {
         };
         let mut guidance = Vec::with_capacity(input.guidance.len());
         for reference in &input.guidance {
-            match self.record(reference).map(|record| &record.body) {
+            match self.record(reference)?.as_ref().map(|record| &record.body) {
                 Some(Body::ActivationEvidence(ActivationEvidenceContent::Guidance { text })) => {
                     guidance.push(text.clone())
                 }
@@ -1630,18 +1700,12 @@ impl ExecutionContentStore {
         let parents = input
             .parents
             .iter()
-            .map(|parent| {
-                self.resolve_final_output(&parent.activation, &parent.output)
-                    .cloned()
-            })
+            .map(|parent| self.resolve_final_output(&parent.activation, &parent.output))
             .collect::<Result<Vec<_>, _>>()?;
         let revision_context = input
             .revision_context
             .as_ref()
-            .map(|context| {
-                self.resolve_final_output(&context.activation, &context.output)
-                    .cloned()
-            })
+            .map(|context| self.resolve_final_output(&context.activation, &context.output))
             .transpose()?;
         Ok(ResolvedActivationInput {
             definition: definition.clone(),
@@ -1659,12 +1723,12 @@ impl ExecutionContentStore {
         &self,
         activation: &ActivationRef,
         reference: &EvidenceRef,
-    ) -> Result<&ActivationOutputContent, ExecutionContentError> {
-        match self.record(reference).map(|record| &record.body) {
+    ) -> Result<ActivationOutputContent, ExecutionContentError> {
+        match self.record(reference)?.as_ref().map(|record| &record.body) {
             Some(Body::Output(content))
                 if &content.activation == activation && content.kind == OutputKind::Final =>
             {
-                Ok(content)
+                Ok(content.clone())
             }
             Some(Body::ReservedOutput(content))
                 if &content.output.activation == activation
@@ -1672,7 +1736,7 @@ impl ExecutionContentStore {
                     && content.output.kind == OutputKind::Final
                     && !content.is_truncated() =>
             {
-                Ok(&content.output)
+                Ok(content.output.clone())
             }
             _ => Err(ExecutionContentError::Invalid(
                 "missing or wrong producer final output evidence",
@@ -1725,8 +1789,7 @@ impl ExecutionContentStore {
     ) -> Result<Option<DurableActivationOutputReservation>, ExecutionContentError> {
         self.require_activation(snapshot, activation)?;
         Ok(self
-            .data
-            .records
+            .keyed(&segments::output_reservation_key(activation))?
             .iter()
             .find_map(|record| match &record.body {
                 Body::ActivationOutputReservation(body) if &body.activation == activation => {
@@ -1774,8 +1837,7 @@ impl ExecutionContentStore {
     ) -> Result<Option<DurableReservedExecutionOutput>, ExecutionContentError> {
         self.require_output_reservation(reservation)?;
         Ok(self
-            .data
-            .records
+            .keyed(&segments::reserved_key(&reservation.reference))?
             .iter()
             .find_map(|record| match &record.body {
                 Body::ReservedOutput(body)
@@ -1869,13 +1931,17 @@ impl ExecutionContentStore {
     pub fn legacy_history(
         &self,
         receipt: &DurableLegacyHistory,
-    ) -> Result<&LegacyHistoryFrontier, ExecutionContentError> {
+    ) -> Result<LegacyHistoryFrontier, ExecutionContentError> {
         self.require_identity(&receipt.identity)?;
-        match self.record(&receipt.reference).map(|record| &record.body) {
+        match self
+            .record(&receipt.reference)?
+            .as_ref()
+            .map(|record| &record.body)
+        {
             Some(Body::LegacyHistory(frontier))
                 if predecessor(frontier).as_ref() == receipt.last_predecessor() =>
             {
-                Ok(frontier)
+                Ok(frontier.clone())
             }
             _ => Err(ExecutionContentError::Conflict),
         }
@@ -1886,13 +1952,17 @@ impl ExecutionContentStore {
     pub fn read_legacy_history(
         &self,
         seal: &DurableLegacySeal,
-    ) -> Result<&LegacyHistoryFrontier, ExecutionContentError> {
+    ) -> Result<LegacyHistoryFrontier, ExecutionContentError> {
         self.require_identity(seal.identity())?;
-        match self.record(seal.reference()).map(|record| &record.body) {
+        match self
+            .record(seal.reference())?
+            .as_ref()
+            .map(|record| &record.body)
+        {
             Some(Body::LegacyHistory(frontier))
                 if predecessor(frontier).as_ref() == seal.last_predecessor() =>
             {
-                Ok(frontier)
+                Ok(frontier.clone())
             }
             _ => Err(ExecutionContentError::Conflict),
         }
@@ -1937,7 +2007,7 @@ impl ExecutionContentStore {
         invocation: &InvocationId,
     ) -> Result<Option<DurableToolArguments>, ExecutionContentError> {
         self.require_activation(snapshot, activation)?;
-        for record in &self.data.records {
+        for record in self.keyed(&segments::tool_key(invocation))?.iter() {
             if let Body::ToolReservation(body) = &record.body {
                 if &body.invocation_id == invocation {
                     if &body.activation != activation {
@@ -1989,8 +2059,7 @@ impl ExecutionContentStore {
     ) -> Result<Option<DurableToolResult>, ExecutionContentError> {
         self.require_arguments(arguments)?;
         Ok(self
-            .data
-            .records
+            .keyed(&segments::reserved_key(&arguments.protected.evidence_ref))?
             .iter()
             .find_map(|record| match &record.body {
                 Body::ToolResult(body)
@@ -2008,7 +2077,8 @@ impl ExecutionContentStore {
     ) -> Result<Vec<u8>, ExecutionContentError> {
         self.require_arguments(&receipt.arguments)?;
         match self
-            .record(&receipt.protected.evidence_ref)
+            .record(&receipt.protected.evidence_ref)?
+            .as_ref()
             .map(|record| &record.body)
         {
             Some(Body::ToolResult(body))
@@ -2032,7 +2102,7 @@ impl ExecutionContentStore {
         let contract = snapshot.contract();
         let request = match snapshot.request_ref() {
             None => ContentResolution::NotRecorded,
-            Some(reference) => match self.record(reference).map(|record| &record.body) {
+            Some(reference) => match self.record(reference)?.as_ref().map(|record| &record.body) {
                 None => ContentResolution::Missing {
                     reference: reference.clone(),
                 },
@@ -2050,36 +2120,37 @@ impl ExecutionContentStore {
         for activation in contract.activations() {
             let output = match &activation.output {
                 None => ContentResolution::NotRecorded,
-                Some(reference) => match self.record(reference).map(|record| &record.body) {
-                    None => ContentResolution::Missing {
-                        reference: reference.clone(),
-                    },
-                    Some(Body::Output(content))
-                        if content.activation == activation.activation
-                            && content.kind == OutputKind::Final =>
-                    {
-                        ContentResolution::Available {
+                Some(reference) => {
+                    match self.record(reference)?.as_ref().map(|record| &record.body) {
+                        None => ContentResolution::Missing {
                             reference: reference.clone(),
-                            content: content.clone(),
+                        },
+                        Some(Body::Output(content))
+                            if content.activation == activation.activation
+                                && content.kind == OutputKind::Final =>
+                        {
+                            ContentResolution::Available {
+                                reference: reference.clone(),
+                                content: content.clone(),
+                            }
                         }
-                    }
-                    Some(Body::ReservedOutput(content))
-                        if content.output.activation == activation.activation
-                            && content.slot == ActivationOutputSlot::Settlement
-                            && content.output.kind == OutputKind::Final
-                            && !content.is_truncated() =>
-                    {
-                        ContentResolution::Available {
-                            reference: reference.clone(),
-                            content: content.output.clone(),
+                        Some(Body::ReservedOutput(content))
+                            if content.output.activation == activation.activation
+                                && content.slot == ActivationOutputSlot::Settlement
+                                && content.output.kind == OutputKind::Final
+                                && !content.is_truncated() =>
+                        {
+                            ContentResolution::Available {
+                                reference: reference.clone(),
+                                content: content.output.clone(),
+                            }
                         }
+                        _ => return Err(ExecutionContentError::Conflict),
                     }
-                    _ => return Err(ExecutionContentError::Conflict),
-                },
+                }
             };
-            let reserved_outputs: Vec<ReservedActivationOutputView> = self
-                .data
-                .records
+            let records = self.keyed(&segments::activation_key(&activation.activation))?;
+            let reserved_outputs: Vec<ReservedActivationOutputView> = records
                 .iter()
                 .filter_map(|record| match &record.body {
                     Body::ReservedOutput(body)
@@ -2093,9 +2164,7 @@ impl ExecutionContentStore {
                     _ => None,
                 })
                 .collect();
-            let partial_outputs = self
-                .data
-                .records
+            let partial_outputs = records
                 .iter()
                 .filter_map(|record| match &record.body {
                     Body::Output(content)
@@ -2113,7 +2182,8 @@ impl ExecutionContentStore {
                 .filter(|item| item.activation == activation.activation)
                 .map(|amendment| {
                     let instruction = match self
-                        .record(&amendment.instruction)
+                        .record(&amendment.instruction)?
+                        .as_ref()
                         .map(|record| &record.body)
                     {
                         None => ContentResolution::Missing {
@@ -2137,7 +2207,8 @@ impl ExecutionContentStore {
             activations.push(ExecutionActivationView {
                 activation: activation.clone(),
                 definition_name: match self
-                    .record(&activation.input.definition.snapshot)
+                    .record(&activation.input.definition.snapshot)?
+                    .as_ref()
                     .map(|record| &record.body)
                 {
                     Some(Body::ActivationEvidence(ActivationEvidenceContent::Definition {
@@ -2187,8 +2258,7 @@ impl ExecutionContentStore {
             repository_reattachments: self.repository_reattachments(snapshot)?,
             superseded: false,
             kept_way: self
-                .data
-                .records
+                .keyed(&segments::ways_turn_key(snapshot.turn_id()))?
                 .iter()
                 .find_map(|record| match &record.body {
                     Body::WaysSelection {
@@ -2283,17 +2353,18 @@ impl ExecutionContentStore {
     fn require_arguments(
         &self,
         receipt: &DurableToolArguments,
-    ) -> Result<&ToolReservation, ExecutionContentError> {
+    ) -> Result<ToolReservation, ExecutionContentError> {
         self.require_identity(&receipt.identity)?;
         match self
-            .record(&receipt.protected.evidence_ref)
+            .record(&receipt.protected.evidence_ref)?
+            .as_ref()
             .map(|record| &record.body)
         {
             Some(Body::ToolReservation(body))
                 if self.arguments_receipt(receipt.protected.evidence_ref.clone(), body)
                     == *receipt =>
             {
-                Ok(body)
+                Ok(body.clone())
             }
             _ => Err(ExecutionContentError::Conflict),
         }
@@ -2317,14 +2388,18 @@ impl ExecutionContentStore {
     fn require_condition_arguments(
         &self,
         receipt: &DurableConditionArguments,
-    ) -> Result<&ConditionArguments, ExecutionContentError> {
+    ) -> Result<ConditionArguments, ExecutionContentError> {
         self.require_identity(&receipt.identity)?;
-        match self.record(receipt.reference()).map(|record| &record.body) {
+        match self
+            .record(receipt.reference())?
+            .as_ref()
+            .map(|record| &record.body)
+        {
             Some(Body::ConditionArguments(arguments))
                 if self.condition_arguments_receipt(receipt.reference().clone(), arguments)?
                     == *receipt =>
             {
-                Ok(arguments)
+                Ok(arguments.clone())
             }
             _ => Err(ExecutionContentError::Conflict),
         }
@@ -2349,13 +2424,17 @@ impl ExecutionContentStore {
     fn require_output_reservation(
         &self,
         receipt: &DurableActivationOutputReservation,
-    ) -> Result<&ActivationOutputReservation, ExecutionContentError> {
+    ) -> Result<ActivationOutputReservation, ExecutionContentError> {
         self.require_identity(&receipt.identity)?;
-        match self.record(&receipt.reference).map(|record| &record.body) {
+        match self
+            .record(&receipt.reference)?
+            .as_ref()
+            .map(|record| &record.body)
+        {
             Some(Body::ActivationOutputReservation(body))
                 if self.output_reservation_receipt(receipt.reference.clone(), body) == *receipt =>
             {
-                Ok(body)
+                Ok(body.clone())
             }
             _ => Err(ExecutionContentError::Conflict),
         }
@@ -2419,51 +2498,69 @@ impl ExecutionContentStore {
             recorded_at_unix_ms: body.recorded_at_unix_ms,
         }
     }
-    fn record(&self, reference: &EvidenceRef) -> Option<&Record> {
-        self.data
-            .records
-            .iter()
-            .find(|record| &record.reference == reference)
+    /// The record named `reference`, from any segment.
+    fn record(
+        &self,
+        reference: &EvidenceRef,
+    ) -> Result<Option<Arc<Record>>, ExecutionContentError> {
+        self.records.record(reference)
+    }
+
+    /// Records holding `key`, oldest first.
+    fn keyed(&self, key: &str) -> Result<Vec<Arc<Record>>, ExecutionContentError> {
+        self.records.keyed(key)
     }
 
     fn append(&mut self, body: Body) -> Result<EvidenceRef, ExecutionContentError> {
-        self.append_with(body, |storage, bytes| storage.write(bytes))
-    }
-    fn append_with(
-        &mut self,
-        body: Body,
-        write: impl FnOnce(&Storage, &[u8]) -> io::Result<()>,
-    ) -> Result<EvidenceRef, ExecutionContentError> {
         self.healthy()?;
         validate_body(&body, self.identity.owner())?;
         let reference = content_reference(&self.identity, &body)?;
-        if let Some(existing) = self.record(&reference) {
+        if let Some(existing) = self.record(&reference)? {
             return if existing.body == body {
                 Ok(reference)
             } else {
                 Err(ExecutionContentError::Conflict)
             };
         }
-        if self.data.records.len() >= self.limits.records {
-            return Err(ExecutionContentError::Capacity);
-        }
-        validate_next(&self.data.records, &body)?;
-        let mut next = self.data.clone();
-        next.records.push(Record {
+        let relevant = self.records.relevant(&segments::dependency_keys(&body))?;
+        validate_next(&relevant, &body)?;
+        let record = Record {
             reference: reference.clone(),
             body,
-        });
-        validate_capacity(&next, self.limits)?;
-        let bytes = encode_bounded(&next, self.limits.bytes)?;
-        if write(&self.storage, &bytes)
-            .and_then(|()| self.storage.verify())
-            .is_err()
-        {
+        };
+        match self.records.push(record) {
+            Ok(()) => {}
+            Err(ExecutionContentError::Capacity) => return Err(ExecutionContentError::Capacity),
+            Err(_) => {
+                self.poisoned = true;
+                return Err(ExecutionContentError::RecoveryRequired);
+            }
+        }
+        if self.storage.verify().is_err() {
             self.poisoned = true;
             return Err(ExecutionContentError::RecoveryRequired);
         }
-        self.data = next;
         Ok(reference)
+    }
+
+    /// Append `body` durably, then report the write as failed, as a lost
+    /// acknowledgement would.
+    #[cfg(test)]
+    fn append_losing_ack(&mut self, body: Body) -> Result<EvidenceRef, ExecutionContentError> {
+        self.records.lose_next_ack = true;
+        let result = self.append(body);
+        self.records.lose_next_ack = false;
+        result
+    }
+
+    /// How many records this journal holds over the Session's life.
+    pub fn record_count(&self) -> u64 {
+        self.records.len()
+    }
+
+    /// Sealed segments and the bytes of memory their key filters hold.
+    pub fn sealed_segments(&self) -> (usize, usize) {
+        self.records.sealed_segments()
     }
 }
 
@@ -3426,15 +3523,61 @@ mod tests {
             model: None,
         })
     }
-    fn store(
+    fn store(path: &Path, identity: DurableSessionIdentity) -> ExecutionContentStore {
+        open_store(path, identity).unwrap()
+    }
+    fn open_store(
         path: &Path,
         identity: DurableSessionIdentity,
-        limits: Limits,
-    ) -> ExecutionContentStore {
+    ) -> Result<ExecutionContentStore, ExecutionContentError> {
         let dir = SecureDir::open_existing_all(path).unwrap();
         dir.restrict_owner_only().unwrap();
         dir.try_lock_exclusive().unwrap();
-        ExecutionContentStore::open_at(Storage::Standalone(dir), identity, limits).unwrap()
+        ExecutionContentStore::open_at(Storage::Standalone(dir), identity)
+    }
+    /// Every file of the store, by path: equal before and after an operation
+    /// means it wrote nothing.
+    fn stored(path: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+        let mut files = Vec::new();
+        let mut pending = vec![path.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    let bytes = std::fs::read(&path).unwrap();
+                    files.push((path, bytes));
+                }
+            }
+        }
+        files.sort();
+        files
+    }
+    /// Every record, read back from every segment.
+    fn all_records(content: &ExecutionContentStore) -> Vec<Record> {
+        content
+            .records
+            .all()
+            .unwrap()
+            .iter()
+            .map(|record| record.as_ref().clone())
+            .collect()
+    }
+    /// The single-file journal the 1.1 releases wrote for these records.
+    fn legacy_journal(identity: &DurableSessionIdentity, records: Vec<Record>) -> Journal {
+        Journal {
+            schema_version: SCHEMA,
+            journal_id: identity.journal_id().into(),
+            owner: identity.owner().clone(),
+            records,
+        }
+    }
+    /// Replace the segmented store at `path` with a single-file journal.
+    fn write_legacy(path: &Path, journal: &Journal) {
+        let dir = SecureDir::open_existing_all(path).unwrap();
+        crate::segment_log::SegmentLog::remove(&dir, &segments::SPEC).unwrap();
+        std::fs::write(path.join(FILE), encode_bounded(journal, MAX_BYTES).unwrap()).unwrap();
     }
     fn reservation() -> ToolReservation {
         ToolReservation {
@@ -3564,7 +3707,7 @@ mod tests {
             let mut canonical = canonical(&root);
             let dir = tempfile::tempdir().unwrap();
             let identity = canonical.identity().unwrap();
-            let mut content = store(dir.path(), identity.clone(), Limits::default());
+            let mut content = store(dir.path(), identity.clone());
             let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
             let arguments = content
                 .reserve_condition_arguments(&snapshot, &run, &repository)
@@ -3601,7 +3744,7 @@ mod tests {
                 result
             );
             drop(content);
-            let content = store(dir.path(), identity, Limits::default());
+            let content = store(dir.path(), identity);
             let restored = content.condition_result(&arguments).unwrap().unwrap();
             assert_eq!(restored, result);
             assert_eq!(restored.supervision(), Some(&evidence));
@@ -3619,12 +3762,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
-        let mut content = store(dir.path(), canonical.identity().unwrap(), Limits::default());
+        let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let arguments = content
             .reserve_condition_arguments(&snapshot, &run, &repository)
             .unwrap();
-        let before = std::fs::read(dir.path().join(FILE)).unwrap();
+        let before = stored(dir.path());
         let base = condition_supervision(&run);
         let mut invalid = Vec::new();
         for (field, value) in [
@@ -3691,7 +3834,7 @@ mod tests {
                 .is_err());
         }
         assert!(content.condition_result(&arguments).unwrap().is_none());
-        assert_eq!(std::fs::read(dir.path().join(FILE)).unwrap(), before);
+        assert_eq!(stored(dir.path()), before);
     }
 
     #[test]
@@ -3700,7 +3843,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let mut canonical = canonical(&root);
             let dir = tempfile::tempdir().unwrap();
-            let mut content = store(dir.path(), canonical.identity().unwrap(), Limits::default());
+            let mut content = store(dir.path(), canonical.identity().unwrap());
             let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
             let arguments = content
                 .reserve_condition_arguments(&snapshot, &run, &repository)
@@ -3744,28 +3887,19 @@ mod tests {
     }
 
     #[test]
-    fn maximal_supervision_metadata_settles_reserved_capacity_and_reopens() {
+    fn maximal_supervision_metadata_settles_and_reopens() {
         let root = tempfile::tempdir().unwrap();
         let mut canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
         let identity = canonical.identity().unwrap();
-        let mut content = store(dir.path(), identity.clone(), Limits::default());
+        let mut content = store(dir.path(), identity.clone());
         let (snapshot, mut run, repository) = condition_fixture(&mut canonical, &mut content);
         run.run_id = ConditionRunId::new("r".repeat(128)).unwrap();
         let arguments = content
             .reserve_condition_arguments(&snapshot, &run, &repository)
             .unwrap();
-        let limits = Limits {
-            bytes: encode_bounded(&content.data, MAX_BYTES).unwrap().len() + RESULT_OVERHEAD + 24,
-            records: content.data.records.len() + 1,
-        };
-        content.limits = limits;
-        assert!(matches!(
-            content.append(request("unrelated", 0)),
-            Err(ExecutionContentError::Capacity)
-        ));
         drop(content);
-        let mut content = store(dir.path(), identity.clone(), limits);
+        let mut content = store(dir.path(), identity.clone());
         let mut evidence = condition_supervision(&run);
         evidence.runtime_identity = "\"".repeat(256);
         evidence.transport_identity = "\\".repeat(256);
@@ -3784,7 +3918,7 @@ mod tests {
             )
             .unwrap();
         drop(content);
-        let content = store(dir.path(), identity, limits);
+        let content = store(dir.path(), identity);
         assert_eq!(content.condition_result(&arguments).unwrap(), Some(result));
     }
 
@@ -3794,7 +3928,7 @@ mod tests {
         let mut canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
         let identity = canonical.identity().unwrap();
-        let mut content = store(dir.path(), identity.clone(), Limits::default());
+        let mut content = store(dir.path(), identity.clone());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let arguments = content
             .reserve_condition_arguments(&snapshot, &run, &repository)
@@ -3809,7 +3943,7 @@ mod tests {
                 Some(condition_supervision(&run)),
             )
             .unwrap();
-        let mut data = content.data.clone();
+        let mut data = legacy_journal(&identity, all_records(&content));
         let record = data
             .records
             .iter_mut()
@@ -3821,24 +3955,17 @@ mod tests {
         result.supervision.as_mut().unwrap().invocation_id = "another-run".into();
         record.reference = content_reference(&identity, &record.body).unwrap();
         drop(content);
-        std::fs::write(
-            dir.path().join(FILE),
-            encode_bounded(&data, MAX_BYTES).unwrap(),
-        )
-        .unwrap();
-        let storage = SecureDir::open_existing_all(dir.path()).unwrap();
-        storage.restrict_owner_only().unwrap();
-        storage.try_lock_exclusive().unwrap();
+        // A single-file journal is checked record by record against its
+        // history before it is migrated, and nothing is converted.
+        write_legacy(dir.path(), &data);
+        let before = stored(dir.path());
         assert!(matches!(
-            ExecutionContentStore::open_at(
-                Storage::Standalone(storage),
-                identity,
-                Limits::default()
-            ),
+            open_store(dir.path(), identity),
             Err(ExecutionContentError::Invalid(
                 "supervised result belongs to another condition run"
             ))
         ));
+        assert_eq!(stored(dir.path()), before);
     }
 
     #[test]
@@ -3846,7 +3973,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
-        let mut content = store(dir.path(), canonical.identity().unwrap(), Limits::default());
+        let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let canonical_before = std::fs::read(canonical.path()).unwrap();
         let receipt = content
@@ -3871,14 +3998,14 @@ mod tests {
         assert!(content.condition_result(&receipt).unwrap().is_none());
         assert!(snapshot.contract().condition_runs().is_empty());
         assert_eq!(std::fs::read(canonical.path()).unwrap(), canonical_before);
-        let before = std::fs::read(dir.path().join(FILE)).unwrap();
+        let before = stored(dir.path());
         assert_eq!(
             content
                 .reserve_condition_arguments(&snapshot, &run, &repository)
                 .unwrap(),
             receipt
         );
-        assert_eq!(std::fs::read(dir.path().join(FILE)).unwrap(), before);
+        assert_eq!(stored(dir.path()), before);
         assert_eq!(
             content.condition_arguments(&snapshot, &run.run_id).unwrap(),
             Some(receipt)
@@ -3890,9 +4017,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
-        let mut content = store(dir.path(), canonical.identity().unwrap(), Limits::default());
+        let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
-        let before = std::fs::read(dir.path().join(FILE)).unwrap();
+        let before = stored(dir.path());
         let missing = EvidenceRef::new("missing-repository").unwrap();
         assert!(content
             .reserve_condition_arguments(&snapshot, &run, &missing)
@@ -3927,40 +4054,29 @@ mod tests {
         let other_root = tempfile::tempdir().unwrap();
         let other = self::canonical(&other_root);
         let other_dir = tempfile::tempdir().unwrap();
-        let mut other_content = store(
-            other_dir.path(),
-            other.identity().unwrap(),
-            Limits::default(),
-        );
+        let mut other_content = store(other_dir.path(), other.identity().unwrap());
         assert!(matches!(
             other_content.reserve_condition_arguments(&snapshot, &run, &repository),
             Err(ExecutionContentError::OwnerMismatch)
         ));
         // Even an internally retained canonical reference cannot replace the
         // physical output body required by a check reservation.
-        let removed = content
-            .data
-            .records
-            .iter()
-            .position(|record| matches!(record.body, Body::Output(_)))
-            .unwrap();
-        let output = content.data.records.remove(removed);
+        let output = all_records(&content)
+            .into_iter()
+            .find(|record| matches!(record.body, Body::Output(_)))
+            .unwrap()
+            .reference;
+        content.records.hidden.insert(output.clone());
         assert!(content
             .reserve_condition_arguments(&snapshot, &run, &repository)
             .is_err());
-        content.data.records.insert(removed, output);
-        let index = content
-            .data
-            .records
-            .iter()
-            .position(|record| record.reference == definition)
-            .unwrap();
-        let definition_record = content.data.records.remove(index);
+        content.records.hidden.remove(&output);
+        content.records.hidden.insert(definition.clone());
         assert!(content
             .reserve_condition_arguments(&snapshot, &run, &repository)
             .is_err());
-        content.data.records.insert(index, definition_record);
-        assert_eq!(std::fs::read(dir.path().join(FILE)).unwrap(), before);
+        content.records.hidden.remove(&definition);
+        assert_eq!(stored(dir.path()), before);
     }
 
     #[test]
@@ -3969,7 +4085,7 @@ mod tests {
         let mut canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
         let identity = canonical.identity().unwrap();
-        let mut content = store(dir.path(), identity.clone(), Limits::default());
+        let mut content = store(dir.path(), identity.clone());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let receipt = content
             .reserve_condition_arguments(&snapshot, &run, &repository)
@@ -4040,7 +4156,7 @@ mod tests {
             Err(ExecutionContentError::Conflict)
         ));
         drop(content);
-        let content = store(dir.path(), identity, Limits::default());
+        let content = store(dir.path(), identity);
         assert_eq!(content.condition_result(&receipt).unwrap(), Some(result));
         let closed = canonical.snapshot(&run.turn_id).unwrap();
         assert_eq!(
@@ -4056,7 +4172,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
-        let mut content = store(dir.path(), canonical.identity().unwrap(), Limits::default());
+        let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let arguments = content
             .reserve_condition_arguments(&snapshot, &run, &repository)
@@ -4084,7 +4200,7 @@ mod tests {
         );
         let mut second = run.clone();
         second.run_id = ConditionRunId::new("check-run-b").unwrap();
-        let before = std::fs::read(dir.path().join(FILE)).unwrap();
+        let before = stored(dir.path());
         assert!(content
             .reserve_condition_arguments(&pending, &second, &repository)
             .is_err());
@@ -4117,7 +4233,7 @@ mod tests {
             .reserve_condition_arguments(&observed, &second, &repository)
             .is_err());
         assert!(content.condition_result(&arguments).unwrap().is_none());
-        assert_eq!(std::fs::read(dir.path().join(FILE)).unwrap(), before);
+        assert_eq!(stored(dir.path()), before);
     }
 
     #[test]
@@ -4125,7 +4241,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
-        let mut content = store(dir.path(), canonical.identity().unwrap(), Limits::default());
+        let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let receipt = content
             .reserve_condition_arguments(&snapshot, &run, &repository)
@@ -4133,11 +4249,7 @@ mod tests {
         let other_root = tempfile::tempdir().unwrap();
         let other = self::canonical(&other_root);
         let other_dir = tempfile::tempdir().unwrap();
-        let mut other_content = store(
-            other_dir.path(),
-            other.identity().unwrap(),
-            Limits::default(),
-        );
+        let mut other_content = store(other_dir.path(), other.identity().unwrap());
         assert!(matches!(
             other_content.record_condition_result(
                 &receipt,
@@ -4148,7 +4260,7 @@ mod tests {
             ),
             Err(ExecutionContentError::OwnerMismatch)
         ));
-        let before = std::fs::read(dir.path().join(FILE)).unwrap();
+        let before = stored(dir.path());
         assert!(content
             .record_condition_result(
                 &receipt,
@@ -4179,33 +4291,28 @@ mod tests {
                 1
             )
             .is_err());
-        assert_eq!(std::fs::read(dir.path().join(FILE)).unwrap(), before);
+        assert_eq!(stored(dir.path()), before);
     }
 
     #[test]
-    fn condition_settlement_bytes_and_slot_survive_capacity_pressure_and_reopen() {
+    fn condition_settlement_bytes_and_slot_survive_unrelated_history_and_reopen() {
         let root = tempfile::tempdir().unwrap();
         let mut canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
         let identity = canonical.identity().unwrap();
-        let mut content = store(dir.path(), identity.clone(), Limits::default());
+        let mut content = store(dir.path(), identity.clone());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let receipt = content
             .reserve_condition_arguments(&snapshot, &run, &repository)
             .unwrap();
-        let limits = Limits {
-            bytes: encode_bounded(&content.data, MAX_BYTES).unwrap().len() + RESULT_OVERHEAD + 24,
-            records: content.data.records.len() + 1,
-        };
-        content.limits = limits;
-        let before = std::fs::read(dir.path().join(FILE)).unwrap();
-        assert!(matches!(
-            content.append(request("unrelated", 0)),
-            Err(ExecutionContentError::Capacity)
-        ));
-        assert_eq!(std::fs::read(dir.path().join(FILE)).unwrap(), before);
+        // Unrelated history seals the reservation into an older segment.
+        for index in 0..20 {
+            content
+                .append(request(&format!("unrelated-{index}"), 0))
+                .unwrap();
+        }
         drop(content);
-        let mut content = store(dir.path(), identity.clone(), limits);
+        let mut content = store(dir.path(), identity.clone());
         let result = content
             .record_condition_result(
                 &receipt,
@@ -4219,7 +4326,8 @@ mod tests {
             .unwrap();
         assert!(content.condition_result(&receipt).unwrap().is_some());
         drop(content);
-        let content = store(dir.path(), identity, limits);
+        let content = store(dir.path(), identity);
+        assert!(content.sealed_segments().0 >= 2);
         assert_eq!(content.condition_result(&receipt).unwrap(), Some(result));
     }
 
@@ -4228,14 +4336,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
-        let mut content = store(dir.path(), canonical.identity().unwrap(), Limits::default());
+        let mut content = store(dir.path(), canonical.identity().unwrap());
         let valid = RepositoryCheckDefinition {
             argv: vec!["check".into()],
             timeout_ms: 1,
             stdout_bytes: 1,
             stderr_bytes: 0,
         };
-        let before = std::fs::read(dir.path().join(FILE)).unwrap();
+        let before = stored(dir.path());
         let mut variants = Vec::new();
         let mut value = valid.clone();
         value.argv.clear();
@@ -4255,7 +4363,7 @@ mod tests {
         for value in variants {
             assert!(content.retain_repository_check_definition(value).is_err());
         }
-        assert_eq!(std::fs::read(dir.path().join(FILE)).unwrap(), before);
+        assert_eq!(stored(dir.path()), before);
         assert!(ConditionOutputCapture::new(MAX_TOOL_BYTES + 1).is_err());
         assert!(ConditionOutputEvidence::from_observed_transport(
             b"text",
@@ -4280,7 +4388,7 @@ mod tests {
         let mut canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
         let identity = canonical.identity().unwrap();
-        let mut content = store(dir.path(), identity.clone(), Limits::default());
+        let mut content = store(dir.path(), identity.clone());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let receipt = content
             .reserve_condition_arguments(&snapshot, &run, &repository)
@@ -4288,13 +4396,7 @@ mod tests {
         let mut arguments = receipt.arguments.clone();
         arguments.run.run_id = ConditionRunId::new("lost-reservation-ack").unwrap();
         assert!(matches!(
-            content.append_with(
-                Body::ConditionArguments(arguments.clone()),
-                |storage, bytes| {
-                    storage.write(bytes)?;
-                    Err(io::Error::other("lost reservation acknowledgement"))
-                }
-            ),
+            content.append_losing_ack(Body::ConditionArguments(arguments.clone())),
             Err(ExecutionContentError::RecoveryRequired)
         ));
         assert!(matches!(
@@ -4302,7 +4404,7 @@ mod tests {
             Err(ExecutionContentError::RecoveryRequired)
         ));
         drop(content);
-        let mut content = store(dir.path(), identity.clone(), Limits::default());
+        let mut content = store(dir.path(), identity.clone());
         let receipt = content
             .condition_arguments(&snapshot, &arguments.run.run_id)
             .unwrap()
@@ -4317,10 +4419,7 @@ mod tests {
             recorded_at_unix_ms: 100,
         };
         assert!(matches!(
-            content.append_with(Body::ConditionResult(result.clone()), |storage, bytes| {
-                storage.write(bytes)?;
-                Err(io::Error::other("lost result acknowledgement"))
-            }),
+            content.append_losing_ack(Body::ConditionResult(result.clone())),
             Err(ExecutionContentError::RecoveryRequired)
         ));
         assert!(matches!(
@@ -4328,7 +4427,7 @@ mod tests {
             Err(ExecutionContentError::RecoveryRequired)
         ));
         drop(content);
-        let content = store(dir.path(), identity, Limits::default());
+        let content = store(dir.path(), identity);
         assert_eq!(
             content.condition_result(&receipt).unwrap().unwrap().result,
             result
@@ -4516,12 +4615,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
-        let mut content = store(dir.path(), canonical.identity().unwrap(), Limits::default());
+        let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, start) = proposed_input_fixture(&mut canonical, &mut content);
         let TurnContractEvent::StartActivation { input } = &start.event else {
             panic!("start")
         };
-        let before_content = std::fs::read(dir.path().join(FILE)).unwrap();
+        let before_content = stored(dir.path());
         let before_canonical = std::fs::read(canonical.path()).unwrap();
         let resolved = content.validate_proposed_input(&snapshot, input).unwrap();
         assert_eq!(resolved.guidance, vec!["b".repeat(8)]);
@@ -4539,10 +4638,7 @@ mod tests {
             .contract()
             .activations()
             .is_empty());
-        assert_eq!(
-            std::fs::read(dir.path().join(FILE)).unwrap(),
-            before_content
-        );
+        assert_eq!(stored(dir.path()), before_content);
         assert_eq!(std::fs::read(canonical.path()).unwrap(), before_canonical);
         canonical.append(start.clone()).unwrap();
         let admitted = canonical.snapshot(snapshot.turn_id()).unwrap();
@@ -4560,10 +4656,7 @@ mod tests {
             content.validate_input(&admitted, &changed),
             Err(ExecutionContentError::Conflict)
         ));
-        assert_eq!(
-            std::fs::read(dir.path().join(FILE)).unwrap(),
-            before_content
-        );
+        assert_eq!(stored(dir.path()), before_content);
     }
 
     #[test]
@@ -4571,12 +4664,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
-        let mut content = store(dir.path(), canonical.identity().unwrap(), Limits::default());
+        let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, start) = proposed_input_fixture(&mut canonical, &mut content);
         let TurnContractEvent::StartActivation { input } = &start.event else {
             panic!("start")
         };
-        let before_content = std::fs::read(dir.path().join(FILE)).unwrap();
+        let before_content = stored(dir.path());
         let before_canonical = std::fs::read(canonical.path()).unwrap();
         for case in [
             "definition",
@@ -4614,11 +4707,7 @@ mod tests {
                 ),
                 "{case}"
             );
-            assert_eq!(
-                std::fs::read(dir.path().join(FILE)).unwrap(),
-                before_content,
-                "{case}"
-            );
+            assert_eq!(stored(dir.path()), before_content, "{case}");
             assert_eq!(
                 std::fs::read(canonical.path()).unwrap(),
                 before_canonical,
@@ -4632,11 +4721,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut canonical_store = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
-        let mut content = store(
-            dir.path(),
-            canonical_store.identity().unwrap(),
-            Limits::default(),
-        );
+        let mut content = store(dir.path(), canonical_store.identity().unwrap());
         let (snapshot, start) = proposed_input_fixture(&mut canonical_store, &mut content);
         let TurnContractEvent::StartActivation { input } = &start.event else {
             panic!("start")
@@ -4656,11 +4741,7 @@ mod tests {
         let foreign_root = tempfile::tempdir().unwrap();
         let mut foreign_canonical = canonical(&foreign_root);
         let foreign_dir = tempfile::tempdir().unwrap();
-        let mut foreign_content = store(
-            foreign_dir.path(),
-            foreign_canonical.identity().unwrap(),
-            Limits::default(),
-        );
+        let mut foreign_content = store(foreign_dir.path(), foreign_canonical.identity().unwrap());
         let (foreign_snapshot, _) =
             proposed_input_fixture(&mut foreign_canonical, &mut foreign_content);
         // Session and turn names match, but the retained journal owner does not.
@@ -4680,12 +4761,12 @@ mod tests {
         let other = content.retain_request(other_request).unwrap();
         let mut wrong_request = input.clone();
         wrong_request.guidance = vec![other.reference().clone()];
-        let bytes = std::fs::read(dir.path().join(FILE)).unwrap();
+        let bytes = stored(dir.path());
         assert!(matches!(
             content.validate_proposed_input(&snapshot, &wrong_request),
             Err(ExecutionContentError::Invalid(_))
         ));
-        assert_eq!(std::fs::read(dir.path().join(FILE)).unwrap(), bytes);
+        assert_eq!(stored(dir.path()), bytes);
     }
 
     #[test]
@@ -4694,10 +4775,6 @@ mod tests {
         let canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
         let identity = canonical.identity().unwrap();
-        let limits = Limits {
-            bytes: 64 * 1024,
-            records: 100,
-        };
         // A check result as the removed standing-work inbox recorded it.
         let recorded = |activation: &ActivationRef| -> Body {
             serde_json::from_value(serde_json::json!({
@@ -4716,7 +4793,7 @@ mod tests {
             .unwrap()
         };
         let activation = reservation().activation;
-        let mut content = store(dir.path(), identity.clone(), limits);
+        let mut content = store(dir.path(), identity.clone());
         content.append(recorded(&activation)).unwrap();
         content.append(request("turn-after", 16)).unwrap();
         let mut foreign = activation.clone();
@@ -4726,77 +4803,212 @@ mod tests {
             Err(ExecutionContentError::OwnerMismatch)
         ));
         drop(content);
-        let content = store(dir.path(), identity, limits);
-        assert!(content
-            .data
-            .records
+        let content = store(dir.path(), identity.clone());
+        let records = all_records(&content);
+        assert!(records
             .iter()
             .any(|record| matches!(&record.body, Body::StandingRepositoryCheck(check) if check.activation == activation)));
-        assert!(content
-            .data
-            .records
+        assert!(records
             .iter()
             .any(|record| matches!(&record.body, Body::Request(request) if request.turn_id.as_str() == "turn-after")));
+        // It migrates from the single-file layout too.
+        drop(content);
+        write_legacy(dir.path(), &legacy_journal(&identity, records.clone()));
+        let content = store(dir.path(), identity);
+        assert_eq!(all_records(&content), records);
     }
 
     #[test]
-    fn admission_fills_available_bytes_but_reserved_result_still_settles_and_reopens() {
+    fn a_single_file_journal_migrates_once_across_segments_and_an_interrupted_move_is_redone() {
         let root = tempfile::tempdir().unwrap();
         let canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
         let identity = canonical.identity().unwrap();
-        let limits = Limits {
-            bytes: 24 * 1024,
-            records: 100,
-        };
-        let mut content = store(dir.path(), identity.clone(), limits);
+        let mut content = store(dir.path(), identity.clone());
         let reservation = reservation();
         let reference = content
             .append(Body::ToolReservation(reservation.clone()))
             .unwrap();
         let receipt = content.arguments_receipt(reference, &reservation);
-        let mut admitted = 0;
-        for index in 0..100 {
-            match content.append(request(&format!("turn-{index}"), 800)) {
-                Ok(_) => admitted += 1,
-                Err(ExecutionContentError::Capacity) => break,
-                Err(error) => panic!("unexpected admission error: {error}"),
-            }
+        for index in 0..3 * segments::SPEC.segment_records + 2 {
+            content
+                .append(request(&format!("turn-{index}"), 8))
+                .unwrap();
         }
-        assert!(admitted > 0 && admitted < 100);
+        let records = all_records(&content);
+        drop(content);
+        let journal = legacy_journal(&identity, records.clone());
+        write_legacy(dir.path(), &journal);
+
+        // A crash during an earlier move left part of a log behind.
+        let partial = tempfile::tempdir().unwrap();
+        let mut leftover = store(partial.path(), identity.clone());
+        for index in 0..segments::SPEC.segment_records + 1 {
+            leftover
+                .append(request(&format!("leftover-{index}"), 8))
+                .unwrap();
+        }
+        drop(leftover);
+        std::fs::rename(partial.path().join("segments"), dir.path().join("segments")).unwrap();
+        std::fs::copy(
+            partial.path().join(segments::SPEC.active_name()),
+            dir.path().join(segments::SPEC.active_name()),
+        )
+        .unwrap();
+
+        let mut content = store(dir.path(), identity.clone());
+        assert_eq!(all_records(&content), records);
+        assert_eq!(content.sealed_segments().0, 3);
+        let head = std::fs::read(dir.path().join(FILE)).unwrap();
+        assert!(matches!(
+            segments::parse_stored(&head).unwrap(),
+            segments::StoredContent::Head(_)
+        ));
+        // An older release reads the head as a journal and refuses it.
+        assert!(serde_json::from_slice::<Journal>(&head).is_err());
+        // The reservation made before the move still settles.
+        let result = content
+            .record_tool_result(&receipt, InvocationOutcome::Succeeded, b"done", 101)
+            .unwrap();
+        drop(content);
+        let before = stored(dir.path());
+        let content = store(dir.path(), identity);
+        assert_eq!(stored(dir.path()), before);
+        assert_eq!(content.tool_result(&receipt).unwrap(), Some(result));
+        assert_eq!(content.record_count(), records.len() as u64 + 1);
+    }
+
+    #[test]
+    fn torn_tail_and_interrupted_seal_recover_through_the_store() {
+        use std::io::Write;
+        let root = tempfile::tempdir().unwrap();
+        let canonical = canonical(&root);
+        let dir = tempfile::tempdir().unwrap();
+        let identity = canonical.identity().unwrap();
+        let mut content = store(dir.path(), identity.clone());
+        let per = segments::SPEC.segment_records;
+        for index in 0..per {
+            content
+                .append(request(&format!("turn-{index}"), 4))
+                .unwrap();
+        }
+        assert_eq!(content.sealed_segments().0, 1);
+        drop(content);
+        // The crash came after the sealed copy was published and before the
+        // new active segment replaced the old one.
+        let active = dir.path().join(segments::SPEC.active_name());
+        let sealed =
+            dir.path()
+                .join("segments")
+                .join(format!("{}.{:010}.jsonl", segments::SPEC.name, 0));
+        let sealed_bytes = std::fs::read(&sealed).unwrap();
+        let records_end = sealed_bytes[..sealed_bytes.len() - 1]
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .unwrap()
+            + 1;
+        std::fs::write(&active, &sealed_bytes[..records_end]).unwrap();
+        let mut content = store(dir.path(), identity.clone());
+        assert_eq!(content.record_count(), per);
+        assert_eq!(content.sealed_segments().0, 1);
+        content.append(request("after-seal", 4)).unwrap();
+        drop(content);
+
+        // A torn last line is cut; every acknowledged record stays.
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&active)
+            .unwrap();
+        file.write_all(br#"{"record":{"reference":"#).unwrap();
+        drop(file);
+        let mut content = store(dir.path(), identity.clone());
+        assert_eq!(content.record_count(), per + 1);
+        content.append(request("after-tear", 4)).unwrap();
+        drop(content);
+        let content = store(dir.path(), identity);
+        let turns = (0..per)
+            .map(|index| format!("turn-{index}"))
+            .chain(["after-seal".into(), "after-tear".into()]);
+        for turn in turns {
+            let turn = LogicalTurnId::new(turn).unwrap();
+            assert_eq!(
+                content.keyed(&segments::request_key(&turn)).unwrap().len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn history_rotates_across_segments_and_reserved_result_still_settles_and_reopens() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical = canonical(&root);
+        let dir = tempfile::tempdir().unwrap();
+        let identity = canonical.identity().unwrap();
+        let mut content = store(dir.path(), identity.clone());
+        let reservation = reservation();
+        let reference = content
+            .append(Body::ToolReservation(reservation.clone()))
+            .unwrap();
+        let receipt = content.arguments_receipt(reference, &reservation);
+        // Dozens of segments. Going past the single-file journal's 4096
+        // records is the daemon's long-Session test; here every append pays
+        // a full sync, so the count stays small.
+        let turns = 40 * segments::SPEC.segment_records as usize + 5;
+        for index in 0..turns {
+            content
+                .append(request(&format!("turn-{index}"), 16))
+                .unwrap();
+        }
         let result = content
             .record_tool_result(&receipt, InvocationOutcome::Succeeded, &[0xff; 512], 101)
             .unwrap();
         assert_eq!(content.read_tool_result(&result).unwrap(), vec![0xff; 128]);
+        assert_eq!(content.record_count(), turns as u64 + 2);
+        let (sealed, filter_bytes) = content.sealed_segments();
+        assert_eq!(
+            sealed,
+            (turns + 2) / segments::SPEC.segment_records as usize
+        );
+        assert!(content.records.active_len() < segments::SPEC.segment_records as usize);
+        // A key filter costs a few bytes per key, far less than the records.
+        assert!(filter_bytes < turns * 64);
         drop(content);
-        let content = store(dir.path(), identity, limits);
+        let content = store(dir.path(), identity.clone());
         assert_eq!(content.tool_result(&receipt).unwrap(), Some(result));
+        assert_eq!(content.record_count(), turns as u64 + 2);
+        for index in [0, turns / 2, turns - 1] {
+            let turn = LogicalTurnId::new(format!("turn-{index}")).unwrap();
+            let retained = content.keyed(&segments::request_key(&turn)).unwrap();
+            assert_eq!(retained.len(), 1, "turn-{index}");
+        }
+        // A duplicate request in any segment is still refused.
+        let mut content = content;
+        let mut duplicate = request("turn-0", 16);
+        if let Body::Request(value) = &mut duplicate {
+            value.recorded_at_unix_ms += 1;
+        }
+        assert!(content.append(duplicate).is_err());
     }
 
     #[test]
-    fn result_record_slot_is_reserved_and_underfunded_loaded_history_is_rejected() {
+    fn legacy_journal_over_its_old_bounds_is_refused_without_conversion() {
         let root = tempfile::tempdir().unwrap();
         let canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
         let identity = canonical.identity().unwrap();
-        let limits = Limits {
-            bytes: 24 * 1024,
-            records: 2,
-        };
-        let mut content = store(dir.path(), identity.clone(), limits);
+        let mut content = store(dir.path(), identity.clone());
         let reservation = reservation();
         let reference = content
             .append(Body::ToolReservation(reservation.clone()))
             .unwrap();
         let receipt = content.arguments_receipt(reference, &reservation);
-        assert!(matches!(
-            content.append(request("extra", 1)),
-            Err(ExecutionContentError::Capacity)
-        ));
-        let encoded = encode_bounded(&content.data, limits.bytes).unwrap();
+        content.append(request("extra", 1)).unwrap();
+        let journal = legacy_journal(&identity, all_records(&content));
+        // The single-file layout reserved room for every open result.
+        let encoded = encode_bounded(&journal, MAX_BYTES).unwrap();
         assert!(matches!(
             validate_journal(
-                &content.data,
+                &journal,
                 &identity,
                 Limits {
                     bytes: encoded.len(),
@@ -4805,10 +5017,31 @@ mod tests {
             ),
             Err(ExecutionContentError::Capacity)
         ));
+        // One over the old record bound is refused on open, and nothing is
+        // converted.
+        let mut oversized = journal.clone();
+        for index in 0..MAX_RECORDS - 1 {
+            let body = request(&format!("turn-{index}"), 0);
+            oversized.records.push(Record {
+                reference: content_reference(&identity, &body).unwrap(),
+                body,
+            });
+        }
+        drop(content);
+        write_legacy(dir.path(), &oversized);
+        let before = stored(dir.path());
+        assert!(matches!(
+            open_store(dir.path(), identity.clone()),
+            Err(ExecutionContentError::Json(_))
+        ));
+        assert_eq!(stored(dir.path()), before);
+        // Within the bound it migrates and the reservation still settles.
+        write_legacy(dir.path(), &journal);
+        let mut content = store(dir.path(), identity);
         content
             .record_tool_result(&receipt, InvocationOutcome::Succeeded, b"done", 101)
             .unwrap();
-        assert_eq!(content.data.records.len(), 2);
+        assert_eq!(content.record_count(), 3);
     }
 
     #[test]
@@ -4817,13 +5050,10 @@ mod tests {
         let canonical = canonical(&root);
         let dir = tempfile::tempdir().unwrap();
         let identity = canonical.identity().unwrap();
-        let mut content = store(dir.path(), identity.clone(), Limits::default());
+        let mut content = store(dir.path(), identity.clone());
         let body = request("turn-a", 20);
         assert!(matches!(
-            content.append_with(body.clone(), |storage, bytes| {
-                storage.write(bytes)?;
-                Err(io::Error::other("simulated lost acknowledgement"))
-            }),
+            content.append_losing_ack(body.clone()),
             Err(ExecutionContentError::RecoveryRequired)
         ));
         assert!(matches!(
@@ -4831,12 +5061,12 @@ mod tests {
             Err(ExecutionContentError::RecoveryRequired)
         ));
         drop(content);
-        let mut content = store(dir.path(), identity.clone(), Limits::default());
+        let mut content = store(dir.path(), identity.clone());
         assert_eq!(
             content.append(body.clone()).unwrap(),
             content_reference(&identity, &body).unwrap()
         );
-        assert_eq!(content.data.records.len(), 1);
+        assert_eq!(content.record_count(), 1);
     }
 
     fn output_reservation() -> ActivationOutputReservation {
@@ -4866,30 +5096,22 @@ mod tests {
     }
 
     #[test]
-    fn output_settlement_survives_unrelated_capacity_pressure_and_worst_case_json() {
+    fn output_settlement_survives_unrelated_history_and_worst_case_json() {
         let root = tempfile::tempdir().unwrap();
         let canonical = canonical(&root);
         let identity = canonical.identity().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let limits = Limits {
-            bytes: 64 * 1024,
-            records: 100,
-        };
-        let mut content = store(dir.path(), identity.clone(), limits);
+        let mut content = store(dir.path(), identity.clone());
         let body = output_reservation();
         let reference = content
             .append(Body::ActivationOutputReservation(body.clone()))
             .unwrap();
         let receipt = content.output_reservation_receipt(reference, &body);
-        let mut admitted = 0;
         for index in 0..100 {
-            match content.append(request(&format!("extra-{index}"), 800)) {
-                Ok(_) => admitted += 1,
-                Err(ExecutionContentError::Capacity) => break,
-                Err(error) => panic!("unexpected error: {error}"),
-            }
+            content
+                .append(request(&format!("extra-{index}"), 800))
+                .unwrap();
         }
-        assert!(admitted > 0 && admitted < 100);
         let raw = reserved_text(&receipt, &"\0".repeat(1024));
         for sequence in 0..2 {
             content
@@ -4908,7 +5130,7 @@ mod tests {
         assert_eq!(settled.content.output.usage, raw.usage);
         assert!(settled.complete_output().is_none());
         drop(content);
-        let mut content = store(dir.path(), identity, limits);
+        let mut content = store(dir.path(), identity);
         assert_eq!(
             content.activation_output_settlement(&receipt).unwrap(),
             Some(settled.clone())
@@ -4928,32 +5150,25 @@ mod tests {
     }
 
     #[test]
-    fn output_record_reservation_rejects_underfunded_reopen_and_forged_receipts() {
+    fn output_record_reservation_rejects_underfunded_legacy_journal_and_forged_receipts() {
         let root = tempfile::tempdir().unwrap();
         let canonical = canonical(&root);
         let identity = canonical.identity().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let limits = Limits {
-            bytes: 64 * 1024,
-            records: 4,
-        };
-        let mut content = store(dir.path(), identity.clone(), limits);
+        let mut content = store(dir.path(), identity.clone());
         let body = output_reservation();
         let reference = content
             .append(Body::ActivationOutputReservation(body.clone()))
             .unwrap();
         let receipt = content.output_reservation_receipt(reference, &body);
-        assert!(matches!(
-            content.append(request("unrelated", 1)),
-            Err(ExecutionContentError::Capacity)
-        ));
+        content.append(request("unrelated", 1)).unwrap();
         assert!(matches!(
             validate_journal(
-                &content.data,
+                &legacy_journal(&identity, all_records(&content)),
                 &identity,
                 Limits {
-                    bytes: limits.bytes,
-                    records: 3
+                    bytes: MAX_BYTES,
+                    records: 4
                 }
             ),
             Err(ExecutionContentError::Capacity)
@@ -4987,14 +5202,11 @@ mod tests {
         let canonical = canonical(&root);
         let identity = canonical.identity().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let mut content = store(dir.path(), identity.clone(), Limits::default());
+        let mut content = store(dir.path(), identity.clone());
         let body = output_reservation();
         let record = Body::ActivationOutputReservation(body.clone());
         assert!(matches!(
-            content.append_with(record.clone(), |storage, bytes| {
-                storage.write(bytes)?;
-                Err(io::Error::other("lost reservation acknowledgement"))
-            }),
+            content.append_losing_ack(record.clone()),
             Err(ExecutionContentError::RecoveryRequired)
         ));
         assert!(matches!(
@@ -5002,7 +5214,7 @@ mod tests {
             Err(ExecutionContentError::RecoveryRequired)
         ));
         drop(content);
-        let mut content = store(dir.path(), identity.clone(), Limits::default());
+        let mut content = store(dir.path(), identity.clone());
         let reference = content.append(record).unwrap();
         let receipt = content.output_reservation_receipt(reference, &body);
         let raw = reserved_text(&receipt, "known terminal partial");
@@ -5014,13 +5226,7 @@ mod tests {
             output: raw,
         };
         assert!(matches!(
-            content.append_with(
-                Body::ReservedOutput(settlement.clone()),
-                |storage, bytes| {
-                    storage.write(bytes)?;
-                    Err(io::Error::other("lost settlement acknowledgement"))
-                }
-            ),
+            content.append_losing_ack(Body::ReservedOutput(settlement.clone())),
             Err(ExecutionContentError::RecoveryRequired)
         ));
         assert!(matches!(
@@ -5028,13 +5234,13 @@ mod tests {
             Err(ExecutionContentError::RecoveryRequired)
         ));
         drop(content);
-        let content = store(dir.path(), identity, Limits::default());
+        let content = store(dir.path(), identity);
         let settled = content
             .activation_output_settlement(&receipt)
             .unwrap()
             .unwrap();
         assert_eq!(settled.content(), &settlement);
-        assert_eq!(content.data.records.len(), 2);
+        assert_eq!(content.record_count(), 2);
     }
     #[test]
     fn selected_way_stays_in_session_history_independently_of_review_archive() {
@@ -5162,6 +5368,27 @@ mod tests {
         // Text a tool returned later in the line cannot pick the class.
         assert_eq!(
             class("Activation failed: Tool call failed: bash - last failure: stream ended early"),
+            Some(("other", "inspect"))
+        );
+        // An Agent that ran out of tool rounds with budget left is continued.
+        let rounds = "Activation failed: This Agent reached its tool-round limit for this activation (1,024 rounds) and still asked for bash; those calls did not run. Run it again to go on, or narrow the task.";
+        assert_eq!(class(rounds), Some(("round_limit", "continue")));
+        let view = classify_activation_failure(rounds).unwrap();
+        assert!(
+            view.explanation
+                .starts_with("The Agent used all 1,024 tool rounds"),
+            "{}",
+            view.explanation
+        );
+        let legacy = "Activation failed: Tool call failed: agent tool loop - the model still requested tools after the safety limit of 128 rounds (pending: bash); those pending calls were not executed. Retry with a more capable model or narrow the task";
+        assert_eq!(class(legacy), Some(("round_limit", "continue")));
+        assert!(classify_activation_failure(legacy)
+            .unwrap()
+            .explanation
+            .starts_with("The Agent used all 128 tool rounds"));
+        // A tool's own text naming the limit later in the line does not.
+        assert_eq!(
+            class("Activation failed: Tool call failed: bash - This Agent reached its tool-round limit for this activation (3 rounds)"),
             Some(("other", "inspect"))
         );
     }

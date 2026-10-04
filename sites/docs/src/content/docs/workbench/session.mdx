@@ -29,8 +29,11 @@ and **Apply** it. This creates a durable Session configuration for future turns.
 Existing legacy data roots keep compatibility execution until explicitly upgraded.
 
 For native ordinary Agent turns, the reviewed invocation allowance also bounds tool
-iteration, up to a safety ceiling of 128 rounds. Each provider and tool call still
-requires durable budget admission, so the grant can run out before that ceiling.
+iteration: one round per invocation, up to a safety ceiling of 1,024 rounds, or fewer
+when the Agent sets `max_tool_rounds`. Each provider and tool call still requires durable
+budget admission, so the grant normally runs out first. An activation that reaches its
+round limit stops with that reason and **Continue** as its suggested next step; see
+[How long an Agent may work](/configure/agents/#how-long-an-agent-may-work).
 Compatibility Agents retain the default ten-round guard.
 
 <Steps>

@@ -126,12 +126,13 @@ passing condition observations, and settled effects. References still require ph
 evidence resolution and executor validation; the fold does not dispatch work.
 
 `execution_store::SessionExecutionStore` persists this v2 history under a retained upgraded
-format guard and a separate Session writer lock. A single atomic journal owns at most one
-unfinished turn, verifies linked predecessors against closed history, and returns the original
-receipt for exact command repeats. Reopening durably interrupts a Running epoch before exposing
-the projection. Admission reserves record and byte capacity for bounded activation/tool
-settlement, condition observations, interruption, and closure. Limits can reject new work;
-retained history is not silently evicted. Opaque durable snapshots bind downstream storage to
+format guard and a separate Session writer lock. Its journal owns at most one unfinished
+turn, verifies linked predecessors against closed history, and returns the original receipt
+for exact command repeats. Reopening durably interrupts a Running epoch before exposing the
+projection. Admission reserves command and byte room within the turn's own bounds (4,096
+commands and 8 MiB of retained events) for bounded activation/tool settlement, condition
+observations, interruption, and closure. Those bounds can reject new work in a turn; nothing
+bounds how many turns or records a Session keeps, and retained history is never evicted. Opaque durable snapshots bind downstream storage to
 the canonical journal, Workspace, and Session; an ordinary in-memory fold cannot mint them.
 Retained user request references commit atomically with Begin. An immutable legacy history
 frontier can be sealed before the first v2 turn, whose projection retains the legacy predecessor.
@@ -144,6 +145,29 @@ source. A changed source requires a fresh immutable candidate; an acknowledged s
 replaced. An exact seal retry returns the original receipt even if the old source later changes.
 The host must retire in-process legacy writers before conversion. Source checks do not prove
 the absence of checkpoint-only or private actor state.
+
+`segment_log` holds the records of every per-Session journal that grows with the Session's
+work, beside a small head file per journal: the canonical turn journal, execution content,
+the invocation audit, activation state, Session team revisions and Ways decisions (whose
+record and patch bodies are files named by their SHA-256). Records are appended to an active
+segment as one synced JSON line each. The network record uses the same layout with its own
+writer, which acknowledges a complete write and syncs every 200 ms so that egress decisions
+do not wait on a sync. When it reaches its record or byte bound the segment
+is sealed: its bytes and a seal line with the record count and SHA-256 digest are published
+under `segments/`, and a new active segment starts whose header names that digest, so the
+chain of segments cannot be reordered, removed or changed unnoticed. Opening verifies every
+seal and link, removes a torn last line (a write that never finished, so never
+acknowledged), and completes a seal a crash interrupted. A reader without the writer lock
+reads the same files and never writes.
+
+Memory holds the active segment, a few decoded sealed segments, a per-segment summary, and
+for stores looked up by key a small key filter per sealed segment; older records are read
+back by key or range on demand. Per-turn and per-record bounds stay as they were. The head
+file carries a `segments` marker that an older daemon's strict parser refuses, so a migrated
+Session cannot be opened by a release that would misread it. A single-file journal written
+before segmentation is validated with its old bounds and converted on first open: its records
+are appended to a fresh log and the head replaces the file last, so a crash during conversion
+leaves the old file, and the next open converts it again.
 
 `execution_namespace` provisions typed component roots under the canonical Session writer.
 Each component and its descendants retain the format guard, Session lock, and component lock.
@@ -162,7 +186,15 @@ final body remains evidence and cannot become an accepted complete answer.
 logical closure. Late outcomes do not reopen a turn or replace accepted output. Protected
 argument references are distinct from display previews; host code must verify and resolve
 the actual post-hook bytes. Opaque intent receipts prove persistence, never replay safety.
-The bounded journal reserves space for unresolved invocations' later evidence.
+The journal keeps every invocation for the life of the Session in segments and evicts
+nothing; only unresolved invocations are held in memory. A tool call still needs room in
+its turn: an intent and a settlement in the canonical turn, and claims in the turn's
+control authority (at most 4,096). The host reports that room (less one After capture per
+running activation that observes its repository) as the Agent's `tool_calls` allowance,
+declines an Agent's call it has no room for before anything is written, and records a
+capture it cannot admit as unavailable. A full turn therefore ends each Agent's tool loop
+with a final answer instead of fencing the controller, and the next turn starts with fresh
+room.
 
 `control_authority` persists grant policies and their prior revisions, exact generation
 registration, revocation, Stop, cumulative budget reservations, and dispatch claims. A fresh
@@ -272,10 +304,14 @@ provisioning rather than inherited authority.
 Unsupported custom behaviors refuse the optional boundary.
 
 Native `DefaultAgentBehavior` derives its tool-round ceiling from the reviewed
-grant's invocation allowance, clamped to 1–128 rounds. Compatibility construction
-retains the default ten-round ceiling. This is a finite loop guard, not a reservation
-or permission: provider and tool calls still pass their individual durable admission
-boundaries, and the grant may be exhausted before the round ceiling is reached.
+grant's invocation allowance, lowered by the Agent template's `max_tool_rounds` when it
+sets one, and held to 1–1,024 rounds (`axocoatl_core::MAX_TOOL_ROUNDS`). Every round
+spends at least one invocation, so the grant normally runs out before the ceiling.
+Compatibility construction retains the default ten-round ceiling. This is a finite loop
+guard, not a reservation or permission: provider and tool calls still pass their
+individual durable admission boundaries. An activation that reaches the ceiling while the
+model still asks for tools fails with `AgentError::ToolRoundLimit`; its pending calls do
+not run, and the failure is classed `round_limit` with Continue as the next step.
 
 The daemon's explicit `session_dispatch` adapter joins the owned stores for that tool boundary.
 It verifies exact current activation, physical input, profile, and grant; reserves protected
@@ -348,7 +384,11 @@ The internal autonomous driver schedules child tasks from the canonical graph wh
 controller continues accepting exact controls. Independent branches can finish when a sibling
 fails; dependent work uses only current accepted parent outputs. Explicit revision supersedes
 affected descendants, and the driver prepares their next generation from the retained input and
-new accepted parents. A lost driver interrupts its epoch and drains owned tasks for late evidence;
+new accepted parents. A person's Continue that restarts failed work selects never-started
+work that depends on it, directly or through other such work, as awaiting its dependencies
+when every other parent is accepted, so the driver starts it once the restarted work is
+accepted; work behind a parent left blocked stays blocked in that epoch. A lost driver
+interrupts its epoch and drains owned tasks for late evidence;
 reconstruction requires explicit continuation. An activation stopped before binding receives a
 durable never-dispatched record, not an inference from missing accounting. Prepared generations
 that never started are identified from canonical history even after supersession. Definitive
@@ -775,8 +815,12 @@ and streams that sometimes end early.
   one ended by an error record, such as an unparseable tool call) is retried once. Its
   estimated input and the output it had already streamed are charged to the same grant
   before the retry, and the retry is checked against what is left.
+- **Answering when the turn can record no more tool calls.** The Session keeps every
+  record; when the turn has no room for another tool call, the Agent's next request goes
+  without tools and asks for the final answer, the same way.
 - **Failure classes.** A failed activation states its failure class (provider stream,
-  budget, context limit, write scope, capture, admission) and a suggested next step.
+  budget, tool-round limit, context limit, write scope, capture, admission) and a
+  suggested next step.
 
 ## Multi-agent sessions and the event feed
 

@@ -39,7 +39,7 @@ function record(extraRules = []) {
   ];
 }
 
-async function setup({ full = false, sidecar = { state: 'ready', generation: 1, restarts: 0 }, loseFirstAllow = false, extra = [], warnings, proposals = [], loseFirstDecision = false } = {}) {
+async function setup({ sidecar = { state: 'ready', generation: 1, restarts: 0 }, loseFirstAllow = false, extra = [], warnings, proposals = [], loseFirstDecision = false } = {}) {
   const context = await newAuthorizedContext(browser, { viewport: { width: 390, height: 844 }, colorScheme: 'dark', reducedMotion: 'reduce' });
   const page = await context.newPage();
   const calls = [];
@@ -93,7 +93,7 @@ async function setup({ full = false, sidecar = { state: 'ready', generation: 1, 
           { scope: 'session', revision, digest: 'd'.repeat(64), rules: sessionRules.slice() },
         ],
         private_destinations: [],
-        record: { events: events.length, bytes: 4096, max_events: 50000, full, gaps: 0 },
+        record: { events: events.length, bytes: 4096, gaps: 0 },
         events, next_after: events.length,
         proposals: proposals.map((proposal) => ({ ...proposal })),
       },
@@ -423,11 +423,10 @@ test('the reload and proposal routes of the real daemon answer as documented', {
   assert.deepEqual(view.proposals, []);
 });
 
-test('a full record and a failed proxy are shown as banners', async () => {
-  const { context, page, errors } = await setup({ full: true, sidecar: { state: 'failed', generation: 6, restarts: 5 } });
+test('a failed proxy is shown as a banner', async () => {
+  const { context, page, errors } = await setup({ sidecar: { state: 'failed', generation: 6, restarts: 5 } });
   try {
     const dialog = page.getByRole('dialog', { name: 'Session network', exact: true });
-    await dialog.getByText('The network record is full, so new connections are refused.', { exact: true }).waitFor();
     await dialog.getByText('The egress proxy stopped after repeated failures', { exact: false }).waitFor();
     await dialog.getByText('Egress proxy: failed (generation 6, 5 restarts).', { exact: true }).waitFor();
     for (const theme of ['light', 'dark']) {
@@ -457,7 +456,7 @@ test('the activation inspector shows network evidence and opens the Session netw
       const events = record();
       return route.fulfill({ json: {
         session_id: 'session', mode: 'egress', sidecar: { state: 'ready', generation: 1, restarts: 0 }, policies: [],
-        private_destinations: [], record: { events: events.length, bytes: 4096, max_events: 50000, full: false, gaps: 0 },
+        private_destinations: [], record: { events: events.length, bytes: 4096, gaps: 0 },
         events, next_after: events.length,
       } });
     });

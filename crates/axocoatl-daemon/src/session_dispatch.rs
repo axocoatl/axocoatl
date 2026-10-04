@@ -35,9 +35,9 @@ use axocoatl_session::execution_store::{
     DurableTurnReceipt, DurableTurnSnapshot, SessionExecutionStore,
 };
 use axocoatl_session::invocation_audit::{
-    InvocationAudit, InvocationAuditCommand, InvocationAuthority, InvocationEvidenceCommand,
-    InvocationFinalEvidence, InvocationIntent, InvocationIntentCommand, InvocationOutcomeSource,
-    InvocationReplayPolicy, ProviderReplayIdentity,
+    InvocationAudit, InvocationAuthority, InvocationEvidenceCommand, InvocationFinalEvidence,
+    InvocationIntent, InvocationIntentCommand, InvocationOutcomeSource, InvocationReplayPolicy,
+    ProviderReplayIdentity,
 };
 use axocoatl_session::turn_contract::*;
 use sha2::{Digest, Sha256};
@@ -576,9 +576,23 @@ impl SessionDispatchController {
                 "the repository capture port belongs to the host; an Agent cannot call it",
             ));
         }
-        if !repository_snapshot::is_host_observation(group)
-            || repository_snapshot::is_digest_group(group)
-        {
+        let agent_call = !repository_snapshot::is_host_observation(group)
+            || repository_snapshot::is_digest_group(group);
+        // A call the turn has no room for is declined before anything is
+        // written, so reaching a per-turn bound never fences the controller.
+        let room = if agent_call {
+            state.tool_call_room()
+        } else {
+            state.turn_record_room()
+        };
+        if room == 0 {
+            return Ok(Err(if agent_call {
+                repository_snapshot::record_full_message()
+            } else {
+                repository_snapshot::RECORD_FULL.to_owned()
+            }));
+        }
+        if agent_call {
             if let Some(reserve) =
                 state.host_observation_shortfall(activation, repository_snapshot::TOOL_CALL_NEEDS)
             {
@@ -708,16 +722,21 @@ impl DispatchState {
     fn reconcile(&mut self) -> Result<()> {
         // Canonical intent is written first. A crash before audit admission is
         // therefore retained as unknown, never upgraded to a no-effect proof.
-        let audit_intents = self
+        // This turn's invocations are checked, and every invocation of any
+        // turn still without final evidence; settled invocations of closed
+        // turns were checked while their turn was live and cannot change.
+        let mut audit_intents: Vec<_> = self
             .audit
-            .records()
+            .turn_invocations(&self.turn_id)
             .map_err(error)?
-            .iter()
-            .filter_map(|record| match &record.command {
-                InvocationAuditCommand::Intent(command) => Some(command.intent.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+            .into_iter()
+            .map(|audited| audited.intent)
+            .collect();
+        for audited in self.audit.unresolved().map_err(error)? {
+            if audited.intent.activation.turn_id != self.turn_id {
+                audit_intents.push(audited.intent);
+            }
+        }
         for intent in &audit_intents {
             let snapshot = self
                 .canonical
@@ -776,7 +795,7 @@ impl DispatchState {
                         .grant
                         .as_ref()
                         .ok_or_else(|| error("retained outcome has no captured grant"))?;
-                    let ActivationEvidenceContent::Grant { policy } = self
+                    let ActivationEvidenceContent::Grant { policy } = &self
                         .content
                         .resolve_activation_evidence(&grant.evidence)
                         .map_err(error)?

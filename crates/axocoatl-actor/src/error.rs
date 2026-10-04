@@ -34,6 +34,16 @@ pub enum AgentError {
     #[error("Tool call failed: {tool} - {reason}")]
     ToolFailed { tool: String, reason: String },
 
+    /// The activation ran every tool round its limit allows and the model
+    /// still asked for tools. `pending` names them; none of them ran.
+    #[error(
+        "This Agent reached its tool-round limit for this activation ({} rounds) and still \
+         asked for {pending}; those calls did not run. Run it again to go on, or narrow the \
+         task.",
+        group_digits(*.limit)
+    )]
+    ToolRoundLimit { limit: usize, pending: String },
+
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
@@ -105,6 +115,16 @@ mod tests {
         assert_eq!(
             other.to_string(),
             "LLM provider error: Network error: reset"
+        );
+        assert_eq!(
+            AgentError::ToolRoundLimit {
+                limit: 1_024,
+                pending: "bash".into()
+            }
+            .to_string(),
+            "This Agent reached its tool-round limit for this activation (1,024 rounds) and \
+             still asked for bash; those calls did not run. Run it again to go on, or narrow \
+             the task."
         );
         assert_eq!(group_digits(0), "0");
         assert_eq!(group_digits(999), "999");

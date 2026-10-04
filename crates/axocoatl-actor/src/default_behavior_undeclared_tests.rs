@@ -179,8 +179,7 @@ async fn repeated_undeclared_tool_calls_stop_at_the_tool_round_limit() {
         .await
         .expect_err("an undeclared call is a tool round like any other");
     assert!(
-        error.to_string().contains("safety limit of 2 rounds")
-            && error.to_string().contains("report"),
+        matches!(&error, AgentError::ToolRoundLimit { limit: 2, pending } if pending == "report"),
         "{error}"
     );
     assert_eq!(captured.lock().unwrap().len(), 3);
