@@ -1007,6 +1007,33 @@ workflows:
     }
 
     #[test]
+    fn record_max_events_still_parses_and_is_reported_as_ignored() {
+        // It capped a Session's network record in 1.2.0; the record now
+        // keeps every event, so a file that sets it loads with a warning,
+        // even with a value 1.2.0 refused.
+        for network in ["egress", "bridge"] {
+            let yaml =
+                format!("sandbox:\n  network: {network}\n  egress:\n    record_max_events: 500\n");
+            let config = parse_config(&yaml, &PathBuf::from("test.yaml")).unwrap();
+            let egress = config.sandbox.egress.as_ref().unwrap();
+            assert_eq!(egress.record_max_events, Some(500));
+            let warnings: Vec<String> = network_warnings(&config)
+                .iter()
+                .filter(|warning| warning.field == "sandbox.egress.record_max_events")
+                .map(ToString::to_string)
+                .collect();
+            assert_eq!(
+                warnings,
+                [format!(
+                    "sandbox.egress.record_max_events: {}",
+                    egress::RECORD_MAX_EVENTS_WARNING
+                )],
+                "{network}"
+            );
+        }
+    }
+
+    #[test]
     fn worker_with_depends_on_rejected() {
         let yaml = r#"
 agents:
@@ -1886,7 +1913,7 @@ mcp_servers:
         let egress = config.sandbox.egress.as_ref().unwrap();
         assert_eq!(egress.allow.len(), 3);
         assert_eq!(egress.max_connections, 128);
-        assert_eq!(egress.record_max_events, 50_000);
+        assert_eq!(egress.record_max_events, None);
         assert_eq!(egress.sidecar_network.as_deref(), Some("axo-egress-test"));
         let searxng = config
             .web_search

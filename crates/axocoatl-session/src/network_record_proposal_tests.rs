@@ -87,15 +87,6 @@ fn proposals_and_reloads_round_trip_with_their_wire_names() {
 }
 
 #[test]
-fn only_decided_proposals_use_the_control_headroom() {
-    // An Agent can make pending proposals; they must not fill the headroom
-    // that explains why the record stopped. A person's decision may use it.
-    assert!(!proposal(ProposalState::Pending).is_control());
-    assert!(proposal(ProposalState::Approved).is_control());
-    assert!(proposal(ProposalState::Rejected).is_control());
-}
-
-#[test]
 fn proposal_bounds_are_enforced() {
     let bad = |event: NetworkEvent| event.validate().is_err();
     let with = |change: &dyn Fn(&mut NetworkEvent)| {
@@ -181,30 +172,15 @@ fn a_record_keeps_proposals_in_order_and_reads_them_back() {
         },
     )
     .unwrap();
-    let limits = RecordLimits {
-        max_events: 1,
-        max_bytes: DEFAULT_MAX_BYTES,
-    };
     let mut record = NetworkRecord::open(
         store
             .component_namespace(ExecutionComponent::NetworkRecord)
             .unwrap(),
-        limits,
     )
     .unwrap();
     record.append(1, proposal(ProposalState::Pending)).unwrap();
-    // Past the cap an Agent's next proposal is refused, while a person's
-    // decision still fits in the control headroom.
-    assert!(matches!(
-        record.append(2, proposal(ProposalState::Pending)),
-        Err(NetworkRecordError::Full)
-    ));
-    assert!(matches!(
-        record.append_control(2, proposal(ProposalState::Pending)),
-        Err(NetworkRecordError::NotControl)
-    ));
     record
-        .append_control(
+        .append(
             3,
             decided(ProposalState::Rejected, Some("human"), Some("c-2"), None),
         )

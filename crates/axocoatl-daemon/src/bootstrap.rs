@@ -701,7 +701,6 @@ impl crate::session_network::RecordNamespaces for RegistryNetworkRecords {
         session_id: &str,
         after: Option<u64>,
         limit: usize,
-        limits: axocoatl_session::network_record::RecordLimits,
     ) -> Result<
         Option<(
             Vec<axocoatl_session::network_record::NetworkLine>,
@@ -710,7 +709,7 @@ impl crate::session_network::RecordNamespaces for RegistryNetworkRecords {
         String,
     > {
         self.0
-            .read_network_record(session_id, after, limit, limits)
+            .read_network_record(session_id, after, limit)
             .map_err(|error| error.to_string())
     }
 
@@ -5311,10 +5310,6 @@ impl AxocoatlDaemon {
         );
         let session_network_records = Arc::new(crate::session_network::SessionNetworkRecords::new(
             Arc::new(RegistryNetworkRecords(session_dispatch_lifecycles.clone())),
-            config.sandbox.egress.as_ref().map_or(
-                axocoatl_session::network_record::DEFAULT_MAX_EVENTS,
-                |egress| u64::from(egress.record_max_events),
-            ),
         ));
         let web_tools = Arc::new(
             crate::session_dispatch_web::WebTools::from_config(

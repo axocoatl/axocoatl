@@ -214,7 +214,7 @@ async fn actual_browser_declared_hosts_use_the_egress_sessions_own_proxy() {
     let mut f = fixture().await;
     let session_id = f.owner.metadata().session_id.clone();
     let stores = crate::session_network::tests::Stores::new(&[session_id.as_str()]);
-    let records = Arc::new(SessionNetworkRecords::new(stores, 50_000));
+    let records = Arc::new(SessionNetworkRecords::new(stores));
     // Port 8000 is declared for the browser only, 8001 allowed for the
     // Session only, exactly as `EgressPolicyConfig::from_config` builds it.
     let mut config = axocoatl_config::AxocoatlConfig {

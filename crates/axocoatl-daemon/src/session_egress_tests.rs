@@ -56,9 +56,27 @@ impl EgressRecordSink for FakeRecord {
         Ok(self.push(event))
     }
 
-    async fn history(&self) -> Result<Vec<NetworkLine>, RecordFailure> {
-        Ok(self.lines.lock().unwrap().clone())
+    async fn replay(
+        &self,
+        visit: &mut (dyn for<'line> FnMut(&'line NetworkLine) + Send),
+    ) -> Result<u32, RecordFailure> {
+        let lines = self.lines.lock().unwrap().clone();
+        Ok(replay_lines(&lines, visit))
     }
+}
+
+/// [`EgressRecordSink::replay`] over lines kept in memory: every line, and
+/// the highest generation they name.
+pub(crate) fn replay_lines(
+    lines: &[NetworkLine],
+    visit: &mut (dyn for<'line> FnMut(&'line NetworkLine) + Send),
+) -> u32 {
+    let mut generation = 0;
+    for line in lines {
+        visit(line);
+        generation = generation.max(line.event.generation().unwrap_or(0));
+    }
+    generation
 }
 
 /// Maps names to fixed answers and logs every query it receives.
@@ -651,7 +669,7 @@ async fn scopes_are_separate() {
 async fn record_failure_refuses_new_connections() {
     let fixture = fixture().await;
     let (_grant, hash) = granted(&fixture, agent_spec()).await;
-    *fixture.record.fail.lock().unwrap() = Some(RecordFailure::Full);
+    *fixture.record.fail.lock().unwrap() = Some(RecordFailure::Unavailable("disk".into()));
     for id in 0..3 {
         let decision = fixture
             .egress
@@ -659,30 +677,21 @@ async fn record_failure_refuses_new_connections() {
             .await;
         assert_eq!(reason(&decision), (503, "record_unavailable".into()));
     }
-    let limits = fixture
-        .record
-        .events()
-        .into_iter()
-        .filter(|event| {
-            matches!(
-                event,
-                NetworkEvent::Limit {
-                    what: LimitKind::RecordFull,
-                    ..
-                }
-            )
-        })
-        .count();
-    assert_eq!(limits, 1);
-    // Without a credential (a setup step or terminal that could not get one
-    // because the record is full) the answer names the full record.
+    // The record has no cap, so nothing says it is full, and a connection
+    // without a credential is refused for that.
+    assert!(!fixture.record.events().iter().any(|event| matches!(
+        event,
+        NetworkEvent::Limit {
+            what: LimitKind::RecordFull,
+            ..
+        }
+    )));
     let decision = fixture
         .egress
         .decide(open(5, "allowed.test", 443, None))
         .await;
-    assert_eq!(reason(&decision), (503, "record_unavailable".into()));
+    assert_eq!(reason(&decision), (407, "no_credential".into()));
     // A refusal stays a refusal even when it cannot be recorded.
-    *fixture.record.fail.lock().unwrap() = Some(RecordFailure::Unavailable("disk".into()));
     let decision = fixture
         .egress
         .decide(open(9, "evil.test", 443, Some(&hash)))
@@ -1416,8 +1425,11 @@ impl EgressRecordSink for GatedRecord {
         self.inner.append_control(event).await
     }
 
-    async fn history(&self) -> Result<Vec<NetworkLine>, RecordFailure> {
-        self.inner.history().await
+    async fn replay(
+        &self,
+        visit: &mut (dyn for<'line> FnMut(&'line NetworkLine) + Send),
+    ) -> Result<u32, RecordFailure> {
+        self.inner.replay(visit).await
     }
 }
 
@@ -1806,6 +1818,136 @@ async fn a_new_sidecar_continues_the_generations_in_the_record() {
     .await
     .unwrap();
     assert_eq!(reopened.first_generation(), 6);
+}
+
+/// A decision point reopened over a Session's real record whose policy
+/// changes, proposals and generations lie in sealed segments replays them,
+/// reading the record one segment at a time.
+#[tokio::test]
+async fn a_decision_point_replays_a_record_kept_in_segments() {
+    use crate::session_network::SessionNetworkRecords;
+    use crate::session_network_proposals::ProposalRequest;
+    use axocoatl_session::network_record::{ProposalState, SegmentLimits};
+    let stores = crate::session_network::tests::Stores::new(&["ses-1"]);
+    // Four events per segment, so every change below is sealed before the
+    // decision point is opened again.
+    let records = Arc::new(SessionNetworkRecords::with_segments(
+        stores,
+        SegmentLimits {
+            bytes: 64 * 1024,
+            events: 4,
+        },
+    ));
+    let sink = || -> Arc<dyn EgressRecordSink> {
+        Arc::new(SessionRecordSink::new(records.clone(), "ses-1"))
+    };
+    let resolver = FakeResolver::with(&[("allowed.test", &["93.184.216.34"])]);
+    let traffic = |generation: u32, count: u64| {
+        let records = records.clone();
+        async move {
+            for id in 0..count {
+                records
+                    .append(
+                        "ses-1",
+                        NetworkEvent::Open {
+                            conn: format!("g{generation}:{id}"),
+                            peer: None,
+                            decision: RecordDecision::Allow,
+                            reason: None,
+                            status: None,
+                            rule: None,
+                            host: "allowed.test".into(),
+                            port: 443,
+                            conn_kind: ConnKind::Connect,
+                            method: None,
+                            path: None,
+                            addrs: vec!["93.184.216.34".into()],
+                            token: None,
+                            binding: None,
+                            scope: Some(EgressScope::Session),
+                            policy_revision: Some(1),
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+    };
+    let proposal = |host: &str| ProposalRequest {
+        host: host.into(),
+        ports: vec![443],
+        reason: "the build fetches its schema from here".into(),
+        agent: "writer".into(),
+        invocation_id: "inv-1".into(),
+        activation_id: "act-1".into(),
+    };
+    let egress = SessionEgress::open("ses-1", config(), sink(), resolver.clone(), None)
+        .await
+        .unwrap();
+    egress
+        .allow(
+            EgressScope::Session,
+            "extra.test",
+            Some(vec![443]),
+            "human",
+            "cmd-1",
+        )
+        .await
+        .unwrap();
+    traffic(3, 30).await;
+    egress
+        .allow(EgressScope::Session, "other.test", None, "human", "cmd-2")
+        .await
+        .unwrap();
+    let rejected = egress.propose(proposal("rejected.test")).await.unwrap();
+    egress
+        .reject_proposal(&rejected.view.id, "human", "cmd-3")
+        .await
+        .unwrap();
+    traffic(7, 30).await;
+    egress
+        .revoke(EgressScope::Session, "other.test", "human", "cmd-4")
+        .await
+        .unwrap();
+    let pending = egress.propose(proposal("pending.test")).await.unwrap();
+    traffic(5, 30).await;
+    let views = egress.policy_views();
+    let proposals = egress.proposals();
+    drop(egress);
+    let events = records.stats("ses-1").await.unwrap().events;
+    assert!(events > 90, "{events}");
+    // Close the record, so the next decision point reads it from disk.
+    records.close("ses-1").await;
+
+    let reopened = SessionEgress::open("ses-1", config(), sink(), resolver, None)
+        .await
+        .unwrap();
+    // The same policy, so nothing new is recorded.
+    assert_eq!(reopened.policy_views(), views);
+    assert_eq!(records.stats("ses-1").await.unwrap().events, events);
+    let session = reopened.policy(EgressScope::Session).unwrap();
+    assert!(session.match_name("extra.test", 443).is_some());
+    assert!(session.match_name("other.test", 443).is_none());
+    // The highest generation is in a sealed segment, behind a lower one.
+    assert_eq!(reopened.first_generation(), 8);
+    // A command id applied in a sealed segment is still refused.
+    let resent = reopened
+        .allow(EgressScope::Session, "again.test", None, "human", "cmd-1")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(resent, EgressPolicyError::Conflict(_)),
+        "{resent:?}"
+    );
+    assert_eq!(reopened.proposals(), proposals);
+    assert_eq!(
+        reopened.proposal(&pending.view.id).unwrap().state,
+        ProposalState::Pending
+    );
+    assert_eq!(
+        reopened.proposal(&rejected.view.id).unwrap().state,
+        ProposalState::Rejected
+    );
 }
 
 /// The real proxy from `axocoatl-exec`, in-process, behind the real control

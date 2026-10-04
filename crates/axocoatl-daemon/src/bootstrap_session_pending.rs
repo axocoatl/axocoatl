@@ -159,7 +159,6 @@ impl PendingSessionEntry {
         &self,
         after: Option<u64>,
         limit: usize,
-        limits: axocoatl_session::network_record::RecordLimits,
     ) -> Result<
         Option<(
             Vec<axocoatl_session::network_record::NetworkLine>,
@@ -174,7 +173,7 @@ impl PendingSessionEntry {
         let Ok(canonical) = stores.canonical() else {
             return Ok(None);
         };
-        crate::session_network::read_existing(canonical, after, limit, limits).map_err(failure)
+        crate::session_network::read_existing(canonical, after, limit).map_err(failure)
     }
 
     pub(super) fn read_network_screenshot(

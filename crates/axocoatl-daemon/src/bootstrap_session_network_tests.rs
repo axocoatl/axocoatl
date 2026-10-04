@@ -80,7 +80,6 @@ async fn child_body() {
     assert_eq!(view.mode, "bridge");
     assert!(view.events.is_empty() && view.policies.is_empty() && view.sidecar.is_none());
     assert_eq!(view.record.events, 0);
-    assert_eq!(view.record.max_events, 50_000);
     assert_eq!(view.next_after, None);
     assert!(!daemon.session_network_records.is_open(&id).await);
     assert!(view.warnings.is_empty());
@@ -156,10 +155,10 @@ async fn child_body() {
     daemon.reopen_session(&id).await.unwrap();
     let seq = daemon
         .session_network_records
-        .append_control(
+        .append(
             &id,
             NetworkEvent::Limit {
-                what: LimitKind::RecordFull,
+                what: LimitKind::UnrecordedRefusals,
                 detail: "after reopen".into(),
             },
         )

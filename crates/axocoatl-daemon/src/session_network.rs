@@ -4,7 +4,8 @@
 //! Each open record is owned by a dedicated thread. Appends and reads are
 //! messages to it, so the record has exactly one writer and the caller learns
 //! the sequence number only after the line is in the file. The thread syncs
-//! the file every 200 ms while it is dirty, and on close.
+//! the file every 200 ms while it is dirty, and on close. A record has no
+//! cap: it keeps every event for the Session's life, in segments.
 
 use std::collections::HashMap;
 use std::sync::mpsc as std_mpsc;
@@ -13,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use axocoatl_session::execution_namespace::OwnedExecutionNamespace;
 use axocoatl_session::network_record::{
-    NetworkEvent, NetworkLine, NetworkRecord, NetworkRecordError, RecordLimits, RecordStats,
-    ScreenshotRef, DEFAULT_MAX_BYTES, MAX_READ_LIMIT,
+    KindPage, NetworkEvent, NetworkLine, NetworkRecord, NetworkRecordError, RecordStats,
+    ScreenshotRef, SegmentLimits, MAX_READ_LIMIT,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -39,7 +40,6 @@ pub(crate) trait RecordNamespaces: Send + Sync + 'static {
         session_id: &str,
         after: Option<u64>,
         limit: usize,
-        limits: RecordLimits,
     ) -> Result<Option<(Vec<NetworkLine>, RecordStats)>, String>;
 
     /// Read a stored screenshot without opening a writer. `Ok(None)` when the
@@ -69,9 +69,8 @@ pub(crate) fn read_existing(
     canonical: &axocoatl_session::execution_store::SessionExecutionStore,
     after: Option<u64>,
     limit: usize,
-    limits: RecordLimits,
 ) -> Result<Option<(Vec<NetworkLine>, RecordStats)>, String> {
-    NetworkRecord::read_existing(canonical, after, limit, limits).map_err(|error| error.to_string())
+    NetworkRecord::read_existing(canonical, after, limit).map_err(|error| error.to_string())
 }
 
 /// [`RecordNamespaces::read_screenshot`] for one canonical Session store.
@@ -92,13 +91,6 @@ pub enum RecordServiceError {
     Stopped,
 }
 
-impl RecordServiceError {
-    /// Whether the record refused because it reached its cap.
-    pub fn is_full(&self) -> bool {
-        matches!(self, Self::Record(NetworkRecordError::Full))
-    }
-}
-
 /// One page of a Session's record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordPage {
@@ -115,13 +107,18 @@ enum Command {
     Append {
         ts_ms: u64,
         event: Box<NetworkEvent>,
-        control: bool,
         reply: Reply<u64>,
     },
     Read {
         after: Option<u64>,
         limit: usize,
         reply: Reply<RecordPage>,
+    },
+    ReadKinds {
+        after: Option<u64>,
+        kinds: &'static [&'static str],
+        max: usize,
+        reply: Reply<KindPage>,
     },
     StoreScreenshot {
         media_type: String,
@@ -140,7 +137,8 @@ struct Writer {
 /// Daemon-wide owner of every open Session network record.
 pub struct SessionNetworkRecords {
     namespaces: Arc<dyn RecordNamespaces>,
-    limits: RecordLimits,
+    /// When each record's active segment is sealed.
+    segments: SegmentLimits,
     writers: tokio::sync::Mutex<HashMap<String, Writer>>,
 }
 
@@ -148,7 +146,7 @@ impl std::fmt::Debug for SessionNetworkRecords {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("SessionNetworkRecords")
-            .field("limits", &self.limits)
+            .field("segments", &self.segments)
             .finish_non_exhaustive()
     }
 }
@@ -158,17 +156,6 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
-}
-
-fn empty_stats(limits: RecordLimits) -> RecordStats {
-    RecordStats {
-        events: 0,
-        bytes: 0,
-        last_seq: 0,
-        full: false,
-        gaps: 0,
-        max_events: limits.max_events,
-    }
 }
 
 fn page(
@@ -198,12 +185,10 @@ fn run_writer(mut record: NetworkRecord, commands: std_mpsc::Receiver<Command>, 
             Ok(Command::Append {
                 ts_ms,
                 event,
-                control,
                 reply,
             }) => {
                 let result = match &failed {
                     Some(_) => Err(NetworkRecordError::Poisoned),
-                    None if control => record.append_control(ts_ms, *event),
                     None => record.append(ts_ms, *event),
                 };
                 let _ = reply.send(result);
@@ -214,6 +199,14 @@ fn run_writer(mut record: NetworkRecord, commands: std_mpsc::Receiver<Command>, 
                 reply,
             }) => {
                 let _ = reply.send(page(&record, after, limit));
+            }
+            Ok(Command::ReadKinds {
+                after,
+                kinds,
+                max,
+                reply,
+            }) => {
+                let _ = reply.send(record.read_kinds_after(after, kinds, max));
             }
             Ok(Command::StoreScreenshot {
                 media_type,
@@ -254,19 +247,21 @@ fn run_writer(mut record: NetworkRecord, commands: std_mpsc::Receiver<Command>, 
 }
 
 impl SessionNetworkRecords {
-    pub(crate) fn new(namespaces: Arc<dyn RecordNamespaces>, max_events: u64) -> Self {
-        Self {
-            namespaces,
-            limits: RecordLimits {
-                max_events: max_events.max(1),
-                max_bytes: DEFAULT_MAX_BYTES,
-            },
-            writers: tokio::sync::Mutex::new(HashMap::new()),
-        }
+    pub(crate) fn new(namespaces: Arc<dyn RecordNamespaces>) -> Self {
+        Self::with_segments(namespaces, SegmentLimits::default())
     }
 
-    pub fn limits(&self) -> RecordLimits {
-        self.limits
+    /// Records whose active segments are sealed at `segments` instead of the
+    /// defaults, so a test reaches several segments with few events.
+    pub(crate) fn with_segments(
+        namespaces: Arc<dyn RecordNamespaces>,
+        segments: SegmentLimits,
+    ) -> Self {
+        Self {
+            namespaces,
+            segments,
+            writers: tokio::sync::Mutex::new(HashMap::new()),
+        }
     }
 
     /// The writer for `session`, opening (and if needed creating) its record.
@@ -280,11 +275,11 @@ impl SessionNetworkRecords {
             reason,
         };
         let namespaces = self.namespaces.clone();
-        let limits = self.limits;
+        let segments = self.segments;
         let owned_session = session.to_string();
         let record = tokio::task::spawn_blocking(move || {
             let namespace = namespaces.writer_namespace(&owned_session)?;
-            NetworkRecord::open(namespace, limits).map_err(|error| error.to_string())
+            NetworkRecord::open_with(namespace, segments).map_err(|error| error.to_string())
         })
         .await
         .map_err(|error| unavailable(error.to_string()))?
@@ -304,11 +299,12 @@ impl SessionNetworkRecords {
         Ok(sender)
     }
 
-    async fn send_append(
+    /// Append an event and return its sequence number once the line is
+    /// written. Creates the record on first use.
+    pub async fn append(
         &self,
         session: &str,
         event: NetworkEvent,
-        control: bool,
     ) -> Result<u64, RecordServiceError> {
         let sender = self.writer(session).await?;
         let (reply, receive) = oneshot::channel();
@@ -316,31 +312,35 @@ impl SessionNetworkRecords {
             .send(Command::Append {
                 ts_ms: now_ms(),
                 event: Box::new(event),
-                control,
                 reply,
             })
             .map_err(|_| RecordServiceError::Stopped)?;
         Ok(receive.await.map_err(|_| RecordServiceError::Stopped)??)
     }
 
-    /// Append an ordinary event and return its sequence number once the line
-    /// is written. Creates the record on first use.
-    pub async fn append(
+    /// The lines after `after` whose event is one of `kinds`, at most `max`,
+    /// from at most one segment ([`NetworkRecord::read_kinds_after`]):
+    /// call again with `next_after` until the page is `done`. Reads through
+    /// the record's writer, opening it, and creating the record on first
+    /// use, like an append; the caller is about to write to it.
+    pub async fn read_kinds_after(
         &self,
         session: &str,
-        event: NetworkEvent,
-    ) -> Result<u64, RecordServiceError> {
-        self.send_append(session, event, false).await
-    }
-
-    /// Append a `policy`, `sidecar`, `unbind` or `limit` event, which may use
-    /// the headroom reserved past the cap.
-    pub async fn append_control(
-        &self,
-        session: &str,
-        event: NetworkEvent,
-    ) -> Result<u64, RecordServiceError> {
-        self.send_append(session, event, true).await
+        after: Option<u64>,
+        kinds: &'static [&'static str],
+        max: usize,
+    ) -> Result<KindPage, RecordServiceError> {
+        let sender = self.writer(session).await?;
+        let (reply, receive) = oneshot::channel();
+        sender
+            .send(Command::ReadKinds {
+                after,
+                kinds,
+                max,
+                reply,
+            })
+            .map_err(|_| RecordServiceError::Stopped)?;
+        Ok(receive.await.map_err(|_| RecordServiceError::Stopped)??)
     }
 
     /// Lines after `after`. Reads through the open writer, or else reads the
@@ -375,10 +375,9 @@ impl SessionNetworkRecords {
             }
         }
         let namespaces = self.namespaces.clone();
-        let limits = self.limits;
         let owned_session = session.to_string();
         let stored = tokio::task::spawn_blocking(move || {
-            namespaces.read_existing(&owned_session, after, limit, limits)
+            namespaces.read_existing(&owned_session, after, limit)
         })
         .await
         .map_err(|error| RecordServiceError::Unavailable {
@@ -400,7 +399,7 @@ impl SessionNetworkRecords {
             }
             None => RecordPage {
                 events: Vec::new(),
-                stats: empty_stats(self.limits),
+                stats: RecordStats::default(),
                 next_after: after,
             },
         })
@@ -504,13 +503,13 @@ pub struct PolicyView {
     pub rules: Vec<PolicyRuleView>,
 }
 
-/// Record counts for the network view.
+/// Record counts for the network view. The record has no cap, so there is
+/// no limit to show.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordSummary {
     pub events: u64,
+    /// Bytes of the recorded events' lines.
     pub bytes: u64,
-    pub max_events: u64,
-    pub full: bool,
     pub gaps: u64,
 }
 
@@ -519,8 +518,6 @@ impl From<RecordStats> for RecordSummary {
         Self {
             events: stats.events,
             bytes: stats.bytes,
-            max_events: stats.max_events,
-            full: stats.full,
             gaps: stats.gaps,
         }
     }
@@ -584,7 +581,7 @@ pub(crate) mod tests {
     use super::*;
     use axocoatl_session::execution_ownership::{LegacyFormatOwnership, UpgradedFormatOwnership};
     use axocoatl_session::execution_store::{ExecutionStoreOwner, SessionExecutionStore};
-    use axocoatl_session::network_record::{LimitKind, SidecarState};
+    use axocoatl_session::network_record::SidecarState;
     use axocoatl_session::turn_contract::SessionId;
     use std::sync::Mutex;
 
@@ -640,11 +637,10 @@ pub(crate) mod tests {
             session_id: &str,
             after: Option<u64>,
             limit: usize,
-            limits: RecordLimits,
         ) -> Result<Option<(Vec<NetworkLine>, RecordStats)>, String> {
             let stores = self.stores.lock().unwrap();
             let store = stores.get(session_id).ok_or("not a native Session")?;
-            read_existing(store, after, limit, limits)
+            read_existing(store, after, limit)
         }
 
         fn read_screenshot(
@@ -661,7 +657,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn screenshots_are_stored_through_the_writer_and_read_without_one() {
         let stores = Stores::new(&["s"]);
-        let records = SessionNetworkRecords::new(stores, 50_000);
+        let records = SessionNetworkRecords::new(stores);
         let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
         png.extend([1u8; 64]);
         let stored = records
@@ -699,7 +695,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn appends_are_ordered_per_session_and_readable() {
         let stores = Stores::new(&["a", "b"]);
-        let records = SessionNetworkRecords::new(stores, 50_000);
+        let records = SessionNetworkRecords::new(stores);
         assert_eq!(
             records
                 .append("a", sidecar(SidecarState::Starting))
@@ -734,11 +730,11 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn reading_a_session_without_a_record_creates_nothing() {
         let stores = Stores::new(&["quiet"]);
-        let records = SessionNetworkRecords::new(stores, 50_000);
+        let records = SessionNetworkRecords::new(stores);
         let page = records.read_after("quiet", None, 200).await.unwrap();
         assert!(page.events.is_empty());
         assert_eq!(page.next_after, None);
-        assert_eq!(page.stats.max_events, 50_000);
+        assert_eq!(page.stats, RecordStats::default());
         assert!(!records.is_open("quiet").await);
         assert!(records.read_after("unknown", None, 10).await.is_err());
         assert!(records
@@ -750,7 +746,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn close_syncs_and_a_reopen_continues_the_sequence() {
         let stores = Stores::new(&["s"]);
-        let records = SessionNetworkRecords::new(stores.clone(), 50_000);
+        let records = SessionNetworkRecords::new(stores.clone());
         for _ in 0..3 {
             records
                 .append("s", sidecar(SidecarState::Ready))
@@ -773,41 +769,64 @@ pub(crate) mod tests {
         assert!(!records.is_open("s").await);
     }
 
+    /// Every sequence number in a Session's record, paged, and its counts.
+    async fn read_all(records: &SessionNetworkRecords, session: &str) -> (Vec<u64>, RecordStats) {
+        let mut seqs = Vec::new();
+        let mut after = None;
+        loop {
+            let page = records.read_after(session, after, 333).await.unwrap();
+            if page.events.is_empty() {
+                return (seqs, page.stats);
+            }
+            seqs.extend(page.events.iter().map(|line| line.seq));
+            after = page.next_after;
+        }
+    }
+
     #[tokio::test]
-    async fn a_full_record_refuses_ordinary_events_but_records_why() {
+    async fn a_record_keeps_every_event_across_segments_and_reopens() {
+        // Axocoatl 1.2.0 refused events past `record_max_events` (at least
+        // 1,000). Small segments reach many seals with few events.
         let stores = Stores::new(&["s"]);
-        let records = SessionNetworkRecords::new(stores, 2);
-        records
-            .append("s", sidecar(SidecarState::Ready))
-            .await
-            .unwrap();
-        records
-            .append("s", sidecar(SidecarState::Ready))
-            .await
-            .unwrap();
-        let error = records
-            .append("s", sidecar(SidecarState::Ready))
-            .await
-            .unwrap_err();
-        assert!(error.is_full(), "{error}");
-        let seq = records
-            .append_control(
-                "s",
-                NetworkEvent::Limit {
-                    what: LimitKind::RecordFull,
-                    detail: "2 events".into(),
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(seq, 3);
-        assert!(records.stats("s").await.unwrap().full);
+        let records = SessionNetworkRecords::with_segments(
+            stores.clone(),
+            SegmentLimits {
+                bytes: 64 * 1024,
+                events: 50,
+            },
+        );
+        for expected in 1..=1_050 {
+            let seq = records
+                .append("s", sidecar(SidecarState::Ready))
+                .await
+                .unwrap();
+            assert_eq!(seq, expected);
+        }
+        let (seqs, stats) = read_all(&records, "s").await;
+        assert_eq!(seqs, (1..=1_050).collect::<Vec<_>>());
+        assert_eq!(
+            (stats.events, stats.last_seq, stats.gaps),
+            (1_050, 1_050, 0)
+        );
+        records.close("s").await;
+        // Without a writer the same pages are read from the segments.
+        let (seqs, closed) = read_all(&records, "s").await;
+        assert_eq!(seqs, (1..=1_050).collect::<Vec<_>>());
+        assert_eq!(closed, stats);
+        assert!(!records.is_open("s").await);
+        assert_eq!(
+            records
+                .append("s", sidecar(SidecarState::Stopped))
+                .await
+                .unwrap(),
+            1_051
+        );
     }
 
     #[tokio::test]
     async fn concurrent_appends_get_unique_contiguous_sequences() {
         let stores = Stores::new(&["s"]);
-        let records = Arc::new(SessionNetworkRecords::new(stores, 50_000));
+        let records = Arc::new(SessionNetworkRecords::new(stores));
         let mut tasks = Vec::new();
         for _ in 0..64 {
             let records = records.clone();
@@ -832,7 +851,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn the_writer_syncs_dirty_records_on_its_own() {
         let stores = Stores::new(&["s"]);
-        let records = SessionNetworkRecords::new(stores.clone(), 50_000);
+        let records = SessionNetworkRecords::new(stores.clone());
         records
             .append("s", sidecar(SidecarState::Ready))
             .await

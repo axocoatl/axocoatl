@@ -622,8 +622,11 @@ impl EgressRecordSink for ScopeFailingRecord {
         self.inner.append_control(event).await
     }
 
-    async fn history(&self) -> Result<Vec<NetworkLine>, RecordFailure> {
-        self.inner.history().await
+    async fn replay(
+        &self,
+        visit: &mut (dyn for<'line> FnMut(&'line NetworkLine) + Send),
+    ) -> Result<u32, RecordFailure> {
+        self.inner.replay(visit).await
     }
 }
 

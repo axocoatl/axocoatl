@@ -4,11 +4,15 @@
 //! are kept beside it, by digest, in its `screenshots/` directory; they are
 //! for people and never reach a model.
 //!
-//! The record is append-only. [`NetworkRecord::append`] returns only after a
-//! complete `write(2)` of the whole line to the file, so a caller that waits
-//! for it before acting has a write-ahead record of that action in the file.
-//! Durability across an operating-system crash comes from [`NetworkRecord::sync`],
-//! which the owner calls every 200 ms while the record is dirty and on close.
+//! The record is append-only and keeps every event for the Session's life;
+//! only each line and each screenshot is bounded. [`NetworkRecord::append`]
+//! returns only after a complete `write(2)` of the whole line to the active
+//! segment, so a caller that waits for it before acting has a write-ahead
+//! record of that action in the file. Durability across an operating-system
+//! crash comes from [`NetworkRecord::sync`], which the owner calls every
+//! 200 ms while the record is dirty and on close, and from sealing, which
+//! writes a full active segment to an immutable, synced file. How segments
+//! are kept is described in `network_record_segments.rs`.
 //!
 //! On open, a torn or unparseable last line (an interrupted append) is cut off
 //! and a `sidecar{state: "recovered"}` event says how many bytes were removed.
@@ -18,10 +22,18 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::Mutex;
 
+use axocoatl_core::SecureDir;
 use serde::{Deserialize, Serialize};
 
 use crate::execution_namespace::{ExecutionComponent, OwnedExecutionNamespace};
+
+#[path = "network_record_segments.rs"]
+mod segments;
+
+use segments::{damaged, Chain, Header, Sealed, Tally, ACTIVE_FILE, SEGMENTS_DIR};
+pub use segments::{SegmentLimits, DEFAULT_SEGMENT_BYTES, DEFAULT_SEGMENT_EVENTS};
 
 /// The record's file inside its component directory.
 pub const NETWORK_RECORD_FILE: &str = "network-record.v1.jsonl";
@@ -29,15 +41,6 @@ pub const NETWORK_RECORD_FILE: &str = "network-record.v1.jsonl";
 pub const NETWORK_RECORD_VERSION: u32 = 1;
 /// Longest line, newline included.
 pub const MAX_LINE_BYTES: usize = 16 * 1024;
-/// Default event cap (`sandbox.egress.record_max_events`).
-pub const DEFAULT_MAX_EVENTS: u64 = 50_000;
-/// Default byte cap.
-pub const DEFAULT_MAX_BYTES: u64 = 32 * 1024 * 1024;
-/// Events past the cap reserved for `limit`, `sidecar`, `policy` and `unbind`,
-/// so the record always explains why it stopped.
-pub const CONTROL_HEADROOM_EVENTS: u64 = 64;
-/// Bytes reserved for those events.
-pub const CONTROL_HEADROOM_BYTES: u64 = CONTROL_HEADROOM_EVENTS * MAX_LINE_BYTES as u64;
 /// Most lines one read returns.
 pub const MAX_READ_LIMIT: usize = 1000;
 /// Longest recorded request path, in characters.
@@ -237,11 +240,6 @@ pub enum BrowserTool {
 pub const SCREENSHOT_DIR: &str = "screenshots";
 /// Largest screenshot kept.
 pub const MAX_SCREENSHOT_BYTES: usize = 1024 * 1024;
-/// Most screenshots one Session keeps; later ones are not stored.
-pub const MAX_SCREENSHOTS: usize = 2000;
-/// Most bytes of screenshots one Session keeps, beside the record's own
-/// bounds; later ones are not stored.
-pub const MAX_SCREENSHOT_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 /// Longest failure reason a `browser` event keeps.
 pub const MAX_BROWSER_ERROR_CHARS: usize = 500;
 /// Longest URL a `browser` event keeps.
@@ -275,6 +273,8 @@ fn is_sha256(value: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LimitKind {
+    /// Axocoatl 1.2.0 wrote this when the record reached its cap. The record
+    /// has no cap now; the kind is kept so those records still read.
     RecordFull,
     MaxConnections,
     RestartBudget,
@@ -696,12 +696,18 @@ impl NetworkEvent {
         }
     }
 
-    /// Events that may use the reserved headroom past the cap.
-    pub fn is_control(&self) -> bool {
-        matches!(
-            self,
-            Self::Policy { .. } | Self::Sidecar { .. } | Self::Unbind { .. } | Self::Limit { .. }
-        ) || matches!(self, Self::Proposal { state, .. } if *state != ProposalState::Pending)
+    /// The egress sidecar generation the event names: a `sidecar` event's
+    /// `generation`, or the `g{generation}` an `open` or `close` event's
+    /// `conn` starts with. A reopened Session's sidecar takes the next one.
+    pub fn generation(&self) -> Option<u32> {
+        match self {
+            Self::Sidecar { generation, .. } => Some(*generation),
+            Self::Open { conn, .. } | Self::Close { conn, .. } => conn
+                .strip_prefix('g')
+                .and_then(|rest| rest.split_once(':'))
+                .and_then(|(generation, _)| generation.parse().ok()),
+            _ => None,
+        }
     }
 
     /// Bounds a writer must respect. Token fields must be tags, never secrets.
@@ -879,75 +885,91 @@ pub struct NetworkLine {
     pub event: NetworkEvent,
 }
 
-/// Caps for one record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RecordLimits {
-    pub max_events: u64,
-    pub max_bytes: u64,
+/// Counts for the API.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordStats {
+    pub events: u64,
+    /// Bytes of the recorded events' lines.
+    pub bytes: u64,
+    pub last_seq: u64,
+    /// Places where `seq` skipped a value.
+    pub gaps: u64,
+    /// The highest egress sidecar generation the record names
+    /// ([`NetworkEvent::generation`]).
+    pub max_generation: u32,
 }
 
-impl Default for RecordLimits {
-    fn default() -> Self {
+impl RecordStats {
+    fn of(tally: &Tally) -> Self {
         Self {
-            max_events: DEFAULT_MAX_EVENTS,
-            max_bytes: DEFAULT_MAX_BYTES,
+            events: tally.totals.events,
+            bytes: tally.totals.bytes,
+            last_seq: tally.last_seq,
+            gaps: tally.totals.gaps,
+            max_generation: tally.totals.max_generation,
         }
     }
 }
 
-impl RecordLimits {
-    fn read_ceiling(&self) -> usize {
-        (self.max_bytes + CONTROL_HEADROOM_BYTES + MAX_LINE_BYTES as u64) as usize
-    }
-}
-
-/// Counts for the API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RecordStats {
-    pub events: u64,
-    pub bytes: u64,
-    pub last_seq: u64,
-    /// Ordinary events are refused; only control events still fit.
-    pub full: bool,
-    /// Places where `seq` skipped a value.
-    pub gaps: u64,
-    pub max_events: u64,
+/// Lines of some event kinds, from [`NetworkRecord::read_kinds_after`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KindPage {
+    /// Matching lines, oldest first.
+    pub lines: Vec<NetworkLine>,
+    /// Every line through this sequence number was searched; pass it back as
+    /// `after` to continue.
+    pub next_after: Option<u64>,
+    /// The search reached the end of the record.
+    pub done: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum NetworkRecordError {
     #[error("network record I/O: {0}")]
     Io(#[from] io::Error),
-    #[error("network record is full")]
-    Full,
     #[error("network record line is longer than 16 KiB")]
     LineTooLong,
-    #[error("only policy, sidecar, unbind and limit events may use the reserved headroom")]
-    NotControl,
     #[error("invalid network event: {0}")]
     InvalidEvent(&'static str),
     #[error("network record is damaged at line {line}: {reason}")]
     Damaged { line: u64, reason: String },
     #[error("network record write is uncertain; reopen it")]
     Poisoned,
-    #[error("network record limits must be positive")]
-    InvalidLimits,
+}
+
+/// A sealed segment's events, by sequence number: `(seq, start, end)` of
+/// each line in its file, newline excluded.
+struct CachedSegment {
+    index: u64,
+    lines: Vec<(u64, u32, u32)>,
 }
 
 /// Single-writer handle to one Session's record.
 pub struct NetworkRecord {
     namespace: OwnedExecutionNamespace,
+    limits: SegmentLimits,
+    /// The Session journal every segment header names.
+    meta: serde_json::Value,
+    /// Append handle to the active segment.
     file: File,
-    limits: RecordLimits,
-    /// `(seq, byte offset)` of every line, in order.
-    index: Vec<(u64, u64)>,
-    bytes: u64,
-    last_seq: u64,
-    gaps: u64,
+    header: Header,
+    header_len: u64,
+    /// `(seq, offset)` of each event in the active segment.
+    active_index: Vec<(u64, u32)>,
+    active_len: u64,
+    /// The sealed segments' directory, once one exists.
+    segments: Option<SecureDir>,
+    /// The same directory for writing, once this writer sealed a segment.
+    segment_namespace: Option<OwnedExecutionNamespace>,
+    /// One summary per sealed segment.
+    sealed: Vec<Sealed>,
+    /// The whole record's totals.
+    tally: Tally,
     dirty: bool,
     poisoned: bool,
-    /// Screenshots kept and their bytes, counted on first use.
-    screenshots: Option<(usize, u64)>,
+    /// The sealed segment read last, so paging through it reads only the
+    /// lines asked for.
+    cache: Mutex<Option<CachedSegment>>,
 }
 
 impl std::fmt::Debug for NetworkRecord {
@@ -955,16 +977,17 @@ impl std::fmt::Debug for NetworkRecord {
         formatter
             .debug_struct("NetworkRecord")
             .field("stats", &self.stats())
+            .field("sealed", &self.sealed.len())
             .finish_non_exhaustive()
     }
 }
 
+/// A record in Axocoatl 1.2.0's single file, as loaded.
 struct Loaded {
     index: Vec<(u64, u64)>,
     good_bytes: u64,
     torn_bytes: u64,
-    last_seq: u64,
-    gaps: u64,
+    tally: Tally,
 }
 
 fn load(bytes: &[u8]) -> Result<Loaded, NetworkRecordError> {
@@ -972,8 +995,7 @@ fn load(bytes: &[u8]) -> Result<Loaded, NetworkRecordError> {
         index: Vec::new(),
         good_bytes: 0,
         torn_bytes: 0,
-        last_seq: 0,
-        gaps: 0,
+        tally: Tally::default(),
     };
     let mut position = 0usize;
     let mut line_number = 0u64;
@@ -985,10 +1007,7 @@ fn load(bytes: &[u8]) -> Result<Loaded, NetworkRecordError> {
         };
         let end = position + length;
         let is_last = end + 1 == bytes.len();
-        let parsed = (length < MAX_LINE_BYTES)
-            .then(|| serde_json::from_slice::<NetworkLine>(&bytes[position..end]).ok())
-            .flatten();
-        let Some(line) = parsed else {
+        let Some(line) = segments::parse_any(&bytes[position..end]) else {
             if is_last {
                 loaded.torn_bytes = (bytes.len() - position) as u64;
                 break;
@@ -998,17 +1017,21 @@ fn load(bytes: &[u8]) -> Result<Loaded, NetworkRecordError> {
                 reason: "unparseable line before the end of the record".into(),
             });
         };
-        if line.v != NETWORK_RECORD_VERSION || line.seq <= loaded.last_seq {
+        let counted = (line.v == NETWORK_RECORD_VERSION)
+            .then(|| {
+                loaded
+                    .tally
+                    .count(line.seq, length + 1, line.event.generation())
+                    .ok()
+            })
+            .flatten();
+        if counted.is_none() {
             return Err(NetworkRecordError::Damaged {
                 line: line_number,
                 reason: "unknown version or non-increasing sequence".into(),
             });
         }
-        if loaded.last_seq != 0 && line.seq != loaded.last_seq + 1 {
-            loaded.gaps += 1;
-        }
         loaded.index.push((line.seq, position as u64));
-        loaded.last_seq = line.seq;
         position = end + 1;
         loaded.good_bytes = position as u64;
     }
@@ -1042,11 +1065,7 @@ fn matching_lines(
         let start = memchr::memrchr(b'\n', &body[..found]).map_or(0, |newline| newline + 1);
         let end = found + memchr::memchr(b'\n', &body[found..]).unwrap_or(body.len() - found);
         read_from = start;
-        let parsed = (end - start < MAX_LINE_BYTES)
-            .then(|| serde_json::from_slice::<NetworkLine>(&body[start..end]).ok())
-            .flatten()
-            .filter(|line| line.v == NETWORK_RECORD_VERSION);
-        let Some(line) = parsed else {
+        let Some(line) = segments::parse_line(&body[start..end]) else {
             // An unparseable last line is an interrupted append.
             if end + 1 == complete {
                 continue;
@@ -1065,124 +1084,261 @@ fn matching_lines(
     Ok(newest_first)
 }
 
+/// What the Session journal is, as every segment header names it.
+fn record_meta(identity: &crate::execution_store::DurableSessionIdentity) -> serde_json::Value {
+    serde_json::json!({
+        "journal_id": identity.journal_id(),
+        "owner": identity.owner(),
+    })
+}
+
+fn recovered(torn_bytes: u64) -> NetworkEvent {
+    NetworkEvent::Sidecar {
+        state: SidecarState::Recovered,
+        generation: 0,
+        container: None,
+        detail: Some(format!("torn {torn_bytes} bytes")),
+    }
+}
+
+fn encode(seq: u64, ts_ms: u64, event: NetworkEvent) -> Result<Vec<u8>, NetworkRecordError> {
+    let mut line = serde_json::to_vec(&NetworkLine {
+        v: NETWORK_RECORD_VERSION,
+        seq,
+        ts_ms,
+        event,
+    })
+    .map_err(io::Error::other)?;
+    line.push(b'\n');
+    if line.len() > MAX_LINE_BYTES {
+        return Err(NetworkRecordError::LineTooLong);
+    }
+    Ok(line)
+}
+
+/// Read `from..to` of a file.
+fn read_range(mut file: File, from: u64, to: u64) -> Result<Vec<u8>, NetworkRecordError> {
+    file.seek(SeekFrom::Start(from))?;
+    let mut bytes = vec![0; (to - from) as usize];
+    file.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn parse_all(bytes: &[u8]) -> Result<Vec<NetworkLine>, NetworkRecordError> {
+    segments::lines(bytes)
+        .map(|(_, line)| {
+            segments::parse_line(line).ok_or_else(|| damaged("a recorded line does not parse"))
+        })
+        .collect()
+}
+
 impl NetworkRecord {
     /// Open or create the record in its component namespace, recovering a
-    /// torn tail.
-    pub fn open(
+    /// torn tail or an interrupted seal, and moving a record Axocoatl 1.2.0
+    /// kept in one file into segments.
+    pub fn open(namespace: OwnedExecutionNamespace) -> Result<Self, NetworkRecordError> {
+        Self::open_with(namespace, SegmentLimits::default())
+    }
+
+    /// [`Self::open`], sealing the active segment at `limits` instead of the
+    /// defaults. Segments written with other limits read the same.
+    pub fn open_with(
         namespace: OwnedExecutionNamespace,
-        limits: RecordLimits,
+        limits: SegmentLimits,
     ) -> Result<Self, NetworkRecordError> {
-        if limits.max_events == 0 || limits.max_bytes == 0 {
-            return Err(NetworkRecordError::InvalidLimits);
-        }
+        let limits = limits.validate()?;
         namespace.require_root(&ExecutionComponent::NetworkRecord)?;
+        let meta = record_meta(namespace.identity());
         let primary = Path::new(NETWORK_RECORD_FILE);
-        let bytes = match namespace.read_limited(primary, limits.read_ceiling()) {
+        let bytes = match namespace.read_limited(primary, segments::LEGACY_FILE_CEILING) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 // An initialized component whose file is gone must never look
                 // like a new, empty record.
                 namespace.check_journal_creation(primary)?;
+                // A new record starts as Axocoatl 1.2.0's empty single file
+                // and is moved into segments below like any other.
+                namespace.open_append(primary)?.sync_all()?;
                 Vec::new()
             }
             Err(error) => return Err(error.into()),
         };
-        let loaded = load(&bytes)?;
-        let file = namespace.open_append(primary)?;
-        if loaded.torn_bytes > 0 {
-            file.set_len(loaded.good_bytes)?;
+        namespace.mark_journal_initialized(primary)?;
+        if !segments::is_head(&bytes)? {
+            let loaded = load(&bytes)?;
+            let mut legacy = bytes[..loaded.good_bytes as usize].to_vec();
+            if loaded.torn_bytes > 0 {
+                legacy.extend(encode(
+                    loaded.tally.last_seq + 1,
+                    now_ms(),
+                    recovered(loaded.torn_bytes),
+                )?);
+            }
+            segments::migrate(&namespace, NETWORK_RECORD_FILE, &legacy, &meta, limits)?;
+        }
+        Self::open_segments(namespace, meta, limits)
+    }
+
+    fn open_segments(
+        namespace: OwnedExecutionNamespace,
+        meta: serde_json::Value,
+        limits: SegmentLimits,
+    ) -> Result<Self, NetworkRecordError> {
+        let root = namespace.secure_dir()?;
+        let segment_dir = segments::segments_dir(&root)?;
+        let count = segments::sealed_count(segment_dir.as_ref())?;
+        let mut chain = Chain::default();
+        let mut sealed = Vec::with_capacity(count as usize);
+        if let Some(segment_dir) = &segment_dir {
+            for index in 0..count {
+                let read = segments::read_sealed(segment_dir, index)?;
+                sealed.push(segments::verify_sealed(&read, &mut chain, &meta)?);
+            }
+        }
+        let bytes = match namespace.read_limited(ACTIVE_FILE, segments::SEGMENT_FILE_CEILING) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(damaged("the active segment is missing"));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let mut active = segments::read_active(&bytes)?;
+        let mut torn_bytes = active.torn_bytes as u64;
+        match &segment_dir {
+            Some(segment_dir) if count > 0 && active.header.index + 1 == count => {
+                // The last segment was sealed from this active segment, which
+                // was not replaced yet. The sealed copy holds every event the
+                // active segment holds, and any whose write the system lost
+                // before it was synced.
+                let last = segments::read_sealed(segment_dir, count - 1)?;
+                if !last.bytes[..last.events.end].starts_with(&bytes[..active.good_len]) {
+                    return Err(damaged(
+                        "the active segment differs from the segment sealed from it",
+                    ));
+                }
+                // Opening counted the sealed events without parsing them; the
+                // next header also needs the generations this one names.
+                let last_generation = segments::tally_sealed(&last)?.totals.max_generation;
+                chain.tally.totals.max_generation =
+                    chain.tally.totals.max_generation.max(last_generation);
+                let line = segments::header_line(&chain.header(&meta))?;
+                namespace.atomic_write(ACTIVE_FILE, &line)?;
+                active = segments::read_active(&line)?;
+                torn_bytes = 0;
+            }
+            _ => chain.check(&active.header, &meta)?,
+        }
+        let file = namespace.open_append(ACTIVE_FILE)?;
+        if torn_bytes > 0 {
+            file.set_len(active.good_len as u64)?;
         }
         file.sync_all()?;
-        namespace.mark_journal_initialized(primary)?;
         let mut record = Self {
             namespace,
-            file,
             limits,
-            index: loaded.index,
-            bytes: loaded.good_bytes,
-            last_seq: loaded.last_seq,
-            gaps: loaded.gaps,
+            meta,
+            file,
+            header: active.header,
+            header_len: active.header_len as u64,
+            active_index: active.index,
+            active_len: active.good_len as u64,
+            segments: segment_dir,
+            segment_namespace: None,
+            sealed,
+            tally: active.tally,
             dirty: false,
             poisoned: false,
-            screenshots: None,
+            cache: Mutex::new(None),
         };
-        if loaded.torn_bytes > 0 {
-            record.append_control(
-                now_ms(),
-                NetworkEvent::Sidecar {
-                    state: SidecarState::Recovered,
-                    generation: 0,
-                    container: None,
-                    detail: Some(format!("torn {} bytes", loaded.torn_bytes)),
-                },
-            )?;
+        if torn_bytes > 0 {
+            record.append(now_ms(), recovered(torn_bytes))?;
             record.sync()?;
         }
         Ok(record)
     }
 
-    /// Append an ordinary event. `Err(Full)` past the cap.
+    /// Append an event and return its sequence number once its line is
+    /// written. A full active segment is sealed first.
     pub fn append(&mut self, ts_ms: u64, event: NetworkEvent) -> Result<u64, NetworkRecordError> {
-        self.append_within(ts_ms, event, 0, 0)
-    }
-
-    /// Append a `policy`, `sidecar`, `unbind` or `limit` event, using the
-    /// reserved headroom once the ordinary cap is reached.
-    pub fn append_control(
-        &mut self,
-        ts_ms: u64,
-        event: NetworkEvent,
-    ) -> Result<u64, NetworkRecordError> {
-        if !event.is_control() {
-            return Err(NetworkRecordError::NotControl);
-        }
-        self.append_within(
-            ts_ms,
-            event,
-            CONTROL_HEADROOM_EVENTS,
-            CONTROL_HEADROOM_BYTES,
-        )
-    }
-
-    fn append_within(
-        &mut self,
-        ts_ms: u64,
-        event: NetworkEvent,
-        extra_events: u64,
-        extra_bytes: u64,
-    ) -> Result<u64, NetworkRecordError> {
         if self.poisoned {
             return Err(NetworkRecordError::Poisoned);
         }
         event.validate()?;
-        let seq = self.last_seq + 1;
-        let mut line = serde_json::to_vec(&NetworkLine {
-            v: NETWORK_RECORD_VERSION,
-            seq,
-            ts_ms,
-            event,
-        })
-        .map_err(io::Error::other)?;
-        line.push(b'\n');
-        if line.len() > MAX_LINE_BYTES {
-            return Err(NetworkRecordError::LineTooLong);
-        }
-        let events = self.index.len() as u64;
-        if events >= self.limits.max_events + extra_events
-            || self.bytes + line.len() as u64 > self.limits.max_bytes + extra_bytes
-        {
-            return Err(NetworkRecordError::Full);
+        let seq = self.tally.last_seq + 1;
+        let generation = event.generation();
+        let line = encode(seq, ts_ms, event)?;
+        if self.limits.full(
+            self.active_index.len() as u64,
+            self.active_len - self.header_len,
+        ) {
+            self.seal()?;
         }
         if let Err(error) = self.file.write_all(&line) {
             // A partial line may now end the file; only a reopen may decide.
             self.poisoned = true;
             return Err(error.into());
         }
-        self.index.push((seq, self.bytes));
-        self.bytes += line.len() as u64;
-        self.last_seq = seq;
+        self.active_index.push((seq, self.active_len as u32));
+        self.active_len += line.len() as u64;
+        self.tally
+            .count(seq, line.len(), generation)
+            .map_err(damaged)?;
         self.dirty = true;
         Ok(seq)
+    }
+
+    /// Seal the active segment and start the next one. The sealed copy is
+    /// published and synced first, so every event written to the active
+    /// segment is durable in it; the new active segment then replaces the
+    /// old one. A crash between the two is completed by the next open. Any
+    /// failure leaves the record refusing writes until it is reopened.
+    fn seal(&mut self) -> Result<(), NetworkRecordError> {
+        let result = self.seal_inner();
+        if result.is_err() {
+            self.poisoned = true;
+        }
+        result
+    }
+
+    fn seal_inner(&mut self) -> Result<(), NetworkRecordError> {
+        let bytes = self
+            .namespace
+            .read_limited(ACTIVE_FILE, segments::SEGMENT_FILE_CEILING)?;
+        if bytes.len() as u64 != self.active_len {
+            return Err(damaged("the active segment changed while it was open"));
+        }
+        let (sealed_bytes, digest) = segments::sealed_file(&bytes, self.active_index.len() as u64)?;
+        if self.segment_namespace.is_none() {
+            self.segment_namespace = Some(self.namespace.child(SEGMENTS_DIR)?);
+        }
+        let segment_dir = self
+            .segment_namespace
+            .as_ref()
+            .ok_or_else(|| damaged("the sealed segments are missing"))?;
+        segment_dir.atomic_write(segments::sealed_name(self.header.index), &sealed_bytes)?;
+        if self.segments.is_none() {
+            self.segments = Some(segment_dir.secure_dir()?);
+        }
+        let chain = Chain {
+            index: self.header.index + 1,
+            previous: Some(digest.clone()),
+            tally: self.tally,
+        };
+        let header = chain.header(&self.meta);
+        let line = segments::header_line(&header)?;
+        self.namespace.atomic_write(ACTIVE_FILE, &line)?;
+        self.file = self.namespace.open_append(ACTIVE_FILE)?;
+        self.sealed.push(Sealed {
+            index: self.header.index,
+            last_seq: self.tally.last_seq,
+            digest,
+        });
+        self.header = header;
+        self.header_len = line.len() as u64;
+        self.active_index.clear();
+        self.active_len = line.len() as u64;
+        self.dirty = false;
+        Ok(())
     }
 
     /// Flush completed appends to stable storage and re-check the record's
@@ -1212,35 +1368,170 @@ impl NetworkRecord {
         limit: usize,
     ) -> Result<Vec<NetworkLine>, NetworkRecordError> {
         let limit = limit.min(MAX_READ_LIMIT);
-        let start = match after {
-            Some(after) => self.index.partition_point(|(seq, _)| *seq <= after),
-            None => 0,
-        };
-        if limit == 0 || start >= self.index.len() {
-            return Ok(Vec::new());
+        let after = after.unwrap_or(0);
+        let mut lines = Vec::new();
+        if limit == 0 {
+            return Ok(lines);
         }
-        let end = (start + limit).min(self.index.len());
-        let from = self.index[start].1;
-        let to = self
-            .index
-            .get(end)
-            .map_or(self.bytes, |(_, offset)| *offset);
-        let mut file = self
-            .namespace
-            .open_read(NETWORK_RECORD_FILE, self.limits.read_ceiling())?;
-        file.seek(SeekFrom::Start(from))?;
-        let mut bytes = vec![0; (to - from) as usize];
-        file.read_exact(&mut bytes)?;
-        bytes
-            .split(|byte| *byte == b'\n')
-            .filter(|line| !line.is_empty())
-            .map(|line| {
-                serde_json::from_slice(line).map_err(|error| NetworkRecordError::Damaged {
-                    line: 0,
-                    reason: error.to_string(),
-                })
-            })
-            .collect()
+        self.namespace.verify_ambient_identity()?;
+        let first = self
+            .sealed
+            .partition_point(|segment| segment.last_seq <= after);
+        for segment in &self.sealed[first..] {
+            if lines.len() >= limit {
+                return Ok(lines);
+            }
+            self.sealed_lines_after(segment, after, limit, &mut lines)?;
+        }
+        let start = self.active_index.partition_point(|(seq, _)| *seq <= after);
+        let end = (start + limit - lines.len()).min(self.active_index.len());
+        if start < end {
+            let from = self.active_index[start].1 as u64;
+            let to = self
+                .active_index
+                .get(end)
+                .map_or(self.active_len, |(_, offset)| *offset as u64);
+            let file = self
+                .namespace
+                .open_read(ACTIVE_FILE, segments::SEGMENT_FILE_CEILING)?;
+            lines.extend(parse_all(&read_range(file, from, to)?)?);
+        }
+        Ok(lines)
+    }
+
+    /// Lines of one sealed segment with `seq > after`, until `lines` holds
+    /// `limit`. The segment is read whole and checked against its digest
+    /// once; later pages of it read only their lines.
+    fn sealed_lines_after(
+        &self,
+        segment: &Sealed,
+        after: u64,
+        limit: usize,
+        lines: &mut Vec<NetworkLine>,
+    ) -> Result<(), NetworkRecordError> {
+        let segment_dir = self
+            .segments
+            .as_ref()
+            .ok_or_else(|| damaged("the sealed segments are missing"))?;
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|_| damaged("the segment cache lock was poisoned"))?;
+        let wanted = |cached: &CachedSegment| {
+            let start = cached.lines.partition_point(|(seq, _, _)| *seq <= after);
+            start..(start + limit - lines.len()).min(cached.lines.len())
+        };
+        if let Some(cached) = cache
+            .as_ref()
+            .filter(|cached| cached.index == segment.index)
+        {
+            let range = wanted(cached);
+            if range.is_empty() {
+                return Ok(());
+            }
+            let from = cached.lines[range.start].1 as u64;
+            let to = cached.lines[range.end - 1].2 as u64;
+            let file = segment_dir.open_file_limited(
+                segments::sealed_name(segment.index),
+                segments::SEGMENT_FILE_CEILING,
+            )?;
+            let bytes = read_range(file, from, to)?;
+            for &(seq, start, end) in &cached.lines[range] {
+                let line = segments::parse_line(
+                    &bytes[(start as u64 - from) as usize..(end as u64 - from) as usize],
+                )
+                .filter(|line| line.seq == seq)
+                .ok_or_else(|| damaged("a sealed segment changed after it was opened"))?;
+                lines.push(line);
+            }
+            return Ok(());
+        }
+        let read = segments::read_sealed(segment_dir, segment.index)?;
+        if read.digest != segment.digest {
+            return Err(damaged("a sealed segment changed after it was opened"));
+        }
+        let base = read.events.start;
+        let mut index = Vec::new();
+        for (at, line) in segments::lines(read.region()) {
+            let seq = match segments::line_seq(line) {
+                Some(seq) => seq,
+                None => {
+                    segments::parse_line(line)
+                        .ok_or_else(|| damaged("a recorded line does not parse"))?
+                        .seq
+                }
+            };
+            let start = (base + at) as u32;
+            index.push((seq, start, start + line.len() as u32));
+        }
+        let cached = CachedSegment {
+            index: segment.index,
+            lines: index,
+        };
+        for &(_, start, end) in &cached.lines[wanted(&cached)] {
+            lines.push(
+                segments::parse_line(&read.bytes[start as usize..end as usize])
+                    .ok_or_else(|| damaged("a recorded line does not parse"))?,
+            );
+        }
+        *cache = Some(cached);
+        Ok(())
+    }
+
+    /// The lines with `seq > after` whose event is one of `kinds`, at most
+    /// `max` (capped at 1000), searching at most one segment per call, so a
+    /// caller can go through the whole record while appends continue
+    /// between calls. Only lines that may be of those kinds are parsed (see
+    /// [`Self::read_existing_matching`]).
+    pub fn read_kinds_after(
+        &self,
+        after: Option<u64>,
+        kinds: &[&str],
+        max: usize,
+    ) -> Result<KindPage, NetworkRecordError> {
+        self.namespace.verify_ambient_identity()?;
+        let max = max.clamp(1, MAX_READ_LIMIT);
+        let from = after.unwrap_or(0);
+        let mut lines = Vec::new();
+        let first = self
+            .sealed
+            .partition_point(|segment| segment.last_seq <= from);
+        if let Some(segment) = self.sealed.get(first) {
+            let segment_dir = self
+                .segments
+                .as_ref()
+                .ok_or_else(|| damaged("the sealed segments are missing"))?;
+            let read = segments::read_sealed(segment_dir, segment.index)?;
+            if read.digest != segment.digest {
+                return Err(damaged("a sealed segment changed after it was opened"));
+            }
+            let stopped = segments::kind_lines_after(read.region(), kinds, from, max, &mut lines)?;
+            return Ok(KindPage {
+                lines,
+                next_after: Some(stopped.unwrap_or(segment.last_seq)),
+                done: false,
+            });
+        }
+        let start = self.active_index.partition_point(|(seq, _)| *seq <= from);
+        if let Some((_, offset)) = self.active_index.get(start) {
+            let file = self
+                .namespace
+                .open_read(ACTIVE_FILE, segments::SEGMENT_FILE_CEILING)?;
+            let bytes = read_range(file, *offset as u64, self.active_len)?;
+            if let Some(seq) = segments::kind_lines_after(&bytes, kinds, from, max, &mut lines)? {
+                return Ok(KindPage {
+                    lines,
+                    next_after: Some(seq),
+                    done: false,
+                });
+            }
+        }
+        Ok(KindPage {
+            lines,
+            next_after: (self.tally.last_seq > 0 || after.is_some())
+                .then_some(self.tally.last_seq.max(from)),
+            done: true,
+        })
     }
 
     /// Read a record without opening a writer: no lock, no recovery, no
@@ -1250,116 +1541,68 @@ impl NetworkRecord {
         canonical: &crate::execution_store::SessionExecutionStore,
         after: Option<u64>,
         limit: usize,
-        limits: RecordLimits,
     ) -> Result<Option<(Vec<NetworkLine>, RecordStats)>, NetworkRecordError> {
-        let bytes = match canonical.read_existing_component(
-            &ExecutionComponent::NetworkRecord,
-            Path::new(NETWORK_RECORD_FILE),
-            limits.read_ceiling(),
-        ) {
-            Ok(bytes) => bytes,
-            Err(crate::execution_store::ExecutionStoreError::Io(error))
-                if error.kind() == io::ErrorKind::NotFound =>
-            {
-                return Ok(None);
-            }
-            Err(error) => return Err(io::Error::other(error.to_string()).into()),
-        };
-        let loaded = load(&bytes)?;
-        let events = loaded.index.len() as u64;
-        let stats = RecordStats {
-            events,
-            bytes: loaded.good_bytes,
-            last_seq: loaded.last_seq,
-            full: events >= limits.max_events || loaded.good_bytes >= limits.max_bytes,
-            gaps: loaded.gaps,
-            max_events: limits.max_events,
-        };
         let limit = limit.min(MAX_READ_LIMIT);
-        let start = match after {
-            Some(after) => loaded.index.partition_point(|(seq, _)| *seq <= after),
-            None => 0,
-        };
-        let lines = loaded.index[start.min(loaded.index.len())..]
-            .iter()
-            .take(limit)
-            .map(|(_, offset)| {
-                let from = *offset as usize;
-                let to = from
-                    + bytes[from..]
-                        .iter()
-                        .position(|byte| *byte == b'\n')
-                        .unwrap_or(bytes.len() - from);
-                serde_json::from_slice(&bytes[from..to]).map_err(|error| {
-                    NetworkRecordError::Damaged {
-                        line: 0,
-                        reason: error.to_string(),
-                    }
-                })
-            })
-            .collect::<Result<Vec<NetworkLine>, _>>()?;
-        Ok(Some((lines, stats)))
+        let after = after.unwrap_or(0);
+        match Existing::open(canonical)? {
+            None => Ok(None),
+            Some(Existing::Single(bytes)) => {
+                let loaded = load(&bytes)?;
+                let start = loaded.index.partition_point(|(seq, _)| *seq <= after);
+                let lines = loaded.index[start..]
+                    .iter()
+                    .take(limit)
+                    .map(|(_, offset)| {
+                        let from = *offset as usize;
+                        let to = from
+                            + memchr::memchr(b'\n', &bytes[from..]).unwrap_or(bytes.len() - from);
+                        segments::parse_line(&bytes[from..to])
+                            .ok_or_else(|| damaged("a recorded line does not parse"))
+                    })
+                    .collect::<Result<Vec<NetworkLine>, _>>()?;
+                Ok(Some((lines, RecordStats::of(&loaded.tally))))
+            }
+            Some(Existing::Segmented(snapshot)) => {
+                let lines = snapshot.lines_after(after, limit)?;
+                Ok(Some((lines, RecordStats::of(&snapshot.tally))))
+            }
+        }
     }
 
     /// The newest stored lines of event kind `kind` that `keep` accepts, at
     /// most `max`, oldest first, read without opening a writer. Like
     /// [`Self::read_existing`] it takes no lock, recovers nothing, creates
     /// nothing and skips a torn tail. `Ok(None)` when the Session has no
-    /// record.
+    /// record. Segments are read newest first, one at a time, until `max`
+    /// lines are found.
     ///
-    /// Only lines that may be of that kind are parsed: the file is searched
-    /// once for `"kind":"<kind>"`, which the writer's compact JSON puts at the
-    /// start of every event of that kind (an escaped string value cannot
-    /// contain it), and each match is parsed and its kind checked. Other lines
-    /// are not validated, so a damaged line of another kind is not reported
-    /// here; opening the writer still refuses one.
+    /// Only lines that may be of that kind are parsed: each segment is
+    /// searched once for `"kind":"<kind>"`, which the writer's compact JSON
+    /// puts at the start of every event of that kind (an escaped string value
+    /// cannot contain it), and each match is parsed and its kind checked.
+    /// Other lines are not validated, so a damaged line of another kind is
+    /// not reported here; opening the writer still refuses one.
     pub fn read_existing_matching(
         canonical: &crate::execution_store::SessionExecutionStore,
-        limits: RecordLimits,
         kind: &str,
         keep: impl Fn(&NetworkEvent) -> bool,
         max: usize,
     ) -> Result<Option<Vec<NetworkLine>>, NetworkRecordError> {
-        let bytes = match canonical.read_existing_component(
-            &ExecutionComponent::NetworkRecord,
-            Path::new(NETWORK_RECORD_FILE),
-            limits.read_ceiling(),
-        ) {
-            Ok(bytes) => bytes,
-            Err(crate::execution_store::ExecutionStoreError::Io(error))
-                if error.kind() == io::ErrorKind::NotFound =>
-            {
-                return Ok(None);
-            }
-            Err(error) => return Err(io::Error::other(error.to_string()).into()),
-        };
-        Ok(Some(matching_lines(&bytes, kind, keep, max)?))
+        match Existing::open(canonical)? {
+            None => Ok(None),
+            Some(Existing::Single(bytes)) => Ok(Some(matching_lines(&bytes, kind, keep, max)?)),
+            Some(Existing::Segmented(snapshot)) => Ok(Some(snapshot.matching(kind, &keep, max)?)),
+        }
     }
 
     /// Keep a screenshot beside the record, named by its SHA-256. The bytes
     /// must be a JPEG or PNG of at most [`MAX_SCREENSHOT_BYTES`]. Storing
-    /// the same bytes again returns the same reference. Past
-    /// [`MAX_SCREENSHOTS`] screenshots or [`MAX_SCREENSHOT_TOTAL_BYTES`] in
-    /// all it returns `Full`.
+    /// the same bytes again returns the same reference. Nothing limits how
+    /// many a Session keeps, and nothing lists them.
     pub fn store_screenshot(
         &mut self,
         media_type: &str,
         bytes: &[u8],
-    ) -> Result<ScreenshotRef, NetworkRecordError> {
-        self.store_screenshot_within(
-            media_type,
-            bytes,
-            MAX_SCREENSHOTS,
-            MAX_SCREENSHOT_TOTAL_BYTES,
-        )
-    }
-
-    fn store_screenshot_within(
-        &mut self,
-        media_type: &str,
-        bytes: &[u8],
-        max_count: usize,
-        max_bytes: u64,
     ) -> Result<ScreenshotRef, NetworkRecordError> {
         let extension = screenshot_extension(media_type).ok_or(
             NetworkRecordError::InvalidEvent("screenshots are JPEG or PNG"),
@@ -1388,26 +1631,8 @@ impl NetworkRecord {
         if directory.is_file(&name)? {
             return Ok(reference);
         }
-        let (count, used) = match self.screenshots {
-            Some(kept) => kept,
-            None => {
-                let entries = directory.entries_limited(MAX_SCREENSHOTS + 1)?;
-                let mut used = 0u64;
-                for entry in &entries {
-                    if entry.file_type == axocoatl_core::SecureEntryType::File {
-                        used = used.saturating_add(directory.file_len(&entry.name)?);
-                    }
-                }
-                (entries.len(), used)
-            }
-        };
-        self.screenshots = Some((count, used));
-        if count >= max_count || used.saturating_add(bytes.len() as u64) > max_bytes {
-            return Err(NetworkRecordError::Full);
-        }
         directory.atomic_write(&name, bytes)?;
         directory.sync_all()?;
-        self.screenshots = Some((count + 1, used + bytes.len() as u64));
         Ok(reference)
     }
 
@@ -1442,19 +1667,12 @@ impl NetworkRecord {
     }
 
     pub fn stats(&self) -> RecordStats {
-        let events = self.index.len() as u64;
-        RecordStats {
-            events,
-            bytes: self.bytes,
-            last_seq: self.last_seq,
-            full: events >= self.limits.max_events || self.bytes >= self.limits.max_bytes,
-            gaps: self.gaps,
-            max_events: self.limits.max_events,
-        }
+        RecordStats::of(&self.tally)
     }
 
-    pub fn limits(&self) -> RecordLimits {
-        self.limits
+    /// How many segments are sealed.
+    pub fn sealed_segments(&self) -> usize {
+        self.sealed.len()
     }
 }
 
@@ -1466,12 +1684,247 @@ impl Drop for NetworkRecord {
     }
 }
 
+/// Times a reader starts over when a writer sealed a segment under it.
+const READ_ATTEMPTS: usize = 4;
+
+/// A record as a reader without a writer finds it.
+enum Existing {
+    /// Axocoatl 1.2.0's single file, not migrated yet.
+    Single(Vec<u8>),
+    Segmented(Box<Snapshot>),
+}
+
+/// The segmented record at one moment: how many segments were sealed, the
+/// active segment, and the totals through its last complete event.
+struct Snapshot {
+    segments: Option<SecureDir>,
+    count: u64,
+    active_bytes: Vec<u8>,
+    /// `None` when the active segment was sealed and not replaced yet: its
+    /// events are in the last sealed segment.
+    active: Option<segments::ActiveRead>,
+    tally: Tally,
+}
+
+enum Attempt {
+    Changed,
+    Failed(NetworkRecordError),
+}
+
+impl From<NetworkRecordError> for Attempt {
+    fn from(error: NetworkRecordError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl From<io::Error> for Attempt {
+    fn from(error: io::Error) -> Self {
+        Self::Failed(error.into())
+    }
+}
+
+impl Existing {
+    fn open(
+        canonical: &crate::execution_store::SessionExecutionStore,
+    ) -> Result<Option<Self>, NetworkRecordError> {
+        let not_found = |error: &crate::execution_store::ExecutionStoreError| {
+            matches!(error, crate::execution_store::ExecutionStoreError::Io(error)
+                if error.kind() == io::ErrorKind::NotFound)
+        };
+        let root = match canonical.existing_component_root(
+            &ExecutionComponent::NetworkRecord,
+            Path::new(NETWORK_RECORD_FILE),
+        ) {
+            Ok(root) => root,
+            Err(error) if not_found(&error) => return Ok(None),
+            Err(error) => return Err(io::Error::other(error.to_string()).into()),
+        };
+        let meta = record_meta(
+            &canonical
+                .identity()
+                .map_err(|error| io::Error::other(error.to_string()))?,
+        );
+        for _ in 0..READ_ATTEMPTS {
+            let primary =
+                match root.read_limited(NETWORK_RECORD_FILE, segments::LEGACY_FILE_CEILING) {
+                    Ok(bytes) => bytes,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                    Err(error) => return Err(error.into()),
+                };
+            if !segments::is_head(&primary)? {
+                return Ok(Some(Self::Single(primary)));
+            }
+            match Snapshot::take(&root, &meta) {
+                Ok(snapshot) => {
+                    root.verify_ambient_identity()?;
+                    canonical
+                        .identity()
+                        .map_err(|error| io::Error::other(error.to_string()))?;
+                    return Ok(Some(Self::Segmented(Box::new(snapshot))));
+                }
+                Err(Attempt::Changed) => continue,
+                Err(Attempt::Failed(error)) => return Err(error),
+            }
+        }
+        Err(damaged("the record kept changing while it was being read"))
+    }
+}
+
+impl Snapshot {
+    fn take(root: &SecureDir, meta: &serde_json::Value) -> Result<Self, Attempt> {
+        let segment_dir = segments::segments_dir(root)?;
+        let count = segments::sealed_count(segment_dir.as_ref())?;
+        let active_bytes = match root.read_limited(ACTIVE_FILE, segments::SEGMENT_FILE_CEILING) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(damaged("the active segment is missing").into());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let active = segments::read_active(&active_bytes)?;
+        if active.header.meta != *meta {
+            return Err(damaged("the active segment belongs to another record").into());
+        }
+        let index = active.header.index;
+        if index == count {
+            return Ok(Self {
+                segments: segment_dir,
+                count,
+                tally: active.tally,
+                active: Some(active),
+                active_bytes,
+            });
+        }
+        if index > count {
+            // Sealed after the listing above; start over.
+            return Err(Attempt::Changed);
+        }
+        match &segment_dir {
+            Some(segment_dir) if index + 1 == count => {
+                // Sealed and not replaced yet: a writer is sealing it, or
+                // stopped while it did. The sealed copy holds its events.
+                let last = segments::read_sealed(segment_dir, count - 1)?;
+                let tally = segments::tally_sealed(&last)?;
+                Ok(Self {
+                    segments: Some(segment_dir.clone()),
+                    count,
+                    active_bytes: Vec::new(),
+                    active: None,
+                    tally,
+                })
+            }
+            _ => Err(damaged("the segment chain is broken").into()),
+        }
+    }
+
+    /// The active segment's complete events, if it holds the newest ones.
+    fn active_region(&self) -> Option<(&segments::ActiveRead, &[u8])> {
+        self.active.as_ref().map(|active| {
+            (
+                active,
+                &self.active_bytes[active.header_len..active.good_len],
+            )
+        })
+    }
+
+    fn segment_dir(&self) -> Result<&SecureDir, NetworkRecordError> {
+        self.segments
+            .as_ref()
+            .ok_or_else(|| damaged("the sealed segments are missing"))
+    }
+
+    fn lines_after(
+        &self,
+        after: u64,
+        limit: usize,
+    ) -> Result<Vec<NetworkLine>, NetworkRecordError> {
+        let mut lines = Vec::new();
+        if limit == 0 {
+            return Ok(lines);
+        }
+        let active_first = self
+            .active
+            .as_ref()
+            .map_or(self.tally.last_seq + 1, |active| active.header.first_seq);
+        let mut previous = None;
+        if self.count > 0 && after + 1 < active_first {
+            let segment_dir = self.segment_dir()?;
+            // The last segment whose first sequence number is at most
+            // `after + 1` holds the first line after `after`, if any does.
+            let (mut low, mut high) = (0, self.count);
+            while low < high {
+                let middle = low + (high - low) / 2;
+                if segments::read_sealed_header(segment_dir, middle)?.first_seq <= after + 1 {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+            for index in low.saturating_sub(1)..self.count {
+                if lines.len() >= limit {
+                    return Ok(lines);
+                }
+                let read = segments::read_sealed(segment_dir, index)?;
+                if previous.is_some() && read.header.previous != previous {
+                    return Err(damaged("the segment chain is broken"));
+                }
+                segments::lines_after(read.region(), after, limit, &mut lines)?;
+                previous = Some(read.digest);
+            }
+        }
+        if let Some((active, region)) = self.active_region() {
+            if previous.is_some() && active.header.previous != previous {
+                return Err(damaged("the segment chain is broken"));
+            }
+            segments::lines_after(region, after, limit, &mut lines)?;
+        }
+        Ok(lines)
+    }
+
+    fn matching(
+        &self,
+        kind: &str,
+        keep: &impl Fn(&NetworkEvent) -> bool,
+        max: usize,
+    ) -> Result<Vec<NetworkLine>, NetworkRecordError> {
+        // Newest segment first; each segment's lines oldest first.
+        let mut found: Vec<Vec<NetworkLine>> = Vec::new();
+        let mut total = 0;
+        let mut newer_previous = None;
+        if let Some((active, region)) = self.active_region() {
+            let lines = matching_lines(region, kind, keep, max)?;
+            total += lines.len();
+            found.push(lines);
+            newer_previous = Some(active.header.previous.clone());
+        }
+        let mut index = self.count;
+        while total < max && index > 0 {
+            index -= 1;
+            let read = segments::read_sealed(self.segment_dir()?, index)?;
+            if let Some(previous) = &newer_previous {
+                if previous.as_ref() != Some(&read.digest) {
+                    return Err(damaged("the segment chain is broken"));
+                }
+            }
+            let lines = matching_lines(read.region(), kind, keep, max - total)?;
+            total += lines.len();
+            found.push(lines);
+            newer_previous = Some(read.header.previous.clone());
+        }
+        Ok(found.into_iter().rev().flatten().collect())
+    }
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(all(test, unix))]
+#[path = "network_record_segment_tests.rs"]
+mod segment_tests;
 
 #[cfg(all(test, unix))]
 mod tests {
@@ -1481,7 +1934,7 @@ mod tests {
     use crate::turn_contract::SessionId;
     use std::sync::Arc;
 
-    fn setup() -> (
+    pub(super) fn setup() -> (
         tempfile::TempDir,
         Arc<UpgradedFormatOwnership>,
         SessionExecutionStore,
@@ -1504,26 +1957,42 @@ mod tests {
         (root, ownership, store)
     }
 
-    fn open(store: &SessionExecutionStore, limits: RecordLimits) -> NetworkRecord {
+    pub(super) fn open(store: &SessionExecutionStore) -> NetworkRecord {
         NetworkRecord::open(
             store
                 .component_namespace(ExecutionComponent::NetworkRecord)
                 .unwrap(),
-            limits,
         )
         .unwrap()
     }
 
-    fn file_path(store: &SessionExecutionStore) -> std::path::PathBuf {
+    /// The active segment, where new events are appended.
+    pub(super) fn file_path(store: &SessionExecutionStore) -> std::path::PathBuf {
         store
             .path()
             .parent()
             .unwrap()
             .join("network-record")
-            .join(NETWORK_RECORD_FILE)
+            .join(ACTIVE_FILE)
     }
 
-    fn open_event(id: u64, host: &str) -> NetworkEvent {
+    /// Leave `bytes` as Axocoatl 1.2.0 did: the whole record in the primary
+    /// file of an initialized component, and nothing beside it.
+    pub(super) fn single_file_record(store: &SessionExecutionStore, bytes: &[u8]) {
+        drop(open(store));
+        let directory = file_path(store).parent().unwrap().to_path_buf();
+        std::fs::remove_file(directory.join(ACTIVE_FILE)).unwrap();
+        let _ = std::fs::remove_dir_all(directory.join(SEGMENTS_DIR));
+        std::fs::write(directory.join(NETWORK_RECORD_FILE), bytes).unwrap();
+    }
+
+    /// The active segment's header line, newline included.
+    pub(super) fn header_len(store: &SessionExecutionStore) -> usize {
+        let bytes = std::fs::read(file_path(store)).unwrap();
+        bytes.iter().position(|byte| *byte == b'\n').unwrap() + 1
+    }
+
+    pub(super) fn open_event(id: u64, host: &str) -> NetworkEvent {
         NetworkEvent::Open {
             conn: format!("g1:{id}"),
             peer: None,
@@ -1549,7 +2018,7 @@ mod tests {
         }
     }
 
-    fn limit_event() -> NetworkEvent {
+    pub(super) fn limit_event() -> NetworkEvent {
         NetworkEvent::Limit {
             what: LimitKind::RecordFull,
             detail: "cap reached".into(),
@@ -1580,7 +2049,7 @@ mod tests {
     #[test]
     fn browser_events_and_screenshots_are_kept_beside_the_record() {
         let (_root, _ownership, store) = setup();
-        let mut record = open(&store, RecordLimits::default());
+        let mut record = open(&store);
         let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe0];
         jpeg.extend(std::iter::repeat_n(9u8, 1000));
         let shot = record.store_screenshot("image/jpeg", &jpeg).unwrap();
@@ -1613,7 +2082,7 @@ mod tests {
                 .is_none()
         );
 
-        let mut record = open(&store, RecordLimits::default());
+        let mut record = open(&store);
         for (media, bytes) in [
             ("image/svg+xml", b"<svg/>".to_vec()),
             ("image/jpeg", b"<svg/>".to_vec()),
@@ -1638,53 +2107,60 @@ mod tests {
     }
 
     #[test]
-    fn screenshots_stop_at_the_byte_budget_across_reopen() {
+    fn screenshots_have_no_count_or_byte_budget() {
+        // Axocoatl 1.2.0 counted the screenshots on disk at first use and
+        // stopped keeping them at 2000 or 64 MiB. Leave more than both, as
+        // a long Session would, and keep storing.
+        use sha2::Digest;
         let (_root, _ownership, store) = setup();
-        let jpeg = |fill: u8, len: usize| {
+        drop(open(&store));
+        let directory = file_path(&store).parent().unwrap().join(SCREENSHOT_DIR);
+        std::fs::create_dir(&directory).unwrap();
+        let jpeg = |n: u32, len: usize| {
             let mut bytes = vec![0xff, 0xd8, 0xff, 0xe0];
-            bytes.resize(len, fill);
+            bytes.extend_from_slice(&n.to_le_bytes());
+            bytes.resize(len, 7);
             bytes
         };
-        let mut record = open(&store, RecordLimits::default());
-        record
-            .store_screenshot_within("image/jpeg", &jpeg(1, 4000), 10, 10_000)
+        let kept = |bytes: &[u8]| {
+            std::fs::write(
+                directory.join(format!("{:x}.jpg", sha2::Sha256::digest(bytes))),
+                bytes,
+            )
             .unwrap();
-        record
-            .store_screenshot_within("image/jpeg", &jpeg(2, 4000), 10, 10_000)
-            .unwrap();
-        // The third would pass the byte budget though the count allows it.
-        assert!(matches!(
-            record.store_screenshot_within("image/jpeg", &jpeg(3, 4000), 10, 10_000),
-            Err(NetworkRecordError::Full)
-        ));
-        // Bytes already kept are named again without counting twice.
-        record
-            .store_screenshot_within("image/jpeg", &jpeg(1, 4000), 10, 10_000)
-            .unwrap();
-        record
-            .store_screenshot_within("image/jpeg", &jpeg(4, 1000), 10, 10_000)
-            .unwrap();
+        };
+        for n in 0..2_000 {
+            kept(&jpeg(n, 64));
+        }
+        for n in 0..65 {
+            kept(&jpeg(10_000 + n, MAX_SCREENSHOT_BYTES));
+        }
+        let mut record = open(&store);
+        let new = jpeg(20_000, 4096);
+        let shot = record.store_screenshot("image/jpeg", &new).unwrap();
+        assert_eq!(record.store_screenshot("image/jpeg", &new).unwrap(), shot);
+        let mut large = b"\x89PNG\r\n\x1a\n".to_vec();
+        large.resize(MAX_SCREENSHOT_BYTES, 9);
+        let png = record.store_screenshot("image/png", &large).unwrap();
         drop(record);
-        // A reopened record counts what is on disk.
-        let mut record = open(&store, RecordLimits::default());
-        assert!(matches!(
-            record.store_screenshot_within("image/jpeg", &jpeg(5, 2000), 10, 10_000),
-            Err(NetworkRecordError::Full)
-        ));
-        record
-            .store_screenshot_within("image/jpeg", &jpeg(6, 1000), 10, 10_000)
-            .unwrap();
-        assert!(matches!(
-            record.store_screenshot_within("image/jpeg", &jpeg(7, 100), 4, 10_000),
-            Err(NetworkRecordError::Full)
-        ));
-        assert_eq!(MAX_SCREENSHOT_TOTAL_BYTES, 64 * 1024 * 1024);
+        let read = |sha256: &str| {
+            NetworkRecord::read_screenshot_existing(&store, sha256)
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(read(&shot.sha256), ("image/jpeg".to_string(), new));
+        assert_eq!(read(&png.sha256), ("image/png".to_string(), large));
+        let old = jpeg(3, 64);
+        assert_eq!(
+            read(&format!("{:x}", sha2::Sha256::digest(&old))),
+            ("image/jpeg".to_string(), old)
+        );
     }
 
     #[test]
     fn append_and_read_back_in_order() {
         let (_root, _ownership, store) = setup();
-        let mut record = open(&store, RecordLimits::default());
+        let mut record = open(&store);
         assert_eq!(
             record
                 .append(10, open_event(1, "registry.npmjs.org"))
@@ -1720,9 +2196,10 @@ mod tests {
         assert_eq!(record.read_after(None, 1).unwrap().len(), 1);
         assert!(record.read_after(None, 0).unwrap().is_empty());
 
-        // The wire form is the documented contract.
+        // The wire form is the documented contract. The active segment
+        // starts with its header.
         let text = std::fs::read_to_string(file_path(&store)).unwrap();
-        let first: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        let first: serde_json::Value = serde_json::from_str(text.lines().nth(1).unwrap()).unwrap();
         assert_eq!(first["v"], 1);
         assert_eq!(first["event"]["kind"], "open");
         assert_eq!(first["event"]["decision"], "allow");
@@ -1731,31 +2208,26 @@ mod tests {
         assert!(first["event"]["binding"].get("terminal_id").is_none());
         assert!(first["event"].get("reason").is_none());
         let stats = record.stats();
-        assert_eq!(
-            (stats.events, stats.last_seq, stats.gaps, stats.full),
-            (2, 2, 0, false)
-        );
-        assert_eq!(stats.bytes, text.len() as u64);
+        assert_eq!((stats.events, stats.last_seq, stats.gaps), (2, 2, 0));
+        assert_eq!(stats.bytes, (text.len() - header_len(&store)) as u64);
+        assert_eq!(stats.max_generation, 1);
     }
 
     #[test]
     fn read_existing_needs_no_writer_and_skips_a_torn_tail() {
         let (_root, _ownership, store) = setup();
-        assert!(
-            NetworkRecord::read_existing(&store, None, 10, RecordLimits::default())
-                .unwrap()
-                .is_none()
-        );
+        assert!(NetworkRecord::read_existing(&store, None, 10)
+            .unwrap()
+            .is_none());
         {
-            let mut record = open(&store, RecordLimits::default());
+            let mut record = open(&store);
             for id in 0..4 {
                 record.append(id, open_event(id, "a.example")).unwrap();
             }
             // Works while the writer holds its lock.
-            let (lines, stats) =
-                NetworkRecord::read_existing(&store, Some(1), 2, RecordLimits::default())
-                    .unwrap()
-                    .unwrap();
+            let (lines, stats) = NetworkRecord::read_existing(&store, Some(1), 2)
+                .unwrap()
+                .unwrap();
             assert_eq!(
                 lines.iter().map(|line| line.seq).collect::<Vec<_>>(),
                 [2, 3]
@@ -1767,12 +2239,11 @@ mod tests {
         let good = bytes.len();
         bytes.extend_from_slice(b"{\"v\":1,");
         std::fs::write(&path, &bytes).unwrap();
-        let (lines, stats) =
-            NetworkRecord::read_existing(&store, None, 100, RecordLimits::default())
-                .unwrap()
-                .unwrap();
+        let (lines, stats) = NetworkRecord::read_existing(&store, None, 100)
+            .unwrap()
+            .unwrap();
         assert_eq!(lines.len(), 4);
-        assert_eq!(stats.bytes, good as u64);
+        assert_eq!(stats.bytes, (good - header_len(&store)) as u64);
         // The read changed nothing.
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
@@ -1781,12 +2252,12 @@ mod tests {
     fn sequence_continues_across_reopen() {
         let (_root, _ownership, store) = setup();
         {
-            let mut record = open(&store, RecordLimits::default());
+            let mut record = open(&store);
             for id in 0..5 {
                 record.append(id, open_event(id, "a.example")).unwrap();
             }
         }
-        let mut record = open(&store, RecordLimits::default());
+        let mut record = open(&store);
         assert_eq!(record.stats().last_seq, 5);
         assert_eq!(record.append(9, limit_event()).unwrap(), 6);
         let seqs: Vec<u64> = record
@@ -1801,7 +2272,7 @@ mod tests {
     #[test]
     fn a_second_writer_is_refused_while_one_is_open() {
         let (_root, _ownership, store) = setup();
-        let _record = open(&store, RecordLimits::default());
+        let _record = open(&store);
         assert!(store
             .component_namespace(ExecutionComponent::NetworkRecord)
             .is_err());
@@ -1812,7 +2283,7 @@ mod tests {
         for tail in [&b"{\"v\":1,\"seq\":4,\"ts"[..], b"not json\n", b"\n"] {
             let (_root, _ownership, store) = setup();
             {
-                let mut record = open(&store, RecordLimits::default());
+                let mut record = open(&store);
                 for id in 0..3 {
                     record.append(id, open_event(id, "a.example")).unwrap();
                 }
@@ -1822,7 +2293,7 @@ mod tests {
             let mut torn = good.clone();
             torn.extend_from_slice(tail);
             std::fs::write(&path, &torn).unwrap();
-            let record = open(&store, RecordLimits::default());
+            let record = open(&store);
             let lines = record.read_after(None, 100).unwrap();
             assert_eq!(lines.len(), 4, "{tail:?}");
             assert_eq!(lines[3].seq, 4);
@@ -1845,13 +2316,14 @@ mod tests {
     fn damage_before_the_end_refuses_the_open() {
         let (_root, _ownership, store) = setup();
         {
-            let mut record = open(&store, RecordLimits::default());
+            let mut record = open(&store);
             for id in 0..3 {
                 record.append(id, open_event(id, "a.example")).unwrap();
             }
         }
         let path = file_path(&store);
         let text = std::fs::read_to_string(&path).unwrap();
+        // The header is line 1; the first event, line 2, is damaged.
         let mut lines: Vec<&str> = text.lines().collect();
         lines[1] = "garbage";
         std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
@@ -1859,7 +2331,6 @@ mod tests {
             store
                 .component_namespace(ExecutionComponent::NetworkRecord)
                 .unwrap(),
-            RecordLimits::default(),
         )
         .unwrap_err();
         assert!(
@@ -1872,38 +2343,46 @@ mod tests {
     fn a_deleted_record_file_is_not_mistaken_for_a_new_record() {
         let (_root, _ownership, store) = setup();
         {
-            let mut record = open(&store, RecordLimits::default());
+            let mut record = open(&store);
             record.append(1, limit_event()).unwrap();
         }
+        let directory = file_path(&store).parent().unwrap().to_path_buf();
+        let active = std::fs::read(file_path(&store)).unwrap();
+        // Neither the head nor the active segment may go missing.
         std::fs::remove_file(file_path(&store)).unwrap();
-        assert!(NetworkRecord::open(
-            store
-                .component_namespace(ExecutionComponent::NetworkRecord)
-                .unwrap(),
-            RecordLimits::default(),
-        )
-        .is_err());
+        let reopen = || {
+            NetworkRecord::open(
+                store
+                    .component_namespace(ExecutionComponent::NetworkRecord)
+                    .unwrap(),
+            )
+        };
+        assert!(reopen().is_err());
+        std::fs::write(file_path(&store), active).unwrap();
+        std::fs::remove_file(directory.join(NETWORK_RECORD_FILE)).unwrap();
+        assert!(reopen().is_err());
     }
 
     #[test]
     fn sequence_gaps_are_counted_not_renumbered() {
         let (_root, _ownership, store) = setup();
         {
-            let mut record = open(&store, RecordLimits::default());
+            let mut record = open(&store);
             for id in 0..3 {
                 record.append(id, open_event(id, "a.example")).unwrap();
             }
         }
         let path = file_path(&store);
         let text = std::fs::read_to_string(&path).unwrap();
+        // Line 0 is the header; drop the second event.
         let kept: Vec<&str> = text
             .lines()
             .enumerate()
-            .filter(|(index, _)| *index != 1)
+            .filter(|(index, _)| *index != 2)
             .map(|(_, line)| line)
             .collect();
         std::fs::write(&path, format!("{}\n", kept.join("\n"))).unwrap();
-        let mut record = open(&store, RecordLimits::default());
+        let mut record = open(&store);
         assert_eq!(record.stats().gaps, 1);
         assert_eq!(record.append(5, limit_event()).unwrap(), 4);
         let seqs: Vec<u64> = record
@@ -1913,71 +2392,6 @@ mod tests {
             .map(|line| line.seq)
             .collect();
         assert_eq!(seqs, vec![3, 4]);
-    }
-
-    #[test]
-    fn cap_refuses_ordinary_events_but_keeps_control_headroom() {
-        let (_root, _ownership, store) = setup();
-        let mut record = open(
-            &store,
-            RecordLimits {
-                max_events: 3,
-                max_bytes: DEFAULT_MAX_BYTES,
-            },
-        );
-        for id in 0..3 {
-            record.append(id, open_event(id, "a.example")).unwrap();
-        }
-        assert!(record.stats().full);
-        assert!(matches!(
-            record.append(3, open_event(3, "a.example")),
-            Err(NetworkRecordError::Full)
-        ));
-        // A control event is still refused through the ordinary path...
-        assert!(matches!(
-            record.append(3, limit_event()),
-            Err(NetworkRecordError::Full)
-        ));
-        // ...fits through the control path, which refuses ordinary kinds.
-        assert_eq!(record.append_control(3, limit_event()).unwrap(), 4);
-        assert!(matches!(
-            record.append_control(3, open_event(4, "a.example")),
-            Err(NetworkRecordError::NotControl)
-        ));
-        for _ in 1..CONTROL_HEADROOM_EVENTS {
-            record
-                .append_control(
-                    4,
-                    NetworkEvent::Unbind {
-                        token: "0123456789abcdef".into(),
-                        reason: UnbindReason::Settled,
-                    },
-                )
-                .unwrap();
-        }
-        assert!(matches!(
-            record.append_control(5, limit_event()),
-            Err(NetworkRecordError::Full)
-        ));
-        assert_eq!(record.stats().events, 3 + CONTROL_HEADROOM_EVENTS);
-    }
-
-    #[test]
-    fn byte_cap_applies_too() {
-        let (_root, _ownership, store) = setup();
-        let mut record = open(
-            &store,
-            RecordLimits {
-                max_events: 1000,
-                max_bytes: 600,
-            },
-        );
-        let mut accepted = 0;
-        while record.append(1, open_event(accepted, "a.example")).is_ok() {
-            accepted += 1;
-        }
-        assert!(accepted >= 1 && record.stats().bytes <= 600, "{accepted}");
-        assert!(record.append_control(2, limit_event()).is_ok());
     }
 
     #[test]
@@ -1997,7 +2411,7 @@ mod tests {
         assert_eq!(parsed.event, limit_event_with("x"));
 
         let (_root, _ownership, store) = setup();
-        let mut record = open(&store, RecordLimits::default());
+        let mut record = open(&store);
         for event in [
             NetworkEvent::Unbind {
                 token: "axe_rawsecretvalue".into(),
@@ -2022,7 +2436,7 @@ mod tests {
             detail: "x".repeat(MAX_LINE_BYTES),
         };
         assert!(matches!(
-            record.append_control(1, huge),
+            record.append(1, huge),
             Err(NetworkRecordError::LineTooLong)
         ));
         assert_eq!(record.stats().events, 0);
@@ -2132,7 +2546,7 @@ mod tests {
             limit_event(),
         ];
         let (_root, _ownership, store) = setup();
-        let mut record = open(&store, RecordLimits::default());
+        let mut record = open(&store);
         for event in &events {
             record.append(1, event.clone()).unwrap();
         }
@@ -2173,7 +2587,7 @@ mod tests {
     #[test]
     fn ten_thousand_appends_finish_quickly() {
         let (_root, _ownership, store) = setup();
-        let mut record = open(&store, RecordLimits::default());
+        let mut record = open(&store);
         let started = std::time::Instant::now();
         for id in 0..10_000 {
             record
@@ -2195,7 +2609,7 @@ mod tests {
         assert_eq!(tail.last().unwrap().seq, 10_000);
     }
 
-    fn web_event(activation: &str) -> NetworkEvent {
+    pub(super) fn web_event(activation: &str) -> NetworkEvent {
         NetworkEvent::Web {
             tool: WebTool::WebSearch,
             invocation_id: "inv".into(),
@@ -2238,16 +2652,12 @@ mod tests {
     #[test]
     fn read_existing_matching_keeps_the_newest_of_one_kind_and_skips_a_torn_tail() {
         let (_root, _ownership, store) = setup();
-        assert!(NetworkRecord::read_existing_matching(
-            &store,
-            RecordLimits::default(),
-            "web",
-            |_| true,
-            10
-        )
-        .unwrap()
-        .is_none());
-        let mut record = open(&store, RecordLimits::default());
+        assert!(
+            NetworkRecord::read_existing_matching(&store, "web", |_| true, 10)
+                .unwrap()
+                .is_none()
+        );
+        let mut record = open(&store);
         for id in 0..2_500 {
             let event = if id % 1_000 == 7 {
                 web_event(&format!("act-{id}"))
@@ -2277,7 +2687,7 @@ mod tests {
             .write_all(b"{\"v\":1,\"seq\":99999,\"ts_ms\":1,\"event\":{\"kind\":\"web\"")
             .unwrap();
         let read = |keep: &dyn Fn(&NetworkEvent) -> bool, max: usize| {
-            NetworkRecord::read_existing_matching(&store, RecordLimits::default(), "web", keep, max)
+            NetworkRecord::read_existing_matching(&store, "web", keep, max)
                 .unwrap()
                 .unwrap()
         };
@@ -2295,15 +2705,9 @@ mod tests {
         .map(activation)
         .collect();
         assert_eq!(one, ["act-7"]);
-        let requests = NetworkRecord::read_existing_matching(
-            &store,
-            RecordLimits::default(),
-            "web_request",
-            |_| true,
-            100,
-        )
-        .unwrap()
-        .unwrap();
+        let requests = NetworkRecord::read_existing_matching(&store, "web_request", |_| true, 100)
+            .unwrap()
+            .unwrap();
         assert_eq!(requests.len(), 3);
         assert!(requests
             .iter()
@@ -2311,14 +2715,16 @@ mod tests {
     }
 
     #[test]
-    fn a_full_record_is_searched_for_its_web_lines_quickly() {
-        // A record at its default event cap, nearly all egress lines, with a
-        // web event every 500 lines: the projection's read parses only those.
+    fn a_large_record_is_searched_for_its_web_lines_quickly() {
+        // A record at Axocoatl 1.2.0's default event cap, nearly all egress
+        // lines, with a web event every 500 lines: the projection's read
+        // parses only those, in the single file 1.2.0 left and again once a
+        // writer moved it into segments.
+        const EVENTS: u64 = 50_000;
         let (_root, _ownership, store) = setup();
-        drop(open(&store, RecordLimits::default()));
         let mut bytes = Vec::new();
         let mut web = 0;
-        for seq in 1..=DEFAULT_MAX_EVENTS {
+        for seq in 1..=EVENTS {
             let event = if seq % 500 == 0 {
                 web += 1;
                 web_event(&format!("act-{seq}"))
@@ -2337,32 +2743,44 @@ mod tests {
             .unwrap();
             bytes.push(b'\n');
         }
-        std::fs::write(file_path(&store), &bytes).unwrap();
-        let started = std::time::Instant::now();
-        let lines = NetworkRecord::read_existing_matching(
-            &store,
-            RecordLimits::default(),
-            "web",
-            |_| true,
-            usize::MAX,
-        )
-        .unwrap()
-        .unwrap();
-        let elapsed = started.elapsed();
-        assert_eq!(lines.len(), web);
-        assert_eq!(lines.last().unwrap().seq, DEFAULT_MAX_EVENTS);
-        eprintln!(
-            "network record: {web} web lines found in {} MiB of {DEFAULT_MAX_EVENTS} events in {elapsed:?}",
-            bytes.len() >> 20
-        );
-        let bound = if cfg!(debug_assertions) { 2000 } else { 250 };
-        assert!(elapsed.as_millis() < bound, "{elapsed:?}");
+        single_file_record(&store, &bytes);
+        let search = |layout: &str| {
+            let started = std::time::Instant::now();
+            let lines = NetworkRecord::read_existing_matching(&store, "web", |_| true, usize::MAX)
+                .unwrap()
+                .unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(lines.len(), web);
+            assert_eq!(lines.last().unwrap().seq, EVENTS);
+            assert!(lines.windows(2).all(|pair| pair[0].seq < pair[1].seq));
+            eprintln!(
+                "network record: {web} web lines found in {} MiB of {EVENTS} events ({layout}) in {elapsed:?}",
+                bytes.len() >> 20
+            );
+            let bound = if cfg!(debug_assertions) { 2000 } else { 250 };
+            assert!(elapsed.as_millis() < bound, "{elapsed:?}");
+        };
+        search("single file");
+        let mut record = open(&store);
+        assert!(record.sealed_segments() > 1, "{record:?}");
+        assert_eq!(record.stats().events, EVENTS);
+        // 1.2.0 refused ordinary events at its 50,000-event cap and the
+        // reserved control events 64 past it; the record keeps going.
+        for seq in EVENTS + 1..=EVENTS + 100 {
+            assert_eq!(
+                record.append(seq, open_event(seq, "a.example")).unwrap(),
+                seq
+            );
+        }
+        assert_eq!(record.stats().events, EVENTS + 100);
+        drop(record);
+        search("segments");
     }
 
     #[test]
     fn a_damaged_line_of_the_kind_read_is_reported_and_others_are_not_read() {
         let (_root, _ownership, store) = setup();
-        let mut record = open(&store, RecordLimits::default());
+        let mut record = open(&store);
         record.append(1, web_event("act-1")).unwrap();
         record.sync().unwrap();
         drop(record);
@@ -2373,15 +2791,7 @@ mod tests {
         // Damage in a line of another kind is not this reader's to find.
         file.write_all(b"{\"v\":1,\"seq\":2,\"ts_ms\":1,\"event\":{\"kind\":\"open\",broken}\n")
             .unwrap();
-        let read = |kind: &str| {
-            NetworkRecord::read_existing_matching(
-                &store,
-                RecordLimits::default(),
-                kind,
-                |_| true,
-                10,
-            )
-        };
+        let read = |kind: &str| NetworkRecord::read_existing_matching(&store, kind, |_| true, 10);
         assert_eq!(read("web").unwrap().unwrap().len(), 1);
         // Damage in a line of the kind read, before the end, is reported.
         file.write_all(b"{\"v\":1,\"seq\":3,\"ts_ms\":1,\"event\":{\"kind\":\"web\",broken}\n")
@@ -2398,7 +2808,7 @@ mod tests {
     fn sync_data_cost_per_thousand_events() {
         // Reported for the A5 measurement; asserts only that it works.
         let (_root, _ownership, store) = setup();
-        let mut record = open(&store, RecordLimits::default());
+        let mut record = open(&store);
         let started = std::time::Instant::now();
         for id in 0..1000 {
             record

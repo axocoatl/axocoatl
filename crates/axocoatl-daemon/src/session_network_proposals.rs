@@ -231,66 +231,63 @@ impl std::fmt::Debug for ProposalBook {
 }
 
 impl ProposalBook {
-    /// Rebuild the list from a Session's record: each `proposal` line in
-    /// order, and an approval's `policy` line, which decides its proposal
-    /// even when the `proposal` line after it was not written.
-    pub fn replay(history: &[NetworkLine]) -> Self {
-        let mut book = Self::default();
-        for line in history {
-            match &line.event {
-                NetworkEvent::Proposal {
-                    id,
+    /// Rebuild the list from a Session's record, one line at a time, in
+    /// order: each `proposal` line, and an approval's `policy` line, which
+    /// decides its proposal even when the `proposal` line after it was not
+    /// written. Lines of other kinds change nothing.
+    pub fn apply(&mut self, line: &NetworkLine) {
+        match &line.event {
+            NetworkEvent::Proposal {
+                id,
+                state: ProposalState::Pending,
+                host,
+                ports,
+                reason,
+                agent,
+                invocation_id,
+                activation_id,
+                ..
+            } if is_proposal_id(id)
+                && self.position(id).is_none()
+                // Two calls that raced recorded the same request twice;
+                // the first one kept is the one they waited on.
+                && self.joinable(host, ports).is_none() =>
+            {
+                self.push(ProposalView {
+                    id: id.clone(),
                     state: ProposalState::Pending,
-                    host,
-                    ports,
-                    reason,
-                    agent,
-                    invocation_id,
-                    activation_id,
-                    ..
-                } if is_proposal_id(id)
-                    && book.position(id).is_none()
-                    // Two calls that raced recorded the same request twice;
-                    // the first one kept is the one they waited on.
-                    && book.joinable(host, ports).is_none() =>
-                {
-                    book.push(ProposalView {
-                        id: id.clone(),
-                        state: ProposalState::Pending,
-                        host: host.clone(),
-                        ports: ports.clone(),
-                        reason: reason.clone(),
-                        agent: agent.clone(),
-                        invocation_id: invocation_id.clone(),
-                        activation_id: activation_id.clone(),
-                        revision: None,
-                        actor: None,
-                    });
-                }
-                NetworkEvent::Proposal {
-                    id,
-                    state,
-                    actor,
-                    revision,
-                    ..
-                } if *state != ProposalState::Pending => {
-                    book.settle(id, *state, actor.clone(), *revision);
-                }
-                NetworkEvent::Policy {
-                    source: PolicySource::SessionAllow,
-                    change: Some(change),
-                    revision,
-                    actor,
-                    ..
-                } => {
-                    if let Some(id) = &change.proposal_id {
-                        book.settle(id, ProposalState::Approved, actor.clone(), Some(*revision));
-                    }
-                }
-                _ => {}
+                    host: host.clone(),
+                    ports: ports.clone(),
+                    reason: reason.clone(),
+                    agent: agent.clone(),
+                    invocation_id: invocation_id.clone(),
+                    activation_id: activation_id.clone(),
+                    revision: None,
+                    actor: None,
+                });
             }
+            NetworkEvent::Proposal {
+                id,
+                state,
+                actor,
+                revision,
+                ..
+            } if *state != ProposalState::Pending => {
+                self.settle(id, *state, actor.clone(), *revision);
+            }
+            NetworkEvent::Policy {
+                source: PolicySource::SessionAllow,
+                change: Some(change),
+                revision,
+                actor,
+                ..
+            } => {
+                if let Some(id) = &change.proposal_id {
+                    self.settle(id, ProposalState::Approved, actor.clone(), Some(*revision));
+                }
+            }
+            _ => {}
         }
-        book
     }
 
     fn position(&self, id: &str) -> Option<usize> {
