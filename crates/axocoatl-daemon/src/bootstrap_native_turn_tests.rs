@@ -74,6 +74,22 @@ async fn native_team_fixture(
     tools: &[&[&str]],
     dependencies: &[(usize, usize)],
 ) -> NativeFixture {
+    let limits = GrantLimits {
+        activations: 2,
+        invocations,
+        tokens: 8192,
+        cost_microunits: 0,
+    };
+    native_team_fixture_with_limits(limits, issuer, tools, dependencies).await
+}
+/// As `native_team_fixture`, with `limits` in every grant.
+async fn native_team_fixture_with_limits(
+    limits: GrantLimits,
+    issuer: &str,
+    tools: &[&[&str]],
+    dependencies: &[(usize, usize)],
+) -> NativeFixture {
+    let grant_limits = limits;
     let mut repository = fixture_with_legacy_turn(Some("legacy-before-native")).await;
     let canonical = repository._canonical.take().unwrap();
     let content = ExecutionContentStore::open_owned(
@@ -146,12 +162,7 @@ async fn native_team_fixture(
                     .unwrap()
                     .reference()
                     .clone();
-                let limits = GrantLimits {
-                    activations: 2,
-                    invocations,
-                    tokens: 8192,
-                    cost_microunits: 0,
-                };
+                let limits = grant_limits.clone();
                 let policy = AuthorityGrant {
                     id: format!("grant-{index}"),
                     revision: 1,
@@ -1039,6 +1050,9 @@ mod review_tests;
 
 #[path = "bootstrap_native_team_continue_tests.rs"]
 mod team_continue_tests;
+
+#[path = "bootstrap_native_long_session_tests.rs"]
+mod long_session_tests;
 
 #[path = "bootstrap_native_ways_admission_tests.rs"]
 mod ways_admission_tests;
