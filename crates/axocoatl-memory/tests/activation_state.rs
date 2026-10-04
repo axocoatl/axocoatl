@@ -290,8 +290,67 @@ impl Turn {
 fn open(root: &Path) -> ActivationStateStore {
     ActivationStateStore::open(root, session()).unwrap()
 }
-fn read_state(root: &Path) -> serde_json::Value {
+const ACTIVE_SEGMENT: &str = "activation-state.active.jsonl";
+
+/// The store's head file: its identity and journal binding.
+fn read_head(root: &Path) -> serde_json::Value {
     serde_json::from_slice(&fs::read(root.join("activation-state.json")).unwrap()).unwrap()
+}
+fn segment_files(root: &Path) -> Vec<std::path::PathBuf> {
+    let mut sealed: Vec<_> = fs::read_dir(root.join("segments"))
+        .into_iter()
+        .flatten()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    sealed.sort();
+    sealed.push(root.join(ACTIVE_SEGMENT));
+    sealed
+}
+/// Every journal record, in order, from the sealed and active segments.
+fn records(root: &Path) -> Vec<serde_json::Value> {
+    segment_files(root)
+        .iter()
+        .flat_map(|path| {
+            fs::read(path)
+                .unwrap()
+                .split(|byte| *byte == b'\n')
+                .filter(|line| !line.is_empty())
+                .map(|line| serde_json::from_slice::<serde_json::Value>(line).unwrap())
+                .collect::<Vec<_>>()
+        })
+        .filter_map(|line| line.get("record").cloned())
+        .collect()
+}
+fn count(records: &[serde_json::Value], kind: &str) -> usize {
+    records
+        .iter()
+        .filter(|record| record.get(kind).is_some())
+        .count()
+}
+/// A promotion decision whose pointers were not all written yet.
+fn pending(root: &Path) -> Option<serde_json::Value> {
+    records(root)
+        .last()
+        .and_then(|record| record.get("promotion_prepared").cloned())
+}
+/// The bytes of the head and every segment, to show that nothing was written.
+fn journal_bytes(root: &Path) -> Vec<u8> {
+    let mut bytes = fs::read(root.join("activation-state.json")).unwrap();
+    for path in segment_files(root) {
+        bytes.extend(fs::read(path).unwrap());
+    }
+    bytes
+}
+/// Make the next journal append fail.
+fn block_journal(root: &Path) -> std::path::PathBuf {
+    let saved = root.join("saved-segment");
+    fs::rename(root.join(ACTIVE_SEGMENT), &saved).unwrap();
+    fs::create_dir(root.join(ACTIVE_SEGMENT)).unwrap();
+    saved
+}
+fn unblock_journal(root: &Path, saved: std::path::PathBuf) {
+    fs::remove_dir(root.join(ACTIVE_SEGMENT)).unwrap();
+    fs::rename(saved, root.join(ACTIVE_SEGMENT)).unwrap();
 }
 fn object_path(root: &Path, reference: &CheckpointRef) -> std::path::PathBuf {
     root.join("objects").join(format!(
@@ -508,9 +567,14 @@ fn partial_multi_node_promotion_blocks_restore_and_reopen_finishes_exact_manifes
         store.committed_checkpoint(&conversation("a")),
         Err(ActivationStateError::RecoveryRequired)
     ));
-    let state = read_state(root.path());
-    assert_eq!(state["pending"]["selected"].as_array().unwrap().len(), 2);
-    assert!(state["heads"].as_array().unwrap().is_empty());
+    assert_eq!(
+        pending(root.path()).unwrap()["selected"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(count(&records(root.path()), "promotion_finished"), 0);
     assert!(root
         .path()
         .join("heads")
@@ -529,14 +593,9 @@ fn partial_multi_node_promotion_blocks_restore_and_reopen_finishes_exact_manifes
             format!("conversation-{node}")
         );
     }
-    assert!(read_state(root.path())["pending"].is_null());
-    assert_eq!(
-        read_state(root.path())["promotions"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+    assert!(pending(root.path()).is_none());
+    assert_eq!(count(&records(root.path()), "promotion_prepared"), 1);
+    assert_eq!(count(&records(root.path()), "promotion_finished"), 1);
 }
 
 #[test]
@@ -567,7 +626,7 @@ fn recovery_refuses_missing_selected_artifact_until_exact_bytes_are_restored() {
     fs::remove_dir(blocked).unwrap();
     fs::remove_file(&artifact).unwrap();
     assert!(ActivationStateStore::open(root.path(), session()).is_err());
-    assert!(!read_state(root.path())["pending"].is_null());
+    assert!(pending(root.path()).is_some());
     fs::write(artifact, bytes).unwrap();
     assert!(open(root.path())
         .committed_checkpoint(&conversation("b"))
@@ -607,11 +666,7 @@ fn ownership_aliases_digest_corruption_and_template_cache_are_refused() {
     turn.close(TurnClosure::Finished);
     fs::write(object_path(root.path(), &reference), b"different bytes").unwrap();
     assert!(store.promote(&turn.snapshot()).is_err());
-    assert!(read_state(root.path())["pending"].is_null());
-    assert!(read_state(root.path())["promotions"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert_eq!(count(&records(root.path()), "promotion_prepared"), 0);
 }
 
 #[test]
@@ -621,7 +676,7 @@ fn immutable_input_cannot_be_rebound_by_another_canonical_journal() {
     let mut store = open(root.path());
     let mut first = Turn::new(&history, "turn-input", &[("a", None)]);
     let activation = first.start(&mut store, "a");
-    let before = fs::read(root.path().join("activation-state.json")).unwrap();
+    let before = journal_bytes(root.path());
     let foreign = History::new();
     let mut other = Turn::new(&foreign, "turn-input", &[("a", None)]);
     let mut changed = other.input("a", 1);
@@ -630,10 +685,7 @@ fn immutable_input_cannot_be_rebound_by_another_canonical_journal() {
         input: Box::new(changed),
     });
     assert!(store.record_input(&other.snapshot(), &activation).is_err());
-    assert_eq!(
-        fs::read(root.path().join("activation-state.json")).unwrap(),
-        before
-    );
+    assert_eq!(journal_bytes(root.path()), before);
     assert!(store.starting_checkpoint(&activation).unwrap().is_none());
 }
 
@@ -704,9 +756,9 @@ fn stale_starting_state_cannot_overwrite_a_conversation_that_advanced() {
     );
     let current = accepted_turn(&history, &mut store, "turn-current", &[("a", Some(old))]);
     store.promote(&current.snapshot()).unwrap();
-    let before = read_state(root.path());
+    let before = journal_bytes(root.path());
     assert!(store.promote(&stale.snapshot()).is_err());
-    assert_eq!(read_state(root.path()), before);
+    assert_eq!(journal_bytes(root.path()), before);
 }
 
 #[test]
@@ -720,10 +772,7 @@ fn failure_before_durable_promotion_intent_leaves_all_conversation_heads_untouch
         "turn-conflict",
         &[("a", None), ("b", None)],
     );
-    let state = root.path().join("activation-state.json");
-    let saved = root.path().join("saved-state");
-    fs::rename(&state, &saved).unwrap();
-    fs::create_dir(&state).unwrap();
+    let saved = block_journal(root.path());
     assert!(store.promote(&turn.snapshot()).is_err());
     assert!(fs::read_dir(root.path().join("heads"))
         .unwrap()
@@ -734,8 +783,7 @@ fn failure_before_durable_promotion_intent_leaves_all_conversation_heads_untouch
         Err(ActivationStateError::RecoveryRequired)
     ));
     drop(store);
-    fs::remove_dir(&state).unwrap();
-    fs::rename(saved, state).unwrap();
+    unblock_journal(root.path(), saved);
     let mut store = open(root.path());
     assert!(store
         .committed_reference(&conversation("a"))
@@ -753,26 +801,47 @@ fn corrupt_future_or_misbound_store_and_linked_paths_fail_closed() {
         let turn = accepted_turn(&history, &mut store, "turn-corrupt", &[("a", None)]);
         store.promote(&turn.snapshot()).unwrap();
         drop(store);
-        let mut state = read_state(root.path());
+        let mut head = read_head(root.path());
         match corruption {
-            "future" => state["schema_version"] = 2.into(),
-            "foreign_session" => state["session_id"] = "another-session".into(),
+            "future" => head["schema_version"] = 2.into(),
+            "foreign_session" => head["session_id"] = "another-session".into(),
             "candidate_owner" => {
-                state["candidates"][0]["reference"]["conversation_id"] =
-                    "another-conversation".into()
+                let active = fs::read(root.path().join(ACTIVE_SEGMENT)).unwrap();
+                let mut changed = Vec::new();
+                for line in active.split_inclusive(|byte| *byte == b'\n') {
+                    let mut value: serde_json::Value = serde_json::from_slice(line).unwrap();
+                    if let Some(candidate) = value
+                        .get_mut("record")
+                        .and_then(|record| record.get_mut("candidate"))
+                    {
+                        candidate["reference"]["conversation_id"] = "another-conversation".into();
+                        changed.extend(serde_json::to_vec(&value).unwrap());
+                        changed.push(b'\n');
+                    } else {
+                        changed.extend(line);
+                    }
+                }
+                assert_ne!(changed, active);
+                fs::write(root.path().join(ACTIVE_SEGMENT), changed).unwrap();
             }
-            _ => state["heads"] = serde_json::json!([]),
+            _ => fs::remove_file(
+                root.path()
+                    .join("heads")
+                    .join(format!("{}.json", hash("conversation-a"))),
+            )
+            .unwrap(),
         }
-        let bytes = serde_json::to_vec(&state).unwrap();
-        fs::write(root.path().join("activation-state.json"), &bytes).unwrap();
+        fs::write(
+            root.path().join("activation-state.json"),
+            serde_json::to_vec(&head).unwrap(),
+        )
+        .unwrap();
+        let bytes = journal_bytes(root.path());
         assert!(
             ActivationStateStore::open(root.path(), session()).is_err(),
             "{corruption}"
         );
-        assert_eq!(
-            fs::read(root.path().join("activation-state.json")).unwrap(),
-            bytes
-        );
+        assert_eq!(journal_bytes(root.path()), bytes, "{corruption}");
     }
     let parent = tempfile::tempdir().unwrap();
     let target = tempfile::tempdir().unwrap();
@@ -869,9 +938,9 @@ fn different_slot_cannot_claim_a_retained_conversation_in_a_successor() {
     second.apply(TurnContractEvent::StartActivation {
         input: Box::new(input),
     });
-    let before = read_state(root.path());
+    let before = journal_bytes(root.path());
     assert!(store.record_input(&second.snapshot(), &activation).is_err());
-    assert_eq!(read_state(root.path()), before);
+    assert_eq!(journal_bytes(root.path()), before);
 }
 
 #[test]
@@ -889,7 +958,7 @@ fn foreign_canonical_journals_cannot_stage_promote_or_alias_artifact_identity() 
         let mut other = Turn::new(&foreign_history, "same-turn", &[("a", None)]);
         let other_activation = other.start(&mut foreign_store, "a");
         assert_eq!(activation, other_activation);
-        let before = read_state(root.path());
+        let before = journal_bytes(root.path());
         assert!(store.record_input(&other.snapshot(), &activation).is_err());
         assert!(store
             .stage_candidate(
@@ -904,7 +973,7 @@ fn foreign_canonical_journals_cannot_stage_promote_or_alias_artifact_identity() 
         other.accept(&activation, &foreign_reference);
         other.close(TurnClosure::Completed);
         assert!(store.promote(&other.snapshot()).is_err());
-        assert_eq!(read_state(root.path()), before);
+        assert_eq!(journal_bytes(root.path()), before);
     }
 }
 
@@ -928,13 +997,13 @@ fn owned_open_binds_canonical_identity_before_any_input_and_holds_all_leases() {
         .component_namespace(ExecutionComponent::ActivationState)
         .unwrap();
     let store = ActivationStateStore::open_owned(namespace).unwrap();
-    let state = read_state(&path);
-    assert_eq!(state["journal"]["journal_id"], identity.journal_id());
+    let head = read_head(&path);
+    assert_eq!(head["journal"]["journal_id"], identity.journal_id());
     assert_eq!(
-        state["journal"]["workspace_id"],
+        head["journal"]["workspace_id"],
         identity.owner().workspace_id
     );
-    assert!(state["inputs"].as_array().unwrap().is_empty());
+    assert!(records(&path).is_empty());
     assert!(history
         .borrow()
         .component_namespace(ExecutionComponent::ActivationState)
@@ -978,9 +1047,9 @@ fn owned_open_refuses_wrong_component_child_and_foreign_journal_without_rebindin
     fs::remove_dir(path.join("not-root")).unwrap();
     let store = ActivationStateStore::open_owned(namespace).unwrap();
     drop(store);
-    let mut state = read_state(&path);
-    state["journal"]["journal_id"] = "11111111-1111-4111-8111-111111111111".into();
-    let bytes = serde_json::to_vec(&state).unwrap();
+    let mut head = read_head(&path);
+    head["journal"]["journal_id"] = "11111111-1111-4111-8111-111111111111".into();
+    let bytes = serde_json::to_vec(&head).unwrap();
     fs::write(path.join("activation-state.json"), &bytes).unwrap();
     let namespace = history
         .store
@@ -1182,10 +1251,10 @@ fn real_legacy_ingress_becomes_immutable_baseline_then_exact_v2_starting_state()
         .parent()
         .unwrap()
         .join("activation-state");
-    let state = read_state(&path);
-    assert_eq!(state["baselines"].as_array().unwrap().len(), 1);
-    assert!(state["promotions"].as_array().unwrap().is_empty());
-    assert!(state["candidates"].as_array().unwrap().is_empty());
+    let records = records(&path);
+    assert_eq!(count(&records, "baseline"), 1);
+    assert_eq!(count(&records, "promotion_prepared"), 0);
+    assert_eq!(count(&records, "candidate"), 0);
     drop(store);
     let mut store = memory_owned(&history);
     let mut turn = Turn::new(&history, "v2-turn", &[("a", Some(baseline.clone()))]);
@@ -1432,10 +1501,7 @@ fn interrupted_baseline_import_reuses_exact_orphan_bytes_only_after_reopen() {
         .parent()
         .unwrap()
         .join("activation-state");
-    let state_path = root.join("activation-state.json");
-    let saved = root.join("saved-state");
-    fs::rename(&state_path, &saved).unwrap();
-    fs::create_dir(&state_path).unwrap();
+    let saved = block_journal(&root);
     assert!(store
         .import_legacy_baseline(&history.store.borrow(), &projection)
         .is_err());
@@ -1446,8 +1512,7 @@ fn interrupted_baseline_import_reuses_exact_orphan_bytes_only_after_reopen() {
     let artifact = object_path(&root, projection.reference());
     let orphan = fs::read(&artifact).unwrap();
     drop(store);
-    fs::remove_dir(&state_path).unwrap();
-    fs::rename(saved, state_path).unwrap();
+    unblock_journal(&root, saved);
     let mut store = memory_owned(&history);
     assert!(store
         .committed_reference(&conversation("a"))

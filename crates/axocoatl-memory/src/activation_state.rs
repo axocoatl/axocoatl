@@ -17,6 +17,10 @@
 //! a write is uncertain no restore is permitted; reopen completes the recorded
 //! decision before exposing any conversation. This is conversation state only,
 //! not rollback or settlement of filesystem, tool, provider, or remote effects.
+//!
+//! Records live in an append-only segmented journal (see the `journal`
+//! module), so a Session may record any number of activations, turns and
+//! rewinds; only single records, objects and migrations are bounded.
 
 use std::collections::HashSet;
 use std::io;
@@ -54,43 +58,17 @@ pub use legacy_roles::{
 mod rewind;
 pub use rewind::SessionRewind;
 
+#[path = "activation_state_journal.rs"]
+mod journal;
+use journal::{Event, Projection, SealedSummary, StoreHead, LOG_SPEC, MAX_RECORD_BYTES};
+
 const SCHEMA: u32 = 1;
 const STATE_FILE: &str = "activation-state.json";
-const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
-const MAX_INPUTS: usize = 4096;
-const MAX_CANDIDATES: usize = 8192;
-const MAX_PROMOTIONS: usize = 4096;
+// Per-migration and per-record bounds; nothing bounds a Session's lifetime.
 const MAX_BASELINES: usize = 128;
 const MAX_BASELINE_TURNS: usize = 4096;
 const LEGACY_PROJECTION_POLICY: &str = "plain-completed-single-agent-text-v1";
 const ORDINARY_LEGACY_PROJECTION_POLICY: &str = "ordinary-autonomous-canonical-history-v2";
-// Schema-1 identities are at most 128 ASCII bytes. A selected entry has fewer
-// than 32 such fields across accepted, committed, previous, node, and slot refs.
-// 16 KiB covers both its manifest and materialized-head representations plus
-// JSON framing. 4 KiB covers closure, journal/workspace identity, and digests.
-// This deliberately reserves for every unpromoted turn/conversation, including
-// failed generations, until an explicit empty/partial promotion releases it.
-const PROMOTION_CONVERSATION_RESERVE: usize = 16 * 1024;
-const PROMOTION_TURN_RESERVE: usize = 4 * 1024;
-// A candidate contains a bounded activation/ref plus three digests and lengths.
-// This covers its complete serialized record with maximal schema-1 identifiers.
-const CANDIDATE_METADATA_RESERVE: usize = 4 * 1024;
-
-#[derive(Clone, Copy)]
-struct Limits {
-    state_bytes: usize,
-    promotions: usize,
-    candidates: usize,
-}
-impl Default for Limits {
-    fn default() -> Self {
-        Self {
-            state_bytes: MAX_STATE_BYTES,
-            promotions: MAX_PROMOTIONS,
-            candidates: MAX_CANDIDATES,
-        }
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ActivationStateError {
@@ -106,6 +84,8 @@ pub enum ActivationStateError {
     UnsupportedLegacy(&'static str),
     #[error("invalid activation state: {0}")]
     Invalid(String),
+    /// A single record, checkpoint object or migration exceeds its bound.
+    /// Nothing bounds how much a Session records over its life.
     #[error("activation state capacity exceeded")]
     Capacity,
     #[error("activation state write is uncertain; reopen before restoring or writing")]
@@ -372,27 +352,6 @@ struct CanonicalJournal {
     workspace_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoreState {
-    schema_version: u32,
-    session_id: SessionId,
-    journal: Option<CanonicalJournal>,
-    #[serde(default)]
-    baselines: Vec<BaselineRecord>,
-    inputs: Vec<InputRecord>,
-    candidates: Vec<Candidate>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    candidate_reservations: Vec<CandidateReservation>,
-    heads: Vec<PromotedConversation>,
-    promotions: Vec<PromotionManifest>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    rewinds: Vec<SessionRewind>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    promotion_reservations: Vec<LogicalTurnId>,
-    pending: Option<PromotionManifest>,
-}
-
 enum StoreDirectory {
     Isolated(SecureDir),
     Owned(OwnedExecutionNamespace),
@@ -461,15 +420,23 @@ impl StoreDirectory {
     }
 }
 
-/// One exclusively owned, bounded activation-artifact namespace for a Session.
+/// One exclusively owned activation-artifact namespace for a Session.
 /// No mutable conversation cache is keyed by an Agent definition/template.
 pub struct ActivationStateStore {
     root: StoreDirectory,
     objects: StoreDirectory,
     heads: StoreDirectory,
-    state: StoreState,
+    head: StoreHead,
+    log: axocoatl_session::segment_log::SegmentLog,
+    /// Records of the active segment, the only ones held in memory.
+    active: Vec<std::sync::Arc<Event>>,
+    /// One key filter per sealed segment, in segment order.
+    sealed: Vec<SealedSummary>,
+    cache: axocoatl_session::segment_log::SegmentCache<Event>,
+    projection: Projection,
     uncertain: bool,
-    limits: Limits,
+    #[cfg_attr(not(test), allow(dead_code))]
+    recovery: axocoatl_session::segment_log::SegmentRecovery,
 }
 
 impl ActivationStateStore {
@@ -477,6 +444,14 @@ impl ActivationStateStore {
     /// so the format and Session writer leases remain held with every artifact.
     /// The caller must durably provision this private root outside every checkout.
     pub fn open(path: impl AsRef<Path>, session_id: SessionId) -> Result<Self> {
+        Self::open_isolated(path, session_id, LOG_SPEC)
+    }
+
+    fn open_isolated(
+        path: impl AsRef<Path>,
+        session_id: SessionId,
+        spec: axocoatl_session::segment_log::SegmentSpec,
+    ) -> Result<Self> {
         let root = SecureDir::open_existing_all(path)?;
         #[cfg(unix)]
         {
@@ -485,10 +460,17 @@ impl ActivationStateStore {
         }
         #[cfg(not(unix))]
         return Err(io::Error::new(io::ErrorKind::Unsupported, "Unix ownership required").into());
-        Self::open_directory(StoreDirectory::Isolated(root), session_id, None)
+        Self::open_directory(StoreDirectory::Isolated(root), session_id, None, spec)
     }
 
     pub fn open_owned(namespace: OwnedExecutionNamespace) -> Result<Self> {
+        Self::open_owned_with(namespace, LOG_SPEC)
+    }
+
+    fn open_owned_with(
+        namespace: OwnedExecutionNamespace,
+        spec: axocoatl_session::segment_log::SegmentSpec,
+    ) -> Result<Self> {
         namespace.require_root(&ExecutionComponent::ActivationState)?;
         let identity = namespace.identity().clone();
         let journal = CanonicalJournal {
@@ -499,75 +481,19 @@ impl ActivationStateStore {
             StoreDirectory::Owned(namespace),
             identity.owner().session_id.clone(),
             Some(journal),
+            spec,
         )
     }
 
-    fn open_directory(
-        root: StoreDirectory,
-        session_id: SessionId,
-        journal: Option<CanonicalJournal>,
-    ) -> Result<Self> {
-        root.verify_ambient_identity()?;
-        let loaded = match root.read_limited(STATE_FILE, MAX_STATE_BYTES) {
-            Ok(bytes) => Some(serde_json::from_slice::<StoreState>(&bytes)?),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
-        };
-        let state = if let Some(state) = loaded {
-            if state.session_id != session_id
-                || journal
-                    .as_ref()
-                    .is_some_and(|expected| state.journal.as_ref() != Some(expected))
-            {
-                return invalid("store belongs to another Session or canonical journal");
-            }
-            state
-        } else {
-            root.check_journal_creation(STATE_FILE)?;
-            if !root.entries_limited(1)?.is_empty() {
-                return invalid("missing store identity in a nonempty directory");
-            }
-            StoreState {
-                schema_version: SCHEMA,
-                session_id,
-                journal,
-                baselines: vec![],
-                inputs: vec![],
-                candidates: vec![],
-                candidate_reservations: vec![],
-                heads: vec![],
-                promotions: vec![],
-                rewinds: vec![],
-                promotion_reservations: vec![],
-                pending: None,
-            }
-        };
-        admit_state(&state, Limits::default())?;
-        if let Some(pending) = &state.pending {
-            admit_state(&apply_promotion(&state, pending), Limits::default())?;
-        }
-        // Persist identity before creating subordinate namespaces. A crash can
-        // resume missing empty namespaces, but never reassign a populated store.
-        root.mark_journal_initialized(STATE_FILE)?;
-        root.atomic_write(STATE_FILE, &state_bytes(&state)?)?;
-        let objects = root.child("objects")?;
-        let heads = root.child("heads")?;
-        objects.sync_all()?;
-        heads.sync_all()?;
-        root.sync_all()?;
-        let mut store = Self {
-            root,
-            objects,
-            heads,
-            state,
-            uncertain: false,
-            limits: Limits::default(),
-        };
-        if store.state.pending.is_some() {
-            store.finish_pending()?;
-        }
-        store.verify_heads()?;
-        Ok(store)
+    fn session_id(&self) -> &SessionId {
+        &self.head.session_id
+    }
+
+    /// The bound canonical journal, which every populated store has.
+    fn bound_journal(&self) -> Result<CanonicalJournal> {
+        self.head.journal.clone().ok_or_else(|| {
+            invalid_error("populated artifact namespace has no canonical journal binding")
+        })
     }
 
     /// Install an exact immutable legacy baseline before any canonical v2 turn.
@@ -589,13 +515,7 @@ impl ActivationStateStore {
         {
             return invalid("legacy baseline belongs to another owned canonical namespace");
         }
-        if !canonical.records()?.is_empty()
-            || !self.state.inputs.is_empty()
-            || !self.state.candidates.is_empty()
-            || !self.state.promotions.is_empty()
-            || !self.state.promotion_reservations.is_empty()
-            || self.state.pending.is_some()
-        {
+        if !canonical.records()?.is_empty() || self.projection.v2 {
             return invalid("legacy baseline must precede every v2 input and promotion");
         }
         let record = &projection.record;
@@ -604,7 +524,7 @@ impl ActivationStateStore {
         {
             return invalid("legacy projection payload changed");
         }
-        if let Some(existing) = self.state.baselines.iter().find(|existing| {
+        if let Some(existing) = self.projection.baselines.iter().find(|existing| {
             existing.slot_id == record.slot_id
                 || existing.reference.conversation_id == record.reference.conversation_id
         }) {
@@ -614,15 +534,8 @@ impl ActivationStateStore {
             self.load_baseline(existing)?;
             return Ok(existing.reference.clone());
         }
-        let mut next = self.state.clone();
-        next.baselines.push(record.clone());
-        next.baselines.sort_by(|a, b| {
-            a.reference
-                .conversation_id
-                .as_str()
-                .cmp(b.reference.conversation_id.as_str())
-        });
-        self.admit(&next)?;
+        let event = Event::Baseline(record.clone());
+        let admitted = self.admit(&event, &self.bound_journal()?)?;
         let name = object_name(&record.reference);
         if self.objects.is_file(&name)?
             && self.objects.read_limited(&name, MAX_CHECKPOINT_BYTES)? != projection.payload
@@ -632,7 +545,7 @@ impl ActivationStateStore {
         self.uncertain = true;
         self.retain_legacy_checkpoint_archive(projection)?;
         self.objects.atomic_write(&name, &projection.payload)?;
-        self.persist(next)?;
+        self.append(event, admitted)?;
         Ok(record.reference.clone())
     }
 
@@ -651,7 +564,7 @@ impl ActivationStateStore {
             .iter()
             .find(|item| item.activation == *activation)
             .ok_or_else(|| invalid_error("activation is absent from validated contract"))?;
-        if item.activation.session_id != self.state.session_id {
+        if item.activation.session_id != *self.session_id() {
             return invalid("input belongs to another Session");
         }
         let slot_id = contract
@@ -670,8 +583,8 @@ impl ActivationStateStore {
             slot_id,
             input: item.input.clone(),
         };
-        if let Some(existing) = self.input(activation) {
-            return if existing == &record {
+        if let Some(existing) = self.input(activation)? {
+            return if existing == record {
                 Ok(())
             } else {
                 invalid("immutable input changed")
@@ -685,18 +598,18 @@ impl ActivationStateStore {
         for parent in &record.input.parents {
             self.load_reference(&parent.checkpoint)?;
         }
-        let mut next = self.state.clone();
-        next.journal = Some(journal);
-        next.inputs.push(record);
-        self.admit(&next)?;
-        self.persist(next)
+        let event = Event::Input(record);
+        let admitted = self.admit(&event, &journal)?;
+        self.bind_journal(journal)?;
+        self.append(event, admitted)
     }
 
     /// Reserve one bounded candidate before provider work. The current canonical
     /// store, rather than a previously captured snapshot, proves that this exact
     /// activation and epoch are still running. Controller dispatch authority and
     /// physical input/profile checks remain separate mandatory host checks.
-    /// This reserves journal capacity, not physical filesystem free space.
+    /// This reserves the candidate's single settlement, not physical
+    /// filesystem free space.
     pub fn reserve_candidate(
         &mut self,
         canonical: &SessionExecutionStore,
@@ -723,7 +636,7 @@ impl ActivationStateStore {
             return invalid("candidate reservation requires the current running epoch");
         }
         let input = self
-            .input(activation)
+            .input(activation)?
             .filter(|input| input.input == item.input)
             .ok_or_else(|| invalid_error("candidate reservation requires exact durable input"))?;
         let record = CandidateReservation {
@@ -732,25 +645,17 @@ impl ActivationStateStore {
             max_checkpoint_bytes: MAX_CHECKPOINT_BYTES,
         };
         let conversation_id = input.input.conversation_id.clone();
-        if let Some(existing) = self
-            .state
-            .candidate_reservations
-            .iter()
-            .find(|existing| existing.activation == *activation)
-        {
-            if existing != &record {
+        if let Some(existing) = self.reservation(activation)? {
+            if existing != record {
                 return invalid("candidate reservation differs from durable input");
             }
         } else {
-            if self.state.candidates.iter().any(|candidate| {
-                matches!(&candidate.reference.source, CheckpointSource::Accepted { activation: producer } if producer == activation)
-            }) {
+            if !self.candidates_for(activation)?.is_empty() {
                 return invalid("cannot reserve an activation after its candidate was retained");
             }
-            let mut next = self.state.clone();
-            next.candidate_reservations.push(record.clone());
-            self.admit(&next)?;
-            self.persist(next)?;
+            let event = Event::CandidateReserved(record.clone());
+            let admitted = self.admit(&event, &canonical_journal(&identity))?;
+            self.append(event, admitted)?;
         }
         Ok(ReservedActivationCheckpoint {
             identity,
@@ -778,18 +683,15 @@ impl ActivationStateStore {
             .find(|item| item.activation == *activation)
             .ok_or_else(|| invalid_error("candidate reservation has no canonical activation"))?;
         let input = self
-            .input(activation)
+            .input(activation)?
             .filter(|input| input.input == item.input)
             .ok_or_else(|| {
                 invalid_error("candidate reservation input differs from canonical history")
             })?;
         let record = self
-            .state
-            .candidate_reservations
-            .iter()
-            .find(|record| record.activation == *activation && record.input_sha256 == input.sha256)
-            .ok_or_else(|| invalid_error("activation has no durable candidate reservation"))?
-            .clone();
+            .reservation(activation)?
+            .filter(|record| record.input_sha256 == input.sha256)
+            .ok_or_else(|| invalid_error("activation has no durable candidate reservation"))?;
         Ok(ReservedActivationCheckpoint {
             identity,
             conversation_id: input.input.conversation_id.clone(),
@@ -819,9 +721,8 @@ impl ActivationStateStore {
     ) -> Result<CheckpointRef> {
         self.require_reservation(reservation)?;
         let input = self
-            .input(reservation.activation())
-            .ok_or_else(|| invalid_error("reserved activation has no input"))?
-            .clone();
+            .input(reservation.activation())?
+            .ok_or_else(|| invalid_error("reserved activation has no input"))?;
         if checkpoint.agent_id != reservation.conversation_id.as_str() {
             return invalid("checkpoint must own the exact reserved conversation");
         }
@@ -833,7 +734,8 @@ impl ActivationStateStore {
     }
 
     /// Isolated compatibility staging. Owned stores require the explicit
-    /// reservation API so provider admission cannot consume settlement capacity.
+    /// reservation API, which fixes each activation's single settlement
+    /// before any provider work.
     pub fn stage_candidate(
         &mut self,
         snapshot: &DurableTurnSnapshot,
@@ -853,9 +755,8 @@ impl ActivationStateStore {
             .filter(|item| item.state == ActivationState::Running)
             .ok_or_else(|| invalid_error("candidate producer is not a running activation"))?;
         let input = self
-            .input(activation)
-            .ok_or_else(|| invalid_error("starting input was not persisted"))?
-            .clone();
+            .input(activation)?
+            .ok_or_else(|| invalid_error("starting input was not persisted"))?;
         if input.input != item.input || checkpoint.agent_id != input.input.conversation_id.as_str()
         {
             return invalid("checkpoint must own the exact node conversation and input");
@@ -893,7 +794,7 @@ impl ActivationStateStore {
         let reference = CheckpointRef {
             checkpoint_id: CheckpointId::new(format!("checkpoint:{key}"))
                 .map_err(|e| invalid_error(e.to_string()))?,
-            session_id: self.state.session_id.clone(),
+            session_id: self.session_id().clone(),
             conversation_id: input.input.conversation_id.clone(),
             source: CheckpointSource::Accepted {
                 activation: activation.clone(),
@@ -905,23 +806,18 @@ impl ActivationStateStore {
             payload_sha256,
             payload_bytes: payload.len(),
         };
-        if let Some(existing) = self.candidate(&reference) {
-            if existing != &candidate {
+        if let Some(existing) = self.candidate(&reference)? {
+            if existing != candidate {
                 return invalid("checkpoint identity collision");
             }
-            self.load_candidate(existing)?;
+            self.load_candidate(&existing)?;
             return Ok(reference);
         }
-        if self.state.candidate_reservations.iter().any(|record| record.activation == *activation)
-            && self.state.candidates.iter().any(|candidate| {
-                matches!(&candidate.reference.source, CheckpointSource::Accepted { activation: producer } if producer == activation)
-            })
-        {
+        if self.reservation(activation)?.is_some() && !self.candidates_for(activation)?.is_empty() {
             return invalid("reserved activation already retained a different candidate");
         }
-        let mut next = self.state.clone();
-        next.candidates.push(candidate.clone());
-        self.admit(&next)?;
+        let event = Event::Candidate(candidate);
+        let admitted = self.admit(&event, journal)?;
         let name = object_name(&reference);
         if self.objects.is_file(&name)?
             && self.objects.read_limited(&name, MAX_CHECKPOINT_BYTES)? != payload
@@ -930,7 +826,7 @@ impl ActivationStateStore {
         }
         self.uncertain = true;
         self.objects.atomic_write(&name, &payload)?;
-        self.persist(next)?;
+        self.append(event, admitted)?;
         Ok(reference)
     }
 
@@ -954,11 +850,8 @@ impl ActivationStateStore {
     fn require_reservation(&self, reservation: &ReservedActivationCheckpoint) -> Result<()> {
         self.ready()?;
         if self.root.identity() != Some(&reservation.identity)
-            || !self
-                .state
-                .candidate_reservations
-                .contains(&reservation.record)
-            || self.input(reservation.activation()).is_none_or(|input| {
+            || self.reservation(reservation.activation())?.as_ref() != Some(&reservation.record)
+            || self.input(reservation.activation())?.is_none_or(|input| {
                 input.sha256 != reservation.record.input_sha256
                     || input.input.conversation_id != reservation.conversation_id
             })
@@ -975,7 +868,7 @@ impl ActivationStateStore {
     ) -> Result<Option<AgentCheckpoint>> {
         self.ready()?;
         let input = self
-            .input(activation)
+            .input(activation)?
             .ok_or_else(|| invalid_error("unknown activation input"))?;
         match &input.input.starting_savepoint {
             ConversationSavepoint::Empty => Ok(None),
@@ -998,10 +891,7 @@ impl ActivationStateStore {
     ) -> Result<Option<CheckpointRef>> {
         self.ready()?;
         self.verify_heads()?;
-        Ok(
-            rewind::effective_reference(&self.state, conversation, self.state.promotions.len())
-                .cloned(),
-        )
+        Ok(self.projection.effective(conversation))
     }
 
     pub fn committed_checkpoint(
@@ -1019,23 +909,17 @@ impl ActivationStateStore {
     pub fn validate_starting_savepoints(&self, graph: &TurnGraphSnapshot) -> Result<()> {
         self.ready()?;
         for node in &graph.nodes {
-            for (slot, conversation) in
-                self.state
-                    .inputs
-                    .iter()
-                    .map(|input| (&input.slot_id, &input.input.conversation_id))
-                    .chain(
-                        self.state.baselines.iter().map(|baseline| {
-                            (&baseline.slot_id, &baseline.reference.conversation_id)
-                        }),
-                    )
+            // A reviewed future Team Reset creates a fresh conversation
+            // for this slot. Historical conversation ownership never moves
+            // to another slot; selection authority belongs to Team admission.
+            if self
+                .projection
+                .conversations
+                .get(&node.conversation_id)
+                .and_then(|conversation| conversation.slot_id.as_ref())
+                .is_some_and(|slot| slot != &node.slot_id)
             {
-                // A reviewed future Team Reset creates a fresh conversation
-                // for this slot. Historical conversation ownership never moves
-                // to another slot; selection authority belongs to Team admission.
-                if conversation == &node.conversation_id && slot != &node.slot_id {
-                    return invalid("graph assigns a retained conversation to another team slot");
-                }
+                return invalid("graph assigns a retained conversation to another team slot");
             }
             let current = self.committed_reference(&node.conversation_id)?;
             let expected = current
@@ -1062,10 +946,8 @@ impl ActivationStateStore {
         conversation: &NodeConversationId,
     ) -> Result<Option<AgentCheckpoint>> {
         self.ready()?;
-        self.state
-            .baselines
-            .iter()
-            .find(|baseline| baseline.reference.conversation_id == *conversation)
+        self.projection
+            .baseline(conversation)
             .map(|baseline| self.load_baseline(baseline))
             .transpose()
     }
@@ -1079,16 +961,11 @@ impl ActivationStateStore {
             .closed_reference()
             .map_err(|e| invalid_error(e.to_string()))?;
         let contract_sha256 = digest(snapshot.contract())?;
-        match self
-            .state
-            .promotions
-            .iter()
-            .find(|item| item.closure.turn_id() == closure.turn_id())
-        {
+        match self.promotion_of_turn(closure.turn_id())? {
             Some(existing)
                 if existing.closure == closure && existing.contract_sha256 == contract_sha256 =>
             {
-                Ok(Some(existing.clone()))
+                Ok(Some(existing))
             }
             Some(_) => invalid("closed turn already has a different promotion decision"),
             None => Ok(None),
@@ -1122,24 +999,16 @@ impl ActivationStateStore {
             }
         }
         self.selected_for_promotion(snapshot)?;
-        if self
-            .state
-            .promotion_reservations
-            .contains(snapshot.turn_id())
-            || self
-                .state
-                .inputs
-                .iter()
-                .any(|input| &input.input.activation.turn_id == snapshot.turn_id())
-        {
-            // Input admission already reserves this turn and its selected heads.
+        if self.turn_reserved(snapshot.turn_id())? {
+            // Input admission already reserves this turn's final promotion.
             return Ok(());
         }
-        let mut next = self.state.clone();
-        next.journal = Some(journal);
-        next.promotion_reservations.push(snapshot.turn_id().clone());
-        self.admit(&next)?;
-        self.persist(next)
+        let event = Event::PromotionReserved {
+            turn_id: snapshot.turn_id().clone(),
+        };
+        let admitted = self.admit(&event, &journal)?;
+        self.bind_journal(journal)?;
+        self.append(event, admitted)
     }
 
     /// Inspect the exact would-be promotion without changing conversation state.
@@ -1185,15 +1054,15 @@ impl ActivationStateStore {
                 .as_ref()
                 .ok_or_else(|| invalid_error("accepted activation lacks checkpoint"))?;
             let input = self
-                .input(&item.activation)
+                .input(&item.activation)?
                 .ok_or_else(|| invalid_error("accepted input is not persisted"))?;
             if input.input != item.input {
                 return invalid("accepted input differs from persisted input");
             }
             let candidate = self
-                .candidate(accepted)
+                .candidate(accepted)?
                 .ok_or_else(|| invalid_error("accepted checkpoint is not retained"))?;
-            self.load_candidate(candidate)?;
+            self.load_candidate(&candidate)?;
             let previous = self.committed_reference(&item.conversation_id)?;
             if let Some(reference) = &previous {
                 self.load_reference(reference)?;
@@ -1229,15 +1098,10 @@ impl ActivationStateStore {
         }
         let journal = self.check_snapshot(snapshot)?;
         let manifest = self.preview_promotion(snapshot)?;
-        // Reserve the final manifest/head representation before any intent is
-        // acknowledged. Capacity must never strand a recoverable transaction.
-        let mut next = self.state.clone();
-        next.journal = Some(journal);
-        let completed = apply_promotion(&next, &manifest);
-        self.admit(&completed)?;
-        next.pending = Some(manifest.clone());
-        self.admit(&next)?;
-        self.persist(next)?;
+        let event = Event::PromotionPrepared(manifest.clone());
+        let admitted = self.admit(&event, &journal)?;
+        self.bind_journal(journal)?;
+        self.append(event, admitted)?;
         self.finish_pending()?;
         Ok(manifest)
     }
@@ -1247,9 +1111,9 @@ impl ActivationStateStore {
             journal_id: snapshot.journal_id().to_owned(),
             workspace_id: snapshot.owner().workspace_id.clone(),
         };
-        if snapshot.owner().session_id != self.state.session_id
+        if snapshot.owner().session_id != *self.session_id()
             || self
-                .state
+                .head
                 .journal
                 .as_ref()
                 .is_some_and(|owner| owner != &journal)
@@ -1260,19 +1124,19 @@ impl ActivationStateStore {
     }
 
     fn committed_base(&self, activation: &ActivationRef) -> Result<Option<CheckpointRef>> {
-        let mut at = activation;
+        let mut at = activation.clone();
         let mut seen = HashSet::new();
         loop {
-            if !seen.insert(at.activation_id.as_str()) {
+            if !seen.insert(at.activation_id.clone()) {
                 return invalid("cyclic starting savepoint");
             }
             let record = self
-                .input(at)
+                .input(&at)?
                 .ok_or_else(|| invalid_error("starting input is missing"))?;
-            match &record.input.starting_savepoint {
+            match record.input.starting_savepoint {
                 ConversationSavepoint::Empty => return Ok(None),
-                ConversationSavepoint::Checkpoint { checkpoint } => match &checkpoint.source {
-                    CheckpointSource::Committed { .. } => return Ok(Some((**checkpoint).clone())),
+                ConversationSavepoint::Checkpoint { checkpoint } => match checkpoint.source {
+                    CheckpointSource::Committed { .. } => return Ok(Some(*checkpoint)),
                     CheckpointSource::Accepted {
                         activation: previous,
                     } => {
@@ -1284,10 +1148,10 @@ impl ActivationStateStore {
     }
 
     fn finish_pending(&mut self) -> Result<()> {
-        let Some(manifest) = self.state.pending.clone() else {
+        let Some(manifest) = self.projection.pending.clone() else {
             return Ok(());
         };
-        validate_promotion(&self.state, &manifest)?;
+        journal::check_promotion(&self.bound_journal()?, self.session_id(), &manifest)?;
         for entry in &manifest.selected {
             self.load_reference(&entry.accepted)?;
         }
@@ -1298,53 +1162,61 @@ impl ActivationStateStore {
                 &serde_json::to_vec(entry)?,
             )?;
         }
-        self.persist(apply_promotion(&self.state, &manifest))
+        let event = Event::PromotionFinished {
+            promotion_id: manifest.promotion_id,
+        };
+        let admitted = self.admit(&event, &self.bound_journal()?)?;
+        self.append(event, admitted)
     }
 
     fn load_reference(&self, reference: &CheckpointRef) -> Result<AgentCheckpoint> {
-        if reference.session_id != self.state.session_id {
+        if reference.session_id != *self.session_id() {
             return invalid("checkpoint belongs to another Session");
         }
         match &reference.source {
             CheckpointSource::Accepted { .. } => {
                 let candidate = self
-                    .candidate(reference)
+                    .candidate(reference)?
                     .ok_or_else(|| invalid_error("unknown checkpoint or changed ownership"))?;
-                self.load_candidate(candidate)
+                self.load_candidate(&candidate)
             }
             CheckpointSource::Committed { .. } => {
-                if let Some(projection) = self
-                    .state
-                    .rewinds
-                    .iter()
-                    .flat_map(|rewind| &rewind.conversations)
-                    .find(|entry| entry.checkpoint.as_ref() == Some(reference))
-                    .and_then(|entry| entry.projection.as_ref())
-                {
-                    return self.load_payload(
-                        reference,
-                        &projection.payload_sha256,
-                        projection.payload_bytes,
-                    );
+                if let Some(promotion) = journal::committed_promotion(reference) {
+                    let accepted = self
+                        .promotion_by_id(promotion)?
+                        .and_then(|manifest| {
+                            manifest
+                                .selected
+                                .into_iter()
+                                .find(|entry| entry.committed == *reference)
+                        })
+                        .ok_or_else(|| {
+                            invalid_error("unknown committed checkpoint or changed ownership")
+                        })?;
+                    return self.load_reference(&accepted.accepted);
                 }
                 if let Some(baseline) = self
-                    .state
+                    .projection
                     .baselines
                     .iter()
                     .find(|baseline| baseline.reference == *reference)
                 {
                     return self.load_baseline(baseline);
                 }
-                let accepted = self
-                    .state
-                    .promotions
-                    .iter()
-                    .flat_map(|p| &p.selected)
-                    .find(|entry| entry.committed == *reference)
+                let projection = self
+                    .rewinds()?
+                    .into_iter()
+                    .flat_map(|rewind| rewind.conversations)
+                    .find(|entry| entry.checkpoint.as_ref() == Some(reference))
+                    .and_then(|entry| entry.projection)
                     .ok_or_else(|| {
                         invalid_error("unknown committed checkpoint or changed ownership")
                     })?;
-                self.load_reference(&accepted.accepted)
+                self.load_payload(
+                    reference,
+                    &projection.payload_sha256,
+                    projection.payload_bytes,
+                )
             }
         }
     }
@@ -1390,65 +1262,35 @@ impl ActivationStateStore {
         Ok(checkpoint)
     }
 
-    fn input(&self, activation: &ActivationRef) -> Option<&InputRecord> {
-        self.state
-            .inputs
-            .iter()
-            .find(|item| item.input.activation == *activation)
-    }
-
-    fn candidate(&self, reference: &CheckpointRef) -> Option<&Candidate> {
-        self.state
-            .candidates
-            .iter()
-            .find(|item| item.reference == *reference)
-    }
-
     fn ready(&self) -> Result<()> {
-        if self.uncertain || self.state.pending.is_some() {
+        if self.uncertain || self.projection.pending.is_some() {
             return Err(ActivationStateError::RecoveryRequired);
         }
         self.root.verify_ambient_identity()?;
         Ok(())
     }
 
-    fn admit(&self, next: &StoreState) -> Result<()> {
-        admit_state(next, self.limits)
-    }
-
-    fn persist(&mut self, next: StoreState) -> Result<()> {
-        validate_state(&next)?;
-        let bytes = state_bytes(&next)?;
-        if bytes.len() > self.limits.state_bytes
-            || next.promotions.len() > self.limits.promotions
-            || next.candidates.len() > self.limits.candidates
-        {
-            return Err(ActivationStateError::Capacity);
-        }
-        self.root.verify_ambient_identity()?;
-        self.uncertain = true;
-        self.root.atomic_write(STATE_FILE, &bytes)?;
-        self.state = next;
-        self.uncertain = false;
-        Ok(())
-    }
-
     fn verify_heads(&self) -> Result<()> {
-        for baseline in &self.state.baselines {
+        for baseline in self.projection.baselines.iter() {
             self.verify_legacy_checkpoint_archive(baseline)?;
-            if !self
-                .state
-                .heads
-                .iter()
-                .any(|head| head.committed.conversation_id == baseline.reference.conversation_id)
+            if self
+                .projection
+                .conversations
+                .get(&baseline.reference.conversation_id)
+                .is_none_or(|conversation| conversation.head.is_none())
             {
                 self.load_baseline(baseline)?;
             }
         }
-        for head in &self.state.heads {
+        for head in self
+            .projection
+            .conversations
+            .values()
+            .filter_map(|conversation| conversation.head.as_ref())
+        {
             let bytes = self
                 .heads
-                .read_limited(head_name(&head.committed.conversation_id), MAX_STATE_BYTES)?;
+                .read_limited(head_name(&head.committed.conversation_id), MAX_RECORD_BYTES)?;
             if serde_json::from_slice::<PromotedConversation>(&bytes)? != *head {
                 return invalid(
                     "materialized conversation pointer differs from canonical promotion",
@@ -1457,322 +1299,6 @@ impl ActivationStateStore {
         }
         Ok(())
     }
-}
-
-fn admit_state(state: &StoreState, limits: Limits) -> Result<()> {
-    validate_state(state)?;
-    let (bytes, turns) = promotion_reservation(state);
-    let candidates = unfilled_candidate_reservations(state);
-    if state_bytes(state)?
-        .len()
-        .saturating_add(bytes)
-        .saturating_add(candidates.saturating_mul(CANDIDATE_METADATA_RESERVE))
-        > limits.state_bytes
-        || state.candidates.len().saturating_add(candidates) > limits.candidates
-        || state
-            .promotions
-            .len()
-            .saturating_add(usize::from(state.pending.is_some()))
-            .saturating_add(turns)
-            > limits.promotions
-    {
-        return Err(ActivationStateError::Capacity);
-    }
-    Ok(())
-}
-
-fn unfilled_candidate_reservations(state: &StoreState) -> usize {
-    state.candidate_reservations.iter().filter(|reservation| {
-        !state.candidates.iter().any(|candidate| {
-            matches!(&candidate.reference.source, CheckpointSource::Accepted { activation } if activation == &reservation.activation)
-        })
-    }).count()
-}
-
-fn promotion_reservation(state: &StoreState) -> (usize, usize) {
-    let completed: HashSet<_> = state
-        .promotions
-        .iter()
-        .chain(state.pending.iter())
-        .map(|manifest| manifest.closure.turn_id())
-        .collect();
-    let mut turns = state
-        .promotion_reservations
-        .iter()
-        .filter(|turn| !completed.contains(turn))
-        .collect::<HashSet<_>>();
-    let mut conversations = HashSet::new();
-    for input in &state.inputs {
-        let turn = &input.input.activation.turn_id;
-        if !completed.contains(turn) {
-            turns.insert(turn);
-            conversations.insert((turn, &input.input.conversation_id));
-        }
-    }
-    (
-        conversations
-            .len()
-            .saturating_mul(PROMOTION_CONVERSATION_RESERVE)
-            .saturating_add(turns.len().saturating_mul(PROMOTION_TURN_RESERVE)),
-        turns.len(),
-    )
-}
-
-fn validate_state(state: &StoreState) -> Result<()> {
-    if state.schema_version != SCHEMA {
-        return invalid("unsupported activation-state schema");
-    }
-    if state.baselines.len() > MAX_BASELINES
-        || state.inputs.len() > MAX_INPUTS
-        || state.candidates.len() > MAX_CANDIDATES
-        || state.candidate_reservations.len() > MAX_INPUTS
-        || state.promotions.len() > MAX_PROMOTIONS
-        || state.promotion_reservations.len() > MAX_PROMOTIONS
-    {
-        return Err(ActivationStateError::Capacity);
-    }
-    if let Some(journal) = &state.journal {
-        if journal.workspace_id.is_empty()
-            || journal.workspace_id.len() > 128
-            || journal.workspace_id.chars().any(char::is_control)
-            || uuid::Uuid::parse_str(&journal.journal_id)
-                .ok()
-                .is_none_or(|id| id.is_nil() || id.to_string() != journal.journal_id)
-        {
-            return invalid("invalid canonical journal binding");
-        }
-    } else if !state.baselines.is_empty()
-        || !state.inputs.is_empty()
-        || !state.candidates.is_empty()
-        || !state.candidate_reservations.is_empty()
-        || !state.promotions.is_empty()
-        || !state.promotion_reservations.is_empty()
-        || state.pending.is_some()
-        || !state.heads.is_empty()
-        || !state.rewinds.is_empty()
-    {
-        return invalid("populated artifact namespace has no canonical journal binding");
-    }
-    if state
-        .promotion_reservations
-        .iter()
-        .collect::<HashSet<_>>()
-        .len()
-        != state.promotion_reservations.len()
-        || state
-            .promotion_reservations
-            .iter()
-            .any(|turn| state.promotions.iter().any(|p| p.closure.turn_id() == turn))
-    {
-        return invalid("invalid or already completed promotion reservation");
-    }
-    let mut input_ids = HashSet::new();
-    let mut activation_ids = HashSet::new();
-    let mut bindings = vec![];
-    let mut baseline_conversations = HashSet::new();
-    let mut baseline_slots = HashSet::new();
-    for baseline in &state.baselines {
-        let journal = state
-            .journal
-            .as_ref()
-            .ok_or_else(|| invalid_error("baseline has no journal"))?;
-        if baseline.reference.session_id != state.session_id
-            || baseline.reference != baseline_reference(journal, baseline)?
-            || !valid_baseline_policy(baseline)
-            || baseline.original_agent_id.is_empty()
-            || baseline.original_agent_id.len() > 256
-            || baseline.visible_turns.len() > MAX_BASELINE_TURNS
-            || baseline.visible_turns.iter().collect::<HashSet<_>>().len()
-                != baseline.visible_turns.len()
-            || !is_digest(&baseline.payload_sha256)
-            || baseline.payload_bytes > MAX_CHECKPOINT_BYTES
-            || !baseline_conversations.insert(&baseline.reference.conversation_id)
-            || !baseline_slots.insert(&baseline.slot_id)
-        {
-            return invalid("legacy baseline identity, ownership, or projection mismatch");
-        }
-        bindings.push((
-            baseline.slot_id.clone(),
-            baseline.reference.conversation_id.clone(),
-        ));
-    }
-    for record in &state.inputs {
-        let input = &record.input;
-        if input.activation.session_id != state.session_id
-            || record.sha256 != digest(&(&record.slot_id, input))?
-            || !input_ids.insert(&input.manifest_id)
-            || !activation_ids.insert(&input.activation.activation_id)
-        {
-            return invalid("input identity, ownership, or digest mismatch");
-        }
-        if bindings.iter().any(|(slot, conversation)| {
-            conversation == &input.conversation_id && slot != &record.slot_id
-        }) {
-            return invalid("Session conversation identity is shared by different slots");
-        }
-        bindings.push((record.slot_id.clone(), input.conversation_id.clone()));
-    }
-    let mut ids = HashSet::new();
-    for candidate in &state.candidates {
-        let CheckpointSource::Accepted { activation } = &candidate.reference.source else {
-            return invalid("candidate has non-activation source");
-        };
-        let input = state
-            .inputs
-            .iter()
-            .find(|item| item.input.activation == *activation)
-            .ok_or_else(|| invalid_error("candidate has no immutable input"))?;
-        let key = digest(&(
-            state
-                .journal
-                .as_ref()
-                .ok_or_else(|| invalid_error("missing journal binding"))?,
-            activation,
-            &input.input.conversation_id,
-            &input.sha256,
-            &candidate.payload_sha256,
-            candidate.payload_bytes,
-        ))?;
-        if candidate.reference.session_id != state.session_id
-            || candidate.reference.conversation_id != input.input.conversation_id
-            || candidate.input_sha256 != input.sha256
-            || candidate.reference.checkpoint_id.as_str() != format!("checkpoint:{key}")
-            || candidate.payload_bytes > MAX_CHECKPOINT_BYTES
-            || !is_digest(&candidate.payload_sha256)
-            || !ids.insert(&candidate.reference.checkpoint_id)
-        {
-            return invalid("candidate identity, ownership, or digest mismatch");
-        }
-    }
-    let mut reserved = HashSet::new();
-    for reservation in &state.candidate_reservations {
-        let input = state
-            .inputs
-            .iter()
-            .find(|input| input.input.activation == reservation.activation)
-            .ok_or_else(|| invalid_error("candidate reservation has no immutable input"))?;
-        if reservation.input_sha256 != input.sha256
-            || reservation.max_checkpoint_bytes != MAX_CHECKPOINT_BYTES
-            || !reserved.insert(&reservation.activation.activation_id)
-            || state.candidates.iter().filter(|candidate| {
-                matches!(&candidate.reference.source, CheckpointSource::Accepted { activation } if activation == &reservation.activation)
-            }).count() > 1
-        {
-            return invalid("candidate reservation identity, capacity, or single settlement mismatch");
-        }
-    }
-    let mut turns = HashSet::new();
-    let mut expected_heads: Vec<PromotedConversation> = vec![];
-    rewind::validate_rewinds(state)?;
-    for (index, promotion) in state
-        .promotions
-        .iter()
-        .chain(state.pending.iter())
-        .enumerate()
-    {
-        if !turns.insert(promotion.closure.turn_id()) {
-            return invalid("duplicate promotion for closed turn");
-        }
-        validate_promotion(state, promotion)?;
-        for selected in &promotion.selected {
-            let previous =
-                rewind::effective_reference(state, &selected.committed.conversation_id, index);
-            if previous != selected.previous_committed.as_ref() {
-                return invalid("promotion does not follow the prior committed conversation");
-            }
-        }
-        if state.pending.as_ref() != Some(promotion) {
-            for selected in &promotion.selected {
-                expected_heads.retain(|head| {
-                    head.committed.conversation_id != selected.committed.conversation_id
-                });
-                expected_heads.push(selected.clone());
-            }
-        }
-    }
-    expected_heads.sort_by(|a, b| {
-        a.committed
-            .conversation_id
-            .as_str()
-            .cmp(b.committed.conversation_id.as_str())
-    });
-    if state.heads != expected_heads {
-        return invalid("conversation heads do not match exact promotion history");
-    }
-    let mut conversations = HashSet::new();
-    for head in &state.heads {
-        if !conversations.insert(&head.committed.conversation_id)
-            || !state.promotions.iter().any(|p| p.selected.contains(head))
-        {
-            return invalid("conversation head is not a uniquely committed selection");
-        }
-    }
-    Ok(())
-}
-
-fn validate_promotion(state: &StoreState, manifest: &PromotionManifest) -> Result<()> {
-    let journal = state
-        .journal
-        .as_ref()
-        .ok_or_else(|| invalid_error("missing journal binding"))?;
-    if manifest.journal_id != journal.journal_id
-        || manifest.workspace_id != journal.workspace_id
-        || manifest.closure.session_id() != &state.session_id
-        || manifest.closure.closure_revision() == 0
-        || !is_digest(&manifest.contract_sha256)
-        || manifest.promotion_id
-            != promotion_id(
-                journal,
-                &manifest.closure,
-                &manifest.contract_sha256,
-                &manifest.selected,
-            )?
-    {
-        return invalid("promotion identity or closure mismatch");
-    }
-    let mut nodes = HashSet::new();
-    let mut conversations = HashSet::new();
-    for entry in &manifest.selected {
-        let CheckpointSource::Accepted { activation } = &entry.accepted.source else {
-            return invalid("promotion lacks exact activation source");
-        };
-        if activation.turn_id != *manifest.closure.turn_id()
-            || activation.node_id != entry.node_id
-            || !nodes.insert(&entry.node_id)
-            || !conversations.insert(&entry.accepted.conversation_id)
-            || !state.inputs.iter().any(|record| {
-                record.input.activation == *activation && record.slot_id == entry.slot_id
-            })
-            || entry.committed != committed_ref(&manifest.promotion_id, &entry.accepted)?
-            || !state
-                .candidates
-                .iter()
-                .any(|candidate| candidate.reference == entry.accepted)
-        {
-            return invalid("promotion selects a foreign or missing checkpoint");
-        }
-    }
-    Ok(())
-}
-
-fn apply_promotion(state: &StoreState, manifest: &PromotionManifest) -> StoreState {
-    let mut next = state.clone();
-    for entry in &manifest.selected {
-        next.heads
-            .retain(|head| head.committed.conversation_id != entry.committed.conversation_id);
-        next.heads.push(entry.clone());
-    }
-    next.heads.sort_by(|a, b| {
-        a.committed
-            .conversation_id
-            .as_str()
-            .cmp(b.committed.conversation_id.as_str())
-    });
-    next.promotions.push(manifest.clone());
-    next.promotion_reservations
-        .retain(|turn| turn != manifest.closure.turn_id());
-    next.pending = None;
-    next
 }
 
 fn promotion_id(
@@ -2370,14 +1896,6 @@ fn legacy_usage(turn: &SessionTurn) -> Result<(TokenUsageStats, bool)> {
     ))
 }
 
-fn state_bytes(state: &StoreState) -> Result<Vec<u8>> {
-    let bytes = serde_json::to_vec(state)?;
-    if bytes.len() > MAX_STATE_BYTES {
-        return Err(ActivationStateError::Capacity);
-    }
-    Ok(bytes)
-}
-
 fn digest(value: &impl Serialize) -> Result<String> {
     Ok(digest_bytes(&serde_json::to_vec(value)?))
 }
@@ -2415,6 +1933,41 @@ fn effective_uid() -> u32 {
     unsafe { geteuid() }
 }
 
+/// The bytes of a store's head and every journal segment, in order.
+#[cfg(all(test, unix))]
+fn journal_bytes(root: &Path) -> Vec<u8> {
+    let mut bytes = std::fs::read(root.join(STATE_FILE)).unwrap();
+    bytes.extend(std::fs::read(root.join(LOG_SPEC.active_name())).unwrap());
+    let mut sealed: Vec<_> = std::fs::read_dir(root.join("segments"))
+        .into_iter()
+        .flatten()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    sealed.sort();
+    for path in sealed {
+        bytes.extend(std::fs::read(path).unwrap());
+    }
+    bytes
+}
+
+/// Make the next journal append fail by putting a directory where the
+/// active segment is; returns the moved segment.
+#[cfg(all(test, unix))]
+fn block_active_segment(root: &Path) -> std::path::PathBuf {
+    let active = root.join(LOG_SPEC.active_name());
+    let saved = root.join("saved-active-segment");
+    std::fs::rename(&active, &saved).unwrap();
+    std::fs::create_dir(&active).unwrap();
+    saved
+}
+
+#[cfg(all(test, unix))]
+fn unblock_active_segment(root: &Path, saved: std::path::PathBuf) {
+    let active = root.join(LOG_SPEC.active_name());
+    std::fs::remove_dir(&active).unwrap();
+    std::fs::rename(saved, active).unwrap();
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -2425,7 +1978,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn disk_admission_reserves_promotion_space_before_acceptance_and_survives_reopen() {
+    fn isolated_store_binds_its_journal_with_the_first_input_and_refuses_oversized_checkpoints() {
         let history_root = tempfile::tempdir().unwrap();
         let ownership = Arc::new(
             LegacyFormatOwnership::acquire(history_root.path())
@@ -2454,15 +2007,16 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut store =
             ActivationStateStore::open(root.path(), activation.session_id.clone()).unwrap();
-        let before = fs::read(root.path().join(STATE_FILE)).unwrap();
-        store.limits.promotions = 0;
-        assert!(matches!(
-            store.record_input(&snapshot, &activation),
-            Err(ActivationStateError::Capacity)
-        ));
-        assert_eq!(fs::read(root.path().join(STATE_FILE)).unwrap(), before);
-        store.limits = Limits::default();
+        let head = |root: &Path| -> serde_json::Value {
+            serde_json::from_slice(&fs::read(root.join(STATE_FILE)).unwrap()).unwrap()
+        };
+        assert!(head(root.path())["journal"].is_null());
+        assert_eq!(head(root.path())["segments"]["kind"], "activation-state");
         store.record_input(&snapshot, &activation).unwrap();
+        assert_eq!(
+            head(root.path())["journal"]["journal_id"],
+            snapshot.journal_id()
+        );
         let mut checkpoint = AgentCheckpoint {
             version: 1,
             agent_id: "conversation-a".into(),
@@ -2475,16 +2029,14 @@ mod tests {
         let accepted = store
             .stage_candidate(&snapshot, &activation, &checkpoint)
             .unwrap();
-        let (reserved, turns) = promotion_reservation(&store.state);
-        assert_eq!(turns, 1);
-        store.limits.state_bytes = state_bytes(&store.state).unwrap().len() + reserved;
-        let bytes = fs::read(root.path().join(STATE_FILE)).unwrap();
+        let before = journal_bytes(root.path());
         checkpoint.version = 900;
+        checkpoint.behavior_state = Some("x".repeat(MAX_CHECKPOINT_BYTES));
         assert!(matches!(
             store.stage_candidate(&snapshot, &activation, &checkpoint),
             Err(ActivationStateError::Capacity)
         ));
-        assert_eq!(fs::read(root.path().join(STATE_FILE)).unwrap(), bytes);
+        assert_eq!(journal_bytes(root.path()), before);
         assert_eq!(
             fs::read_dir(root.path().join("objects")).unwrap().count(),
             1
@@ -2512,7 +2064,7 @@ mod tests {
                 .unwrap();
         }
         store.promote(&history.snapshot(&turn_id).unwrap()).unwrap();
-        assert_eq!(promotion_reservation(&store.state), (0, 0));
+        assert!(store.projection.pending.is_none());
         drop(store);
         let reopened = ActivationStateStore::open(root.path(), activation.session_id).unwrap();
         assert_eq!(
@@ -2598,10 +2150,10 @@ mod reservation_tests {
         memory.record_input(&snapshot, &activations[0]).unwrap();
         (root, canonical, memory, activations)
     }
-    fn empty_checkpoint() -> AgentCheckpoint {
+    fn empty_checkpoint(conversation: &str) -> AgentCheckpoint {
         AgentCheckpoint {
             version: 1,
-            agent_id: "conversation-a".into(),
+            agent_id: conversation.into(),
             checkpoint_time: 1,
             session_messages: vec![],
             cumulative_token_usage: TokenUsageStats::new(5, 3),
@@ -2609,11 +2161,45 @@ mod reservation_tests {
             behavior_state: None,
         }
     }
+    fn memory_root(canonical: &SessionExecutionStore) -> std::path::PathBuf {
+        canonical.path().parent().unwrap().join("activation-state")
+    }
 
     #[test]
-    fn owned_admission_reserves_last_candidate_slot_before_any_provider_work() {
+    fn every_activation_reserves_and_settles_exactly_once() {
         let (_root, canonical, mut memory, activations) = fixture();
-        memory.limits.candidates = 1;
+        let first = memory
+            .reserve_candidate(&canonical, &activations[0])
+            .unwrap();
+        memory
+            .record_input(
+                &canonical.snapshot(&activations[1].turn_id).unwrap(),
+                &activations[1],
+            )
+            .unwrap();
+        let second = memory
+            .reserve_candidate(&canonical, &activations[1])
+            .unwrap();
+        let a = memory
+            .stage_reserved_candidate(&first, &empty_checkpoint("conversation-a"))
+            .unwrap();
+        let b = memory
+            .stage_reserved_candidate(&second, &empty_checkpoint("conversation-b"))
+            .unwrap();
+        assert_ne!(a, b);
+        let mut different = empty_checkpoint("conversation-a");
+        different.version = 2;
+        assert!(memory.stage_reserved_candidate(&first, &different).is_err());
+        assert_eq!(memory.candidates_for(&activations[0]).unwrap().len(), 1);
+        assert_eq!(
+            memory.checkpoint(&a).unwrap().cumulative_token_usage,
+            TokenUsageStats::new(5, 3)
+        );
+    }
+
+    #[test]
+    fn reopen_keeps_an_unsettled_reservation_and_its_exact_settlement() {
+        let (_root, canonical, mut memory, activations) = fixture();
         let reservation = memory
             .reserve_candidate(&canonical, &activations[0])
             .unwrap();
@@ -2623,73 +2209,9 @@ mod reservation_tests {
                 &activations[1],
             )
             .unwrap();
-        let before = memory
-            .root
-            .read_limited(STATE_FILE, MAX_STATE_BYTES)
-            .unwrap();
-        assert!(matches!(
-            memory.reserve_candidate(&canonical, &activations[1]),
-            Err(ActivationStateError::Capacity)
-        ));
-        assert_eq!(
-            memory
-                .root
-                .read_limited(STATE_FILE, MAX_STATE_BYTES)
-                .unwrap(),
-            before
-        );
         let candidate = memory
-            .stage_reserved_candidate(&reservation, &empty_checkpoint())
+            .stage_reserved_candidate(&reservation, &empty_checkpoint("conversation-a"))
             .unwrap();
-        assert_eq!(memory.state.candidates.len(), 1);
-        assert_eq!(unfilled_candidate_reservations(&memory.state), 0);
-        assert_eq!(
-            memory
-                .checkpoint(&candidate)
-                .unwrap()
-                .cumulative_token_usage,
-            TokenUsageStats::new(5, 3)
-        );
-    }
-
-    #[test]
-    fn unrelated_input_cannot_spend_reserved_candidate_bytes_and_reopen_keeps_reservation() {
-        let (_root, canonical, mut memory, activations) = fixture();
-        let reservation = memory
-            .reserve_candidate(&canonical, &activations[0])
-            .unwrap();
-        let (promotion_bytes, _) = promotion_reservation(&memory.state);
-        memory.limits.state_bytes = state_bytes(&memory.state).unwrap().len()
-            + promotion_bytes
-            + CANDIDATE_METADATA_RESERVE;
-        let before = memory
-            .root
-            .read_limited(STATE_FILE, MAX_STATE_BYTES)
-            .unwrap();
-        assert!(matches!(
-            memory.record_input(
-                &canonical.snapshot(&activations[1].turn_id).unwrap(),
-                &activations[1]
-            ),
-            Err(ActivationStateError::Capacity)
-        ));
-        assert_eq!(
-            memory
-                .root
-                .read_limited(STATE_FILE, MAX_STATE_BYTES)
-                .unwrap(),
-            before
-        );
-        let candidate = memory
-            .stage_reserved_candidate(&reservation, &empty_checkpoint())
-            .unwrap();
-        assert!(
-            serde_json::to_vec(&memory.state.candidates[0])
-                .unwrap()
-                .len()
-                < CANDIDATE_METADATA_RESERVE
-        );
-        let limits = memory.limits;
         drop(memory);
         let mut memory = ActivationStateStore::open_owned(
             canonical
@@ -2697,17 +2219,18 @@ mod reservation_tests {
                 .unwrap(),
         )
         .unwrap();
-        memory.limits = limits;
         let recovered = memory
             .candidate_reservation(&canonical, &activations[0])
             .unwrap();
         assert_eq!(
             memory
-                .stage_reserved_candidate(&recovered, &empty_checkpoint())
+                .stage_reserved_candidate(&recovered, &empty_checkpoint("conversation-a"))
                 .unwrap(),
             candidate
         );
-        admit_state(&memory.state, limits).unwrap();
+        assert!(memory
+            .candidate_reservation(&canonical, &activations[1])
+            .is_err());
     }
 
     #[test]
@@ -2716,25 +2239,17 @@ mod reservation_tests {
         let reservation = memory
             .reserve_candidate(&canonical, &activations[0])
             .unwrap();
-        let before = memory
-            .root
-            .read_limited(STATE_FILE, MAX_STATE_BYTES)
-            .unwrap();
-        let mut checkpoint = empty_checkpoint();
+        let before = journal_bytes(&memory_root(&canonical));
+        let mut checkpoint = empty_checkpoint("conversation-a");
         checkpoint.behavior_state = Some("x".repeat(reservation.max_checkpoint_bytes()));
         assert!(matches!(
             memory.stage_reserved_candidate(&reservation, &checkpoint),
             Err(ActivationStateError::Capacity)
         ));
-        assert_eq!(
-            memory
-                .root
-                .read_limited(STATE_FILE, MAX_STATE_BYTES)
-                .unwrap(),
-            before
-        );
+        assert_eq!(journal_bytes(&memory_root(&canonical)), before);
         assert!(memory.objects.entries_limited(1).unwrap().is_empty());
-        assert_eq!(unfilled_candidate_reservations(&memory.state), 1);
+        assert!(memory.candidates_for(&activations[0]).unwrap().is_empty());
+        assert!(memory.reservation(&activations[0]).unwrap().is_some());
     }
 
     #[test]
@@ -2743,13 +2258,10 @@ mod reservation_tests {
         let reservation = memory
             .reserve_candidate(&canonical, &activations[0])
             .unwrap();
-        let root = canonical.path().parent().unwrap().join("activation-state");
-        let primary = root.join(STATE_FILE);
-        let saved = root.join("saved-state");
-        fs::rename(&primary, &saved).unwrap();
-        fs::create_dir(&primary).unwrap();
+        let root = memory_root(&canonical);
+        let saved = block_active_segment(&root);
         assert!(memory
-            .stage_reserved_candidate(&reservation, &empty_checkpoint())
+            .stage_reserved_candidate(&reservation, &empty_checkpoint("conversation-a"))
             .is_err());
         assert!(matches!(
             memory.starting_checkpoint_for(&reservation),
@@ -2759,8 +2271,7 @@ mod reservation_tests {
         assert_eq!(files.len(), 1);
         let orphan = fs::read(files[0].as_ref().unwrap().path()).unwrap();
         drop(memory);
-        fs::remove_dir(&primary).unwrap();
-        fs::rename(saved, primary).unwrap();
+        unblock_active_segment(&root, saved);
         let mut memory = ActivationStateStore::open_owned(
             canonical
                 .component_namespace(ExecutionComponent::ActivationState)
@@ -2771,7 +2282,7 @@ mod reservation_tests {
             .candidate_reservation(&canonical, &activations[0])
             .unwrap();
         let retained = memory
-            .stage_reserved_candidate(&recovered, &empty_checkpoint())
+            .stage_reserved_candidate(&recovered, &empty_checkpoint("conversation-a"))
             .unwrap();
         assert_eq!(
             memory
@@ -2793,7 +2304,7 @@ mod empty_promotion_tests {
     use std::sync::Arc;
 
     #[test]
-    fn empty_turn_reserves_durable_promotion_before_close_at_capacity() {
+    fn empty_turn_reserves_its_promotion_before_close_and_promotes_an_empty_selection() {
         let history_root = tempfile::tempdir().unwrap();
         let ownership = Arc::new(
             LegacyFormatOwnership::acquire(history_root.path())
@@ -2819,33 +2330,30 @@ mod empty_promotion_tests {
         assert!(snapshot.contract().activations().is_empty());
         let root = tempfile::tempdir().unwrap();
         let mut memory = ActivationStateStore::open(root.path(), begin.session_id.clone()).unwrap();
-        let before = std::fs::read(root.path().join(STATE_FILE)).unwrap();
-        memory.limits.state_bytes = before.len() + 8;
+        assert!(!memory.turn_reserved(&begin.turn_id).unwrap());
+        let saved = block_active_segment(root.path());
+        assert!(memory
+            .prepare_close(&snapshot, TurnClosure::Cancelled)
+            .is_err());
         assert!(matches!(
             memory.prepare_close(&snapshot, TurnClosure::Cancelled),
-            Err(ActivationStateError::Capacity)
+            Err(ActivationStateError::RecoveryRequired)
         ));
-        assert_eq!(std::fs::read(root.path().join(STATE_FILE)).unwrap(), before);
-        assert_eq!(
-            canonical
-                .snapshot(&begin.turn_id)
-                .unwrap()
-                .contract()
-                .state(),
-            Some(LogicalTurnState::Running)
-        );
-        memory.limits = Limits::default();
+        drop(memory);
+        unblock_active_segment(root.path(), saved);
+        let mut memory = ActivationStateStore::open(root.path(), begin.session_id.clone()).unwrap();
+        assert!(!memory.turn_reserved(&begin.turn_id).unwrap());
         memory
             .prepare_close(&snapshot, TurnClosure::Cancelled)
             .unwrap();
-        assert_eq!(
-            promotion_reservation(&memory.state),
-            (PROMOTION_TURN_RESERVE, 1)
-        );
+        assert!(memory.turn_reserved(&begin.turn_id).unwrap());
+        let before = journal_bytes(root.path());
+        memory
+            .prepare_close(&snapshot, TurnClosure::Cancelled)
+            .unwrap();
+        assert_eq!(journal_bytes(root.path()), before, "a repeat is inert");
         drop(memory);
         let mut memory = ActivationStateStore::open(root.path(), begin.session_id.clone()).unwrap();
-        let (reserved, _) = promotion_reservation(&memory.state);
-        memory.limits.state_bytes = state_bytes(&memory.state).unwrap().len() + reserved;
         canonical
             .append(TurnContractEnvelope {
                 schema_version: begin.schema_version,
@@ -2861,7 +2369,6 @@ mod empty_promotion_tests {
         let closed = canonical.snapshot(&begin.turn_id).unwrap();
         let promoted = memory.promote(&closed).unwrap();
         assert!(promoted.selected.is_empty());
-        assert!(memory.state.promotion_reservations.is_empty());
         assert_eq!(memory.promotion(&closed).unwrap(), Some(promoted.clone()));
         drop(memory);
         let reopened = ActivationStateStore::open(root.path(), begin.session_id).unwrap();

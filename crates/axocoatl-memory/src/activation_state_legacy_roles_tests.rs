@@ -200,7 +200,7 @@ async fn captured_roles_import_real_owned_baselines_and_preserve_source_across_r
             .windows(b"unfinished coder".len())
             .any(|part| part == b"unfinished coder"));
     }
-    assert_eq!(state.state.baselines.len(), 2);
+    assert_eq!(state.projection.baselines.len(), 2);
     drop(state);
     let reopened = memory(&fixture);
     for assignment in assignments() {
@@ -291,7 +291,7 @@ async fn source_change_after_projection_is_rejected_before_baseline_publication(
     assert!(state
         .import_legacy_baseline(&fixture.canonical, &projections[0])
         .is_err());
-    assert!(state.state.baselines.is_empty());
+    assert!(state.projection.baselines.is_empty());
 }
 
 #[tokio::test]
@@ -471,7 +471,7 @@ async fn incomplete_or_unknown_checkpoint_import_provenance_refuses_publication(
             .is_err(),
             "{metadata}"
         );
-        assert!(memory(&fixture).state.baselines.is_empty());
+        assert!(memory(&fixture).projection.baselines.is_empty());
     }
 }
 
@@ -493,7 +493,7 @@ async fn ordinary_checkpoint_only_context_cannot_silently_become_accounting_only
         &str::len,
     )
     .is_err());
-    assert!(memory(&fixture).state.baselines.is_empty());
+    assert!(memory(&fixture).projection.baselines.is_empty());
     let mut empty = fixture
         .source
         .load_latest(&axocoatl_core::AgentId::new("session:coder"))
@@ -612,5 +612,5 @@ async fn worker_checkpoint_only_conversation_refuses_instead_of_publishing_accou
         &str::len
     )
     .is_err());
-    assert!(memory(&fixture).state.baselines.is_empty());
+    assert!(memory(&fixture).projection.baselines.is_empty());
 }

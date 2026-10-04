@@ -830,11 +830,12 @@ fn autonomous_input_persistence_failure_prevents_provider_and_tool_dispatch_and_
         .parent()
         .unwrap()
         .join("activation-state");
-    let state_file = memory_root.join("activation-state.json");
-    let before = std::fs::read(&state_file).unwrap();
-    let saved = memory_root.join("saved-state.json");
-    std::fs::rename(&state_file, &saved).unwrap();
-    std::fs::create_dir(&state_file).unwrap();
+    // Inputs are appended to the store's active journal segment.
+    let journal = memory_root.join("activation-state.active.jsonl");
+    let before = std::fs::read(&journal).unwrap();
+    let saved = memory_root.join("saved-journal.jsonl");
+    std::fs::rename(&journal, &saved).unwrap();
+    std::fs::create_dir(&journal).unwrap();
     assert!(fixture
         .controller
         .prepare_autonomous_activation(
