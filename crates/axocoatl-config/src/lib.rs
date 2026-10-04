@@ -311,6 +311,24 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
             validate_writes(&agent.id, writes)?;
         }
 
+        if let Some(rounds) = agent
+            .max_tool_rounds
+            .filter(|rounds| !(1..=axocoatl_core::MAX_TOOL_ROUNDS).contains(rounds))
+        {
+            return Err(ConfigError::InvalidField {
+                field: format!("agents[{}].max_tool_rounds", agent.id),
+                value: rounds.to_string(),
+                reason: format!(
+                    "One activation runs from 1 to {} tool rounds",
+                    axocoatl_core::MAX_TOOL_ROUNDS
+                ),
+                suggestion: format!(
+                    "Set max_tool_rounds between 1 and {}, or remove it to let the grant's invocations set the limit",
+                    axocoatl_core::MAX_TOOL_ROUNDS
+                ),
+            });
+        }
+
         if !seen_ids.insert(agent.id.to_ascii_lowercase()) {
             return Err(ConfigError::DuplicateId {
                 field: "agents[].id".to_string(),
@@ -824,6 +842,45 @@ agents:
                 "{bad}: {err:?}"
             );
         }
+    }
+
+    #[test]
+    fn parse_max_tool_rounds() {
+        let yaml = r#"
+agents:
+  - id: open
+    name: "Open"
+    provider: ollama
+    model: llama3
+  - id: capped
+    name: "Capped"
+    provider: ollama
+    model: llama3
+    max_tool_rounds: 300
+"#;
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        assert_eq!(config.agents[0].max_tool_rounds, None);
+        assert_eq!(config.agents[0].to_core().max_tool_rounds, None);
+        assert_eq!(config.agents[1].to_core().max_tool_rounds, Some(300));
+        // An Agent without the key writes back without it.
+        let written = serde_yaml::to_string(&config.agents[0]).unwrap();
+        assert!(!written.contains("max_tool_rounds"), "{written}");
+
+        for bad in [0, axocoatl_core::MAX_TOOL_ROUNDS + 1] {
+            let yaml = format!(
+                "agents:\n  - id: bad\n    name: Bad\n    provider: ollama\n    model: llama3\n    max_tool_rounds: {bad}\n"
+            );
+            let err = parse_config(&yaml, &PathBuf::from("test.yaml")).unwrap_err();
+            assert!(
+                matches!(err, ConfigError::InvalidField { ref field, .. } if field == "agents[bad].max_tool_rounds"),
+                "{bad}: {err:?}"
+            );
+        }
+        let yaml = format!(
+            "agents:\n  - id: most\n    name: Most\n    provider: ollama\n    model: llama3\n    max_tool_rounds: {}\n",
+            axocoatl_core::MAX_TOOL_ROUNDS
+        );
+        assert!(parse_config(&yaml, &PathBuf::from("test.yaml")).is_ok());
     }
 
     #[test]

@@ -76,6 +76,15 @@ fn validate_native_config(config: &AgentConfig) -> Result<()> {
             "native factory requires an exact configured bounded Ollama or OpenRouter actor",
         ));
     }
+    if config
+        .max_tool_rounds
+        .is_some_and(|rounds| !(1..=axocoatl_core::MAX_TOOL_ROUNDS).contains(&rounds))
+    {
+        return Err(error(format!(
+            "configured tool-round limit must be 1 to {}",
+            axocoatl_core::MAX_TOOL_ROUNDS
+        )));
+    }
     match config.sampling.max_tokens {
         Some(0) => return Err(error("configured native output maximum must be positive")),
         Some(_) => {}

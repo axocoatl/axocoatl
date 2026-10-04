@@ -572,9 +572,23 @@ impl SessionDispatchController {
                 "the repository capture port belongs to the host; an Agent cannot call it",
             ));
         }
-        if !repository_snapshot::is_host_observation(group)
-            || repository_snapshot::is_digest_group(group)
-        {
+        let agent_call = !repository_snapshot::is_host_observation(group)
+            || repository_snapshot::is_digest_group(group);
+        // The audit keeps every record; a call it has no room for is
+        // declined before anything is written, so it never fences the Session.
+        let room = if agent_call {
+            state.tool_call_room()
+        } else {
+            state.audit.remaining_invocations()
+        };
+        if room == 0 {
+            return Ok(Err(if agent_call {
+                repository_snapshot::record_full_message()
+            } else {
+                repository_snapshot::RECORD_FULL.to_owned()
+            }));
+        }
+        if agent_call {
             if let Some(reserve) =
                 state.host_observation_shortfall(activation, repository_snapshot::TOOL_CALL_NEEDS)
             {

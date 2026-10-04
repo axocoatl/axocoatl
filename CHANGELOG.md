@@ -27,6 +27,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `path` of `list_dir` and `grep`, the `rows` and `cols` of `spawn_terminal`, the
   `tail_lines` of `read_terminal` and the `delimiter` of `text_split` given as `null`
   now take their defaults instead of refusing the call.
+- **A native Agent is no longer stopped at 128 tool rounds while its budget has room.**
+  A lead could stop at exactly 128 rounds with tokens, spending and time left. An
+  activation may now run one tool round per invocation its grant allows, up to 1,024,
+  so the grant normally ends a long run before the round limit does. An Agent's new
+  `max_tool_rounds` (1 to 1,024) sets a lower limit for its activations. An activation
+  that reaches its limit fails with "This Agent reached its tool-round limit for this
+  activation (N rounds)", classed `round_limit` with **Continue** as the suggested next
+  step, where it was classed `other` with "inspect"; failures written by 1.2.0 are read
+  the same way.
+- **A Session whose tool-call record is full keeps running.** A Session records at most
+  256 tool calls and repository captures over its life, and the call after that left
+  its runtime needing recovery ("invocation audit capacity exhausted"). Each Agent is
+  now asked for its final answer without tools once the record has no room, as when its
+  budget runs out; an Agent's call it cannot record is declined before anything is
+  written, and a capture it cannot record is kept as unavailable. Start a new Session to
+  give its Agents tools again.
 - **Continuing a Team turn runs the work that depends on the restarted Agents.** When a
   lead depended on two helpers that failed on a provider error, Continue restarted the
   helpers but left the lead, which had never started, blocked, so the turn stopped

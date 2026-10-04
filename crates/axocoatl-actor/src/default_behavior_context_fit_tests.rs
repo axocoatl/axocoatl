@@ -125,6 +125,9 @@ impl LlmProvider for LongLoopLlm {
             allowance.invocations = allowance
                 .invocations
                 .map(|left| left.saturating_sub(invocations));
+            if !answers {
+                allowance.tool_calls = allowance.tool_calls.map(|left| left.saturating_sub(1));
+            }
         }
         self.captured.lock().unwrap().push(request);
         let n = self
@@ -424,6 +427,40 @@ async fn a_nearly_spent_session_budget_ends_with_an_answer() {
         .text_content()
         .unwrap()
         .contains("allows only 2 more model or tool call(s)"));
+}
+
+/// A Session that can record only so many more tool calls ends the loop the
+/// same way once it has room for none, with budget left: the request after
+/// the last recorded call goes without tools and asks for the answer.
+#[tokio::test]
+async fn a_session_with_no_room_for_tool_calls_ends_with_an_answer() {
+    let mut provider = LongLoopLlm::new(usize::MAX, 40, 40, 0);
+    provider.grant = Some(std::sync::Mutex::new(FakeGrant {
+        allowance: axocoatl_llm::ProviderAllowance {
+            invocations: Some(1_000),
+            tool_calls: Some(3),
+            ..Default::default()
+        },
+        reservation: 1,
+    }));
+    let provider = Arc::new(provider);
+    let captured = provider.captured.clone();
+    let mut behavior = DefaultAgentBehavior::new(provider, simple_counter())
+        .with_tool_round_limit(128)
+        .with_tool_executor(echo_executor());
+    behavior.on_start(&AgentConfig::default()).await.unwrap();
+
+    let output = behavior.execute(AgentInput::text("keep going")).await.unwrap();
+    assert_eq!(output.content, "final answer");
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests.len(), 4, "three tool rounds, then the answer");
+    assert!(requests[..3].iter().all(|request| !request.tools.is_empty()));
+    assert!(requests[3].tools.is_empty());
+    let note = requests[3].messages.last().unwrap().text_content().unwrap();
+    assert!(
+        note.contains("the Session can record no more tool calls, so tools are no longer available"),
+        "{note}"
+    );
 }
 
 /// When the Session budget cannot admit even the final call, the failure

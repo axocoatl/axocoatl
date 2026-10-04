@@ -819,8 +819,8 @@ pub struct ExecutionActivationView {
 /// The step is a suggestion for a person; nothing runs by itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ActivationFailureView {
-    /// provider_incomplete | provider_error | budget_limited | context_limit |
-    /// scope_violation | capture_unavailable | admission | other
+    /// provider_incomplete | provider_error | budget_limited | round_limit |
+    /// context_limit | scope_violation | capture_unavailable | admission | other
     pub class: &'static str,
     pub explanation: String,
     /// continue | finish_partial | review_then_finish | inspect
@@ -871,6 +871,33 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
             "The Session budget for this Agent ran out before it answered.",
             "finish_partial",
         )
+    } else if let Some(rounds) = line
+        .strip_prefix("This Agent reached its tool-round limit for this activation (")
+        .and_then(|rest| rest.split_once(" rounds)"))
+        // 1.2.0 and earlier wrote it as a failure of the agent tool loop.
+        .or_else(|| {
+            line.strip_prefix(
+                "Tool call failed: agent tool loop - the model still requested tools after the \
+                 safety limit of ",
+            )
+            .and_then(|rest| rest.split_once(" rounds"))
+        })
+        .map(|(rounds, _)| rounds)
+        .filter(|rounds| {
+            !rounds.is_empty()
+                && rounds
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b',')
+        })
+    {
+        return Some(ActivationFailureView {
+            class: "round_limit",
+            explanation: format!(
+                "The Agent used all {rounds} tool rounds one activation may run and still asked \
+                 for more; those calls did not run. Its budget was not used up."
+            ),
+            next_step: "continue",
+        });
     } else if line.starts_with("Current request needs") {
         (
             "context_limit",
@@ -5162,6 +5189,27 @@ mod tests {
         // Text a tool returned later in the line cannot pick the class.
         assert_eq!(
             class("Activation failed: Tool call failed: bash - last failure: stream ended early"),
+            Some(("other", "inspect"))
+        );
+        // An Agent that ran out of tool rounds with budget left is continued.
+        let rounds = "Activation failed: This Agent reached its tool-round limit for this activation (1,024 rounds) and still asked for bash; those calls did not run. Run it again to go on, or narrow the task.";
+        assert_eq!(class(rounds), Some(("round_limit", "continue")));
+        let view = classify_activation_failure(rounds).unwrap();
+        assert!(
+            view.explanation
+                .starts_with("The Agent used all 1,024 tool rounds"),
+            "{}",
+            view.explanation
+        );
+        let legacy = "Activation failed: Tool call failed: agent tool loop - the model still requested tools after the safety limit of 128 rounds (pending: bash); those pending calls were not executed. Retry with a more capable model or narrow the task";
+        assert_eq!(class(legacy), Some(("round_limit", "continue")));
+        assert!(classify_activation_failure(legacy)
+            .unwrap()
+            .explanation
+            .starts_with("The Agent used all 128 tool rounds"));
+        // A tool's own text naming the limit later in the line does not.
+        assert_eq!(
+            class("Activation failed: Tool call failed: bash - This Agent reached its tool-round limit for this activation (3 rounds)"),
             Some(("other", "inspect"))
         );
     }

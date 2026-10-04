@@ -286,6 +286,136 @@ async fn native_tool_rounds_use_reviewed_capacity_and_still_stop_at_durable_invo
     }
 }
 
+/// Two benchmark leads stopped at exactly 128 tool rounds with budget left.
+/// A granted activation now runs as many rounds as its grant pays for; the
+/// next bound it meets is the Session's invocation audit, which keeps every
+/// record. With no room left, the Agent is asked for its final answer, as
+/// when its budget runs out, and the Session's runtime stays usable.
+#[tokio::test]
+async fn a_granted_activation_runs_past_128_rounds_and_answers_when_the_session_record_is_full() {
+    let fixture = fixture_with_limits(
+        GrantLimits {
+            activations: 2,
+            invocations: 1_000,
+            tokens: 10_000_000,
+            cost_microunits: 10_000_000,
+        },
+        "in-process",
+    );
+    let provider = Arc::new(RunProvider::new(&fixture, RunProviderMode::ToolRounds(300), true));
+    let tool = Arc::new(CountingTool::default());
+    let settled = fixture
+        .controller
+        .prepare_autonomous_activation(
+            fixture.activation.clone(),
+            resources(&fixture, provider.clone(), tool.clone()),
+        )
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    assert!(settled.accepted, "{:?}", settled.failure);
+    assert_eq!(settled.output.content().output.text, "done");
+    let rounds = tool.count.load(Ordering::SeqCst);
+    assert!(rounds > 128, "{rounds}");
+    assert_eq!(provider.calls.load(Ordering::SeqCst), rounds + 1);
+    let note = provider.requests.lock().unwrap()[rounds]
+        .last()
+        .and_then(ChatMessage::text_content)
+        .unwrap()
+        .to_string();
+    assert!(
+        note.contains("the Session can record no more tool calls, so tools are no longer available"),
+        "{note}"
+    );
+    let state = fixture.controller.lock().unwrap();
+    assert!(state.poisoned.is_none(), "{:?}", state.poisoned);
+    assert_eq!(state.audit.remaining_invocations(), 0);
+    assert_eq!(state.tool_call_room(), 0);
+    let snapshot = state.canonical.snapshot(&state.turn_id).unwrap();
+    assert_eq!(snapshot.contract().invocations().len(), rounds);
+}
+
+/// An Agent template's `max_tool_rounds` stops its activation at that many
+/// rounds although its grant has room for more. The activation's evidence
+/// names the limit, it is classed `round_limit`, and Continue is offered.
+#[tokio::test]
+async fn a_template_round_limit_stops_the_activation_and_offers_continue() {
+    let fixture = fixture_with_config(
+        GrantLimits {
+            activations: 2,
+            invocations: 32,
+            tokens: 10_000,
+            cost_microunits: 10_000,
+        },
+        "in-process",
+        AgentConfig {
+            id: AgentId::new("conversation"),
+            name: "Counter".into(),
+            provider: "controlled".into(),
+            model: "controlled-model".into(),
+            tools: vec!["effect".into()],
+            max_tool_rounds: Some(3),
+            ..Default::default()
+        },
+        "count once",
+    );
+    let provider = Arc::new(RunProvider::new(&fixture, RunProviderMode::ToolRounds(12), true));
+    let tool = Arc::new(CountingTool::default());
+    let settled = fixture
+        .controller
+        .prepare_autonomous_activation(
+            fixture.activation.clone(),
+            resources(&fixture, provider.clone(), tool.clone()),
+        )
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    assert!(!settled.accepted);
+    assert_eq!(tool.count.load(Ordering::SeqCst), 3);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
+    let expected = "This Agent reached its tool-round limit for this activation (3 rounds) and \
+                    still asked for effect; those calls did not run. Run it again to go on, or \
+                    narrow the task.";
+    assert_eq!(settled.failure.as_deref(), Some(expected));
+    assert_eq!(
+        settled.output.content().output.text,
+        format!("Activation failed: {expected}")
+    );
+    let snapshot = fixture.controller.snapshot().unwrap();
+    let view = {
+        let state = fixture.controller.lock().unwrap();
+        state.content.project(&snapshot).unwrap()
+    };
+    let failure = view.activations[0].failure.as_ref().unwrap();
+    assert_eq!((failure.class, failure.next_step), ("round_limit", "continue"));
+    assert!(
+        failure.explanation.starts_with("The Agent used all 3 tool rounds"),
+        "{}",
+        failure.explanation
+    );
+    // Once the epoch stops, the control plane offers to continue it.
+    fixture
+        .controller
+        .append_host_event(TurnContractEnvelope {
+            schema_version: TURN_CONTRACT_SCHEMA_VERSION,
+            command_id: CommandId::new("interrupt-after-round-limit").unwrap(),
+            expected_revision: snapshot.contract().revision(),
+            session_id: fixture.activation.session_id.clone(),
+            turn_id: fixture.activation.turn_id.clone(),
+            event: TurnContractEvent::InterruptEpoch {
+                epoch_id: fixture.activation.execution_epoch_id.clone(),
+            },
+        })
+        .unwrap();
+    let controls = fixture.controller.control_plane().unwrap().turn_controls.unwrap();
+    assert!(controls.continue_turn.enabled, "{}", controls.continue_turn.reason);
+    assert_eq!(controls.continuation_choices.len(), 1);
+    assert_eq!(controls.continuation_choices[0].activation, fixture.activation);
+    assert_eq!(controls.continuation_choices[0].state, "failed");
+}
+
 #[tokio::test]
 async fn autonomous_run_accepts_actual_native_checkpoint_only_after_durable_provider_and_tool_evidence(
 ) {

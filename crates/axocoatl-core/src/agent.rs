@@ -95,7 +95,17 @@ pub struct AgentConfig {
     /// applied to every LLM call this agent makes.
     #[serde(default)]
     pub sampling: SamplingConfig,
+    /// The most tool rounds one activation of this Agent may run, from 1 to
+    /// [`MAX_TOOL_ROUNDS`]. A native activation without it may run as many
+    /// rounds as its grant has invocations, up to that bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_rounds: Option<u32>,
 }
+
+/// The most tool rounds any one activation may run, whatever its Agent
+/// template or grant allows: a finite guard against a model that never stops
+/// asking for tools. Each round still needs its own durable admission.
+pub const MAX_TOOL_ROUNDS: u32 = 1024;
 
 impl Default for AgentConfig {
     fn default() -> Self {
@@ -111,6 +121,7 @@ impl Default for AgentConfig {
             memory: MemoryConfig::default(),
             role: AgentRole::default(),
             sampling: SamplingConfig::default(),
+            max_tool_rounds: None,
         }
     }
 }
@@ -297,6 +308,7 @@ mod tests {
             },
             role: AgentRole::default(),
             sampling: SamplingConfig::default(),
+            max_tool_rounds: Some(200),
         };
 
         let json = serde_json::to_string_pretty(&config).unwrap();
@@ -304,6 +316,7 @@ mod tests {
         assert_eq!(back.id, config.id);
         assert_eq!(back.provider, "anthropic");
         assert_eq!(back.tools.len(), 2);
+        assert_eq!(back.max_tool_rounds, Some(200));
     }
 
     #[test]
@@ -311,6 +324,7 @@ mod tests {
         let config = AgentConfig::default();
         let json = serde_json::to_string(&config).unwrap();
         assert!(!json.contains("writes"), "{json}");
+        assert!(!json.contains("max_tool_rounds"), "{json}");
         assert_eq!(
             json,
             r#"{"id":"default","name":"Default Agent","provider":"openai","model":"gpt-4o","system_prompt":null,"token_budget":null,"tools":[],"memory":{"max_session_messages":100,"recall":{"passive_inject":true,"top_k":5,"min_score":0.15},"core":{"blocks":[{"label":"persona","value":"","limit":2000,"shared":false,"description":"Who you are and how you behave."},{"label":"human","value":"","limit":2000,"shared":false,"description":"What you know about the user you serve."},{"label":"project","value":"","limit":3000,"shared":false,"description":"Durable project context, decisions, and conventions."}]}},"role":"Autonomous","sampling":{"temperature":null,"top_p":null,"max_tokens":null,"response_format":null}}"#

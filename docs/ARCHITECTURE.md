@@ -162,7 +162,13 @@ final body remains evidence and cannot become an accepted complete answer.
 logical closure. Late outcomes do not reopen a turn or replace accepted output. Protected
 argument references are distinct from display previews; host code must verify and resolve
 the actual post-hook bytes. Opaque intent receipts prove persistence, never replay safety.
-The bounded journal reserves space for unresolved invocations' later evidence.
+The bounded journal reserves space for unresolved invocations' later evidence. It holds at
+most 256 invocations for the life of the Session and evicts nothing, so the host reports
+its remaining room (less one After capture per running activation that observes its
+repository) as the Agent's `tool_calls` allowance, declines an Agent's call it has no room
+for before anything is written, and records a capture it cannot admit as unavailable. A
+full audit therefore ends each Agent's tool loop with a final answer instead of fencing
+the controller.
 
 `control_authority` persists grant policies and their prior revisions, exact generation
 registration, revocation, Stop, cumulative budget reservations, and dispatch claims. A fresh
@@ -262,10 +268,14 @@ provisioning rather than inherited authority.
 Unsupported custom behaviors refuse the optional boundary.
 
 Native `DefaultAgentBehavior` derives its tool-round ceiling from the reviewed
-grant's invocation allowance, clamped to 1–128 rounds. Compatibility construction
-retains the default ten-round ceiling. This is a finite loop guard, not a reservation
-or permission: provider and tool calls still pass their individual durable admission
-boundaries, and the grant may be exhausted before the round ceiling is reached.
+grant's invocation allowance, lowered by the Agent template's `max_tool_rounds` when it
+sets one, and held to 1–1,024 rounds (`axocoatl_core::MAX_TOOL_ROUNDS`). Every round
+spends at least one invocation, so the grant normally runs out before the ceiling.
+Compatibility construction retains the default ten-round ceiling. This is a finite loop
+guard, not a reservation or permission: provider and tool calls still pass their
+individual durable admission boundaries. An activation that reaches the ceiling while the
+model still asks for tools fails with `AgentError::ToolRoundLimit`; its pending calls do
+not run, and the failure is classed `round_limit` with Continue as the next step.
 
 The daemon's explicit `session_dispatch` adapter joins the owned stores for that tool boundary.
 It verifies exact current activation, physical input, profile, and grant; reserves protected
@@ -768,8 +778,12 @@ and streams that sometimes end early.
   one ended by an error record, such as an unparseable tool call) is retried once. Its
   estimated input and the output it had already streamed are charged to the same grant
   before the retry, and the retry is checked against what is left.
+- **Answering when the Session can record no more tool calls.** The Session's invocation
+  audit keeps every record; when it has no room for another tool call, the Agent's next
+  request goes without tools and asks for the final answer, the same way.
 - **Failure classes.** A failed activation states its failure class (provider stream,
-  budget, context limit, write scope, capture, admission) and a suggested next step.
+  budget, tool-round limit, context limit, write scope, capture, admission) and a
+  suggested next step.
 
 ## Multi-agent sessions and the event feed
 

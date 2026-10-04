@@ -111,6 +111,7 @@ agents:
       top_p: null
       max_tokens: 4096
       response_format: text
+    max_tool_rounds: 200
     memory:
       max_session_messages: 100
       recall:
@@ -134,6 +135,11 @@ Agent with an empty list the baseline tools. See [Agents and budgets](/configure
 native Session. Omit it to allow any file; `[]` makes a read-only helper. Absolute paths,
 `..` segments, `.git` segments, empty entries, and repeated entries are rejected. See
 [Limit which files an Agent may change](/configure/agents/#limit-which-files-an-agent-may-change).
+
+`max_tool_rounds` is optional: the most tool rounds one activation of the Agent may run
+in a native Session, from 1 to 1,024. Without it the Agent's grant sets the limit, one
+round per invocation it allows, up to 1,024. Other values are rejected. See
+[How long an Agent may work](/configure/agents/#how-long-an-agent-may-work).
 
 A Coordinator must be the `entry_point` of exactly one workflow. A Worker in a workflow must
 belong to that coordinator-led workflow; a Worker outside every workflow is a helper template

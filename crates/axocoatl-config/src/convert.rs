@@ -22,6 +22,7 @@ impl AgentConfigYaml {
             memory: self.memory.to_core(),
             role: self.role.to_core(),
             sampling: self.sampling.to_core(),
+            max_tool_rounds: self.max_tool_rounds,
         }
     }
 }
@@ -142,11 +143,13 @@ mod tests {
             activation_threshold: None,
             activation_decay: None,
             sampling: SamplingConfigYaml::default(),
+            max_tool_rounds: Some(300),
         };
 
         let core = yaml.to_core();
         assert_eq!(core.id, AgentId::new("test"));
         assert_eq!(core.provider, "openai");
+        assert_eq!(core.max_tool_rounds, Some(300));
         assert!(core.token_budget.is_some());
         let budget = core.token_budget.unwrap();
         assert_eq!(budget.per_execution, 20000);

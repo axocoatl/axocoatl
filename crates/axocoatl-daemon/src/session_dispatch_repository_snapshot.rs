@@ -180,7 +180,14 @@ impl SessionDispatchController {
                 },
             };
             let invocation = host_invocation_id(activation, group)?;
-            let admitted = self.admit_invocation(activation, &request)?;
+            // A capture the Session cannot record is unavailable, not a fault.
+            let admitted = match self.admit_or_decline_invocation(activation, &request)? {
+                Ok(admitted) => admitted,
+                Err(reason) => {
+                    observation.unavailable = Some(reason);
+                    return self.retain_observation(observation);
+                }
+            };
             let repository = admitted
                 .repository
                 .as_ref()
@@ -217,6 +224,15 @@ impl SessionDispatchController {
                 Err(failure) => observation.unavailable = Some(failure),
             }
         }
+        self.retain_observation(observation)
+    }
+
+    /// Retain one repository observation; an unavailable one keeps only its
+    /// bounded reason.
+    fn retain_observation(
+        &self,
+        mut observation: ActivationRepositorySnapshot,
+    ) -> Result<Option<EvidenceRef>> {
         if let Some(reason) = &mut observation.unavailable {
             observation.tree_sha256 = None;
             observation.judged_sha256 = None;
@@ -252,6 +268,9 @@ impl SessionDispatchController {
             return None;
         }
         let state = self.lock().ok()?;
+        if state.tool_call_room() <= earlier as usize {
+            return Some(record_full_message());
+        }
         state
             .host_observation_shortfall(activation, TOOL_CALL_NEEDS.saturating_add(earlier))
             .map(reserve_message)
@@ -589,6 +608,15 @@ pub(crate) fn reserve_message(reserve: u32) -> String {
     )
 }
 
+/// Why a tool call or capture cannot be recorded: the Session's invocation
+/// audit keeps every record it has and has no room for another.
+pub(crate) const RECORD_FULL: &str = "The Session can record no more tool calls or captures";
+
+/// Why an Agent's tool call is declined when the Session can record no more.
+pub(crate) fn record_full_message() -> String {
+    format!("{RECORD_FULL}. Do not call any more tools; write your final answer now.")
+}
+
 /// How a failure that the Session budget refused a model call begins.
 pub(crate) const BUDGET_USED_UP: &str = "The Session budget for this Agent is used up: ";
 
@@ -672,7 +700,37 @@ impl DispatchState {
             )),
             tokens: Some(limits.tokens.saturating_sub(usage.tokens)),
             cost_microunits: Some(limits.cost_microunits.saturating_sub(usage.cost_microunits)),
+            tool_calls: Some(u64::try_from(self.tool_call_room()).unwrap_or(u64::MAX)),
         })
+    }
+
+    /// Tool calls the Session's invocation audit can still record for an
+    /// Agent: its room, less the After capture that each running activation
+    /// observing its repository still needs. The audit keeps every record,
+    /// so this only shrinks over the Session's life.
+    pub(crate) fn tool_call_room(&self) -> usize {
+        let held =
+            self.canonical
+                .snapshot(&self.turn_id)
+                .ok()
+                .map_or(0, |snapshot| {
+                    snapshot
+                        .contract()
+                        .activations()
+                        .iter()
+                        .filter(|item| {
+                            item.state == ActivationState::Running
+                                && self.bound.get(&item.activation.activation_id).is_some_and(
+                                    |bound| {
+                                        bound.activation == item.activation
+                                            && bound.repository.is_some()
+                                            && capture_tool(&bound.profile).is_some()
+                                    },
+                                )
+                        })
+                        .count()
+                });
+        self.audit.remaining_invocations().saturating_sub(held)
     }
 
     /// Invocations the host holds back for this activation, when it can run

@@ -301,6 +301,8 @@ pub struct InvocationAudit {
     namespace: Option<OwnedExecutionNamespace>,
     data: AuditData,
     projection: AuditProjection,
+    /// Length of the published journal, for the byte bound.
+    stored_bytes: usize,
     recovery_required: bool,
 }
 
@@ -426,12 +428,14 @@ impl InvocationAudit {
         // Reading cannot repair a prior rename whose directory fsync failed.
         // A successful atomic rewrite is required before exposing any receipt.
         dir.verify_ambient_identity()?;
-        dir.atomic_write(FILE_NAME, &serde_json::to_vec(&data)?)?;
+        let bytes = serde_json::to_vec(&data)?;
+        dir.atomic_write(FILE_NAME, &bytes)?;
         Ok(Self {
             dir,
             namespace,
             data,
             projection,
+            stored_bytes: bytes.len(),
             recovery_required: false,
         })
     }
@@ -563,7 +567,29 @@ impl InvocationAudit {
         }
         self.data = next;
         self.projection = projection;
+        self.stored_bytes = bytes.len();
         Ok(())
+    }
+
+    /// How many more intents this audit can acknowledge. Each needs its own
+    /// record and, until it settles, room held for its terminal one, so the
+    /// invocation, record and byte bounds all apply; bytes are counted at the
+    /// largest record size. No history is ever evicted to make room.
+    pub fn remaining_invocations(&self) -> usize {
+        let unresolved = self
+            .projection
+            .invocations
+            .values()
+            .filter(|item| item.final_evidence.is_none())
+            .count();
+        let by_count = MAX_INVOCATIONS.saturating_sub(self.projection.invocations.len());
+        let by_records = MAX_RECORDS
+            .saturating_sub(self.data.records.len() + unresolved)
+            .saturating_div(2);
+        let by_bytes = MAX_STORE_BYTES
+            .saturating_sub(self.stored_bytes + unresolved * (MAX_RECORD_BYTES + 1))
+            / (2 * (MAX_RECORD_BYTES + 1));
+        by_count.min(by_records).min(by_bytes)
     }
 }
 
@@ -923,5 +949,89 @@ mod tests {
         drop(audit);
         let audit = InvocationAudit::open(dir.path(), owner()).unwrap();
         assert_eq!(audit.records().unwrap().len(), before.len() + 1);
+    }
+
+    /// The room an audit reports is never more than it has: while it
+    /// reports any, the next intent is acknowledged, and once it reports none
+    /// the next is refused for capacity. Settling frees no room.
+    #[test]
+    fn remaining_invocations_reaches_zero_exactly_when_intents_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
+        let mut previous = audit.remaining_invocations();
+        assert!(previous > 0);
+        let mut recorded = 0;
+        while audit.remaining_invocations() > 0 {
+            let mut next = intent();
+            next.command_id = CommandId::new(format!("command-{recorded}")).unwrap();
+            next.intent.invocation_id =
+                InvocationId::new(format!("invocation-{recorded}")).unwrap();
+            audit.record_intent(next.clone()).unwrap();
+            audit
+                .record_evidence(InvocationEvidenceCommand {
+                    command_id: CommandId::new(format!("outcome-{recorded}")).unwrap(),
+                    expected_revision: 1,
+                    invocation_id: next.intent.invocation_id.clone(),
+                    activation: next.intent.activation.clone(),
+                    authority: next.intent.authority.clone(),
+                    evidence: InvocationFinalEvidence::Outcome {
+                        outcome: InvocationOutcome::Succeeded,
+                        result: ProtectedArguments {
+                            evidence_ref: EvidenceRef::new(format!("result-{recorded}")).unwrap(),
+                            sha256: "f".repeat(64),
+                            byte_len: 2,
+                        },
+                        redacted_preview: "ok".into(),
+                        source: InvocationOutcomeSource::Executor,
+                        authority_ref: EvidenceRef::new("authority").unwrap(),
+                    },
+                })
+                .unwrap();
+            recorded += 1;
+            let remaining = audit.remaining_invocations();
+            assert!(remaining <= previous, "{remaining} after {previous}");
+            previous = remaining;
+        }
+        assert_eq!(recorded, MAX_INVOCATIONS);
+        let mut refused = intent();
+        refused.command_id = CommandId::new("command-refused").unwrap();
+        refused.intent.invocation_id = InvocationId::new("invocation-refused").unwrap();
+        assert!(matches!(
+            audit.record_intent(refused),
+            Err(InvocationAuditError::Capacity)
+        ));
+        drop(audit);
+        let audit = InvocationAudit::open(dir.path(), owner()).unwrap();
+        assert_eq!(audit.remaining_invocations(), 0);
+
+        // Large unsettled intents fill the bytes first; the room reported is
+        // still always there.
+        let dir = tempfile::tempdir().unwrap();
+        let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
+        let mut recorded = 0;
+        while audit.remaining_invocations() > 0 {
+            let mut large = intent();
+            large.command_id = CommandId::new(format!("large-{recorded}")).unwrap();
+            large.intent.invocation_id = InvocationId::new(format!("large-{recorded}")).unwrap();
+            large.intent.redacted_preview = "\u{1}".repeat(2048);
+            large.intent.tool_name = "t".repeat(256);
+            large.intent.dispatch_scope = "d".repeat(128);
+            large.intent.arguments.evidence_ref = EvidenceRef::new("a".repeat(128)).unwrap();
+            large.intent.authority.grant_id = "g".repeat(128);
+            large.intent.authority.approval_ref = Some(EvidenceRef::new("p".repeat(128)).unwrap());
+            large.intent.provider_replay.adapter_id = "i".repeat(128);
+            large.intent.provider_replay.adapter_version = "v".repeat(128);
+            large.intent.provider_replay.provider_run_ref =
+                Some(EvidenceRef::new("r".repeat(128)).unwrap());
+            large.intent.provider_replay.native_call_id = Some("n".repeat(512));
+            large.intent.provider_replay.response_group_id = Some("s".repeat(512));
+            large.intent.replay_policy = InvocationReplayPolicy::ProviderIdempotency {
+                policy_ref: EvidenceRef::new("q".repeat(128)).unwrap(),
+                key_ref: EvidenceRef::new("k".repeat(128)).unwrap(),
+            };
+            audit.record_intent(large).unwrap();
+            recorded += 1;
+        }
+        assert!(recorded > 1 && recorded < MAX_INVOCATIONS, "{recorded}");
     }
 }

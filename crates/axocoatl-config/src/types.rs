@@ -401,6 +401,11 @@ pub struct AgentConfigYaml {
     /// Sampling controls threaded into each LLM request this agent makes.
     #[serde(default)]
     pub sampling: SamplingConfigYaml,
+    /// The most tool rounds one activation of this Agent may run, 1 to
+    /// 1,024. Absent, a native activation may run as many rounds as its
+    /// grant has invocations, up to 1,024.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_rounds: Option<u32>,
 }
 
 /// Per-agent sampling controls. All optional; an unset field leaves the

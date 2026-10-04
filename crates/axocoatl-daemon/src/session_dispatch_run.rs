@@ -22,6 +22,17 @@ use axocoatl_tools::ToolExecutor;
 /// result each round is what exhausts a small local model's context.
 const KEPT_TOOL_ROUNDS: usize = 3;
 
+/// The most tool rounds one activation may run: the Agent template's
+/// `max_tool_rounds` when it sets one, and never more than its grant's
+/// invocations. Every round needs at least one model call, so by default the
+/// grant runs out before the rounds do. The actor also holds it to
+/// `axocoatl_core::MAX_TOOL_ROUNDS`.
+fn tool_round_limit(config: &AgentConfig, limits: &GrantLimits) -> u32 {
+    config
+        .max_tool_rounds
+        .map_or(limits.invocations, |rounds| rounds.min(limits.invocations))
+}
+
 /// The repository's instructions for its Agents, at the root of a checkout.
 const PROJECT_INSTRUCTIONS_FILE: &str = "AXOCOATL.md";
 
@@ -312,7 +323,7 @@ impl SessionDispatchController {
         // A Coordinator template runs here as a lead like any other Agent: its
         // approved Worker templates are reachable only through `delegate`.
         let mut behavior = DefaultAgentBehavior::new(provider, counter)
-            .with_tool_round_limit(policy.limits.invocations)
+            .with_tool_round_limit(tool_round_limit(&config, &policy.limits))
             .with_tool_executor(tools)
             .with_executor_tool_allowlist(offered_tools)
             .with_activation_checkpoint_port(port.clone())
@@ -885,4 +896,27 @@ fn merge_usage(total: &mut MeasuredTokenUsage, next: MeasuredTokenUsage) -> Resu
     };
     total.complete &= next.complete;
     Ok(())
+}
+
+#[cfg(test)]
+mod round_limit_tests {
+    use super::*;
+
+    #[test]
+    fn the_grant_sets_the_round_limit_and_a_template_can_only_lower_it() {
+        let limits = GrantLimits {
+            activations: 16,
+            invocations: 400,
+            tokens: 2_000_000,
+            cost_microunits: 7_000_000,
+        };
+        let template = |rounds| AgentConfig {
+            max_tool_rounds: rounds,
+            ..Default::default()
+        };
+        // The benchmark lead's grant: 400 rounds, no longer capped at 128.
+        assert_eq!(tool_round_limit(&template(None), &limits), 400);
+        assert_eq!(tool_round_limit(&template(Some(50)), &limits), 50);
+        assert_eq!(tool_round_limit(&template(Some(1_000)), &limits), 400);
+    }
 }
