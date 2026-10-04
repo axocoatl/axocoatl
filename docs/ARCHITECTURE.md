@@ -338,7 +338,11 @@ The internal autonomous driver schedules child tasks from the canonical graph wh
 controller continues accepting exact controls. Independent branches can finish when a sibling
 fails; dependent work uses only current accepted parent outputs. Explicit revision supersedes
 affected descendants, and the driver prepares their next generation from the retained input and
-new accepted parents. A lost driver interrupts its epoch and drains owned tasks for late evidence;
+new accepted parents. A person's Continue that restarts failed work selects never-started
+work that depends on it, directly or through other such work, as awaiting its dependencies
+when every other parent is accepted, so the driver starts it once the restarted work is
+accepted; work behind a parent left blocked stays blocked in that epoch. A lost driver
+interrupts its epoch and drains owned tasks for late evidence;
 reconstruction requires explicit continuation. An activation stopped before binding receives a
 durable never-dispatched record, not an inference from missing accounting. Prepared generations
 that never started are identified from canonical history even after supersession. Definitive

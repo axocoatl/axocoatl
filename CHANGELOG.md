@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `path` of `list_dir` and `grep`, the `rows` and `cols` of `spawn_terminal`, the
   `tail_lines` of `read_terminal` and the `delimiter` of `text_split` given as `null`
   now take their defaults instead of refusing the call.
+- **Continuing a Team turn runs the work that depends on the restarted Agents.** When a
+  lead depended on two helpers that failed on a provider error, Continue restarted the
+  helpers but left the lead, which had never started, blocked, so the turn stopped
+  again with nothing left to continue. Work that never started and depends on restarted
+  work now waits for it in the new epoch and runs once it is accepted; work that also
+  depends on failed work left unselected stays blocked until that is continued too.
 
 ## [1.2.0] - 2026-10-03
 

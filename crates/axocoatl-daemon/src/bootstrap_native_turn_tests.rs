@@ -61,8 +61,19 @@ async fn native_fixture_with_checks_and_invocations(
     )
     .await
 }
-/// Two slots whose grants `issuer` approved; slot `n` has `tools[n]`.
+/// Two slots whose grants `issuer` approved; slot `n` has `tools[n]`, and
+/// node-1 depends on node-0.
 async fn native_fixture_with(invocations: u32, issuer: &str, tools: [&[&str]; 2]) -> NativeFixture {
+    native_team_fixture(invocations, issuer, &tools, &[(0, 1)]).await
+}
+/// One slot per entry of `tools`, node `n` with `tools[n]`, and the
+/// `(parent, child)` node `dependencies`, on grants `issuer` approved.
+async fn native_team_fixture(
+    invocations: u32,
+    issuer: &str,
+    tools: &[&[&str]],
+    dependencies: &[(usize, usize)],
+) -> NativeFixture {
     let mut repository = fixture_with_legacy_turn(Some("legacy-before-native")).await;
     let canonical = repository._canonical.take().unwrap();
     let content = ExecutionContentStore::open_owned(
@@ -99,13 +110,13 @@ async fn native_fixture_with(invocations: u32, issuer: &str, tools: [&[&str]; 2]
             let mut continuity = Vec::new();
             let mut grants = Vec::new();
             let mut inputs = Vec::new();
-            for index in 0..2 {
+            for (index, tools) in tools.iter().enumerate() {
                 let node_id = TurnNodeId::new(format!("node-{index}")).unwrap();
                 let slot_id = SessionTeamSlotId::new(format!("slot-{index}")).unwrap();
                 let conversation_id =
                     NodeConversationId::new(format!("conversation-{index}")).unwrap();
                 let definition_id = AgentDefinitionId::new(format!("definition-{index}")).unwrap();
-                let tools: Vec<String> = tools[index].iter().map(|tool| (*tool).into()).collect();
+                let tools: Vec<String> = tools.iter().map(|tool| (*tool).into()).collect();
                 let config = AgentConfig {
                     id: AgentId::new(conversation_id.as_str()),
                     provider: "ollama".into(),
@@ -191,10 +202,13 @@ async fn native_fixture_with(invocations: u32, issuer: &str, tools: [&[&str]; 2]
             }
             let graph = SessionTeamGraph {
                 slots,
-                dependencies: vec![DependencyEdge {
-                    parent: TurnNodeId::new("node-0").unwrap(),
-                    child: TurnNodeId::new("node-1").unwrap(),
-                }],
+                dependencies: dependencies
+                    .iter()
+                    .map(|(parent, child)| DependencyEdge {
+                        parent: TurnNodeId::new(format!("node-{parent}")).unwrap(),
+                        child: TurnNodeId::new(format!("node-{child}")).unwrap(),
+                    })
+                    .collect(),
                 conditions: vec![],
             };
             let mut team = SessionTeamStore::open_owned(
@@ -1022,6 +1036,9 @@ mod delegate_tests;
 
 #[path = "bootstrap_native_review_tests.rs"]
 mod review_tests;
+
+#[path = "bootstrap_native_team_continue_tests.rs"]
+mod team_continue_tests;
 
 #[path = "bootstrap_native_ways_admission_tests.rs"]
 mod ways_admission_tests;
