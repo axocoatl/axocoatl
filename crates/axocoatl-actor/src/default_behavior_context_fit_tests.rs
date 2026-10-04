@@ -49,6 +49,9 @@ struct LongLoopLlm {
     /// Reported usage per call, when the test needs the guard to see some.
     usage: Option<TokenUsageStats>,
     grant: Option<std::sync::Mutex<FakeGrant>>,
+    /// The next call's reservation grows with its prompt, as a native
+    /// OpenRouter call's does: by the added tokens.
+    growing: bool,
     calls: std::sync::atomic::AtomicUsize,
     captured: Arc<std::sync::Mutex<Vec<ChatRequest>>>,
 }
@@ -62,6 +65,7 @@ impl LongLoopLlm {
             context,
             usage: None,
             grant: None,
+            growing: false,
             calls: std::sync::atomic::AtomicUsize::new(0),
             captured: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
@@ -92,6 +96,25 @@ impl LlmProvider for LongLoopLlm {
             cost_microunits: 0,
             response_bytes: 1 << 20,
         })
+    }
+    fn follow_up_execution_bounds(
+        &self,
+        request: &ChatRequest,
+        added_prompt_tokens: u64,
+    ) -> Option<axocoatl_llm::ProviderExecutionBounds> {
+        let mut bounds = self.execution_bounds(request)?;
+        if self.growing {
+            bounds.token_limit += added_prompt_tokens;
+        }
+        Some(bounds)
+    }
+    fn response_tokens(&self, _: &ChatRequest, output: usize) -> usize {
+        // Reasoning at OpenRouter's `high` share when the reservation grows.
+        if self.growing {
+            output * 5
+        } else {
+            output
+        }
     }
     fn remaining_allowance(&self) -> Option<axocoatl_llm::ProviderAllowance> {
         Some(self.grant.as_ref()?.lock().unwrap().allowance)
@@ -392,7 +415,43 @@ async fn a_nearly_spent_session_budget_ends_with_an_answer() {
         assert!(requests[4].tools.is_empty());
         assert!(
             note.contains(
-                "the Session budget has 2,000 tokens left and each model call reserves 2,000"
+                "the Session budget has 2,000 tokens left, and this model call and the one \
+                 after it reserve 4,000"
+            ),
+            "{note}"
+        );
+    }
+
+    // When the next call reserves more than this one (its prompt adds this
+    // call's response, reasoning included, and the tool results), the
+    // answer is asked for while that larger call still fits.
+    let mut provider = LongLoopLlm::new(usize::MAX, 40, 40, 0);
+    provider.growing = true;
+    provider.grant = Some(std::sync::Mutex::new(FakeGrant {
+        allowance: axocoatl_llm::ProviderAllowance {
+            tokens: Some(10_000),
+            ..Default::default()
+        },
+        reservation: 2_000,
+    }));
+    let provider = Arc::new(provider);
+    let captured = provider.captured.clone();
+    let mut behavior = DefaultAgentBehavior::new(provider, simple_counter())
+        .with_tool_round_limit(128)
+        .with_tool_executor(echo_executor());
+    behavior.on_start(&answer_limit(200)).await.unwrap();
+    let output = behavior.execute(AgentInput::text("keep going")).await.unwrap();
+    assert_eq!(output.content, "final answer");
+    {
+        let requests = captured.lock().unwrap();
+        // 200 of output may bill 1,000; the next call grows by twice that.
+        // Each round needs 2,000 + 4,000: three rounds, then the answer.
+        assert_eq!(requests.len(), 4, "three tool rounds, then the answer");
+        let note = requests[3].messages.last().unwrap().text_content().unwrap();
+        assert!(
+            note.contains(
+                "the Session budget has 4,000 tokens left, and this model call and the one \
+                 after it reserve 6,000"
             ),
             "{note}"
         );

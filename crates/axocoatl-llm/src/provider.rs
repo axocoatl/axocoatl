@@ -317,6 +317,26 @@ pub trait LlmProvider: Send + Sync + 'static {
         None
     }
 
+    /// What the call after this one can be expected to reserve once a tool
+    /// round has added `added_prompt_tokens` to its prompt (its own replayed
+    /// response and the tool results). An estimate for planning, not a
+    /// bound: dispatch still reserves each call's own `execution_bounds`.
+    /// Executors whose bounds do not grow with the prompt return those.
+    fn follow_up_execution_bounds(
+        &self,
+        request: &ChatRequest,
+        _added_prompt_tokens: u64,
+    ) -> Option<ProviderExecutionBounds> {
+        self.execution_bounds(request)
+    }
+
+    /// The completion tokens a call can bill when its visible output may
+    /// reach `output`: the output plus any reasoning the provider allows on
+    /// top of it. Token budgets reserve this, not the visible output alone.
+    fn response_tokens(&self, _request: &ChatRequest, output: usize) -> usize {
+        output
+    }
+
     /// What a host that meters this caller still allows it to spend, when it
     /// knows. Each call reserves its `execution_bounds`. Plain providers have
     /// no such budget and return `None`.
@@ -359,31 +379,38 @@ pub trait LlmProvider: Send + Sync + 'static {
     /// a shared provider-agnostic tokenizer. Provider-native implementations
     /// may override it with their exact tokenizer.
     fn count_tokens(&self, request: &ChatRequest) -> usize {
-        static COUNTER: OnceLock<Option<ApproximateCounter>> = OnceLock::new();
-        let Some(counter) = COUNTER.get_or_init(|| ApproximateCounter::new().ok()) else {
-            // Static tokenizer initialization should not fail, but retain a
-            // bounded, allocation-free fallback rather than panicking at the
-            // provider boundary.
-            let message_bytes = serde_json::to_vec(&request.messages)
-                .map(|value| value.len())
-                .unwrap_or_default();
-            let tool_bytes = serde_json::to_vec(&request.tools)
-                .map(|value| value.len())
-                .unwrap_or_default();
-            return message_bytes.saturating_add(tool_bytes).saturating_add(3) / 4;
-        };
-
-        let mut total = counter.count_messages(&request.messages);
-        for tool in &request.tools {
-            let provider_visible = serde_json::json!({
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters,
-            });
-            total = total.saturating_add(counter.count_tool_definition(&provider_visible));
-        }
-        total
+        approximate_request_tokens(request)
     }
+}
+
+/// The shared provider-agnostic estimate of a request's input tokens: its
+/// complete message and tool serialization. `count_tokens` uses it unless a
+/// provider overrides that with its exact tokenizer.
+pub fn approximate_request_tokens(request: &ChatRequest) -> usize {
+    static COUNTER: OnceLock<Option<ApproximateCounter>> = OnceLock::new();
+    let Some(counter) = COUNTER.get_or_init(|| ApproximateCounter::new().ok()) else {
+        // Static tokenizer initialization should not fail, but retain a
+        // bounded, allocation-free fallback rather than panicking at the
+        // provider boundary.
+        let message_bytes = serde_json::to_vec(&request.messages)
+            .map(|value| value.len())
+            .unwrap_or_default();
+        let tool_bytes = serde_json::to_vec(&request.tools)
+            .map(|value| value.len())
+            .unwrap_or_default();
+        return message_bytes.saturating_add(tool_bytes).saturating_add(3) / 4;
+    };
+
+    let mut total = counter.count_messages(&request.messages);
+    for tool in &request.tools {
+        let provider_visible = serde_json::json!({
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.parameters,
+        });
+        total = total.saturating_add(counter.count_tool_definition(&provider_visible));
+    }
+    total
 }
 
 /// An executor capability, not a price estimate. Implementations must account

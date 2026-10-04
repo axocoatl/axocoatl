@@ -17,11 +17,15 @@ pub(crate) enum ControlledChat {
 /// Planning must not install this on a request: compression and paid summaries
 /// can change both its input size and remaining execution allowance. This local
 /// estimate does not replace a provider's canonical whole-call reservation.
+/// `response` maps a visible output limit to the completion tokens the call
+/// can bill (`LlmProvider::response_tokens`): an Abort budget must hold the
+/// whole response, reasoning included, not the visible output alone.
 pub(crate) fn projected_output_allowance(
     explicit_maximum: Option<usize>,
     provider_default: usize,
     tracker: Option<&TokenTracker>,
     estimated_input: usize,
+    response: impl Fn(usize) -> usize,
 ) -> usize {
     if let Some(maximum) = explicit_maximum {
         return maximum;
@@ -36,12 +40,49 @@ pub(crate) fn projected_output_allowance(
         .per_execution
         .saturating_sub(tracker.total_used());
     let call_allowance = tracker.budget().per_call.min(execution_remaining);
-    let budget_safe_output = call_allowance.saturating_sub(estimated_input);
-    if provider_default > 0 {
-        budget_safe_output.min(provider_default)
+    let budget_safe_response = call_allowance.saturating_sub(estimated_input);
+    let ceiling = if provider_default > 0 {
+        budget_safe_response.min(provider_default)
     } else {
-        budget_safe_output
+        budget_safe_response
+    };
+    largest_output_within(ceiling, budget_safe_response, response)
+}
+
+/// The largest visible output up to `ceiling` whose whole response fits
+/// `room`, or 0 when not even one token's response fits.
+pub(crate) fn largest_output_within(
+    ceiling: usize,
+    room: usize,
+    response: impl Fn(usize) -> usize,
+) -> usize {
+    if response(ceiling) <= room {
+        return ceiling;
     }
+    // A response only grows with its output limit.
+    let (mut low, mut high) = (0usize, ceiling);
+    while low < high {
+        let middle = low + (high - low).div_ceil(2);
+        if response(middle) <= room {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    low
+}
+
+/// The completion tokens `request` can bill at `output`, and at least one
+/// token when the call would produce any output at all.
+pub(crate) fn response_reservation(
+    provider: &dyn LlmProvider,
+    request: &ChatRequest,
+    output: usize,
+) -> usize {
+    if output == 0 {
+        return 0;
+    }
+    provider.response_tokens(request, output).max(output)
 }
 
 fn context_output_allowance(
@@ -55,6 +96,7 @@ fn context_output_allowance(
         provider_default,
         tracker,
         provider.count_tokens(request),
+        |output| response_reservation(provider, request, output),
     )
 }
 
@@ -193,6 +235,7 @@ fn preflight_provider_spend(
         provider_default_output,
         Some(tracker),
         estimated_input,
+        |output| response_reservation(provider, request, output),
     );
     if request.max_tokens.is_none()
         && tracker.budget().overflow_policy == OverflowPolicy::Abort
@@ -201,12 +244,15 @@ fn preflight_provider_spend(
         request.max_tokens = Some(output_reservation);
     }
 
-    let requested = estimated_input.saturating_add(output_reservation);
+    // The whole response, reasoning included, must fit what is left.
+    let requested =
+        estimated_input.saturating_add(response_reservation(provider, request, output_reservation));
     let checked_requested = if tracker.budget().overflow_policy == OverflowPolicy::Abort
         && output_reservation == 0
         && request.max_tokens.is_none()
     {
-        requested.saturating_add(1)
+        // Nothing fits: check the smallest response so the call is refused.
+        requested.saturating_add(response_reservation(provider, request, 1))
     } else {
         requested
     };

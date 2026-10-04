@@ -221,7 +221,10 @@ async fn a_session_budget_short_of_a_tool_round_asks_for_the_answer_and_names_it
         .unwrap()
         .to_string();
     assert!(
-        note.contains("the Session budget has 150 tokens left and each model call reserves 100"),
+        note.contains(
+            "the Session budget has 150 tokens left, and this model call and the one after it \
+             reserve 200"
+        ),
         "{note}"
     );
 

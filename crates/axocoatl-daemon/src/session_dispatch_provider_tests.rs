@@ -15,6 +15,9 @@ struct BoundedProvider {
     response: Option<ChatResponse>,
     accounting: Option<MeasuredTokenUsage>,
     cost_microunits: Option<u64>,
+    /// A follow-up call reserves more as its prompt grows, one token and one
+    /// microunit per added prompt token, as a native OpenRouter call does.
+    grows: bool,
 }
 
 impl BoundedProvider {
@@ -33,6 +36,7 @@ impl BoundedProvider {
             response: None,
             accounting: None,
             cost_microunits: None,
+            grows: false,
         }
     }
 }
@@ -53,6 +57,18 @@ impl LlmProvider for BoundedProvider {
     }
     fn execution_bounds(&self, _: &ChatRequest) -> Option<ProviderExecutionBounds> {
         self.bounds
+    }
+    fn follow_up_execution_bounds(
+        &self,
+        _: &ChatRequest,
+        added_prompt_tokens: u64,
+    ) -> Option<ProviderExecutionBounds> {
+        let mut bounds = self.bounds?;
+        if self.grows {
+            bounds.token_limit += added_prompt_tokens;
+            bounds.cost_microunits += added_prompt_tokens;
+        }
+        Some(bounds)
     }
     async fn chat(&self, _: ChatRequest) -> std::result::Result<ChatResponse, ProviderError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -787,4 +803,101 @@ async fn provider_nonstream_authoritative_cost_preserves_failure_subtotal() {
         assert_eq!(usage.cost_known, succeeds);
         assert_eq!(usage.tokens.complete, succeeds);
     }
+}
+
+/// A helper's answer is read by a call that reserves more than any earlier
+/// one: its prompt adds the lead's reasoning, the turn it returned and the
+/// answer. Admission uses that estimate, not the largest earlier reservation.
+#[tokio::test]
+async fn a_tool_call_leaves_the_estimate_of_the_call_that_reads_its_result() {
+    let tool_round = || {
+        vec![
+            Ok(StreamEvent::ToolCallDelta {
+                index: Some(0),
+                id: "call_1".into(),
+                name: Some("effect".into()),
+                args_delta: "{}".into(),
+            }),
+            Ok(StreamEvent::UsageObservation(MeasuredTokenUsage::known(
+                TokenUsageStats {
+                    input_tokens: 10,
+                    output_tokens: 2,
+                    reasoning_tokens: Some(40),
+                },
+            ))),
+            Ok(StreamEvent::Done {
+                finish_reason: FinishReason::ToolUse,
+            }),
+        ]
+    };
+    let mut inner = BoundedProvider::new(tool_round());
+    inner.grows = true;
+    let (fixture, wrapped) = provider_fixture(Arc::new(inner));
+    let mut stream = wrapped
+        .chat_stream(ChatRequest::simple("input"))
+        .await
+        .unwrap();
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+    let answer = crate::session_dispatch::delegate::ANSWER_PROMPT_TOKENS;
+    let state = fixture.controller.lock().unwrap();
+    let (activation, estimate) = state
+        .follow_ups
+        .get(&fixture.activation.activation_id)
+        .cloned()
+        .expect("a completed tool call leaves an estimate");
+    assert_eq!(activation, fixture.activation);
+    // 100 reserved, plus the 40 reasoning tokens sent back, the returned
+    // turn's bytes and one helper answer.
+    let growth = estimate.tokens - 100;
+    assert!(growth > 40 + answer && growth < 40 + answer + 1024, "{growth}");
+    assert_eq!(estimate.cost_microunits, 10 + growth);
+
+    // The largest earlier reservation (100 tokens) would admit a helper that
+    // leaves 848 of the 1,000; the follow-up needs far more.
+    let bound = state.bound.get(&fixture.activation.activation_id).unwrap();
+    let policy = state
+        .authority
+        .grant_policy(bound.grant.grant_id.as_str())
+        .unwrap();
+    let refused = state
+        .delegate_follow_up_shortfall(
+            &fixture.activation,
+            &policy,
+            "reader",
+            &GrantLimits {
+                activations: 1,
+                invocations: 4,
+                tokens: 100,
+                cost_microunits: 0,
+            },
+        )
+        .unwrap()
+        .expect("the helper does not leave room to read its answer");
+    assert!(
+        refused.contains(&format!("{} tokens", estimate.tokens)),
+        "{refused}"
+    );
+    drop(state);
+
+    // A completion that asks for no tool leaves no estimate.
+    let inner = BoundedProvider::new(vec![
+        Ok(StreamEvent::TextDelta {
+            delta: "answer".into(),
+        }),
+        Ok(StreamEvent::Usage(TokenUsageStats::new(10, 2))),
+        Ok(StreamEvent::Done {
+            finish_reason: FinishReason::Stop,
+        }),
+    ]);
+    let (fixture, wrapped) = provider_fixture(Arc::new(inner));
+    let mut stream = wrapped
+        .chat_stream(ChatRequest::simple("input"))
+        .await
+        .unwrap();
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+    assert!(fixture.controller.lock().unwrap().follow_ups.is_empty());
 }

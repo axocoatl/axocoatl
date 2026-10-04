@@ -517,6 +517,32 @@ impl LlmProvider for FallbackProvider {
         }
     }
 
+    fn response_tokens(&self, request: &ChatRequest, output: usize) -> usize {
+        match self.history_route(request) {
+            Ok(Some(route)) if route.slot == FALLBACK_SLOT => {
+                let target = self
+                    .fallback
+                    .as_ref()
+                    .expect("history_route validated fallback slot");
+                target
+                    .provider
+                    .response_tokens(&Self::retarget(request.clone(), &route.model), output)
+            }
+            Ok(Some(route)) => self
+                .primary
+                .response_tokens(&Self::retarget(request.clone(), &route.model), output),
+            Ok(None) | Err(_) => self.fallback.as_ref().map_or_else(
+                || self.primary.response_tokens(request, output),
+                |fallback| {
+                    let fallback_request = Self::retarget(request.clone(), &fallback.model);
+                    self.primary
+                        .response_tokens(request, output)
+                        .max(fallback.provider.response_tokens(&fallback_request, output))
+                },
+            ),
+        }
+    }
+
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
         if let Some(route) = self.history_route(&request)? {
             let selected_provider: &dyn LlmProvider = match route.slot.as_str() {

@@ -117,6 +117,7 @@ impl SessionDispatchController {
             changed: Arc::new(tokio::sync::Notify::new()),
             stream_bus: None,
             bound: HashMap::new(),
+            follow_ups: HashMap::new(),
             repository_checks: HashMap::new(),
             repository_owners: HashMap::new(),
             repository_reattachments: HashMap::new(),

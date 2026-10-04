@@ -486,6 +486,17 @@ impl SessionDispatchController {
         }
     }
 
+    /// Remember what `activation`'s next model call can be expected to
+    /// reserve after the tool round its latest call started.
+    pub(super) fn note_follow_up(&self, activation: &ActivationRef, estimate: DispatchReservation) {
+        if let Ok(mut state) = self.lock() {
+            state.follow_ups.insert(
+                activation.activation_id.clone(),
+                (activation.clone(), estimate),
+            );
+        }
+    }
+
     pub(super) fn settle_provider(
         &self,
         claim: &ProviderCallClaim,

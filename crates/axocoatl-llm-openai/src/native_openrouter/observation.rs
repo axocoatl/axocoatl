@@ -17,6 +17,31 @@ pub const PROMPT_TEMPLATE_ALLOWANCE: usize = 4096;
 /// OpenRouter documents a 1,024-token minimum reasoning budget, and the
 /// request's `max_tokens` must stay above it.
 pub const MINIMUM_REASONING_ALLOWANCE: usize = 1024;
+/// Bytes a Session keeps per response token while a call streams. A token of
+/// text is about four bytes; reasoning text is kept twice (streamed as it
+/// arrives, and in the reasoning blocks sent back with tool results), each
+/// JSON-escaped and framed. A response allowance whose tokens at this rate
+/// pass a call's response byte bound is refused before inference.
+pub const STREAMED_BYTES_PER_RESPONSE_TOKEN: usize = 10;
+
+/// OpenRouter's service tiers other than the standard one. A tier endpoint
+/// (`openai/flex`, `openai/fast`, `google-vertex/flex`) is never matched by
+/// its base slug and serves a request only when the request opts into it;
+/// it trades latency, availability or price. Native requests use the
+/// standard tier only, so such endpoints are not selected.
+const SERVICE_TIERS: [&str; 4] = ["flex", "fast", "priority", "ultrafast"];
+/// Model id suffixes that opt into a service tier.
+const TIER_VARIANTS: [&str; 2] = [":nitro", ":floor"];
+
+/// Whether an endpoint tag names a service-tier endpoint.
+pub(super) fn service_tier_endpoint(tag: &str) -> bool {
+    tag.rsplit_once('/')
+        .is_some_and(|(_, suffix)| SERVICE_TIERS.contains(&suffix))
+}
+
+fn tier_variant(model: &str) -> bool {
+    TIER_VARIANTS.iter().any(|suffix| model.ends_with(suffix))
+}
 
 /// Priced features a request can only start by asking for them. Axocoatl's
 /// native request never does: it sends text, function tools only, no
@@ -157,7 +182,9 @@ impl NativeOpenRouterObservation {
             || self.model.starts_with("openrouter/")
             || self.model.split('/').count() != 2
             || self.model.ends_with(":online")
+            || tier_variant(&self.model)
             || !valid_tag(&self.endpoint_tag)
+            || service_tier_endpoint(&self.endpoint_tag)
             || self.provider_name.is_empty()
             || !(2048..=16 * 1024 * 1024).contains(&self.context_tokens)
             || self.max_output_tokens == 0
@@ -315,15 +342,52 @@ impl NativeOpenRouterObservation {
     }
 
     /// `max_tokens` for a call whose visible output may reach `output`: the
-    /// output plus the reasoning allowance, within the endpoint's limit.
+    /// output plus the reasoning allowance. It is never clamped to the
+    /// endpoint's output limit, which would silently cut the visible output;
+    /// an Agent whose allowance passes that limit is refused instead.
     pub fn response_allowance(
         &self,
         output: usize,
         reasoning: Option<NativeOpenRouterReasoningRequest>,
     ) -> usize {
-        output
-            .saturating_add(reasoning.map_or(0, |request| request.allowance(output)))
-            .min(self.max_output_tokens)
+        output.saturating_add(reasoning.map_or(0, |request| request.allowance(output)))
+    }
+
+    /// Why a call whose visible output may reach `output` cannot run on this
+    /// endpoint, in plain words: its response allowance passes the
+    /// endpoint's output limit, or streaming it can pass `response_bytes`.
+    pub fn response_refusal(
+        &self,
+        output: usize,
+        reasoning: Option<NativeOpenRouterReasoningRequest>,
+        response_bytes: usize,
+    ) -> Option<String> {
+        let allowance = self.response_allowance(output, reasoning);
+        let parts = if allowance > output {
+            format!(
+                "{output} of output plus {} of reasoning",
+                allowance - output
+            )
+        } else {
+            format!("{output} of output")
+        };
+        if allowance > self.max_output_tokens {
+            return Some(format!(
+                "each call to {} would need max_tokens {allowance} ({parts}), more than the \
+                 {} output tokens it allows on OpenRouter endpoint {}",
+                self.model, self.max_output_tokens, self.endpoint_tag
+            ));
+        }
+        if allowance.saturating_mul(STREAMED_BYTES_PER_RESPONSE_TOKEN) > response_bytes {
+            return Some(format!(
+                "each call to {} may stream {allowance} tokens ({parts}), more than the \
+                 {} KiB a Session keeps of one response ({STREAMED_BYTES_PER_RESPONSE_TOKEN} \
+                 bytes per token)",
+                self.model,
+                response_bytes / 1024
+            ));
+        }
+        None
     }
 
     /// Hard bounds of one call: its prompt bound plus its `max_tokens`, at the
@@ -650,6 +714,12 @@ pub async fn observe_native_openrouter_profiles(
              never request; use the model id without :online",
         ));
     }
+    if tier_variant(model) {
+        return Err(invalid(
+            "a :nitro or :floor model id opts into an OpenRouter service tier; native \
+             Sessions use the standard tier, so use the model id without the suffix",
+        ));
+    }
     let client = http_client();
     let catalog = metadata(&client, base_url, api_key, "models").await?;
     let rows = catalog
@@ -719,12 +789,23 @@ pub async fn observe_native_openrouter_profiles(
             continue;
         };
         let reject = |reason: &str| format!("{tag}: {reason}");
-        // `only: ["base"]` matches every `base/...` variant, so a base tag
-        // pins one endpoint only when no other variant shares it.
+        if service_tier_endpoint(tag) {
+            rejected.insert(reject(
+                "a service-tier endpoint a request must opt into; native Sessions use the \
+                 standard tier",
+            ));
+            continue;
+        }
+        // `only: ["base"]` matches every `base/...` variant except service
+        // tiers, which a base slug never selects; a base tag pins one
+        // endpoint only when no other variant shares it.
         let shared = tags
             .iter()
             .filter(|other| {
-                **other == tag || (!tag.contains('/') && other.starts_with(&format!("{tag}/")))
+                **other == tag
+                    || (!tag.contains('/')
+                        && !service_tier_endpoint(other)
+                        && other.starts_with(&format!("{tag}/")))
             })
             .count();
         if shared != 1 {

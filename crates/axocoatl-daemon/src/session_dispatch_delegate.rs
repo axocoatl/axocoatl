@@ -18,6 +18,10 @@ pub(super) const NAME: &str = axocoatl_session::control_authority::DELEGATE_TOOL
 const ADAPTER: &str = "delegate-child-v1";
 const MAX_TASK_BYTES: usize = 16 * 1024;
 const MAX_ANSWER_BYTES: usize = 8192;
+/// What one helper answer can add to the lead's next prompt bound: the answer
+/// and its JSON fields, escaped once in the tool result and again in the
+/// request body. An estimate that covers ordinary text, not a bound.
+pub(super) const ANSWER_PROMPT_TOKENS: u64 = 2 * (MAX_ANSWER_BYTES as u64 + 1024);
 /// Provider calls a lead must still be able to make after a helper's limits
 /// are reserved: one reads the answer, and one more lets it answer after a
 /// declined tool round.
@@ -339,7 +343,11 @@ impl DispatchState {
         ) else {
             return Ok(None);
         };
-        let call = self
+        // The call that reads the answer reserves more than any earlier one:
+        // its prompt adds this round's reasoning, the turn the lead returned
+        // and the helper's answer. Use the estimate the lead's latest call
+        // left, and never less than its largest reservation so far.
+        let largest = self
             .authority
             .largest_provider_reservation(lead)
             .map_err(error)?
@@ -347,6 +355,17 @@ impl DispatchState {
                 tokens: 0,
                 cost_microunits: 0,
             });
+        let call = match self
+            .follow_ups
+            .get(&lead.activation_id)
+            .filter(|(activation, _)| activation == lead)
+        {
+            Some((_, estimate)) => DispatchReservation {
+                tokens: largest.tokens.max(estimate.tokens),
+                cost_microunits: largest.cost_microunits.max(estimate.cost_microunits),
+            },
+            None => largest,
+        };
         let reserve = self.host_observation_reserve(lead).unwrap_or(0);
         let needed = FOLLOW_UP_CALLS.saturating_add(reserve);
         if invocations >= needed && tokens >= call.tokens && cost >= call.cost_microunits {

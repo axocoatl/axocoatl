@@ -448,6 +448,7 @@ impl SessionDispatchController {
             state.authority = authority;
             state.commands = commands;
             state.bound.clear();
+            state.follow_ups.clear();
             state.reconcile()?;
             state.reconcile_conditions()?;
             state.reconcile_promotions()?;

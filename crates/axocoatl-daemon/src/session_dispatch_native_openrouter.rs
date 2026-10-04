@@ -77,9 +77,37 @@ fn microdollars(amount: u64) -> String {
     format!("${}.{:06}", amount / 1_000_000, amount % 1_000_000)
 }
 
+/// Refuse, by name, a sampling parameter the Agent sends that this endpoint
+/// does not list. OpenRouter would refuse every call (`require_parameters`).
+fn openrouter_parameters(
+    config: &AgentConfig,
+    observation: &axocoatl_llm_openai::NativeOpenRouterObservation,
+) -> Result<()> {
+    for (parameter, set) in [
+        ("temperature", config.sampling.temperature.is_some()),
+        ("top_p", config.sampling.top_p.is_some()),
+        ("response_format", config.sampling.response_format.is_some()),
+    ] {
+        if set
+            && !observation
+                .supported_parameters
+                .iter()
+                .any(|supported| supported == parameter)
+        {
+            return Err(error(format!(
+                "{} on OpenRouter endpoint {} does not accept sampling.{parameter}; remove it \
+                 from this Agent or choose a model whose endpoints accept it",
+                observation.model, observation.endpoint_tag
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// The Agent's visible output limit per call on this endpoint. The response
 /// allowance is that output plus the reasoning allowance; with the template
-/// allowance for the smallest prompt it must fit one whole call. Without
+/// allowance for the smallest prompt it must fit one whole call, within the
+/// endpoint's output limit and the response bytes a Session keeps. Without
 /// `sampling.max_tokens`, the response allowance takes at most half of the
 /// whole-call budget so the other half is left for prompts.
 fn openrouter_output_limit(
@@ -89,6 +117,7 @@ fn openrouter_output_limit(
     reasoning: Option<axocoatl_llm_openai::NativeOpenRouterReasoningRequest>,
 ) -> Result<usize> {
     validate_native_config(config)?;
+    openrouter_parameters(config, observation)?;
     let model = &observation.model;
     let tag = &observation.endpoint_tag;
     let capacity = whole_call_capacity(config, limits);
@@ -108,6 +137,14 @@ fn openrouter_output_limit(
                 "sampling.max_tokens {explicit} exceeds the {} output tokens {model} allows on \
                  OpenRouter endpoint {tag}",
                 observation.max_output_tokens
+            )));
+        }
+        if let Some(refusal) =
+            observation.response_refusal(explicit, reasoning, NATIVE_RESPONSE_BYTES)
+        {
+            return Err(error(format!(
+                "sampling.max_tokens {explicit}{effort}: {refusal}; lower sampling.max_tokens \
+                 or sampling.reasoning_effort"
             )));
         }
         let allowance = response(explicit);
@@ -134,7 +171,15 @@ fn openrouter_output_limit(
         allowance <= capacity / 2
             && minimum_prompt + allowance <= capacity
             && (allowance as usize) < observation.context_tokens
+            && observation
+                .response_refusal(output, reasoning, NATIVE_RESPONSE_BYTES)
+                .is_none()
     };
+    if let Some(refusal) = observation.response_refusal(1, reasoning, NATIVE_RESPONSE_BYTES) {
+        return Err(error(format!(
+            "{refusal}; choose a lower sampling.reasoning_effort"
+        )));
+    }
     if !fits(1) {
         return Err(error(format!(
             "the {capacity}-token whole-call budget leaves no room for a {model} response of \

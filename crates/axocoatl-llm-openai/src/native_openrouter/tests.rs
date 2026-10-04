@@ -100,9 +100,13 @@ async fn exact_paid_credit_route_uses_wire_caps_and_reports_actual_cost() {
     assert_eq!(body["provider"]["require_parameters"], true);
     assert_eq!(body["provider"]["max_price"]["prompt"], "1");
     assert_eq!(body["max_tokens"], 32);
-    // The account's default web plugin is turned off; a non-reasoning model
-    // gets no reasoning parameter.
-    assert_eq!(body["plugins"], json!([{"id":"web","enabled":false}]));
+    // The account's default web plugin and context compression are turned
+    // off; a non-reasoning model gets no reasoning parameter.
+    assert_eq!(
+        body["plugins"],
+        json!([{"id":"web","enabled":false},{"id":"context-compression","enabled":false}])
+    );
+    assert_eq!(body["transforms"], json!([]));
     assert!(body.get("reasoning").is_none());
     assert!(!String::from_utf8_lossy(&sent.body).contains(KEY));
 }
@@ -355,22 +359,23 @@ async fn reasoning_models_are_admitted_with_every_price_component_and_tier() {
     );
 
     let (_, gpt) = captured_profiles(GPT).await;
-    // `openai` would also select openai/flex and openai/fast; Azure lists
-    // only max_completion_tokens. The cheapest exact variant comes first.
+    // openai/flex and openai/fast are service tiers a request must opt into:
+    // never selected, and a base slug never matches them, so `openai`
+    // qualifies. Azure lists only max_completion_tokens.
     assert_eq!(
         gpt.iter()
             .map(|p| p.endpoint_tag.as_str())
             .collect::<Vec<_>>(),
-        ["openai/flex", "openai/fast", "amazon-bedrock/us-east-1"]
+        ["openai", "amazon-bedrock/us-east-1"]
     );
-    let flex = &gpt[0];
-    // Base 1/5, cache write 1.25, and the >272k-token tier 2/7.5 with cache
-    // write 2.5: the highest tier wins.
-    assert_eq!(flex.prompt_price_per_million, "2.5");
-    assert_eq!(flex.completion_price_per_million, "7.5");
-    assert_eq!(flex.max_prompt_tokens, Some(922_000));
-    assert_eq!(flex.prompt_limit(), 922_000);
-    let contract = flex.reasoning.clone().unwrap();
+    let openai = &gpt[0];
+    // Base 2/10, cache write 2.5, and the >272k-token tier 4/15 with cache
+    // write 5: the highest tier wins.
+    assert_eq!(openai.prompt_price_per_million, "5");
+    assert_eq!(openai.completion_price_per_million, "15");
+    assert_eq!(openai.max_prompt_tokens, Some(922_000));
+    assert_eq!(openai.prompt_limit(), 922_000);
+    let contract = openai.reasoning.clone().unwrap();
     assert!(!contract.mandatory && contract.enabled_by_default);
 }
 
@@ -587,12 +592,16 @@ async fn a_reasoning_call_reserves_its_own_request_and_settles_reasoning_as_outp
 
     let mut stream = provider.chat_stream(request.clone()).await.unwrap();
     let mut reasoning_text = String::new();
+    let mut reasoning_deltas = 0;
     let mut metadata = None;
     let mut usage = None;
     let mut cost = None;
     while let Some(event) = stream.next().await {
         match event.unwrap() {
-            StreamEvent::ReasoningDelta { delta } => reasoning_text.push_str(&delta),
+            StreamEvent::ReasoningDelta { delta } => {
+                reasoning_deltas += 1;
+                reasoning_text.push_str(&delta);
+            }
             StreamEvent::ToolCallMetadata { metadata: m, .. } => metadata = Some(m),
             StreamEvent::UsageObservation(observed) => usage = Some(observed),
             StreamEvent::CostObservation { cost_microunits } => cost = Some(cost_microunits),
@@ -600,6 +609,8 @@ async fn a_reasoning_call_reserves_its_own_request_and_settles_reasoning_as_outp
         }
     }
     assert_eq!(reasoning_text, "Oslo is east of Lima.");
+    // Fragments are merged before they are yielded, flushed by the tool call.
+    assert_eq!(reasoning_deltas, 1);
     let usage = usage.unwrap();
     assert!(usage.complete);
     assert_eq!(usage.usage.input_tokens, 432);
@@ -614,9 +625,14 @@ async fn a_reasoning_call_reserves_its_own_request_and_settles_reasoning_as_outp
     assert_eq!(body["reasoning"], json!({"effort":"high"}));
     assert_eq!(body["max_tokens"], 1024 + 4096);
     assert_eq!(body["provider"]["only"], json!(["anthropic"]));
-    assert_eq!(body["provider"]["max_price"]["prompt"], "4");
-    assert_eq!(body["provider"]["max_price"]["completion"], "10");
-    assert_eq!(body["plugins"], json!([{"id":"web","enabled":false}]));
+    assert_eq!(
+        body["provider"]["max_price"],
+        json!({"prompt":"4","completion":"10","request":"0"})
+    );
+    assert_eq!(
+        body["plugins"],
+        json!([{"id":"web","enabled":false},{"id":"context-compression","enabled":false}])
+    );
     assert!(body["messages"][0].get("reasoning_details").is_none());
 
     // The reservation is the request's own bytes plus the template allowance
@@ -791,7 +807,7 @@ async fn summary_and_encrypted_reasoning_blocks_merge_by_index() {
     assert_eq!(body["reasoning"], json!({"effort":"medium"}));
     // Medium doubles the output: 2,048 visible plus 2,048 of reasoning.
     assert_eq!(body["max_tokens"], 4096);
-    assert_eq!(body["provider"]["only"], json!(["openai/flex"]));
+    assert_eq!(body["provider"]["only"], json!(["openai"]));
 }
 
 async fn breach(usage: Value, extra_delta: Option<Value>) -> AccountedChatOutcome {
@@ -1011,4 +1027,236 @@ fn streamed_reasoning_blocks_merge_until_signed_and_refuse_unknown_types() {
         .push(&json!({"type":"reasoning.server_tool_call","index":3}))
         .is_err());
     assert_eq!(stream::ReasoningDetails::default().encoded().unwrap(), None);
+}
+
+#[tokio::test]
+async fn service_tier_endpoints_are_never_selected_and_never_shadow_a_base_tag() {
+    // A provider that adds a tier endpoint later leaves its base tag usable.
+    let (row, mut endpoints) = captured(CLAUDE);
+    let rows = endpoints["data"]["endpoints"].as_array_mut().unwrap();
+    let mut fast = rows[4].clone();
+    assert_eq!(fast["tag"], "anthropic");
+    fast["tag"] = json!("anthropic/fast");
+    fast["pricing"]["prompt"] = json!("0.000001");
+    rows.push(fast);
+    let server = MockServer::start().await;
+    catalog(&server, row, endpoints).await;
+    let profiles = observe_native_openrouter_profiles(&server.uri(), KEY, CLAUDE)
+        .await
+        .unwrap();
+    assert!(profiles.iter().all(|p| p.endpoint_tag != "anthropic/fast"));
+    let (_, before) = captured_profiles(CLAUDE).await;
+    let mut retained = tagged(&before, "anthropic");
+    let after = tagged(&profiles, "anthropic");
+    retained.base_url = after.base_url.clone();
+    assert!(retained.same_contract(&after));
+
+    // Only tier endpoints: refused by name.
+    let (row, mut endpoints) = captured(GPT);
+    endpoints["data"]["endpoints"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|endpoint| endpoint["tag"] == "openai/flex" || endpoint["tag"] == "openai/fast");
+    let server = MockServer::start().await;
+    catalog(&server, row, endpoints).await;
+    let error = observe_native_openrouter_profiles(&server.uri(), KEY, GPT)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("openai/flex: a service-tier endpoint a request must opt into"),
+        "{error}"
+    );
+
+    // A retained profile can never name a tier endpoint or a tier variant.
+    let (_, gpt) = captured_profiles(GPT).await;
+    let mut flex = tagged(&gpt, "openai");
+    flex.endpoint_tag = "openai/flex".into();
+    assert!(flex.validate().is_err());
+    let mut nitro = tagged(&gpt, "openai");
+    nitro.model = format!("{GPT}:nitro");
+    assert!(nitro.validate().is_err());
+    for variant in [":nitro", ":floor"] {
+        let refused = observe_native_openrouter_profiles(
+            "http://127.0.0.1:9",
+            KEY,
+            &format!("{GPT}{variant}"),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(refused.contains("service tier"), "{refused}");
+    }
+}
+
+#[tokio::test]
+async fn a_response_at_another_service_tier_is_refused() {
+    for (tier, accepted) in [
+        (json!("default"), true),
+        (Value::Null, true),
+        (json!("flex"), false),
+        (json!("priority"), false),
+    ] {
+        let server = MockServer::start().await;
+        metadata(&server).await;
+        // The tier arrives with the terminal usage, which is kept either way.
+        let first = json!({"id":"gen-fixture","model":MODEL,"provider":"FiniteProvider",
+            "choices":[{"index":0,"delta":{"content":"verified"},"finish_reason":"stop"}]});
+        let usage = json!({"id":"gen-fixture","model":MODEL,"provider":"FiniteProvider",
+            "service_tier":tier,"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2,
+            "total_tokens":6,"cost":0.000008,"is_byok":false}});
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                format!("data: {first}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                "text/event-stream",
+            ))
+            .mount(&server)
+            .await;
+        let outcome = provider(&server)
+            .await
+            .chat_with_accounting(ChatRequest::simple("Answer once"))
+            .await;
+        match outcome.response {
+            Ok(response) => {
+                assert!(accepted, "{tier}");
+                assert_eq!(response.content, "verified");
+            }
+            Err(error) => {
+                assert!(!accepted, "{tier}: {error}");
+                assert!(error.to_string().contains("service tier"), "{error}");
+            }
+        }
+        assert_eq!(outcome.usage.usage.input_tokens, 4, "{tier}");
+        assert_eq!(outcome.cost_microunits, Some(8), "{tier}");
+    }
+}
+
+#[tokio::test]
+async fn image_and_audio_priced_endpoints_run_without_image_or_audio_caps() {
+    let server = MockServer::start().await;
+    let row = json!({"id":MODEL,"architecture":{"input_modalities":["text","image","audio"],
+        "output_modalities":["text"]},"supported_parameters":["max_tokens","tools"]});
+    let endpoints = json!({"data":{"id":MODEL,"endpoints":[{"model_id":MODEL,
+        "provider_name":"FiniteProvider","tag":"finite/exact","context_length":2048,
+        "max_completion_tokens":128,"supported_parameters":["max_tokens","tools"],
+        "pricing":{"prompt":"0.000001","completion":"0.000002","image":"0.0000001",
+            "audio":"0.0000003"},"status":0}]}});
+    catalog(&server, row, endpoints).await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(reply(true), "text/event-stream"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let profile = observe_native_openrouter_profiles(&server.uri(), KEY, MODEL)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(profile.unrequested_priced_features, ["audio", "image"]);
+    let provider = NativeOpenRouterProvider::connect_observed(profile, KEY, 32, 65536, None)
+        .await
+        .unwrap();
+    let outcome = provider
+        .chat_with_accounting(ChatRequest::simple("Answer once"))
+        .await;
+    assert_eq!(outcome.response.unwrap().content, "verified");
+    // OpenRouter filters endpoints on their listed image and audio prices
+    // even for text, so a zero cap there would refuse every call.
+    let (body, _) = posted(&server.received_requests().await.unwrap()).remove(0);
+    assert_eq!(
+        body["provider"]["max_price"],
+        json!({"prompt":"1","completion":"2","request":"0"})
+    );
+}
+
+#[tokio::test]
+async fn a_response_allowance_past_the_endpoint_or_byte_limit_is_refused_not_clamped() {
+    use axocoatl_core::ReasoningEffort as E;
+    use NativeOpenRouterReasoningRequest as R;
+    let (server, claude) = captured_profiles(CLAUDE).await;
+    let anthropic = tagged(&claude, "anthropic");
+    let bytes = 1024 * 1024;
+    // 8,192 at xhigh asks for 163,840 tokens; the endpoint allows 128,000.
+    let refused = anthropic
+        .response_refusal(8192, Some(R::Effort(E::Xhigh)), bytes)
+        .unwrap();
+    assert!(
+        refused.contains("max_tokens 163840 (8192 of output plus 155648 of reasoning)"),
+        "{refused}"
+    );
+    assert!(refused.contains("128000 output tokens"), "{refused}");
+    assert_eq!(
+        anthropic.response_allowance(8192, Some(R::Effort(E::Xhigh))),
+        163_840
+    );
+    // 5,300 at max fits the endpoint, but not the response bytes a Session
+    // keeps at ten bytes per streamed token.
+    let refused = anthropic
+        .response_refusal(5300, Some(R::Effort(E::Max)), bytes)
+        .unwrap();
+    assert!(refused.contains("may stream 106000 tokens"), "{refused}");
+    assert_eq!(
+        anthropic.response_refusal(4096, Some(R::Effort(E::High)), bytes),
+        None
+    );
+    for (output, effort) in [(8192, E::Xhigh), (5300, E::Max)] {
+        assert!(NativeOpenRouterProvider::connect_observed(
+            anthropic.clone(),
+            KEY,
+            output,
+            bytes,
+            Some(R::Effort(effort)),
+        )
+        .await
+        .is_err());
+    }
+    drop(server);
+}
+
+#[tokio::test]
+async fn budgets_see_the_whole_response_and_the_replayed_reasoning() {
+    let server = MockServer::start().await;
+    let provider = claude_provider(&server, 1024).await;
+    let mut request = ChatRequest::simple("again");
+    request.tools.push(time_tool());
+    // High effort: 1,024 of output plus four times that of reasoning, and
+    // never less than the 1,024-token minimum.
+    assert_eq!(provider.response_tokens(&request, 1024), 5120);
+    assert_eq!(provider.response_tokens(&request, 100), 1124);
+    let mut call = axocoatl_llm::ToolCall {
+        id: "toolu_1".into(),
+        name: "get_time".into(),
+        arguments: json!({"city":"Oslo"}),
+        provider_metadata: Default::default(),
+    };
+    call.provider_metadata.insert(
+        REASONING_DETAILS_METADATA.into(),
+        json!([{"type":"reasoning.text","text":"Oslo.","signature":"sig-1","index":0}]).to_string(),
+    );
+    call.provider_metadata
+        .insert(REASONING_TOKENS_METADATA.into(), "443".into());
+    request
+        .messages
+        .push(axocoatl_core::ChatMessage::assistant_with_tool_calls(
+            "",
+            vec![call],
+        ));
+    let mut result = axocoatl_core::ChatMessage::tool("12:00");
+    result.tool_call_id = Some("toolu_1".into());
+    request.messages.push(result);
+    assert_eq!(
+        provider.count_tokens(&request),
+        axocoatl_llm::approximate_request_tokens(&request) + 443
+    );
+    // The call after a tool round reserves its grown prompt at the input
+    // ceiling ($4/M), the same response, and stays within the prompt limit.
+    let bound = provider.execution_bounds(&request).unwrap();
+    let grown = provider.follow_up_execution_bounds(&request, 1000).unwrap();
+    assert_eq!(grown.token_limit, bound.token_limit + 1000);
+    assert_eq!(grown.cost_microunits, bound.cost_microunits + 4000);
+    let capped = provider
+        .follow_up_execution_bounds(&request, u64::MAX)
+        .unwrap();
+    assert_eq!(capped.token_limit, 1_000_000 + 5120);
 }

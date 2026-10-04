@@ -10,6 +10,11 @@ pub(super) fn replayable_reasoning(kind: &str) -> bool {
     )
 }
 
+/// Reasoning text is merged into deltas of about this many bytes before it
+/// is yielded. Models that stream one token per chunk would otherwise spend
+/// most of a call's response byte bound on per-event framing.
+const REASONING_DELTA_BYTES: usize = 256;
+
 fn count(value: &Value, name: &str) -> Result<usize, ProviderError> {
     value
         .as_u64()
@@ -169,6 +174,9 @@ pub(super) fn decode(
         let mut generation = None;
         let mut observed_provider = false;
         let mut sentinel = false;
+        // Reasoning text not yet yielded; every other event flushes it first
+        // so the stream keeps its order.
+        let mut pending_reasoning = String::new();
         'wire: loop {
             let chunk = next_stream_item(&mut bytes, deadline, STREAM_IDLE_TIMEOUT, PROVIDER).await?;
             let eof = chunk.is_none();
@@ -204,6 +212,11 @@ pub(super) fn decode(
                     observed_provider = true;
                 }
                 if let Some(measured) = value.get("usage").filter(|v| !v.is_null()) {
+                    if !pending_reasoning.is_empty() {
+                        yield StreamEvent::ReasoningDelta {
+                            delta: std::mem::take(&mut pending_reasoning),
+                        };
+                    }
                     let observed = usage(measured)?;
                     if measured.get("is_byok").and_then(Value::as_bool) != Some(false) {
                         yield StreamEvent::UsageObservation(MeasuredTokenUsage::lower_bound(
@@ -244,6 +257,14 @@ pub(super) fn decode(
                         ))?;
                     }
                 }
+                // The request never opts into a service tier; another one
+                // reported means the endpoint served it at that tier's terms.
+                // Checked after this chunk's usage so its spend is kept.
+                if let Some(tier) = value.get("service_tier").filter(|v| !v.is_null()) {
+                    if !matches!(tier.as_str(), Some("default" | "standard")) {
+                        Err(protocol("response used a service tier the request never chose"))?;
+                    }
+                }
                 if value.get("error").is_some_and(|v| !v.is_null()) {
                     Err(protocol(
                         "provider reported an error; retained accounting remains partial",
@@ -281,8 +302,11 @@ pub(super) fn decode(
                         if finished.is_some() && !text.is_empty() {
                             Err(protocol("reasoning after terminal completion"))?;
                         }
-                        if !text.is_empty() {
-                            yield StreamEvent::ReasoningDelta { delta: text.into() };
+                        pending_reasoning.push_str(text);
+                        if pending_reasoning.len() >= REASONING_DELTA_BYTES {
+                            yield StreamEvent::ReasoningDelta {
+                                delta: std::mem::take(&mut pending_reasoning),
+                            };
                         }
                     }
                     if let Some(details) = delta.get("reasoning_details").filter(|v| !v.is_null()) {
@@ -301,12 +325,22 @@ pub(super) fn decode(
                             Err(protocol("content after terminal completion"))?;
                         }
                         if !text.is_empty() {
+                            if !pending_reasoning.is_empty() {
+                                yield StreamEvent::ReasoningDelta {
+                                    delta: std::mem::take(&mut pending_reasoning),
+                                };
+                            }
                             yield StreamEvent::TextDelta { delta: text.into() };
                         }
                     }
                     if let Some(parts) = delta.get("tool_calls").filter(|v| !v.is_null()) {
                         if finished.is_some() {
                             Err(protocol("tool delta after terminal completion"))?;
+                        }
+                        if !pending_reasoning.is_empty() {
+                            yield StreamEvent::ReasoningDelta {
+                                delta: std::mem::take(&mut pending_reasoning),
+                            };
                         }
                         for part in parts
                             .as_array()
@@ -373,6 +407,11 @@ pub(super) fn decode(
             if eof {
                 break;
             }
+        }
+        if !pending_reasoning.is_empty() {
+            yield StreamEvent::ReasoningDelta {
+                delta: std::mem::take(&mut pending_reasoning),
+            };
         }
         if !sentinel
             || generation.is_none()

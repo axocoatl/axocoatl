@@ -68,7 +68,13 @@ impl LlmSummarizer {
         request.max_tokens = Some(SUMMARY_MAX_OUTPUT_TOKENS);
         let estimated_input = self.provider.count_tokens(&request);
         if let Some(tracker) = &self.tracker {
-            let requested = estimated_input.saturating_add(SUMMARY_MAX_OUTPUT_TOKENS);
+            // The whole response, reasoning included.
+            let requested =
+                estimated_input.saturating_add(crate::provider_budget::response_reservation(
+                    self.provider.as_ref(),
+                    &request,
+                    SUMMARY_MAX_OUTPUT_TOKENS,
+                ));
             if let Err(BudgetError::WouldExceedBudget {
                 current,
                 requested,

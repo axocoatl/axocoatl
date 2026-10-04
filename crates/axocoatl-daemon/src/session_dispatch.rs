@@ -173,6 +173,10 @@ struct DispatchState {
     execution_lifetimes: Arc<execution_lifetime::ExecutionLifetimes>,
     changed: Arc<tokio::sync::Notify>,
     bound: HashMap<ActivationId, BoundActivation>,
+    /// What each activation's next model call can be expected to reserve
+    /// once the tool round its latest call started has added a helper's
+    /// answer. Advisory: dispatch reserves each call's own bounds.
+    follow_ups: HashMap<ActivationId, (ActivationRef, DispatchReservation)>,
     repository_checks:
         HashMap<ConditionRunId, axocoatl_isolation::supervisor_transport::SupervisorCancellation>,
     repository_owners:

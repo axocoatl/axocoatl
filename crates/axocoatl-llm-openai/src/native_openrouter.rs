@@ -33,7 +33,7 @@ use observation::CallShape;
 pub use observation::{
     observe_native_openrouter_profiles, NativeOpenRouterEfforts, NativeOpenRouterObservation,
     NativeOpenRouterReasoning, NativeOpenRouterReasoningRequest, MINIMUM_REASONING_ALLOWANCE,
-    PROMPT_TEMPLATE_ALLOWANCE,
+    PROMPT_TEMPLATE_ALLOWANCE, STREAMED_BYTES_PER_RESPONSE_TOKEN,
 };
 
 const PROVIDER: &str = "openrouter";
@@ -82,6 +82,9 @@ impl NativeOpenRouterProvider {
             || observation.response_allowance(max_output_tokens, reasoning)
                 >= observation.context_tokens
             || !(4096..=16 * 1024 * 1024).contains(&max_response_bytes)
+            || observation
+                .response_refusal(max_output_tokens, reasoning, max_response_bytes)
+                .is_some()
         {
             return Err(invalid(
                 "unsupported exact OpenRouter execution bounds or missing credential",
@@ -142,19 +145,28 @@ impl NativeOpenRouterProvider {
                 "order": [self.observation.endpoint_tag],
                 "allow_fallbacks": false,
                 "require_parameters": true,
+                // OpenRouter filters endpoints on their listed image and
+                // audio prices even for a text-only request, so those caps
+                // are left out: the request sends neither.
                 "max_price": {
                     "prompt": self.observation.prompt_price_per_million,
                     "completion": self.observation.completion_price_per_million,
                     "request": self.observation.request_price.as_deref().unwrap_or("0"),
-                    "image": "0",
-                    "audio": "0",
                 },
             }),
         );
         object.insert("transforms".into(), json!([]));
-        // An account can turn the web plugin on for every request; an
-        // explicit disable overrides that default.
-        object.insert("plugins".into(), json!([{"id": "web", "enabled": false}]));
+        // An account can turn the web plugin or context compression on for
+        // every request; an explicit disable overrides that default. The
+        // model must see the exact conversation the Session recorded,
+        // including replayed reasoning, never a compressed one.
+        object.insert(
+            "plugins".into(),
+            json!([
+                {"id": "web", "enabled": false},
+                {"id": "context-compression", "enabled": false},
+            ]),
+        );
         if let Some(reasoning) = self.reasoning {
             object.insert("reasoning".into(), reasoning.wire());
         }
@@ -181,6 +193,22 @@ impl NativeOpenRouterProvider {
             },
         ))
     }
+}
+
+/// The reasoning tokens a request sends back: what its tool-calling turns
+/// reported. The provider can bill them again as input.
+fn replayed_reasoning_tokens(request: &ChatRequest) -> usize {
+    request
+        .messages
+        .iter()
+        .filter_map(|message| {
+            message.tool_calls.iter().find_map(|call| {
+                call.provider_metadata
+                    .get(REASONING_TOKENS_METADATA)
+                    .and_then(|tokens| tokens.parse::<usize>().ok())
+            })
+        })
+        .fold(0, usize::saturating_add)
 }
 
 /// Send each tool-calling assistant turn's reasoning back unmodified, as
@@ -319,6 +347,29 @@ impl LlmProvider for NativeOpenRouterProvider {
         self.observation
             .call_bounds(shape, self.max_response_bytes)
             .ok()
+    }
+    fn follow_up_execution_bounds(
+        &self,
+        request: &ChatRequest,
+        added_prompt_tokens: u64,
+    ) -> Option<ProviderExecutionBounds> {
+        let (_, mut shape) = self.body(request).ok()?;
+        shape.prompt_tokens = shape
+            .prompt_tokens
+            .saturating_add(usize::try_from(added_prompt_tokens).unwrap_or(usize::MAX))
+            .min(self.observation.prompt_limit());
+        self.observation
+            .call_bounds(shape, self.max_response_bytes)
+            .ok()
+    }
+    fn response_tokens(&self, _request: &ChatRequest, output: usize) -> usize {
+        self.observation.response_allowance(output, self.reasoning)
+    }
+    /// The shared estimate plus the reasoning tokens the request replays,
+    /// which its text does not show.
+    fn count_tokens(&self, request: &ChatRequest) -> usize {
+        axocoatl_llm::approximate_request_tokens(request)
+            .saturating_add(replayed_reasoning_tokens(request))
     }
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
         self.chat_with_accounting(request).await.response

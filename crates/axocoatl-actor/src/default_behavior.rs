@@ -1545,6 +1545,16 @@ impl DefaultAgentBehavior {
         }
     }
 
+    /// The completion tokens a request reserves: its output limit plus any
+    /// reasoning the provider allows on top of it.
+    fn request_response_reservation(&self, request: &ChatRequest) -> usize {
+        crate::provider_budget::response_reservation(
+            self.provider.as_ref(),
+            request,
+            self.request_output_reservation(request),
+        )
+    }
+
     /// The output a request reserves: its own limit, else the exact model's.
     fn request_output_reservation(&self, request: &ChatRequest) -> usize {
         request.max_tokens.unwrap_or_else(|| {
@@ -1572,13 +1582,15 @@ impl DefaultAgentBehavior {
         }) {
             let budget = tracker.budget().per_execution;
             let used = tracker.total_used();
-            // This call and the next, each with its input and output; one
-            // more output allowance for what the tool round adds.
+            // This call and the next, each with its input and its whole
+            // response (reasoning included); one more response allowance for
+            // what the tool round adds.
+            let response = self.request_response_reservation(request);
             let need = self
                 .provider
                 .count_tokens(request)
                 .saturating_mul(2)
-                .saturating_add(self.request_output_reservation(request).saturating_mul(3));
+                .saturating_add(response.saturating_mul(3));
             if budget.saturating_sub(used) < need {
                 return Some(format!(
                     "this activation has used {} of its {} tokens",
@@ -1597,22 +1609,27 @@ impl DefaultAgentBehavior {
             ));
         }
         let bounds = self.provider.execution_bounds(request)?;
-        if let Some(left) = allowance
-            .tokens
-            .filter(|left| *left < bounds.token_limit.saturating_mul(2))
-        {
+        // The next call reserves more when its prompt grows: it adds this
+        // call's response, sent back, and as much again for the tool results.
+        let growth = (self.request_response_reservation(request) as u64).saturating_mul(2);
+        let next = self
+            .provider
+            .follow_up_execution_bounds(request, growth)
+            .unwrap_or(bounds);
+        let need_tokens = bounds.token_limit.saturating_add(next.token_limit);
+        if let Some(left) = allowance.tokens.filter(|left| *left < need_tokens) {
             return Some(format!(
-                "the Session budget has {} tokens left and each model call reserves {}",
+                "the Session budget has {} tokens left, and this model call and the one after \
+                 it reserve {}",
                 crate::error::group_digits(usize::try_from(left).unwrap_or(usize::MAX)),
-                crate::error::group_digits(
-                    usize::try_from(bounds.token_limit).unwrap_or(usize::MAX)
-                )
+                crate::error::group_digits(usize::try_from(need_tokens).unwrap_or(usize::MAX))
             ));
         }
-        if bounds.cost_microunits > 0
+        let need_cost = bounds.cost_microunits.saturating_add(next.cost_microunits);
+        if need_cost > 0
             && allowance
                 .cost_microunits
-                .is_some_and(|left| left < bounds.cost_microunits.saturating_mul(2))
+                .is_some_and(|left| left < need_cost)
         {
             return Some("the Session budget's spending allowance is nearly used up".to_string());
         }
@@ -1702,7 +1719,8 @@ impl DefaultAgentBehavior {
     }
 
     /// Shrink a final answer's output allowance to what the abort guard has
-    /// left, while that is still a useful answer.
+    /// left, while that is still a useful answer. The whole response,
+    /// reasoning included, must fit: the largest output whose response does.
     fn fit_final_answer_output(&self, request: &mut ChatRequest) {
         let Some(tracker) = self
             .tracker
@@ -1711,14 +1729,24 @@ impl DefaultAgentBehavior {
         else {
             return;
         };
+        let Some(output) = request.max_tokens else {
+            return;
+        };
         let room = tracker
             .budget()
             .per_execution
             .saturating_sub(tracker.total_used())
+            .min(tracker.budget().per_call)
             .saturating_sub(self.provider.count_tokens(request));
-        if request.max_tokens.is_some_and(|output| room < output) && room >= MIN_FINAL_ANSWER_TOKENS
-        {
-            request.max_tokens = Some(room);
+        let provider = self.provider.as_ref();
+        let response =
+            |output| crate::provider_budget::response_reservation(provider, request, output);
+        if response(output) <= room {
+            return;
+        }
+        let fitted = crate::provider_budget::largest_output_within(output, room, response);
+        if fitted >= MIN_FINAL_ANSWER_TOKENS {
+            request.max_tokens = Some(fitted);
         }
     }
 
@@ -1759,11 +1787,13 @@ impl DefaultAgentBehavior {
         {
             return request.max_tokens.unwrap_or(capabilities.max_output_tokens);
         }
+        let provider = self.provider.as_ref();
         crate::provider_budget::projected_output_allowance(
             request.max_tokens,
             capabilities.max_output_tokens,
             self.tracker.as_ref(),
             self.provider.count_tokens(request),
+            |output| crate::provider_budget::response_reservation(provider, request, output),
         )
     }
 
@@ -1786,6 +1816,7 @@ impl DefaultAgentBehavior {
             return Ok(request.max_tokens.unwrap_or(capabilities.max_output_tokens));
         }
         let (wire, _) = Self::encode_provider_request(request.clone())?;
+        let provider = self.provider.as_ref();
         Ok(crate::provider_budget::projected_output_allowance(
             None,
             capabilities.max_output_tokens,
@@ -1793,6 +1824,7 @@ impl DefaultAgentBehavior {
             self.provider
                 .count_tokens(&wire)
                 .saturating_add(attachment_tokens),
+            |output| crate::provider_budget::response_reservation(provider, &wire, output),
         ))
     }
 
@@ -1814,11 +1846,13 @@ impl DefaultAgentBehavior {
             } else {
                 0
             };
+        let provider = self.provider.as_ref();
         let output_reservation = crate::provider_budget::projected_output_allowance(
             request.max_tokens,
             provider_default_output,
             Some(tracker),
             estimated_input,
+            |output| crate::provider_budget::response_reservation(provider, request, output),
         );
         if request.max_tokens.is_none()
             && tracker.budget().overflow_policy == OverflowPolicy::Abort
@@ -1827,15 +1861,20 @@ impl DefaultAgentBehavior {
             request.max_tokens = Some(output_reservation);
         }
 
-        // A chat call needs room for at least one output token. Treat an
-        // unknown/default limit with no remaining allowance as a local budget
-        // failure instead of dispatching an unbounded request.
-        let requested = estimated_input.saturating_add(output_reservation);
+        // The whole response, reasoning included, must fit what is left. A
+        // chat call needs room for at least one output token's response.
+        // Treat an unknown/default limit with no remaining allowance as a
+        // local budget failure instead of dispatching an unbounded request.
+        let requested = estimated_input.saturating_add(
+            crate::provider_budget::response_reservation(provider, request, output_reservation),
+        );
         let checked_requested = if tracker.budget().overflow_policy == OverflowPolicy::Abort
             && output_reservation == 0
             && request.max_tokens.is_none()
         {
-            requested.saturating_add(1)
+            requested.saturating_add(crate::provider_budget::response_reservation(
+                provider, request, 1,
+            ))
         } else {
             requested
         };
@@ -11508,6 +11547,9 @@ mod tests {
     struct OutputAllowanceLlm {
         context: usize,
         output: usize,
+        /// Reasoning tokens the provider allows per output token, on top of
+        /// the visible output (OpenRouter's `high` effort is 4).
+        reasoning_factor: usize,
         paid_summary_usage: TokenUsageStats,
         calls: std::sync::Mutex<Vec<(bool, ChatRequest)>>,
     }
@@ -11517,6 +11559,7 @@ mod tests {
             Self {
                 context,
                 output,
+                reasoning_factor: 0,
                 paid_summary_usage: TokenUsageStats::new(900, 100),
                 calls: std::sync::Mutex::new(Vec::new()),
             }
@@ -11538,6 +11581,9 @@ mod tests {
                 max_output_tokens: self.output,
                 ..Default::default()
             }
+        }
+        fn response_tokens(&self, _: &ChatRequest, output: usize) -> usize {
+            output * (1 + self.reasoning_factor)
         }
         fn count_tokens(&self, request: &ChatRequest) -> usize {
             // The summary probe has its own measured request estimate. It lets
@@ -11635,6 +11681,86 @@ mod tests {
                 Some(input.as_str())
             );
         }
+    }
+
+    /// A reasoning provider bills reasoning on top of the visible output, so
+    /// an Abort budget must hold the whole response: the derived output is
+    /// the largest whose response fits, and an explicit one whose response
+    /// does not fit is refused before any call.
+    #[tokio::test]
+    async fn abort_budget_reserves_the_whole_reasoning_response() {
+        let mut provider = OutputAllowanceLlm::new(100_000, 8_000);
+        provider.reasoning_factor = 4;
+        let provider = Arc::new(provider);
+        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter());
+        behavior
+            .on_start(&output_allowance_config(800, 800))
+            .await
+            .unwrap();
+        behavior.execute(AgentInput::text("answer")).await.unwrap();
+        {
+            let calls = provider.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            let request = &calls[0].1;
+            let room = 800 - provider.count_tokens(request);
+            let output = request.max_tokens.unwrap();
+            assert_eq!(
+                output,
+                room / 5,
+                "visible output plus four times it in reasoning"
+            );
+            assert!(provider.response_tokens(request, output) <= room);
+        }
+
+        let mut config = output_allowance_config(800, 800);
+        config.sampling.max_tokens = Some(200);
+        let mut provider = OutputAllowanceLlm::new(100_000, 8_000);
+        provider.reasoning_factor = 4;
+        let provider = Arc::new(provider);
+        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter());
+        behavior.on_start(&config).await.unwrap();
+        // 200 visible tokens may bill 1,000: more than the 800 per call.
+        let error = behavior
+            .execute(AgentInput::text("answer"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, AgentError::TokenBudgetExceeded { budget: 800, .. }),
+            "{error}"
+        );
+        assert!(provider.calls.lock().unwrap().is_empty());
+    }
+
+    /// The final answer's output shrinks until its whole response, not just
+    /// its visible output, fits what the Abort guard has left.
+    #[tokio::test]
+    async fn a_final_answer_fits_its_reasoning_into_the_abort_guard() {
+        let mut provider = OutputAllowanceLlm::new(100_000, 8_000);
+        provider.reasoning_factor = 4;
+        let provider = Arc::new(provider);
+        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter());
+        behavior
+            .on_start(&output_allowance_config(2_000, 2_000))
+            .await
+            .unwrap();
+        behavior.begin_budgeted_operation();
+        let mut request = ChatRequest::simple("write the final answer");
+        request.max_tokens = Some(1_000);
+        let room = 2_000 - provider.count_tokens(&request);
+        behavior.fit_final_answer_output(&mut request);
+        assert_eq!(request.max_tokens, Some(room / 5));
+        // Too little left for a useful answer: the limit stays, and the
+        // budget check refuses the call.
+        let mut tight = ChatRequest::simple("write the final answer");
+        tight.max_tokens = Some(1_000);
+        behavior
+            .tracker
+            .as_ref()
+            .unwrap()
+            .record_usage(800, 0)
+            .unwrap();
+        behavior.fit_final_answer_output(&mut tight);
+        assert_eq!(tight.max_tokens, Some(1_000));
     }
 
     #[tokio::test]

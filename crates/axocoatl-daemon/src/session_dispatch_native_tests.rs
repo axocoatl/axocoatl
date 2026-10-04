@@ -982,3 +982,89 @@ fn identity_looking_standalone_content_cannot_capture_native_definition_or_profi
         )
         .is_err());
 }
+
+#[test]
+fn openrouter_admission_refuses_unsent_parameters_and_unfit_responses_by_name() {
+    use axocoatl_core::ReasoningEffort;
+    let mut config = config();
+    config.provider = "openrouter".into();
+    config.model = "anthropic/claude-sonnet-5.5".into();
+    config.sampling.max_tokens = Some(4096);
+    config.sampling.temperature = Some(0.2);
+    let initial_limits = GrantLimits {
+        cost_microunits: 10_000_000,
+        ..limits(1_000_000)
+    };
+    let prepare = |config: &AgentConfig| {
+        NativeDefinitionPreparation::new(
+            config.clone(),
+            AgentDefinitionId::new("sonnet").unwrap(),
+            1,
+            initial_limits.clone(),
+        )
+        .unwrap()
+    };
+    // The cheapest endpoint does not list temperature: it is skipped for one
+    // that does, and with none left the refusal names the parameter.
+    let mut azure = claude_observation();
+    azure.endpoint_tag = "azure/global".into();
+    azure.provider_name = "Azure".into();
+    azure.supported_parameters.push("temperature".into());
+    azure.supported_parameters.sort();
+    let selected = prepare(&config)
+        .openrouter_runtime(vec![claude_observation(), azure])
+        .unwrap();
+    assert_eq!(selected.openrouter_endpoint(), Some("azure/global"));
+    let refused = prepare(&config)
+        .openrouter_runtime(vec![claude_observation()])
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        refused.contains("anthropic/claude-sonnet-5.5 on OpenRouter endpoint anthropic does not accept sampling.temperature"),
+        "{refused}"
+    );
+    config.sampling.temperature = None;
+
+    // A response allowance past the endpoint's output limit is refused, not
+    // clamped below sampling.max_tokens.
+    config.sampling.max_tokens = Some(8192);
+    config.sampling.reasoning_effort = Some(ReasoningEffort::Xhigh);
+    let refused = prepare(&config)
+        .openrouter_runtime(vec![claude_observation()])
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        refused.contains("sampling.max_tokens 8192 at reasoning effort xhigh")
+            && refused.contains("max_tokens 163840")
+            && refused.contains("128000 output tokens"),
+        "{refused}"
+    );
+    // One the endpoint allows but whose streamed text can pass the response
+    // bytes a Session keeps of one call.
+    config.sampling.max_tokens = Some(5300);
+    config.sampling.reasoning_effort = Some(ReasoningEffort::Max);
+    let refused = prepare(&config)
+        .openrouter_runtime(vec![claude_observation()])
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(refused.contains("may stream 106000 tokens"), "{refused}");
+
+    // A derived output stops where the response still fits both limits.
+    config.sampling.max_tokens = None;
+    config.token_budget = Some(TokenBudget {
+        per_call: 1_000_000,
+        per_execution: 1_000_000,
+        overflow_policy: OverflowPolicy::Abort,
+    });
+    let observation = claude_observation();
+    let reasoning = observation
+        .reasoning_request(config.sampling.reasoning_effort)
+        .unwrap();
+    let derived =
+        openrouter_output_limit(&config, &observation, &initial_limits, reasoning).unwrap();
+    assert_eq!(derived, 5242);
+    assert_eq!(observation.response_allowance(derived, reasoning), 104_840);
+}

@@ -85,6 +85,9 @@ impl SessionProvider {
             bytes: 0,
             expected_provider: self.expected_provider.clone(),
             expected_model: self.expected_model.clone(),
+            follow_up: Some((self.inner.clone(), request.clone())),
+            activation: self.activation.clone(),
+            tool_calls: false,
         })
     }
 
@@ -118,6 +121,17 @@ impl LlmProvider for SessionProvider {
     }
     fn execution_bounds(&self, request: &ChatRequest) -> Option<ProviderExecutionBounds> {
         self.inner.execution_bounds(request)
+    }
+    fn follow_up_execution_bounds(
+        &self,
+        request: &ChatRequest,
+        added_prompt_tokens: u64,
+    ) -> Option<ProviderExecutionBounds> {
+        self.inner
+            .follow_up_execution_bounds(request, added_prompt_tokens)
+    }
+    fn response_tokens(&self, request: &ChatRequest, output: usize) -> usize {
+        self.inner.response_tokens(request, output)
     }
     fn remaining_allowance(&self) -> Option<ProviderAllowance> {
         self.controller.agent_allowance(&self.activation)
@@ -199,6 +213,7 @@ impl LlmProvider for SessionProvider {
                     "provider reported a failed completion".into(),
                 ));
             }
+            pending.note_follow_up();
             Ok(response)
         }
         .await;
@@ -244,9 +259,45 @@ struct PendingCall {
     bytes: usize,
     expected_provider: String,
     expected_model: String,
+    /// The executor and the exact request, to estimate the call that reads
+    /// this one's tool results.
+    follow_up: Option<(Arc<dyn LlmProvider>, ChatRequest)>,
+    activation: ActivationRef,
+    /// The response asked for at least one tool.
+    tool_calls: bool,
 }
 
 impl PendingCall {
+    /// After a completed call that asked for tools: what the call reading
+    /// their results, a helper's answer among them, can be expected to
+    /// reserve. This call's reasoning is sent back, and its returned bytes
+    /// join that call's prompt as the assistant turn.
+    fn note_follow_up(&mut self) {
+        let Some((provider, request)) = self.follow_up.take() else {
+            return;
+        };
+        if !self.tool_calls {
+            return;
+        }
+        let reasoning = self
+            .observed
+            .as_ref()
+            .and_then(|usage| usage.usage.reasoning_tokens)
+            .unwrap_or(0) as u64;
+        let growth = reasoning
+            .saturating_add(self.bytes as u64)
+            .saturating_add(crate::session_dispatch::delegate::ANSWER_PROMPT_TOKENS);
+        if let Some(bounds) = provider.follow_up_execution_bounds(&request, growth) {
+            self.controller.note_follow_up(
+                &self.activation,
+                axocoatl_session::control_authority::DispatchReservation {
+                    tokens: bounds.token_limit,
+                    cost_microunits: bounds.cost_microunits,
+                },
+            );
+        }
+    }
+
     fn finish(&mut self, kind: ProviderCallTerminal, terminal: bool) -> Result<(), ProviderError> {
         let Some(claim) = self.claim.take() else {
             return Err(ProviderError::Stream(
@@ -380,6 +431,7 @@ impl PendingCall {
     }
 
     fn observe_response(&mut self, response: &ChatResponse) -> Result<(), String> {
+        self.tool_calls = !response.tool_calls.is_empty();
         self.check_usage_bound()?;
         self.check_route(
             (!response.provider.is_empty()).then_some(response.provider.as_str()),
@@ -436,6 +488,9 @@ impl PendingCall {
                 self.observe_cost(*cost_microunits)?
             }
             _ => {}
+        }
+        if matches!(event, StreamEvent::ToolCallDelta { .. }) {
+            self.tool_calls = true;
         }
         let metadata = match event {
             StreamEvent::ProviderRoute { metadata }
@@ -537,6 +592,7 @@ impl Stream for SessionProviderStream {
                     "provider reported a failed completion".into(),
                 ))));
             }
+            this.pending.note_follow_up();
         }
         Poll::Ready(Some(Ok(event)))
     }

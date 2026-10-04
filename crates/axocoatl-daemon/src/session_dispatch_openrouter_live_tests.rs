@@ -41,6 +41,17 @@ impl LlmProvider for Recording {
     fn execution_bounds(&self, request: &ChatRequest) -> Option<ProviderExecutionBounds> {
         self.inner.execution_bounds(request)
     }
+    fn follow_up_execution_bounds(
+        &self,
+        request: &ChatRequest,
+        added_prompt_tokens: u64,
+    ) -> Option<ProviderExecutionBounds> {
+        self.inner
+            .follow_up_execution_bounds(request, added_prompt_tokens)
+    }
+    fn response_tokens(&self, request: &ChatRequest, output: usize) -> usize {
+        self.inner.response_tokens(request, output)
+    }
     fn count_tokens(&self, request: &ChatRequest) -> usize {
         self.inner.count_tokens(request)
     }
