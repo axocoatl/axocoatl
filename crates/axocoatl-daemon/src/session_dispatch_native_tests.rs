@@ -409,6 +409,60 @@ fn explicit_output_is_preserved_or_refused_and_json_reserves_both_passes() {
     assert!(native_output_limit(&config, 2048, &limits(8192)).is_err());
 }
 
+fn legacy_openrouter_observation(model: &str) -> axocoatl_llm_openai::NativeOpenRouterObservation {
+    axocoatl_llm_openai::NativeOpenRouterObservation {
+        schema_version: 1,
+        base_url: "https://openrouter.ai/api/v1".into(),
+        model: model.into(),
+        endpoint_tag: "deepinfra/fp8".into(),
+        provider_name: "DeepInfra".into(),
+        context_tokens: 32_768,
+        max_output_tokens: 16_384,
+        prompt_price_per_million: "0.36".into(),
+        completion_price_per_million: "0.4".into(),
+        supported_parameters: vec![
+            "max_tokens".into(),
+            "tools".into(),
+            "response_format".into(),
+        ],
+        non_reasoning_evidence: Some("openrouter-model-catalog:no-reasoning-contract-v1".into()),
+        max_prompt_tokens: None,
+        request_price: None,
+        reasoning: None,
+        unrequested_priced_features: vec![],
+        observed_at_ms: 1,
+        billing: "openrouter_credits".into(),
+    }
+}
+
+/// The public catalog contract of anthropic/claude-sonnet-5.5 on its
+/// first-party endpoint, 2026-10-03.
+fn claude_observation() -> axocoatl_llm_openai::NativeOpenRouterObservation {
+    axocoatl_llm_openai::NativeOpenRouterObservation {
+        schema_version: 2,
+        endpoint_tag: "anthropic".into(),
+        provider_name: "Anthropic".into(),
+        context_tokens: 1_000_000,
+        max_output_tokens: 128_000,
+        prompt_price_per_million: "4".into(),
+        completion_price_per_million: "10".into(),
+        supported_parameters: vec!["max_tokens".into(), "reasoning".into(), "tools".into()],
+        non_reasoning_evidence: None,
+        reasoning: Some(axocoatl_llm_openai::NativeOpenRouterReasoning {
+            mandatory: true,
+            enabled_by_default: true,
+            efforts: axocoatl_llm_openai::NativeOpenRouterEfforts::Listed(
+                ["max", "xhigh", "high", "medium", "low"]
+                    .map(str::to_owned)
+                    .to_vec(),
+            ),
+            default_effort: Some("high".into()),
+        }),
+        unrequested_priced_features: vec!["web_search".into()],
+        ..legacy_openrouter_observation("anthropic/claude-sonnet-5.5")
+    }
+}
+
 #[test]
 fn openrouter_json_admission_uses_one_call_and_preserves_finite_limits() {
     let mut config = config();
@@ -421,30 +475,12 @@ fn openrouter_json_admission_uses_one_call_and_preserves_finite_limits() {
         per_execution: 40_000,
         overflow_policy: OverflowPolicy::Abort,
     });
-    let observation = axocoatl_llm_openai::NativeOpenRouterObservation {
-        schema_version: 1,
-        base_url: "https://openrouter.ai/api/v1".into(),
-        model: config.model.clone(),
-        endpoint_tag: "deepinfra/fp8".into(),
-        provider_name: "DeepInfra".into(),
-        context_tokens: 32_768,
-        max_output_tokens: 16_384,
-        prompt_price_per_million: "0.36".into(),
-        completion_price_per_million: "0.4".into(),
-        supported_parameters: vec![
-            "max_tokens".into(),
-            "tools".into(),
-            "response_format".into(),
-        ],
-        non_reasoning_evidence: "openrouter-model-catalog:no-reasoning-contract-v1".into(),
-        observed_at_ms: 1,
-        billing: "openrouter_credits".into(),
-    };
+    let observation = legacy_openrouter_observation(&config.model);
     let initial_limits = GrantLimits {
         cost_microunits: 1_000_000,
         ..limits(40_000)
     };
-    let selected = openrouter_output_limit(&config, &observation, &initial_limits).unwrap();
+    let selected = openrouter_output_limit(&config, &observation, &initial_limits, None).unwrap();
     assert_eq!(selected, 4096);
     let mut runtime = NativeOpenRouterRuntimeConfiguration {
         schema_version: 2,
@@ -452,16 +488,20 @@ fn openrouter_json_admission_uses_one_call_and_preserves_finite_limits() {
         max_output_tokens: selected,
         max_response_bytes: NATIVE_RESPONSE_BYTES,
         initial_limits,
+        reasoning: None,
     };
     runtime.validate(&config).unwrap();
+    // The smallest call: the 4,096-token template allowance and the output,
+    // not the 32,768-token context window.
     let bound = runtime
         .openrouter_observation
-        .execution_bounds(selected, NATIVE_RESPONSE_BYTES)
+        .minimum_call_bounds(selected, None, NATIVE_RESPONSE_BYTES)
         .unwrap();
-    assert_eq!(bound.token_limit, 36_864);
+    assert_eq!(bound.token_limit, 8192);
+    assert_eq!(bound.cost_microunits, 3113);
 
-    // Admission and retained-profile validation accept the exact one-call
-    // ceiling without clamping the approved output or weakening any limit.
+    // Admission and retained-profile validation accept the exact smallest
+    // call without clamping the approved output or weakening any limit.
     runtime.initial_limits.tokens = bound.token_limit;
     runtime.initial_limits.cost_microunits = bound.cost_microunits;
     runtime.validate(&config).unwrap();
@@ -469,7 +509,8 @@ fn openrouter_json_admission_uses_one_call_and_preserves_finite_limits() {
     assert!(runtime.validate(&config).is_err());
     runtime.initial_limits.tokens = bound.token_limit;
     runtime.initial_limits.cost_microunits -= 1;
-    assert!(runtime.validate(&config).is_err());
+    let costly = runtime.validate(&config).err().unwrap().to_string();
+    assert!(costly.contains("can cost up to $0.003113"), "{costly}");
     runtime.initial_limits.cost_microunits = bound.cost_microunits;
     config.token_budget.as_mut().unwrap().per_call = bound.token_limit as usize - 1;
     assert!(runtime.validate(&config).is_err());
@@ -483,9 +524,9 @@ fn openrouter_json_admission_uses_one_call_and_preserves_finite_limits() {
         "explicit output must remain exact"
     );
 
-    // Reopen an older JSON profile whose output was implicitly derived with
-    // two passes: 73,728 / 2 - 32,768 = 4,096. The fixed rule permits 16,384,
-    // but recovery must keep the original request ceiling without raising it.
+    // Reopen an older JSON profile whose output was implicitly derived:
+    // 73,728 / 2 - 32,768 = 4,096. Half of the whole call now permits the
+    // endpoint's 16,384, but recovery keeps the original request ceiling.
     config.sampling.max_tokens = None;
     config.token_budget.as_mut().unwrap().per_call = 73_728;
     config.token_budget.as_mut().unwrap().per_execution = 73_728;
@@ -493,11 +534,15 @@ fn openrouter_json_admission_uses_one_call_and_preserves_finite_limits() {
     runtime.max_output_tokens = 4096;
     let restored: NativeOpenRouterRuntimeConfiguration =
         serde_json::from_str(&serde_json::to_string(&runtime).unwrap()).unwrap();
+    assert!(!serde_json::to_string(&restored)
+        .unwrap()
+        .contains("\"reasoning\":"));
     assert_eq!(
         openrouter_output_limit(
             &config,
             &restored.openrouter_observation,
-            &restored.initial_limits
+            &restored.initial_limits,
+            None,
         )
         .unwrap(),
         16_384
@@ -518,6 +563,7 @@ fn openrouter_json_admission_uses_one_call_and_preserves_finite_limits() {
         &config,
         &runtime.openrouter_observation,
         &runtime.initial_limits,
+        None,
     )
     .is_err());
     config.sampling.max_tokens = Some(2047);
@@ -526,10 +572,138 @@ fn openrouter_json_admission_uses_one_call_and_preserves_finite_limits() {
             &config,
             &runtime.openrouter_observation,
             &runtime.initial_limits,
+            None,
         )
         .unwrap(),
         2047
     );
+}
+
+#[test]
+fn a_reasoning_model_fits_a_modest_grant_and_retains_its_reasoning_setting() {
+    use axocoatl_core::ReasoningEffort;
+    use axocoatl_llm_openai::NativeOpenRouterReasoningRequest as Reasoning;
+    let mut config = config();
+    config.provider = "openrouter".into();
+    config.model = "anthropic/claude-sonnet-5.5".into();
+    config.sampling.max_tokens = Some(4096);
+    // 200,000 tokens and $1: before, each call reserved the 1,000,000-token
+    // window plus output (over $4 at these rates), so no call could start.
+    let initial_limits = GrantLimits {
+        cost_microunits: 1_000_000,
+        ..limits(200_000)
+    };
+    let preparation = NativeDefinitionPreparation::new(
+        config.clone(),
+        AgentDefinitionId::new("sonnet").unwrap(),
+        1,
+        initial_limits.clone(),
+    )
+    .unwrap();
+    let NativeRuntimeConfiguration::OpenRouter(runtime) = preparation
+        .openrouter_runtime(vec![claude_observation()])
+        .unwrap()
+    else {
+        panic!("an OpenRouter runtime");
+    };
+    // The model's default effort, high: 4x the output for reasoning.
+    assert_eq!(
+        runtime.reasoning,
+        Some(Reasoning::Effort(ReasoningEffort::High))
+    );
+    assert_eq!(runtime.max_output_tokens, 4096);
+    let bound = runtime
+        .openrouter_observation
+        .minimum_call_bounds(4096, runtime.reasoning, NATIVE_RESPONSE_BYTES)
+        .unwrap();
+    assert_eq!(bound.token_limit, 4096 + 4096 + 16_384);
+    assert_eq!(bound.cost_microunits, 4096 * 4 + 20_480 * 10);
+    let retained = serde_json::to_string(&runtime).unwrap();
+    assert!(
+        retained.contains(r#""reasoning":{"effort":"high"}"#),
+        "{retained}"
+    );
+
+    // The Agent's own effort replaces the default and changes the allowance;
+    // the retained profile no longer matches it.
+    config.sampling.reasoning_effort = Some(ReasoningEffort::Low);
+    assert!(runtime.validate(&config).is_err());
+    let preparation = NativeDefinitionPreparation::new(
+        config.clone(),
+        AgentDefinitionId::new("sonnet").unwrap(),
+        1,
+        initial_limits.clone(),
+    )
+    .unwrap();
+    let NativeRuntimeConfiguration::OpenRouter(low) = preparation
+        .openrouter_runtime(vec![claude_observation()])
+        .unwrap()
+    else {
+        panic!("an OpenRouter runtime");
+    };
+    assert_eq!(low.reasoning, Some(Reasoning::Effort(ReasoningEffort::Low)));
+    low.validate(&config).unwrap();
+
+    // Refusals name the reason: an effort the model does not accept, and a
+    // response allowance the whole-call budget cannot hold.
+    config.sampling.reasoning_effort = Some(ReasoningEffort::Minimal);
+    let preparation = NativeDefinitionPreparation::new(
+        config.clone(),
+        AgentDefinitionId::new("sonnet").unwrap(),
+        1,
+        initial_limits.clone(),
+    )
+    .unwrap();
+    let refused = preparation
+        .openrouter_runtime(vec![claude_observation()])
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        refused.contains("does not accept reasoning effort minimal"),
+        "{refused}"
+    );
+    config.sampling.reasoning_effort = Some(ReasoningEffort::Max);
+    config.token_budget = Some(TokenBudget {
+        per_call: 40_000,
+        per_execution: 400_000,
+        overflow_policy: OverflowPolicy::Abort,
+    });
+    let preparation = NativeDefinitionPreparation::new(
+        config.clone(),
+        AgentDefinitionId::new("sonnet").unwrap(),
+        1,
+        initial_limits,
+    )
+    .unwrap();
+    let refused = preparation
+        .openrouter_runtime(vec![claude_observation()])
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        refused.contains("may produce 81920 tokens (4096 of output plus 77824 of reasoning at reasoning effort max)"),
+        "{refused}"
+    );
+    assert!(
+        refused.contains("40000-token whole-call budget"),
+        "{refused}"
+    );
+
+    // Without sampling.max_tokens, the response allowance takes at most half
+    // of the whole call: 20,000 tokens at high effort is 4,000 of output.
+    config.sampling.max_tokens = None;
+    config.sampling.reasoning_effort = None;
+    let budget = config.token_budget.as_mut().unwrap();
+    budget.per_call = 40_000;
+    let derived = openrouter_output_limit(
+        &config,
+        &claude_observation(),
+        &limits(200_000),
+        Some(Reasoning::Effort(ReasoningEffort::High)),
+    )
+    .unwrap();
+    assert_eq!(derived, 4000);
 }
 
 #[test]

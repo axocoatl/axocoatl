@@ -10,6 +10,9 @@ mod knowledge_tests;
 #[path = "session_dispatch_host_tools_tests.rs"]
 mod host_tools_tests;
 
+#[path = "session_dispatch_openrouter_live_tests.rs"]
+mod openrouter_live_tests;
+
 const REQUEST: &str = "Produce and verify the requested change";
 const PARENT_V1: &str = "parent-final-generation-one";
 const PARENT_V2: &str = "parent-final-generation-two";
@@ -155,6 +158,27 @@ fn input_fixture_with_nodes(
     required_review: bool,
     node_tools: [(&[&str], Option<Vec<String>>); 2],
 ) -> InputFixture {
+    input_fixture_configured(
+        required_review,
+        node_tools,
+        &|_| {},
+        GrantLimits {
+            activations: 16,
+            invocations: 32,
+            tokens: 10_000,
+            cost_microunits: 0,
+        },
+    )
+}
+
+/// As `input_fixture_with_nodes`, with each Agent's configuration adjusted
+/// before it is retained and the grant's limits given.
+fn input_fixture_configured(
+    required_review: bool,
+    node_tools: [(&[&str], Option<Vec<String>>); 2],
+    configure: &dyn Fn(&mut AgentConfig),
+    limits: GrantLimits,
+) -> InputFixture {
     let root = tempfile::tempdir().unwrap();
     let ownership = Arc::new(
         LegacyFormatOwnership::acquire(root.path())
@@ -185,12 +209,6 @@ fn input_fixture_with_nodes(
             model: None,
         })
         .unwrap();
-    let limits = GrantLimits {
-        activations: 16,
-        invocations: 32,
-        tokens: 10_000,
-        cost_microunits: 0,
-    };
     let budget = content
         .retain_activation_evidence(ActivationEvidenceContent::Budget {
             limits: limits.clone(),
@@ -203,7 +221,7 @@ fn input_fixture_with_nodes(
         .unwrap();
     let mut nodes = Vec::new();
     for (name, (tools, writes)) in ["parent", "child"].into_iter().zip(node_tools) {
-        let config = AgentConfig {
+        let mut config = AgentConfig {
             id: AgentId::new(format!("{name}-conversation")),
             name: name.into(),
             provider: "controlled".into(),
@@ -212,6 +230,7 @@ fn input_fixture_with_nodes(
             writes: writes.clone(),
             ..Default::default()
         };
+        configure(&mut config);
         let profile = ExecutionProfile {
             definition: name.into(),
             provider: config.provider.clone(),

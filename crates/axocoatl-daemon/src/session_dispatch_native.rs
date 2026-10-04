@@ -39,6 +39,11 @@ pub(crate) struct NativeOpenRouterRuntimeConfiguration {
     max_output_tokens: usize,
     max_response_bytes: usize,
     initial_limits: GrantLimits,
+    /// The reasoning setting every call sends, resolved from the Agent's
+    /// `sampling.reasoning_effort` or the model's default. Absent for a
+    /// non-reasoning model, which keeps 1.2.0 profiles byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning: Option<axocoatl_llm_openai::NativeOpenRouterReasoningRequest>,
 }
 #[derive(Clone, Default)]
 pub(crate) struct NativeProviderCredentials {
@@ -95,6 +100,22 @@ fn validate_native_config(config: &AgentConfig) -> Result<()> {
     Ok(())
 }
 
+/// The most one call may use: the grant's tokens, and the Agent's own Abort
+/// per-call and per-execution budgets when it has them.
+fn whole_call_capacity(config: &AgentConfig, limits: &GrantLimits) -> u64 {
+    let mut capacity = limits.tokens;
+    if let Some(budget) = config
+        .token_budget
+        .as_ref()
+        .filter(|budget| budget.overflow_policy == OverflowPolicy::Abort)
+    {
+        capacity = capacity
+            .min(budget.per_call as u64)
+            .min(budget.per_execution as u64);
+    }
+    capacity
+}
+
 fn native_output_limit(
     config: &AgentConfig,
     context: usize,
@@ -118,17 +139,7 @@ fn native_output_limit(
     let native_maximum = context
         .checked_mul(10)
         .ok_or_else(|| error("native output capacity overflow"))?;
-    let mut whole_call_capacity = limits.tokens;
-    if let Some(budget) = config
-        .token_budget
-        .as_ref()
-        .filter(|budget| budget.overflow_policy == OverflowPolicy::Abort)
-    {
-        whole_call_capacity = whole_call_capacity
-            .min(budget.per_call as u64)
-            .min(budget.per_execution as u64);
-    }
-    let pass_capacity = whole_call_capacity / passes;
+    let pass_capacity = whole_call_capacity(config, limits) / passes;
     let allowed = pass_capacity.checked_sub(context as u64)
         .and_then(|output| usize::try_from(output).ok())
         .filter(|output| *output > 0)

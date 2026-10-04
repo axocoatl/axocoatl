@@ -58,6 +58,7 @@ impl SamplingConfigYaml {
                 "json" => ResponseFormat::Json,
                 _ => ResponseFormat::Text,
             }),
+            reasoning_effort: self.reasoning_effort,
         }
     }
 }
@@ -160,12 +161,38 @@ mod tests {
             top_p: Some(0.9),
             max_tokens: Some(512),
             response_format: Some("json".to_string()),
+            reasoning_effort: Some(axocoatl_core::ReasoningEffort::Low),
         };
         let core = yaml.to_core();
         assert_eq!(core.temperature, Some(0.0));
         assert_eq!(core.top_p, Some(0.9));
         assert_eq!(core.max_tokens, Some(512));
         assert_eq!(core.response_format, Some(ResponseFormat::Json));
+        assert_eq!(
+            core.reasoning_effort,
+            Some(axocoatl_core::ReasoningEffort::Low)
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_parses_known_levels_and_refuses_others() {
+        let parsed: SamplingConfigYaml =
+            serde_yaml::from_str("max_tokens: 4096\nreasoning_effort: xhigh\n").unwrap();
+        assert_eq!(
+            parsed.to_core().reasoning_effort,
+            Some(axocoatl_core::ReasoningEffort::Xhigh)
+        );
+        let unset: SamplingConfigYaml = serde_yaml::from_str("max_tokens: 4096\n").unwrap();
+        assert_eq!(unset.to_core().reasoning_effort, None);
+        let error = serde_yaml::from_str::<SamplingConfigYaml>("reasoning_effort: ultra\n")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown variant `ultra`"), "{error}");
+        // An unset effort leaves a definition's serialized bytes unchanged.
+        let core = unset.to_core();
+        assert!(!serde_json::to_string(&core)
+            .unwrap()
+            .contains("reasoning_effort"));
     }
 
     #[test]

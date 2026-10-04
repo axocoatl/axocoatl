@@ -1,24 +1,35 @@
 use super::*;
 
+/// Reasoning blocks OpenRouter documents for chat completions. A
+/// `reasoning.server_tool_call` block means a server tool ran, which a native
+/// request never asks for.
+pub(super) fn replayable_reasoning(kind: &str) -> bool {
+    matches!(
+        kind,
+        "reasoning.text" | "reasoning.summary" | "reasoning.encrypted"
+    )
+}
+
+fn count(value: &Value, name: &str) -> Result<usize, ProviderError> {
+    value
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or_else(|| protocol(format!("terminal {name} usage missing or malformed")))
+}
+
+/// Terminal usage. Reasoning tokens are part of `completion_tokens`, billed
+/// as output; they are kept apart so they can be shown, and every total
+/// (grants, budgets, cost) counts them.
 fn usage(value: &Value) -> Result<MeasuredTokenUsage, ProviderError> {
-    let input = value["prompt_tokens"]
-        .as_u64()
-        .and_then(|n| usize::try_from(n).ok())
-        .ok_or_else(|| protocol("terminal prompt usage missing"))?;
-    let completion = value["completion_tokens"]
-        .as_u64()
-        .and_then(|n| usize::try_from(n).ok())
-        .ok_or_else(|| protocol("terminal completion usage missing"))?;
-    let reasoning = value
+    let input = count(&value["prompt_tokens"], "prompt")?;
+    let completion = count(&value["completion_tokens"], "completion")?;
+    let reasoning = match value
         .get("completion_tokens_details")
         .and_then(|v| v.get("reasoning_tokens"))
-        .map(|n| {
-            n.as_u64()
-                .and_then(|n| usize::try_from(n).ok())
-                .ok_or_else(|| protocol("reasoning usage malformed"))
-        })
-        .transpose()?
-        .unwrap_or(0);
+    {
+        None | Some(Value::Null) => 0,
+        Some(tokens) => count(tokens, "reasoning")?,
+    };
     let output = completion
         .checked_sub(reasoning)
         .ok_or_else(|| protocol("reasoning usage exceeds total completion usage"))?;
@@ -34,6 +45,24 @@ fn usage(value: &Value) -> Result<MeasuredTokenUsage, ProviderError> {
         complete: true,
     })
 }
+
+/// A server tool (such as web search) bills beyond tokens. A native request
+/// never offers one, so its use means the request's contract was not honored.
+fn server_tool_ran(usage: &Value) -> bool {
+    usage
+        .get("server_tool_use_details")
+        .filter(|v| !v.is_null())
+        .is_some_and(|details| {
+            [
+                "web_search_requests",
+                "tool_calls_executed",
+                "tool_calls_requested",
+            ]
+            .iter()
+            .any(|name| details.get(*name).and_then(Value::as_u64).unwrap_or(0) > 0)
+        })
+}
+
 #[derive(Default)]
 struct Call {
     id: String,
@@ -41,24 +70,102 @@ struct Call {
     args: String,
 }
 
+/// Reasoning blocks rebuilt from stream deltas. OpenRouter streams one block
+/// as several deltas with the same `index` and `type` (text fragments, then
+/// its signature); a block's later fields complete the same block.
+#[derive(Default)]
+pub(super) struct ReasoningDetails {
+    blocks: Vec<serde_json::Map<String, Value>>,
+    positions: BTreeMap<(u64, String), usize>,
+}
+
+impl ReasoningDetails {
+    pub(super) fn push(&mut self, detail: &Value) -> Result<(), ProviderError> {
+        let object = detail
+            .as_object()
+            .ok_or_else(|| protocol("reasoning detail is not an object"))?;
+        let kind = object
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|kind| replayable_reasoning(kind))
+            .ok_or_else(|| protocol("unsupported reasoning detail type"))?;
+        let key = object
+            .get("index")
+            .and_then(Value::as_u64)
+            .map(|index| (index, kind.to_owned()));
+        // A block is complete once signed; more text under its index starts
+        // the next block rather than altering a signed one.
+        let continues = |block: &serde_json::Map<String, Value>| {
+            !(block.get("signature").is_some_and(|v| !v.is_null())
+                && ["text", "summary", "data"]
+                    .iter()
+                    .any(|field| object.get(*field).is_some_and(|v| !v.is_null())))
+        };
+        let Some(position) = key
+            .as_ref()
+            .and_then(|key| self.positions.get(key))
+            .filter(|position| continues(&self.blocks[**position]))
+        else {
+            if let Some(key) = key {
+                self.positions.insert(key, self.blocks.len());
+            }
+            self.blocks.push(object.clone());
+            return Ok(());
+        };
+        let block = &mut self.blocks[*position];
+        for (field, value) in object {
+            if value.is_null() || matches!(field.as_str(), "type" | "index") {
+                continue;
+            }
+            match (field.as_str(), block.get_mut(field)) {
+                ("text" | "summary" | "data", Some(Value::String(existing))) => {
+                    existing.push_str(
+                        value
+                            .as_str()
+                            .ok_or_else(|| protocol("reasoning fragment is not text"))?,
+                    );
+                }
+                (_, Some(existing)) if !existing.is_null() && existing != value => {
+                    return Err(protocol("a reasoning block changed one of its fields"));
+                }
+                _ => {
+                    block.insert(field.clone(), value.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn encoded(&self) -> Result<Option<String>, ProviderError> {
+        if self.blocks.is_empty() {
+            return Ok(None);
+        }
+        serde_json::to_string(&self.blocks)
+            .map(Some)
+            .map_err(|_| protocol("reasoning details could not be retained"))
+    }
+}
+
 pub(super) fn decode(
     response: reqwest::Response,
     request: ChatRequest,
     profile: NativeOpenRouterObservation,
-    limit: usize,
-    max_output_tokens: usize,
+    shape: CallShape,
+    bounds: ProviderExecutionBounds,
     key: String,
 ) -> Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>> {
     Box::pin(async_stream::try_stream! {
-        let bounds = profile.execution_bounds(max_output_tokens, limit)?;
-        let output_limit = request.max_tokens.unwrap_or(max_output_tokens);
         let mut bytes = response.bytes_stream();
-        let mut decoder = SseDecoder::new(limit, limit);
+        // Reasoning streams many small chunks; the wire may run well past the
+        // retained response bound, which the Session boundary enforces on
+        // what is kept. One event still fits within that bound.
+        let mut decoder = SseDecoder::new(MAX_STREAM_BYTES, bounds.response_bytes);
         let deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
         let mut finished = None;
         let mut terminal_usage = None;
         let mut terminal_cost = None;
         let mut calls = BTreeMap::<usize, Call>::new();
+        let mut reasoning = ReasoningDetails::default();
         let mut generation = None;
         let mut observed_provider = false;
         let mut sentinel = false;
@@ -121,16 +228,20 @@ pub(super) fn decode(
                     yield StreamEvent::CostObservation {
                         cost_microunits: cost,
                     };
-                    if observed.usage.input_tokens > profile.context_tokens
-                        || observed.usage.output_tokens > output_limit
+                    if server_tool_ran(measured) {
+                        Err(protocol("OpenRouter ran a server tool the request never offered"))?;
+                    }
+                    let completion = observed
+                        .usage
+                        .output_tokens
+                        .saturating_add(observed.usage.reasoning_tokens.unwrap_or(0));
+                    if observed.usage.input_tokens > shape.prompt_tokens
+                        || completion > shape.response_tokens
                         || cost > bounds.cost_microunits
                     {
                         Err(protocol(
                             "provider usage exceeded the admitted execution contract",
                         ))?;
-                    }
-                    if observed.usage.reasoning_tokens.unwrap_or(0) != 0 {
-                        Err(protocol("non-reasoning endpoint reported reasoning spend"))?;
                     }
                 }
                 if value.get("error").is_some_and(|v| !v.is_null()) {
@@ -152,14 +263,35 @@ pub(super) fn decode(
                         Err(protocol("nonzero completion index"))?;
                     }
                     let delta = &choice["delta"];
-                    if delta
-                        .get("reasoning")
-                        .is_some_and(|v| !v.is_null() && v.as_str() != Some(""))
-                        || delta
-                            .get("reasoning_details")
-                            .is_some_and(|v| !v.is_null() && v.as_array().is_none_or(|v| !v.is_empty()))
-                    {
-                        Err(protocol("unapproved reasoning response"))?;
+                    for (field, what) in [
+                        ("annotations", "web citations"),
+                        ("images", "image output"),
+                        ("audio", "audio output"),
+                    ] {
+                        if delta.get(field).is_some_and(|v| {
+                            !v.is_null() && v.as_array().is_none_or(|v| !v.is_empty())
+                        }) {
+                            Err(protocol(format!("unrequested {what} in the response")))?;
+                        }
+                    }
+                    if let Some(text) = delta.get("reasoning").filter(|v| !v.is_null()) {
+                        let text = text
+                            .as_str()
+                            .ok_or_else(|| protocol("reasoning text malformed"))?;
+                        if finished.is_some() && !text.is_empty() {
+                            Err(protocol("reasoning after terminal completion"))?;
+                        }
+                        if !text.is_empty() {
+                            yield StreamEvent::ReasoningDelta { delta: text.into() };
+                        }
+                    }
+                    if let Some(details) = delta.get("reasoning_details").filter(|v| !v.is_null()) {
+                        for detail in details
+                            .as_array()
+                            .ok_or_else(|| protocol("reasoning details malformed"))?
+                        {
+                            reasoning.push(detail)?;
+                        }
                     }
                     if let Some(text) = delta.get("content").filter(|v| !v.is_null()) {
                         let text = text
@@ -185,6 +317,13 @@ pub(super) fn decode(
                                 .and_then(|n| usize::try_from(n).ok())
                                 .filter(|n| *n < 128)
                                 .ok_or_else(|| protocol("tool index missing or unbounded"))?;
+                            if part
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .is_some_and(|kind| kind != "function")
+                            {
+                                Err(protocol("the model called a tool that is not a function"))?;
+                            }
                             let call = calls.entry(index).or_default();
                             let id = part.get("id").and_then(Value::as_str).unwrap_or("");
                             if !id.is_empty() {
@@ -245,6 +384,17 @@ pub(super) fn decode(
                 "terminal route, usage, cost or SSE sentinel is missing",
             ))?;
         }
+        let reasoning_tokens = terminal_usage
+            .as_ref()
+            .and_then(|usage| usage.usage.reasoning_tokens)
+            .unwrap_or(0);
+        let mut replay = reasoning.encoded()?;
+        if replay
+            .as_ref()
+            .is_some_and(|encoded| encoded.len() > bounds.response_bytes)
+        {
+            Err(protocol("reasoning details exceed the retained response bound"))?;
+        }
         let mut ids = std::collections::HashSet::new();
         for (index, call) in calls {
             axocoatl_llm::validate_required_tool_call_id(PROVIDER, &call.id)?;
@@ -263,6 +413,15 @@ pub(super) fn decode(
                 "axocoatl.openrouter.generation".into(),
                 generation.clone().unwrap(),
             );
+            // The turn's reasoning goes back with its tool results; it rides
+            // on the first call so the assistant message carries it once.
+            if let Some(details) = replay.take() {
+                metadata.insert(REASONING_DETAILS_METADATA.into(), details);
+                metadata.insert(
+                    REASONING_TOKENS_METADATA.into(),
+                    reasoning_tokens.to_string(),
+                );
+            }
             yield StreamEvent::ToolCallMetadata {
                 index: Some(index),
                 id: call.id,

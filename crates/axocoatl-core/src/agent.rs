@@ -54,6 +54,57 @@ pub enum ResponseFormat {
     Json,
 }
 
+/// How much a reasoning model thinks before it answers. The values are the
+/// OpenRouter `reasoning.effort` levels, highest first; `none` turns reasoning
+/// off where the model allows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    Max,
+    Xhigh,
+    High,
+    Medium,
+    Low,
+    Minimal,
+    None,
+}
+
+impl ReasoningEffort {
+    /// The wire value, as OpenRouter spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Max => "max",
+            Self::Xhigh => "xhigh",
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
+            Self::Minimal => "minimal",
+            Self::None => "none",
+        }
+    }
+
+    /// Parse a wire value. An unknown level is `None`, so a caller refuses it
+    /// by name instead of guessing a nearby level.
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "max" => Self::Max,
+            "xhigh" => Self::Xhigh,
+            "high" => Self::High,
+            "medium" => Self::Medium,
+            "low" => Self::Low,
+            "minimal" => Self::Minimal,
+            "none" => Self::None,
+            _ => return None,
+        })
+    }
+}
+
+impl std::fmt::Display for ReasoningEffort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Per-agent sampling controls, threaded into every LLM request the agent
 /// makes. All optional — an unset field leaves the provider's default in place.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -66,6 +117,12 @@ pub struct SamplingConfig {
     pub max_tokens: Option<usize>,
     /// Requested output format (e.g. force JSON).
     pub response_format: Option<ResponseFormat>,
+    /// Reasoning effort for a reasoning model. Native OpenRouter sends it and
+    /// sizes each call's reasoning allowance from it; unset uses the model's
+    /// own default. Left out of the serialized form when unset, so retained
+    /// definitions written before this field keep their exact bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// Configuration for a single agent.
@@ -354,5 +411,39 @@ mod tests {
     fn overflow_policy_default_is_abort() {
         let policy = OverflowPolicy::default();
         assert!(matches!(policy, OverflowPolicy::Abort));
+    }
+
+    #[test]
+    fn reasoning_effort_uses_openrouter_spellings_and_leaves_old_bytes_alone() {
+        for effort in [
+            ReasoningEffort::Max,
+            ReasoningEffort::Xhigh,
+            ReasoningEffort::High,
+            ReasoningEffort::Medium,
+            ReasoningEffort::Low,
+            ReasoningEffort::Minimal,
+            ReasoningEffort::None,
+        ] {
+            assert_eq!(ReasoningEffort::parse(effort.as_str()), Some(effort));
+            assert_eq!(
+                serde_json::to_string(&effort).unwrap(),
+                format!("\"{effort}\"")
+            );
+        }
+        assert_eq!(ReasoningEffort::parse("ultra"), None);
+        // A configuration without an effort serializes exactly as before.
+        let sampling = SamplingConfig {
+            max_tokens: Some(4096),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&sampling).unwrap(),
+            r#"{"temperature":null,"top_p":null,"max_tokens":4096,"response_format":null}"#
+        );
+        let back: SamplingConfig = serde_json::from_str(
+            r#"{"temperature":null,"top_p":null,"max_tokens":4096,"response_format":null}"#,
+        )
+        .unwrap();
+        assert_eq!(back, sampling);
     }
 }

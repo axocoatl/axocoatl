@@ -1,0 +1,489 @@
+{
+ "endpoints": {
+  "data": {
+   "architecture": {
+    "input_modalities": [
+     "file",
+     "image",
+     "text"
+    ],
+    "instruct_type": null,
+    "modality": "text+image+file->text",
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "GPT"
+   },
+   "created": 1783590850,
+   "description": "GPT-5.6 Sol is the flagship model in OpenAI's GPT-5.6 series. It is suited for complex reasoning, coding, and agentic workflows, and is particularly strong at command-line and multi-step coding tasks...",
+   "endpoints": [
+    {
+     "context_length": 1050000,
+     "max_completion_tokens": 128000,
+     "max_prompt_tokens": 922000,
+     "model_id": "openai/gpt-5.6-sol",
+     "model_name": "OpenAI: GPT-5.6 Sol",
+     "name": "OpenAI | openai/gpt-5.6-sol-20260709",
+     "native_tools": {
+      "openrouter:apply_patch": {
+       "type": "apply_patch"
+      },
+      "openrouter:web_search": {
+       "type": "web_search"
+      }
+     },
+     "pricing": {
+      "completion": "0.000005",
+      "discount": 0.5,
+      "input_cache_read": "0.0000001",
+      "input_cache_write": "0.00000125",
+      "overrides": [
+       {
+        "completion": "0.0000075",
+        "input_cache_read": "0.0000002",
+        "input_cache_write": "0.0000025",
+        "min_prompt_tokens": 272000,
+        "prompt": "0.000002"
+       }
+      ],
+      "prompt": "0.000001",
+      "web_search": "0.01"
+     },
+     "provider_name": "OpenAI",
+     "quantization": "unknown",
+     "status": 0,
+     "supported_parameters": [
+      "reasoning",
+      "include_reasoning",
+      "seed",
+      "max_tokens",
+      "response_format",
+      "structured_outputs",
+      "tools",
+      "tool_choice",
+      "verbosity",
+      "reasoning_effort"
+     ],
+     "supports_image_reference": false,
+     "supports_implicit_caching": false,
+     "supports_multiple_audio_references": false,
+     "supports_tool_choice": {
+      "auto": true,
+      "function": true,
+      "none": true,
+      "required": true
+     },
+     "supports_voice_cloning": false,
+     "tag": "openai/flex"
+    },
+    {
+     "context_length": 1050000,
+     "max_completion_tokens": 128000,
+     "max_prompt_tokens": 922000,
+     "model_id": "openai/gpt-5.6-sol",
+     "model_name": "OpenAI: GPT-5.6 Sol",
+     "name": "OpenAI | openai/gpt-5.6-sol-20260709",
+     "native_tools": {
+      "openrouter:apply_patch": {
+       "type": "apply_patch"
+      },
+      "openrouter:web_search": {
+       "type": "web_search"
+      }
+     },
+     "pricing": {
+      "completion": "0.00001",
+      "discount": 0.5,
+      "input_cache_read": "0.0000002",
+      "input_cache_write": "0.0000025",
+      "overrides": [
+       {
+        "completion": "0.000015",
+        "input_cache_read": "0.0000004",
+        "input_cache_write": "0.000005",
+        "min_prompt_tokens": 272000,
+        "prompt": "0.000004"
+       }
+      ],
+      "prompt": "0.000002",
+      "web_search": "0.01"
+     },
+     "provider_name": "OpenAI",
+     "quantization": "unknown",
+     "status": 0,
+     "supported_parameters": [
+      "reasoning",
+      "include_reasoning",
+      "seed",
+      "max_tokens",
+      "response_format",
+      "structured_outputs",
+      "tools",
+      "tool_choice",
+      "verbosity",
+      "reasoning_effort"
+     ],
+     "supports_image_reference": false,
+     "supports_implicit_caching": false,
+     "supports_multiple_audio_references": false,
+     "supports_tool_choice": {
+      "auto": true,
+      "function": true,
+      "none": true,
+      "required": true
+     },
+     "supports_voice_cloning": false,
+     "tag": "openai"
+    },
+    {
+     "context_length": 1050000,
+     "max_completion_tokens": 128000,
+     "max_prompt_tokens": 922000,
+     "model_id": "openai/gpt-5.6-sol",
+     "model_name": "OpenAI: GPT-5.6 Sol",
+     "name": "OpenAI | openai/gpt-5.6-sol-20260709",
+     "native_tools": {
+      "openrouter:apply_patch": {
+       "type": "apply_patch"
+      },
+      "openrouter:web_search": {
+       "type": "web_search"
+      }
+     },
+     "pricing": {
+      "completion": "0.00002",
+      "discount": 0.5,
+      "input_cache_read": "0.0000004",
+      "input_cache_write": "0.000005",
+      "overrides": [
+       {
+        "completion": "0.00003",
+        "input_cache_read": "0.0000008",
+        "input_cache_write": "0.00001",
+        "min_prompt_tokens": 272000,
+        "prompt": "0.000008"
+       }
+      ],
+      "prompt": "0.000004",
+      "web_search": "0.01"
+     },
+     "provider_name": "OpenAI",
+     "quantization": "unknown",
+     "status": 0,
+     "supported_parameters": [
+      "reasoning",
+      "include_reasoning",
+      "seed",
+      "max_tokens",
+      "response_format",
+      "structured_outputs",
+      "tools",
+      "tool_choice",
+      "verbosity",
+      "reasoning_effort"
+     ],
+     "supports_image_reference": false,
+     "supports_implicit_caching": false,
+     "supports_multiple_audio_references": false,
+     "supports_tool_choice": {
+      "auto": true,
+      "function": true,
+      "none": true,
+      "required": true
+     },
+     "supports_voice_cloning": false,
+     "tag": "openai/fast"
+    },
+    {
+     "context_length": 1050000,
+     "max_completion_tokens": 128000,
+     "max_prompt_tokens": 922000,
+     "model_id": "openai/gpt-5.6-sol",
+     "model_name": "OpenAI: GPT-5.6 Sol",
+     "name": "Azure | openai/gpt-5.6-sol-20260709",
+     "native_tools": {
+      "openrouter:apply_patch": {
+       "type": "apply_patch"
+      },
+      "openrouter:web_search": {
+       "type": "web_search"
+      }
+     },
+     "pricing": {
+      "completion": "0.00002",
+      "discount": 0,
+      "input_cache_read": "0.0000004",
+      "input_cache_write": "0.000005",
+      "overrides": [
+       {
+        "completion": "0.00003",
+        "input_cache_read": "0.0000008",
+        "input_cache_write": "0.00001",
+        "min_prompt_tokens": 272000,
+        "prompt": "0.000008"
+       }
+      ],
+      "prompt": "0.000004",
+      "web_search": "0.01"
+     },
+     "provider_name": "Azure",
+     "quantization": "unknown",
+     "status": 0,
+     "supported_parameters": [
+      "reasoning",
+      "include_reasoning",
+      "max_completion_tokens",
+      "tools",
+      "tool_choice",
+      "seed",
+      "response_format",
+      "structured_outputs",
+      "verbosity",
+      "reasoning_effort"
+     ],
+     "supports_image_reference": false,
+     "supports_implicit_caching": false,
+     "supports_multiple_audio_references": false,
+     "supports_tool_choice": {
+      "auto": true,
+      "function": true,
+      "none": true,
+      "required": true
+     },
+     "supports_voice_cloning": false,
+     "tag": "azure"
+    },
+    {
+     "context_length": 1050000,
+     "max_completion_tokens": 128000,
+     "max_prompt_tokens": null,
+     "model_id": "openai/gpt-5.6-sol",
+     "model_name": "OpenAI: GPT-5.6 Sol",
+     "name": "Azure | openai/gpt-5.6-sol-20260709",
+     "native_tools": {
+      "openrouter:apply_patch": {
+       "type": "apply_patch"
+      },
+      "openrouter:web_search": {
+       "type": "web_search"
+      }
+     },
+     "pricing": {
+      "completion": "0.000022",
+      "discount": 0,
+      "input_cache_read": "0.00000044",
+      "input_cache_write": "0.0000055",
+      "overrides": [
+       {
+        "completion": "0.000033",
+        "input_cache_read": "0.00000088",
+        "input_cache_write": "0.000011",
+        "min_prompt_tokens": 272000,
+        "prompt": "0.0000088"
+       }
+      ],
+      "prompt": "0.0000044",
+      "web_search": "0.01"
+     },
+     "provider_name": "Azure",
+     "quantization": "unknown",
+     "status": 0,
+     "supported_parameters": [
+      "reasoning",
+      "include_reasoning",
+      "max_completion_tokens",
+      "tools",
+      "tool_choice",
+      "seed",
+      "response_format",
+      "structured_outputs",
+      "verbosity",
+      "reasoning_effort"
+     ],
+     "supports_image_reference": false,
+     "supports_implicit_caching": false,
+     "supports_multiple_audio_references": false,
+     "supports_tool_choice": {
+      "auto": true,
+      "function": true,
+      "none": true,
+      "required": true
+     },
+     "supports_voice_cloning": false,
+     "tag": "azure/us"
+    },
+    {
+     "context_length": 1050000,
+     "max_completion_tokens": 128000,
+     "max_prompt_tokens": 922000,
+     "model_id": "openai/gpt-5.6-sol",
+     "model_name": "OpenAI: GPT-5.6 Sol",
+     "name": "Amazon Bedrock | openai/gpt-5.6-sol-20260709",
+     "native_tools": {},
+     "pricing": {
+      "completion": "0.000022",
+      "discount": 0,
+      "input_cache_read": "0.00000044",
+      "input_cache_write": "0.0000055",
+      "overrides": [
+       {
+        "completion": "0.000033",
+        "input_cache_read": "0.00000088",
+        "input_cache_write": "0.000011",
+        "min_prompt_tokens": 272000,
+        "prompt": "0.0000088"
+       }
+      ],
+      "prompt": "0.0000044",
+      "web_search": "0.01"
+     },
+     "provider_name": "Amazon Bedrock",
+     "quantization": "unknown",
+     "status": 0,
+     "supported_parameters": [
+      "reasoning",
+      "include_reasoning",
+      "max_tokens",
+      "tools",
+      "tool_choice",
+      "response_format",
+      "structured_outputs",
+      "verbosity",
+      "reasoning_effort"
+     ],
+     "supports_image_reference": false,
+     "supports_implicit_caching": true,
+     "supports_multiple_audio_references": false,
+     "supports_tool_choice": {
+      "auto": true,
+      "function": true,
+      "none": true,
+      "required": true
+     },
+     "supports_voice_cloning": false,
+     "tag": "amazon-bedrock/us-east-1"
+    },
+    {
+     "context_length": 1050000,
+     "max_completion_tokens": 128000,
+     "max_prompt_tokens": null,
+     "model_id": "openai/gpt-5.6-sol",
+     "model_name": "OpenAI: GPT-5.6 Sol",
+     "name": "Azure | openai/gpt-5.6-sol-20260709",
+     "native_tools": {
+      "openrouter:apply_patch": {
+       "type": "apply_patch"
+      },
+      "openrouter:web_search": {
+       "type": "web_search"
+      }
+     },
+     "pricing": {
+      "completion": "0.000022",
+      "discount": 0,
+      "input_cache_read": "0.00000044",
+      "input_cache_write": "0.0000055",
+      "overrides": [
+       {
+        "completion": "0.000033",
+        "input_cache_read": "0.00000088",
+        "input_cache_write": "0.000011",
+        "min_prompt_tokens": 272000,
+        "prompt": "0.0000088"
+       }
+      ],
+      "prompt": "0.0000044",
+      "web_search": "0.01"
+     },
+     "provider_name": "Azure",
+     "quantization": "unknown",
+     "status": 0,
+     "supported_parameters": [
+      "reasoning",
+      "include_reasoning",
+      "max_completion_tokens",
+      "tools",
+      "tool_choice",
+      "seed",
+      "response_format",
+      "structured_outputs",
+      "verbosity",
+      "reasoning_effort"
+     ],
+     "supports_image_reference": false,
+     "supports_implicit_caching": false,
+     "supports_multiple_audio_references": false,
+     "supports_tool_choice": {
+      "auto": true,
+      "function": true,
+      "none": true,
+      "required": true
+     },
+     "supports_voice_cloning": false,
+     "tag": "azure/eu"
+    }
+   ],
+   "id": "openai/gpt-5.6-sol",
+   "name": "OpenAI: GPT-5.6 Sol"
+  }
+ },
+ "model": {
+  "architecture": {
+   "input_modalities": [
+    "file",
+    "image",
+    "text"
+   ],
+   "instruct_type": null,
+   "modality": "text+image+file->text",
+   "output_modalities": [
+    "text"
+   ],
+   "tokenizer": "GPT"
+  },
+  "context_length": 1050000,
+  "id": "openai/gpt-5.6-sol",
+  "pricing": {
+   "completion": "0.00001",
+   "input_cache_read": "0.0000002",
+   "input_cache_write": "0.0000025",
+   "overrides": [
+    {
+     "completion": "0.000015",
+     "input_cache_read": "0.0000004",
+     "input_cache_write": "0.000005",
+     "min_prompt_tokens": 272000,
+     "prompt": "0.000004"
+    }
+   ],
+   "prompt": "0.000002",
+   "web_search": "0.01"
+  },
+  "reasoning": {
+   "default_effort": "medium",
+   "default_enabled": true,
+   "mandatory": false,
+   "supported_efforts": [
+    "max",
+    "xhigh",
+    "high",
+    "medium",
+    "low",
+    "none"
+   ]
+  },
+  "supported_parameters": [
+   "include_reasoning",
+   "max_completion_tokens",
+   "max_tokens",
+   "reasoning",
+   "reasoning_effort",
+   "response_format",
+   "seed",
+   "structured_outputs",
+   "tool_choice",
+   "tools",
+   "verbosity"
+  ]
+ }
+}

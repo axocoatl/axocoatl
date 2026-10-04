@@ -405,12 +405,16 @@ pub struct AgentConfigYaml {
 
 /// Per-agent sampling controls. All optional; an unset field leaves the
 /// provider default in place. `response_format` is `"text"` or `"json"`.
+/// `reasoning_effort` is one of `max`, `xhigh`, `high`, `medium`, `low`,
+/// `minimal` or `none`; any other value is a configuration error.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SamplingConfigYaml {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub max_tokens: Option<usize>,
     pub response_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<axocoatl_core::ReasoningEffort>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

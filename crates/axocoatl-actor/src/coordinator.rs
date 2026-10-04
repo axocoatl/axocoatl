@@ -4004,6 +4004,7 @@ mod tests {
             top_p: Some(0.75),
             max_tokens: Some(77),
             response_format: Some(axocoatl_core::ResponseFormat::Json),
+            reasoning_effort: None,
         };
         coordinator.on_start(&config).await.unwrap();
         let (sink, mut chunks) = tokio::sync::mpsc::unbounded_channel();

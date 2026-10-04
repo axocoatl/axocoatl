@@ -2,11 +2,17 @@
 //! ceilings are verified before each single inference request; no retry/fallback.
 //! Requires an operator-declared OpenRouter-credit billing configuration. BYOK
 //! is unsupported; enabling it externally invalidates this execution contract.
+//!
+//! Each call reserves a bound of its own exact request, not the endpoint's
+//! context window: the request's bytes plus a template allowance (and the
+//! recorded reasoning tokens it replays) for the prompt, plus its `max_tokens`
+//! (visible output and reasoning allowance), at the highest input and output
+//! rates the endpoint lists. The provider's terminal usage and cost settle it.
 use crate::OpenAiProvider;
 use axocoatl_core::{MeasuredTokenUsage, TokenUsageStats};
 use axocoatl_llm::transport::{
     http_client, network_error, next_stream_item, read_error_text, read_json, validated_endpoint,
-    SseDecoder, RESPONSE_TIMEOUT, STREAM_IDLE_TIMEOUT, STREAM_TOTAL_TIMEOUT,
+    SseDecoder, MAX_STREAM_BYTES, RESPONSE_TIMEOUT, STREAM_IDLE_TIMEOUT, STREAM_TOTAL_TIMEOUT,
 };
 use axocoatl_llm::{
     provider_tool_metadata, validate_chat_response, validate_response_tool_call,
@@ -23,9 +29,21 @@ mod money;
 mod observation;
 #[path = "native_openrouter/stream.rs"]
 mod stream;
-pub use observation::{observe_native_openrouter_profiles, NativeOpenRouterObservation};
+use observation::CallShape;
+pub use observation::{
+    observe_native_openrouter_profiles, NativeOpenRouterEfforts, NativeOpenRouterObservation,
+    NativeOpenRouterReasoning, NativeOpenRouterReasoningRequest, MINIMUM_REASONING_ALLOWANCE,
+    PROMPT_TEMPLATE_ALLOWANCE,
+};
 
 const PROVIDER: &str = "openrouter";
+/// The exact reasoning blocks of a tool-calling response, as OpenRouter
+/// returned them, kept on its first tool call to be sent back unmodified.
+pub const REASONING_DETAILS_METADATA: &str = "axocoatl.openrouter.reasoning_details";
+/// The reasoning tokens that response reported. Replaying its reasoning can
+/// bill them again as input, so the next prompt bound includes them.
+pub const REASONING_TOKENS_METADATA: &str = "axocoatl.openrouter.reasoning_tokens";
+
 fn invalid(reason: impl Into<String>) -> ProviderError {
     ProviderError::InvalidRequest {
         provider: PROVIDER.into(),
@@ -41,7 +59,7 @@ pub struct NativeOpenRouterProvider {
     observation: NativeOpenRouterObservation,
     max_output_tokens: usize,
     max_response_bytes: usize,
-    bounds: ProviderExecutionBounds,
+    reasoning: Option<NativeOpenRouterReasoningRequest>,
 }
 impl NativeOpenRouterProvider {
     pub async fn connect_observed(
@@ -49,19 +67,27 @@ impl NativeOpenRouterProvider {
         api_key: &str,
         max_output_tokens: usize,
         max_response_bytes: usize,
+        reasoning: Option<NativeOpenRouterReasoningRequest>,
     ) -> Result<Self, ProviderError> {
         observation.validate()?;
+        if !observation.accepts_reasoning(reasoning) {
+            return Err(invalid(format!(
+                "the retained reasoning setting is not one {} accepts",
+                observation.model
+            )));
+        }
         if api_key.is_empty()
             || max_output_tokens == 0
             || max_output_tokens > observation.max_output_tokens
-            || max_output_tokens >= observation.context_tokens
+            || observation.response_allowance(max_output_tokens, reasoning)
+                >= observation.context_tokens
             || !(4096..=16 * 1024 * 1024).contains(&max_response_bytes)
         {
             return Err(invalid(
                 "unsupported exact OpenRouter execution bounds or missing credential",
             ));
         }
-        let bounds = observation.execution_bounds(max_output_tokens, max_response_bytes)?;
+        observation.minimum_call_bounds(max_output_tokens, reasoning, max_response_bytes)?;
         let this = Self {
             inner: OpenAiProvider::with_base_url(
                 api_key,
@@ -72,7 +98,7 @@ impl NativeOpenRouterProvider {
             observation,
             max_output_tokens,
             max_response_bytes,
-            bounds,
+            reasoning,
         };
         this.verify().await?;
         Ok(this)
@@ -86,30 +112,129 @@ impl NativeOpenRouterProvider {
         .await?;
         if !profiles
             .iter()
-            .any(|profile| profile.same_contract(&self.observation))
+            .any(|profile| self.observation.same_contract(profile))
         {
             return Err(invalid("the retained OpenRouter endpoint, capabilities, price ceiling or token limits changed; review a new profile"));
         }
         Ok(())
     }
-    fn body(&self, request: &ChatRequest) -> Result<Value, ProviderError> {
+    /// The exact request body and its bounds. Every byte of the body counts
+    /// toward the prompt bound: the provider renders the messages and tools,
+    /// and each token of a byte-level tokenizer covers at least one byte.
+    fn body(&self, request: &ChatRequest) -> Result<(Value, CallShape), ProviderError> {
         self.validate_request(request)?;
-        let requested_output = request.max_tokens.unwrap_or(self.max_output_tokens);
+        let output = request.max_tokens.unwrap_or(self.max_output_tokens);
+        let response_tokens = self.observation.response_allowance(output, self.reasoning);
         let mut normalized = request.clone();
-        normalized.max_tokens = Some(requested_output);
+        normalized.max_tokens = Some(output);
         let mut body = serde_json::to_value(self.inner.build_chat_request(&normalized)?)
             .map_err(|_| invalid("request serialization failed"))?;
-        body.as_object_mut()
-            .unwrap()
-            .remove("max_completion_tokens");
-        body["max_tokens"] = json!(requested_output);
-        body["stream"] = json!(true);
-        body["provider"] = json!({"only":[self.observation.endpoint_tag],"order":[self.observation.endpoint_tag],"allow_fallbacks":false,"require_parameters":true,"max_price":{"prompt":self.observation.prompt_price_per_million,"completion":self.observation.completion_price_per_million,"request":"0","image":"0","audio":"0"}});
-        body["transforms"] = json!([]);
-        body["plugins"] = json!([]);
-        Ok(body)
+        let object = body
+            .as_object_mut()
+            .ok_or_else(|| invalid("request serialization failed"))?;
+        object.remove("max_completion_tokens");
+        object.insert("max_tokens".into(), json!(response_tokens));
+        object.insert("stream".into(), json!(true));
+        object.insert(
+            "provider".into(),
+            json!({
+                "only": [self.observation.endpoint_tag],
+                "order": [self.observation.endpoint_tag],
+                "allow_fallbacks": false,
+                "require_parameters": true,
+                "max_price": {
+                    "prompt": self.observation.prompt_price_per_million,
+                    "completion": self.observation.completion_price_per_million,
+                    "request": self.observation.request_price.as_deref().unwrap_or("0"),
+                    "image": "0",
+                    "audio": "0",
+                },
+            }),
+        );
+        object.insert("transforms".into(), json!([]));
+        // An account can turn the web plugin on for every request; an
+        // explicit disable overrides that default.
+        object.insert("plugins".into(), json!([{"id": "web", "enabled": false}]));
+        if let Some(reasoning) = self.reasoning {
+            object.insert("reasoning".into(), reasoning.wire());
+        }
+        if object
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| tools.iter().any(|tool| tool["type"] != "function"))
+        {
+            return Err(invalid("native OpenRouter sends function tools only"));
+        }
+        let replayed = replay_reasoning(request, &mut body)?;
+        let bytes = serde_json::to_vec(&body)
+            .map_err(|_| invalid("request serialization failed"))?
+            .len();
+        let prompt_tokens = PROMPT_TEMPLATE_ALLOWANCE
+            .saturating_add(bytes)
+            .saturating_add(replayed)
+            .min(self.observation.prompt_limit());
+        Ok((
+            body,
+            CallShape {
+                prompt_tokens,
+                response_tokens,
+            },
+        ))
     }
 }
+
+/// Send each tool-calling assistant turn's reasoning back unmodified, as
+/// OpenRouter documents for tool use, and return the reasoning tokens those
+/// turns reported. Replayed reasoning can be billed as input at its full
+/// reasoning length, which a summary's bytes do not bound.
+fn replay_reasoning(request: &ChatRequest, body: &mut Value) -> Result<usize, ProviderError> {
+    let mut replayed = 0usize;
+    let messages = body["messages"]
+        .as_array_mut()
+        .filter(|messages| messages.len() == request.messages.len())
+        .ok_or_else(|| invalid("request messages do not map one to one"))?;
+    for (message, wire) in request.messages.iter().zip(messages) {
+        let mut details = None;
+        let mut tokens = None;
+        for call in &message.tool_calls {
+            for (key, slot) in [
+                (REASONING_DETAILS_METADATA, &mut details),
+                (REASONING_TOKENS_METADATA, &mut tokens),
+            ] {
+                if let Some(value) = call.provider_metadata.get(key) {
+                    if slot.is_some_and(|previous: &String| previous != value) {
+                        return Err(invalid("one assistant turn carries conflicting reasoning"));
+                    }
+                    *slot = Some(value);
+                }
+            }
+        }
+        let Some(details) = details else {
+            if tokens.is_some() {
+                return Err(invalid("replayed reasoning tokens lack their reasoning"));
+            }
+            continue;
+        };
+        let tokens = tokens
+            .and_then(|tokens| tokens.parse::<usize>().ok())
+            .ok_or_else(|| invalid("replayed reasoning lacks its recorded token count"))?;
+        let details: Value = serde_json::from_str(details)
+            .map_err(|_| invalid("replayed reasoning is not valid JSON"))?;
+        if !details.as_array().is_some_and(|details| {
+            details.iter().all(|detail| {
+                detail["type"]
+                    .as_str()
+                    .is_some_and(stream::replayable_reasoning)
+            })
+        }) {
+            return Err(invalid("replayed reasoning has an unknown shape"));
+        }
+        wire["reasoning_details"] = details;
+        replayed = replayed.saturating_add(tokens);
+    }
+    Ok(replayed)
+}
+
 #[async_trait::async_trait]
 impl LlmProvider for NativeOpenRouterProvider {
     fn provider_id(&self) -> &str {
@@ -119,6 +244,12 @@ impl LlmProvider for NativeOpenRouterProvider {
         &self.observation.model
     }
     fn capabilities(&self) -> ProviderCapabilities {
+        // Context fitting reserves the visible output; leave the reasoning
+        // allowance and the endpoint's own prompt limit out of the window.
+        let response = self
+            .observation
+            .response_allowance(self.max_output_tokens, self.reasoning);
+        let reasoning = response - self.max_output_tokens;
         ProviderCapabilities {
             streaming: true,
             tool_calling: true,
@@ -128,9 +259,13 @@ impl LlmProvider for NativeOpenRouterProvider {
                 .iter()
                 .any(|p| p == "response_format"),
             vision: false,
-            reasoning: false,
+            reasoning: reasoning > 0,
             embeddings: false,
-            max_context_tokens: self.observation.context_tokens,
+            max_context_tokens: (self.observation.context_tokens.saturating_sub(reasoning)).min(
+                self.observation
+                    .prompt_limit()
+                    .saturating_add(self.max_output_tokens),
+            ),
             max_output_tokens: self.max_output_tokens,
         }
     }
@@ -180,7 +315,10 @@ impl LlmProvider for NativeOpenRouterProvider {
         Ok(())
     }
     fn execution_bounds(&self, request: &ChatRequest) -> Option<ProviderExecutionBounds> {
-        self.validate_request(request).ok().map(|_| self.bounds)
+        let (_, shape) = self.body(request).ok()?;
+        self.observation
+            .call_bounds(shape, self.max_response_bytes)
+            .ok()
     }
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
         self.chat_with_accounting(request).await.response
@@ -193,7 +331,10 @@ impl LlmProvider for NativeOpenRouterProvider {
         request: ChatRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>
     {
-        let body = self.body(&request)?;
+        let (body, shape) = self.body(&request)?;
+        let bounds = self
+            .observation
+            .call_bounds(shape, self.max_response_bytes)?;
         self.verify().await?;
         let response = tokio::time::timeout(
             RESPONSE_TIMEOUT,
@@ -222,8 +363,8 @@ impl LlmProvider for NativeOpenRouterProvider {
             response,
             request,
             self.observation.clone(),
-            self.max_response_bytes,
-            self.max_output_tokens,
+            shape,
+            bounds,
             self.inner.api_key.clone(),
         ))
     }
