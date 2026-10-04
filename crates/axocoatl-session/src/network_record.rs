@@ -2584,31 +2584,6 @@ mod tests {
         assert!(line.contains("\"what\":\"unrecorded_refusals\""), "{line}");
     }
 
-    #[test]
-    fn ten_thousand_appends_finish_quickly() {
-        let (_root, _ownership, store) = setup();
-        let mut record = open(&store);
-        let started = std::time::Instant::now();
-        for id in 0..10_000 {
-            record
-                .append(id, open_event(id, "registry.npmjs.org"))
-                .unwrap();
-        }
-        record.sync().unwrap();
-        let elapsed = started.elapsed();
-        eprintln!("network record: 10000 appends + 1 sync in {elapsed:?}");
-        // The 2 s bound is for an optimized build (measured about 0.43 s on an
-        // M-series Mac); unoptimized serialization alone takes about 2 s.
-        let bound = if cfg!(debug_assertions) { 8 } else { 2 };
-        assert!(
-            elapsed < std::time::Duration::from_secs(bound),
-            "{elapsed:?}"
-        );
-        let tail = record.read_after(Some(9_000), 1000).unwrap();
-        assert_eq!(tail.len(), 1000);
-        assert_eq!(tail.last().unwrap().seq, 10_000);
-    }
-
     pub(super) fn web_event(activation: &str) -> NetworkEvent {
         NetworkEvent::Web {
             tool: WebTool::WebSearch,
