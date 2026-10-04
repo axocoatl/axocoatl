@@ -287,12 +287,11 @@ async fn native_tool_rounds_use_reviewed_capacity_and_still_stop_at_durable_invo
 }
 
 /// Two benchmark leads stopped at exactly 128 tool rounds with budget left.
-/// A granted activation now runs as many rounds as its grant pays for; the
-/// next bound it meets is the Session's invocation audit, which keeps every
-/// record. With no room left, the Agent is asked for its final answer, as
-/// when its budget runs out, and the Session's runtime stays usable.
+/// A granted activation now runs as many rounds as its grant pays for, and
+/// past the 256 invocations the Session's audit once held: it keeps every
+/// record in segments.
 #[tokio::test]
-async fn a_granted_activation_runs_past_128_rounds_and_answers_when_the_session_record_is_full() {
+async fn a_granted_activation_runs_past_the_old_round_and_audit_bounds() {
     let fixture = fixture_with_limits(
         GrantLimits {
             activations: 2,
@@ -316,24 +315,15 @@ async fn a_granted_activation_runs_past_128_rounds_and_answers_when_the_session_
         .unwrap();
     assert!(settled.accepted, "{:?}", settled.failure);
     assert_eq!(settled.output.content().output.text, "done");
-    let rounds = tool.count.load(Ordering::SeqCst);
-    assert!(rounds > 128, "{rounds}");
-    assert_eq!(provider.calls.load(Ordering::SeqCst), rounds + 1);
-    let note = provider.requests.lock().unwrap()[rounds]
-        .last()
-        .and_then(ChatMessage::text_content)
-        .unwrap()
-        .to_string();
-    assert!(
-        note.contains("the Session can record no more tool calls, so tools are no longer available"),
-        "{note}"
-    );
+    assert_eq!(tool.count.load(Ordering::SeqCst), 300);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 301);
     let state = fixture.controller.lock().unwrap();
     assert!(state.poisoned.is_none(), "{:?}", state.poisoned);
-    assert_eq!(state.audit.remaining_invocations(), 0);
-    assert_eq!(state.tool_call_room(), 0);
+    assert_eq!(state.audit.turn_invocations(&state.turn_id).unwrap().len(), 300);
+    // Only the turn's own bounds limit it, and they are far from reached.
+    assert!(state.tool_call_room() > 200, "{}", state.tool_call_room());
     let snapshot = state.canonical.snapshot(&state.turn_id).unwrap();
-    assert_eq!(snapshot.contract().invocations().len(), rounds);
+    assert_eq!(snapshot.contract().invocations().len(), 300);
 }
 
 /// An Agent template's `max_tool_rounds` stops its activation at that many

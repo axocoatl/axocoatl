@@ -46,7 +46,7 @@ fn event(revision: u64, body: serde_json::Value) -> TurnContractEnvelope {
 
 #[test]
 fn stop_reserves_its_intent_and_late_settlement_at_existing_byte_and_record_boundaries() {
-    for scope in 0..4 {
+    for scope in 0..2 {
         let (_root, mut store, records) = fixture();
         let TurnContractEvent::StartActivation { input } = &records[1].event else {
             panic!("fixture Start")
@@ -57,14 +57,9 @@ fn stop_reserves_its_intent_and_late_settlement_at_existing_byte_and_record_boun
         let (bytes, commands) = settlement_reservation(turn);
         match scope {
             0 => store.limits.turn_bytes = turn.retained_event_bytes() + bytes,
-            1 => store.limits.turn_commands = turn.command_count() + commands,
-            2 => {
-                store.limits.session_bytes =
-                    serde_json::to_vec(&store.journal).unwrap().len() + bytes
-            }
-            _ => store.limits.session_records = store.journal.records.len() + commands,
+            _ => store.limits.turn_commands = turn.command_count() + commands,
         }
-        let unchanged = std::fs::read(store.path()).unwrap();
+        let unchanged = store.stored_files_for_test();
         assert!(matches!(
             store.append(event(
                 3,
@@ -72,7 +67,7 @@ fn stop_reserves_its_intent_and_late_settlement_at_existing_byte_and_record_boun
             )),
             Err(ExecutionStoreError::Capacity)
         ));
-        assert_eq!(std::fs::read(store.path()).unwrap(), unchanged);
+        assert_eq!(store.stored_files_for_test(), unchanged);
         let stop = event(
             3,
             json!({"kind":"request_turn_stop","evidence":"retained-human-request"}),
@@ -135,7 +130,7 @@ fn stop_fences_future_node_start_continue_and_late_acceptance_without_mutating_i
         .unwrap()
         .unrun_nodes
         .contains(&TurnNodeId::new("node-b").unwrap()));
-    let before = std::fs::read(store.path()).unwrap();
+    let before = store.stored_files_for_test();
     // Every later Start/Accept from the fixture would be forbidden even when
     // its exact original body is rebound to the currently expected revision.
     for record in &records[2..] {
@@ -148,7 +143,7 @@ fn stop_fences_future_node_start_continue_and_late_acceptance_without_mutating_i
             let mut rejected = record.clone();
             rejected.expected_revision = stopped.contract().revision();
             assert!(store.append(rejected).is_err());
-            assert_eq!(std::fs::read(store.path()).unwrap(), before);
+            assert_eq!(store.stored_files_for_test(), before);
         }
     }
     assert!(store
@@ -157,7 +152,7 @@ fn stop_fences_future_node_start_continue_and_late_acceptance_without_mutating_i
     assert!(store
         .append(event(3, json!({"kind":"close","closure":"finished"})))
         .is_err());
-    assert_eq!(std::fs::read(store.path()).unwrap(), before);
+    assert_eq!(store.stored_files_for_test(), before);
     // The old serialization remains unchanged until a Stop has actually been recorded.
     assert!(serde_json::to_value(original.contract())
         .unwrap()

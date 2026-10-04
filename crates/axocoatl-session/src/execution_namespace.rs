@@ -451,6 +451,43 @@ pub(crate) fn read_existing_component(
     Ok(bytes)
 }
 
+/// The root of an already initialized component, for a reader of a
+/// segmented journal, with the same guarantees as [`read_existing_component`]:
+/// no writer lock, no directory or marker creation, no recovery. The reader
+/// must not write through it.
+pub(crate) fn existing_component_root(
+    session: &SecureDir,
+    ownership: &UpgradedFormatOwnership,
+    identity: &DurableSessionIdentity,
+    component: &ExecutionComponent,
+    primary: &Path,
+) -> io::Result<SecureDir> {
+    let primary = journal_primary_name(primary)?;
+    ownership.verify_installed().map_err(io::Error::other)?;
+    session.verify_ambient_identity()?;
+    require_private(session)?;
+    let root = session.existing_child(component.directory_name())?;
+    root.verify_ambient_identity()?;
+    require_private(&root)?;
+    let marker = root.read_limited(JOURNAL_INITIALIZED_FILE, MAX_INITIALIZATION_BYTES)?;
+    let actual: JournalInitialization = serde_json::from_slice(&marker)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let expected = JournalInitialization {
+        schema_version: 1,
+        journal_id: identity.journal_id().into(),
+        owner: identity.owner().clone(),
+        component: component.clone(),
+        primary: primary.into(),
+    };
+    if actual != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "historical component initialization differs from canonical identity",
+        ));
+    }
+    Ok(root)
+}
+
 /// Read one file from a direct subdirectory of an already initialized
 /// component, with the same guarantees as [`read_existing_component`]: no
 /// writer lock, no directory or marker creation, no recovery.

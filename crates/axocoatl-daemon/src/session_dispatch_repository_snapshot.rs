@@ -608,11 +608,11 @@ pub(crate) fn reserve_message(reserve: u32) -> String {
     )
 }
 
-/// Why a tool call or capture cannot be recorded: the Session's invocation
-/// audit keeps every record it has and has no room for another.
-pub(crate) const RECORD_FULL: &str = "The Session can record no more tool calls or captures";
+/// Why a tool call or capture cannot be recorded: this turn has used its
+/// per-turn room for them.
+pub(crate) const RECORD_FULL: &str = "This turn can record no more tool calls or captures";
 
-/// Why an Agent's tool call is declined when the Session can record no more.
+/// Why an Agent's tool call is declined when the turn can record no more.
 pub(crate) fn record_full_message() -> String {
     format!("{RECORD_FULL}. Do not call any more tools; write your final answer now.")
 }
@@ -704,10 +704,12 @@ impl DispatchState {
         })
     }
 
-    /// Tool calls the Session's invocation audit can still record for an
-    /// Agent: its room, less the After capture that each running activation
-    /// observing its repository still needs. The audit keeps every record,
-    /// so this only shrinks over the Session's life.
+    /// Tool calls this turn can still record for an Agent within its
+    /// per-turn bounds (the turn contract's commands and bytes, and the
+    /// authority's dispatch claims, one more of which each tool round's
+    /// model call takes), less the After capture that each running
+    /// activation observing its repository still needs. A Session's own
+    /// history has no such bound: each new turn starts with full room.
     pub(crate) fn tool_call_room(&self) -> usize {
         let held =
             self.canonical
@@ -730,7 +732,24 @@ impl DispatchState {
                         })
                         .count()
                 });
-        self.audit.remaining_invocations().saturating_sub(held)
+        self.turn_record_room().saturating_sub(held)
+    }
+
+    /// Tool calls, captures included, this turn can still record.
+    pub(crate) fn turn_record_room(&self) -> usize {
+        let contract = self
+            .canonical
+            .turn_room(&self.turn_id)
+            .ok()
+            .flatten()
+            .map_or(0, |room| room.tool_calls());
+        // A tool call and the model call that reads its result, with one
+        // claim kept for the final answer.
+        let claims = self
+            .authority
+            .remaining_claims()
+            .map_or(0, |claims| claims.saturating_sub(1) / 2);
+        contract.min(claims)
     }
 
     /// Invocations the host holds back for this activation, when it can run

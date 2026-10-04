@@ -69,11 +69,9 @@ impl SessionDispatchController {
             Some(intent) => Some(
                 state
                     .canonical
-                    .records()
+                    .command_record(&intent.command_id)
                     .map_err(error)?
-                    .iter()
-                    .find(|record| record.command_id == intent.command_id)
-                    .cloned()
+                    .map(|(_, record)| record)
                     .ok_or_else(|| error("Stop intent has no exact canonical request"))?,
             ),
             None => None,

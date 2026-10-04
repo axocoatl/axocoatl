@@ -226,13 +226,35 @@ impl SegmentLog {
         spec: SegmentSpec,
         meta: serde_json::Value,
         create: bool,
-        visit: impl FnMut(u64, R) -> Result<(), E>,
+        mut visit: impl FnMut(u64, R) -> Result<(), E>,
     ) -> Result<Self, E>
     where
         R: DeserializeOwned,
         E: From<SegmentError>,
     {
-        open_log(dir, spec, meta, Mode::Writer { create }, visit)
+        Self::open_indexed(dir, spec, meta, create, |_, sequence, record| {
+            visit(sequence, record)
+        })
+    }
+
+    /// [`SegmentLog::open`], also naming each record's segment index (the
+    /// active segment's index is the number of sealed segments).
+    pub fn open_indexed<R, E>(
+        dir: SecureDir,
+        spec: SegmentSpec,
+        meta: serde_json::Value,
+        create: bool,
+        visit: impl FnMut(u64, u64, R) -> Result<(), E>,
+    ) -> Result<Self, E>
+    where
+        R: DeserializeOwned,
+        E: From<SegmentError>,
+    {
+        match open_inner(dir, spec, meta, Mode::Writer { create }, visit) {
+            Ok(log) => Ok(log),
+            Err(Retry::Failed(error)) => Err(error),
+            Err(Retry::Changed) => Err(SegmentError::Changed.into()),
+        }
     }
 
     /// Read every record without writing anything, while a writer may be
@@ -244,8 +266,25 @@ impl SegmentLog {
         dir: SecureDir,
         spec: SegmentSpec,
         meta: serde_json::Value,
-        mut start: impl FnMut(),
+        start: impl FnMut(),
         mut visit: impl FnMut(u64, R) -> Result<(), E>,
+    ) -> Result<Self, E>
+    where
+        R: DeserializeOwned,
+        E: From<SegmentError>,
+    {
+        Self::read_indexed(dir, spec, meta, start, |_, sequence, record| {
+            visit(sequence, record)
+        })
+    }
+
+    /// [`SegmentLog::read`], also naming each record's segment index.
+    pub fn read_indexed<R, E>(
+        dir: SecureDir,
+        spec: SegmentSpec,
+        meta: serde_json::Value,
+        mut start: impl FnMut(),
+        mut visit: impl FnMut(u64, u64, R) -> Result<(), E>,
     ) -> Result<Self, E>
     where
         R: DeserializeOwned,
@@ -282,6 +321,11 @@ impl SegmentLog {
     /// Sequence the next appended record receives.
     pub fn next_sequence(&self) -> u64 {
         self.header.first_sequence + self.active_records
+    }
+
+    /// The active segment's index: the number of sealed segments.
+    pub fn active_index(&self) -> u64 {
+        self.header.index
     }
 
     /// The sequence of the active segment's first record.
@@ -450,31 +494,12 @@ impl<E: From<SegmentError>> From<SegmentError> for Retry<E> {
     }
 }
 
-/// Open a writer, mapping the reader-only retry to a plain error.
-fn open_log<R, E>(
-    dir: SecureDir,
-    spec: SegmentSpec,
-    meta: serde_json::Value,
-    mode: Mode,
-    visit: impl FnMut(u64, R) -> Result<(), E>,
-) -> Result<SegmentLog, E>
-where
-    R: DeserializeOwned,
-    E: From<SegmentError>,
-{
-    match open_inner(dir, spec, meta, mode, visit) {
-        Ok(log) => Ok(log),
-        Err(Retry::Failed(error)) => Err(error),
-        Err(Retry::Changed) => Err(SegmentError::Changed.into()),
-    }
-}
-
 fn open_inner<R, E>(
     dir: SecureDir,
     spec: SegmentSpec,
     meta: serde_json::Value,
     mode: Mode,
-    mut visit: impl FnMut(u64, R) -> Result<(), E>,
+    mut visit: impl FnMut(u64, u64, R) -> Result<(), E>,
 ) -> Result<SegmentLog, Retry<E>>
 where
     R: DeserializeOwned,
@@ -502,7 +527,7 @@ where
         }
         let mut records = 0;
         let header = parse_segment(body, &spec, |record: R| {
-            visit(next_sequence + records, record).map_err(Retry::Failed)?;
+            visit(index, next_sequence + records, record).map_err(Retry::Failed)?;
             records += 1;
             Ok::<(), Retry<E>>(())
         })?;
@@ -574,6 +599,16 @@ where
         }
         bytes.truncate(complete);
     }
+    if !reader {
+        // An append whose sync failed may be visible without being durable.
+        // Make what this open observes durable before anything is
+        // acknowledged on top of it.
+        let file = dir
+            .open_append(&active_name)
+            .map_err(|error| failed(error.into()))?;
+        file.sync_all().map_err(|error| failed(error.into()))?;
+        dir.sync_all().map_err(|error| failed(error.into()))?;
+    }
     let active_header = peek_header(&bytes).map_err(failed)?;
     if let Some(last) = sealed
         .last()
@@ -612,7 +647,7 @@ where
     }
     let mut active_records = 0;
     let header = parse_segment(&bytes, &spec, |record: R| {
-        visit(next_sequence + active_records, record).map_err(Retry::Failed)?;
+        visit(next_index, next_sequence + active_records, record).map_err(Retry::Failed)?;
         active_records += 1;
         Ok::<(), Retry<E>>(())
     })?;

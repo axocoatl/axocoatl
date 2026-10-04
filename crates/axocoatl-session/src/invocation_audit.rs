@@ -1,8 +1,10 @@
 //! Durable invocation evidence, independent of logical-turn lifecycle.
 //!
-//! Events are append-only: the bounded journal is atomically republished without
-//! changing prior records. Late authoritative evidence may settle an invocation
-//! after its turn closes; this store never changes turn state or accepted output.
+//! Events are append-only: each is one synced line of a segment log whose
+//! sealed segments are hash-chained (see `segment_log`), so a Session can
+//! record any number of invocations over its life. Late authoritative evidence
+//! may settle an invocation after its turn closes; this store never changes
+//! turn state or accepted output.
 //!
 //! A durable intent receipt proves storage acknowledgement, not permission to
 //! dispatch. The host must protect/resolve evidence, authenticate observations,
@@ -19,6 +21,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::execution_namespace::{ExecutionComponent, OwnedExecutionNamespace};
 use crate::execution_store::DurableSessionIdentity;
+use crate::segment_log::{
+    KeyFilter, SegmentCache, SegmentError, SegmentLog, SegmentSpec, SegmentsMarker,
+};
 use crate::turn_contract::{
     ActivationRef, CommandId, EffectDisposition, EvidenceRef, InvocationId, InvocationOutcome,
     SessionId,
@@ -26,12 +31,25 @@ use crate::turn_contract::{
 
 const SCHEMA_VERSION: u32 = 1;
 const FILE_NAME: &str = "invocation-audit.v1.json";
-const MAX_INVOCATIONS: usize = 256;
-const MAX_RECORDS: usize = MAX_INVOCATIONS * 2;
-const MAX_STORE_BYTES: usize = 8 * 1024 * 1024;
+/// Bounds of the single-file layout written before segmentation, which such
+/// a file still meets when it is read and migrated.
+const LEGACY_MAX_RECORDS: usize = 512;
+const LEGACY_MAX_STORE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_COMMAND_BYTES: usize = 16 * 1024;
 const MAX_RECORD_BYTES: usize = 17 * 1024;
 const MAX_PROTECTED_BYTES: u64 = 16 * 1024 * 1024;
+/// The records live in a segment log beside the head file; a Session can
+/// record any number of invocations over its life.
+const SPEC: SegmentSpec = SegmentSpec {
+    name: "invocation-audit",
+    kind: "invocation-audit",
+    segment_bytes: 1024 * 1024,
+    // Unit tests seal often so that every path crosses segments.
+    segment_records: if cfg!(test) { 8 } else { 1024 },
+    // A record line wraps the record in a short frame.
+    record_bytes: MAX_RECORD_BYTES + 64,
+};
+const CACHED_SEGMENTS: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -274,11 +292,27 @@ pub enum InvocationAuditError {
     Capacity,
     #[error("ambiguous write; reopen and reconcile before acknowledging or dispatching")]
     RecoveryRequired,
+    #[error("invocation audit segments: {0}")]
+    Segment(String),
 }
 
+impl From<SegmentError> for InvocationAuditError {
+    fn from(error: SegmentError) -> Self {
+        match error {
+            SegmentError::Io(error) => Self::Io(error),
+            SegmentError::Json(error) => Self::Json(error),
+            SegmentError::RecoveryRequired => Self::RecoveryRequired,
+            SegmentError::RecordTooLarge => Self::Capacity,
+            error => Self::Segment(error.to_string()),
+        }
+    }
+}
+
+/// The single-file layout written before segmentation. A store still in it
+/// is validated with its old bounds and migrated on open.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AuditData {
+struct LegacyAuditData {
     schema_version: u32,
     audit_id: String,
     owner: InvocationAuditOwner,
@@ -287,28 +321,108 @@ struct AuditData {
     canonical_journal_id: Option<String>,
 }
 
-#[derive(Clone, Default)]
-struct AuditProjection {
-    invocations: HashMap<InvocationId, AuditedInvocation>,
-    commands: HashMap<CommandId, InvocationAuditCommand>,
+/// The primary file of a segmented audit: its identity only. The records
+/// are in the segment log beside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuditHead {
+    schema_version: u32,
+    audit_id: String,
+    owner: InvocationAuditOwner,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    canonical_journal_id: Option<String>,
+    segments: SegmentsMarker,
 }
 
-/// One bounded, single-writer audit for an explicitly owned Session. The host
-/// must supply an existing, durably provisioned private control-plane directory
-/// outside the repository mount. No resolved or unresolved history is evicted.
+impl AuditHead {
+    fn meta(&self) -> serde_json::Value {
+        serde_json::json!({
+            "audit_id": self.audit_id,
+            "owner": self.owner,
+            "canonical_journal_id": self.canonical_journal_id,
+        })
+    }
+}
+
+enum StoredAudit {
+    Head(AuditHead),
+    Legacy(LegacyAuditData),
+}
+
+fn parse_stored(bytes: &[u8]) -> Result<StoredAudit, InvocationAuditError> {
+    #[derive(Deserialize)]
+    struct Header {
+        schema_version: u32,
+        #[serde(default)]
+        segments: Option<serde::de::IgnoredAny>,
+    }
+    let header: Header = serde_json::from_slice(bytes)?;
+    if header.schema_version != SCHEMA_VERSION {
+        return Err(InvocationAuditError::UnsupportedVersion(
+            header.schema_version,
+        ));
+    }
+    Ok(if header.segments.is_some() {
+        let head: AuditHead = serde_json::from_slice(bytes)?;
+        if !head.segments.matches(&SPEC) {
+            return Err(InvocationAuditError::Invalid("unsupported audit segments"));
+        }
+        StoredAudit::Head(head)
+    } else {
+        StoredAudit::Legacy(serde_json::from_slice(bytes)?)
+    })
+}
+
+/// The keys a record is found by in a sealed segment.
+fn record_keys(record: &InvocationAuditRecord) -> Vec<String> {
+    match &record.command {
+        InvocationAuditCommand::Intent(command) => vec![
+            format!("cmd:{}", command.command_id.as_str()),
+            format!("intent:{}", command.intent.invocation_id.as_str()),
+            format!("inv:{}", command.intent.invocation_id.as_str()),
+            format!("turn:{}", command.intent.activation.turn_id.as_str()),
+        ],
+        InvocationAuditCommand::Evidence(command) => vec![
+            format!("cmd:{}", command.command_id.as_str()),
+            format!("inv:{}", command.invocation_id.as_str()),
+            format!("turn:{}", command.activation.turn_id.as_str()),
+        ],
+    }
+}
+
+/// Keys that one record may hold only once in the whole history.
+fn unique_keys(record: &InvocationAuditRecord) -> impl Iterator<Item = String> {
+    record_keys(record)
+        .into_iter()
+        .filter(|key| key.starts_with("cmd:") || key.starts_with("intent:"))
+}
+
+/// One single-writer audit for an explicitly owned Session. The host must
+/// supply an existing, durably provisioned private control-plane directory
+/// outside the repository mount. No resolved or unresolved history is
+/// evicted: records are kept in a segment log, and memory holds only the
+/// active segment, unresolved intents and one key filter per sealed segment.
 pub struct InvocationAudit {
     dir: SecureDir,
     namespace: Option<OwnedExecutionNamespace>,
-    data: AuditData,
-    projection: AuditProjection,
-    /// Length of the published journal, for the byte bound.
-    stored_bytes: usize,
+    head: AuditHead,
+    log: SegmentLog,
+    /// Records of the active segment, in order.
+    active: Vec<InvocationAuditRecord>,
+    /// One filter per sealed segment, in order.
+    filters: Vec<KeyFilter>,
+    cache: SegmentCache<InvocationAuditRecord>,
+    /// Every intent without final evidence, wherever it was recorded.
+    unresolved: HashMap<InvocationId, InvocationIntentCommand>,
     recovery_required: bool,
+    #[cfg(test)]
+    fail_next_append: bool,
 }
 
 impl InvocationAudit {
-    /// Read existing, identity-checked audit evidence without opening a writer,
-    /// acknowledging an uncertain write, or minting a dispatch receipt.
+    /// Read existing, identity-checked audit evidence for one turn without
+    /// opening a writer, acknowledging an uncertain write, or minting a
+    /// dispatch receipt.
     pub fn read_retained_views(
         canonical: &crate::execution_store::SessionExecutionStore,
         turn_id: &crate::turn_contract::LogicalTurnId,
@@ -316,40 +430,54 @@ impl InvocationAudit {
         let snapshot = canonical
             .snapshot(turn_id)
             .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let bytes = canonical
-            .read_existing_component(
-                &ExecutionComponent::InvocationAudit,
-                Path::new(FILE_NAME),
-                MAX_STORE_BYTES,
-            )
+        let root = canonical
+            .existing_component_root(&ExecutionComponent::InvocationAudit, Path::new(FILE_NAME))
             .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let data: AuditData = serde_json::from_slice(&bytes)?;
-        if data.owner.workspace_id != snapshot.owner().workspace_id
-            || data.owner.session_id != snapshot.owner().session_id
-            || data.canonical_journal_id.as_deref() != Some(snapshot.journal_id())
-        {
-            return Err(InvocationAuditError::OwnerConflict);
-        }
-        let projection = rebuild(&data)?;
-        data.records
-            .iter()
-            .filter_map(|record| match &record.command {
-                InvocationAuditCommand::Intent(command)
-                    if &command.intent.activation.turn_id == turn_id =>
-                {
-                    Some(
-                        projection
-                            .invocations
-                            .get(&command.intent.invocation_id)
-                            .cloned()
-                            .ok_or(InvocationAuditError::Invalid(
-                                "retained intent has no audit projection",
-                            )),
-                    )
+        let bytes = root.read_limited(FILE_NAME, LEGACY_MAX_STORE_BYTES)?;
+        let (owner, canonical_journal_id) = (
+            &snapshot.owner().workspace_id,
+            Some(snapshot.journal_id().to_owned()),
+        );
+        let check = |audit_owner: &InvocationAuditOwner, journal: &Option<String>| {
+            if &audit_owner.workspace_id != owner
+                || audit_owner.session_id != snapshot.owner().session_id
+                || journal != &canonical_journal_id
+            {
+                return Err(InvocationAuditError::OwnerConflict);
+            }
+            Ok(())
+        };
+        let mut views = Vec::new();
+        match parse_stored(&bytes)? {
+            StoredAudit::Legacy(data) => {
+                check(&data.owner, &data.canonical_journal_id)?;
+                let mut turn = TurnInvocations::default();
+                validate_legacy(&data)?;
+                for record in data.records {
+                    turn.add(record, turn_id);
                 }
-                _ => None,
-            })
-            .collect()
+                views.extend(turn.finish()?);
+            }
+            StoredAudit::Head(head) => {
+                check(&head.owner, &head.canonical_journal_id)?;
+                let turn = std::cell::RefCell::new(TurnInvocations::default());
+                SegmentLog::read(
+                    root,
+                    SPEC,
+                    head.meta(),
+                    || *turn.borrow_mut() = TurnInvocations::default(),
+                    |sequence, record: InvocationAuditRecord| {
+                        if record.sequence != sequence {
+                            return Err(InvocationAuditError::Invalid("record sequence mismatch"));
+                        }
+                        turn.borrow_mut().add(record, turn_id);
+                        Ok(())
+                    },
+                )?;
+                views.extend(turn.into_inner().finish()?);
+            }
+        }
+        Ok(views)
     }
 
     pub fn open(
@@ -390,54 +518,90 @@ impl InvocationAudit {
         let canonical_journal_id = namespace
             .as_ref()
             .map(|ns| ns.identity().journal_id().to_owned());
-        let data = match dir.read_limited(FILE_NAME, MAX_STORE_BYTES) {
-            Ok(bytes) => {
-                #[derive(Deserialize)]
-                struct Header {
-                    schema_version: u32,
+        let head = match dir.read_limited(FILE_NAME, LEGACY_MAX_STORE_BYTES) {
+            Ok(bytes) => match parse_stored(&bytes)? {
+                StoredAudit::Head(head) => head,
+                StoredAudit::Legacy(data) => {
+                    if data.owner != owner || data.canonical_journal_id != canonical_journal_id {
+                        return Err(InvocationAuditError::OwnerConflict);
+                    }
+                    validate_legacy(&data)?;
+                    migrate_legacy(&dir, namespace.as_ref(), data)?
                 }
-                let header: Header = serde_json::from_slice(&bytes)?;
-                if header.schema_version != SCHEMA_VERSION {
-                    return Err(InvocationAuditError::UnsupportedVersion(
-                        header.schema_version,
-                    ));
-                }
-                serde_json::from_slice::<AuditData>(&bytes)?
-            }
+            },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if let Some(namespace) = &namespace {
                     namespace.check_journal_creation(FILE_NAME)?;
+                } else if SegmentLog::exists(&dir, &SPEC)? {
+                    return Err(InvocationAuditError::Invalid(
+                        "audit segments exist without their head",
+                    ));
                 }
-                AuditData {
+                let head = AuditHead {
                     schema_version: SCHEMA_VERSION,
                     audit_id: uuid::Uuid::new_v4().to_string(),
                     owner: owner.clone(),
-                    records: Vec::new(),
                     canonical_journal_id: canonical_journal_id.clone(),
+                    segments: SegmentsMarker::of(&SPEC),
+                };
+                if let Some(namespace) = &namespace {
+                    namespace.mark_journal_initialized(FILE_NAME)?;
                 }
+                SegmentLog::open(
+                    dir.clone(),
+                    SPEC,
+                    head.meta(),
+                    true,
+                    |_, _: InvocationAuditRecord| Ok::<(), InvocationAuditError>(()),
+                )?;
+                dir.verify_ambient_identity()?;
+                dir.atomic_write(FILE_NAME, &serde_json::to_vec(&head)?)?;
+                head
             }
             Err(error) => return Err(error.into()),
         };
-        if data.owner != owner || data.canonical_journal_id != canonical_journal_id {
+        if head.owner != owner || head.canonical_journal_id != canonical_journal_id {
             return Err(InvocationAuditError::OwnerConflict);
         }
-        let projection = rebuild(&data)?;
+        uuid::Uuid::parse_str(&head.audit_id)
+            .map_err(|_| InvocationAuditError::Invalid("invalid audit identity"))?;
         if let Some(namespace) = &namespace {
             namespace.mark_journal_initialized(FILE_NAME)?;
         }
-        // Reading cannot repair a prior rename whose directory fsync failed.
-        // A successful atomic rewrite is required before exposing any receipt.
-        dir.verify_ambient_identity()?;
-        let bytes = serde_json::to_vec(&data)?;
-        dir.atomic_write(FILE_NAME, &bytes)?;
-        Ok(Self {
+        let mut loader = Loader::default();
+        let log = SegmentLog::open_indexed(
+            dir.clone(),
+            SPEC,
+            head.meta(),
+            false,
+            |segment, sequence, record: InvocationAuditRecord| {
+                loader.visit(&head.owner, segment, sequence, record)
+            },
+        )?;
+        let (active, filters, unresolved, suspects) = loader.finish(&log);
+        let audit = Self {
             dir,
             namespace,
-            data,
-            projection,
-            stored_bytes: bytes.len(),
+            head,
+            log,
+            active,
+            filters,
+            cache: SegmentCache::new(CACHED_SEGMENTS),
+            unresolved,
             recovery_required: false,
-        })
+            #[cfg(test)]
+            fail_next_append: false,
+        };
+        // A key a later segment repeats may be a filter's false positive;
+        // confirm against the earlier segment itself.
+        for (key, segment) in suspects {
+            if audit.segment_has_key(segment, &key)? {
+                return Err(InvocationAuditError::Invalid(
+                    "duplicate command or intent across segments",
+                ));
+            }
+        }
+        Ok(audit)
     }
 
     pub fn path(&self) -> PathBuf {
@@ -446,7 +610,7 @@ impl InvocationAudit {
 
     pub fn audit_id(&self) -> Result<&str, InvocationAuditError> {
         self.ensure_usable()?;
-        Ok(&self.data.audit_id)
+        Ok(&self.head.audit_id)
     }
 
     /// Return only after intent is durable. Exact repeats return its original
@@ -457,7 +621,7 @@ impl InvocationAudit {
     ) -> Result<DurableIntentReceipt, InvocationAuditError> {
         self.append(InvocationAuditCommand::Intent(command.clone()))?;
         Ok(DurableIntentReceipt {
-            audit_id: self.data.audit_id.clone(),
+            audit_id: self.head.audit_id.clone(),
             command,
         })
     }
@@ -485,14 +649,8 @@ impl InvocationAudit {
         receipt: &DurableIntentReceipt,
     ) -> Result<bool, InvocationAuditError> {
         self.ensure_usable()?;
-        Ok(receipt.audit_id == self.data.audit_id
-            && self.projection.commands.get(&receipt.command.command_id)
-                == Some(&InvocationAuditCommand::Intent(receipt.command.clone()))
-            && self
-                .projection
-                .invocations
-                .get(receipt.invocation_id())
-                .is_some_and(|item| item.revision == 1 && item.final_evidence.is_none()))
+        Ok(receipt.audit_id == self.head.audit_id
+            && self.unresolved.get(receipt.invocation_id()) == Some(&receipt.command))
     }
 
     /// Latest durable evidence, independent of closure-time turn projections.
@@ -501,14 +659,86 @@ impl InvocationAudit {
     pub fn invocation(
         &self,
         invocation_id: &InvocationId,
-    ) -> Result<Option<&AuditedInvocation>, InvocationAuditError> {
+    ) -> Result<Option<AuditedInvocation>, InvocationAuditError> {
         self.ensure_usable()?;
-        Ok(self.projection.invocations.get(invocation_id))
+        if let Some(command) = self.unresolved.get(invocation_id) {
+            return Ok(Some(AuditedInvocation {
+                intent: command.intent.clone(),
+                revision: 1,
+                final_evidence: None,
+            }));
+        }
+        let mut found: Option<AuditedInvocation> = None;
+        for record in self.records_with(&format!("inv:{}", invocation_id.as_str()))? {
+            match &record.command {
+                InvocationAuditCommand::Intent(command)
+                    if &command.intent.invocation_id == invocation_id =>
+                {
+                    found = Some(AuditedInvocation {
+                        intent: command.intent.clone(),
+                        revision: 1,
+                        final_evidence: None,
+                    })
+                }
+                InvocationAuditCommand::Evidence(command)
+                    if &command.invocation_id == invocation_id =>
+                {
+                    if let Some(found) = &mut found {
+                        found.final_evidence = Some(command.evidence.clone());
+                        found.revision = 2;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(found)
     }
 
-    pub fn records(&self) -> Result<&[InvocationAuditRecord], InvocationAuditError> {
+    /// Every invocation whose intent belongs to `turn_id`, in intent order,
+    /// with its latest evidence.
+    pub fn turn_invocations(
+        &self,
+        turn_id: &crate::turn_contract::LogicalTurnId,
+    ) -> Result<Vec<AuditedInvocation>, InvocationAuditError> {
         self.ensure_usable()?;
-        Ok(&self.data.records)
+        let mut turn = TurnInvocations::default();
+        for record in self.records_with(&format!("turn:{}", turn_id.as_str()))? {
+            turn.add(record, turn_id);
+        }
+        turn.finish()
+    }
+
+    /// Every invocation still without final evidence, in any turn.
+    pub fn unresolved(&self) -> Result<Vec<AuditedInvocation>, InvocationAuditError> {
+        self.ensure_usable()?;
+        let mut unresolved: Vec<_> = self
+            .unresolved
+            .values()
+            .map(|command| AuditedInvocation {
+                intent: command.intent.clone(),
+                revision: 1,
+                final_evidence: None,
+            })
+            .collect();
+        unresolved.sort_by(|a, b| {
+            a.intent
+                .invocation_id
+                .as_str()
+                .cmp(b.intent.invocation_id.as_str())
+        });
+        Ok(unresolved)
+    }
+
+    /// The whole history, read back from every segment. Memory grows with
+    /// it, so this is for export and tests, not for live operation.
+    pub fn records(&self) -> Result<Vec<InvocationAuditRecord>, InvocationAuditError> {
+        self.ensure_usable()?;
+        let mut records = Vec::new();
+        for segment in self.log.sealed() {
+            records.extend(self.log.read_sealed::<InvocationAuditRecord>(segment)?);
+        }
+        records.extend(self.active.iter().cloned());
+        Ok(records)
     }
 
     pub(crate) fn canonical_identity(
@@ -519,6 +749,14 @@ impl InvocationAudit {
             .namespace
             .as_ref()
             .map(OwnedExecutionNamespace::identity))
+    }
+
+    /// Sealed segments and the bytes of memory their key filters hold.
+    pub fn sealed_segments(&self) -> (usize, usize) {
+        (
+            self.filters.len(),
+            self.filters.iter().map(KeyFilter::bytes).sum(),
+        )
     }
 
     fn ensure_usable(&self) -> Result<(), InvocationAuditError> {
@@ -532,135 +770,315 @@ impl InvocationAudit {
         Ok(())
     }
 
-    fn append(&mut self, command: InvocationAuditCommand) -> Result<(), InvocationAuditError> {
-        self.append_with(command, |dir, bytes| dir.atomic_write(FILE_NAME, bytes))
+    /// Records holding `key`, oldest first: from the sealed segments its
+    /// filters admit, then the active segment.
+    fn records_with(&self, key: &str) -> Result<Vec<InvocationAuditRecord>, InvocationAuditError> {
+        let mut records = Vec::new();
+        for (segment, filter) in self.log.sealed().iter().zip(&self.filters) {
+            if !filter.may_contain(key) {
+                continue;
+            }
+            for record in self.cache.get(&self.log, segment)?.iter() {
+                if record_keys(record).iter().any(|held| held == key) {
+                    records.push(record.as_ref().clone());
+                }
+            }
+        }
+        records.extend(
+            self.active
+                .iter()
+                .filter(|record| record_keys(record).iter().any(|held| held == key))
+                .cloned(),
+        );
+        Ok(records)
     }
 
-    fn append_with(
-        &mut self,
-        command: InvocationAuditCommand,
-        write: impl FnOnce(&SecureDir, &[u8]) -> std::io::Result<()>,
-    ) -> Result<(), InvocationAuditError> {
+    fn segment_has_key(&self, index: u64, key: &str) -> Result<bool, InvocationAuditError> {
+        let segment = &self.log.sealed()[index as usize];
+        Ok(self
+            .cache
+            .get(&self.log, segment)?
+            .iter()
+            .any(|record| record_keys(record).iter().any(|held| held == key)))
+    }
+
+    /// The command already recorded under `id`, anywhere in the history.
+    fn command(
+        &self,
+        id: &CommandId,
+    ) -> Result<Option<InvocationAuditCommand>, InvocationAuditError> {
+        Ok(self
+            .records_with(&format!("cmd:{}", id.as_str()))?
+            .into_iter()
+            .map(|record| record.command)
+            .find(|command| command.command_id() == id))
+    }
+
+    /// The revision `command` would create, `None` for an exact repeat, or
+    /// why it is refused. Nothing is written.
+    fn admit(&self, command: &InvocationAuditCommand) -> Result<Option<u64>, InvocationAuditError> {
+        validate_command(&self.head.owner, command)?;
+        if let Some(previous) = self.command(command.command_id())? {
+            return if &previous == command {
+                Ok(None)
+            } else {
+                Err(InvocationAuditError::CommandConflict)
+            };
+        }
+        match command {
+            InvocationAuditCommand::Intent(command) => {
+                let id = &command.intent.invocation_id;
+                if self.unresolved.contains_key(id)
+                    || !self
+                        .records_with(&format!("intent:{}", id.as_str()))?
+                        .is_empty()
+                {
+                    return Err(InvocationAuditError::IntentConflict);
+                }
+                if command.expected_revision != 0 {
+                    return Err(InvocationAuditError::StaleRevision {
+                        expected: command.expected_revision,
+                        actual: 0,
+                    });
+                }
+                Ok(Some(1))
+            }
+            InvocationAuditCommand::Evidence(command) => {
+                let invocation = self
+                    .invocation(&command.invocation_id)?
+                    .ok_or(InvocationAuditError::NotFound)?;
+                if command.activation != invocation.intent.activation
+                    || command.authority != invocation.intent.authority
+                {
+                    return Err(InvocationAuditError::TargetConflict);
+                }
+                if command.expected_revision != invocation.revision {
+                    return Err(InvocationAuditError::StaleRevision {
+                        expected: command.expected_revision,
+                        actual: invocation.revision,
+                    });
+                }
+                if invocation.final_evidence.is_some() {
+                    return Err(InvocationAuditError::EvidenceConflict);
+                }
+                Ok(Some(2))
+            }
+        }
+    }
+
+    fn append(&mut self, command: InvocationAuditCommand) -> Result<(), InvocationAuditError> {
         self.ensure_usable()?;
-        let mut projection = self.projection.clone();
-        let Some(invocation_revision) = apply_command(&self.data.owner, &mut projection, &command)?
-        else {
+        let Some(invocation_revision) = self.admit(&command)? else {
             return Ok(());
         };
         let record = InvocationAuditRecord {
-            sequence: self.data.records.len() as u64 + 1,
+            sequence: self.log.next_sequence(),
             invocation_revision,
             command,
         };
         if serde_json::to_vec(&record)?.len() > MAX_RECORD_BYTES {
             return Err(InvocationAuditError::Capacity);
         }
-        let mut next = self.data.clone();
-        next.records.push(record);
-        let bytes = serde_json::to_vec(&next)?;
-        validate_capacity(&next, &projection, bytes.len())?;
-        if let Err(error) = write(&self.dir, &bytes) {
+        let line = self
+            .log
+            .encode_record(&record)
+            .map_err(|error| match error {
+                SegmentError::RecordTooLarge => InvocationAuditError::Capacity,
+                error => error.into(),
+            })?;
+        if let Err(error) = self.log.append_line(&line) {
             // Publication may have succeeded. No acknowledgement, stale read,
             // or retry may escape until reopen has made observed state durable.
             self.recovery_required = true;
             return Err(error.into());
         }
-        self.data = next;
-        self.projection = projection;
-        self.stored_bytes = bytes.len();
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_next_append) {
+            self.recovery_required = true;
+            return Err(
+                std::io::Error::other("injected uncertain return after publication").into(),
+            );
+        }
+        match &record.command {
+            InvocationAuditCommand::Intent(command) => {
+                self.unresolved
+                    .insert(command.intent.invocation_id.clone(), command.clone());
+            }
+            InvocationAuditCommand::Evidence(command) => {
+                self.unresolved.remove(&command.invocation_id);
+            }
+        }
+        self.active.push(record);
+        if self.log.should_seal() {
+            let filter = active_filter(&self.active);
+            if self.log.seal().is_err() {
+                // The record is durable; the seal is completed on reopen.
+                self.recovery_required = true;
+                return Ok(());
+            }
+            self.filters.push(filter);
+            self.active.clear();
+        }
+        Ok(())
+    }
+}
+
+fn active_filter(records: &[InvocationAuditRecord]) -> KeyFilter {
+    let keys: Vec<String> = records.iter().flat_map(record_keys).collect();
+    KeyFilter::new(keys.iter().map(String::as_str))
+}
+
+/// Builds the in-memory state while a segmented audit is opened, one
+/// segment at a time.
+#[derive(Default)]
+struct Loader {
+    segment: u64,
+    records: Vec<InvocationAuditRecord>,
+    seen: std::collections::HashSet<String>,
+    filters: Vec<KeyFilter>,
+    unresolved: HashMap<InvocationId, InvocationIntentCommand>,
+    suspects: Vec<(String, u64)>,
+}
+
+impl Loader {
+    fn visit(
+        &mut self,
+        owner: &InvocationAuditOwner,
+        segment: u64,
+        sequence: u64,
+        record: InvocationAuditRecord,
+    ) -> Result<(), InvocationAuditError> {
+        if segment != self.segment {
+            self.close_segment();
+            self.segment = segment;
+        }
+        validate_command(owner, &record.command)?;
+        if record.sequence != sequence || serde_json::to_vec(&record)?.len() > MAX_RECORD_BYTES {
+            return Err(InvocationAuditError::Invalid(
+                "invalid record sequence or size",
+            ));
+        }
+        for key in unique_keys(&record) {
+            if !self.seen.insert(key.clone()) {
+                return Err(InvocationAuditError::Invalid(
+                    "duplicate command or intent in a segment",
+                ));
+            }
+            for (earlier, filter) in self.filters.iter().enumerate() {
+                if filter.may_contain(&key) {
+                    self.suspects.push((key.clone(), earlier as u64));
+                }
+            }
+        }
+        let revision = match &record.command {
+            InvocationAuditCommand::Intent(command) => {
+                if command.expected_revision != 0 {
+                    return Err(InvocationAuditError::Invalid("intent revision mismatch"));
+                }
+                self.unresolved
+                    .insert(command.intent.invocation_id.clone(), command.clone());
+                1
+            }
+            InvocationAuditCommand::Evidence(command) => {
+                let intent = self.unresolved.remove(&command.invocation_id).ok_or(
+                    InvocationAuditError::Invalid("evidence for an unknown or settled invocation"),
+                )?;
+                if command.activation != intent.intent.activation
+                    || command.authority != intent.intent.authority
+                    || command.expected_revision != 1
+                {
+                    return Err(InvocationAuditError::Invalid(
+                        "evidence differs from its intent",
+                    ));
+                }
+                2
+            }
+        };
+        if record.invocation_revision != revision {
+            return Err(InvocationAuditError::Invalid(
+                "duplicate record or revision mismatch",
+            ));
+        }
+        self.records.push(record);
         Ok(())
     }
 
-    /// How many more intents this audit can acknowledge. Each needs its own
-    /// record and, until it settles, room held for its terminal one, so the
-    /// invocation, record and byte bounds all apply; bytes are counted at the
-    /// largest record size. No history is ever evicted to make room.
-    pub fn remaining_invocations(&self) -> usize {
-        let unresolved = self
-            .projection
-            .invocations
-            .values()
-            .filter(|item| item.final_evidence.is_none())
-            .count();
-        let by_count = MAX_INVOCATIONS.saturating_sub(self.projection.invocations.len());
-        let by_records = MAX_RECORDS
-            .saturating_sub(self.data.records.len() + unresolved)
-            .saturating_div(2);
-        let by_bytes = MAX_STORE_BYTES
-            .saturating_sub(self.stored_bytes + unresolved * (MAX_RECORD_BYTES + 1))
-            / (2 * (MAX_RECORD_BYTES + 1));
-        by_count.min(by_records).min(by_bytes)
+    fn close_segment(&mut self) {
+        let records = std::mem::take(&mut self.records);
+        self.filters.push(active_filter(&records));
+        self.seen.clear();
+    }
+
+    /// The active segment's records, every sealed segment's filter, the
+    /// unresolved intents, and keys to confirm against earlier segments.
+    #[allow(clippy::type_complexity)]
+    fn finish(
+        mut self,
+        log: &SegmentLog,
+    ) -> (
+        Vec<InvocationAuditRecord>,
+        Vec<KeyFilter>,
+        HashMap<InvocationId, InvocationIntentCommand>,
+        Vec<(String, u64)>,
+    ) {
+        // Records seen last belong to the active segment unless it is empty.
+        let active = if self.segment == log.active_index() {
+            std::mem::take(&mut self.records)
+        } else {
+            if !self.records.is_empty() {
+                self.close_segment();
+            }
+            vec![]
+        };
+        // A sealed segment always holds records, so every one was visited.
+        debug_assert_eq!(self.filters.len(), log.sealed().len());
+        (active, self.filters, self.unresolved, self.suspects)
     }
 }
 
-fn apply_command(
-    owner: &InvocationAuditOwner,
-    projection: &mut AuditProjection,
-    command: &InvocationAuditCommand,
-) -> Result<Option<u64>, InvocationAuditError> {
-    validate_command(owner, command)?;
-    if let Some(previous) = projection.commands.get(command.command_id()) {
-        return if previous == command {
-            Ok(None)
-        } else {
-            Err(InvocationAuditError::CommandConflict)
-        };
-    }
-    let revision = match command {
-        InvocationAuditCommand::Intent(command) => {
-            if projection
-                .invocations
-                .contains_key(&command.intent.invocation_id)
+/// Collects one turn's invocations from records read in order.
+#[derive(Default)]
+struct TurnInvocations {
+    invocations: Vec<AuditedInvocation>,
+}
+
+impl TurnInvocations {
+    fn add(
+        &mut self,
+        record: InvocationAuditRecord,
+        turn_id: &crate::turn_contract::LogicalTurnId,
+    ) {
+        match record.command {
+            InvocationAuditCommand::Intent(command)
+                if &command.intent.activation.turn_id == turn_id =>
             {
-                return Err(InvocationAuditError::IntentConflict);
-            }
-            if command.expected_revision != 0 {
-                return Err(InvocationAuditError::StaleRevision {
-                    expected: command.expected_revision,
-                    actual: 0,
-                });
-            }
-            projection.invocations.insert(
-                command.intent.invocation_id.clone(),
-                AuditedInvocation {
-                    intent: command.intent.clone(),
+                self.invocations.push(AuditedInvocation {
+                    intent: command.intent,
                     revision: 1,
                     final_evidence: None,
-                },
-            );
-            1
-        }
-        InvocationAuditCommand::Evidence(command) => {
-            let invocation = projection
-                .invocations
-                .get_mut(&command.invocation_id)
-                .ok_or(InvocationAuditError::NotFound)?;
-            if command.activation != invocation.intent.activation
-                || command.authority != invocation.intent.authority
-            {
-                return Err(InvocationAuditError::TargetConflict);
-            }
-            if command.expected_revision != invocation.revision {
-                return Err(InvocationAuditError::StaleRevision {
-                    expected: command.expected_revision,
-                    actual: invocation.revision,
                 });
             }
-            if invocation.final_evidence.is_some() {
-                return Err(InvocationAuditError::EvidenceConflict);
+            InvocationAuditCommand::Evidence(command) => {
+                if let Some(invocation) = self
+                    .invocations
+                    .iter_mut()
+                    .find(|item| item.intent.invocation_id == command.invocation_id)
+                {
+                    invocation.final_evidence = Some(command.evidence);
+                    invocation.revision = 2;
+                }
             }
-            invocation.final_evidence = Some(command.evidence.clone());
-            invocation.revision = 2;
-            2
+            _ => {}
         }
-    };
-    projection
-        .commands
-        .insert(command.command_id().clone(), command.clone());
-    Ok(Some(revision))
+    }
+
+    fn finish(self) -> Result<Vec<AuditedInvocation>, InvocationAuditError> {
+        Ok(self.invocations)
+    }
 }
 
-fn rebuild(data: &AuditData) -> Result<AuditProjection, InvocationAuditError> {
+/// Validate a single-file audit with the rules it was written under.
+fn validate_legacy(data: &LegacyAuditData) -> Result<(), InvocationAuditError> {
     if data.schema_version != SCHEMA_VERSION {
         return Err(InvocationAuditError::UnsupportedVersion(
             data.schema_version,
@@ -669,48 +1087,52 @@ fn rebuild(data: &AuditData) -> Result<AuditProjection, InvocationAuditError> {
     validate_owner(&data.owner)?;
     uuid::Uuid::parse_str(&data.audit_id)
         .map_err(|_| InvocationAuditError::Invalid("invalid audit identity"))?;
-    if data.records.len() > MAX_RECORDS {
+    if data.records.len() > LEGACY_MAX_RECORDS {
         return Err(InvocationAuditError::Capacity);
     }
-    let mut projection = AuditProjection::default();
+    let mut loader = Loader::default();
     for (index, record) in data.records.iter().enumerate() {
-        if record.sequence != index as u64 + 1
-            || serde_json::to_vec(record)?.len() > MAX_RECORD_BYTES
-        {
-            return Err(InvocationAuditError::Invalid(
-                "invalid record sequence or size",
-            ));
-        }
-        let revision = apply_command(&data.owner, &mut projection, &record.command)?;
-        if revision != Some(record.invocation_revision) {
-            return Err(InvocationAuditError::Invalid(
-                "duplicate record or revision mismatch",
-            ));
-        }
-    }
-    validate_capacity(data, &projection, serde_json::to_vec(data)?.len())?;
-    Ok(projection)
-}
-
-fn validate_capacity(
-    data: &AuditData,
-    projection: &AuditProjection,
-    serialized_size: usize,
-) -> Result<(), InvocationAuditError> {
-    let unresolved = projection
-        .invocations
-        .values()
-        .filter(|item| item.final_evidence.is_none())
-        .count();
-    // Every admitted intent reserves a whole bounded terminal record, including
-    // its comma. Capacity cannot prevent late evidence for acknowledged work.
-    if projection.invocations.len() > MAX_INVOCATIONS
-        || data.records.len() + unresolved > MAX_RECORDS
-        || serialized_size + unresolved * (MAX_RECORD_BYTES + 1) > MAX_STORE_BYTES
-    {
-        return Err(InvocationAuditError::Capacity);
+        loader.visit(&data.owner, 0, index as u64 + 1, record.clone())?;
     }
     Ok(())
+}
+
+/// Move a single-file audit's records into a segment log and replace its
+/// file with the head. A crash before the head is written leaves the old
+/// file in place, and the next open converts it again from the start.
+fn migrate_legacy(
+    dir: &SecureDir,
+    namespace: Option<&OwnedExecutionNamespace>,
+    data: LegacyAuditData,
+) -> Result<AuditHead, InvocationAuditError> {
+    let head = AuditHead {
+        schema_version: SCHEMA_VERSION,
+        audit_id: data.audit_id,
+        owner: data.owner,
+        canonical_journal_id: data.canonical_journal_id,
+        segments: SegmentsMarker::of(&SPEC),
+    };
+    SegmentLog::remove(dir, &SPEC)?;
+    let mut log = SegmentLog::open(
+        dir.clone(),
+        SPEC,
+        head.meta(),
+        true,
+        |_, _: InvocationAuditRecord| Ok::<(), InvocationAuditError>(()),
+    )?;
+    for record in &data.records {
+        log.append_line(&log.encode_record(record)?)?;
+        if log.should_seal() {
+            log.seal()?;
+        }
+    }
+    drop(log);
+    if let Some(namespace) = namespace {
+        namespace.mark_journal_initialized(FILE_NAME)?;
+    }
+    dir.verify_ambient_identity()?;
+    dir.atomic_write(FILE_NAME, &serde_json::to_vec(&head)?)?;
+    Ok(head)
 }
 
 fn validate_owner(owner: &InvocationAuditOwner) -> Result<(), InvocationAuditError> {
@@ -829,209 +1251,256 @@ mod tests {
         .unwrap()
     }
 
-    #[cfg(unix)]
+    fn numbered(n: usize) -> InvocationIntentCommand {
+        let mut command = intent();
+        command.command_id = CommandId::new(format!("intent-{n}")).unwrap();
+        command.intent.invocation_id = InvocationId::new(format!("invocation-{n}")).unwrap();
+        command
+    }
+
+    fn outcome(command: &InvocationIntentCommand, n: usize) -> InvocationEvidenceCommand {
+        InvocationEvidenceCommand {
+            command_id: CommandId::new(format!("outcome-{n}")).unwrap(),
+            expected_revision: 1,
+            invocation_id: command.intent.invocation_id.clone(),
+            activation: command.intent.activation.clone(),
+            authority: command.intent.authority.clone(),
+            evidence: InvocationFinalEvidence::Outcome {
+                outcome: InvocationOutcome::Succeeded,
+                result: ProtectedArguments {
+                    evidence_ref: EvidenceRef::new(format!("result-{n}")).unwrap(),
+                    sha256: "f".repeat(64),
+                    byte_len: 2,
+                },
+                redacted_preview: "ok".into(),
+                source: InvocationOutcomeSource::Executor,
+                authority_ref: EvidenceRef::new("authority").unwrap(),
+            },
+        }
+    }
+
     #[test]
-    fn failure_after_publication_requires_durable_reopen_before_receipt() {
-        use std::os::unix::fs::MetadataExt;
+    fn an_uncertain_append_requires_reopening_and_its_record_is_then_durable() {
         let dir = tempfile::tempdir().unwrap();
         let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
         let command = intent();
-        let error = audit.append_with(
-            InvocationAuditCommand::Intent(command.clone()),
-            |dir, bytes| {
-                dir.atomic_write(FILE_NAME, bytes)?;
-                Err(std::io::Error::other(
-                    "injected uncertain return after publication",
-                ))
-            },
-        );
-        assert!(matches!(error, Err(InvocationAuditError::Io(_))));
+        // The line reached storage, but the write reported an error.
+        audit.fail_next_append = true;
+        assert!(matches!(
+            audit.record_intent(command.clone()),
+            Err(InvocationAuditError::Io(_))
+        ));
         assert!(matches!(
             audit.record_intent(command.clone()),
             Err(InvocationAuditError::RecoveryRequired)
         ));
-        assert!(matches!(
-            audit.records(),
-            Err(InvocationAuditError::RecoveryRequired)
-        ));
-        let prior_inode = std::fs::metadata(audit.path()).unwrap().ino();
         drop(audit);
         let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
-        assert_ne!(std::fs::metadata(audit.path()).unwrap().ino(), prior_inode);
         let receipt = audit.record_intent(command).unwrap();
         assert!(audit.is_dispatchable_receipt(&receipt).unwrap());
         assert_eq!(audit.records().unwrap().len(), 1);
     }
 
+    /// More invocations than the old single-file bound of 256, across many
+    /// sealed segments: each is found again, by id and by turn, before and
+    /// after reopening, and memory holds only the active segment.
     #[test]
-    fn byte_capacity_reserves_late_evidence_and_does_not_evict_unresolved_intents() {
+    fn invocations_beyond_the_old_bound_are_found_across_sealed_segments() {
         let dir = tempfile::tempdir().unwrap();
-        let audit = InvocationAudit::open(dir.path(), owner()).unwrap();
-        let mut data = audit.data.clone();
-        let path = audit.path();
-        drop(audit);
-        let mut large = intent();
-        large.intent.redacted_preview = "\u{1}".repeat(2048);
-        large.intent.tool_name = "t".repeat(256);
-        large.intent.dispatch_scope = "d".repeat(128);
-        large.intent.arguments.evidence_ref = EvidenceRef::new("a".repeat(128)).unwrap();
-        large.intent.authority.grant_id = "g".repeat(128);
-        large.intent.authority.approval_ref = Some(EvidenceRef::new("p".repeat(128)).unwrap());
-        large.intent.provider_replay.adapter_id = "i".repeat(128);
-        large.intent.provider_replay.adapter_version = "v".repeat(128);
-        large.intent.provider_replay.provider_run_ref =
-            Some(EvidenceRef::new("r".repeat(128)).unwrap());
-        large.intent.provider_replay.native_call_id = Some("n".repeat(512));
-        large.intent.provider_replay.response_group_id = Some("s".repeat(512));
-        large.intent.replay_policy = InvocationReplayPolicy::ProviderIdempotency {
-            policy_ref: EvidenceRef::new("q".repeat(128)).unwrap(),
-            key_ref: EvidenceRef::new("k".repeat(128)).unwrap(),
-        };
-        let mut projection = AuditProjection::default();
-        for i in 0..MAX_INVOCATIONS {
-            let mut next = data.clone();
-            let mut candidate = large.clone();
-            candidate.command_id = CommandId::new(format!("command-{i}")).unwrap();
-            candidate.intent.invocation_id = InvocationId::new(format!("invocation-{i}")).unwrap();
-            let command = InvocationAuditCommand::Intent(candidate);
-            let mut next_projection = projection.clone();
-            apply_command(&data.owner, &mut next_projection, &command).unwrap();
-            next.records.push(InvocationAuditRecord {
-                sequence: i as u64 + 1,
-                invocation_revision: 1,
-                command,
-            });
-            if validate_capacity(
-                &next,
-                &next_projection,
-                serde_json::to_vec(&next).unwrap().len(),
-            )
-            .is_err()
-            {
-                break;
-            }
-            data = next;
-            projection = next_projection;
-        }
-        assert!(data.records.len() > 1 && data.records.len() < MAX_INVOCATIONS);
-        std::fs::write(&path, serde_json::to_vec(&data).unwrap()).unwrap();
         let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
-        let before = audit.records().unwrap().to_vec();
-        assert!(matches!(
-            audit.record_intent(large.clone()),
-            Err(InvocationAuditError::Capacity)
-        ));
-        assert_eq!(audit.records().unwrap(), before);
-        let InvocationAuditCommand::Intent(first) = &before[0].command else {
-            panic!("expected intent")
+        let count = 300;
+        for n in 0..count {
+            let command = numbered(n);
+            audit.record_intent(command.clone()).unwrap();
+            if n % 3 != 0 {
+                audit.record_evidence(outcome(&command, n)).unwrap();
+            }
+        }
+        let check = |audit: &InvocationAudit| {
+            let (sealed, filter_bytes) = audit.sealed_segments();
+            assert!(sealed > 60, "{sealed}");
+            assert!(audit.active.len() < SPEC.segment_records as usize);
+            assert!(filter_bytes < sealed * 64);
+            for n in [0, 1, 2, 150, count - 1] {
+                let found = audit
+                    .invocation(&numbered(n).intent.invocation_id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(found.final_evidence.is_some(), n % 3 != 0, "{n}");
+            }
+            assert!(audit
+                .invocation(&InvocationId::new("absent").unwrap())
+                .unwrap()
+                .is_none());
+            let turn = audit
+                .turn_invocations(&intent().intent.activation.turn_id)
+                .unwrap();
+            assert_eq!(turn.len(), count);
+            assert_eq!(audit.unresolved().unwrap().len(), count.div_ceil(3));
+            assert_eq!(audit.records().unwrap().len(), count + count * 2 / 3);
         };
-        audit
-            .record_evidence(InvocationEvidenceCommand {
-                command_id: CommandId::new("late-outcome").unwrap(),
-                expected_revision: 1,
-                invocation_id: first.intent.invocation_id.clone(),
-                activation: first.intent.activation.clone(),
-                authority: first.intent.authority.clone(),
-                evidence: InvocationFinalEvidence::Outcome {
-                    outcome: InvocationOutcome::Failed,
-                    result: ProtectedArguments {
-                        evidence_ref: EvidenceRef::new("z".repeat(128)).unwrap(),
-                        sha256: "f".repeat(64),
-                        byte_len: MAX_PROTECTED_BYTES,
-                    },
-                    redacted_preview: "\u{1}".repeat(2048),
-                    source: InvocationOutcomeSource::Executor,
-                    authority_ref: EvidenceRef::new("o".repeat(128)).unwrap(),
-                },
+        check(&audit);
+        // Exact repeats are acknowledged without a write; changed ones are
+        // refused, however old the original.
+        let first = numbered(0);
+        let before = audit.records().unwrap().len();
+        audit.record_intent(first.clone()).unwrap();
+        let mut changed = first.clone();
+        changed.intent.tool_name = "other".into();
+        assert!(matches!(
+            audit.record_intent(changed),
+            Err(InvocationAuditError::CommandConflict)
+        ));
+        let mut reused = numbered(1);
+        reused.command_id = CommandId::new("fresh-command").unwrap();
+        assert!(matches!(
+            audit.record_intent(reused),
+            Err(InvocationAuditError::IntentConflict)
+        ));
+        assert!(matches!(
+            audit.record_evidence(outcome(&numbered(1), 9999)),
+            Err(InvocationAuditError::StaleRevision {
+                expected: 1,
+                actual: 2
             })
-            .unwrap();
-        assert_eq!(&audit.records().unwrap()[..before.len()], before);
+        ));
+        let mut second = outcome(&numbered(1), 9999);
+        second.expected_revision = 2;
+        assert!(matches!(
+            audit.record_evidence(second),
+            Err(InvocationAuditError::EvidenceConflict)
+        ));
+        assert_eq!(audit.records().unwrap().len(), before);
+        // Late evidence settles an intent sealed long ago.
+        audit.record_evidence(outcome(&first, 0)).unwrap();
         drop(audit);
         let audit = InvocationAudit::open(dir.path(), owner()).unwrap();
-        assert_eq!(audit.records().unwrap().len(), before.len() + 1);
+        assert_eq!(audit.unresolved().unwrap().len(), count.div_ceil(3) - 1);
+        assert!(audit
+            .invocation(&first.intent.invocation_id)
+            .unwrap()
+            .unwrap()
+            .final_evidence
+            .is_some());
     }
 
-    /// The room an audit reports is never more than it has: while it
-    /// reports any, the next intent is acknowledged, and once it reports none
-    /// the next is refused for capacity. Settling frees no room.
+    /// A store written by the single-file layout opens with its history
+    /// intact, as a segmented store, and an interrupted conversion is redone.
     #[test]
-    fn remaining_invocations_reaches_zero_exactly_when_intents_are_refused() {
+    fn a_single_file_audit_is_migrated_into_segments() {
         let dir = tempfile::tempdir().unwrap();
-        let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
-        let mut previous = audit.remaining_invocations();
-        assert!(previous > 0);
-        let mut recorded = 0;
-        while audit.remaining_invocations() > 0 {
-            let mut next = intent();
-            next.command_id = CommandId::new(format!("command-{recorded}")).unwrap();
-            next.intent.invocation_id =
-                InvocationId::new(format!("invocation-{recorded}")).unwrap();
-            audit.record_intent(next.clone()).unwrap();
-            audit
-                .record_evidence(InvocationEvidenceCommand {
-                    command_id: CommandId::new(format!("outcome-{recorded}")).unwrap(),
-                    expected_revision: 1,
-                    invocation_id: next.intent.invocation_id.clone(),
-                    activation: next.intent.activation.clone(),
-                    authority: next.intent.authority.clone(),
-                    evidence: InvocationFinalEvidence::Outcome {
-                        outcome: InvocationOutcome::Succeeded,
-                        result: ProtectedArguments {
-                            evidence_ref: EvidenceRef::new(format!("result-{recorded}")).unwrap(),
-                            sha256: "f".repeat(64),
-                            byte_len: 2,
-                        },
-                        redacted_preview: "ok".into(),
-                        source: InvocationOutcomeSource::Executor,
-                        authority_ref: EvidenceRef::new("authority").unwrap(),
-                    },
-                })
-                .unwrap();
-            recorded += 1;
-            let remaining = audit.remaining_invocations();
-            assert!(remaining <= previous, "{remaining} after {previous}");
-            previous = remaining;
+        let mut records = vec![];
+        for n in 0..20 {
+            let command = numbered(n);
+            records.push(InvocationAuditRecord {
+                sequence: records.len() as u64 + 1,
+                invocation_revision: 1,
+                command: InvocationAuditCommand::Intent(command.clone()),
+            });
+            if n % 2 == 0 {
+                records.push(InvocationAuditRecord {
+                    sequence: records.len() as u64 + 1,
+                    invocation_revision: 2,
+                    command: InvocationAuditCommand::Evidence(outcome(&command, n)),
+                });
+            }
         }
-        assert_eq!(recorded, MAX_INVOCATIONS);
-        let mut refused = intent();
-        refused.command_id = CommandId::new("command-refused").unwrap();
-        refused.intent.invocation_id = InvocationId::new("invocation-refused").unwrap();
-        assert!(matches!(
-            audit.record_intent(refused),
-            Err(InvocationAuditError::Capacity)
-        ));
-        drop(audit);
+        let legacy = LegacyAuditData {
+            schema_version: SCHEMA_VERSION,
+            audit_id: uuid::Uuid::new_v4().to_string(),
+            owner: owner(),
+            records: records.clone(),
+            canonical_journal_id: None,
+        };
+        let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(&path, &legacy_bytes).unwrap();
+        // A conversion that stopped before its head was written left a
+        // partial log behind; it is discarded and the conversion redone.
+        {
+            let partial = SegmentLog::open(
+                SecureDir::open(dir.path()).unwrap(),
+                SPEC,
+                serde_json::json!({"partial": true}),
+                true,
+                |_, _: InvocationAuditRecord| Ok::<(), SegmentError>(()),
+            )
+            .unwrap();
+            drop(partial);
+        }
         let audit = InvocationAudit::open(dir.path(), owner()).unwrap();
-        assert_eq!(audit.remaining_invocations(), 0);
+        assert_eq!(audit.records().unwrap(), records);
+        assert_eq!(audit.audit_id().unwrap(), legacy.audit_id);
+        assert_eq!(audit.unresolved().unwrap().len(), 10);
+        drop(audit);
+        let head: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(head.get("records").is_none());
+        assert_eq!(head["segments"]["kind"], "invocation-audit");
+        // An older daemon, which knows only the single-file layout, refuses
+        // the head instead of reading part of the history.
+        assert!(serde_json::from_slice::<LegacyAuditData>(&std::fs::read(&path).unwrap()).is_err());
+        let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
+        assert_eq!(audit.records().unwrap(), records);
+        audit.record_intent(numbered(100)).unwrap();
+        assert_eq!(audit.records().unwrap().len(), records.len() + 1);
+    }
 
-        // Large unsettled intents fill the bytes first; the room reported is
-        // still always there.
+    /// History that repeats a command or an intent across sealed segments
+    /// is refused on open, though each segment alone is well formed.
+    #[test]
+    fn a_duplicate_across_segments_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let audit = InvocationAudit::open(dir.path(), owner()).unwrap();
+        let meta = audit.head.meta();
+        drop(audit);
+        let mut log = SegmentLog::open(
+            SecureDir::open(dir.path()).unwrap(),
+            SPEC,
+            meta,
+            false,
+            |_, _: InvocationAuditRecord| Ok::<(), SegmentError>(()),
+        )
+        .unwrap();
+        for (sequence, n) in (1..).zip((0..10).chain([3])) {
+            let record = InvocationAuditRecord {
+                sequence,
+                invocation_revision: 1,
+                command: InvocationAuditCommand::Intent(numbered(n)),
+            };
+            log.append_line(&log.encode_record(&record).unwrap())
+                .unwrap();
+            if log.should_seal() {
+                log.seal().unwrap();
+            }
+        }
+        drop(log);
+        assert!(matches!(
+            InvocationAudit::open(dir.path(), owner()),
+            Err(InvocationAuditError::Invalid(_))
+        ));
+    }
+
+    /// A line cut short by a crash was never acknowledged: reopening drops
+    /// it and the audit continues.
+    #[test]
+    fn a_torn_append_is_dropped_on_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
-        let mut recorded = 0;
-        while audit.remaining_invocations() > 0 {
-            let mut large = intent();
-            large.command_id = CommandId::new(format!("large-{recorded}")).unwrap();
-            large.intent.invocation_id = InvocationId::new(format!("large-{recorded}")).unwrap();
-            large.intent.redacted_preview = "\u{1}".repeat(2048);
-            large.intent.tool_name = "t".repeat(256);
-            large.intent.dispatch_scope = "d".repeat(128);
-            large.intent.arguments.evidence_ref = EvidenceRef::new("a".repeat(128)).unwrap();
-            large.intent.authority.grant_id = "g".repeat(128);
-            large.intent.authority.approval_ref = Some(EvidenceRef::new("p".repeat(128)).unwrap());
-            large.intent.provider_replay.adapter_id = "i".repeat(128);
-            large.intent.provider_replay.adapter_version = "v".repeat(128);
-            large.intent.provider_replay.provider_run_ref =
-                Some(EvidenceRef::new("r".repeat(128)).unwrap());
-            large.intent.provider_replay.native_call_id = Some("n".repeat(512));
-            large.intent.provider_replay.response_group_id = Some("s".repeat(512));
-            large.intent.replay_policy = InvocationReplayPolicy::ProviderIdempotency {
-                policy_ref: EvidenceRef::new("q".repeat(128)).unwrap(),
-                key_ref: EvidenceRef::new("k".repeat(128)).unwrap(),
-            };
-            audit.record_intent(large).unwrap();
-            recorded += 1;
+        for n in 0..5 {
+            audit.record_intent(numbered(n)).unwrap();
         }
-        assert!(recorded > 1 && recorded < MAX_INVOCATIONS, "{recorded}");
+        drop(audit);
+        let active = dir.path().join(SPEC.active_name());
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(active)
+            .unwrap();
+        std::io::Write::write_all(&mut file, br#"{"record":{"sequence":6,"#).unwrap();
+        drop(file);
+        let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
+        assert_eq!(audit.records().unwrap().len(), 5);
+        audit.record_intent(numbered(5)).unwrap();
+        assert_eq!(audit.records().unwrap()[5].sequence, 6);
     }
 }

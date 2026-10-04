@@ -538,13 +538,16 @@ impl DispatchState {
             return Ok(());
         };
         let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
-        let record = self
+        let (_, last) = self
             .canonical
-            .records()
+            .turn_sequences(&self.turn_id)
             .map_err(error)?
-            .iter()
-            .rev()
-            .find(|record| record.turn_id == self.turn_id)
+            .ok_or_else(|| error("human wait invalidation has no durable canonical record"))?;
+        let (_, record) = self
+            .canonical
+            .records_in(last, last)
+            .map_err(error)?
+            .pop()
             .ok_or_else(|| error("human wait invalidation has no durable canonical record"))?;
         let _ = bus.send(crate::stream::StreamFrame::ActivationControlChanged {
             activation: activation.clone(),

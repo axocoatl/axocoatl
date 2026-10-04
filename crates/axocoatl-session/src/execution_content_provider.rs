@@ -1,7 +1,6 @@
 //! Definition-bound runtime configuration retained before canonical use. These
 //! bytes are configuration evidence, never a provider lease or budget authority.
 use super::*;
-use crate::turn_contract::TurnContractEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,18 +27,9 @@ fn first_definition_use(
     canonical: &SessionExecutionStore,
     definition: &EvidenceRef,
 ) -> Result<Option<usize>, ExecutionContentError> {
-    let records = canonical
-        .records()
-        .map_err(|error| ExecutionContentError::Io(io::Error::other(error)))?;
-    Ok(records.iter().position(|record| match &record.event {
-        TurnContractEvent::Begin { graph, .. } | TurnContractEvent::ReviseGraph { graph, .. } => {
-            graph
-                .nodes
-                .iter()
-                .any(|node| &node.definition.snapshot == definition)
-        }
-        _ => false,
-    }))
+    canonical
+        .first_definition_use(definition)
+        .map_err(|error| ExecutionContentError::Io(io::Error::other(error)))
 }
 
 impl ExecutionContentStore {
@@ -83,10 +73,7 @@ impl ExecutionContentStore {
                 "provider configuration was not captured before definition admission",
             ));
         }
-        let captured_after_records = canonical
-            .records()
-            .map_err(|error| ExecutionContentError::Io(io::Error::other(error)))?
-            .len();
+        let captured_after_records = canonical.record_count() as usize;
         let reference = self.append(Body::ProviderProfile(RetainedProviderProfile {
             schema_version: 1,
             definition: definition.clone(),
@@ -124,10 +111,7 @@ impl ExecutionContentStore {
             ));
         }
         if let Some((_, profile)) = selected {
-            let records = canonical
-                .records()
-                .map_err(|error| ExecutionContentError::Io(io::Error::other(error)))?;
-            if profile.captured_after_records > records.len()
+            if profile.captured_after_records > canonical.record_count() as usize
                 || first_definition_use(canonical, definition)?
                     .is_some_and(|first| profile.captured_after_records > first)
             {

@@ -207,6 +207,15 @@ fn command_identity_is_session_wide_and_changed_replay_cannot_mutate_closed_hist
     assert_eq!(fs::read(store.path()).unwrap(), before);
 }
 
+/// The segment the canonical journal appends its records to.
+fn active_segment(store: &SessionExecutionStore) -> std::path::PathBuf {
+    store
+        .path()
+        .parent()
+        .unwrap()
+        .join("execution.active.jsonl")
+}
+
 #[test]
 fn foreign_workspace_and_corrupt_journal_fail_without_overwriting_evidence() {
     let root = tempfile::tempdir().unwrap();
@@ -233,21 +242,28 @@ fn duplicate_or_foreign_canonical_records_fail_replay() {
         let mut store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
         store.append(begin("turn-a", "begin-a", None)).unwrap();
         let path = store.path();
+        let active = active_segment(&store);
         drop(store);
         let mut journal: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         match mutation {
             "duplicate" => {
-                let duplicate = journal["records"][0].clone();
-                journal["records"].as_array_mut().unwrap().push(duplicate);
+                // The records are in the active segment beside the head.
+                let mut log = fs::read_to_string(&active).unwrap();
+                let record = log.lines().nth(1).unwrap().to_owned();
+                log.push_str(&record);
+                log.push('\n');
+                fs::write(&active, log).unwrap();
             }
             "owner" => journal["ownership_id"] = "foreign-boundary".into(),
             _ => journal["schema_version"] = 3.into(),
         }
         let bytes = serde_json::to_vec(&journal).unwrap();
         fs::write(&path, &bytes).unwrap();
+        let log = fs::read(&active).unwrap();
         assert!(SessionExecutionStore::open(guard, owner()).is_err());
         assert_eq!(fs::read(path).unwrap(), bytes);
+        assert_eq!(fs::read(active).unwrap(), log);
     }
 }
 
@@ -256,7 +272,8 @@ fn failed_publication_poison_requires_reopen_before_any_receipt() {
     let root = tempfile::tempdir().unwrap();
     let guard = boundary(&root);
     let mut store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
-    let path = store.path();
+    // Records are appended to the active segment beside the head.
+    let path = active_segment(&store);
     let saved = path.with_extension("saved");
     fs::rename(&path, &saved).unwrap();
     fs::create_dir(&path).unwrap();
@@ -308,4 +325,62 @@ fn existing_recovery_never_creates_a_missing_namespace_or_journal() {
     fs::remove_file(&path).unwrap();
     assert!(SessionExecutionStore::open_existing(guard, owner()).is_err());
     assert!(!path.exists());
+}
+
+/// More turns and records than the single-file journal's lifetime bounds
+/// (256 turns), each turn closed and named by its successor: every one stays
+/// readable after reopening, and exact replays of old commands keep their
+/// original receipts.
+#[test]
+fn a_session_holds_more_turns_than_the_old_lifetime_bound() {
+    let root = tempfile::tempdir().unwrap();
+    let guard = boundary(&root);
+    let mut store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
+    let mut predecessor = None;
+    let mut first_receipt = None;
+    for n in 0..300 {
+        let turn = format!("turn-{n}");
+        let receipt = store
+            .append(begin(&turn, &format!("begin-{n}"), predecessor.clone()))
+            .unwrap();
+        first_receipt.get_or_insert(receipt);
+        store
+            .append(close(&turn, 1, &format!("close-{n}")))
+            .unwrap();
+        predecessor = Some(
+            store
+                .turn(&LogicalTurnId::new(&turn).unwrap())
+                .unwrap()
+                .unwrap()
+                .closed_reference()
+                .unwrap(),
+        );
+    }
+    drop(store);
+    let mut store = SessionExecutionStore::open(guard, owner()).unwrap();
+    assert_eq!(store.turn_ids().unwrap().len(), 300);
+    assert_eq!(store.record_count(), 600);
+    for n in [0, 150, 299] {
+        let snapshot = store
+            .snapshot(&LogicalTurnId::new(format!("turn-{n}")).unwrap())
+            .unwrap();
+        assert_eq!(
+            snapshot.contract().state(),
+            Some(LogicalTurnState::Finished)
+        );
+    }
+    assert_eq!(
+        store.append(begin("turn-0", "begin-0", None)).unwrap(),
+        first_receipt.unwrap()
+    );
+    assert!(matches!(
+        store.append(begin("turn-new", "begin-0", None)),
+        Err(ExecutionStoreError::Contract(
+            TurnContractError::CommandConflict
+        ))
+    ));
+    store
+        .append(begin("turn-300", "begin-300", predecessor))
+        .unwrap();
+    assert_eq!(store.records().unwrap().len(), 601);
 }

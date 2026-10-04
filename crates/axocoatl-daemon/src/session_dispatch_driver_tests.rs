@@ -383,10 +383,8 @@ async fn revised_parent_automatically_rebases_superseded_child_despite_old_bound
     assert!(state
         .bound
         .contains_key(&child_result.activation.activation_id));
-    let rebases: Vec<_> = state
-        .canonical
-        .records()
-        .unwrap()
+    let records = state.canonical.records().unwrap();
+    let rebases: Vec<_> = records
         .iter()
         .filter_map(|event| match &event.event {
             TurnContractEvent::RebaseActivation { previous, input } => Some((previous, input)),

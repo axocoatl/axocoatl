@@ -587,10 +587,10 @@ impl SessionDispatchController {
                 .or_else(|| {
                     before_run
                         .as_ref()
-                        .zip(state.canonical.records().ok())
+                        .zip(state.canonical.turn_records(snapshot.turn_id()).ok())
                         .is_some_and(|(before_run, records)| {
                             accepted_after_capture(
-                                records,
+                                &records,
                                 snapshot.turn_id(),
                                 before_run,
                                 &current,

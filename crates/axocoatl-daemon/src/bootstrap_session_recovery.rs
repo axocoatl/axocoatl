@@ -7,7 +7,7 @@ use axocoatl_session::execution_content::ExecutionContentStore;
 use axocoatl_session::execution_namespace::ExecutionComponent;
 use axocoatl_session::execution_ownership::UpgradedFormatOwnership;
 use axocoatl_session::execution_store::{ExecutionStoreOwner, SessionExecutionStore};
-use axocoatl_session::turn_contract::{SessionId, TurnContractEvent};
+use axocoatl_session::turn_contract::SessionId;
 
 /// Minted only by an exclusive mkdir of the final data-root component in this
 /// process. Existing empty directories do not acquire first-install authority.
@@ -122,13 +122,7 @@ pub(super) fn recover_session_stores(
             .map_err(recovery_error)?,
     )
     .map_err(recovery_error)?;
-    let latest = canonical
-        .records()
-        .map_err(recovery_error)?
-        .iter()
-        .rev()
-        .find(|record| matches!(record.event, TurnContractEvent::Begin { .. }))
-        .map(|record| record.turn_id.clone());
+    let latest = canonical.latest_turn().map_err(recovery_error)?.cloned();
     let stores = RetainedSessionStores {
         canonical,
         content,
@@ -193,6 +187,7 @@ mod tests {
     use super::*;
     use axocoatl_session::execution_content::{ActivationEvidenceContent, ExecutionRequestContent};
     use axocoatl_session::execution_ownership::LegacyFormatOwnership;
+    use axocoatl_session::turn_contract::TurnContractEvent;
     use axocoatl_session::turn_contract::*;
 
     fn native_session(

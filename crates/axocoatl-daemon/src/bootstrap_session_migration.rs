@@ -178,11 +178,7 @@ async fn migrate_held_session_state_with_mode(
         canonical
             .verify_data_root(data_root)
             .map_err(|error| failure(error.to_string()))?;
-        if !canonical
-            .records()
-            .map_err(|error| failure(error.to_string()))?
-            .is_empty()
-        {
+        if canonical.record_count() != 0 {
             return Err(failure(
                 "migration cannot replace a Session that already has v2 work",
             ));
@@ -617,10 +613,7 @@ fn initialize_migration_session(
     canonical
         .verify_data_root(data_root)
         .map_err(|e| failure(e.to_string()))?;
-    if !canonical
-        .records()
-        .map_err(|e| failure(e.to_string()))?
-        .is_empty()
+    if canonical.record_count() != 0
         || canonical
             .native_origin()
             .map_err(|e| failure(e.to_string()))?

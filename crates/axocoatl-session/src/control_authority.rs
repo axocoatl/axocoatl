@@ -1754,6 +1754,12 @@ impl ControlAuthority {
         Ok(self.lock()?.data.revision)
     }
 
+    /// Dispatch claims this turn's authority can still record: tool calls,
+    /// model calls and check runs each take one.
+    pub fn remaining_claims(&self) -> Result<usize, AuthorityError> {
+        Ok(MAX_CLAIMS.saturating_sub(total_claims(&self.lock()?.data)))
+    }
+
     /// Current retained policy for exact host-side input validation. Reading a
     /// policy does not bypass revocation, expiry, or the live dispatch gate.
     pub fn grant_policy(&self, grant_id: &str) -> Result<AuthorityGrant, AuthorityError> {

@@ -170,7 +170,7 @@ impl DispatchState {
                     .filter(|capture| capture.tree_sha256.is_some()));
             }
         } else {
-            let records = self.canonical.records().map_err(error)?;
+            let records = self.canonical.turn_records(&self.turn_id).map_err(error)?;
             let last = records.iter().rev().find_map(|record| match &record.event {
                 TurnContractEvent::AcceptActivation { activation, .. }
                     if record.turn_id == self.turn_id =>

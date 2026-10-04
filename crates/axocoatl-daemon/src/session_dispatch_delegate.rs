@@ -521,24 +521,15 @@ impl DispatchState {
 
     /// Whether a `delegate` call of this turn still has no recorded return.
     fn has_unresolved_delegate_return(&self) -> Result<bool> {
-        for record in self.audit.records().map_err(error)? {
-            let InvocationAuditCommand::Intent(command) = &record.command else {
-                continue;
-            };
-            if command.intent.tool_name != NAME || command.intent.activation.turn_id != self.turn_id
-            {
-                continue;
-            }
-            if self
-                .audit
-                .invocation(&command.intent.invocation_id)
-                .map_err(error)?
-                .is_some_and(|audited| audited.final_evidence.is_none())
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        Ok(self
+            .audit
+            .unresolved()
+            .map_err(error)?
+            .iter()
+            .any(|audited| {
+                audited.intent.tool_name == NAME
+                    && audited.intent.activation.turn_id == self.turn_id
+            }))
     }
 
     /// Run after control command reconciliation on reconstruction. A lost
@@ -868,15 +859,11 @@ impl SessionDispatchController {
         let state = self.lock().unwrap();
         let intent = state
             .audit
-            .records()
+            .turn_invocations(&state.turn_id)
             .unwrap()
-            .iter()
-            .find_map(|record| match &record.command {
-                InvocationAuditCommand::Intent(command) if command.intent.tool_name == NAME => {
-                    Some(command.intent.clone())
-                }
-                _ => None,
-            })
+            .into_iter()
+            .map(|audited| audited.intent)
+            .find(|intent| intent.tool_name == NAME)
             .unwrap();
         let snapshot = state
             .canonical

@@ -791,21 +791,6 @@ impl DispatchState {
         conversation: &NodeConversationId,
         unbound: Option<&ActivationRef>,
     ) -> Result<MeasuredTokenUsage> {
-        // Prepared generations can become Superseded without ever starting.
-        // The immutable journal, rather than a missing authority record or the
-        // latest state label, establishes whether dispatch was ever possible.
-        let started = self
-            .canonical
-            .records()
-            .map_err(error)?
-            .iter()
-            .filter_map(|record| match &record.event {
-                TurnContractEvent::StartActivation { input } => Some(&input.activation),
-                TurnContractEvent::StartPreparedActivation { activation } => Some(activation),
-                _ => None,
-            })
-            .map(|activation| ((&activation.turn_id, &activation.activation_id), activation))
-            .collect::<HashMap<_, _>>();
         let mut total = match self
             .memory
             .legacy_baseline_checkpoint(conversation)
@@ -817,12 +802,23 @@ impl DispatchState {
             },
             None => MeasuredTokenUsage::known(TokenUsageStats::default()),
         };
-        let mut turns = HashSet::new();
-        for record in self.canonical.records().map_err(error)? {
-            if !turns.insert(record.turn_id.clone()) {
-                continue;
-            }
-            let snapshot = self.canonical.snapshot(&record.turn_id).map_err(error)?;
+        // One turn at a time: a Session may hold any number of turns.
+        for turn_id in self.canonical.turn_ids().map_err(error)? {
+            // Prepared generations can become Superseded without ever
+            // starting. The immutable journal, rather than a missing authority
+            // record or the latest state label, establishes whether dispatch
+            // was ever possible.
+            let records = self.canonical.turn_records(turn_id).map_err(error)?;
+            let started = records
+                .iter()
+                .filter_map(|record| match &record.event {
+                    TurnContractEvent::StartActivation { input } => Some(&input.activation),
+                    TurnContractEvent::StartPreparedActivation { activation } => Some(activation),
+                    _ => None,
+                })
+                .map(|activation| ((&activation.turn_id, &activation.activation_id), activation))
+                .collect::<HashMap<_, _>>();
+            let snapshot = self.canonical.snapshot(turn_id).map_err(error)?;
             let activations = snapshot
                 .contract()
                 .activations()
@@ -839,7 +835,7 @@ impl DispatchState {
             if activations.is_empty() {
                 continue;
             }
-            if record.turn_id == self.turn_id {
+            if turn_id == &self.turn_id {
                 for activation in &activations {
                     merge_usage(
                         &mut total,
@@ -862,7 +858,7 @@ impl DispatchState {
                 let namespace = self
                     .canonical
                     .component_namespace(ExecutionComponent::ControlAuthority {
-                        turn_id: record.turn_id.clone(),
+                        turn_id: turn_id.clone(),
                     })
                     .map_err(error)?;
                 let usage = ControlAuthority::read_provider_usage_owned(namespace, &activations)

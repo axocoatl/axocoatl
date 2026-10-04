@@ -254,10 +254,9 @@ impl DispatchState {
         let envelope = self.resume_envelope(&view)?;
         if !self
             .canonical
-            .records()
+            .command_record(&envelope.command_id)
             .map_err(error)?
-            .iter()
-            .any(|record| record == &envelope)
+            .is_some_and(|(_, record)| record == envelope)
         {
             return Err(error("human response has no durable canonical predecessor"));
         }

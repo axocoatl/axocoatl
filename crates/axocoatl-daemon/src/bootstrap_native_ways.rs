@@ -119,15 +119,18 @@ impl AxocoatlDaemon {
         memory: &axocoatl_memory::activation_state::ActivationStateStore,
         after: Option<&LogicalTurnId>,
     ) -> Result<Vec<EvidenceRef>, DaemonError> {
-        let records = canonical.records().map_err(admission_error)?;
+        // A turn's place in History is the sequence of its first record.
+        let position = |turn: &LogicalTurnId| -> Result<Option<u64>, DaemonError> {
+            Ok(canonical
+                .turn_sequences(turn)
+                .map_err(admission_error)?
+                .map(|(first, _)| first))
+        };
         let after = after
             .map(|turn| {
-                records
-                    .iter()
-                    .position(|record| &record.turn_id == turn)
-                    .ok_or_else(|| {
-                        admission_error("Committed conversation source is absent from History")
-                    })
+                position(turn)?.ok_or_else(|| {
+                    admission_error("Committed conversation source is absent from History")
+                })
             })
             .transpose()?;
         let superseded = memory.superseded_turn_ids().map_err(admission_error)?;
@@ -142,9 +145,7 @@ impl AxocoatlDaemon {
             {
                 continue;
             }
-            let position = records
-                .iter()
-                .position(|record| record.turn_id == selected.turn_id)
+            let position = position(&selected.turn_id)?
                 .ok_or_else(|| admission_error("Kept decision source is absent from History"))?;
             if after.is_some_and(|after| position <= after) {
                 continue;

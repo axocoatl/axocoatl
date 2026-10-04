@@ -113,7 +113,7 @@ impl ExecutionContentStore {
                 .ok_or(ExecutionContentError::Invalid(
                     "driver lacks retained first-turn source",
                 ))?;
-        if canonical.turn(turn).map_err(canonical_error)?.is_none() {
+        if !canonical.contains_turn(turn).map_err(canonical_error)? {
             return Err(ExecutionContentError::Invalid(
                 "driver handoff requires exact Begin",
             ));
@@ -136,11 +136,18 @@ fn validate_canonical(
     canonical: &SessionExecutionStore,
     content: &TurnAdmissionContent,
 ) -> Result<(), ExecutionContentError> {
-    let records = canonical.records().map_err(canonical_error)?;
-    if let Some(begin) = records
-        .iter()
-        .find(|record| record.turn_id == content.turn_id)
+    let begin = match canonical
+        .turn_sequences(&content.turn_id)
+        .map_err(canonical_error)?
     {
+        Some((first, _)) => canonical
+            .records_in(first, first)
+            .map_err(canonical_error)?
+            .pop()
+            .map(|(_, record)| record),
+        None => None,
+    };
+    if let Some(begin) = begin {
         if begin.command_id != content.command_id
             || !matches!(&begin.event,
             TurnContractEvent::Begin{epoch_id,graph,..} if epoch_id==&content.epoch_id && graph==&content.graph)
@@ -350,12 +357,10 @@ impl ExecutionContentStore {
                     "control driver lacks native admission",
                 ))?;
         if !canonical
-            .records()
+            .command_record(&canonical_command)
             .map_err(canonical_error)?
-            .iter()
-            .any(|event| {
+            .is_some_and(|(_, event)| {
                 &event.turn_id == turn
-                    && event.command_id == canonical_command
                     && matches!(
                         event.event,
                         TurnContractEvent::Continue { .. }

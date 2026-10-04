@@ -331,16 +331,23 @@ fn duplicate_request_owner_in_journal_fails_without_overwriting_evidence() {
         .retain_request(content("turn", "original"))
         .unwrap();
     journal.begin_with_request(begin("turn"), &request).unwrap();
-    let path = journal.path();
+    // The Begin and its request binding are one record of the active segment.
+    let path = journal
+        .path()
+        .parent()
+        .unwrap()
+        .join("execution.active.jsonl");
     drop(contents);
     drop(journal);
-    let mut data: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    let duplicate = data["requests"][0].clone();
-    data["requests"].as_array_mut().unwrap().push(duplicate);
-    let corrupted = serde_json::to_vec(&data).unwrap();
-    fs::write(&path, &corrupted).unwrap();
+    let mut log = fs::read_to_string(&path).unwrap();
+    let mut duplicate: serde_json::Value =
+        serde_json::from_str(log.lines().nth(1).unwrap()).unwrap();
+    assert_eq!(duplicate["record"]["kind"], "begin");
+    duplicate["record"]["envelope"]["command_id"] = "begin-again".into();
+    log.push_str(&format!("{duplicate}\n"));
+    fs::write(&path, &log).unwrap();
     assert!(SessionExecutionStore::open(ownership, owner()).is_err());
-    assert_eq!(fs::read(path).unwrap(), corrupted);
+    assert_eq!(fs::read_to_string(path).unwrap(), log);
 }
 
 #[test]

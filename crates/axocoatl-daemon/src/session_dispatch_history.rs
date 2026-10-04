@@ -140,22 +140,10 @@ impl DispatchState {
                 .iter()
                 .any(|turn| turn == snapshot.turn_id().as_str()),
         );
-        let mut audited = Vec::new();
-        for record in self.audit.records().map_err(error)? {
-            if let axocoatl_session::invocation_audit::InvocationAuditCommand::Intent(command) =
-                &record.command
-            {
-                if &command.intent.activation.turn_id == snapshot.turn_id() {
-                    audited.push(
-                        self.audit
-                            .invocation(&command.intent.invocation_id)
-                            .map_err(error)?
-                            .ok_or_else(|| error("recorded invocation has no audit projection"))?
-                            .clone(),
-                    );
-                }
-            }
-        }
+        let audited = self
+            .audit
+            .turn_invocations(snapshot.turn_id())
+            .map_err(error)?;
         join_invocation_evidence(&mut view, snapshot, audited)?;
         view.commands = if current {
             crate::session_control_plane::EvidenceValue::Available {

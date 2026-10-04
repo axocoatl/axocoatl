@@ -680,12 +680,9 @@ impl SessionDispatchRegistry {
         stores.verify()?;
         let latest = stores
             .canonical()?
-            .records()
+            .latest_turn()
             .map_err(|error| failure(error.to_string()))?
-            .iter()
-            .rev()
-            .find(|record| matches!(record.event, TurnContractEvent::Begin { .. }))
-            .map(|record| record.turn_id.clone());
+            .cloned();
         drop(stores);
         Ok(latest.map(|turn| (token, turn)))
     }
@@ -803,12 +800,8 @@ impl SessionDispatchRegistry {
             || !owner.execution_is_idle()?
             || stores
                 .canonical()?
-                .records()
+                .latest_turn()
                 .map_err(|error| failure(error.to_string()))?
-                .iter()
-                .rev()
-                .find(|record| matches!(record.event, TurnContractEvent::Begin { .. }))
-                .map(|record| &record.turn_id)
                 != Some(&turn_id)
         {
             return Err(failure(
@@ -1019,10 +1012,9 @@ impl SessionDispatchRegistry {
         }
         let prior = stores
             .canonical()?
-            .records()
+            .latest_turn()
             .map_err(|error| failure(error.to_string()))?
-            .last()
-            .map(|record| record.turn_id.clone());
+            .cloned();
         let predecessor = match prior {
             Some(prior) if prior != spec.turn_id && allow_predecessor => {
                 if stores
