@@ -86,7 +86,7 @@ impl AxocoatlDaemon {
     ) -> Result<Option<WaysDecisionRecord>, DaemonError> {
         let id = Self::ways_decision_id(session_id, set_id)?;
         self.with_ways_archive(session_id, |archive| {
-            Ok(archive.get(&id).map_err(archive_error)?.cloned())
+            archive.get(&id).map_err(archive_error)
         })
     }
     /// The caller holds the existing attempt-operation lease and has stopped

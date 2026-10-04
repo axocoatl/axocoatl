@@ -20,6 +20,11 @@ pub const WAYS_RETENTION_LIMITS_VERSION: u32 = 1;
 /// Caller-configured versioned admission limits. There is no default retention
 /// budget. The host supplies the complete aggregate ownership scope and must
 /// retain every previously promised record when configuration changes.
+///
+/// `records` and `aggregate_bytes` bound what is retained at once: the
+/// retained decisions, the protected patches they pin, and the room each
+/// unfinished decision reserves for its final receipts. Deleting a decision
+/// releases its share; its deletion tombstone is kept and not counted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WaysRetentionLimits {

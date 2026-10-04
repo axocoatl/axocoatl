@@ -679,7 +679,7 @@ async fn cleaned_incomplete_ways_require_exact_decision_and_preserve_explicit_st
                         recorded_at_unix_ms: 2,
                     };
                     archive.record_progress(record.clone()).unwrap();
-                    record = archive.get(&record.decision_id).unwrap().unwrap().clone();
+                    record = archive.get(&record.decision_id).unwrap().unwrap();
                     Ok(())
                 })
                 .unwrap();
@@ -1071,7 +1071,7 @@ async fn recovered_running_ways_freeze_interrupted_under_cleanup_lease_and_close
                 recorded_at_unix_ms: 2,
             };
             archive.record_progress(record.clone()).unwrap();
-            Ok(archive.get(&record.decision_id).unwrap().unwrap().clone())
+            Ok(archive.get(&record.decision_id).unwrap().unwrap())
         })
         .unwrap();
     f.registry

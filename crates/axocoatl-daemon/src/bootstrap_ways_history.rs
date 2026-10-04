@@ -4,7 +4,7 @@ use super::*;
 use axocoatl_session::execution_namespace::ExecutionComponent;
 use axocoatl_session::ways_decision::*;
 use axocoatl_session::ways_decision_store::{
-    DeletedWaysDecision, PinnedWaysPatch, WaysDecisionStore,
+    DeletedWaysDecision, PinnedWaysPatch, WaysDecisionStore, MAX_WAYS_PATCH_BYTES,
 };
 use serde::{Deserialize, Serialize};
 #[path = "bootstrap_ways_decision.rs"]
@@ -186,13 +186,9 @@ impl AxocoatlDaemon {
                 .map_err(archive_error)?,
         );
         self.with_ways_archive(session_id, |archive| {
-            let record = archive
-                .get(&id)
-                .map_err(archive_error)?
-                .cloned()
-                .ok_or_else(|| {
-                    archive_error("This decision is unavailable or was explicitly deleted")
-                })?;
+            let record = archive.get(&id).map_err(archive_error)?.ok_or_else(|| {
+                archive_error("This decision is unavailable or was explicitly deleted")
+            })?;
             let mut patches = Vec::new();
             let mut seen = std::collections::HashSet::new();
             for candidate in &record.candidates {
@@ -224,10 +220,9 @@ impl AxocoatlDaemon {
         );
         if self.with_ways_archive(session_id, |archive| {
             Ok(archive
-                .deleted()
+                .deleted_decision(&id)
                 .map_err(archive_error)?
-                .iter()
-                .any(|deleted| deleted.decision_id == id))
+                .is_some())
         })? {
             return Ok(());
         }
@@ -335,8 +330,8 @@ impl AxocoatlDaemon {
                         supports_retention: true,
                         session_id: session_id.into(),
                         limits: Some(archive.limits()),
-                        decisions: archive.records().map_err(archive_error)?.to_vec(),
-                        deleted: archive.deleted().map_err(archive_error)?.to_vec(),
+                        decisions: archive.records().map_err(archive_error)?,
+                        deleted: archive.deleted().map_err(archive_error)?,
                     },
                     None => WaysHistoryView {
                         schema_version: 1,
@@ -447,6 +442,12 @@ impl AxocoatlDaemon {
                 .await?,
                 "retaining exact checked patch",
             )?;
+            // One patch is bounded by the per-patch limit, never by how much
+            // the Session may retain in total.
+            let limit = limit.min(MAX_WAYS_PATCH_BYTES);
+            if git.file_len(&key).map_err(archive_error)? > limit as u64 {
+                return Err(archive_error(WaysDecisionError::Capacity));
+            }
             let bytes = git.read_limited(&key, limit).map_err(archive_error)?;
             let pinned = PinnedWaysPatch::capture(&bytes).map_err(archive_error)?;
             if pinned.sha256 != checked.patch_sha256 {
