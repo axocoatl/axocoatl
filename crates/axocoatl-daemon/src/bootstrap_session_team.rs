@@ -1151,13 +1151,7 @@ impl AxocoatlDaemon {
                     None,
                 )
                 .map_err(team_error)?;
-                for revision in 1..=store.configuration_revision().map_err(team_error)? {
-                    let Some(record) = store.get(revision).map_err(team_error)? else {
-                        return Err(team_error("Saved Session configuration is missing"));
-                    };
-                    if record.command_id != command_id {
-                        continue;
-                    }
+                if let Some(record) = store.find_command(&command_id).map_err(team_error)? {
                     let first = record
                         .graph
                         .slots
@@ -1242,8 +1236,7 @@ impl AxocoatlDaemon {
                     store
                         .get(edit.expected_configuration_revision)
                         .map_err(team_error)?
-                        .cloned()
-                        .map(Some)
+                        .map(|record| Some(record.as_ref().clone()))
                         .ok_or_else(|| {
                             team_error("Session configuration changed; refresh the team")
                         })

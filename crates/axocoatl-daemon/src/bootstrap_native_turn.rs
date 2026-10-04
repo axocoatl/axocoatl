@@ -332,8 +332,10 @@ pub(super) fn prepare_admission(
         )
         .map_err(failure)?;
         let accepted = canonical.turn(&request.turn_id).map_err(failure)?.is_some();
+        let stored;
         let revision = if accepted {
-            team.get(request.expected_team_revision).map_err(failure)?
+            stored = team.get(request.expected_team_revision).map_err(failure)?;
+            stored.as_deref()
         } else {
             team.current().map_err(failure)?
         }
@@ -917,8 +919,10 @@ pub(super) fn verify_selected_team(
         None,
     )
     .map_err(failure)?;
+    let stored;
     let selected = if canonical.turn(turn).map_err(failure)?.is_some() {
-        team.get(revision).map_err(failure)?
+        stored = team.get(revision).map_err(failure)?;
+        stored.as_deref()
     } else {
         team.current().map_err(failure)?
     }
