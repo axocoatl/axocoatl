@@ -7,7 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Reasoning models in native OpenRouter Sessions.** A model whose OpenRouter catalog
+  entry describes reasoning, such as `anthropic/claude-sonnet-5.5` (reasoning mandatory)
+  or `openai/gpt-5.6-sol` (reasoning on by default), now runs in a native Session
+  instead of being refused. Every call sends the documented `reasoning` setting: the
+  new per-Agent `sampling.reasoning_effort` (`max`, `xhigh`, `high`, `medium`, `low`,
+  `minimal` or `none`), or the model's own default effort when it is unset. An effort the
+  model does not list, `none` for a model whose reasoning is mandatory, and an effort for
+  a non-reasoning model are refused by name when Team & budget is applied. Each call's
+  `max_tokens` is its output limit plus a reasoning allowance sized from OpenRouter's
+  share for the effort (four times the output at `high`, once at `medium`, a quarter at
+  `low`, at least OpenRouter's 1,024-token minimum), so reasoning does not starve the
+  answer. Reasoning tokens are output in usage, grants and cost. The reasoning blocks of
+  a tool-calling response are kept on its first tool call and sent back unmodified with
+  the tool results, as OpenRouter documents, and reasoning text streams to the Session.
+
 ### Fixed
+- **Native OpenRouter reserves each call's own request, not the context window.** A
+  call reserved the endpoint's whole context window plus its output, about 1.06 million
+  tokens and $2.08 on a 1M-context model, so a modest grant could never make one. A call
+  now reserves the byte length of the exact request body plus 4,096 tokens for the
+  provider's chat template, plus the reasoning tokens of earlier tool turns it sends
+  back, capped at the endpoint's prompt limit; plus its output limit and reasoning
+  allowance. It still settles to OpenRouter's reported usage and cost, and usage beyond
+  the reservation is refused with its spend kept. Team & budget checks that the smallest
+  call fits the approved tokens and money; without `sampling.max_tokens`, the response
+  allowance takes at most half of the whole-call capacity.
+- **Native OpenRouter prices every component it can be billed for.** An endpoint was
+  refused when it priced anything beyond prompt, completion and cache reads, which
+  excluded every current frontier model (cache writes and `web_search` are priced on
+  both models above, and `openai/gpt-5.6-sol` has tiered prices). The cost ceiling now
+  uses the highest input rate of the prompt, cache read and cache write prices and the
+  highest output rate of the completion and internal reasoning prices, at the highest
+  tier, plus any per-request fee; `max_price` carries the same ceilings. Web search,
+  image and audio prices are retained as features the request cannot start: it sends
+  text and function tools only, no server tools, no `modalities` or
+  `web_search_options`, refuses `:online` model ids, and turns the web plugin off
+  explicitly, which overrides an account default. A response that reports a server
+  tool, web citations, or image or audio output is refused. An endpoint that charges
+  for anything else is refused and the error names the component. A provider tag such
+  as `anthropic` qualifies when no other variant shares it, and the cheapest qualifying
+  endpoint is selected first. Profiles retained by 1.2.0 keep working unchanged.
 - **`browser` and `browser_check` accept `null` for an optional argument and explain
   every refusal.** A model that gave an optional argument as `null`, such as
   `"snapshot": null`, had the whole call refused, and a refusal said only which rule

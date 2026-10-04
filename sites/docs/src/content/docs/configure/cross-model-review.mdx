@@ -75,9 +75,10 @@ providers:
     api_key: "${OPENROUTER_API_KEY}"
 ```
 
-The reviewer then uses an OpenRouter-credit profile with whole-call budget reservations,
-while the lead stays local. Only eligible models work: an exact endpoint with text
-output, tool calling, an enforced output limit and complete pricing. See
+The reviewer then uses an OpenRouter-credit profile with per-request budget
+reservations, while the lead stays local. Only eligible models work: an exact endpoint
+with text output, tool calling, an enforced output limit and prices Axocoatl can bound;
+reasoning models qualify. See
 [Configure OpenRouter](/configure/providers/#configure-openrouter). The reviewer is
 shown the request, the lead's answer and the change, so they leave your machine for
 OpenRouter.

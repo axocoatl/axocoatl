@@ -451,6 +451,26 @@ Review every path by which content can leave the machine:
 `axocoatl doctor` prints configured webhook destinations as an egress notice.
 It does not prove the safety of any destination.
 
+## Bound hosted model spend
+
+A native Session's budget is enforced before each model call: the call reserves an
+upper bound of what it can use, and the provider's own report of the call settles it.
+For OpenRouter that bound is computed from the exact request (its bytes plus a fixed
+template allowance for the prompt, and its output limit plus a reasoning allowance for
+the response) at the highest input and output prices the endpoint lists, including
+cache writes and every price tier. A response that reports more than its reservation
+is refused and keeps its reported spend. See
+[What each request reserves](/configure/providers/#what-each-request-reserves).
+
+What leaves your computer with a native OpenRouter request is its messages, tool
+definitions and tool results, and, for a reasoning model, the reasoning blocks of
+earlier tool turns, which Axocoatl sends back unmodified and keeps in the Session's
+history. The request turns OpenRouter's web plugin off and offers no OpenRouter server
+tools, so OpenRouter does not search the web or fetch pages for it; a response that
+shows otherwise is refused. Your OpenRouter account settings still apply: an account
+that forces a plugin with **Prevent overrides**, or connects BYOK provider keys, breaks
+this contract, and Axocoatl cannot change or always detect those settings.
+
 ## Handle secrets
 
 - The onboarding wizard uses a masked prompt. A supplied hosted-provider key is

@@ -111,6 +111,7 @@ agents:
       top_p: null
       max_tokens: 4096
       response_format: text
+      reasoning_effort: null
     memory:
       max_session_messages: 100
       recall:
@@ -146,7 +147,12 @@ contains `{label, value?, limit?, shared?, description?}` with a default limit
 of 2000 characters.
 
 Sampling fields are optional and adapter support varies. `response_format` is
-`text` or `json`.
+`text` or `json`. `reasoning_effort` is `max`, `xhigh`, `high`, `medium`, `low`,
+`minimal` or `none`; any other value is a configuration error. Native OpenRouter sends
+it to a reasoning model and sizes each call's reasoning allowance from it; without it,
+the model's own default effort is used. A non-reasoning model, an effort the model does
+not list, or `none` for a model that requires reasoning is refused when Team & budget
+is applied. See [Reasoning models](/configure/providers/#reasoning-models).
 
 ## Providers
 
@@ -183,9 +189,9 @@ A known smaller fallback rejects an already oversized request locally, while
 unknown custom-model constraints remain endpoint-validated.
 
 Native Sessions accept reviewed local Ollama profiles or eligible OpenRouter-credit
-profiles. `openrouter_billing: credits` declares credit billing with no connected
-BYOK provider keys; it does not change the account. Native OpenRouter also rejects
-custom endpoints and configured fallback. Review the full
+profiles, reasoning models included. `openrouter_billing: credits` declares credit
+billing with no connected BYOK provider keys; it does not change the account. Native
+OpenRouter also rejects custom endpoints and configured fallback. Review the full
 [provider requirements](/configure/providers/) before applying **Team & budget**;
 YAML token guards do not replace its explicit Session authority.
 

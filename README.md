@@ -215,10 +215,10 @@ tokens, and one Agent is cheaper for small tasks. To change the team, see
 
 New data roots use the native Session controller. **Team & budget** requires explicit
 limits and expiry before execution. Its enforced provider boundary currently supports
-reviewed local Ollama profiles and eligible OpenRouter text/tool endpoints paid with
-OpenRouter credits. OpenRouter requires `providers.openrouter_billing: credits`, a
-normal API key, and an account with no connected BYOK provider keys. BYOK is not
-supported. A compatible HTTP API alone does not establish a bound.
+reviewed local Ollama profiles and eligible OpenRouter text/tool endpoints, reasoning
+models included, paid with OpenRouter credits. OpenRouter requires
+`providers.openrouter_billing: credits`, a normal API key, and an account with no
+connected BYOK provider keys. BYOK is not supported. A compatible HTTP API alone does not establish a bound.
 The onboarding wizard offers Ollama and OpenRouter for native Sessions. For Ollama it
 checks that the server is a loopback Ollama 0.20.6 with its cloud features disabled
 (`OLLAMA_NO_CLOUD=1`, or `{"disable_ollama_cloud": true}` in `~/.ollama/server.json`),

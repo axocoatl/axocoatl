@@ -145,8 +145,10 @@ Automation store; editing an Automation does not edit a Session team.
 
 In a native Session, **Team & budget** captures the selected Agent configuration
 and requires explicit activation, invocation, token, cost, and expiry limits.
-Each model call reserves its whole context and output against those limits before it is
-sent. When the provider reports what the call used, only that stays charged and the rest
+Each model call reserves an upper bound of what it can use against those limits before
+it is sent: for local Ollama the loaded context and the output limit, for OpenRouter a
+bound of the request's own prompt plus its output and reasoning allowance (see
+[What each request reserves](/configure/providers/#what-each-request-reserves)). When the provider reports what the call used, only that stays charged and the rest
 of the reservation is available again; a call whose usage is not reported, such as an
 interrupted one, keeps its whole reservation. A helper's limits are reserved from its
 lead's approved aggregate allowance while the helper runs; when it finishes or is stopped,

@@ -195,14 +195,22 @@ reserved in full.
 
 Native provider preparation supports reviewed local Ollama profiles and bounded
 OpenRouter-credit profiles. OpenRouter retains one exact static model and qualified
-endpoint variant, non-reasoning text/tool capabilities, context/output limits, and
-decimal price ceilings. Those metadata are revalidated before each request; the wire
-request pins the endpoint, disables fallbacks, and supplies output and price limits.
-Admission reserves the full context allowance plus bounded output at those rates.
-Streaming retains terminal measured tokens and billed cost independently of accepted
-output and settles the reservation to them; incomplete responses keep the reservation and
-unknown usage. The normal API key stays in daemon configuration, never retained profile
-evidence.
+endpoint variant, its text/tool capabilities, context/output limits, the catalog's
+reasoning contract for a reasoning model, and two decimal price ceilings: the highest
+input rate (prompt, cache read, cache write, every tier) and the highest output rate
+(completion, internal reasoning, every tier), plus any per-request fee. Priced features a
+native request cannot start (web search, image and audio) are retained by name. Those
+metadata are revalidated before each request; the wire request pins the endpoint,
+disables fallbacks and the web plugin, sends the Agent's resolved `reasoning` setting,
+and supplies `max_tokens` and price limits. Each call reserves a bound of its own
+request: the body's bytes plus a template allowance and any replayed reasoning tokens
+for the prompt, and the output limit plus the effort's reasoning allowance for the
+response, at those rates. Streaming retains terminal measured tokens (reasoning as
+output) and billed cost independently of accepted output and settles the reservation to
+them; usage beyond the reservation is a contract breach that keeps the spend; incomplete
+responses keep the reservation and unknown usage. Reasoning blocks of a tool-calling
+response ride on its first tool call and are sent back unmodified with the tool results.
+The normal API key stays in daemon configuration, never retained profile evidence.
 `providers.openrouter_billing: credits` explicitly declares an account without
 connected BYOK keys. This is a supported configuration requirement, not detection or
 prevention of external account changes. BYOK execution is not supported; an unexpected
