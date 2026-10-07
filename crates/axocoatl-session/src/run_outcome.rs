@@ -566,15 +566,18 @@ impl RunOutcome {
                 if missing == 1 { "" } else { "s" }
             ));
         }
-        if !self.not_covered.is_empty() {
+        // Areas, not entries: one area can have several entries (each part
+        // of it a worker did not reach).
+        let areas = self
+            .not_covered
+            .iter()
+            .map(|entry| entry.area.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        if areas > 0 {
             attention.push(format!(
-                "{} area{} not covered",
-                self.not_covered.len(),
-                if self.not_covered.len() == 1 {
-                    " was"
-                } else {
-                    "s were"
-                }
+                "{areas} area{} not covered",
+                if areas == 1 { " was" } else { "s were" }
             ));
         }
         if inputs.turn_needs_attention {
@@ -806,6 +809,34 @@ mod tests {
             run.decide(VerdictInputs::default()),
             exit_code::NEEDS_ATTENTION
         );
+    }
+
+    /// The audit re-smoke's summary said "4 areas were not covered" when
+    /// two areas had four entries between them.
+    #[test]
+    fn the_attention_line_counts_areas_not_entries() {
+        let entry = |area: &str, detail: &str| NotCovered {
+            area: area.into(),
+            class: FailureClass::NotReached,
+            detail: detail.into(),
+            node_id: None,
+            turn_id: None,
+        };
+        let mut run = outcome();
+        run.not_covered = vec![
+            entry("ingest", "ingest/src/lib.rs"),
+            entry("ingest", "ingest/src/main.rs"),
+            entry("ingest", "ingest/**/*.rs"),
+            entry("notify", "the report could not be read"),
+        ];
+        assert_eq!(
+            run.decide(VerdictInputs::default()),
+            exit_code::NEEDS_ATTENTION
+        );
+        assert_eq!(run.attention, ["2 areas were not covered"]);
+        run.not_covered.truncate(3);
+        run.decide(VerdictInputs::default());
+        assert_eq!(run.attention, ["1 area was not covered"]);
     }
 
     #[test]

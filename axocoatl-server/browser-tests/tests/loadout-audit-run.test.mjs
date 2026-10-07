@@ -40,9 +40,15 @@ function answer(body) {
     return { role: 'assistant', content: `FINDINGS${fence([{ id: 'A1', title: 'README has no usage section', severity: 'low', location: 'README.md:1', area: 'docs' }])}` };
   }
   const area = text.match(/Your area: ([a-z0-9-]+)/);
-  if (area) {
-    const findings = area[1] === 'docs' ? [{ id: 'F1', title: 'README has no usage section', severity: 'low', location: 'README.md:1' }] : [];
+  if (area?.[1] === 'docs') {
+    const findings = [{ id: 'F1', title: 'README has no usage section', severity: 'low', location: 'README.md:1' }];
     return { role: 'assistant', content: `FINDINGS${fence(findings)}NOT_REACHED${fence([])}` };
+  }
+  if (area) {
+    // As the 1.3.0 re-smoke's notify worker answered: one unfenced JSON
+    // object with uppercase block keys, listing another planned area and a
+    // path that does not exist as not reached.
+    return { role: 'assistant', content: JSON.stringify({ FINDINGS: [], NOT_REACHED: ['docs', 'src/main.rs'] }, null, 2) };
   }
   return { role: 'assistant', content: `AREAS${fence({ areas: [
     { name: 'docs', scope: 'the README', paths: ['README.md'] },
@@ -107,7 +113,11 @@ test('the audit loadout plans two areas, runs a read-only worker per area and in
   assert.equal(result.code, 0);
   assert.deepEqual(outcome.turns.map((turn) => [turn.purpose, turn.state]),
     [['audit_plan', 'completed'], ['audit_areas', 'completed'], ['audit_integrate', 'completed']]);
+  // The code worker's answer was read; neither the other area nor the
+  // missing path is a gap, and both are notes in the run's progress.
   assert.deepEqual(outcome.not_covered, []);
+  assert.match(result.stderr, /note: worker-code listed other planned areas as not reached \(docs\)/);
+  assert.match(result.stderr, /note: worker-code listed src\/main\.rs as not reached, and no such path exists/);
   assert.equal(outcome.findings.length, 1, JSON.stringify(outcome.findings));
   assert.equal(outcome.findings[0].title, 'README has no usage section');
   assert.equal(outcome.findings[0].area, 'docs');

@@ -784,7 +784,7 @@ routes:
     inject: { header: Authorization, format: "Bearer {}" }
   - host: plain.example.com
 budgets:
-  agent: { activations: 1, invocations: 10, tokens: 1000, cost_usd: 1 }
+  agent: { activations: 1, invocations: 10, tokens: 100000, cost_usd: 1 }
   wall_clock: 30m
 prompt: "{task}"
 environment: { recipes: [e2e] }

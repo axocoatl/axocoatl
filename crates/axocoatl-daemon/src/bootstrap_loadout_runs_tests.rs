@@ -533,6 +533,17 @@ async fn admission_child_body() {
         admission_yaml(&server.uri(), "{cidr: 192.168.1.0/24, ports: [8766]}"),
     )
     .unwrap();
+    // A loadout whose writer's tokens budget is valid on its own but cannot
+    // hold one call of the model's 32768-token context plus its 8192-token
+    // output bound.
+    std::fs::create_dir(dir.path().join(USER_LOADOUT_DIR)).unwrap();
+    std::fs::write(
+        dir.path().join(USER_LOADOUT_DIR).join("tight.yaml"),
+        NATIVE_RUN
+            .replace("id: native-run", "id: tight")
+            .replace("tokens: 100000", "tokens: 40000"),
+    )
+    .unwrap();
     let config = axocoatl_config::load_config(&path).await.unwrap();
     let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
     daemon.set_config_path(&path);
@@ -608,6 +619,34 @@ async fn admission_child_body() {
     daemon.reload_network_policy().await.unwrap();
     let message = conflict(admit(request("http://shop.example.test:8080", "host-after")).await);
     assert!(message.contains(&holder.id), "{message}");
+
+    // A tokens budget below one call of the model's observed context is a
+    // usage error (exit 3) naming the budget and the minimum, before the
+    // held Workspace is even asked for.
+    let message = usage(
+        admit(RunRequest {
+            loadout: "tight".into(),
+            task: "Read README.md.".into(),
+            repo: repo.path().display().to_string(),
+            params: [("writer_model".to_string(), format!("ollama:{MODEL}"))]
+                .into_iter()
+                .collect(),
+            keep: Default::default(),
+            check_command: None,
+            setup_command: None,
+            request_id: "tight".into(),
+        })
+        .await,
+    );
+    assert_eq!(
+        message,
+        format!(
+            "loadout field budgets.agent.tokens: 40000 tokens is less than one model call of \
+             Agent writer (ollama:{MODEL}) needs: the model's 32768-token context plus 8192 \
+             output tokens (agents.writer.max_output_tokens), at least 40960 tokens; raise it \
+             to at least 40960 or lower agents.writer.max_output_tokens"
+        )
+    );
 
     // A reproductions directory that is a link is refused before anything
     // is created.
@@ -905,6 +944,119 @@ prompt: "{task}"
 
 /// The task of the run the test stops while its provider call is running.
 const SLOW_TASK: &str = "Wait for the person to stop this run.";
+/// What the writer of the stopped run has written when it is stopped: part
+/// of an answer, as the fix re-smoke's writer had.
+const STREAMED_TEXT: &str = "I can see the issue now. Let me also look at the tests to better";
+
+/// A model server in front of `upstream` (the wiremock model server): a
+/// `/api/chat` call for [`SLOW_TASK`] streams one line of the writer's
+/// answer ([`STREAMED_TEXT`]) and then stalls without ending the stream, as
+/// a model does while it works; every other request goes to `upstream` as
+/// it came. Returns its base URL and how many such lines it has sent.
+async fn streaming_front(upstream: String) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    use http_body_util::{combinators::BoxBody, BodyExt, Full, StreamBody};
+    use hyper::body::{Bytes, Frame, Incoming};
+    type Body = BoxBody<Bytes, std::convert::Infallible>;
+
+    async fn respond(
+        request: hyper::Request<Incoming>,
+        client: reqwest::Client,
+        upstream: String,
+        streamed: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> hyper::Response<Body> {
+        let method = request.method().as_str().to_owned();
+        let target = request
+            .uri()
+            .path_and_query()
+            .map(|path| path.as_str().to_owned())
+            .unwrap_or_else(|| "/".into());
+        let content_type = request.headers().get("content-type").cloned();
+        let body = request
+            .into_body()
+            .collect()
+            .await
+            .map(|collected| collected.to_bytes())
+            .unwrap_or_default();
+        if target.starts_with("/api/chat") && String::from_utf8_lossy(&body).contains(SLOW_TASK) {
+            let model = serde_json::from_slice::<serde_json::Value>(&body)
+                .map(|body| body["model"].clone())
+                .unwrap_or_default();
+            let line = serde_json::json!({
+                "model": model, "created_at": "2026-10-07T00:00:00Z",
+                "message": {"role": "assistant", "content": STREAMED_TEXT},
+                "done": false
+            });
+            let (sender, receiver) =
+                tokio::sync::mpsc::channel::<Result<Frame<Bytes>, std::convert::Infallible>>(1);
+            tokio::spawn(async move {
+                if sender
+                    .send(Ok(Frame::data(Bytes::from(format!("{line}\n")))))
+                    .await
+                    .is_ok()
+                {
+                    streamed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                // Never end the stream: wait until the client goes away.
+                sender.closed().await;
+            });
+            return hyper::Response::builder()
+                .header("content-type", "application/x-ndjson")
+                .body(
+                    StreamBody::new(tokio_stream::wrappers::ReceiverStream::new(receiver)).boxed(),
+                )
+                .unwrap();
+        }
+        let mut forwarded = client.request(
+            reqwest::Method::from_bytes(method.as_bytes()).unwrap(),
+            format!("{upstream}{target}"),
+        );
+        if let Some(content_type) = content_type {
+            forwarded = forwarded.header("content-type", content_type.as_bytes());
+        }
+        let (status, content_type, bytes) = match forwarded.body(body.to_vec()).send().await {
+            Ok(response) => (
+                response.status().as_u16(),
+                response
+                    .headers()
+                    .get("content-type")
+                    .map(|value| value.as_bytes().to_vec()),
+                response.bytes().await.unwrap_or_default(),
+            ),
+            Err(error) => (502, None, Bytes::from(error.to_string())),
+        };
+        let mut response = hyper::Response::builder().status(status);
+        if let Some(content_type) = content_type {
+            response = response.header("content-type", content_type);
+        }
+        response.body(Full::new(bytes).boxed()).unwrap()
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let client = reqwest::Client::new();
+    let streamed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = streamed.clone();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let (client, upstream, counter) = (client.clone(), upstream.clone(), counter.clone());
+            tokio::spawn(async move {
+                let service = hyper::service::service_fn(move |request| {
+                    let (client, upstream, counter) =
+                        (client.clone(), upstream.clone(), counter.clone());
+                    async move {
+                        Ok::<_, std::convert::Infallible>(
+                            respond(request, client, upstream, counter).await,
+                        )
+                    }
+                });
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+    (format!("http://{address}"), streamed)
+}
 
 /// Native Ollama's `/api/chat` as a model whose tool call Ollama cannot
 /// parse answers it: the first call asks for read_file (120 input and 7
@@ -917,12 +1069,6 @@ struct ToolCallThenParseError {
 impl wiremock::Respond for ToolCallThenParseError {
     fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
         let body: serde_json::Value = request.body_json().unwrap_or_default();
-        if body.to_string().contains(SLOW_TASK) {
-            // A call that is still running when the run is stopped.
-            return ResponseTemplate::new(200)
-                .set_delay(Duration::from_secs(300))
-                .set_body_raw("{}\n", "application/x-ndjson");
-        }
         let reply = if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
             serde_json::json!({
                 "model": body["model"], "created_at": "2026-10-07T00:00:00Z",
@@ -1134,13 +1280,15 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
         })
         .mount(&server)
         .await;
+    // The stopped run's writer streams part of an answer before it stalls,
+    // so its stop goes through the path a real model's does.
+    let (models, streamed) = streaming_front(server.uri()).await;
     let config_dir = tempfile::tempdir().unwrap();
     let config_path = config_dir.path().join("axocoatl.yaml");
     std::fs::write(
         &config_path,
         format!(
-            "agents: []\nproviders:\n  ollama:\n    base_url: {}\nsandbox:\n  backend: podman\n  network: bridge\nconsolidation:\n  enabled: false\n",
-            server.uri()
+            "agents: []\nproviders:\n  ollama:\n    base_url: {models}\nsandbox:\n  backend: podman\n  network: bridge\nconsolidation:\n  enabled: false\n"
         ),
     )
     .unwrap();
@@ -1345,10 +1493,11 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
         assert_eq!(slot["reset_history"], true, "{team}");
         assert_eq!(slot["tools"], serde_json::json!(["read_file"]), "{team}");
 
-        // A run a person stops while its writer's provider call is running
-        // ends interrupted; the writer is not covered because of the stop,
-        // with a reason, never "other" with an empty one; and the Workspace
-        // is free again.
+        // A run a person stops while its writer's provider call is running,
+        // after the writer streamed part of its answer, ends interrupted;
+        // the writer is not covered because of the stop, with a reason,
+        // never "other" with an empty one or with the half-written answer;
+        // and the Workspace is free again.
         let stopped_repo = outside.path().join("stopped");
         std::fs::create_dir_all(&stopped_repo).unwrap();
         let (stopped, stopped_context) = daemon
@@ -1376,18 +1525,46 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
                 crate::loadout::driver::run_to_outcome(&host, &stopped_context).await
             })
         };
+        // Stop once the writer's partial answer is in its turn's record.
         let started = tokio::time::Instant::now();
         loop {
-            let calls = server.received_requests().await.unwrap_or_default();
-            if calls.iter().any(|request| {
-                request.url.path() == "/api/chat"
-                    && String::from_utf8_lossy(&request.body).contains(SLOW_TASK)
-            }) {
+            let turn_id = daemon
+                .loadout_run_recorded_events(&stopped.run_id)?
+                .into_iter()
+                .find_map(|event| match event {
+                    RunEvent::TurnStarted { turn_id, .. } => Some(turn_id),
+                    _ => None,
+                });
+            let recorded = match &turn_id {
+                Some(turn_id) => daemon
+                    .session_turn_control_plane(&stopped.session_id, turn_id)
+                    .await?
+                    .is_some_and(|view| {
+                        view.nodes
+                            .iter()
+                            .flat_map(|node| &node.activations)
+                            .any(|activation| {
+                                activation.evidence.iter().any(|evidence| {
+                                    evidence.kind == "stream_text"
+                                        && matches!(
+                                            &evidence.summary,
+                                            crate::session_control_plane::EvidenceValue::Available {
+                                                value
+                                            } if value.contains(STREAMED_TEXT)
+                                        )
+                                })
+                            })
+                    }),
+                None => false,
+            };
+            if recorded {
                 break;
             }
             assert!(
                 started.elapsed() < Duration::from_secs(120),
-                "the stopped run's provider call never started"
+                "the stopped run's writer never recorded its partial answer ({} lines \
+                 streamed, turn {turn_id:?})",
+                streamed.load(std::sync::atomic::Ordering::SeqCst)
             );
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
@@ -1402,10 +1579,17 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
             assert!(
                 !entry.detail.trim().is_empty()
                     && entry.detail != "other: "
+                    && !entry.detail.contains(STREAMED_TEXT)
                     && entry.class != axocoatl_session::run_outcome::FailureClass::Other,
                 "{entry:?}"
             );
         }
+        let writer = outcome
+            .not_covered
+            .iter()
+            .find(|entry| entry.area == "writer")
+            .unwrap_or_else(|| panic!("{:?}", outcome.not_covered));
+        assert_eq!(writer.reason(), "stopped: writer ended without a result");
         let operation = daemon
             .attempt_operation_for_workspace(&stopped.workspace_id)
             .await;

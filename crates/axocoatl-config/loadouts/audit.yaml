@@ -8,9 +8,11 @@
 #      with a fresh context and no dependencies (no checks, no review);
 #   3. integrate: the integrator merges every worker's report. Integration is
 #      its own turn, so the integrator has no depends_on.
-# A worker without a result and every NOT_REACHED entry are listed as not
-# covered, which makes the run need attention (exit 2). Findings alone do
-# not change the exit code unless fail_on_findings is true.
+# A worker without a result and every NOT_REACHED entry of its own area are
+# listed as not covered, which makes the run need attention (exit 2); an
+# entry naming another planned area is dropped (that area's worker audits
+# it), and one naming a path that does not exist is a note, not a gap.
+# Findings alone do not change the exit code unless fail_on_findings is true.
 #
 # Measured trade-off, not an Axocoatl result: on an audit larger than one
 # context, orchestrated read-only area workers had recall +11 points (99% vs
@@ -60,8 +62,10 @@ agents:
     instructions: >-
       Audit only your area. Change nothing; your commands cannot write to the
       repository. Report each defect with file:line, evidence and severity in
-      a FINDINGS JSON block, and list every part of your area you did not
-      examine in a NOT_REACHED JSON block.
+      a FINDINGS JSON block, and list every existing path of your area you did
+      not examine in a NOT_REACHED JSON block ([] when you examined all of
+      it). The other areas of the plan are audited by other workers: never
+      list them as not reached.
   - id: integrator
     role: integrator
     model: { param: integrator_model }

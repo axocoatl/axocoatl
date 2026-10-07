@@ -479,6 +479,13 @@ async fn a_plan_runs_one_fresh_read_only_worker_per_area_then_integrates() {
             instructions.contains("Audit only your area"),
             "{instructions}"
         );
+        // Workers are told the other areas are covered by other workers.
+        assert!(
+            instructions.contains("those areas are covered: never list them as not reached")
+                && instructions
+                    .contains("audited by other workers: never list them as not reached"),
+            "{instructions}"
+        );
         assert!(instructions.contains("FINDINGS") && instructions.contains("NOT_REACHED"));
     }
     let auth = calls[1].0[0].instructions.as_deref().unwrap();
@@ -605,10 +612,14 @@ async fn a_failed_worker_and_unreached_parts_are_not_covered() {
     assert_eq!(
         entries,
         [
-            ("auth: src/auth/oauth.rs", FailureClass::NotReached),
+            ("auth", FailureClass::NotReached),
             ("db", FailureClass::ProviderRefusal),
             ("api", FailureClass::Other),
         ]
+    );
+    assert_eq!(
+        report.not_covered[0].detail,
+        "src/auth/oauth.rs (the area worker reported it did not reach this)"
     );
     let db = &report.not_covered[1];
     assert!(db.detail.contains("classifier stop"), "{}", db.detail);
@@ -639,7 +650,10 @@ async fn a_failed_worker_and_unreached_parts_are_not_covered() {
     assert!(request.contains("REPORT of area api") && request.contains("I looked around."));
     assert!(!request.contains("REPORT of area db"));
     assert!(request.contains("- db (provider_refusal)"), "{request}");
-    assert!(request.contains("- auth: src/auth/oauth.rs (not_reached)"));
+    assert!(
+        request.contains("- auth (not_reached): src/auth/oauth.rs (the area worker"),
+        "{request}"
+    );
 
     let outcome = outcome_of(&report);
     assert_eq!(outcome.exit_code, exit_code::NEEDS_ATTENTION);
@@ -647,6 +661,252 @@ async fn a_failed_worker_and_unreached_parts_are_not_covered() {
         .attention
         .iter()
         .any(|reason| reason.contains("3 areas were not covered")));
+}
+
+/// The 1.3.0 re-smoke's fixture repository: four areas, one file each
+/// (and an empty `notify/__init__.py`).
+fn smoke_repository() -> tempfile::TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    for (path, text) in [
+        ("README.md", "# fixture\n"),
+        ("auth/__init__.py", ""),
+        ("auth/tokens.py", "def is_valid(token): ...\n"),
+        ("billing/__init__.py", ""),
+        ("billing/pagination.py", "def get_page(items, page): ...\n"),
+        ("ingest/feed.go", "package ingest\n"),
+        ("ingest/go.mod", "module ingest\n"),
+        ("notify/__init__.py", ""),
+        ("notify/webhook.py", "TOKEN = 'x'\n"),
+        ("tests/test_billing.py", "def test_page(): ...\n"),
+    ] {
+        let path = repo.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    std::fs::create_dir_all(repo.path().join(".git/objects")).unwrap();
+    std::fs::write(repo.path().join(".git/objects/lib.rs"), "").unwrap();
+    repo
+}
+
+fn smoke_plan() -> AuditPlan {
+    let area = |name: &str, paths: &[&str]| AuditArea {
+        name: name.into(),
+        scope: format!("the {name} module"),
+        paths: paths.iter().map(|path| path.to_string()).collect(),
+    };
+    AuditPlan {
+        areas: vec![
+            area("auth", &["auth/**"]),
+            area("billing", &["billing/**"]),
+            area("ingest", &["ingest/**"]),
+            area("notify", &["notify/**/*"]),
+        ],
+    }
+}
+
+#[test]
+fn not_reached_entries_are_gaps_other_areas_or_missing_paths() {
+    let repo = smoke_repository();
+    let plan = smoke_plan();
+    let classify =
+        |area: usize, item: &str| classify_not_reached(item, &plan.areas[area], &plan, repo.path());
+    use NotReachedItem::*;
+    // Other planned areas, by name in the forms models write, or by a path
+    // only their patterns name.
+    for item in [
+        "billing",
+        "Billing",
+        "the billing area",
+        "billing module (another worker)",
+        "billing/",
+        "billing/**",
+        "billing/pagination.py",
+        "`billing/pagination.py:16`",
+    ] {
+        assert_eq!(classify(0, item), OtherArea("billing".into()), "{item}");
+    }
+    // Paths that name nothing in the repository: the run 1 ingest worker's.
+    for (item, path) in [
+        ("ingest/src/lib.rs", "ingest/src/lib.rs"),
+        ("ingest/src/main.rs", "ingest/src/main.rs"),
+        ("ingest/**/*.rs", "ingest/**/*.rs"),
+        ("./ingest/handlers.go (budget)", "ingest/handlers.go"),
+        ("feed.rs", "feed.rs"),
+        ("*.rs", "*.rs"),
+    ] {
+        assert_eq!(classify(2, item), NoSuchPath(path.into()), "{item}");
+    }
+    // Real gaps: existing paths of the area, prose, its own name, and what
+    // only exists inside .git.
+    for item in [
+        "notify/__init__.py",
+        "notify/",
+        "notify/**/*.py",
+        "__init__.py",
+        "webhook.py:12",
+        "All other files in notify directory were examined",
+        "notify",
+        "the retry logic",
+        "/workspace/notify/missing.py",
+        "../outside.py",
+    ] {
+        assert_eq!(classify(3, item), Gap, "{item}");
+    }
+    assert_eq!(classify(2, "lib.rs"), NoSuchPath("lib.rs".into()));
+    assert_eq!(classify(2, ".git/objects/lib.rs"), Gap);
+    // Without a readable repository nothing is dropped as missing.
+    let gone = repo.path().join("gone");
+    assert_eq!(
+        classify_not_reached("ingest/src/lib.rs", &plan.areas[2], &plan, &gone),
+        Gap
+    );
+    // A pattern that needs more of the repository than the bound stays a
+    // gap.
+    let big = tempfile::tempdir().unwrap();
+    for index in 0..=MAX_PATH_WALK_ENTRIES {
+        std::fs::write(big.path().join(format!("f{index}.txt")), "").unwrap();
+    }
+    assert_eq!(
+        classify_not_reached("*.rs", &plan.areas[2], &plan, big.path()),
+        Gap
+    );
+}
+
+/// The 1.3.0 re-smoke's audits ended needing attention in both runs only
+/// because workers listed other areas and invented paths as not reached;
+/// with each worker's answer as recorded (run 1's notify answer verbatim,
+/// one JSON object with uppercase keys), the run now passes, and real gaps
+/// of one area count as one area.
+#[tokio::test]
+async fn other_areas_and_missing_paths_are_not_gaps() {
+    let notify = include_str!(
+        "../../../axocoatl-session/tests/fixtures/answers/audit-run1-worker-notify.txt"
+    );
+    let plan = format!(
+        "AREAS\n```json\n{}\n```",
+        serde_json::json!({"areas": smoke_plan().areas})
+    );
+    let integrated = integrated_answer(&[
+        ("Timing attack", "auth"),
+        ("Off by one", "billing"),
+        ("Unchecked Unmarshal", "ingest"),
+        ("Hardcoded token", "notify"),
+    ]);
+    let script = |notify_answer: String| {
+        vec![
+            turn(
+                TurnState::Completed,
+                vec![(PLANNER_SLOT, Node::Answer(plan.clone()))],
+            ),
+            turn(
+                TurnState::Completed,
+                vec![
+                    (
+                        "worker-auth",
+                        Node::Answer(worker_answer(
+                            &[("Timing attack", "auth/tokens.py:19")],
+                            &["billing", "ingest", "notify"],
+                        )),
+                    ),
+                    (
+                        "worker-billing",
+                        Node::Answer(worker_answer(
+                            &[("Off by one", "billing/pagination.py:16")],
+                            &[],
+                        )),
+                    ),
+                    (
+                        "worker-ingest",
+                        Node::Answer(worker_answer(
+                            &[("Unchecked Unmarshal", "ingest/feed.go:29")],
+                            &["ingest/src/lib.rs", "ingest/src/main.rs", "ingest/**/*.rs"],
+                        )),
+                    ),
+                    ("worker-notify", Node::Answer(notify_answer)),
+                ],
+            ),
+            turn(
+                TurnState::Completed,
+                vec![(INTEGRATOR_SLOT, Node::Answer(integrated.clone()))],
+            ),
+        ]
+    };
+    let repo = smoke_repository();
+    let mut run = context(later());
+    run.options.repo = repo.path().to_path_buf();
+
+    let host = FakeHost::new(script(notify.to_owned()));
+    let (report, _) = drive(&host, &run).await;
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    // The notify worker's report was read: the integrator got its findings.
+    let request = &host.sent()[2];
+    assert!(request.contains("REPORT of area notify"));
+    assert!(request.contains("Hardcoded Webhook Token"), "{request}");
+    assert!(!request.contains("could not be read"), "{request}");
+    assert!(!request.contains("Not covered"), "{request}");
+    // What was not a gap is in the record as a note.
+    let notes: Vec<String> = host
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|event| match event {
+            RunEvent::Phase { phase, detail, .. } if phase == "note" => Some(detail.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notes.len(), 5, "{notes:?}");
+    assert!(notes[0].contains(
+        "worker-auth listed other planned areas as not reached (billing, ingest, notify)"
+    ));
+    assert!(notes[1].contains(
+        "worker-ingest listed ingest/src/lib.rs as not reached, and no such path exists"
+    ));
+    assert!(notes[3].contains("ingest/**/*.rs"));
+    assert!(notes[4].contains(
+        "worker-notify listed other planned areas as not reached (auth, billing, ingest)"
+    ));
+    // The workers were told the other areas are covered.
+    let outcome = outcome_of(&report);
+    assert_eq!(
+        outcome.exit_code,
+        exit_code::PASS,
+        "{:?}",
+        outcome.attention
+    );
+
+    // Run 2's notify answer: an existing file and a line of prose stay
+    // gaps, and they are one area.
+    let host = FakeHost::new(script(worker_answer(
+        &[("Hardcoded token", "notify/webhook.py:7")],
+        &[
+            "notify/__init__.py",
+            "All other files in notify directory were examined",
+        ],
+    )));
+    let (report, _) = drive(&host, &run).await;
+    let entries: Vec<(&str, &str)> = report
+        .not_covered
+        .iter()
+        .map(|entry| (entry.area.as_str(), entry.detail.as_str()))
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            (
+                "notify",
+                "notify/__init__.py (the area worker reported it did not reach this)"
+            ),
+            (
+                "notify",
+                "All other files in notify directory were examined (the area worker reported \
+                 it did not reach this)"
+            ),
+        ]
+    );
+    let outcome = outcome_of(&report);
+    assert_eq!(outcome.exit_code, exit_code::NEEDS_ATTENTION);
+    assert_eq!(outcome.attention, ["1 area was not covered"]);
 }
 
 #[tokio::test]

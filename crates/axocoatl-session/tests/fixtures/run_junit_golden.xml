@@ -78,7 +78,7 @@ repro: .axocoatl/qa/B2.spec.ts</system-out>
   </testsuite>
   <testsuite name="run" tests="1" failures="1" errors="0" skipped="0">
     <testcase classname="axocoatl.run" name="verdict">
-      <failure type="checks_failed" message="The required check types did not run on the final result; The required review did not pass: the reviewer asked for changes; The writer did not answer 1 review finding; 2 areas were not covered; 1 finding needs attention"/>
+      <failure type="checks_failed" message="The required check e2e failed (exit code 1); The required check lint ran past its 180 s timeout; The required check types did not run on the final result; The required review did not pass: the reviewer asked for changes; The writer did not answer 1 review finding; 2 areas were not covered; 1 finding needs attention"/>
     </testcase>
   </testsuite>
 </testsuites>

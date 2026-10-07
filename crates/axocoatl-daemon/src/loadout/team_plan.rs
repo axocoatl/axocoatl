@@ -24,7 +24,7 @@ use crate::{
 pub const LOADOUT_REVIEWER_TEMPLATE: &str = "loadout-reviewer";
 /// The output bound per request of a loadout Agent or reviewer that names
 /// none: a native Agent always runs with an explicit sampling maximum.
-pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 8192;
+pub use axocoatl_config::loadout::DEFAULT_MAX_OUTPUT_TOKENS;
 
 /// One slot to create: a loadout Agent, possibly instantiated per area.
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +65,43 @@ pub fn default_slots(resolved: &ResolvedLoadout) -> Result<Vec<SlotPlan>, RunErr
             })
         })
         .collect()
+}
+
+/// Each native model caller of the run (an Agent or the reviewer) with its
+/// resolved model ([`axocoatl_config::loadout::call_budgets`]).
+pub fn resolved_call_budgets(
+    resolved: &ResolvedLoadout,
+) -> Vec<(axocoatl_config::loadout::CallBudget, Option<ModelSpec>)> {
+    axocoatl_config::loadout::call_budgets(&resolved.loadout.file)
+        .into_iter()
+        .map(|budget| {
+            let model = match &budget.agent {
+                Some(agent) => resolved.agent_models.get(agent).cloned(),
+                None => resolved.reviewer_model.clone(),
+            };
+            (budget, model)
+        })
+        .collect()
+}
+
+/// Refuse, as a usage error, a run whose native Agent or reviewer cannot
+/// make one model call within its tokens budget: a call needs the model's
+/// context plus the caller's output bound. `context_of` is a model's
+/// observed context; `None` (not observed, or not observable before the
+/// run) leaves the smallest context a native call runs with, which
+/// validation already checked.
+pub fn refuse_budgets_below_one_call(
+    resolved: &ResolvedLoadout,
+    context_of: impl Fn(&ModelSpec) -> Option<u64>,
+) -> Result<(), RunError> {
+    for (budget, model) in resolved_call_budgets(resolved) {
+        let context = model.as_ref().and_then(&context_of);
+        let name = model.as_ref().map(ToString::to_string);
+        if let Some(error) = budget.refusal(context, name.as_deref()) {
+            return Err(RunError::Usage(error.to_string()));
+        }
+    }
+    Ok(())
 }
 
 /// Grant limits from loadout limits: `cost_microunits = cost_usd × 10⁶`.
@@ -333,6 +370,67 @@ mod tests {
             "openrouter:openai/gpt-oss-120b".into(),
         );
         resolve_loadout(&fix, &params, "fix the parser", "/repo").unwrap()
+    }
+
+    /// The qa re-smoke's `qa-tight` run: 40000 tokens for an explorer whose
+    /// model was loaded with a 32768-token context and an 8192-token output
+    /// bound. Admission refuses it, naming the budget and the minimum.
+    #[test]
+    fn a_budget_below_one_call_of_the_observed_context_is_refused() {
+        let qa = builtin_loadouts()
+            .into_iter()
+            .map(Result::unwrap)
+            .find(|loadout| loadout.file.id == "qa")
+            .unwrap();
+        let mut params = ParamValues::new();
+        params.insert(
+            "explorer_model".into(),
+            "ollama:qwen3-coder:axocoatl-launch".into(),
+        );
+        let mut resolved = resolve_loadout(&qa, &params, "find bugs", "/repo").unwrap();
+        resolved.loadout.file.budgets.agent.tokens = 40_000;
+        let budgets = resolved_call_budgets(&resolved);
+        assert_eq!(budgets.len(), 1);
+        assert_eq!(
+            budgets[0].1,
+            ModelSpec::parse("ollama:qwen3-coder:axocoatl-launch")
+        );
+        let observed = |model: &ModelSpec| (model.provider == "ollama").then_some(32_768);
+        let Err(RunError::Usage(message)) = refuse_budgets_below_one_call(&resolved, observed)
+        else {
+            panic!("admitted")
+        };
+        assert_eq!(
+            message,
+            "loadout field budgets.agent.tokens: 40000 tokens is less than one model call of \
+             Agent explorer (ollama:qwen3-coder:axocoatl-launch) needs: the model's 32768-token \
+             context plus 8192 output tokens (agents.explorer.max_output_tokens), at least \
+             40960 tokens; raise it to at least 40960 or lower \
+             agents.explorer.max_output_tokens"
+        );
+        // Enough for one call, or a context that is not known before the
+        // run: admitted.
+        assert!(refuse_budgets_below_one_call(&resolved, |_| Some(30_000)).is_ok());
+        assert!(refuse_budgets_below_one_call(&resolved, |_| None).is_ok());
+        resolved.loadout.file.budgets.agent.tokens = 40_960;
+        assert!(refuse_budgets_below_one_call(&resolved, observed).is_ok());
+        // The reviewer is checked against its own model and budget.
+        let mut fix = resolved_fix();
+        fix.loadout.file.budgets.reviewer.as_mut().unwrap().tokens = 20_000;
+        let Err(RunError::Usage(message)) =
+            refuse_budgets_below_one_call(&fix, |model: &ModelSpec| {
+                (model.model == "openai/gpt-oss-120b").then_some(16_384)
+            })
+        else {
+            panic!("admitted")
+        };
+        assert!(
+            message.starts_with(
+                "loadout field budgets.reviewer.tokens: 20000 tokens is less than one model \
+                 call of the reviewer (openrouter:openai/gpt-oss-120b)"
+            ),
+            "{message}"
+        );
     }
 
     #[test]

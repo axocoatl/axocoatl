@@ -43,6 +43,13 @@ const FINDINGS_TEXT_BYTES: usize = 24 * 1024;
 const NETWORK_PAGE: usize = 1000;
 /// Run events read per bundle page.
 const RUN_EVENT_PAGE: usize = 1000;
+/// How the session dispatch begins the output it keeps for an activation
+/// that failed with an error (`session_dispatch_run.rs`): that output is the
+/// failure's reason, unlike the partial answer kept for a stopped one.
+const ACTIVATION_FAILED: &str = "Activation failed:";
+/// Longest admission waits to observe the context an Ollama model is
+/// loaded with (a load without a prompt, as the run's first call does).
+const ADMISSION_CONTEXT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// What the daemon keeps about loadout runs while it runs: the record store,
 /// admissions by request id, which runs have a driver and which a person
@@ -546,9 +553,23 @@ pub fn observation_from_control_plane(
             if !matches!(state, NodeState::NeverStarted | NodeState::Running) {
                 usage.complete &= activation_usage.complete;
             }
-            // An empty recorded reason says nothing: it is no reason.
-            let reason =
-                evidence_text(&activation.reason).filter(|reason| !reason.trim().is_empty());
+            // An empty recorded reason says nothing: it is no reason. Nor is
+            // the activation's own partial answer. An activation that ends
+            // without an accepted answer fails with its reserved output as
+            // the evidence, which the projection shows as the reason: for an
+            // error that output is `Activation failed: <error>`
+            // (`session_dispatch_run.rs`), a real reason; for a stop it is
+            // the answer as far as the model had written it, which says
+            // nothing about why it ended.
+            let reason = evidence_text(&activation.reason)
+                .filter(|reason| !reason.trim().is_empty())
+                .filter(|reason| {
+                    reason.starts_with(ACTIVATION_FAILED)
+                        || !activation
+                            .partial_outputs
+                            .iter()
+                            .any(|output| output.text == *reason)
+                });
             let failure = matches!(
                 state,
                 NodeState::Failed | NodeState::Stopped | NodeState::Blocked
@@ -1054,6 +1075,14 @@ impl AxocoatlDaemon {
                     });
             }
         }
+        // A tokens budget that cannot hold one model call is refused now,
+        // as a usage error naming the budget and the minimum, not after the
+        // run's Session started.
+        let contexts = self.loadout_model_contexts(&resolved).await;
+        crate::loadout::team_plan::refuse_budgets_below_one_call(&resolved, |model| {
+            contexts.get(model).copied().flatten()
+        })
+        .map_err(run_error)?;
         let workspace = self.create_workspace(&repo_text, None).await?;
         let run_id = format!("run-{}", uuid::Uuid::new_v4());
         let loadout_ref = LoadoutRef {
@@ -1274,6 +1303,50 @@ impl AxocoatlDaemon {
                 (digest, accepted.clone(), context.clone()),
             );
         Ok((accepted, context))
+    }
+
+    /// The context each native Ollama model of the run is loaded with,
+    /// observed as its first call observes it (a load without a prompt, no
+    /// inference), within [`ADMISSION_CONTEXT_TIMEOUT`]. A model that cannot
+    /// be observed now maps to `None`; its run reports the provider's own
+    /// error. Other providers' models are not observed before the run.
+    async fn loadout_model_contexts(
+        &self,
+        resolved: &axocoatl_config::loadout::ResolvedLoadout,
+    ) -> HashMap<axocoatl_config::loadout::ModelSpec, Option<u64>> {
+        let mut contexts = HashMap::new();
+        let Some(base_url) = self
+            .config
+            .providers
+            .ollama
+            .as_ref()
+            .map(|provider| provider.base_url.clone())
+        else {
+            return contexts;
+        };
+        for (_, model) in crate::loadout::team_plan::resolved_call_budgets(resolved) {
+            let Some(model) = model.filter(|model| model.provider == "ollama") else {
+                continue;
+            };
+            if contexts.contains_key(&model) {
+                continue;
+            }
+            let observed = tokio::time::timeout(
+                ADMISSION_CONTEXT_TIMEOUT,
+                axocoatl_llm_ollama::observe_native_ollama_context(&base_url, &model.model),
+            )
+            .await;
+            let context = match observed {
+                Ok(Ok(observation)) => Some(observation.context_tokens as u64),
+                Ok(Err(error)) => {
+                    tracing::debug!(model = %model, %error, "admission could not observe the model's context");
+                    None
+                }
+                Err(_) => None,
+            };
+            contexts.insert(model, context);
+        }
+        contexts
     }
 
     /// Create the native Session of a loadout run in `workspace_id`, bind it
@@ -2382,6 +2455,94 @@ mod tests {
             "the provider's safety classifier stopped the stream"
         );
         assert_ne!(real.class, FailureClass::Stopped);
+    }
+
+    /// The fix re-smoke's interrupted run: the writer streamed part of an
+    /// answer, the person pressed Ctrl-C, and the activation failed with
+    /// its reserved output as evidence, so the projection's reason was the
+    /// half-written answer and the run reported "writer: other: I can see
+    /// the issue now. ...". That text is no reason: the writer ended
+    /// without a result, because of the stop.
+    #[test]
+    fn a_partial_answer_is_not_the_reason_a_node_ended() {
+        use crate::session_control_plane::{ControlPlaneOutput, EvidenceValue};
+        use axocoatl_session::run_outcome::FailureClass;
+        let partial = "I can see the issue now. The `pageCount` function is using \
+                       `Math.floor(total / pageSize)` which truncates the result.\n\nLet me \
+                       also look at the tests to better";
+        let streamed = |turn_state: &str, reason: &str| {
+            let mut view = projection(
+                turn_state,
+                "failed",
+                EvidenceValue::Available {
+                    value: reason.into(),
+                },
+                EvidenceValue::Unknown {
+                    reason: "No complete usage record is attached to the accepted output.".into(),
+                },
+            );
+            view.nodes[0].activations[0]
+                .partial_outputs
+                .push(ControlPlaneOutput {
+                    text: partial.into(),
+                    truncated: false,
+                    original_byte_len: EvidenceValue::Available {
+                        value: partial.len() as u64,
+                    },
+                    reference: EvidenceValue::Available {
+                        value: "content-3534dcb05e85".into(),
+                    },
+                });
+            observation_from_control_plane(&view, &[], None, &HashMap::new()).nodes[0].generations
+                [0]
+            .clone()
+        };
+        let stopped = streamed("cancelled", partial);
+        let failure = stopped.failure.unwrap();
+        assert_eq!(failure.message, "writer ended without a result");
+        assert_eq!(failure.class, FailureClass::Stopped);
+        // The partial answer is still the generation's answer.
+        assert_eq!(stopped.answer.as_deref(), Some(partial));
+        // Without a stop the node still ended without a result, never with
+        // its half-written answer as the reason.
+        let failure = streamed("needs_attention", partial).failure.unwrap();
+        assert_eq!(failure.message, "writer ended without a result");
+        assert_eq!(failure.class, FailureClass::Other);
+        // A reason of its own is kept beside a partial answer.
+        let failure = streamed("needs_attention", "LLM provider stream ended early")
+            .failure
+            .unwrap();
+        assert_eq!(failure.message, "LLM provider stream ended early");
+        // An activation that failed with an error keeps the error as its
+        // output, which the projection shows as its reason and as its
+        // partial output: that is a reason.
+        let error = "Activation failed: LLM provider error: error parsing tool call: raw='{\"c'";
+        let mut view = projection(
+            "needs_attention",
+            "failed",
+            EvidenceValue::Available {
+                value: error.into(),
+            },
+            EvidenceValue::NotRecorded,
+        );
+        view.nodes[0].activations[0]
+            .partial_outputs
+            .push(ControlPlaneOutput {
+                text: error.into(),
+                truncated: false,
+                original_byte_len: EvidenceValue::Available {
+                    value: error.len() as u64,
+                },
+                reference: EvidenceValue::Available {
+                    value: "content-1".into(),
+                },
+            });
+        let failure = observation_from_control_plane(&view, &[], None, &HashMap::new()).nodes[0]
+            .generations[0]
+            .failure
+            .clone()
+            .unwrap();
+        assert_eq!(failure.message, error);
     }
 
     /// A failed activation has no usage attached to an accepted answer, but
