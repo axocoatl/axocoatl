@@ -49,7 +49,8 @@ pub struct RunArgs {
     /// A loadout parameter as NAME=VALUE
     #[arg(long = "param", value_name = "NAME=VALUE")]
     pub params: Vec<String>,
-    /// The command a `detected` check runs when the repository has none
+    /// The command a `detected` check runs, in place of the repository's
+    /// detected check command (needed when none is detected)
     #[arg(long)]
     pub check: Option<String>,
     /// The exact setup command this run approves

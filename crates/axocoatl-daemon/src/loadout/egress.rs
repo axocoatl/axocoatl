@@ -136,8 +136,9 @@ pub fn loadout_overlay(
             _ => {
                 return Err(RunError::Usage(format!(
                     "the route to {} names credential {name:?}, which is neither in the \
-                     configuration's credentials nor stored: run `axocoatl secret set {name}` \
-                     and paste the value on its standard input",
+                     configuration's credentials nor stored: pipe the value into \
+                     `axocoatl secret set {name}` (it reads standard input and refuses a \
+                     terminal)",
                     route.host
                 )))
             }
@@ -213,6 +214,8 @@ prompt: "{task}"
                 .contains("axocoatl secret set example-token"),
             "{error}"
         );
+        // `axocoatl secret set` refuses a terminal: the advice is a pipe.
+        assert!(error.to_string().contains("pipe the value"), "{error}");
         let secret = crate::secret_store::secret_path(data.path(), "example-token");
         std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
         std::fs::write(&secret, "value").unwrap();

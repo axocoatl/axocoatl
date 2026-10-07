@@ -244,12 +244,12 @@ pub struct SessionTeamEdit {
     /// historical serialized shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_review: Option<ReviewSetting>,
-    /// Per-check options (name, timeout, report), aligned by index with
-    /// `required_checks`. Empty: every check takes the defaults (three
-    /// minutes), and the historical serialized shape is kept. Validation and
-    /// the path to the admitted definitions belong to workstream `runtime`
-    /// (`axocoatl_session::check_options`); until then a non-empty list is
-    /// refused at Apply.
+    /// Per-check options (name, timeout, report, egress), aligned by index
+    /// with `required_checks`. Empty: every check takes the defaults (three
+    /// minutes, no network), and the historical serialized shape is kept.
+    /// Apply validates them (`axocoatl_session::check_options`) and carries
+    /// each timeout and egress flag into the admitted check definitions. A
+    /// `report` is read only by a loadout run's e2e checks.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub check_options: Vec<axocoatl_session::check_options::RequiredCheckOptions>,
 }
