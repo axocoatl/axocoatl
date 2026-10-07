@@ -152,6 +152,77 @@ pub async fn run_single_turn(
     run_turn(host, run, &run.resolved.prompt, "run").await
 }
 
+/// Close every turn of the run that is still open once the run has
+/// everything its Outcome needs, whatever the verdict. A turn that needs
+/// attention keeps its Session's hold on the Workspace until someone
+/// continues, stops or closes it, and nobody continues a run's turn: the next
+/// run on the same repository would find the Workspace held. Each turn the
+/// run started (`events`' `TurnStarted`) that was not observed completed is
+/// stopped as a person's Stop stops it, observed until it settles, and
+/// stopped once more: that second Stop releases the Workspace when the first
+/// came while the turn's last execution was still finishing. A turn
+/// observed stopped only gets that second Stop. The Outcome keeps every turn
+/// as it was observed. A Stop that fails is logged, never fatal: the next
+/// run's admission then names the Session that still holds the Workspace.
+async fn close_open_turns(
+    host: &dyn RunHost,
+    run: &RunContext,
+    observed: &[TurnObservation],
+    events: &[RunEvent],
+) -> Result<(), RunError> {
+    let mut turns: Vec<(String, Option<TurnState>)> = Vec::new();
+    for event in events {
+        if let RunEvent::TurnStarted { turn_id, .. } = event {
+            if !turns.iter().any(|(known, _)| known == turn_id) {
+                turns.push((turn_id.clone(), None));
+            }
+        }
+    }
+    for turn in observed {
+        match turns.iter_mut().find(|(known, _)| *known == turn.turn_id) {
+            Some(entry) => entry.1 = Some(turn.state),
+            None => turns.push((turn.turn_id.clone(), Some(turn.state))),
+        }
+    }
+    for (turn_id, state) in turns {
+        if state == Some(TurnState::Completed) {
+            continue;
+        }
+        if state != Some(TurnState::Stopped) {
+            let how = match state {
+                Some(TurnState::NeedsAttention) => "needs attention",
+                Some(TurnState::Running) => "is still running",
+                Some(TurnState::Failed) => "failed",
+                _ => "was not observed to end",
+            };
+            phase(
+                host,
+                run,
+                "closing_turn",
+                format!(
+                    "Stopping turn {turn_id}, which {how}, so the run's Session no longer holds \
+                     the Workspace; the Outcome keeps the turn as it was observed"
+                ),
+            )
+            .await?;
+            if let Err(error) = host.stop_turn(&run.session_id, &turn_id).await {
+                tracing::debug!(run = %run.run_id, turn = %turn_id, %error, "stopping a run's open turn");
+            }
+            if let Err(error) = host
+                .wait_turn(&run.session_id, &turn_id, Instant::now() + STOP_GRACE)
+                .await
+            {
+                tracing::debug!(run = %run.run_id, turn = %turn_id, %error, "observing a run's stopped turn");
+            }
+        }
+        if let Err(error) = host.stop_turn(&run.session_id, &turn_id).await {
+            // Expected once the turn is closed and its Workspace released.
+            tracing::debug!(run = %run.run_id, turn = %turn_id, %error, "settling a run's stopped turn");
+        }
+    }
+    Ok(())
+}
+
 /// The class of a failure the host did not classify: the runtime's
 /// classification, or the closest safe class while it is not available.
 pub fn class_of(message: &str, recorded: Option<&str>) -> FailureClass {
@@ -207,11 +278,16 @@ pub fn scan_not_covered(turns: &[TurnObservation], wall_clock_ran_out: bool) -> 
                 ),
                 NodeState::Failed | NodeState::Blocked | NodeState::Stopped => {
                     match &latest.failure {
-                        Some(failure) => (failure.class, failure.message.clone()),
-                        None => (
-                            match latest.state {
-                                NodeState::Blocked => FailureClass::Blocked,
-                                NodeState::Stopped => FailureClass::Stopped,
+                        Some(failure) if !failure.message.trim().is_empty() => {
+                            (failure.class, failure.message.clone())
+                        }
+                        // No failure, or one with an empty reason: the
+                        // entry still says what happened, never "other: ".
+                        failure => (
+                            match (failure.as_ref().map(|failure| failure.class), latest.state) {
+                                (Some(class), _) if class != FailureClass::Other => class,
+                                (_, NodeState::Blocked) => FailureClass::Blocked,
+                                (_, NodeState::Stopped) => FailureClass::Stopped,
                                 _ => FailureClass::Other,
                             },
                             format!("{} ended without a result", node.slot_id),
@@ -387,6 +463,8 @@ pub async fn run_to_outcome_with(
             outcome.error = Some(error.to_string());
         }
     }
+    let started = host.recorded_events(&run.run_id).await.unwrap_or_default();
+    close_open_turns(host, run, &report.turns, &started).await?;
     outcome.turns = if report.turn_refs.is_empty() {
         report
             .turns
@@ -647,12 +725,31 @@ prompt: "{task}"
 
     #[derive(Default)]
     struct FakeHost {
-        /// Observations `wait_turn` returns, in order.
+        /// Observations `wait_turn` returns, in order; once they run out,
+        /// the last one again (a turn that ended stays ended).
         waits: Mutex<Vec<TurnObservation>>,
+        last_wait: Mutex<Option<TurnObservation>>,
         applied: Mutex<Vec<SessionTeamEdit>>,
         stopped: Mutex<Vec<String>>,
         events: Mutex<Vec<RunEvent>>,
         finished: Mutex<Option<RunOutcome>>,
+    }
+
+    impl FakeHost {
+        /// The recorded events in order: a phase's name, `ended` for the
+        /// `Ended` event and `event` for any other.
+        fn phases(&self) -> Vec<String> {
+            self.events
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|event| match event {
+                    RunEvent::Phase { phase, .. } => phase.clone(),
+                    RunEvent::Ended { .. } => "ended".into(),
+                    _ => "event".into(),
+                })
+                .collect()
+        }
     }
 
     #[async_trait]
@@ -672,7 +769,11 @@ prompt: "{task}"
             _: Instant,
         ) -> Result<TurnObservation, RunError> {
             let mut waits = self.waits.lock().unwrap();
-            Ok(waits.remove(0))
+            let mut last = self.last_wait.lock().unwrap();
+            if !waits.is_empty() {
+                *last = Some(waits.remove(0));
+            }
+            Ok(last.clone().expect("a scripted observation"))
         }
         async fn stop_turn(&self, _: &str, turn_id: &str) -> Result<(), RunError> {
             self.stopped.lock().unwrap().push(turn_id.into());
@@ -757,6 +858,118 @@ prompt: "{task}"
         )]);
         let outcome = run_to_outcome(&host, &run).await.unwrap();
         assert_eq!(outcome.exit_code, exit_code::CHECKS_FAILED);
+        // The turn needed attention: it is stopped before the run ends, so
+        // the Session no longer holds the Workspace, and the Outcome keeps
+        // it as observed.
+        assert_eq!(
+            host.stopped.lock().unwrap().as_slice(),
+            ["turn-1", "turn-1"]
+        );
+        assert_eq!(outcome.turns[0].state, TurnState::NeedsAttention);
+        let phases = host.phases();
+        let closing = phases.iter().position(|phase| phase == "closing_turn");
+        let ended = phases.iter().position(|phase| phase == "ended");
+        assert!(closing.unwrap() < ended.unwrap(), "{phases:?}");
+    }
+
+    /// Whatever the verdict, no turn the run started stays open once the run
+    /// has its Outcome: a turn that needs attention (review not passed), one
+    /// a failing driver left unobserved, and none of a passing run.
+    #[tokio::test]
+    async fn every_ended_run_closes_its_open_turns() {
+        // Review not passed: needs attention, exit 2.
+        let run = context(&[], later());
+        let mut review_failed = observation(
+            TurnState::NeedsAttention,
+            vec![check(CheckState::Passed)],
+            review(false, "openai/gpt-oss-120b"),
+        );
+        review_failed.nodes[0].generations[0].state = NodeState::Accepted;
+        let host = host(vec![review_failed]);
+        let outcome = run_to_outcome(&host, &run).await.unwrap();
+        assert_eq!(outcome.exit_code, exit_code::NEEDS_ATTENTION);
+        assert_eq!(
+            host.stopped.lock().unwrap().as_slice(),
+            ["turn-1", "turn-1"]
+        );
+
+        // Passing: its completed turn already released the Workspace.
+        let host = super::tests::host(vec![observation(
+            TurnState::Completed,
+            vec![check(CheckState::Passed)],
+            review(true, "openai/gpt-oss-120b"),
+        )]);
+        let outcome = run_to_outcome(&host, &run).await.unwrap();
+        assert_eq!(outcome.exit_code, exit_code::PASS);
+        assert!(host.stopped.lock().unwrap().is_empty());
+        assert!(!host.phases().iter().any(|phase| phase == "closing_turn"));
+
+        // A driver that started a turn and then failed before observing it:
+        // exit 5, and the turn it started is still closed.
+        struct StartsThenFails;
+        #[async_trait]
+        impl KindDriver for StartsThenFails {
+            async fn drive(
+                &self,
+                host: &dyn RunHost,
+                run: &RunContext,
+            ) -> Result<KindReport, RunError> {
+                host.record(
+                    &run.run_id,
+                    RunEvent::TurnStarted {
+                        at_ms: now_ms(),
+                        turn_id: "turn-7".into(),
+                        purpose: "run".into(),
+                    },
+                )
+                .await?;
+                Err(RunError::Infrastructure(
+                    "the turn could not be observed".into(),
+                ))
+            }
+        }
+        let host = super::tests::host(vec![observation(
+            TurnState::NeedsAttention,
+            vec![],
+            review(true, "openai/gpt-oss-120b"),
+        )]);
+        let outcome = run_to_outcome_with(&host, &run, &StartsThenFails)
+            .await
+            .unwrap();
+        assert_eq!(outcome.exit_code, exit_code::INFRASTRUCTURE);
+        assert_eq!(
+            host.stopped.lock().unwrap().as_slice(),
+            ["turn-7", "turn-7"]
+        );
+    }
+
+    /// A node that failed with an empty reason is not covered with a reason
+    /// that says so, never `other: ` with nothing after it.
+    #[test]
+    fn an_empty_failure_reason_is_never_the_not_covered_detail() {
+        let mut turn = observation(
+            TurnState::Stopped,
+            vec![],
+            review(true, "openai/gpt-oss-120b"),
+        );
+        turn.nodes[0].generations[0].state = NodeState::Failed;
+        turn.nodes[0].generations[0].failure = Some(NodeFailure {
+            class: FailureClass::Other,
+            message: "  ".into(),
+        });
+        let entries = scan_not_covered(std::slice::from_ref(&turn), false);
+        assert_eq!(entries[0].detail, "writer ended without a result");
+        turn.nodes[0].generations[0].state = NodeState::Stopped;
+        let entries = scan_not_covered(std::slice::from_ref(&turn), false);
+        assert_eq!(entries[0].class, FailureClass::Stopped);
+        assert_eq!(entries[0].detail, "writer ended without a result");
+        // A class the observation gave is kept.
+        turn.nodes[0].generations[0].failure = Some(NodeFailure {
+            class: FailureClass::Budget,
+            message: String::new(),
+        });
+        let entries = scan_not_covered(std::slice::from_ref(&turn), false);
+        assert_eq!(entries[0].class, FailureClass::Budget);
     }
 
     #[tokio::test]
@@ -803,7 +1016,12 @@ prompt: "{task}"
         );
         let host = host(vec![running, stopped]);
         let outcome = run_to_outcome(&host, &run).await.unwrap();
-        assert_eq!(host.stopped.lock().unwrap().as_slice(), ["turn-1"]);
+        // The wall clock's Stop, then the Stop that settles the stopped turn
+        // so its Session releases the Workspace.
+        assert_eq!(
+            host.stopped.lock().unwrap().as_slice(),
+            ["turn-1", "turn-1"]
+        );
         assert_eq!(outcome.exit_code, exit_code::NEEDS_ATTENTION);
         assert!(outcome
             .attention

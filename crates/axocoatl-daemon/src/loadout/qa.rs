@@ -2,6 +2,9 @@
 //! against the build under test and the reference; coverage as not covered.
 //! Owner: review-qa.
 //!
+//! Before the explorer's one turn the host creates the loadout's `repro_dir`
+//! in the checkout when it is missing (the explorer's write_file creates no
+//! directory), refusing one that exists as a link or a file.
 //! After the explorer's one turn the host reads its `FINDINGS` and
 //! `COVERAGE` blocks. Each finding's reproduction must be a file under the
 //! loadout's `repro_dir` in the checkout; the host runs it once with
@@ -50,9 +53,141 @@ pub struct QaDriver;
 #[async_trait]
 impl KindDriver for QaDriver {
     async fn drive(&self, host: &dyn RunHost, run: &RunContext) -> Result<KindReport, RunError> {
+        // The explorer writes its reproductions with write_file, which
+        // creates no directory, and has no bash or edit_file to create one:
+        // the host creates the reproductions directory before its turn.
+        let settings = qa_settings(&run.resolved)?;
+        let created = repro_dir_ready(&run.options.repo, &settings.repro_dir, true).await?;
+        if created {
+            host.record(
+                &run.run_id,
+                RunEvent::Phase {
+                    at_ms: now_ms(),
+                    phase: "preparing".into(),
+                    detail: format!(
+                        "created {}/ in the repository for the explorer's reproductions",
+                        settings.repro_dir
+                    ),
+                },
+            )
+            .await?;
+        }
         let turn = super::driver::run_single_turn(host, run).await?;
         qa_report(host, run, turn).await
     }
+}
+
+/// Why the reproductions directory cannot be used.
+#[derive(Debug)]
+enum ReproDirError {
+    /// A component exists as a link or as something other than a directory.
+    NotADirectory(String),
+    Io(String),
+}
+
+impl From<ReproDirError> for RunError {
+    fn from(error: ReproDirError) -> Self {
+        match error {
+            ReproDirError::NotADirectory(message) => RunError::Usage(message),
+            ReproDirError::Io(message) => RunError::Infrastructure(message),
+        }
+    }
+}
+
+/// Make `repro_dir` (a repository path `validate_qa_admission` accepted) a
+/// real directory of the repository at `repo`. Each component is opened from
+/// its parent's handle without following links; a missing one is created
+/// (owner-only, like every directory `SecureDir` creates) when `create` is
+/// set, and one that exists as a symbolic link or as anything other than a
+/// directory is refused, so nothing is ever created or written through a
+/// link. Returns whether a directory was created.
+fn prepare_repro_dir(
+    repo: &std::path::Path,
+    repro_dir: &str,
+    create: bool,
+) -> Result<bool, ReproDirError> {
+    let shown = |path: &std::path::Path| -> String {
+        path.strip_prefix(repo)
+            .map(|relative| relative.display().to_string())
+            .unwrap_or_else(|_| path.display().to_string())
+    };
+    let mut dir = axocoatl_core::SecureDir::open(repo).map_err(|error| {
+        ReproDirError::Io(format!(
+            "the repository {} cannot be opened: {error}",
+            repo.display()
+        ))
+    })?;
+    let mut created = false;
+    for component in std::path::Path::new(repro_dir).components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(ReproDirError::NotADirectory(format!(
+                "qa.repro_dir {repro_dir:?} is not a path inside the repository"
+            )));
+        };
+        let path = dir.path().join(name);
+        match dir.existing_child(name) {
+            Ok(child) => dir = child,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !create {
+                    return Ok(false);
+                }
+                dir = dir
+                    .child(name)
+                    .map_err(|error| wrong_type(&path, error, &shown))?;
+                created = true;
+            }
+            Err(error) => return Err(wrong_type(&path, error, &shown)),
+        }
+    }
+    Ok(created)
+}
+
+/// The error for a reproductions directory component that could not be
+/// opened as a directory: what it is when it is a link or not a directory.
+fn wrong_type(
+    path: &std::path::Path,
+    error: std::io::Error,
+    shown: &dyn Fn(&std::path::Path) -> String,
+) -> ReproDirError {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => ReproDirError::NotADirectory(format!(
+            "{} in the repository is a symbolic link; the qa explorer writes its reproductions \
+             only into a real directory, so remove the link",
+            shown(path)
+        )),
+        Ok(metadata) if !metadata.is_dir() => ReproDirError::NotADirectory(format!(
+            "{} in the repository is not a directory; the qa explorer writes its reproductions \
+             there, so move it away",
+            shown(path)
+        )),
+        _ => ReproDirError::Io(format!(
+            "{} in the repository cannot be prepared: {error}",
+            shown(path)
+        )),
+    }
+}
+
+/// [`prepare_repro_dir`] off the async runtime.
+pub(crate) async fn repro_dir_ready(
+    repo: &std::path::Path,
+    repro_dir: &str,
+    create: bool,
+) -> Result<bool, RunError> {
+    let repo = repo.to_path_buf();
+    let repro_dir = repro_dir.to_string();
+    tokio::task::spawn_blocking(move || prepare_repro_dir(&repo, &repro_dir, create))
+        .await
+        .map_err(|error| RunError::Infrastructure(error.to_string()))?
+        .map_err(RunError::from)
+}
+
+/// Refuse a qa run whose reproductions directory exists in the repository
+/// as a symbolic link or as something other than a directory. Creates
+/// nothing: the driver creates what is missing before the explorer's turn.
+pub fn check_repro_dir(repo: &std::path::Path, settings: &QaRunSettings) -> Result<(), RunError> {
+    prepare_repro_dir(repo, &settings.repro_dir, false)
+        .map(|_| ())
+        .map_err(RunError::from)
 }
 
 /// The qa section of a resolved loadout, with its parameters' values.
@@ -96,6 +231,28 @@ pub fn qa_settings(resolved: &ResolvedLoadout) -> Result<QaRunSettings, RunError
     })
 }
 
+/// Whether `host` (a URL's host) is this machine as the browser container
+/// sees it: `localhost` or a loopback address, which reach the Session's
+/// exposed ports.
+fn is_loopback_host(host: &str) -> bool {
+    match netaddr::parse_ip_literal(host) {
+        Some(ip) => ip.is_loopback(),
+        None => host.eq_ignore_ascii_case("localhost"),
+    }
+}
+
+/// The Session port a qa URL names: its port when its host is `localhost`
+/// or a loopback address, `None` for any other host (which only
+/// `browser.allow` can admit, see [`browser_reaches`]) or a URL that does not
+/// parse.
+pub fn session_port(url: &str) -> Option<u16> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed.host_str().filter(|host| !host.is_empty())?;
+    is_loopback_host(host)
+        .then(|| parsed.port_or_known_default())
+        .flatten()
+}
+
 /// Why the browser container cannot reach `url`: it reaches the Session's
 /// exposed ports as `http://localhost:<port>` (or `127.0.0.1`/`[::1]`), and
 /// other hosts only through `browser.allow` (`private` lists the private
@@ -116,11 +273,7 @@ pub fn browser_reaches(
         .filter(|host| !host.is_empty())
         .ok_or_else(|| format!("{url} names no host"))?;
     let ip = netaddr::parse_ip_literal(host);
-    let loopback = match ip {
-        Some(ip) => ip.is_loopback(),
-        None => host.eq_ignore_ascii_case("localhost"),
-    };
-    if loopback {
+    if is_loopback_host(host) {
         if exposed_ports.contains(&port) {
             return Ok(());
         }
@@ -188,15 +341,17 @@ fn ip_reached(
 /// Check a qa run before it starts: the explorer's reproductions directory
 /// must be one `browser_check` can read, and the build under test and the
 /// reference build must be reachable from the browser container. Core calls
-/// this at admission with the new Session's exposed ports and the daemon's
-/// `browser:` block; an error is a usage error (exit 3).
+/// this at admission with the new Session's exposed ports and the
+/// `browser.allow` and `browser.private_destinations` lists in force now
+/// (`None` when the daemon has no `browser:` block), so `axocoatl network
+/// reload` applies to the next run; an error is a usage error (exit 3).
 pub fn validate_qa_admission(
     resolved: &ResolvedLoadout,
     exposed_ports: &[u16],
-    browser: Option<&axocoatl_config::BrowserConfigYaml>,
+    browser: Option<(&[EgressAllowYaml], &[String])>,
 ) -> Result<QaRunSettings, RunError> {
     let settings = qa_settings(resolved)?;
-    let browser = browser.ok_or_else(|| {
+    let (allow, private) = browser.ok_or_else(|| {
         RunError::Usage(
             "the qa loadout needs the browser tools: add a browser: block to the configuration \
              and run axocoatl browser install"
@@ -224,13 +379,8 @@ pub fn validate_qa_admission(
         urls.push(("reference_url", reference.as_str()));
     }
     for (field, url) in urls {
-        browser_reaches(
-            url,
-            exposed_ports,
-            &browser.allow,
-            &browser.private_destinations,
-        )
-        .map_err(|reason| RunError::Usage(format!("qa.{field}: {reason}")))?;
+        browser_reaches(url, exposed_ports, allow, private)
+            .map_err(|reason| RunError::Usage(format!("qa.{field}: {reason}")))?;
     }
     Ok(settings)
 }
@@ -313,13 +463,6 @@ fn explorer_failure(
         },
     };
     Some((class, message))
-}
-
-fn class_name(class: FailureClass) -> String {
-    serde_json::to_value(class)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "other".into())
 }
 
 fn status_class(status: &str) -> FailureClass {
@@ -554,11 +697,16 @@ pub async fn qa_report(
         Some(Ok(report)) => {
             reported = report.findings.clone();
             for area in report.coverage.iter().filter(|area| !area.is_covered()) {
-                let detail = match &area.reason {
-                    Some(reason) => format!("{}: {reason}", area.status),
-                    None => area.status.clone(),
+                // The class already says not_reached or blocked; only a
+                // status it does not name stays in the detail.
+                let class = status_class(&area.status);
+                let detail = match (&area.reason, class) {
+                    (Some(reason), FailureClass::Other) => format!("{}: {reason}", area.status),
+                    (Some(reason), _) => reason.clone(),
+                    (None, FailureClass::Other) => area.status.clone(),
+                    (None, _) => "the explorer gave no reason".to_string(),
                 };
-                not_covered.push(entry(&area.area, status_class(&area.status), detail));
+                not_covered.push(entry(&area.area, class, detail));
             }
             for problem in &report.problems {
                 not_covered.push(entry(
@@ -617,10 +765,8 @@ pub async fn qa_report(
                 .collect(),
             _ => Vec::new(),
         };
-        let mut detail = format!(
-            "{}: the explorer did not finish ({message})",
-            class_name(*class)
-        );
+        // The entry's class is `class`; the detail does not repeat it.
+        let mut detail = format!("the explorer did not finish ({message})");
         if covered.is_empty() {
             detail.push_str("; it reported no area covered");
         } else {
@@ -1169,9 +1315,7 @@ pub(crate) mod tests {
         );
         let remaining = &report.not_covered[1];
         assert!(
-            remaining
-                .detail
-                .starts_with("provider_refusal: the explorer did not finish"),
+            remaining.detail.starts_with("the explorer did not finish"),
             "{}",
             remaining.detail
         );
@@ -1432,13 +1576,13 @@ pub(crate) mod tests {
     #[test]
     fn admission_checks_the_browser_urls_and_the_reproductions_directory() {
         let repo = repo_with(&[]);
-        let browser = axocoatl_config::BrowserConfigYaml::default();
+        let browser: (&[EgressAllowYaml], &[String]) = (&[], &[]);
         let run = context(
             "qa",
             &[("explorer_model", "openrouter:qwen/qwen3-coder")],
             repo.path(),
         );
-        let settings = validate_qa_admission(&run.resolved, &[3000], Some(&browser)).unwrap();
+        let settings = validate_qa_admission(&run.resolved, &[3000], Some(browser)).unwrap();
         assert_eq!(settings.target_url, TARGET);
         assert_eq!(settings.reference_url, None);
         assert_eq!(settings.repro_dir, "axocoatl-qa");
@@ -1449,12 +1593,10 @@ pub(crate) mod tests {
         assert!(
             usage(validate_qa_admission(&run.resolved, &[3000], None)).contains("browser: block")
         );
-        assert!(usage(validate_qa_admission(
-            &run.resolved,
-            &[8080],
-            Some(&browser)
-        ))
-        .starts_with("qa.target_url:"));
+        assert!(
+            usage(validate_qa_admission(&run.resolved, &[8080], Some(browser)))
+                .starts_with("qa.target_url:")
+        );
         let with_reference = context(
             "qa",
             &[
@@ -1466,11 +1608,11 @@ pub(crate) mod tests {
         assert!(usage(validate_qa_admission(
             &with_reference.resolved,
             &[3000],
-            Some(&browser)
+            Some(browser)
         ))
         .starts_with("qa.reference_url:"));
         assert!(
-            validate_qa_admission(&with_reference.resolved, &[3000, 3001], Some(&browser)).is_ok()
+            validate_qa_admission(&with_reference.resolved, &[3000, 3001], Some(browser)).is_ok()
         );
         let same = context(
             "qa",
@@ -1483,15 +1625,432 @@ pub(crate) mod tests {
         assert!(usage(validate_qa_admission(
             &same.resolved,
             &[3000],
-            Some(&browser)
+            Some(browser)
         ))
         .contains("is the build under test"));
         // A hidden reproductions directory cannot be re-run by browser_check.
         let mut hidden = run.resolved.clone();
         hidden.loadout.file.qa.as_mut().unwrap().repro_dir = ".axocoatl/qa".into();
         assert!(
-            usage(validate_qa_admission(&hidden, &[3000], Some(&browser)))
+            usage(validate_qa_admission(&hidden, &[3000], Some(browser)))
                 .contains("not a path browser_check can read")
         );
+    }
+
+    /// A cidr entry of `browser.allow` admits an address in its range on
+    /// one of its ports, as the browser container's own policy does; the
+    /// range must also be a listed private destination.
+    #[test]
+    fn admission_accepts_a_cidr_entry_of_browser_allow() {
+        let repo = repo_with(&[]);
+        let run = context(
+            "qa",
+            &[
+                ("explorer_model", "openrouter:qwen/qwen3-coder"),
+                ("target_url", "http://192.168.1.5:8766"),
+            ],
+            repo.path(),
+        );
+        let allow = vec![EgressAllowYaml::Cidr(axocoatl_config::EgressCidrYaml {
+            cidr: "192.168.1.0/24".into(),
+            ports: Some(vec![8766]),
+        })];
+        let private = vec!["192.168.1.0/24".to_string()];
+        let settings = validate_qa_admission(&run.resolved, &[], Some((&allow, &private))).unwrap();
+        assert_eq!(settings.target_url, "http://192.168.1.5:8766");
+        // Not a Session port: the URL names no port the Session exposes.
+        assert_eq!(session_port(&settings.target_url), None);
+        assert_eq!(session_port("http://localhost:3000/x"), Some(3000));
+        assert_eq!(session_port("http://127.0.0.1:3001"), Some(3001));
+        assert_eq!(session_port("http://[::1]:3002"), Some(3002));
+        assert_eq!(session_port("https://shop.example.test"), None);
+        // Another port of the range, or the range without its private
+        // destination, is refused.
+        let other_port = context(
+            "qa",
+            &[
+                ("explorer_model", "openrouter:qwen/qwen3-coder"),
+                ("target_url", "http://192.168.1.5:8767"),
+            ],
+            repo.path(),
+        );
+        assert!(matches!(
+            validate_qa_admission(&other_port.resolved, &[], Some((&allow, &private))),
+            Err(RunError::Usage(message)) if message.contains("browser.allow")
+        ));
+        assert!(matches!(
+            validate_qa_admission(&run.resolved, &[], Some((&allow, &[]))),
+            Err(RunError::Usage(message)) if message.contains("private")
+        ));
+    }
+
+    /// A coverage area's detail does not repeat the class its status maps
+    /// to; a status no class names stays in the detail.
+    #[tokio::test]
+    async fn not_covered_details_do_not_repeat_the_class() {
+        let repo = repo_with(&[]);
+        let run = context(
+            "qa",
+            &[("explorer_model", "openrouter:qwen/qwen3-coder")],
+            repo.path(),
+        );
+        let answer = "FINDINGS\n```json\n[]\n```\nCOVERAGE\n```json\n[\
+            {\"area\": \"checkout\", \"status\": \"not_reached\", \"reason\": \"ran out of steps\"},\
+            {\"area\": \"admin\", \"status\": \"blocked\"},\
+            {\"area\": \"search\", \"status\": \"partly\", \"reason\": \"only the first page\"}\
+            ]\n```\n";
+        let report = qa_report(
+            &FakeHost::default(),
+            &run,
+            explorer_turn(NodeState::Accepted, Some(answer), None),
+        )
+        .await
+        .unwrap();
+        let entries: Vec<_> = report
+            .not_covered
+            .iter()
+            .map(|entry| (entry.area.as_str(), entry.class, entry.detail.as_str()))
+            .collect();
+        assert_eq!(
+            entries,
+            [
+                ("checkout", FailureClass::NotReached, "ran out of steps"),
+                (
+                    "admin",
+                    FailureClass::Blocked,
+                    "the explorer gave no reason"
+                ),
+                ("search", FailureClass::Other, "partly: only the first page"),
+            ]
+        );
+    }
+
+    /// Runs argv on this machine in the repository, as the Session container
+    /// runs the explorer's file tools: write_file's own `sh -c 'cat > "$1"'`,
+    /// with its real exit status.
+    struct HostDirSandbox {
+        root: std::path::PathBuf,
+    }
+
+    impl HostDirSandbox {
+        fn run(
+            &self,
+            argv: &[&str],
+            stdin: Option<&str>,
+        ) -> Result<axocoatl_isolation::ExecResult, axocoatl_isolation::IsolationError> {
+            use std::io::Write;
+            use std::process::Stdio;
+            let mut child = std::process::Command::new(argv[0])
+                .args(&argv[1..])
+                .current_dir(&self.root)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+            if let Some(text) = stdin {
+                child
+                    .stdin
+                    .take()
+                    .expect("piped stdin")
+                    .write_all(text.as_bytes())?;
+            }
+            drop(child.stdin.take());
+            let output = child.wait_with_output()?;
+            Ok(axocoatl_isolation::ExecResult {
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                exit_code: output.status.code().unwrap_or(-1),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl axocoatl_isolation::Sandbox for HostDirSandbox {
+        fn root(&self) -> &Path {
+            &self.root
+        }
+        async fn exec(
+            &self,
+            argv: &[&str],
+            _timeout: Duration,
+        ) -> Result<axocoatl_isolation::ExecResult, axocoatl_isolation::IsolationError> {
+            self.run(argv, None)
+        }
+        async fn exec_stdin(
+            &self,
+            argv: &[&str],
+            stdin: &str,
+            _timeout: Duration,
+        ) -> Result<axocoatl_isolation::ExecResult, axocoatl_isolation::IsolationError> {
+            self.run(argv, Some(stdin))
+        }
+        fn spawn_background(&self, _command: &str) -> String {
+            unreachable!("the explorer's file tools never run in the background")
+        }
+        fn spawn_pty(
+            &self,
+            _command: &str,
+            _rows: u16,
+            _cols: u16,
+        ) -> Result<std::sync::Arc<axocoatl_isolation::pty::PtyTerminal>, String> {
+            Err("unused".to_string())
+        }
+        fn get_terminal(
+            &self,
+            _id: &str,
+        ) -> Option<std::sync::Arc<axocoatl_isolation::pty::PtyTerminal>> {
+            None
+        }
+        fn kill_terminal(&self, _id: &str) -> bool {
+            false
+        }
+        fn list_terminals(&self) -> Vec<(String, String, bool)> {
+            Vec::new()
+        }
+        fn list_tasks(&self) -> Vec<axocoatl_isolation::session_sandbox::BgTask> {
+            Vec::new()
+        }
+        fn with_root(&self, root: &Path) -> std::sync::Arc<dyn axocoatl_isolation::Sandbox> {
+            std::sync::Arc::new(Self {
+                root: root.to_path_buf(),
+            })
+        }
+        async fn stop(&self) {}
+    }
+
+    /// The real session file tools over the repository at `root`.
+    fn file_tools(root: &Path) -> axocoatl_tools::ToolExecutor {
+        let mut tools = axocoatl_tools::ToolExecutor::new();
+        axocoatl_tools::register_session_tools(
+            &mut tools,
+            std::sync::Arc::new(HostDirSandbox {
+                root: root.to_path_buf(),
+            }),
+        );
+        tools
+    }
+
+    /// A host whose explorer turn writes its reproductions with the real
+    /// write_file tool, as the explorer does in the Session container, and
+    /// keeps each tool result.
+    struct WritingHost {
+        inner: FakeHost,
+        tools: axocoatl_tools::ToolExecutor,
+        writes: Vec<(&'static str, &'static str)>,
+        results: Mutex<Vec<Result<serde_json::Value, String>>>,
+    }
+
+    #[async_trait]
+    impl RunHost for WritingHost {
+        async fn apply_team(
+            &self,
+            session_id: &str,
+            edit: crate::SessionTeamEdit,
+        ) -> Result<(), RunError> {
+            self.inner.apply_team(session_id, edit).await
+        }
+        async fn send_turn(&self, session_id: &str, request: &str) -> Result<String, RunError> {
+            for (path, content) in &self.writes {
+                let result = self
+                    .tools
+                    .execute(
+                        "write_file",
+                        serde_json::json!({ "path": path, "content": content }),
+                    )
+                    .await
+                    .map_err(|error| error.to_string());
+                self.results.lock().unwrap().push(result);
+            }
+            self.inner.send_turn(session_id, request).await
+        }
+        async fn wait_turn(
+            &self,
+            session_id: &str,
+            turn_id: &str,
+            deadline: Instant,
+        ) -> Result<TurnObservation, RunError> {
+            self.inner.wait_turn(session_id, turn_id, deadline).await
+        }
+        async fn stop_turn(&self, session_id: &str, turn_id: &str) -> Result<(), RunError> {
+            self.inner.stop_turn(session_id, turn_id).await
+        }
+        async fn run_repro(
+            &self,
+            session_id: &str,
+            request: &ReproRequest,
+        ) -> Result<ReproRun, RunError> {
+            self.inner.run_repro(session_id, request).await
+        }
+        async fn read_sandbox_file(
+            &self,
+            session_id: &str,
+            path: &str,
+            max_bytes: usize,
+        ) -> Result<Option<Vec<u8>>, RunError> {
+            self.inner
+                .read_sandbox_file(session_id, path, max_bytes)
+                .await
+        }
+        async fn record(&self, run_id: &str, event: RunEvent) -> Result<(), RunError> {
+            self.inner.record(run_id, event).await
+        }
+    }
+
+    /// The explorer has write_file but no bash or edit_file, and write_file
+    /// creates no directory. On a repository without `axocoatl-qa/` the
+    /// driver creates it before the explorer's turn, so the real tool's
+    /// write lands and the finding is reproduced from that file; without the
+    /// driver the same write fails.
+    #[tokio::test]
+    async fn the_explorer_writes_reproductions_into_a_repository_without_the_directory() {
+        let repo = repo_with(&[]);
+        let root = repo.path().canonicalize().unwrap();
+        let spec = "import { test } from '@playwright/test';\ntest('b1', async () => {});\n";
+        // The real tool on its own: the directory is missing, so it fails.
+        let refused = file_tools(&root)
+            .execute(
+                "write_file",
+                serde_json::json!({ "path": "axocoatl-qa/probe.spec.ts", "content": spec }),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!root.join("axocoatl-qa").exists(), "{refused}");
+
+        let run = context(
+            "qa",
+            &[("explorer_model", "openrouter:qwen/qwen3-coder")],
+            &root,
+        );
+        let answer = report(
+            &[("B1", Some("axocoatl-qa/b1.spec.ts"))],
+            &[("checkout", "covered")],
+        );
+        let host = WritingHost {
+            inner: FakeHost::with_turn(explorer_turn(NodeState::Accepted, Some(&answer), None)),
+            tools: file_tools(&root),
+            writes: vec![("axocoatl-qa/b1.spec.ts", spec)],
+            results: Mutex::new(Vec::new()),
+        };
+        host.inner
+            .script("axocoatl-qa/b1.spec.ts", TARGET, "failed");
+        let report = QaDriver.drive(&host, &run).await.unwrap();
+        let results = host.results.lock().unwrap().clone();
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert_eq!(
+            classification(&report, "B1"),
+            ReproClassification::Reproduced
+        );
+        let metadata = std::fs::symlink_metadata(root.join("axocoatl-qa")).unwrap();
+        assert!(metadata.is_dir() && !metadata.file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(root.join("axocoatl-qa/b1.spec.ts")).unwrap(),
+            spec
+        );
+        let repro = report.findings[0].repro.as_ref().unwrap();
+        assert_eq!(
+            repro.sha256.as_deref(),
+            Some(format!("{:x}", Sha256::digest(spec.as_bytes())).as_str())
+        );
+        assert!(host.inner.events().iter().any(|event| matches!(
+            event,
+            RunEvent::Phase { phase, detail, .. }
+                if phase == "preparing" && detail.contains("created axocoatl-qa/")
+        )));
+
+        // A later run on the same repository finds the directory and
+        // creates nothing.
+        let again = FakeHost::with_turn(explorer_turn(
+            NodeState::Accepted,
+            Some(&report_text_without_findings()),
+            None,
+        ));
+        QaDriver.drive(&again, &run).await.unwrap();
+        assert!(!again
+            .events()
+            .iter()
+            .any(|event| matches!(event, RunEvent::Phase { phase, .. } if phase == "preparing")));
+    }
+
+    fn report_text_without_findings() -> String {
+        report(&[], &[("checkout", "covered")])
+    }
+
+    /// A reproductions directory that exists as a symbolic link or as a file
+    /// is refused before the explorer's turn, and nothing is created or
+    /// written through the link. Admission refuses it too, and creates
+    /// nothing for a missing directory.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_linked_or_file_reproductions_directory_is_refused() {
+        let run_on = |root: &Path| {
+            context(
+                "qa",
+                &[("explorer_model", "openrouter:qwen/qwen3-coder")],
+                root,
+            )
+        };
+        let refused = |result: Result<KindReport, RunError>| match result {
+            Err(RunError::Usage(message)) => message,
+            other => panic!("{other:?}"),
+        };
+
+        let linked = repo_with(&[]);
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), linked.path().join("axocoatl-qa")).unwrap();
+        let run = run_on(linked.path());
+        let host = FakeHost::with_turn(explorer_turn(
+            NodeState::Accepted,
+            Some(&report_text_without_findings()),
+            None,
+        ));
+        let message = refused(QaDriver.drive(&host, &run).await);
+        assert!(
+            message.contains("axocoatl-qa") && message.contains("symbolic link"),
+            "{message}"
+        );
+        assert!(
+            host.sent.lock().unwrap().is_empty(),
+            "no turn after a refusal"
+        );
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+        let settings = qa_settings(&run.resolved).unwrap();
+        assert!(matches!(
+            check_repro_dir(linked.path(), &settings),
+            Err(RunError::Usage(message)) if message.contains("symbolic link")
+        ));
+
+        // A dangling link is refused the same way.
+        let dangling = repo_with(&[]);
+        std::os::unix::fs::symlink(
+            outside.path().join("missing"),
+            dangling.path().join("axocoatl-qa"),
+        )
+        .unwrap();
+        let message = refused(QaDriver.drive(&host, &run_on(dangling.path())).await);
+        assert!(message.contains("symbolic link"), "{message}");
+        assert!(!outside.path().join("missing").exists());
+
+        // A file in its place.
+        let file = repo_with(&["axocoatl-qa"]);
+        let message = refused(QaDriver.drive(&host, &run_on(file.path())).await);
+        assert!(message.contains("not a directory"), "{message}");
+        assert!(std::fs::symlink_metadata(file.path().join("axocoatl-qa"))
+            .unwrap()
+            .is_file());
+
+        // A nested directory under a linked parent.
+        let nested = repo_with(&[]);
+        std::os::unix::fs::symlink(outside.path(), nested.path().join("qa")).unwrap();
+        let mut deep = run_on(nested.path());
+        deep.resolved.loadout.file.qa.as_mut().unwrap().repro_dir = "qa/repros".into();
+        let message = refused(QaDriver.drive(&host, &deep).await);
+        assert!(message.contains("symbolic link"), "{message}");
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+
+        // Admission creates nothing for a missing directory.
+        let fresh = repo_with(&[]);
+        check_repro_dir(fresh.path(), &settings).unwrap();
+        assert!(!fresh.path().join("axocoatl-qa").exists());
     }
 }

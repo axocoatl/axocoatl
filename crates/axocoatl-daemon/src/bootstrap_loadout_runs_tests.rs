@@ -231,6 +231,36 @@ async fn team_child_body() {
     assert_eq!(team.slots[0].slot_id, "writer");
     assert_eq!(team.slots[0].model, MODEL);
     assert_eq!(team.required_checks, edit.required_checks);
+    // The record bundle's team section says what was applied: the writer
+    // starts from a fresh conversation, with the loadout's own definition
+    // and tools. The team view keeps offering reset_history: false, the
+    // choice for the person's next edit.
+    assert!(!team.slots[0].reset_history);
+    let record = daemon.session_team_record(&bound.id).await.unwrap();
+    let slot = &record["slots"][0];
+    assert_eq!(slot["slot_id"], "writer");
+    assert_eq!(slot["reset_history"], true, "{record}");
+    assert_eq!(
+        slot["tools"],
+        serde_json::json!([
+            "read_file",
+            "list_dir",
+            "grep",
+            "glob",
+            "write_file",
+            "edit_file",
+            "bash"
+        ]),
+        "{record}"
+    );
+    assert!(
+        slot["definition"]["source"]
+            .as_str()
+            .is_some_and(|source| source.contains("fix")),
+        "{record}"
+    );
+    assert_eq!(slot["definition"]["tools"], slot["tools"]);
+    assert_eq!(record["configuration_revision"], 1);
     let review = team.required_review.as_ref().unwrap();
     assert_eq!(review.template_id, "loadout-reviewer");
     assert!(review.inline.is_some());
@@ -469,6 +499,130 @@ async fn e2b_child_body() {
     daemon.shutdown().await.unwrap();
 }
 
+/// The configuration file of the admission test, with `browser.allow`.
+fn admission_yaml(base_url: &str, browser_allow: &str) -> String {
+    format!(
+        r#"
+agents:
+  - id: conversation
+    name: Conversation
+    provider: ollama
+    model: {MODEL}
+    tools: [read_file]
+providers:
+  ollama:
+    base_url: {base_url}
+sandbox:
+  backend: podman
+  network: bridge
+browser:
+  allow: [{browser_allow}]
+  private_destinations: [192.168.1.0/24]
+consolidation:
+  enabled: false
+"#
+    )
+}
+
+async fn admission_child_body() {
+    let server = model_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("axocoatl.yaml");
+    std::fs::write(
+        &path,
+        admission_yaml(&server.uri(), "{cidr: 192.168.1.0/24, ports: [8766]}"),
+    )
+    .unwrap();
+    let config = axocoatl_config::load_config(&path).await.unwrap();
+    let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
+    daemon.set_config_path(&path);
+    let repo = tempfile::tempdir().unwrap();
+    // A Session of the repository's Workspace holds it, as the Session of a
+    // turn that needs attention does until someone continues, stops or
+    // closes that turn.
+    let holder = native_session(&daemon, repo.path(), None).await;
+    let operation = daemon
+        .attempt_operation_for_workspace(&holder.workspace_id)
+        .await;
+    let held = operation.clone().lock_owned().await;
+    let request = |target: &str, id: &str| RunRequest {
+        loadout: "qa".into(),
+        task: "find the bugs".into(),
+        repo: repo.path().display().to_string(),
+        params: [
+            ("explorer_model".to_string(), format!("ollama:{MODEL}")),
+            ("target_url".to_string(), target.to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        keep: Default::default(),
+        check_command: None,
+        setup_command: None,
+        request_id: id.into(),
+    };
+    let admit = |request: RunRequest| {
+        let daemon = &daemon;
+        async move {
+            tokio::time::timeout(Duration::from_secs(60), daemon.admit_loadout_run(request))
+                .await
+                .expect("admission never waits for a held Workspace")
+        }
+    };
+    let conflict = |result: Result<(RunAccepted, RunContext), DaemonError>| match result {
+        Err(DaemonError::SessionConflict(message)) => message,
+        Err(other) => panic!("expected a conflict, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    };
+    let usage = |result: Result<(RunAccepted, RunContext), DaemonError>| match result {
+        Err(DaemonError::InvalidRequest(message)) => message,
+        Err(other) => panic!("expected a usage error, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    };
+
+    // A cidr entry of browser.allow admits a URL in its range: the run gets
+    // past the qa checks to the Workspace, which another Session holds, and
+    // is refused at once, naming that Session.
+    let message = conflict(admit(request("http://192.168.1.5:8766", "cidr")).await);
+    assert!(message.contains(&holder.id), "{message}");
+    assert!(
+        message.contains(&repo.path().canonicalize().unwrap().display().to_string()),
+        "{message}"
+    );
+    // Another port of the range is not admitted.
+    let message = usage(admit(request("http://192.168.1.5:8767", "cidr-port")).await);
+    assert!(message.contains("browser.allow"), "{message}");
+
+    // A host the lists do not name is a usage error, until `axocoatl network
+    // reload` adds it: admission reads the lists in force, not the ones the
+    // daemon started with.
+    let message = usage(admit(request("http://shop.example.test:8080", "host-before")).await);
+    assert!(message.contains("browser.allow"), "{message}");
+    std::fs::write(
+        &path,
+        admission_yaml(
+            &server.uri(),
+            "{cidr: 192.168.1.0/24, ports: [8766]}, {host: shop.example.test, ports: [8080]}",
+        ),
+    )
+    .unwrap();
+    daemon.reload_network_policy().await.unwrap();
+    let message = conflict(admit(request("http://shop.example.test:8080", "host-after")).await);
+    assert!(message.contains(&holder.id), "{message}");
+
+    // A reproductions directory that is a link is refused before anything
+    // is created.
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), repo.path().join("axocoatl-qa")).unwrap();
+    let message = usage(admit(request("http://192.168.1.5:8766", "linked")).await);
+    assert!(message.contains("symbolic link"), "{message}");
+    std::fs::remove_file(repo.path().join("axocoatl-qa")).unwrap();
+
+    // Nothing was admitted: no run record exists.
+    assert!(daemon.list_loadout_runs().await.unwrap().is_empty());
+    drop(held);
+    daemon.shutdown().await.unwrap();
+}
+
 /// Run `name` in a child process with its own data root and a fake Podman
 /// that reports `rootless`.
 async fn run_child(name: &str, rootless: bool) {
@@ -526,6 +680,22 @@ async fn loadout_sessions_bind_their_sandbox_apply_inline_teams_and_refuse_rootf
     run_child(
         "bootstrap::loadout_runs::daemon_tests::loadout_sessions_bind_their_sandbox_apply_inline_teams_and_refuse_rootful_podman",
         false,
+    )
+    .await;
+}
+
+/// qa admission against the live lists (a cidr entry, a reloaded host) and
+/// a Workspace another Session holds: refused at once with that Session
+/// named, never waiting.
+#[tokio::test]
+async fn qa_admission_reads_the_live_lists_and_never_waits_for_a_held_workspace() {
+    if std::env::var_os(CHILD).is_some() {
+        admission_child_body().await;
+        return;
+    }
+    run_child(
+        "bootstrap::loadout_runs::daemon_tests::qa_admission_reads_the_live_lists_and_never_waits_for_a_held_workspace",
+        true,
     )
     .await;
 }
@@ -625,7 +795,7 @@ async fn loadout_session_container_runs_egress_and_hardened() {
                     if let Ok(listed) = listed {
                         for name in String::from_utf8_lossy(&listed.stdout)
                             .lines()
-                            .filter(|name| name.ends_with(id.as_str()))
+                            .filter(|name| name.ends_with(id))
                         {
                             let _ = std::process::Command::new("podman")
                                 .args([kind, "rm", "-f", name])
@@ -710,4 +880,544 @@ async fn loadout_session_container_runs_egress_and_hardened() {
     let cleanup = daemon.shutdown_session_runtimes_checked().await;
     result.unwrap();
     cleanup.unwrap();
+}
+
+/// A custom loadout with one writer that may only read files and no checks:
+/// the writer's turn needs attention when its provider fails.
+const NATIVE_RUN: &str = r#"
+schema: axocoatl.loadout/1
+id: native-run
+version: 1
+name: Native run
+kind: custom
+params:
+  writer_model: { kind: model, required: true }
+agents:
+  - id: writer
+    role: writer
+    model: { param: writer_model }
+    tools: [read_file]
+budgets:
+  agent: { activations: 2, invocations: 40, tokens: 100000, cost_usd: 1 }
+  wall_clock: 5m
+prompt: "{task}"
+"#;
+
+/// The task of the run the test stops while its provider call is running.
+const SLOW_TASK: &str = "Wait for the person to stop this run.";
+
+/// Native Ollama's `/api/chat` as a model whose tool call Ollama cannot
+/// parse answers it: the first call asks for read_file (120 input and 7
+/// output tokens), every later call ends its stream with Ollama's error, as
+/// the qa smoke run's explorer did.
+struct ToolCallThenParseError {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl wiremock::Respond for ToolCallThenParseError {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body: serde_json::Value = request.body_json().unwrap_or_default();
+        if body.to_string().contains(SLOW_TASK) {
+            // A call that is still running when the run is stopped.
+            return ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(300))
+                .set_body_raw("{}\n", "application/x-ndjson");
+        }
+        let reply = if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            serde_json::json!({
+                "model": body["model"], "created_at": "2026-10-07T00:00:00Z",
+                "message": {"role": "assistant", "content": "", "tool_calls": [{
+                    "id": "call_1",
+                    "function": {"index": 0, "name": "read_file", "arguments": {"path": "README.md"}}
+                }]},
+                "done": true, "done_reason": "stop", "prompt_eval_count": 120, "eval_count": 7
+            })
+        } else {
+            serde_json::json!({"error": "error parsing tool call: raw='{\"command\":\"x'"})
+        };
+        ResponseTemplate::new(200).set_body_raw(format!("{reply}\n"), "application/x-ndjson")
+    }
+}
+
+/// What the task that sent each turn returned, by turn id (`None` while it
+/// runs).
+type SendResults = Arc<std::sync::Mutex<HashMap<String, Option<Result<(), String>>>>>;
+
+/// The run driver's host over this daemon, as the server's `DaemonRunHost`
+/// is: each turn is sent as `/ws` sends it and observed through the
+/// control-plane projection.
+struct LiveHost {
+    daemon: Arc<AxocoatlDaemon>,
+    labels: std::sync::Mutex<Vec<CheckLabel>>,
+    sends: SendResults,
+}
+
+#[async_trait::async_trait]
+impl crate::loadout::RunHost for LiveHost {
+    async fn apply_team(
+        &self,
+        session_id: &str,
+        edit: crate::SessionTeamEdit,
+    ) -> Result<(), RunError> {
+        *self.labels.lock().unwrap() = CheckLabel::of_edit(&edit);
+        Ok(self.daemon.apply_loadout_team(session_id, edit).await?)
+    }
+
+    async fn send_turn(&self, session_id: &str, request: &str) -> Result<String, RunError> {
+        let turn_id = format!("turn-{}", uuid::Uuid::new_v4());
+        self.sends.lock().unwrap().insert(turn_id.clone(), None);
+        let (daemon, sends) = (self.daemon.clone(), self.sends.clone());
+        let (session, turn, input) = (session_id.to_string(), turn_id.clone(), request.to_string());
+        tokio::spawn(async move {
+            let (sink, receiver) =
+                tokio::sync::mpsc::unbounded_channel::<axocoatl_actor::AgentStreamChunk>();
+            drop(receiver);
+            let result = daemon
+                .execute_session_turn_streaming(
+                    &session,
+                    &turn,
+                    Some(turn.clone()),
+                    None,
+                    &input,
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                    sink,
+                )
+                .await;
+            sends.lock().unwrap().insert(
+                turn,
+                Some(result.map(|_| ()).map_err(|error| error.to_string())),
+            );
+        });
+        Ok(turn_id)
+    }
+
+    async fn wait_turn(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        deadline: std::time::Instant,
+    ) -> Result<TurnObservation, RunError> {
+        loop {
+            let labels = self.labels.lock().unwrap().clone();
+            let observed = self
+                .daemon
+                .loadout_turn_observation(session_id, turn_id, &labels, None)
+                .await?;
+            let sent = self.sends.lock().unwrap().get(turn_id).cloned().flatten();
+            match (&observed, &sent) {
+                (Some(observation), _) if observation.state != TurnState::Running => {
+                    return Ok(observation.clone())
+                }
+                (None, Some(Err(error))) => {
+                    return Err(RunError::Infrastructure(format!(
+                        "the turn could not start: {error}"
+                    )))
+                }
+                _ => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                return observed
+                    .ok_or_else(|| RunError::Infrastructure("the turn has no projection".into()));
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    async fn stop_turn(&self, session_id: &str, turn_id: &str) -> Result<(), RunError> {
+        self.daemon
+            .stop_session_turn(session_id, turn_id)
+            .await
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
+    async fn run_repro(
+        &self,
+        _session_id: &str,
+        _request: &crate::loadout::host::ReproRequest,
+    ) -> Result<axocoatl_session::run_outcome::ReproRun, RunError> {
+        Err(RunError::NotImplemented("this loadout reproduces nothing"))
+    }
+
+    async fn read_sandbox_file(
+        &self,
+        session_id: &str,
+        path: &str,
+        max_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, RunError> {
+        Ok(self
+            .daemon
+            .loadout_read_sandbox_file(session_id, path, max_bytes)
+            .await?)
+    }
+
+    async fn record(&self, run_id: &str, event: RunEvent) -> Result<(), RunError> {
+        self.daemon
+            .record_loadout_run_event(run_id, &event)
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+
+    async fn recorded_events(&self, run_id: &str) -> Result<Vec<RunEvent>, RunError> {
+        Ok(self.daemon.loadout_run_recorded_events(run_id)?)
+    }
+
+    async fn network_summary(&self, session_id: &str) -> Result<NetworkSummary, RunError> {
+        Ok(self.daemon.loadout_network_summary(session_id).await)
+    }
+
+    async fn stop_requested(&self, run_id: &str) -> bool {
+        self.daemon.loadout_run_stop_requested(run_id)
+    }
+
+    async fn finish(&self, run_id: &str, outcome: &RunOutcome) -> Result<(), RunError> {
+        Ok(self.daemon.finish_loadout_run(run_id, outcome)?)
+    }
+}
+
+/// A whole loadout run on real Podman whose writer's provider fails after
+/// one successful call, so its turn needs attention:
+/// - the run counts the tokens of the call that succeeded (the projection
+///   attaches usage only to accepted answers);
+/// - once the run has its Outcome, its Session no longer holds the
+///   Workspace, so the next run on the repository is not refused or kept
+///   waiting;
+/// - the record bundle's history is the Session's versioned export, and its
+///   team section says the writer started from a fresh conversation with the
+///   loadout's tools.
+///
+/// ```text
+/// CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-daemon --lib \
+///   a_needs_attention_run_on_podman -- --ignored
+/// ```
+#[tokio::test]
+#[ignore = "requires rootless Podman, docker.io/library/alpine:3.20 and the egress sidecar image"]
+async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what_ran() {
+    if std::env::var_os(CHILD).is_none() {
+        let root = tempfile::tempdir().unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(900),
+            tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "bootstrap::loadout_runs::daemon_tests::a_needs_attention_run_on_podman_releases_its_workspace_and_records_what_ran",
+                    "--nocapture",
+                    "--ignored",
+                ])
+                .env(CHILD, "1")
+                .env("AXOCOATL_DATA_DIR", root.path().join("data"))
+                .env("AXOCOATL_SOCKET_PATH", "ipc/daemon.sock")
+                .current_dir(root.path())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+    let server = model_server().await;
+    let chat_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(ToolCallThenParseError {
+            calls: chat_calls.clone(),
+        })
+        .mount(&server)
+        .await;
+    let config_dir = tempfile::tempdir().unwrap();
+    let config_path = config_dir.path().join("axocoatl.yaml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "agents: []\nproviders:\n  ollama:\n    base_url: {}\nsandbox:\n  backend: podman\n  network: bridge\nconsolidation:\n  enabled: false\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    std::fs::create_dir(config_dir.path().join(USER_LOADOUT_DIR)).unwrap();
+    std::fs::write(
+        config_dir
+            .path()
+            .join(USER_LOADOUT_DIR)
+            .join("native-run.yaml"),
+        NATIVE_RUN,
+    )
+    .unwrap();
+    let config = axocoatl_config::load_config(&config_path).await.unwrap();
+    let daemon = Arc::new(AxocoatlDaemon::bootstrap_headless(config).await.unwrap());
+    daemon.set_config_path(&config_path);
+    // The repository is outside the data root, which the container must not
+    // reach.
+    let outside = tempfile::Builder::new()
+        .prefix("axocoatl-loadout-run-")
+        .tempdir_in(std::env::temp_dir())
+        .unwrap();
+    let repo = outside.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("README.md"), "# Native run\n").unwrap();
+
+    let (accepted, context) = daemon
+        .admit_loadout_run(RunRequest {
+            loadout: "native-run".into(),
+            task: "Read README.md and say what it is.".into(),
+            repo: repo.display().to_string(),
+            params: [("writer_model".to_string(), format!("ollama:{MODEL}"))]
+                .into_iter()
+                .collect(),
+            keep: Default::default(),
+            check_command: None,
+            setup_command: None,
+            request_id: "podman-run".into(),
+        })
+        .await
+        .unwrap();
+    // Whatever an assertion does, the containers, volumes and networks of
+    // every Session the test's runs created are removed.
+    struct Cleanup(std::sync::Mutex<Vec<String>>);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            for id in self
+                .0
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .iter()
+            {
+                remove_session_runtime(id);
+            }
+        }
+    }
+    fn remove_session_runtime(id: &str) {
+        let names: Vec<String> = ["axo-ses-", "axo-egr-", "axo-brw-", "axo-pvw-", "axo-svc-"]
+            .iter()
+            .map(|prefix| format!("{prefix}{id}"))
+            .collect();
+        let _ = std::process::Command::new("podman")
+            .args(["rm", "-f", "--ignore"])
+            .args(&names)
+            .output();
+        for kind in ["volume", "network"] {
+            if let Ok(listed) = std::process::Command::new("podman")
+                .args([kind, "ls", "--format", "{{.Name}}"])
+                .output()
+            {
+                for name in String::from_utf8_lossy(&listed.stdout)
+                    .lines()
+                    .filter(|name| name.ends_with(id))
+                {
+                    let _ = std::process::Command::new("podman")
+                        .args([kind, "rm", "-f", name])
+                        .output();
+                }
+            }
+        }
+    }
+    let cleanup = Cleanup(std::sync::Mutex::new(vec![accepted.session_id.clone()]));
+    let result = async {
+        let ready = daemon.loadout_run(&accepted.run_id).await?;
+        assert!(ready.outcome.is_none(), "the environment failed: {ready:?}");
+        // The qa driver creates a missing reproductions directory on the
+        // host as SecureDir creates directories, owner-only; the Session's
+        // hardened writer still writes into it with write_file's own
+        // command, because the Workspace's owner is the writer in the
+        // container.
+        let repo_root = repo.canonicalize().unwrap();
+        assert!(
+            crate::loadout::qa::repro_dir_ready(&repo_root, "axocoatl-qa", true)
+                .await
+                .map_err(|error| DaemonError::Session(error.to_string()))?
+        );
+        let sandbox = daemon
+            .session_sandboxes
+            .lock()
+            .await
+            .get(&accepted.session_id)
+            .cloned()
+            .unwrap();
+        let written = sandbox
+            .exec_stdin(
+                &["sh", "-c", "cat > \"$1\"", "sh", "axocoatl-qa/b1.spec.ts"],
+                "import { test } from '@playwright/test';\n",
+                Duration::from_secs(60),
+            )
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        assert_eq!(written.exit_code, 0, "{written:?}");
+        assert_eq!(
+            std::fs::read_to_string(repo_root.join("axocoatl-qa/b1.spec.ts")).unwrap(),
+            "import { test } from '@playwright/test';\n"
+        );
+        let id = sandbox
+            .exec(&["id", "-u"], Duration::from_secs(30))
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        assert_ne!(id.stdout.trim(), "0", "the writer is not root: {id:?}");
+        let host = LiveHost {
+            daemon: daemon.clone(),
+            labels: std::sync::Mutex::new(Vec::new()),
+            sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        };
+        let outcome = crate::loadout::driver::run_to_outcome(&host, &context)
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        assert!(chat_calls.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+        assert_eq!(
+            outcome.exit_code,
+            exit_code::NEEDS_ATTENTION,
+            "{:?} {:?} {:?}",
+            outcome.error,
+            outcome.attention,
+            outcome.not_covered
+        );
+        assert_eq!(outcome.turns.len(), 1);
+        assert_eq!(outcome.turns[0].state, TurnState::NeedsAttention);
+        let writer = outcome
+            .not_covered
+            .iter()
+            .find(|entry| entry.area == "writer")
+            .unwrap_or_else(|| panic!("{:?}", outcome.not_covered));
+        assert!(
+            writer.detail.contains("error parsing tool call"),
+            "{writer:?}"
+        );
+        // The call that succeeded before the provider failed is counted.
+        assert!(
+            outcome.usage.input_tokens >= 120 && outcome.usage.output_tokens >= 7,
+            "{:?}",
+            outcome.usage
+        );
+
+        // The run has its Outcome: the Workspace is free for the next run,
+        // because the run closed its turn.
+        let operation = daemon
+            .attempt_operation_for_workspace(&accepted.workspace_id)
+            .await;
+        assert!(
+            operation.try_lock().is_ok(),
+            "the run's Session still holds the Workspace"
+        );
+        let events = daemon.loadout_run_recorded_events(&accepted.run_id)?;
+        assert!(events.iter().any(
+            |event| matches!(event, RunEvent::Phase { phase, .. } if phase == "closing_turn")
+        ));
+
+        // The record bundle carries the versioned history and the team as
+        // applied.
+        let mut bundle = Vec::new();
+        daemon
+            .write_record_bundle(&accepted.run_id, &mut bundle)
+            .await?;
+        let sections: Vec<serde_json::Value> = String::from_utf8(bundle)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let section = |name: &str| {
+            sections
+                .iter()
+                .find(|line| line["section"] == name)
+                .map(|line| line["data"].clone())
+                .unwrap_or_else(|| panic!("no {name} section"))
+        };
+        let history = section("history");
+        let entries = history
+            .as_array()
+            .unwrap_or_else(|| panic!("history is not the Session export: {history}"));
+        let turn_id = &outcome.turns[0].turn_id;
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.to_string().contains(turn_id.as_str())),
+            "{history}"
+        );
+        let team = section("team");
+        let slot = &team["slots"][0];
+        assert_eq!(slot["slot_id"], "writer", "{team}");
+        assert_eq!(slot["reset_history"], true, "{team}");
+        assert_eq!(slot["tools"], serde_json::json!(["read_file"]), "{team}");
+
+        // A run a person stops while its writer's provider call is running
+        // ends interrupted; the writer is not covered because of the stop,
+        // with a reason, never "other" with an empty one; and the Workspace
+        // is free again.
+        let stopped_repo = outside.path().join("stopped");
+        std::fs::create_dir_all(&stopped_repo).unwrap();
+        let (stopped, stopped_context) = daemon
+            .admit_loadout_run(RunRequest {
+                loadout: "native-run".into(),
+                task: SLOW_TASK.into(),
+                repo: stopped_repo.display().to_string(),
+                params: [("writer_model".to_string(), format!("ollama:{MODEL}"))]
+                    .into_iter()
+                    .collect(),
+                keep: Default::default(),
+                check_command: None,
+                setup_command: None,
+                request_id: "podman-stop".into(),
+            })
+            .await?;
+        cleanup.0.lock().unwrap().push(stopped.session_id.clone());
+        let driver = {
+            let host = LiveHost {
+                daemon: daemon.clone(),
+                labels: std::sync::Mutex::new(Vec::new()),
+                sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            };
+            tokio::spawn(async move {
+                crate::loadout::driver::run_to_outcome(&host, &stopped_context).await
+            })
+        };
+        let started = tokio::time::Instant::now();
+        loop {
+            let calls = server.received_requests().await.unwrap_or_default();
+            if calls.iter().any(|request| {
+                request.url.path() == "/api/chat"
+                    && String::from_utf8_lossy(&request.body).contains(SLOW_TASK)
+            }) {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(120),
+                "the stopped run's provider call never started"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        daemon.request_loadout_run_stop(&stopped.run_id).await?;
+        let outcome = tokio::time::timeout(Duration::from_secs(180), driver)
+            .await
+            .expect("the stopped run ends")
+            .unwrap()
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        assert_eq!(outcome.exit_code, exit_code::INTERRUPTED, "{outcome:?}");
+        for entry in &outcome.not_covered {
+            assert!(
+                !entry.detail.trim().is_empty()
+                    && entry.detail != "other: "
+                    && entry.class != axocoatl_session::run_outcome::FailureClass::Other,
+                "{entry:?}"
+            );
+        }
+        let operation = daemon
+            .attempt_operation_for_workspace(&stopped.workspace_id)
+            .await;
+        assert!(
+            operation.try_lock().is_ok(),
+            "the stopped run's Session still holds the Workspace"
+        );
+        Ok::<(), DaemonError>(())
+    }
+    .await;
+    let shutdown = daemon.shutdown_session_runtimes_checked().await;
+    drop(cleanup);
+    result.unwrap();
+    shutdown.unwrap();
 }
