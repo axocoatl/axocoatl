@@ -862,6 +862,21 @@ pub fn validate_loadout(file: &LoadoutFile) -> Result<Vec<LoadoutWarning>, Loado
             "network: none reaches no host; remove egress.allow and routes",
         ));
     }
+    if file.sandbox.network == "none" {
+        for agent in &file.agents {
+            if let Some(tool) = agent.tools.iter().find(|tool| {
+                matches!(
+                    tool.as_str(),
+                    "web_search" | "web_fetch" | "browser" | "browser_check"
+                )
+            }) {
+                return Err(invalid(
+                    format!("agents.{}.tools", agent.id),
+                    format!("{tool} reaches hosts, and network: none reaches no host"),
+                ));
+            }
+        }
+    }
     if let Some(environment) = &file.environment {
         if environment.image.is_some() && !environment.recipes.is_empty() {
             return Err(invalid("environment", "set image or recipes, not both"));
@@ -1430,6 +1445,15 @@ mod tests {
         let text = FIX_YAML.replace("workload: hardened", "workload: image");
         let error = parse_loadout(&text, LoadoutSource::Builtin).unwrap_err();
         assert!(error.to_string().contains("sandbox.workload"), "{error}");
+    }
+
+    #[test]
+    fn network_none_keeps_tools_from_reaching_hosts() {
+        let text = QA_YAML.replace("network: egress", "network: none");
+        let error = parse_loadout(&text, LoadoutSource::Builtin).unwrap_err();
+        assert!(error.to_string().contains("reaches hosts"), "{error}");
+        let text = FIX_YAML.replace("network: egress", "network: none");
+        assert!(parse_loadout(&text, LoadoutSource::Builtin).is_ok());
     }
 
     #[test]

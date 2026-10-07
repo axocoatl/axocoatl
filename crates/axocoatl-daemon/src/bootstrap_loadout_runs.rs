@@ -773,6 +773,30 @@ fn qa_exposed_ports(
     Ok(ports)
 }
 
+/// A loadout under `network: none` reaches no host, so none of its Agents
+/// may list a tool that reaches one from the host (the web and browser
+/// tools), whatever the daemon's own `sandbox.network` allows.
+fn refuse_hosts_under_network_none(file: &LoadoutFile) -> Result<(), DaemonError> {
+    if file.sandbox.network != "none" {
+        return Ok(());
+    }
+    for agent in &file.agents {
+        if let Some(tool) = agent.tools.iter().find(|tool| {
+            matches!(
+                tool.as_str(),
+                "web_search" | "web_fetch" | "browser" | "browser_check"
+            )
+        }) {
+            return Err(DaemonError::InvalidRequest(format!(
+                "agents.{}.tools lists {tool}, which reaches hosts, but the loadout runs under \
+                 network: none; run it under network: egress",
+                agent.id
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn valid_request_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
@@ -1002,6 +1026,7 @@ impl AxocoatlDaemon {
         }
         .map(|command| command.trim().to_string())
         .filter(|command| !command.is_empty());
+        refuse_hosts_under_network_none(&loadout.file)?;
         let exposed_ports = qa_exposed_ports(&self.config, &loadout.file, &resolved.params)?;
         let workspace = self.create_workspace(&repo_text, None).await?;
         let run_id = format!("run-{}", uuid::Uuid::new_v4());
@@ -2035,6 +2060,20 @@ mod tests {
         assert!(qa_exposed_ports(&config, &builtin("fix").file, &params)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn network_none_refuses_tools_that_reach_hosts() {
+        let mut file = builtin("qa").file.clone();
+        assert!(refuse_hosts_under_network_none(&file).is_ok());
+        file.sandbox.network = "none".into();
+        assert!(matches!(
+            refuse_hosts_under_network_none(&file),
+            Err(DaemonError::InvalidRequest(_))
+        ));
+        let mut fix = builtin("fix").file.clone();
+        fix.sandbox.network = "none".into();
+        assert!(refuse_hosts_under_network_none(&fix).is_ok());
     }
 
     #[test]
