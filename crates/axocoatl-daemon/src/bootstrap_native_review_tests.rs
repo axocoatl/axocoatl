@@ -663,8 +663,23 @@ async fn changes_go_back_to_the_lead_and_a_second_round_approves() {
         revised.contains("Lead answer, generation 1"),
         "the lead reads its previous answer"
     );
+    // The lead is asked to answer each finding by id, and is told the
+    // unnumbered findings are one finding, F1.
+    assert!(
+        revised.contains(
+            "Answer every finding below in an ADJUDICATIONS block: a fenced JSON array of"
+        ) && revised.contains("one entry per finding, then fix each finding you accept."),
+        "{revised}"
+    );
+    assert!(revised.contains("they are one finding, F1."), "{revised}");
     let reviewer_requests = scenario.reviewer_requests.lock().unwrap().clone();
     assert_eq!(reviewer_requests.len(), 2);
+    for (_, text) in &reviewer_requests {
+        assert!(
+            text.contains("Number each finding F1, F2, ... at the start of its line"),
+            "every round's prompt asks for numbered findings: {text}"
+        );
+    }
     assert!(reviewer_requests[1].1.contains("Lead answer, generation 2"));
     assert!(!reviewer_requests[1].1.contains("Lead answer, generation 1"));
     assert!(reviewer_requests[1].1.contains("review round 2 of 2"));
@@ -701,6 +716,26 @@ async fn changes_go_back_to_the_lead_and_a_second_round_approves() {
     assert_eq!(second.outcome, ConditionOutcome::Passed);
     assert_eq!(second_proof["round"], 2);
     assert_eq!(second.activations[0].generation, 2);
+    // A loadout run reads every round from the same proofs, with the
+    // findings sent back split by id.
+    let rounds: Vec<_> = run
+        .controller
+        .with_team_stores(|_, content, _| {
+            Ok(
+                axocoatl_session::turn_review::review_proofs(&run.outcome.snapshot, content)
+                    .unwrap()
+                    .iter()
+                    .map(|proof| proof.to_round())
+                    .collect(),
+            )
+        })
+        .unwrap();
+    assert_eq!(rounds.len(), 2);
+    assert!(rounds[0].continued && !rounds[1].continued && rounds[1].passed);
+    assert_eq!(rounds[0].findings.len(), 1);
+    assert_eq!(rounds[0].findings[0].id, "F1");
+    assert_eq!(rounds[0].findings[0].text, FINDING);
+    assert!(rounds[1].findings.is_empty());
     // Only the verdict about the current answer counts.
     let current = contract
         .current_condition(&first.condition_id)

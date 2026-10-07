@@ -144,6 +144,12 @@ pub(crate) trait SessionEgressSource: Send + Sync {
 #[async_trait::async_trait]
 pub(crate) trait SessionPorts: Send + Sync {
     async fn exposed_ports(&self, session_id: &str) -> Result<Vec<u16>, String>;
+    /// The network a Session runs under when it is not `sandbox.network`: a
+    /// loadout Session's own `egress` or `none`. `None` keeps the
+    /// configured one.
+    async fn session_network(&self, _session_id: &str) -> Option<String> {
+        None
+    }
 }
 
 #[async_trait::async_trait]
@@ -154,6 +160,14 @@ impl SessionPorts for tokio::sync::Mutex<SessionStore> {
             .get(session_id)
             .map(|session| session.exposed_ports)
             .ok_or_else(|| format!("session '{session_id}' not found"))
+    }
+
+    async fn session_network(&self, session_id: &str) -> Option<String> {
+        self.lock()
+            .await
+            .get(session_id)
+            .and_then(|session| session.loadout)
+            .map(|binding| binding.network)
     }
 }
 
@@ -353,6 +367,15 @@ impl BrowserService {
         result.map(|_| ()).map_err(|error| error.to_string())
     }
 
+    /// The network `session_id` runs under: its loadout's own, or else
+    /// `sandbox.network`.
+    async fn network_of(&self, session_id: &str) -> String {
+        self.ports
+            .session_network(session_id)
+            .await
+            .unwrap_or_else(|| self.config.session_network.clone())
+    }
+
     /// The browser's sidecar and policy for the Session's network view, when
     /// its declared hosts have been used. A sidecar being started reads as
     /// `starting`.
@@ -401,7 +424,7 @@ impl BrowserService {
         session_id: &str,
         session: &BrowserSession,
     ) -> Result<Arc<SessionEgress>, String> {
-        if self.config.session_network == "egress" {
+        if self.network_of(session_id).await == "egress" {
             let authority = self.egress_source.session_egress(session_id).await?;
             if authority.policy(EgressScope::Browser).is_none() {
                 return Err(
@@ -556,6 +579,9 @@ fn proxy_password(url: &str) -> Option<String> {
 struct BrowserCallRunner {
     service: Arc<BrowserService>,
     context: HostInvocationContext,
+    /// What the call may use: `browser:`'s settings, or a host-run
+    /// reproduction's own timeout.
+    settings: BrowserSettings,
     /// The egress credential tag the call used, for its record event.
     token: Mutex<Option<String>>,
 }
@@ -589,7 +615,7 @@ impl BrowserRunner for BrowserCallRunner {
             .map_err(|error| error.to_string())?;
         let ports = service.ports.exposed_ports(session_id).await?;
         let proxy_server = format!("http://127.0.0.1:{}", browser_proxy_port(&ports));
-        let settings = service.config.settings;
+        let settings = self.settings;
         let (script, payload) = match job {
             BrowserJob::Drive(job) => (
                 DRIVER_SCRIPT,
@@ -846,6 +872,7 @@ impl HostInvocationTool for BrowserHostTool {
 
     fn bind(&self, context: HostInvocationContext) -> Arc<dyn BuiltinTool> {
         let runner = Arc::new(BrowserCallRunner {
+            settings: self.service.config.settings,
             service: self.service.clone(),
             context,
             token: Mutex::new(None),
@@ -855,6 +882,131 @@ impl HostInvocationTool for BrowserHostTool {
         } else {
             Arc::new(BrowserTool::with_runner(runner))
         }
+    }
+}
+
+/// The record's name for the host when it re-runs a qa reproduction.
+pub(crate) const REPRO_AGENT: &str = "axocoatl-qa-repro";
+/// The turn, epoch and node names a host-run reproduction is recorded under:
+/// it belongs to no Agent's turn.
+const REPRO_SCOPE: &str = "qa-repro";
+/// Longest first error a reproduction run keeps, in characters.
+const MAX_REPRO_ERROR_CHARS: usize = 500;
+
+/// A reproduction run from what `browser_check` answered: `passed` and
+/// `failed` as the check runner reports them, anything else (no tests, every
+/// test skipped, the runner timed out, the call failed) an `error` with the
+/// first reason found.
+pub(crate) fn repro_run_from(
+    base_url: &str,
+    result: Result<serde_json::Value, String>,
+) -> axocoatl_session::run_outcome::ReproRun {
+    let clip = |text: &str| -> String { text.chars().take(MAX_REPRO_ERROR_CHARS).collect() };
+    let (status, first_error) = match result {
+        Err(reason) => ("error", Some(clip(&reason))),
+        Ok(document) => {
+            let reported = document["status"].as_str().unwrap_or("error");
+            let failing_test = document["tests"].as_array().and_then(|tests| {
+                tests
+                    .iter()
+                    .filter(|test| test["status"].as_str() != Some("passed"))
+                    .find_map(|test| {
+                        let message = test["error"]["message"].as_str()?;
+                        Some(match test["title"].as_str() {
+                            Some(title) => format!("{title}: {message}"),
+                            None => message.to_string(),
+                        })
+                    })
+            });
+            let runner_error = document["errors"]
+                .as_array()
+                .and_then(|errors| errors.iter().find_map(|e| e["message"].as_str()))
+                .map(str::to_owned)
+                .or_else(|| document["error"].as_str().map(str::to_owned));
+            match reported {
+                "passed" => ("passed", None),
+                "failed" => ("failed", failing_test.or(runner_error).map(|e| clip(&e))),
+                other => (
+                    "error",
+                    Some(clip(&runner_error.or(failing_test).unwrap_or_else(|| {
+                        format!("the check ended {other}, not passed or failed")
+                    }))),
+                ),
+            }
+        }
+    };
+    axocoatl_session::run_outcome::ReproRun {
+        base_url: base_url.to_string(),
+        status: status.into(),
+        first_error,
+    }
+}
+
+impl BrowserService {
+    /// Re-run one qa reproduction: one `browser_check` of the repository file
+    /// `path` in `checkout` against `base_url`, outside any Agent's tool
+    /// loop. It runs exactly like an Agent's call (alone in the Session's
+    /// browser container, one worker, no retries, the container replaced
+    /// after it, the Session's declared hosts through its decision point)
+    /// and is recorded in the Session's network record like any browser
+    /// call, under [`REPRO_AGENT`]. `timeout_ms` is bounded to what
+    /// `browser.timeout_secs` allows (10-170 s).
+    pub(crate) async fn run_repro(
+        self: &Arc<Self>,
+        session_id: &str,
+        checkout: SecureDir,
+        path: &str,
+        base_url: &str,
+        timeout_ms: u64,
+    ) -> axocoatl_session::run_outcome::ReproRun {
+        use axocoatl_session::turn_contract::{
+            ActivationId, ActivationRef, ExecutionEpochId, InvocationId, LogicalTurnId, SessionId,
+            TurnNodeId,
+        };
+        if let Some(reason) = browser_refusal(&self.config) {
+            return repro_run_from(base_url, Err(reason));
+        }
+        let unique = uuid::Uuid::new_v4().simple().to_string();
+        let ids = (|| {
+            Ok::<_, axocoatl_session::turn_contract::TurnContractError>((
+                InvocationId::new(format!("{REPRO_SCOPE}-invocation-{unique}"))?,
+                ActivationRef {
+                    session_id: SessionId::new(session_id)?,
+                    turn_id: LogicalTurnId::new(REPRO_SCOPE)?,
+                    execution_epoch_id: ExecutionEpochId::new(REPRO_SCOPE)?,
+                    node_id: TurnNodeId::new(REPRO_SCOPE)?,
+                    generation: 1,
+                    activation_id: ActivationId::new(format!("{REPRO_SCOPE}-{unique}"))?,
+                },
+            ))
+        })();
+        let (invocation_id, activation) = match ids {
+            Ok(ids) => ids,
+            Err(error) => return repro_run_from(base_url, Err(error.to_string())),
+        };
+        let settings = BrowserSettings {
+            timeout_secs: timeout_ms.div_ceil(1000).clamp(10, 170),
+            ..self.config.settings
+        };
+        let runner = Arc::new(BrowserCallRunner {
+            service: self.clone(),
+            context: HostInvocationContext {
+                session_id: session_id.to_string(),
+                invocation_id,
+                activation,
+                agent: REPRO_AGENT.to_string(),
+                read_only: false,
+                checkout: Some(checkout),
+                attempt: false,
+            },
+            settings,
+            token: Mutex::new(None),
+        });
+        let result = BrowserCheckTool::with_runner(runner)
+            .execute(serde_json::json!({"path": path, "base_url": base_url}))
+            .await
+            .map_err(|error| error.to_string());
+        repro_run_from(base_url, result)
     }
 }
 
@@ -1138,6 +1290,7 @@ pub(crate) mod tests {
         let runner = BrowserCallRunner {
             service: service(root.path(), records.clone(), Vec::new()),
             context: context(None),
+            settings: BrowserSettings::default(),
             token: Mutex::new(Some("0123456789abcdef".into())),
         };
         let job = BrowserJob::Drive(
@@ -1430,6 +1583,7 @@ pub(crate) mod tests {
         call.session_id = session_id.clone();
         call.activation.session_id = SessionId::new(&session_id).unwrap();
         let runner = Arc::new(BrowserCallRunner {
+            settings: service.config.settings,
             service: service.clone(),
             context: call,
             token: Mutex::new(None),
@@ -1563,5 +1717,319 @@ pub(crate) mod tests {
         assert_eq!(resolved.max_parallel, 2);
         assert!(resolved.allow.is_empty());
         assert_eq!(resolved.settings.timeout_secs, 120);
+    }
+
+    /// The Session's exposed ports, and the network its loadout runs it
+    /// under.
+    struct LoadoutPorts(&'static str);
+
+    #[async_trait::async_trait]
+    impl SessionPorts for LoadoutPorts {
+        async fn exposed_ports(&self, _: &str) -> Result<Vec<u16>, String> {
+            Ok(vec![8765])
+        }
+        async fn session_network(&self, _: &str) -> Option<String> {
+            Some(self.0.to_string())
+        }
+    }
+
+    /// A loadout Session runs under `egress` while `sandbox.network` stays
+    /// `bridge`: its declared browser hosts go through its own decision
+    /// point, never a second sidecar with its name. A loadout Session under
+    /// `none` keeps the browser-only path.
+    #[tokio::test]
+    async fn a_loadout_session_under_egress_uses_its_own_decision_point() {
+        let root = tempfile::tempdir().unwrap();
+        let docs = vec![EgressAllowYaml::Host(axocoatl_config::EgressHostYaml {
+            host: "docs.test".into(),
+            ports: None,
+        })];
+        let egress = session_decision_point(Some((docs.clone(), Vec::new()))).await;
+        let config = axocoatl_config::AxocoatlConfig {
+            browser: Some(axocoatl_config::BrowserConfigYaml::default()),
+            ..Default::default()
+        };
+        let mut resolved = BrowserServiceConfig::from_config(&config, "authority".into()).unwrap();
+        assert_eq!(resolved.session_network, "bridge");
+        resolved.allow = docs;
+        let stores = crate::session_network::tests::Stores::new(&["ses-1"]);
+        let records = Arc::new(SessionNetworkRecords::new(stores));
+        let dir = SecureDir::open_or_create_all(root.path().join("service")).unwrap();
+        let service = |network: &'static str| {
+            Arc::new(BrowserService::new(
+                resolved.clone(),
+                dir.child("supervisors").unwrap(),
+                Vec::new(),
+                records.clone(),
+                Arc::new(LoadoutPorts(network)),
+                Arc::new(FixedEgress {
+                    egress: Some(egress.clone()),
+                    ready: true,
+                }),
+            ))
+        };
+        let bound = service("egress");
+        assert_eq!(bound.network_of("ses-1").await, "egress");
+        let session = bound.session("ses-1").await;
+        let found = bound.ensure_egress("ses-1", &session).await.unwrap();
+        assert!(Arc::ptr_eq(&found, &egress));
+        assert!(session.egress.lock().await.is_none());
+        assert_eq!(service("none").network_of("ses-1").await, "none");
+    }
+
+    #[test]
+    fn a_check_result_becomes_a_reproduction_run() {
+        let url = "http://localhost:3000";
+        let run = repro_run_from(url, Ok(serde_json::json!({"status": "passed", "ok": true})));
+        assert_eq!((run.status.as_str(), run.first_error), ("passed", None));
+        let run = repro_run_from(
+            url,
+            Ok(serde_json::json!({"status": "failed", "tests": [
+                {"title": "a", "status": "passed"},
+                {"title": "coupon applies", "status": "failed",
+                 "error": {"message": "expected 9 got 10"}}]})),
+        );
+        assert_eq!(run.status, "failed");
+        assert_eq!(
+            run.first_error.as_deref(),
+            Some("coupon applies: expected 9 got 10")
+        );
+        for status in ["no_tests", "skipped", "timed_out", "error"] {
+            let run = repro_run_from(
+                url,
+                Ok(serde_json::json!({"status": status, "errors": [{"message": "SyntaxError"}]})),
+            );
+            assert_eq!(run.status, "error", "{status}");
+            assert_eq!(run.first_error.as_deref(), Some("SyntaxError"));
+        }
+        let run = repro_run_from(url, Ok(serde_json::json!({"status": "no_tests"})));
+        assert!(run.first_error.unwrap().contains("no_tests"));
+        let run = repro_run_from(url, Err("x".repeat(2000)));
+        assert_eq!(run.status, "error");
+        assert_eq!(
+            run.first_error.unwrap().chars().count(),
+            MAX_REPRO_ERROR_CHARS
+        );
+        assert_eq!(run.base_url, url);
+    }
+
+    /// A host-run reproduction on a daemon whose sandbox backend is not
+    /// Podman is an error run with the reason, and nothing starts.
+    #[tokio::test]
+    async fn a_reproduction_without_podman_is_an_error_run() {
+        let root = tempfile::tempdir().unwrap();
+        let stores = crate::session_network::tests::Stores::new(&["ses-1"]);
+        let records = Arc::new(SessionNetworkRecords::new(stores));
+        let config = axocoatl_config::AxocoatlConfig {
+            browser: Some(axocoatl_config::BrowserConfigYaml::default()),
+            ..Default::default()
+        };
+        let mut resolved = BrowserServiceConfig::from_config(&config, "a".into()).unwrap();
+        resolved.backend = "e2b".into();
+        let dir = SecureDir::open_or_create_all(root.path().join("service")).unwrap();
+        let service = Arc::new(BrowserService::new(
+            resolved,
+            dir.child("supervisors").unwrap(),
+            Vec::new(),
+            records,
+            Arc::new(FixedPorts(vec![8765])),
+            no_session_egress(),
+        ));
+        let run = service
+            .run_repro(
+                "ses-1",
+                dir.clone(),
+                "axocoatl-qa/b1.spec.ts",
+                "http://localhost:8765",
+                60_000,
+            )
+            .await;
+        assert_eq!(run.status, "error");
+        assert!(run.first_error.unwrap().contains("Podman"));
+        assert!(service.sessions.lock().await.is_empty());
+    }
+
+    /// A host-run reproduction against a test page served from the Session's
+    /// exposed port, in the real browser container: a passing test is
+    /// `passed`, a failing one `failed` with its assertion, a missing file
+    /// an `error`. Every run is in the Session's network record as a
+    /// `browser_check` call of the host. Ignored by default:
+    ///
+    /// ```text
+    /// CONTAINER_CONNECTION=<connection> cargo test -p axocoatl-daemon --lib \
+    ///     actual_reproductions_run_in_the_browser_container -- --ignored
+    /// ```
+    #[tokio::test]
+    #[ignore = "requires Podman, the browser image and docker.io/library/node:20-slim"]
+    async fn actual_reproductions_run_in_the_browser_container_and_are_recorded() {
+        use axocoatl_isolation::{SandboxNetwork, SandboxPolicy, SessionSandbox};
+        use sha2::Digest;
+
+        async fn podman(args: &[&str]) -> std::process::Output {
+            tokio::process::Command::new("podman")
+                .args(args)
+                .output()
+                .await
+                .unwrap()
+        }
+        let pid = std::process::id();
+        let label = ("io.axocoatl.test".to_string(), format!("qa-repro-{pid}"));
+        let unique = uuid::Uuid::new_v4().simple().to_string();
+        let session_id = format!("repro-{}", &unique[..12]);
+        let authority = format!("{:x}", sha2::Sha256::digest(unique.as_bytes()));
+        let root = tempfile::Builder::new()
+            .prefix("axo-qa-repro-")
+            .tempdir()
+            .unwrap();
+        let dir = SecureDir::open(root.path().canonicalize().unwrap()).unwrap();
+        let workspace = dir.child("workspace").unwrap();
+        let supervisors = dir.child("supervisors").unwrap();
+        std::fs::create_dir_all(workspace.path().join("axocoatl-qa")).unwrap();
+        std::fs::write(
+            workspace.path().join("server.js"),
+            "require('http').createServer((q,s)=>{s.writeHead(200,{'content-type':'text/html'});\
+             s.end('<title>Cart</title><h1 id=\"total\">Total: 10</h1>')}).listen(8765,'0.0.0.0')",
+        )
+        .unwrap();
+        let test = |expected: &str| {
+            format!(
+                "import {{ test, expect }} from '@playwright/test';\n\
+                 test('the total is shown', async ({{ page }}) => {{\n\
+                 \x20 await page.goto('/');\n\
+                 \x20 await expect(page.locator('#total')).toHaveText('{expected}', {{ timeout: 3000 }});\n\
+                 }});\n"
+            )
+        };
+        std::fs::write(
+            workspace.path().join("axocoatl-qa/pass.spec.ts"),
+            test("Total: 10"),
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.path().join("axocoatl-qa/fail.spec.ts"),
+            test("Total: 9"),
+        )
+        .unwrap();
+        let sandbox = SessionSandbox::start(
+            &session_id,
+            workspace.path(),
+            Some("docker.io/library/node:20-slim"),
+            &[8765],
+            &[],
+            &SandboxPolicy {
+                network: SandboxNetwork::Bridge,
+                runtime_authority: Some(authority.clone()),
+                supervisor_installation: Some(supervisors.clone()),
+                ..SandboxPolicy::default()
+            },
+        )
+        .await
+        .expect("the Session container starts");
+        let root_in_container = sandbox.root().join("server.js");
+        let served = podman(&[
+            "exec",
+            "-d",
+            &format!("axo-ses-{session_id}"),
+            "node",
+            root_in_container.to_str().unwrap(),
+        ])
+        .await;
+
+        let stores = crate::session_network::tests::Stores::new(&[session_id.as_str()]);
+        let records = Arc::new(SessionNetworkRecords::new(stores));
+        let config = axocoatl_config::AxocoatlConfig {
+            browser: Some(axocoatl_config::BrowserConfigYaml::default()),
+            ..Default::default()
+        };
+        let mut resolved = BrowserServiceConfig::from_config(&config, authority.clone()).unwrap();
+        resolved.labels = vec![label.clone()];
+        let service = Arc::new(BrowserService::new(
+            resolved,
+            supervisors,
+            Vec::new(),
+            records.clone(),
+            Arc::new(FixedPorts(vec![8765])),
+            no_session_egress(),
+        ));
+        let base = "http://localhost:8765";
+        let runs = tokio::time::timeout(std::time::Duration::from_secs(300), async {
+            let mut runs = Vec::new();
+            for path in [
+                "axocoatl-qa/pass.spec.ts",
+                "axocoatl-qa/fail.spec.ts",
+                "axocoatl-qa/missing.spec.ts",
+            ] {
+                runs.push(
+                    service
+                        .run_repro(&session_id, workspace.clone(), path, base, 60_000)
+                        .await,
+                );
+            }
+            runs
+        })
+        .await;
+        let page = records.read_after(&session_id, None, 1000).await;
+        service.forget(&session_id).await;
+        records.close(&session_id).await;
+        let stopped = sandbox.stop_checked().await;
+        let removed = SessionSandbox::remove_named_with_dependencies(&session_id).await;
+        let label_filter = format!("label={}={}", label.0, label.1);
+        let leftovers = podman(&["ps", "-aq", "--filter", &label_filter]).await;
+        for container in String::from_utf8_lossy(&leftovers.stdout).split_whitespace() {
+            let _ = podman(&["rm", "--force", "--time", "0", "--ignore", container]).await;
+        }
+        stopped.unwrap();
+        removed.unwrap();
+        assert!(served.status.success(), "{served:?}");
+
+        let runs = runs.expect("the reproductions finish");
+        assert_eq!(runs[0].status, "passed", "{:?}", runs[0]);
+        assert_eq!(runs[1].status, "failed", "{:?}", runs[1]);
+        assert!(
+            runs[1]
+                .first_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Total"),
+            "{:?}",
+            runs[1]
+        );
+        assert_eq!(runs[2].status, "error", "{:?}", runs[2]);
+        assert!(runs.iter().all(|run| run.base_url == base));
+        /// Agent, test path, check status, ok and invocation of one call.
+        type Check = (String, Option<String>, Option<String>, bool, String);
+        let checks: Vec<Check> = page
+            .unwrap()
+            .events
+            .into_iter()
+            .filter_map(|line| match line.event {
+                NetworkEvent::Browser {
+                    tool: RecordedTool::BrowserCheck,
+                    agent,
+                    test_path,
+                    check_status,
+                    ok,
+                    invocation_id,
+                    ..
+                } => Some((agent, test_path, check_status, ok, invocation_id)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(checks.len(), 3, "{checks:#?}");
+        assert!(checks.iter().all(|(agent, ..)| agent == REPRO_AGENT));
+        assert_eq!(
+            checks
+                .iter()
+                .map(|(_, path, status, ok, _)| (path.as_deref(), status.as_deref(), *ok))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some("axocoatl-qa/pass.spec.ts"), Some("passed"), true),
+                (Some("axocoatl-qa/fail.spec.ts"), Some("failed"), false),
+                (Some("axocoatl-qa/missing.spec.ts"), None, false),
+            ]
+        );
+        let invocations: std::collections::HashSet<_> =
+            checks.iter().map(|(.., invocation)| invocation).collect();
+        assert_eq!(invocations.len(), 3, "each run is its own invocation");
     }
 }

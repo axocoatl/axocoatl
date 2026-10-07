@@ -54,6 +54,54 @@ const REASK: &str = "Your previous answer did not contain a verdict line. Reply 
      `VERDICT: APPROVE` or `VERDICT: CHANGES` on its own line, followed by findings.";
 const NOT_CAPTURED: &str = "The repository could not be captured after the Agents finished, so \
      the reviewer would not see the exact result. Continue runs the review again.";
+/// The rule the host appends to every reviewer prompt, so the lead can answer
+/// each finding by its id and the host can record each answer.
+pub(crate) const FINDING_ID_RULE: &str = "Number each finding F1, F2, ... at the start of its \
+     line, such as `F1: src/lib.rs:3: the loop skips the last item; stop at len`. The lead \
+     answers each finding by its id.";
+/// The host's instruction to the lead that receives review findings: answer
+/// each one, so the run records the writer's decision and reason.
+pub(crate) const ADJUDICATION_RULE: &str = "Answer every finding below in an ADJUDICATIONS \
+     block: a fenced JSON array of {\"id\":\"F1\",\"decision\":\"accept\"|\"reject\",\
+     \"reason\":\"...\"}, one entry per finding, then fix each finding you accept.";
+/// Said when the reviewer did not number its findings: they are answered as
+/// one finding.
+const UNNUMBERED: &str = "The reviewer did not number its findings, so they are one finding, F1.";
+
+/// The opening of the reviewer's prompt about the result whose repository
+/// tree is `tree`: what to judge, the verdict line, and how to write
+/// findings.
+fn reviewer_prompt_head(tree: Option<&str>) -> String {
+    format!(
+        "You are the required reviewer of this turn. Its request is above. Review the \
+         result below against that request: the final answer of each Agent that did the \
+         work and the change the turn made to the repository. Check the change against \
+         every contract and edge case the project's instructions, docs and tests \
+         describe, one by one. You cannot change files; you may read them.\n\nAnswer in \
+         this form. The first line is exactly one of:\n\
+         VERDICT: APPROVE\nVERDICT: CHANGES\nThen list each finding on its own line as \
+         path:line: what is wrong and what to change. {FINDING_ID_RULE} Approve only when \
+         nothing must change.\n\nRepository tree reviewed: {}\n",
+        tree.unwrap_or("not captured")
+    )
+}
+
+/// The note that sends review round `round`'s `findings` back to the lead.
+fn revision_note(reviewer: &str, round: u32, max_rounds: u32, findings: &str) -> String {
+    // Without any id the whole text is the one finding F1.
+    let unnumbered = match axocoatl_session::review_adjudication::split_findings(findings) {
+        Ok(split) if split.len() == 1 && split[0].text == findings.trim() => {
+            format!("{UNNUMBERED}\n\n")
+        }
+        _ => String::new(),
+    };
+    format!(
+        "The required reviewer ({reviewer}) asked for changes in review round {round} of \
+         {max_rounds}. {ADJUDICATION_RULE}\n\n{unnumbered}{findings}\n\nAddress each finding, \
+         then give your final answer again. The host runs the required checks and the review \
+         again on your new result."
+    )
+}
 
 impl DispatchState {
     /// Whether `node` is this turn's required reviewer.
@@ -244,18 +292,7 @@ impl DispatchState {
             }
         };
         let tree = after.as_ref().and_then(|after| after.tree_sha256.clone());
-        let mut prompt = format!(
-            "You are the required reviewer of this turn. Its request is above. Review the \
-             result below against that request: the final answer of each Agent that did the \
-             work and the change the turn made to the repository. Check the change against \
-             every contract and edge case the project's instructions, docs and tests \
-             describe, one by one. You cannot change files; you may read them.\n\nAnswer in \
-             this form. The first line is exactly one of:\n\
-             VERDICT: APPROVE\nVERDICT: CHANGES\nThen list each finding on its own line as \
-             path:line: what is wrong and what to change. Approve only when nothing must \
-             change.\n\nRepository tree reviewed: {}\n",
-            tree.as_deref().unwrap_or("not captured")
-        );
+        let mut prompt = reviewer_prompt_head(tree.as_deref());
         for item in activations {
             let name = super::turn_checks::agent_name(
                 &self.content,
@@ -372,11 +409,11 @@ impl DispatchState {
                     .into(),
             ));
         }
-        let instruction = format!(
-            "The required reviewer ({}) asked for changes in review round {round} of {}:\n\n\
-             {findings}\n\nAddress each finding, then give your final answer again. The host \
-             runs the required checks and the review again on your new result.",
-            criterion.template_id, criterion.max_rounds
+        let instruction = revision_note(
+            &criterion.template_id,
+            round,
+            criterion.max_rounds,
+            findings,
         );
         let instruction = self
             .content
@@ -1012,5 +1049,89 @@ impl SessionDispatchController {
     /// anything changed.
     pub(crate) fn drive_turn_review(&self) -> Result<bool> {
         self.lock()?.drive_review()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axocoatl_session::review_adjudication::{parse_adjudications, split_findings};
+
+    /// Every reviewer prompt asks for findings numbered at the start of their
+    /// line, beside the verdict form 1.2 reads.
+    #[test]
+    fn the_reviewer_prompt_carries_the_numbering_rule() {
+        let prompt = reviewer_prompt_head(Some("tree-1"));
+        assert!(
+            prompt.contains("VERDICT: APPROVE\nVERDICT: CHANGES\n"),
+            "{prompt}"
+        );
+        assert!(prompt.contains(FINDING_ID_RULE), "{prompt}");
+        assert!(prompt.contains("Number each finding F1, F2, ... at the start of its line"));
+        assert!(
+            prompt.ends_with("Repository tree reviewed: tree-1\n"),
+            "{prompt}"
+        );
+        assert!(reviewer_prompt_head(None).contains("Repository tree reviewed: not captured"));
+        // The example the rule gives is itself a finding the host reads.
+        let example = FINDING_ID_RULE
+            .split('`')
+            .nth(1)
+            .expect("the rule shows an example");
+        assert_eq!(split_findings(example).unwrap()[0].id, "F1");
+    }
+
+    /// The note that sends findings back asks for an ADJUDICATIONS block in
+    /// the exact shape the host parses, before the findings it names.
+    #[test]
+    fn the_revision_note_carries_the_adjudications_instruction() {
+        let findings = "F1: src/lib.rs:3: off by one\nF2: src/api.rs:9: unchecked input";
+        let note = revision_note("reviewer", 1, 2, findings);
+        assert!(
+            note.starts_with(
+                "The required reviewer (reviewer) asked for changes in review round 1 of 2. \
+             Answer every finding below in an ADJUDICATIONS block: a fenced JSON array of \
+             {\"id\":\"F1\",\"decision\":\"accept\"|\"reject\",\"reason\":\"...\"}, one entry \
+             per finding, then fix each finding you accept.\n\n"
+            ),
+            "{note}"
+        );
+        assert!(note.contains(findings), "{note}");
+        assert!(note.find(ADJUDICATION_RULE) < note.find(findings));
+        assert!(!note.contains(UNNUMBERED));
+        assert!(note.ends_with("again on your new result."), "{note}");
+        // An answer in the shape the instruction gives is read.
+        let answer = "Fixed.\n\nADJUDICATIONS\n```json\n[{\"id\":\"F1\",\"decision\":\"accept\",\
+                      \"reason\":\"fixed\"},{\"id\":\"F2\",\"decision\":\"reject\",\"reason\":\
+                      \"validated upstream\"}]\n```";
+        assert_eq!(parse_adjudications(answer).unwrap().len(), 2);
+        // Findings without ids are one finding, F1, and the note says so.
+        let note = revision_note("reviewer", 2, 3, "src/lib.rs:3: no test");
+        assert!(
+            note.contains(&format!("{UNNUMBERED}\n\nsrc/lib.rs:3: no test")),
+            "{note}"
+        );
+        assert!(note.contains("review round 2 of 3"));
+    }
+
+    /// The prompt and note additions leave 1.2's verdict reading as it was.
+    #[test]
+    fn verdict_parsing_is_unchanged_by_numbered_findings() {
+        use axocoatl_session::turn_review::{parse_verdict, ReviewVerdict};
+        assert_eq!(
+            parse_verdict("VERDICT: CHANGES\nF1: src/lib.rs:3: off by one"),
+            (
+                ReviewVerdict::Changes,
+                "F1: src/lib.rs:3: off by one".to_owned()
+            )
+        );
+        assert_eq!(
+            parse_verdict("**F1** src/lib.rs:3: x\nVERDICT: APPROVE").0,
+            ReviewVerdict::Approve
+        );
+        assert_eq!(
+            parse_verdict("F1: VERDICT: CHANGES").0,
+            ReviewVerdict::Unreadable
+        );
     }
 }
