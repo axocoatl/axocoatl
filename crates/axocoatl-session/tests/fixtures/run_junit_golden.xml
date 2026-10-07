@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="axocoatl" tests="14" failures="8" errors="2" skipped="1" time="512.300">
+  <properties>
+    <property name="axocoatl.run_id" value="run-00000000-0000-4000-8000-000000000001"/>
+    <property name="axocoatl.session_id" value="ses-1"/>
+    <property name="axocoatl.loadout" value="fix@1 sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"/>
+    <property name="axocoatl.verdict" value="checks_failed"/>
+    <property name="axocoatl.exit_code" value="1"/>
+    <property name="axocoatl.warning.same_model_reviewer" value="same model"/>
+  </properties>
+  <testsuite name="checks" tests="4" failures="2" errors="1" skipped="0">
+    <testcase classname="axocoatl.check" name="tests">
+      <system-out>argv: npm test</system-out>
+    </testcase>
+    <testcase classname="axocoatl.check" name="e2e">
+      <failure type="failed" message="e2e failed (exit code 1)">stderr:
+assertion &lt;failed&gt; &amp; more[31m
+</failure>
+      <system-out>argv: npm test</system-out>
+    </testcase>
+    <testcase classname="axocoatl.check" name="lint">
+      <failure type="timed_out" message="lint ran past its 180 s timeout"/>
+      <system-out>argv: npm test</system-out>
+    </testcase>
+    <testcase classname="axocoatl.check" name="types">
+      <error type="not_run" message="types did not run on the final result"/>
+      <system-out>argv: npm test</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="check:e2e" tests="2" failures="1" errors="0" skipped="0">
+    <testcase classname="e2e.checkout" name="pays with a saved card" time="1.500">
+      <failure type="failed" message="expected 10 &lt; 9"/>
+    </testcase>
+    <testcase classname="e2e.checkout" name="shows the cart"/>
+  </testsuite>
+  <testsuite name="review" tests="1" failures="1" errors="0" skipped="0">
+    <testcase classname="axocoatl.review" name="required-review">
+      <failure type="changes" message="the reviewer asked for changes"/>
+      <system-out>reviewer openrouter:openai/gpt-oss-120b (native), 1 of 3 rounds
+round 1: Changes, 0 findings</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="adjudications" tests="2" failures="1" errors="0" skipped="0">
+    <testcase classname="axocoatl.adjudication" name="round 1 F1">
+      <system-out>reject: not a bug</system-out>
+    </testcase>
+    <testcase classname="axocoatl.adjudication" name="round 1 F2">
+      <failure type="missing" message="the writer did not answer F2"/>
+      <system-out>y</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="findings" tests="3" failures="1" errors="1" skipped="1">
+    <testcase classname="axocoatl.finding.checkout" name="B1 B1 title">
+      <failure type="confirmed" message="total &quot;ignores&quot; coupon"/>
+      <system-out>repro: .axocoatl/qa/B1.spec.ts</system-out>
+    </testcase>
+    <testcase classname="axocoatl.finding.search" name="B2 B2 title">
+      <skipped message="fails on clean build"/>
+      <system-out>total "ignores" coupon
+repro: .axocoatl/qa/B2.spec.ts</system-out>
+    </testcase>
+    <testcase classname="axocoatl.finding.search" name="B3 B3 title">
+      <error type="repro_error" message="the reproduction could not run"/>
+      <system-out>repro: .axocoatl/qa/B3.spec.ts</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="coverage" tests="1" failures="1" errors="0" skipped="0">
+    <testcase classname="axocoatl.coverage" name="gift cards">
+      <failure type="not_covered" message="provider_refusal: classifier stop"/>
+    </testcase>
+  </testsuite>
+  <testsuite name="run" tests="1" failures="1" errors="0" skipped="0">
+    <testcase classname="axocoatl.run" name="verdict">
+      <failure type="checks_failed" message="The required check types did not run on the final result; The required review did not pass: the reviewer asked for changes; The writer did not answer 1 review finding; 1 area was not covered; 1 finding needs attention"/>
+    </testcase>
+  </testsuite>
+</testsuites>

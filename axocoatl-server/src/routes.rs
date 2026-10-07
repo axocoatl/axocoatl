@@ -1651,6 +1651,28 @@ pub async fn list_sessions(State(state): State<AppState>) -> Json<Vec<axocoatl_s
     Json(state.read().await.list_sessions().await)
 }
 
+/// GET /api/sessions/{id}: one Session, with its loadout binding when a
+/// loadout run created it.
+pub async fn get_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<axocoatl_session::Session>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .get_session(&id)
+        .await
+        .map(Json)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("session '{id}' not found"),
+                }),
+            )
+        })
+}
+
 pub async fn create_session(
     State(state): State<AppState>,
     Json(body): Json<CreateSessionBody>,
@@ -2703,6 +2725,7 @@ fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorRe
         | axocoatl_daemon::DaemonError::SessionConflict(_) => StatusCode::CONFLICT,
         axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::UNPROCESSABLE_ENTITY,
         axocoatl_daemon::DaemonError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
+        axocoatl_daemon::DaemonError::NotFound(_) => StatusCode::NOT_FOUND,
         _ => StatusCode::BAD_REQUEST,
     };
     (

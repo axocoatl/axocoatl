@@ -419,7 +419,9 @@ pub fn build_router(
         )
         .route(
             "/api/sessions/{id}",
-            axum::routing::delete(routes::close_session).patch(routes::rename_session),
+            get(routes::get_session)
+                .delete(routes::close_session)
+                .patch(routes::rename_session),
         )
         .route("/api/sessions/{id}/reopen", post(routes::reopen_session))
         // ── Chats ── lightweight conversations, no directory/sandbox.

@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 ## [Unreleased]
 
 ### Added
+- `readonly` on `<ax-lattice>`: a display-only canvas that stays in View whatever
+  `mode` is set to (drag, connect, delete, copy/paste, undo/redo and auto-layout
+  stay disabled, handles and history buttons hidden), with `aria-readonly="true"`.
 - Explicit `mode="view"` execution graphs keep selection and camera controls while
   disabling all editing gestures and public editing methods, hiding handles and
   history controls, and cancelling unfinished editing gestures on mode changes.

@@ -36,6 +36,7 @@ The canvas. Holds nodes and edges, owns pan/zoom, selection, history.
 | Attribute | Type | Default | Description |
 |---|---|---|---|
 | `mode` | `edit`\|`view` | `edit` | View disables graph editing while retaining inspection and camera controls |
+| `readonly` | boolean | — | Display only: the lattice stays in View whatever `mode` says, for graphs that are shown and never run |
 | `zoom` | number | `1` | Current zoom level |
 | `min-zoom` | number | `0.2` | Minimum zoom |
 | `max-zoom` | number | `3` | Maximum zoom |
@@ -228,6 +229,11 @@ children; View is an interaction contract, not a security boundary against host
 JavaScript. For automatic layout, call the pure `layeredLayout()` function and
 apply returned positions as part of the host projection. `setSelection(ids)`
 restores retained selection without changing graph content.
+
+`readonly` makes View permanent: `mode` reads `view` and setting it to `edit` has no
+effect until the attribute is removed, and the canvas carries `aria-readonly="true"`.
+Use it for graphs that are only displayed, such as an Axocoatl loadout, which the
+lattice shows and never runs.
 
 In View, arrows inspect the previous/next node, Home/End select the first/last,
 and Enter/Space emits `node-inspect` with `{id}` for opening details. Tab leaves

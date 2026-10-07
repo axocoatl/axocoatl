@@ -214,6 +214,11 @@ pub struct SessionTurnControlPlane {
     /// turn has none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required_review: Option<axocoatl_session::turn_review::TurnReviewView>,
+    /// The recorded proof of every review round of the turn, oldest first:
+    /// verdict, findings, whether the host sent them back to the lead.
+    /// Empty when the turn has no review or no round ran.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub review_rounds: Vec<axocoatl_session::turn_review::ReviewProof>,
     pub decisions: EvidenceValue<Vec<Value>>,
     pub warnings: Vec<String>,
 }
@@ -235,6 +240,7 @@ impl SessionTurnControlPlane {
             required_checks: vec![],
             required_check_readiness: None,
             required_review: None,
+            review_rounds: vec![],
             history_version: "legacy_v1".into(),
             superseded_conversation: false,
             stop_requested: None,
@@ -689,6 +695,7 @@ impl SessionTurnControlPlane {
             required_checks: required_checks(snapshot, content),
             required_check_readiness: required_check_readiness(snapshot, content),
             required_review: required_review(snapshot, content),
+            review_rounds: review_rounds(snapshot, content),
             history_version: "execution_v2".into(),
             superseded_conversation: false,
             stop_requested: contract.stop_requested().cloned(),
@@ -853,6 +860,43 @@ fn required_review(
             candidate_sha256: None,
         })
     })
+}
+
+/// Every recorded review round of the turn, oldest first. A proof that
+/// cannot be read is left out; the required review's own view says it is
+/// unavailable.
+fn review_rounds(
+    snapshot: &DurableTurnSnapshot,
+    content: &ExecutionContentStore,
+) -> Vec<axocoatl_session::turn_review::ReviewProof> {
+    use axocoatl_session::turn_review::{review_condition_id, review_node, ReviewProof};
+    let contract = snapshot.contract();
+    if contract.graph().and_then(review_node).is_none() {
+        return Vec::new();
+    }
+    let id = review_condition_id();
+    let mut rounds: Vec<ReviewProof> = Vec::new();
+    for observation in contract
+        .conditions()
+        .iter()
+        .filter(|observation| observation.condition_id == id)
+    {
+        let Ok(ActivationEvidenceContent::Guidance { text }) =
+            content.resolve_activation_evidence(&observation.evidence)
+        else {
+            continue;
+        };
+        let Ok(proof) = serde_json::from_str::<ReviewProof>(&text) else {
+            continue;
+        };
+        // A round recorded again (the same proof re-observed) counts once.
+        match rounds.iter_mut().find(|known| known.round == proof.round) {
+            Some(known) => *known = proof,
+            None => rounds.push(proof),
+        }
+    }
+    rounds.sort_by_key(|proof| proof.round);
+    rounds
 }
 
 fn bounded_json(value: Value) -> EvidenceValue<Value> {

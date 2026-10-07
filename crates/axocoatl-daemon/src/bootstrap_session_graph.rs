@@ -80,6 +80,7 @@ impl HumanGraphEditRequest {
             || self.agent.template_id.is_some() == self.agent.source_slot_id.is_some()
             || !self.agent.required
             || !self.agent.reset_history
+            || self.agent.definition.is_some()
         {
             return Err(graph_error(
                 "Choose an Agent and task for new required work with a fresh conversation",
@@ -321,6 +322,7 @@ mod tests {
                     cost_microunits: 0,
                 }),
                 expires_at_ms: Some(1),
+                definition: None,
             },
             task: "Review".into(),
             dependencies: vec![],

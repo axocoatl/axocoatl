@@ -922,6 +922,47 @@ impl SessionStore {
         self.persist(&snapshot)
     }
 
+    /// Bind a new Session to the loadout run that created it, before its
+    /// environment is first prepared: from then on its container runs under
+    /// the binding's network and hardened workload, never the global
+    /// defaults. A Session is bound once; a prepared Session is not bound.
+    pub fn bind_loadout(
+        &mut self,
+        id: &str,
+        binding: run_record::SessionLoadoutBinding,
+    ) -> Result<Session, SessionError> {
+        let mut candidate = self
+            .sessions
+            .get(id)
+            .cloned()
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        if candidate.loadout.is_some() {
+            return Err(
+                std::io::Error::other("the Session is already bound to a loadout run").into(),
+            );
+        }
+        if !matches!(
+            candidate.environment.state,
+            SessionEnvironmentState::Unprepared | SessionEnvironmentState::AwaitingApproval
+        ) {
+            return Err(std::io::Error::other(
+                "a loadout binds a Session only before its environment is prepared",
+            )
+            .into());
+        }
+        if !matches!(binding.network.as_str(), "egress" | "none") || binding.workload != "hardened"
+        {
+            return Err(std::io::Error::other(
+                "a loadout Session runs under network egress or none with the hardened workload",
+            )
+            .into());
+        }
+        candidate.loadout = Some(binding);
+        self.persist(&candidate)?;
+        self.sessions.insert(id.to_string(), candidate.clone());
+        Ok(candidate)
+    }
+
     /// Set the project's check command. `None` or empty clears it.
     pub fn set_check_command(
         &mut self,

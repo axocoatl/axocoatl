@@ -453,6 +453,25 @@ try {
   check('Switching to View cancels and restores an unfinished drag', await page.evaluate(() => window.viewSnapshot()) === beforeSwitch);
   await page.evaluate(() => document.querySelector('ax-lattice').mode = 'edit');
 
+  // Read-only stays in View whatever mode is set, until it is removed.
+  const readonly = await page.evaluate(() => {
+    const lat = document.querySelector('ax-lattice');
+    const snapshot = window.viewSnapshot();
+    lat.readonly = true;
+    lat.mode = 'edit';
+    const mode = lat.mode;
+    const edge = lat.addEdge({ from: 'architect', to: 'planner' });
+    lat.setSelection(['architect']);
+    lat.deleteSelected(); lat.autoLayout();
+    const result = { mode, edge, aria: lat.getAttribute('aria-readonly'), unchanged: window.viewSnapshot() === snapshot,
+      handlesHidden: [...lat.querySelectorAll('ax-handle')].every(h => getComputedStyle(h).display === 'none') };
+    lat.readonly = false;
+    return { ...result, after: lat.mode, ariaAfter: lat.getAttribute('aria-readonly') };
+  });
+  check('Read-only keeps View and refuses edits', readonly.mode === 'view' && readonly.edge === null
+    && readonly.unchanged && readonly.handlesHidden && readonly.aria === 'true', readonly);
+  check('Removing read-only restores the chosen mode', readonly.after === 'edit' && readonly.ariaAfter === null, readonly);
+
   // ── Node delete (do last; removes nodes) ──────────────────────────────
   await page.evaluate(() => {
     const lat = document.querySelector('ax-lattice');

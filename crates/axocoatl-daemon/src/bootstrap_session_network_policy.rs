@@ -117,6 +117,10 @@ pub(crate) struct SessionEgressPoints {
     /// Session, and the Workspaces credentials stay out of.
     upstream: Arc<crate::egress_broker::UpstreamConnector>,
     workspaces: WorkspaceRoots,
+    /// What each loadout Session adds to the lists in force (its loadout's
+    /// hosts and routes), applied whenever its decision point opens or the
+    /// lists reload. Other Sessions never see these entries.
+    overlays: StdMutex<HashMap<String, crate::loadout::egress::LoadoutEgressOverlay>>,
 }
 
 impl SessionEgressPoints {
@@ -139,6 +143,48 @@ impl SessionEgressPoints {
             sandboxes,
             upstream: Arc::new(crate::egress_broker::UpstreamConnector::new()),
             workspaces,
+            overlays: StdMutex::new(HashMap::new()),
+        }
+    }
+
+    /// Remember what a loadout Session adds to the lists in force. Set
+    /// before the Session's decision point first opens.
+    pub(crate) fn set_loadout_overlay(
+        &self,
+        session_id: &str,
+        overlay: crate::loadout::egress::LoadoutEgressOverlay,
+    ) {
+        self.overlays
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(session_id.to_string(), overlay);
+    }
+
+    /// The lists `session_id`'s decision point compiles from: `base` and,
+    /// for a loadout Session, its loadout's additions. An addition that no
+    /// longer fits the lists in force (a configured route now names the same
+    /// host differently) is left out: the Session gets less, never more.
+    pub(crate) fn policy_for(
+        &self,
+        session_id: &str,
+        base: &EgressPolicyConfig,
+    ) -> EgressPolicyConfig {
+        let overlay = self
+            .overlays
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(session_id)
+            .cloned();
+        match overlay {
+            None => base.clone(),
+            Some(overlay) => overlay.apply(base).unwrap_or_else(|error| {
+                tracing::warn!(
+                    session = %session_id,
+                    %error,
+                    "the loadout's network additions no longer fit the configured lists; the Session keeps only the configured ones"
+                );
+                base.clone()
+            }),
         }
     }
 
@@ -174,7 +220,7 @@ impl SessionEgressPoints {
         // the new lists or is in the reload's list.
         let egress = SessionEgress::open_with_routes(
             session_id,
-            self.policy.current(),
+            self.policy_for(session_id, &self.policy.current()),
             Arc::new(crate::session_egress::SessionRecordSink::new(
                 self.records.clone(),
                 session_id,
@@ -200,12 +246,12 @@ impl SessionEgressPoints {
     async fn replace_and_list(
         &self,
         policy: EgressPolicyConfig,
-    ) -> Vec<(String, Arc<SessionEgress>)> {
+    ) -> Vec<(String, Arc<SessionEgress>, EgressPolicyConfig)> {
         let points = self.points.lock().await;
-        self.policy.replace(policy);
-        let mut listed: Vec<(String, Arc<SessionEgress>)> = points
+        self.policy.replace(policy.clone());
+        let mut listed: Vec<(String, Arc<SessionEgress>, EgressPolicyConfig)> = points
             .iter()
-            .map(|(id, egress)| (id.clone(), egress.clone()))
+            .map(|(id, egress)| (id.clone(), egress.clone(), self.policy_for(id, &policy)))
             .collect();
         listed.sort_by(|left, right| left.0.cmp(&right.0));
         listed
@@ -291,13 +337,7 @@ impl AxocoatlDaemon {
         let current = self.network_policy.current();
         let policy = applicable_policy(started, &current, &next);
         let (changed, _) = live_changes(&current, &policy);
-        let points = self
-            .egress_points
-            .replace_and_list(policy.clone())
-            .await
-            .into_iter()
-            .map(|(session_id, egress)| (session_id, egress, policy.clone()))
-            .collect();
+        let points = self.egress_points.replace_and_list(policy.clone()).await;
         let mut reloaded = reload_points(points, SESSION_NETWORK_ACTOR).await;
         // Under `bridge` and `none` the browser has decision points of its
         // own; under `egress` its policy is a scope of each Session's,
