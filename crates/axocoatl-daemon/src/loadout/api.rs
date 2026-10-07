@@ -137,6 +137,11 @@ pub struct RunStatusView {
     pub started_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<RunOutcome>,
+    /// The latest Keep of this run (`POST /api/sessions/{id}/keep-pr`),
+    /// from the run record: the Outcome itself is written once, before any
+    /// Keep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep: Option<axocoatl_session::run_outcome::KeepResult>,
 }
 
 /// `GET /api/runs/{run_id}/events?after=&limit=`.

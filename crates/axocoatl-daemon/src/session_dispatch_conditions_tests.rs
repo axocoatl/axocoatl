@@ -52,6 +52,7 @@ fn fixture() -> Fixture {
             timeout_ms: 10_000,
             stdout_bytes: 16,
             stderr_bytes: 8,
+            egress: false,
         })
         .unwrap();
     let repository = content

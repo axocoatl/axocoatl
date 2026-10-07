@@ -8522,7 +8522,9 @@ impl AxocoatlDaemon {
                     // this Session's exact durable command above. Keep start's
                     // generic hook empty so no second implicit path can run it.
                     allow_post_create: false,
-                    allow_untrusted_image: sc.allow_untrusted_images,
+                    // A recipe image is trusted by the exact id its build
+                    // recorded, like the browser image; nothing else changes.
+                    allow_untrusted_image: self.session_image_trusted(session.image.as_deref()),
                     network,
                     require_resource_limits: sc.require_resource_limits,
                     passive_start: false,
@@ -8542,13 +8544,19 @@ impl AxocoatlDaemon {
                     workload,
                     shared_sidecar_session: None,
                 };
-                let sandbox = match SessionSandbox::start_in(
+                // A loadout with an e2e check replays `.e2e/cache` but never
+                // records into it: the cache is mounted read-only.
+                let mounts = axocoatl_isolation::WorkspaceMounts {
+                    read_only_e2e_cache: self.session_has_e2e_check(session),
+                };
+                let sandbox = match SessionSandbox::start_in_with_mounts(
                     &session.id,
                     &working_root,
                     session.image.as_deref(),
                     &session.exposed_ports,
                     &[],
                     &policy,
+                    mounts,
                 )
                 .await
                 {
@@ -8937,7 +8945,7 @@ impl AxocoatlDaemon {
         let local_image_error = preflight_local_session_image(
             configured_backend,
             latest.image.as_deref(),
-            self.config.sandbox.allow_untrusted_images,
+            self.session_image_trusted(latest.image.as_deref()),
         )
         .err();
         // The Ready record has no matching published runtime. From this point
@@ -10958,7 +10966,8 @@ impl AxocoatlDaemon {
                     || binding.workload != "hardened"
                 {
                     return Err(DaemonError::Session(format!(
-                        "Session {} is bound to loadout run {} with network {:?} and workload                          {:?}; a loadout Session runs only under egress or none with the                          hardened workload",
+                        "Session {} is bound to loadout run {} with network {:?} and workload {:?}; a loadout \
+                         Session runs only under egress or none with the hardened workload",
                         session.id, binding.run_id, binding.network, binding.workload
                     )));
                 }
@@ -13989,7 +13998,7 @@ trap - 0 1 2 15
                 },
             )?),
             allow_post_create: false,
-            allow_untrusted_image: config.allow_untrusted_images,
+            allow_untrusted_image: self.session_image_trusted(session.image.as_deref()),
             network,
             require_resource_limits: config.require_resource_limits,
             passive_start: false,

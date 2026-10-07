@@ -98,6 +98,11 @@ pub struct RepositoryCheckDefinition {
     pub timeout_ms: u64,
     pub stdout_bytes: usize,
     pub stderr_bytes: usize,
+    /// The check's process gets an egress credential under `network:
+    /// egress` (`RequiredCheckOptions::egress`). Absent, and so unchanged in
+    /// every definition admitted before 1.3, when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub egress: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3635,6 +3640,7 @@ mod tests {
                 timeout_ms: 30_000,
                 stdout_bytes: 8,
                 stderr_bytes: 4,
+                egress: false,
             })
             .unwrap();
         let repository = content
@@ -4364,6 +4370,7 @@ mod tests {
             timeout_ms: 1,
             stdout_bytes: 1,
             stderr_bytes: 0,
+            egress: false,
         };
         let before = stored(dir.path());
         let mut variants = Vec::new();

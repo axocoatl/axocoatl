@@ -273,6 +273,11 @@ export class AxRunOutcome extends HTMLElement {
     keep.setAttribute('session-id', outcome.session_id);
     keep.setAttribute('run-id', outcome.run_id);
     keep.setAttribute('verdict', outcome.verdict);
+    if (outcome.loadout?.id) keep.setAttribute('loadout', outcome.loadout.id);
+    // The run record's latest Keep (the Outcome is written before any Keep).
+    // Set once the element is defined, so its own setter shows it.
+    if (status.keep) void customElements.whenDefined('ax-keep-pr').then(() => { keep.result = status.keep; });
+    keep.addEventListener('keep-pr-result', () => { void this.refresh(); });
     actions.append(keep);
     this.#section('Record').append(actions);
     // Keep as PR belongs to workstream keep; the panel works without it.

@@ -5279,6 +5279,7 @@ mod condition_tests {
                 timeout_ms: 100,
                 stdout_bytes: 128,
                 stderr_bytes: 64,
+                egress: false,
             })
             .unwrap();
         let repository = content

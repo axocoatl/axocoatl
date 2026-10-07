@@ -212,13 +212,62 @@ impl SessionDispatchController {
         let permit =
             self.prepare_repository_check(run, repository.clone(), grant, owner.backend())?;
         let request = supervisor_request(permit.arguments())?;
+        // A check admitted with egress (an e2e check whose agent calls its
+        // model through a route) gets a credential for exactly this process
+        // under `network: egress`, as a writer's shell does; every other
+        // check gets none, so the proxy refuses its connections.
+        let grant = match lease.sandbox().egress_authority() {
+            Some(authority) if permit.arguments().definition().egress => {
+                let mut spec = axocoatl_isolation::egress::GrantSpec::new(
+                    axocoatl_isolation::egress::GrantKind::Agent,
+                );
+                spec.invocation_id = Some(request.invocation_id.clone());
+                spec.agent = Some("required-check".into());
+                spec.process = Some(request.invocation_id.clone());
+                match authority.grant(spec).await {
+                    Ok(grant) => Some(grant),
+                    Err(failure) => {
+                        tracing::warn!(
+                            check = %request.invocation_id,
+                            error = %failure,
+                            "no egress credential for this required check"
+                        );
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
         // Prepare can start the supervisor itself but never the repository
         // command. Dropped/error preparation therefore has a positive no-job
         // boundary while the durable permit records nondispatch on Drop.
+        let prepare = async {
+            match grant.as_ref().and_then(|grant| grant.env_file.as_deref()) {
+                Some(env_file) => {
+                    lease
+                        .sandbox()
+                        .prepare_supervised_command_as(
+                            request.clone(),
+                            None,
+                            axocoatl_isolation::egress::ProcessEnv {
+                                env_file: Some(env_file),
+                            },
+                            axocoatl_isolation::ExecIdentity::Writer,
+                        )
+                        .await
+                }
+                None => {
+                    lease
+                        .sandbox()
+                        .prepare_supervised_command(request.clone())
+                        .await
+                }
+            }
+        };
         let command = tokio::select! {
             biased;
             _ = self.wait_for_turn_stop() => return Err(error("whole-turn Stop cancelled supervisor preparation")),
-            command = lease.sandbox().prepare_supervised_command(request.clone()) => command.map_err(error)?,
+            command = prepare => command.map_err(error)?,
         };
         if command.request() != &request {
             return Err(error(
@@ -243,9 +292,11 @@ impl SessionDispatchController {
         // owner. Cancellation of the external caller cannot abandon this join.
         let controller = self.clone();
         let owned = OwnedRepositoryCheckTask {
-            future: Box::pin(finish_owned_check(
-                controller, in_flight, lease, running, identity,
-            )),
+            future: Box::pin(async move {
+                // The credential ends when its process is settled.
+                let _grant = grant;
+                finish_owned_check(controller, in_flight, lease, running, identity).await
+            }),
             _execution: execution,
         };
         let task = tokio::spawn(owned.run());

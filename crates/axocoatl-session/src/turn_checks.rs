@@ -113,27 +113,35 @@ pub fn check_definitions_with_options(
 ) -> Result<Vec<RepositoryCheckDefinition>, ExecutionContentError> {
     validate_check_options(checks, options)
         .map_err(|_| ExecutionContentError::Invalid("invalid required check options"))?;
-    let timeouts: Vec<u64> = (0..checks.len())
-        .map(|index| {
-            options
+    let settings: Vec<CheckSettings> = (0..checks.len())
+        .map(|index| CheckSettings {
+            timeout_ms: options
                 .get(index)
-                .map_or(DEFAULT_CHECK_TIMEOUT_MS, RequiredCheckOptions::timeout_ms)
+                .map_or(DEFAULT_CHECK_TIMEOUT_MS, RequiredCheckOptions::timeout_ms),
+            egress: options.get(index).is_some_and(|options| options.egress),
         })
         .collect();
-    check_definitions_with(checks, &timeouts, REPOSITORY_SNAPSHOT_COMMAND)
+    check_definitions_with(checks, &settings, REPOSITORY_SNAPSHOT_COMMAND)
 }
 
-/// The timeouts the commands of `group` were admitted with in `graph`, in
-/// order: each recorded definition's own, which must lie between
-/// [`MIN_CHECK_TIMEOUT_MS`] and [`MAX_CHECK_TIMEOUT_MS`]. A command whose
-/// condition is missing takes the default; the comparison with the recorded
-/// definitions then fails closed.
-fn admitted_timeouts(
+/// What a check's definition carries besides its command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CheckSettings {
+    timeout_ms: u64,
+    egress: bool,
+}
+
+/// The timeouts (and egress settings) the commands of `group` were admitted
+/// with in `graph`, in order: each recorded definition's own, whose timeout
+/// must lie between [`MIN_CHECK_TIMEOUT_MS`] and [`MAX_CHECK_TIMEOUT_MS`]. A
+/// command whose condition is missing takes the defaults; the comparison
+/// with the recorded definitions then fails closed.
+fn admitted_settings(
     graph: &TurnGraphSnapshot,
     content: &ExecutionContentStore,
     group: &CheckGroup,
     checks: usize,
-) -> Result<Vec<u64>, ExecutionContentError> {
+) -> Result<Vec<CheckSettings>, ExecutionContentError> {
     (1..=checks)
         .map(|index| {
             let id = group.condition_id(index);
@@ -149,17 +157,21 @@ fn admitted_timeouts(
                     _ => None,
                 });
             let Some(recorded) = recorded else {
-                return Ok(DEFAULT_CHECK_TIMEOUT_MS);
+                return Ok(CheckSettings {
+                    timeout_ms: DEFAULT_CHECK_TIMEOUT_MS,
+                    egress: false,
+                });
             };
-            let timeout = content
-                .resolve_repository_check_definition(recorded)?
-                .timeout_ms;
-            if !(MIN_CHECK_TIMEOUT_MS..=MAX_CHECK_TIMEOUT_MS).contains(&timeout) {
+            let definition = content.resolve_repository_check_definition(recorded)?;
+            if !(MIN_CHECK_TIMEOUT_MS..=MAX_CHECK_TIMEOUT_MS).contains(&definition.timeout_ms) {
                 return Err(ExecutionContentError::Invalid(
                     "a required check's timeout is outside 1 second to 30 minutes",
                 ));
             }
-            Ok(timeout)
+            Ok(CheckSettings {
+                timeout_ms: definition.timeout_ms,
+                egress: definition.egress,
+            })
         })
         .collect()
 }
@@ -191,9 +203,9 @@ pub fn admitted_check_definitions(
         return check_definitions(checks);
     };
     let recorded = content.resolve_repository_check_definition(recorded)?;
-    let timeouts = admitted_timeouts(graph, content, group, checks.len())?;
+    let settings = admitted_settings(graph, content, group, checks.len())?;
     for capture in CAPTURE_COMMANDS {
-        let definitions = check_definitions_with(checks, &timeouts, capture)?;
+        let definitions = check_definitions_with(checks, &settings, capture)?;
         if definitions.first() == Some(&recorded) {
             return Ok(definitions);
         }
@@ -203,10 +215,10 @@ pub fn admitted_check_definitions(
     ))
 }
 
-/// `timeouts` is aligned with `checks`.
+/// `settings` is aligned with `checks`.
 fn check_definitions_with(
     checks: &[Vec<String>],
-    timeouts: &[u64],
+    settings: &[CheckSettings],
     capture: &str,
 ) -> Result<Vec<RepositoryCheckDefinition>, ExecutionContentError> {
     if checks.is_empty() {
@@ -215,7 +227,7 @@ fn check_definitions_with(
     if checks.len().saturating_add(3) > MAX_COMPLETION_CONDITIONS {
         return Err(ExecutionContentError::Capacity);
     }
-    if timeouts.len() != checks.len() {
+    if settings.len() != checks.len() {
         return Err(ExecutionContentError::Invalid(
             "check timeouts are not aligned with the checks",
         ));
@@ -225,15 +237,17 @@ fn check_definitions_with(
         timeout_ms: CAPTURE_TIMEOUT_MS,
         stdout_bytes: 768 * 1024,
         stderr_bytes: 256 * 1024,
+        egress: false,
     };
     let mut definitions = vec![capture.clone()];
-    for (argv, timeout_ms) in checks.iter().zip(timeouts) {
+    for (argv, settings) in checks.iter().zip(settings) {
         check_command(argv)?;
         definitions.push(RepositoryCheckDefinition {
             argv: argv.clone(),
-            timeout_ms: *timeout_ms,
+            timeout_ms: settings.timeout_ms,
             stdout_bytes: 768 * 1024,
             stderr_bytes: 256 * 1024,
+            egress: settings.egress,
         });
     }
     definitions.push(capture);
@@ -624,7 +638,10 @@ mod tests {
         let current = check_definitions(&checks).unwrap();
         let earlier = check_definitions_with(
             &checks,
-            &[DEFAULT_CHECK_TIMEOUT_MS],
+            &[CheckSettings {
+                timeout_ms: DEFAULT_CHECK_TIMEOUT_MS,
+                egress: false,
+            }],
             REPOSITORY_SNAPSHOT_COMMAND_V1,
         )
         .unwrap();
@@ -670,6 +687,7 @@ mod tests {
                 name: Some("e2e".into()),
                 timeout_ms: Some(600_000),
                 report: None,
+                egress: false,
             },
         ];
         let definitions = check_definitions_with_options(&checks, &options).unwrap();
@@ -722,6 +740,51 @@ mod tests {
         );
         // Options must line up with the checks.
         assert!(check_definitions_with_options(&checks, &options[..1]).is_err());
+    }
+
+    /// A check that asks for egress carries it into its admitted definition
+    /// and reads it back from the graph; no other check and no capture gets
+    /// it, and a definition without it serializes exactly as before 1.3.
+    #[test]
+    fn check_egress_reaches_only_its_own_admitted_definition() {
+        let root = tempfile::tempdir().unwrap();
+        let mut content = content_store(root.path());
+        let checks = vec![
+            vec!["npm".to_string(), "test".to_string()],
+            vec!["e2e".to_string(), "run".to_string()],
+        ];
+        let group = CheckGroup::required();
+        let options = vec![
+            RequiredCheckOptions::default(),
+            RequiredCheckOptions {
+                egress: true,
+                ..RequiredCheckOptions::default()
+            },
+        ];
+        let definitions = check_definitions_with_options(&checks, &options).unwrap();
+        let egress: Vec<bool> = definitions.iter().map(|d| d.egress).collect();
+        assert_eq!(egress, [false, false, true, false]);
+        let graph = graph_with(&mut content, &group, definitions.clone());
+        assert_eq!(
+            admitted_check_definitions(&graph, &content, &group, &checks).unwrap(),
+            definitions
+        );
+        let plain = serde_json::to_value(&definitions[1]).unwrap();
+        assert!(plain.get("egress").is_none(), "{plain}");
+        assert_eq!(
+            serde_json::to_value(&definitions[2]).unwrap()["egress"],
+            true
+        );
+        // The admitted definition keeps the flag: a recorded definition
+        // without it is not the one these options admit.
+        let mut without = definitions.clone();
+        without[2].egress = false;
+        let graph = graph_with(&mut content, &group, without.clone());
+        assert_eq!(
+            admitted_check_definitions(&graph, &content, &group, &checks).unwrap(),
+            without
+        );
+        assert_ne!(without, definitions);
     }
 
     #[test]

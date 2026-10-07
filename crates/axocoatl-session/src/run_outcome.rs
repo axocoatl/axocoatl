@@ -415,7 +415,8 @@ pub struct KeepResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunTurnRef {
     pub turn_id: String,
-    /// What the turn was for: `run`, `audit_plan`, `audit_areas`.
+    /// What the turn was for: `run`, `audit_plan`, `audit_areas`,
+    /// `audit_integrate`.
     pub purpose: String,
     pub state: TurnState,
 }

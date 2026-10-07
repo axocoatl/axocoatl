@@ -439,12 +439,20 @@ pub async fn run_to_outcome_with(
     if usage_error {
         outcome.exit_code = exit_code::USAGE;
     }
+    // Kind drivers record their own warnings, findings and not-covered
+    // entries as they go; only what is not in the record yet is added, so
+    // nothing appears twice.
     for warning in &outcome.warnings {
-        if !run
-            .resolved
-            .warnings
-            .iter()
-            .any(|resolved| resolved.code == warning.code)
+        let recorded = events.iter().any(|event| {
+            matches!(event, RunEvent::Warning { warning: existing, .. }
+                if existing.code == warning.code && existing.message == warning.message)
+        });
+        if !recorded
+            && !run
+                .resolved
+                .warnings
+                .iter()
+                .any(|resolved| resolved.code == warning.code)
         {
             record(
                 host,
@@ -458,6 +466,12 @@ pub async fn run_to_outcome_with(
         }
     }
     for entry in &outcome.not_covered {
+        let recorded = events.iter().any(|event| {
+            matches!(event, RunEvent::NotCovered { entry: existing, .. } if **existing == *entry)
+        });
+        if recorded {
+            continue;
+        }
         record(
             host,
             run,

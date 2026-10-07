@@ -300,6 +300,10 @@ pub struct DaemonRunHost {
     /// The loadout's reviewer, named when the turn's projection cannot.
     reviewer: Option<ModelIdentity>,
     sends: SendResults,
+    /// The run's id, for the provider retries recorded when a turn ends.
+    run_id: String,
+    /// Turns whose provider retries are already in the run record.
+    retries_recorded: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 impl DaemonRunHost {
@@ -314,7 +318,25 @@ impl DaemonRunHost {
                 )
             }),
             sends: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            run_id: context.run_id.clone(),
+            retries_recorded: Arc::new(std::sync::Mutex::new(Default::default())),
         }
+    }
+
+    /// Record the provider retries of a turn that ended, once per turn.
+    async fn record_retries(&self, turn_id: &str, events: Vec<RunEvent>) -> Result<(), RunError> {
+        let first = self
+            .retries_recorded
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(turn_id.to_string());
+        if !first {
+            return Ok(());
+        }
+        for event in events {
+            self.record(&self.run_id, event).await?;
+        }
+        Ok(())
     }
 
     fn labels(&self) -> Vec<CheckLabel> {
@@ -408,17 +430,27 @@ impl RunHost for DaemonRunHost {
     ) -> Result<TurnObservation, RunError> {
         loop {
             let labels = self.labels();
-            let observed = self
+            let (observed, retries) = match self
                 .state
                 .read()
                 .await
-                .loadout_turn_observation(session_id, turn_id, &labels, self.reviewer.as_ref())
+                .loadout_turn_observation_with_retries(
+                    session_id,
+                    turn_id,
+                    &labels,
+                    self.reviewer.as_ref(),
+                )
                 .await
-                .map_err(daemon_error)?;
+                .map_err(daemon_error)?
+            {
+                Some((observation, retries)) => (Some(observation), retries),
+                None => (None, Vec::new()),
+            };
             let sent = self.send_result(turn_id);
             match (&observed, &sent) {
                 (Some(observation), _) if observation.state != TurnState::Running => {
-                    return Ok(observation.clone())
+                    self.record_retries(turn_id, retries).await?;
+                    return Ok(observation.clone());
                 }
                 // The turn never started: the send failed before the turn
                 // had a record.
@@ -447,6 +479,7 @@ impl RunHost for DaemonRunHost {
                 let mut observation = observation.clone();
                 observation.state = TurnState::Failed;
                 observation.attention_reason = Some(error.clone());
+                self.record_retries(turn_id, retries).await?;
                 return Ok(observation);
             }
             let wait = TURN_POLL.min(deadline.saturating_duration_since(std::time::Instant::now()));

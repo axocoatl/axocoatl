@@ -1592,12 +1592,20 @@ impl AxocoatlDaemon {
             config.system_prompt = proposed.instructions.clone();
             config.sampling.max_tokens = proposed.max_output_tokens;
             config.writes = checked_writes(proposed, config.writes.as_deref())?;
-            if let Some(provider) = proposed
+            if let Some(definition) = proposed
                 .definition
                 .as_ref()
-                .and_then(|definition| external_runtime_provider(definition.runtime))
+                .filter(|definition| external_runtime_provider(definition.runtime).is_some())
             {
-                config.provider = provider.to_string();
+                // An external program's retained definition: the runtime as
+                // its provider, the program's model, the autonomous writer
+                // with bash, and no per-call limits (the grant bounds it).
+                config = crate::external_agent::external_agent_config(
+                    config,
+                    definition.runtime,
+                    &proposed.model,
+                )
+                .map_err(|error| team_error(error.to_string()))?;
             }
             if let Some(old) = &old_config {
                 config.id = old.id.clone();

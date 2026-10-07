@@ -78,13 +78,8 @@ fn external_routes(resolved: &ResolvedLoadout) -> Result<Vec<EgressRouteYaml>, R
             continue;
         }
         seen.push(agent.runtime);
-        let needed =
-            crate::external_agent::routes_for(agent.runtime).map_err(|error| match error {
-                crate::external_agent::ExternalAgentError::NotImplemented(what) => {
-                    RunError::NotImplemented(what)
-                }
-                other => RunError::Infrastructure(other.to_string()),
-            })?;
+        let needed = crate::external_agent::routes_for(agent.runtime)
+            .map_err(|error| RunError::Infrastructure(error.to_string()))?;
         routes.extend(needed);
     }
     Ok(routes)

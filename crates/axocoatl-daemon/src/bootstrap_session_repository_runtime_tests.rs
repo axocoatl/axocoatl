@@ -188,6 +188,7 @@ async fn prove_owned_check(
         timeout_ms: 30_000,
         stdout_bytes: 64,
         stderr_bytes: 64,
+        egress: false,
     };
     let definition = content
         .retain_repository_check_definition(check_definition.clone())

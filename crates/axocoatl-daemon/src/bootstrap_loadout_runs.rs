@@ -23,8 +23,8 @@ use axocoatl_config::loadout::{
 use axocoatl_session::record_bundle::{BundleHeader, RECORD_BUNDLE_SCHEMA};
 use axocoatl_session::run_outcome::{
     exit_code, CheckResult, CheckState, GenerationObservation, LoadoutRef, ModelIdentity,
-    NetworkSummary, NodeFailure, NodeObservation, NodeState, ReviewOutcome, ReviewRound,
-    ReviewVerdictKind, RunOutcome, RunUsage, RunVerdict, RunWarning, TurnObservation, TurnState,
+    NetworkSummary, NodeFailure, NodeObservation, NodeState, ReviewOutcome, RunOutcome, RunUsage,
+    RunVerdict, RunWarning, TurnObservation, TurnState,
 };
 use axocoatl_session::run_record::{
     RunEvent, RunManifest, RunRecordError, RunRecordStore, SessionLoadoutBinding,
@@ -55,6 +55,10 @@ pub(crate) struct LoadoutRuns {
     admitting: StdMutex<HashSet<String>>,
     drivers: StdMutex<HashSet<String>>,
     stops: StdMutex<HashSet<String>>,
+    /// Runs whose loadout has an e2e check, known before the run's manifest
+    /// is written: the Session's first container already mounts
+    /// `.e2e/cache` read-only.
+    e2e_runs: StdMutex<HashSet<String>>,
 }
 
 impl LoadoutRuns {
@@ -65,6 +69,7 @@ impl LoadoutRuns {
             admitting: StdMutex::new(HashSet::new()),
             drivers: StdMutex::new(HashSet::new()),
             stops: StdMutex::new(HashSet::new()),
+            e2e_runs: StdMutex::new(HashSet::new()),
         }
     }
 
@@ -581,27 +586,15 @@ pub fn observation_from_control_plane(
         })
         .collect();
     let review = view.required_review.as_ref().map(|review| {
+        // Findings are split by id from the whole proof text before the
+        // text is bounded, so a long first finding never hides later ids.
         let rounds = view
             .review_rounds
             .iter()
-            .map(|proof| ReviewRound {
-                round: proof.round,
-                verdict: match proof.verdict {
-                    axocoatl_session::turn_review::ReviewVerdict::Approve => {
-                        ReviewVerdictKind::Approve
-                    }
-                    axocoatl_session::turn_review::ReviewVerdict::Changes => {
-                        ReviewVerdictKind::Changes
-                    }
-                    axocoatl_session::turn_review::ReviewVerdict::Unreadable => {
-                        ReviewVerdictKind::Unreadable
-                    }
-                },
-                passed: proof.passed,
-                findings_text: head(&proof.findings, FINDINGS_TEXT_BYTES),
-                findings: Vec::new(),
-                continued: proof.continued,
-                candidate_sha256: proof.candidate_sha256.clone(),
+            .map(|proof| {
+                let mut round = proof.to_round();
+                round.findings_text = head(&proof.findings, FINDINGS_TEXT_BYTES);
+                round
             })
             .collect();
         ReviewOutcome {
@@ -620,6 +613,7 @@ pub fn observation_from_control_plane(
             reason: review.reason.clone(),
         }
     });
+    usage.retries = crate::provider_retry::run_events(view).len() as u32;
     TurnObservation {
         session_id: view.session_id.clone(),
         turn_id: view.turn_id.clone(),
@@ -1006,16 +1000,9 @@ impl AxocoatlDaemon {
         let environment = loadout.file.environment.clone().unwrap_or_default();
         let image = match (&environment.image, environment.recipes.is_empty()) {
             (Some(image), _) => Some(image.clone()),
-            (None, false) => Some(
-                axocoatl_isolation::recipes::image_name(&environment.recipes).map_err(|error| {
-                    match error {
-                        axocoatl_isolation::recipes::RecipeError::NotImplemented(what) => {
-                            DaemonError::NotImplemented(what)
-                        }
-                        other => DaemonError::InvalidRequest(other.to_string()),
-                    }
-                })?,
-            ),
+            // A recipe image runs by the exact id `axocoatl recipe build`
+            // recorded, which is also what makes it trusted for Sessions.
+            (None, false) => Some(self.recipe_image(&environment.recipes)?.image_id),
             (None, true) => None,
         };
         let setup = match (&request.setup_command, &environment.setup) {
@@ -1028,6 +1015,38 @@ impl AxocoatlDaemon {
         .filter(|command| !command.is_empty());
         refuse_hosts_under_network_none(&loadout.file)?;
         let exposed_ports = qa_exposed_ports(&self.config, &loadout.file, &resolved.params)?;
+        if loadout.file.kind == axocoatl_config::loadout::LoadoutKind::Qa {
+            crate::loadout::qa::validate_qa_admission(
+                &resolved,
+                &exposed_ports,
+                self.config.browser.as_ref(),
+            )
+            .map_err(run_error)?;
+        }
+        // An e2e check's agent needs tool calls and image input: refused
+        // when OpenRouter's catalog says its model has neither, a warning
+        // when the provider's catalog cannot say.
+        let e2e_warnings = crate::loadout::e2e::verify_e2e_models(
+            &resolved,
+            &crate::loadout::e2e::OpenRouterCatalog::default(),
+        )
+        .await
+        .map_err(run_error)?;
+        for warning in e2e_warnings {
+            if !resolved
+                .warnings
+                .iter()
+                .any(|known| known.code == warning.code && known.message == warning.message)
+            {
+                resolved
+                    .warnings
+                    .push(axocoatl_config::loadout::LoadoutWarning {
+                        code: warning.code,
+                        field: "checks".into(),
+                        message: warning.message,
+                    });
+            }
+        }
         let workspace = self.create_workspace(&repo_text, None).await?;
         let run_id = format!("run-{}", uuid::Uuid::new_v4());
         let loadout_ref = LoadoutRef {
@@ -1053,6 +1072,13 @@ impl AxocoatlDaemon {
             .collect();
         let name = format!("{} · {}", loadout.file.id, task_line.trim());
         let started_at_ms = now_ms();
+        if crate::loadout::e2e::workspace_mounts(&resolved).read_only_e2e_cache {
+            self.loadout_runs
+                .e2e_runs
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .insert(run_id.clone());
+        }
         let session = self
             .create_loadout_session(
                 &workspace.id,
@@ -1335,6 +1361,15 @@ impl AxocoatlDaemon {
         let Some(binding) = &session.loadout else {
             return false;
         };
+        if self
+            .loadout_runs
+            .e2e_runs
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .contains(&binding.run_id)
+        {
+            return true;
+        }
         self.loadout_runs
             .store()
             .ok()
@@ -1450,6 +1485,7 @@ impl AxocoatlDaemon {
             .iter()
             .rev()
             .find_map(|(_, event)| match event {
+                RunEvent::Phase { phase, .. } if phase == crate::keep_pr::KEEP_PHASE => None,
                 RunEvent::Phase { phase, detail, .. } => Some(if detail.is_empty() {
                     phase.clone()
                 } else {
@@ -1475,6 +1511,10 @@ impl AxocoatlDaemon {
             phase,
             started_at_ms: manifest.started_at_ms,
             outcome,
+            keep: events
+                .iter()
+                .rev()
+                .find_map(|(_, event)| crate::keep_pr::keep_result_of(event)),
         })
     }
 
@@ -1758,9 +1798,29 @@ impl AxocoatlDaemon {
         reviewer: Option<&ModelIdentity>,
     ) -> Result<Option<TurnObservation>, DaemonError> {
         Ok(self
+            .loadout_turn_observation_with_retries(session_id, turn_id, checks, reviewer)
+            .await?
+            .map(|(observation, _)| observation))
+    }
+
+    /// [`Self::loadout_turn_observation`] with the turn's provider retries
+    /// as run events (`provider_retry::run_events`), for the run record.
+    pub async fn loadout_turn_observation_with_retries(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        checks: &[CheckLabel],
+        reviewer: Option<&ModelIdentity>,
+    ) -> Result<Option<(TurnObservation, Vec<RunEvent>)>, DaemonError> {
+        Ok(self
             .session_turn_control_plane(session_id, turn_id)
             .await?
-            .map(|view| observation_from_control_plane(&view, checks, reviewer)))
+            .map(|view| {
+                (
+                    observation_from_control_plane(&view, checks, reviewer),
+                    crate::provider_retry::run_events(&view),
+                )
+            }))
     }
 
     /// Preview and apply `edit` on the Session's current configuration

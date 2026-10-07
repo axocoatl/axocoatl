@@ -188,6 +188,7 @@ pub fn required_checks(
                     name: Some(check.name.clone()),
                     timeout_ms: Some(timeout_ms),
                     report: None,
+                    egress: false,
                 });
             }
             (None, None) => {
@@ -405,6 +406,7 @@ mod tests {
                 name: Some("tests".into()),
                 timeout_ms: Some(180_000),
                 report: None,
+                egress: false,
             }]
         );
         let review = edit.required_review.as_ref().unwrap();

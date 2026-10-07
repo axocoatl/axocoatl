@@ -27,6 +27,12 @@ pub struct RequiredCheckOptions {
     pub timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<CheckReportSpec>,
+    /// Under `network: egress`, the check's process gets its own egress
+    /// credential, as a writer's shell does: it reaches the Session's
+    /// allowlist and routes, and every connection is in the network record.
+    /// Off by default: required checks have no network under egress.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub egress: bool,
 }
 
 /// Where a check writes a machine-readable report inside the Session

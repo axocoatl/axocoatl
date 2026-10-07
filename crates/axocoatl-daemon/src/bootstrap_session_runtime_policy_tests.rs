@@ -63,6 +63,7 @@ async fn actual_check_past_its_timeout_is_recorded_timed_out() {
             name: Some("slow".into()),
             timeout_ms: Some(2_000),
             report: None,
+            egress: false,
         },
         RequiredCheckOptions::default(),
     ];

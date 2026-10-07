@@ -436,6 +436,9 @@ pub fn expand_e2e_check(
         name: Some(name.to_owned()),
         timeout_ms: Some(timeout_ms),
         report: Some(report),
+        // e2e's agent reaches its model through the loadout's route: the
+        // check's process gets its own egress credential under egress.
+        egress: true,
     };
     validate_check_options(std::slice::from_ref(&argv), std::slice::from_ref(&options))
         .map_err(|reason| usage(format!("check {name}: {reason}")))?;

@@ -273,6 +273,7 @@ impl Builds {
                     writes: None,
                     required: false,
                     reset_history: false,
+                    definition: None,
                     limits: None,
                     expires_at_ms: None,
                 })
