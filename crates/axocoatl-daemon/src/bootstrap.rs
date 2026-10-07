@@ -4698,6 +4698,11 @@ impl AxocoatlDaemon {
         let (secure_data_dir, created_data_root) =
             session_recovery::open_data_root(Path::new(&data_dir))?;
         admit_and_restrict_data_root(&secure_data_dir)?;
+        // A directory made before the daemon first started (`mkdir`, or
+        // `axocoatl secret set`) that no daemon has owned and that holds no
+        // Session starts in the native format, as one the daemon creates.
+        let created_data_root =
+            created_data_root.or_else(|| session_recovery::unowned_data_root(&secure_data_dir));
         let (data_dir_lease, local_runtime_authority, ipc_root, local_cleanup_pending) =
             Self::acquire_data_dir_lease_and_reconcile_created(
                 &config,
@@ -6704,6 +6709,10 @@ impl AxocoatlDaemon {
         // than silently waiting for the whole provider/tool run to finish and
         // then surprise-closing the Session.
         self.request_session_turn_stop(id, None).await?;
+        // Close waits for the Workspace below. Another Session's turn would
+        // hold it until that turn ends: refuse now, naming it.
+        self.refuse_lifecycle_while_another_turn_holds_workspace(id, "close")
+            .await?;
         let mut dispatch_cleanup = self
             .session_dispatch_lifecycles
             .prepare_session_cleanup(id, SESSION_DISPATCH_CLEANUP_TIMEOUT)
@@ -6751,6 +6760,7 @@ impl AxocoatlDaemon {
             self.clear_attempt_cancellation(id, &set_id).await;
         }
         result?;
+        self.remove_closed_session_runtime_volumes(id).await;
         let closed = if self.uses_native_session_history() {
             Some(
                 self.get_session(id)
@@ -6820,6 +6830,10 @@ impl AxocoatlDaemon {
     /// left in place; a user that creates a new session pointing at the same
     /// directory gets a fresh memory slate (different session id).
     pub async fn delete_session(&self, id: &str) -> Result<(), DaemonError> {
+        // Delete waits for the Workspace as Close does; another Session's
+        // turn holding it is refused at once instead.
+        self.refuse_lifecycle_while_another_turn_holds_workspace(id, "delete")
+            .await?;
         let native = self.uses_native_session_history();
         if native {
             if self.get_session(id).await.is_some() {

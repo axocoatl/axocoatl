@@ -33,6 +33,10 @@ pub mod exit_code {
     pub const INFRASTRUCTURE: i32 = 5;
     /// The person interrupted the run (Ctrl-C); the turn was stopped.
     pub const INTERRUPTED: i32 = 6;
+    /// Busy: another run, Session turn or operation holds the run's
+    /// Workspace, so the run was not admitted or its next turn could not
+    /// start. Nothing is wrong with the run itself; run it again later.
+    pub const BUSY: i32 = 7;
 }
 
 /// The overall result.

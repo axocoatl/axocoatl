@@ -1,3 +1,7 @@
+/// The machine-readable `code` of an HTTP 409 for [`DaemonError::WorkspaceBusy`]:
+/// another run, Session turn or operation holds the Workspace; retry later.
+pub const WORKSPACE_BUSY_CODE: &str = "workspace_busy";
+
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error("Configuration error: {0}")]
@@ -48,6 +52,13 @@ pub enum DaemonError {
     /// detach context that a canonical turn already pins).
     #[error("Session conflict: {0}")]
     SessionConflict(String),
+
+    /// Another run, Session turn or operation holds the Workspace this
+    /// request needs, so nothing was done; the same request can succeed once
+    /// it ends. The HTTP boundary returns 409 with the code
+    /// `workspace_busy`, and `axocoatl run` exits 7 (`exit_code::BUSY`).
+    #[error("Workspace busy: {0}")]
+    WorkspaceBusy(String),
 
     /// An idempotent resend attached to the exact turn that is already live.
     /// This is a non-terminal dispatch disposition; the daemon intentionally
@@ -121,6 +132,12 @@ impl DaemonError {
             token_usage,
             token_usage_known,
         }
+    }
+
+    /// Whether this refusal only means that the Workspace is held by another
+    /// run, Session turn or operation (retry later).
+    pub fn is_workspace_busy(&self) -> bool {
+        matches!(self, Self::WorkspaceBusy(_))
     }
 
     pub fn session_token_usage(&self) -> Option<(&axocoatl_core::TokenUsageStats, bool)> {

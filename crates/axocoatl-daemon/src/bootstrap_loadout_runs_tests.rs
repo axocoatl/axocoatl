@@ -569,8 +569,8 @@ async fn admission_child_body() {
         }
     };
     let conflict = |result: Result<(RunAccepted, RunContext), DaemonError>| match result {
-        Err(DaemonError::SessionConflict(message)) => message,
-        Err(other) => panic!("expected a conflict, got {other}"),
+        Err(DaemonError::WorkspaceBusy(message)) => message,
+        Err(other) => panic!("expected a busy Workspace, got {other}"),
         Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
     };
     let usage = |result: Result<(RunAccepted, RunContext), DaemonError>| match result {

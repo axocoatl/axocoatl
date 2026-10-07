@@ -278,6 +278,10 @@ export async function launchTestDaemon({
   const projectsDirectory = path.join(runRoot, 'projects');
   if (!nativeDataRoot) {
     await mkdir(dataDirectory, { recursive: true });
+    // A legacy (1.0-format) root is one a daemon already owned: its format
+    // boundary is the regular lock file. Without it, a directory that holds
+    // no Session starts in the native format like a new one.
+    await writeFile(path.join(dataDirectory, '.axocoatl-daemon.lock'), '', { mode: 0o600 });
     // Isolated legacy fixtures may reuse the immutable model artifacts. The
     // daemon still verifies every byte; no Session or authority state is copied.
     // Native first-install fixtures must keep their data root genuinely absent.

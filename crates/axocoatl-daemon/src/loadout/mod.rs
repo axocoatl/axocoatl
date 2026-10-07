@@ -50,6 +50,11 @@ pub enum RunError {
     /// A person stopped the run.
     #[error("the run was stopped")]
     Stopped,
+    /// Another run, Session turn or operation holds the run's Workspace, so
+    /// a turn could not start (exit code 7). The text says who holds it
+    /// when that is known.
+    #[error("Workspace busy: {0}")]
+    Busy(String),
 }
 
 impl From<crate::DaemonError> for RunError {
@@ -57,6 +62,7 @@ impl From<crate::DaemonError> for RunError {
         match error {
             crate::DaemonError::NotImplemented(what) => RunError::NotImplemented(what),
             crate::DaemonError::InvalidRequest(message) => RunError::Usage(message),
+            crate::DaemonError::WorkspaceBusy(detail) => RunError::Busy(detail),
             other => RunError::Infrastructure(other.to_string()),
         }
     }

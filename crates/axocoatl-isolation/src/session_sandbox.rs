@@ -4679,16 +4679,40 @@ impl SessionSandbox {
         session_ids
             .iter()
             .flat_map(|session_id| {
-                [
-                    Self::dependency_volume_name(session_id),
-                    crate::egress_sidecar::egress_volume_name(session_id),
-                    crate::egress_sidecar::identity_volume_name(session_id),
-                    crate::egress_sidecar::service_volume_name(session_id),
-                    crate::session_trust::trust_volume_name(session_id),
-                ]
+                std::iter::once(Self::dependency_volume_name(session_id))
+                    .chain(Self::runtime_volume_names(session_id))
             })
             .filter(|volume| seen.insert(volume.clone()))
             .collect()
+    }
+
+    /// The volumes a Session's runtime fills again each time it starts: the
+    /// egress proxy's socket volume (`axo-egr-`), the identity-socket volume
+    /// (`axo-egi-`), the service-socket volume (`axo-svc-`) and the trust
+    /// volume (`axo-ca-`). Nothing in them outlives the runtime, so Close
+    /// removes them; the Node dependency volume is not among them.
+    pub fn runtime_volume_names(session_id: &str) -> [String; 4] {
+        [
+            crate::egress_sidecar::egress_volume_name(session_id),
+            crate::egress_sidecar::identity_volume_name(session_id),
+            crate::egress_sidecar::service_volume_name(session_id),
+            crate::session_trust::trust_volume_name(session_id),
+        ]
+    }
+
+    /// Remove a closed Session's runtime volumes
+    /// ([`Self::runtime_volume_names`]), keeping its Node dependency volume
+    /// so Reopen reuses the installed dependencies. Call it after the
+    /// Session's containers and the containers that serve it are removed;
+    /// a volume another container still uses is reported, never forced.
+    pub async fn remove_runtime_volumes(session_id: &str) -> Result<(), IsolationError> {
+        let container = Self::container_name(session_id);
+        let _starts = Self::lock_container_starts(std::slice::from_ref(&container)).await;
+        Self::remove_exact_volume_names(
+            &Self::runtime_volume_names(session_id),
+            NAMED_REMOVE_COMMAND_TIMEOUT,
+        )
+        .await
     }
 
     /// Remove exact named sandboxes, then their exact derived Node dependency
@@ -4704,19 +4728,27 @@ impl SessionSandbox {
             Self::remove_exact_container_names(&containers, timeout).await?;
         }
         Self::remove_session_dependents(session_ids, timeout).await?;
+        Self::remove_exact_volume_names(&Self::session_volume_names(session_ids), timeout).await
+    }
 
-        let volumes = Self::session_volume_names(session_ids);
+    /// Remove exactly these volumes, never forced: a missing volume is
+    /// already removed, and one still present after a retry is an error that
+    /// names it.
+    async fn remove_exact_volume_names(
+        volumes: &[String],
+        timeout: Duration,
+    ) -> Result<(), IsolationError> {
         if volumes.is_empty() {
             return Ok(());
         }
 
-        let first = Self::remove_volume_names_once(&volumes, timeout).await?;
+        let first = Self::remove_volume_names_once(volumes, timeout).await?;
         if !first.timed_out && first.status.success() {
             return Ok(());
         }
         let first_failure = Self::remove_failure(&first, timeout);
         let remaining =
-            Self::reconcile_named_volume_absence(&volumes, NAMED_REMOVE_RECONCILE_TIMEOUT).await?;
+            Self::reconcile_named_volume_absence(volumes, NAMED_REMOVE_RECONCILE_TIMEOUT).await?;
         if remaining.is_empty() {
             return Ok(());
         }
@@ -6390,6 +6422,25 @@ mod tests {
         assert!(provisioner.contains("git"));
         assert!(provisioner.contains("coreutils"));
         assert!(provisioner.contains("findutils"));
+    }
+
+    /// Close removes the volumes the runtime fills again when it starts and
+    /// keeps the Node dependency volume for Reopen; Delete removes all five.
+    #[test]
+    fn close_removes_only_the_runtime_volumes() {
+        assert_eq!(
+            SessionSandbox::runtime_volume_names("s1"),
+            ["axo-egr-s1", "axo-egi-s1", "axo-svc-s1", "axo-ca-s1"]
+        );
+        let dependencies = SessionSandbox::dependency_volume_name("s1");
+        assert_eq!(dependencies, "axo-ses-s1-node-modules");
+        assert!(!SessionSandbox::runtime_volume_names("s1").contains(&dependencies));
+        let deleted = SessionSandbox::session_volume_names(&["s1".to_string()]);
+        assert_eq!(deleted.len(), 5);
+        assert!(deleted.contains(&dependencies));
+        for volume in SessionSandbox::runtime_volume_names("s1") {
+            assert!(deleted.contains(&volume), "{volume}");
+        }
     }
 
     #[test]

@@ -69,6 +69,48 @@ fn failure(message: impl Into<String>) -> DaemonError {
     DaemonError::SessionConflict(message.into())
 }
 
+/// What a Session's lifecycle cleanup waits for, in order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CleanupWait {
+    /// Another lifecycle action of the same Session.
+    Cleanup,
+    /// The Session's registered executions settling.
+    Executions,
+    /// The Workspace, which another Session's turn or another operation of
+    /// the Workspace holds.
+    Workspace,
+    /// The Session's own turn reaching a safe point after Stop.
+    Boundary,
+}
+
+/// The refusal of a lifecycle action whose cleanup did not finish within
+/// `timeout`: what it waited for, and who holds the Workspace when that was
+/// it. The Session itself is not blamed for another Session's turn.
+fn timeout_message(
+    session_id: &str,
+    stage: CleanupWait,
+    timeout: Duration,
+    holders: &[String],
+) -> String {
+    let waited = match stage {
+        CleanupWait::Cleanup => "another lifecycle action of this Session to finish".to_string(),
+        CleanupWait::Executions => "this Session's executions to settle".to_string(),
+        CleanupWait::Workspace if holders.is_empty() => {
+            "its Workspace, which another operation of the Workspace holds".to_string()
+        }
+        CleanupWait::Workspace => format!(
+            "its Workspace, which {} holds; let that turn finish or stop it",
+            holders.join("; ")
+        ),
+        CleanupWait::Boundary => "this Session's stopped turn to reach a safe point".to_string(),
+    };
+    format!(
+        "Session {session_id} was not changed: its cleanup waited {} s for {waited}. Its \
+         controller and Workspace ownership remain retained; retry the action",
+        timeout.as_secs()
+    )
+}
+
 /// Only this module constructs the token. The controller retains a Weak token;
 /// the registry entry holds both its strong token and strong canonical owner.
 pub(crate) struct RepositoryRegistrationGate {
@@ -482,6 +524,34 @@ impl SessionDispatchRegistry {
         }
     }
 
+    /// The registered Sessions other than `except` whose live turn holds
+    /// `gate` (their Workspace's operation gate), named for a refusal.
+    fn workspace_turns_holding(&self, gate: &Arc<AsyncMutex<()>>, except: &str) -> Vec<String> {
+        let Ok(state) = self.state.lock() else {
+            return Vec::new();
+        };
+        let mut holders = Vec::new();
+        for (session_id, entry) in &state.entries {
+            if session_id == except || entry.retired.load(Ordering::SeqCst) {
+                continue;
+            }
+            let shares_gate = entry
+                .owner()
+                .is_ok_and(|owner| Arc::ptr_eq(&owner.workspace_gate(), gate));
+            if !shares_gate {
+                continue;
+            }
+            if let Ok(Some(turn)) = entry.controller.live_owned_turn() {
+                holders.push(format!(
+                    "Session {session_id}, whose turn {} is running",
+                    turn.as_str()
+                ));
+            }
+        }
+        holders.sort();
+        holders
+    }
+
     /// Called by actual Close/Delete/shutdown before waiting on Workspace.
     /// A previously retired owner reuses its parked Workspace gate. None means
     /// there is no remaining registered owner; the legacy lock path then applies.
@@ -516,30 +586,51 @@ impl SessionDispatchRegistry {
             });
         };
         Self::close_entry(&entry)?;
+        // What the lifecycle action is waiting for, so a timeout says so.
+        let waiting = Mutex::new(CleanupWait::Cleanup);
+        let wait_for = |stage: CleanupWait| {
+            *waiting
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = stage;
+        };
         let prepared = tokio::time::timeout(timeout, async {
             let cleanup = Arc::new(entry.cleanup.clone().lock_owned().await);
             // Another lifecycle may have completed while this one waited. It
             // must not reuse an old entry to act on a later registration.
             {
-                let state = self.state.lock().map_err(|_| failure("Session dispatch registry failed"))?;
+                let state = self
+                    .state
+                    .lock()
+                    .map_err(|_| failure("Session dispatch registry failed"))?;
                 match state.entries.get(session_id) {
-                    Some(current) if !Arc::ptr_eq(current, &entry) => return Err(failure("Session registration changed while cleanup waited")),
+                    Some(current) if !Arc::ptr_eq(current, &entry) => {
+                        return Err(failure("Session registration changed while cleanup waited"))
+                    }
                     None => return Ok(None),
                     Some(_) => {}
                 }
             }
             if !entry.retired.load(Ordering::SeqCst) {
-                entry.controller.wait_for_registered_executions(timeout).await
+                wait_for(CleanupWait::Executions);
+                entry
+                    .controller
+                    .wait_for_registered_executions(timeout)
+                    .await
                     .map_err(|error| failure(error.to_string()))?;
                 let owner = entry.owner()?;
-                let between_turns = entry.between_turns.lock()
-                    .map_err(|_| failure("released repository identity failed"))?.is_some();
+                let between_turns = entry
+                    .between_turns
+                    .lock()
+                    .map_err(|_| failure("released repository identity failed"))?
+                    .is_some();
                 let operation = if between_turns {
                     // No process work remains in this permanently retired owner.
                     // Acquire the actual Workspace mutex, then park it below
                     // without an intervening await. A cancelled Close keeps it.
+                    wait_for(CleanupWait::Workspace);
                     owner.workspace_gate().lock_owned().await
                 } else {
+                    wait_for(CleanupWait::Boundary);
                     owner.wait_for_execution_boundary(timeout).await?;
                     if owner.execution_is_idle()? {
                         owner.retire_idle()?
@@ -550,13 +641,33 @@ impl SessionDispatchRegistry {
                 // No await separates receipt of the actual mutex guard from
                 // parking it in the retained entry. Cancellation cannot land
                 // in a window where only the lifecycle future owns the gate.
-                *entry.operation.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(operation));
+                *entry
+                    .operation
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(operation));
                 entry.retired.store(true, Ordering::SeqCst);
             }
-            let operation = entry.operation.lock().map_err(|_| failure("parked Workspace ownership failed"))?.clone()
+            let operation = entry
+                .operation
+                .lock()
+                .map_err(|_| failure("parked Workspace ownership failed"))?
+                .clone()
                 .ok_or_else(|| failure("retired Session registration lost its Workspace gate"))?;
             Ok::<_, DaemonError>(Some((operation, cleanup)))
-        }).await.map_err(|_| failure("Session repository cleanup did not finish; its controller and Workspace ownership remain retained, retry the lifecycle action"))??;
+        })
+        .await
+        .map_err(|_| {
+            let stage = *waiting
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let holders = match (stage, entry.owner()) {
+                (CleanupWait::Workspace, Ok(owner)) => {
+                    self.workspace_turns_holding(&owner.workspace_gate(), session_id)
+                }
+                _ => Vec::new(),
+            };
+            failure(timeout_message(session_id, stage, timeout, &holders))
+        })??;
         let Some((operation, cleanup)) = prepared else {
             return Ok(SessionDispatchCleanup {
                 session_id: session_id.to_owned(),

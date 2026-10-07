@@ -93,6 +93,7 @@ fn run_error(error: RunError) -> DaemonError {
     match error {
         RunError::NotImplemented(what) => DaemonError::NotImplemented(what),
         RunError::Usage(message) => DaemonError::InvalidRequest(message),
+        RunError::Busy(detail) => DaemonError::WorkspaceBusy(detail),
         other => DaemonError::Session(other.to_string()),
     }
 }
@@ -100,6 +101,15 @@ fn run_error(error: RunError) -> DaemonError {
 fn now_ms() -> u64 {
     crate::loadout::driver::now_ms()
 }
+
+/// Why a run is refused on a data directory that still uses the 1.0 Session
+/// format (one that holds Sessions, or that a daemon already used), and how
+/// to upgrade it. A new data directory, and an existing one no daemon has
+/// used yet that holds no Session, start in the native format by themselves.
+pub(crate) const LEGACY_ROOT_REFUSAL: &str = "loadout runs need native Session history, and \
+     this data directory still uses the 1.0 Session format. Stop Axocoatl, make a cold \
+     backup of the data directory, run `axocoatl session upgrade --confirm` with the same \
+     configuration and AXOCOATL_DATA_DIR, then start Axocoatl again";
 
 /// One loadout as the registry lists it: usable, or why not.
 struct RegistryEntry {
@@ -1285,11 +1295,7 @@ impl AxocoatlDaemon {
         let axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(ownership) =
             &self._data_dir_lease.ownership
         else {
-            return Err(DaemonError::Session(
-                "loadout runs need native Session history; this data directory has not been \
-                 upgraded"
-                    .into(),
-            ));
+            return Err(DaemonError::Session(LEGACY_ROOT_REFUSAL.into()));
         };
         let workspace = self
             .get_workspace(workspace_id)
@@ -1361,65 +1367,13 @@ impl AxocoatlDaemon {
         }
     }
 
-    /// The conflict a run gets when another operation holds its Workspace:
-    /// the open Sessions of the Workspace whose turn is running or needs a
-    /// person (each such turn holds the Workspace until it ends), or, when
-    /// none has one, every open Session of the Workspace.
+    /// The refusal a run gets when another operation holds its Workspace
+    /// (exit code 7): the open Sessions of the Workspace whose turn is
+    /// running or needs a person (each such turn holds the Workspace until
+    /// it ends), or, when none has one, every open Session of the Workspace.
     async fn workspace_in_use(&self, workspace_id: &str, path: &std::path::Path) -> DaemonError {
-        let mut holders = Vec::new();
-        let mut open = Vec::new();
-        for session in self.list_sessions().await {
-            if session.workspace_id != workspace_id
-                || session.status == axocoatl_session::SessionStatus::Closed
-            {
-                continue;
-            }
-            let run = session
-                .loadout
-                .as_ref()
-                .map(|binding| format!(" (loadout run {})", binding.run_id))
-                .unwrap_or_default();
-            open.push(format!("{}{run}", session.id));
-            let open_turn = match self.active_session_turn(&session.id).await {
-                Ok(Some(active)) => Some(format!("turn {} is running", active.turn_id)),
-                _ => self
-                    .list_versioned_session_turns(&session.id)
-                    .await
-                    .ok()
-                    .and_then(|entries| {
-                        entries.into_iter().rev().find_map(|entry| match entry {
-                            axocoatl_session::session_history::SessionHistoryEntry::ExecutionV2(
-                                turn,
-                            ) if !turn.state.is_closed() => Some(format!(
-                                "turn {} {}",
-                                turn.turn_id.as_str(),
-                                if turn.state
-                                    == axocoatl_session::turn_contract::LogicalTurnState::Running
-                                {
-                                    "is running"
-                                } else {
-                                    "needs attention"
-                                }
-                            )),
-                            _ => None,
-                        })
-                    }),
-            };
-            if let Some(turn) = open_turn {
-                holders.push(format!("Session {}{run}, whose {turn}", session.id));
-            }
-        }
-        let held_by = if !holders.is_empty() {
-            format!("is held by {}", holders.join("; "))
-        } else if !open.is_empty() {
-            format!(
-                "is held by another operation of one of its open Sessions: {}",
-                open.join(", ")
-            )
-        } else {
-            "is held by another operation".to_string()
-        };
-        DaemonError::SessionConflict(format!(
+        let held_by = self.workspace_holders(workspace_id, None).await.held_by();
+        DaemonError::WorkspaceBusy(format!(
             "the Workspace {} {held_by}. A loadout run needs the Workspace to itself: let that \
              turn finish, or stop it or close its Session, then run again",
             path.display()

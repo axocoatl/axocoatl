@@ -16,9 +16,12 @@
 //! `<skipped>`, `repro_error` and `missing` are `<error>`s; every not-covered
 //! entry is a `<failure type="not_covered">` whose message is
 //! [`NotCovered::reason`](crate::run_outcome::NotCovered::reason), never
-//! skipped. Text is XML-escaped with control characters other than tab and
-//! newline removed, each message is at most 4 KiB, and the document at most
-//! 8 MiB: cases past that are summarized in one `truncated` case.
+//! skipped. The `run` suite's `verdict` case is an `<error type="busy">`
+//! when the run ended with exit code 7 (another run or Session held the
+//! Workspace), so CI can tell it from an `<error type="error">`. Text is
+//! XML-escaped with control characters other than tab and newline removed,
+//! each message is at most 4 KiB, and the document at most 8 MiB: cases past
+//! that are summarized in one `truncated` case.
 //!
 //! Owner: workstream `core`.
 
@@ -468,7 +471,12 @@ fn verdict_case(outcome: &RunOutcome) -> Case {
             message: "the run was interrupted".into(),
         }),
         RunVerdict::Error => case.status(Status::Error {
-            kind: "error".into(),
+            kind: if outcome.exit_code == crate::run_outcome::exit_code::BUSY {
+                "busy"
+            } else {
+                "error"
+            }
+            .into(),
             message: outcome
                 .error
                 .clone()

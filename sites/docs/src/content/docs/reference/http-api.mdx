@@ -168,7 +168,9 @@ Errors are `{"error": "…"}`: `404` for an unknown loadout or run, `422` for a 
 (a loadout file that cannot be used, a missing or unknown parameter, a QA URL the browser
 cannot reach), `409` for a conflict, `501` for a part this build does not implement,
 `400` otherwise, including a host that cannot run the Session under egress with the
-`hardened` workload.
+`hardened` workload. When another run or Session's turn holds the repository's Workspace,
+`POST /api/runs` answers `409` at once with `"code": "workspace_busy"` beside `error`,
+which names that Session and turn; [`axocoatl run`](/reference/run/#exit-codes) exits 7.
 
 | Method | Path | Request / behavior |
 | --- | --- | --- |
@@ -187,7 +189,8 @@ cannot reach), `409` for a conflict, `501` for a part this build does not implem
 The Outcome (`schema` `axocoatl.run-outcome/1`) holds `run_id`, `session_id`,
 `workspace_id`, `loadout` (`{id, version, kind, digest, builtin}`), `task`,
 `started_at_ms`, `finished_at_ms`, `verdict` (`pass`, `checks_failed`,
-`needs_attention`, `interrupted` or `error`), `exit_code`, `attention` (the reasons, in
+`needs_attention`, `interrupted` or `error`), `exit_code` (7 with verdict `error` when a
+turn could not start because the Workspace was held), `attention` (the reasons, in
 words), `turns`, `checks` (each with `name`, `argv`, `state`, `timeout_ms`, `exit_code`,
 output tails, `candidate_sha256`, `report` and `reason`), `review` (the reviewer and every
 round's verdict and numbered findings), `adjudications` (`round`, `finding_id`, `finding`,
@@ -250,7 +253,7 @@ below.
 | POST | `/api/sessions` | Compatibility create from `{name, working_dir, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}`; finds or creates the matching Workspace |
 | GET | `/api/sessions/{id}` | One persisted Session, or `404`; a Session a [loadout run](#loadouts-and-runs) created carries `loadout` |
 | PATCH | `/api/sessions/{id}` | Rename with `{name}` |
-| DELETE | `/api/sessions/{id}?force=false` | Soft-close; `force=true` deletes the Session record |
+| DELETE | `/api/sessions/{id}?force=false` | Close: stops the Session's containers and removes the Podman volumes its runtime fills again on start (`axo-egr-`, `axo-egi-`, `axo-svc-`, `axo-ca-`); the Node dependency volume stays for Reopen. `force=true` deletes the Session record and that volume too. While another Session's turn holds the Workspace, both answer `409` at once with `{"error": "…", "code": "workspace_busy"}`, naming that Session and turn, and change nothing; another conflict is a `409` without `code` |
 | PUT | `/api/sessions/{id}/environment` | Review/change `{image, setup_command, setup_approved, setup_reviewed:true}` and synchronously prepare that exact generation |
 | POST | `/api/sessions/{id}/environment/rebuild` | Remove the old runtime and reproduce the persisted reviewed environment plan |
 | POST | `/api/sessions/{id}/environment/confirm-runtime-cleanup` | High-friction E2B recovery acknowledgment. Send exactly one target: `{runtime_id, confirmed:true}` after manually deleting that retained runtime, or `{creation_token, confirmed_all_matching_sandboxes_deleted:true}` after manually deleting every sandbox whose metadata contains `axocoatl_creation_token=<exact token>` |
@@ -268,8 +271,8 @@ below.
 | POST | `/api/sessions/{id}/network/proposals/{proposal_id}/approve` | `{command_id}`; approve a host an Agent [asked for](#hosts-agents-ask-for): it is allowed for this Session. Returns `{proposal_id, state, revision, digest}` |
 | POST | `/api/sessions/{id}/network/proposals/{proposal_id}/reject` | `{command_id}`; reject a host an Agent asked for. Returns `{proposal_id, state}` |
 | POST | `/api/network/reload` | Read the daemon's configuration file again and [apply its allowlists](#reload-the-network-allowlists) to new and running Sessions. Returns `{applied, unchanged, restart_required, revisions, changes}`, with `503` and `failed` when a running Session kept its policy |
-| GET | `/api/session-turns/search?q=…&session_id=…` | Literal case-insensitive search; omit Session ID for all |
-| GET | `/api/sessions/{id}/export?format=markdown` | Markdown by default; accepts `markdown`, `md`, or `json` |
+| GET | `/api/session-turns/search?q=…&session_id=…` | Literal case-insensitive search; omit Session ID for all. With a Session ID and no `history_version`, answers in that Session's [form](#session-history-versions) |
+| GET | `/api/sessions/{id}/export?format=markdown` | Markdown by default; accepts `markdown`, `md`, or `json`. Without `history_version`, a Session whose History holds native execution (every loadout run's) exports in the versioned [form](#session-history-versions), as its record bundle does |
 | POST | `/api/sessions/{id}/rewind` | `{keep_through_turn_id?}`; legacy `{keep}` is raw message count |
 
 `GET /api/session-teams` returns config-owned records of this shape:

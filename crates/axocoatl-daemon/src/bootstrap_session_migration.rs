@@ -255,7 +255,7 @@ async fn migrate_held_session_state_with_mode(
     Ok(converted)
 }
 
-const STARTUP_MIGRATION_FILE: &str = "execution-migration.v1.json";
+pub(super) const STARTUP_MIGRATION_FILE: &str = "execution-migration.v1.json";
 const STARTUP_MIGRATION_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

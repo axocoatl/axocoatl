@@ -437,6 +437,7 @@ pub async fn run_to_outcome_with(
         Err(_) => Err(RunError::Deadline),
     };
     let mut usage_error = false;
+    let mut busy = false;
     let mut interrupted = host.stop_requested(&run.run_id).await;
     let mut report = KindReport::default();
     match driven {
@@ -446,6 +447,10 @@ pub async fn run_to_outcome_with(
         Err(RunError::Usage(message)) => {
             usage_error = true;
             outcome.error = Some(message);
+        }
+        Err(error @ RunError::Busy(_)) => {
+            busy = true;
+            outcome.error = Some(error.to_string());
         }
         Err(error @ RunError::NotImplemented(_)) | Err(error @ RunError::Infrastructure(_)) => {
             outcome.error = Some(error.to_string())
@@ -516,6 +521,11 @@ pub async fn run_to_outcome_with(
     });
     if usage_error {
         outcome.exit_code = exit_code::USAGE;
+    }
+    // Another run or Session held the Workspace: the run is an error, but
+    // one that running it again later can fix, so it has its own code.
+    if busy {
+        outcome.exit_code = exit_code::BUSY;
     }
     // Kind drivers record their own warnings, findings and not-covered
     // entries as they go; only what is not in the record yet is added, so
@@ -733,6 +743,9 @@ prompt: "{task}"
         stopped: Mutex<Vec<String>>,
         events: Mutex<Vec<RunEvent>>,
         finished: Mutex<Option<RunOutcome>>,
+        /// When set, `send_turn` refuses: another Session holds the
+        /// Workspace, as the daemon's turn start says.
+        busy: Option<String>,
     }
 
     impl FakeHost {
@@ -760,6 +773,9 @@ prompt: "{task}"
         }
         async fn send_turn(&self, _: &str, request: &str) -> Result<String, RunError> {
             assert_eq!(request, "tidy up");
+            if let Some(holder) = &self.busy {
+                return Err(RunError::Busy(holder.clone()));
+            }
             Ok("turn-1".into())
         }
         async fn wait_turn(
@@ -940,6 +956,38 @@ prompt: "{task}"
         assert_eq!(
             host.stopped.lock().unwrap().as_slice(),
             ["turn-7", "turn-7"]
+        );
+    }
+
+    /// A turn that cannot start because another Session holds the Workspace
+    /// ends the run with exit 7, not 5: CI can tell "busy, run it again
+    /// later" from an infrastructure failure, in the Outcome and in JUnit.
+    #[tokio::test]
+    async fn a_run_whose_turn_finds_the_workspace_held_exits_busy() {
+        let run = context(&[], later());
+        let host = FakeHost {
+            busy: Some(
+                "the Workspace /repo is held by Session ses-2, whose turn turn-9 is running".into(),
+            ),
+            ..FakeHost::default()
+        };
+        let outcome = run_to_outcome(&host, &run).await.unwrap();
+        assert_eq!(outcome.exit_code, exit_code::BUSY);
+        assert_eq!(outcome.verdict, RunVerdict::Error);
+        let error = outcome.error.clone().unwrap();
+        assert!(
+            error.starts_with("Workspace busy: the Workspace /repo is held by Session ses-2"),
+            "{error}"
+        );
+        assert_eq!(host.finished.lock().unwrap().as_ref(), Some(&outcome));
+        let junit = axocoatl_session::run_junit::render_junit(&outcome).unwrap();
+        assert!(
+            junit.contains(r#"<property name="axocoatl.exit_code" value="7"/>"#),
+            "{junit}"
+        );
+        assert!(
+            junit.contains(r#"<error type="busy" message="Workspace busy: "#),
+            "{junit}"
         );
     }
 

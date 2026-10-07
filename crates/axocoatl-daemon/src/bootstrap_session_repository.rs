@@ -125,6 +125,17 @@ fn failure(message: impl Into<String>) -> DaemonError {
     DaemonError::SessionConflict(message.into())
 }
 
+/// A turn that needs the Workspace while another Session's turn, a run's
+/// admission or another Workspace operation holds it: nothing started, and
+/// the same turn can start once that ends.
+fn workspace_held() -> DaemonError {
+    DaemonError::WorkspaceBusy(
+        "the Workspace is held by another Session's turn or another operation of the \
+         Workspace, so this turn could not start; start it again once that ends"
+            .into(),
+    )
+}
+
 fn validate_session_owner(session: &Session, identity: &DurableSessionIdentity) -> Result<()> {
     if session.id != identity.owner().session_id.as_str()
         || session.workspace_id != identity.owner().workspace_id
@@ -188,9 +199,7 @@ impl AxocoatlDaemon {
             .attempt_operation_for_workspace(&identity.owner().workspace_id)
             .await;
         let workspace_gate = operation.clone();
-        let operation = operation
-            .try_lock_owned()
-            .map_err(|_| failure("Workspace already has an owning operation"))?;
+        let operation = operation.try_lock_owned().map_err(|_| workspace_held())?;
         verify_canonical()?;
         self.require_runtime_admission()?;
         self.require_no_unresolved_attempt(session_id).await?;
@@ -369,7 +378,7 @@ impl SessionRepositoryOwner {
             .workspace_gate
             .clone()
             .try_lock_owned()
-            .map_err(|_| failure("Workspace already has an owning operation"))?;
+            .map_err(|_| workspace_held())?;
         let start = self.inner.start.clone().lock_owned().await;
         let owner = Self {
             inner: Arc::new(RepositoryOwnerInner {

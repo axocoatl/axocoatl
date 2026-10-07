@@ -41,8 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when a required check failed, 2 when it needs attention (review not passed, a finding
   unanswered, anything not covered, a check that did not run, a budget or the wall clock
   exhausted, findings the loadout fails on, Keep failed), 3 for usage errors, 4 when the
-  daemon is unreachable or refuses the token, 5 for infrastructure errors and 6 when
-  interrupted. `--junit` writes JUnit of checks, check reports, review, adjudications,
+  daemon is unreachable or refuses the token, 5 for infrastructure errors, 6 when
+  interrupted and 7 when another run or Session's turn holds the repository's Workspace
+  (busy: run it again later; `POST /api/runs` answers `409` with
+  `"code": "workspace_busy"`, and JUnit shows `<error type="busy">`). `--junit` writes JUnit of checks, check reports, review, adjudications,
   findings and coverage, with anything not covered as a failure. `--record` writes the
   run's whole record (manifest, loadout text, Outcome, Session, team, turns, History,
   every network-record event and every run event) as one JSON Lines bundle ending with
@@ -280,6 +282,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again with nothing left to continue. Work that never started and depends on restarted
   work now waits for it in the new epoch and runs once it is accepted; work that also
   depends on failed work left unselected stays blocked until that is continued too.
+- **Closing a Session no longer waits a minute for another Session's turn.** Closing
+  (or deleting) an idle Session while another Session's turn held their Workspace waited
+  for the Workspace and failed after 60 seconds with a `500` that blamed the Session
+  being closed. It is now refused at once with `409` and
+  `"code": "workspace_busy"`, naming the Session and turn that hold the Workspace, and
+  nothing changes; close it again once that turn ends. When a lifecycle action does
+  time out, its message says what it waited for. A turn that cannot start because the
+  Workspace is held is busy too, and a loadout run then exits 7, not 5.
+- **Close removes a Session's runtime volumes.** Closing a Session left its
+  `axo-egr-`, `axo-egi-`, `axo-svc-` and `axo-ca-` Podman volumes behind, hundreds after
+  many runs. Close now removes them: their sockets and trust files are filled again
+  when the Session starts. The Node dependency volume still stays until the Session is
+  deleted, so Reopen reuses the installed dependencies.
+- **`GET /api/sessions/{id}/export` exports native Sessions.** Without
+  `history_version` it answered `400` for a Session whose History holds native
+  execution, such as every loadout run's. It now exports such a Session in the
+  versioned form, as JSON or Markdown, like the record bundle and the other History
+  reads; `GET /api/session-turns/search` with a `session_id` does the same.
+- **A data directory made before the daemon first started runs loadouts.** A data
+  directory created with `mkdir`, or by `axocoatl secret set`, before the first start
+  was treated as a 1.0-format root, so every run exited 5 with "this data directory has
+  not been upgraded". Such a directory, which no daemon has used and which holds no
+  Session, now starts in the native format like one the daemon creates. A run on a root
+  a daemon already used in the 1.0 format still exits 5, and the message now says to
+  stop Axocoatl, make a cold backup and run `axocoatl session upgrade --confirm`.
 
 ### Security
 - The docs site's build dependencies are updated: `http-cache-semantics` 4.3.0 fixes
