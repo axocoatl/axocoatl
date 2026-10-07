@@ -2703,6 +2703,7 @@ fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorRe
         | axocoatl_daemon::DaemonError::SessionConflict(_) => StatusCode::CONFLICT,
         axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::UNPROCESSABLE_ENTITY,
         axocoatl_daemon::DaemonError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
+        axocoatl_daemon::DaemonError::NotFound(_) => StatusCode::NOT_FOUND,
         _ => StatusCode::BAD_REQUEST,
     };
     (

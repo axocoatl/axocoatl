@@ -50,7 +50,7 @@ pub(crate) mod external_agent_host;
 #[path = "bootstrap_keep_pr.rs"]
 pub(crate) mod keep_pr_host;
 #[path = "bootstrap_loadout_runs.rs"]
-pub(crate) mod loadout_runs;
+pub mod loadout_runs;
 #[path = "bootstrap_qa_repro.rs"]
 pub(crate) mod qa_repro_host;
 
@@ -810,6 +810,9 @@ async fn configured_workload_users(
     }
     Ok(users)
 }
+
+/// Why a loadout Session cannot run on the E2B backend.
+pub(crate) const LOADOUT_NEEDS_LOCAL_PODMAN: &str = "a loadout Session runs only on local rootless Podman, under network egress (or none) with the hardened workload; the E2B backend cannot prove outbound isolation. Use sandbox.backend: podman";
 
 /// Directory under the data root for egress credentials' 0600 env files.
 const EGRESS_ENV_DIR: &str = "egress-env";
@@ -3655,6 +3658,8 @@ pub struct AxocoatlDaemon {
     /// Opens the decision points in `session_egress`; the browser tools use
     /// it to reach a Session's own under `network: egress`.
     egress_points: Arc<session_network_policy::SessionEgressPoints>,
+    /// Loadout runs: their record store, admissions, drivers and stops.
+    loadout_runs: Arc<loadout_runs::LoadoutRuns>,
     /// The configuration file this daemon loaded, canonical, once the CLI
     /// has said which one it was.
     config_path: StdMutex<Option<std::path::PathBuf>>,
@@ -5443,6 +5448,7 @@ impl AxocoatlDaemon {
             agent_handles.push(handle);
         }
 
+        let secure_data_dir_for_runs = secure_data_dir.clone();
         let daemon = Self {
             config,
             data_dir: data_dir.clone(),
@@ -5483,6 +5489,7 @@ impl AxocoatlDaemon {
             session_egress,
             network_policy,
             egress_points,
+            loadout_runs: Arc::new(loadout_runs::LoadoutRuns::open(&secure_data_dir_for_runs)),
             config_path: StdMutex::new(None),
             session_network_evidence: Arc::new(
                 crate::session_network_evidence::NetworkEvidenceIndex::default(),
@@ -5510,6 +5517,7 @@ impl AxocoatlDaemon {
                 reattach_active_ready && !upgraded_startup,
             )
             .await;
+        daemon.recover_loadout_runs().await;
         Ok(daemon)
     }
 
@@ -8286,6 +8294,12 @@ impl AxocoatlDaemon {
         };
         let sc = &self.config.sandbox;
         match sc.backend.as_str() {
+            "e2b" if session.loadout.is_some() => Err(SessionEnvironmentPreparationError {
+                error: DaemonError::Session(LOADOUT_NEEDS_LOCAL_PODMAN.to_string()),
+                effective_image: None,
+                runtime: None,
+                setup_results: Vec::new(),
+            }),
             "e2b" => {
                 let created = self.create_e2b_sandbox(session).await?;
                 let initial_sandbox = created.sandbox;
@@ -8433,14 +8447,17 @@ impl AxocoatlDaemon {
                         setup_results: Vec::new(),
                     }
                 })?;
-                let network = configured_sandbox_network(&sc.network).map_err(|error| {
-                    SessionEnvironmentPreparationError {
+                // The Session's own network: the global setting, or its
+                // loadout's (egress or none) for a loadout Session.
+                let network = self
+                    .session_sandbox_policy(session)
+                    .and_then(|(network, _, _)| configured_sandbox_network(&network))
+                    .map_err(|error| SessionEnvironmentPreparationError {
                         error,
                         effective_image: None,
                         runtime: None,
                         setup_results: Vec::new(),
-                    }
-                })?;
+                    })?;
                 if let Some(warning) = self.config_in_workspace_warning(&session.working_dir) {
                     tracing::warn!(session = %session.id, "{warning}");
                 }
@@ -8478,7 +8495,8 @@ impl AxocoatlDaemon {
                 } else {
                     None
                 };
-                let workload = configured_workload_users(sc, network)
+                let workload = self
+                    .session_workload_users(session, network)
                     .await
                     .map_err(|error| SessionEnvironmentPreparationError {
                         error,
@@ -10909,6 +10927,73 @@ impl AxocoatlDaemon {
         self.egress_points.get_or_open(session_id).await
     }
 
+    /// The network, workload plan and egress lists of one Session. Every
+    /// place the daemon decides these for a Session reads them here: an
+    /// unbound Session gets the global `sandbox.network`, the workload plan
+    /// of `sandbox.workload` and the lists in force (unchanged behavior); a
+    /// Session a loadout run created gets its binding's network (`egress` or
+    /// `none`), the hardened workload as a requirement (never the image's
+    /// user) and the lists in force plus its loadout's hosts and routes.
+    pub(crate) fn session_sandbox_policy(
+        &self,
+        session: &Session,
+    ) -> Result<
+        (
+            String,
+            axocoatl_config::workload::WorkloadPlan,
+            crate::session_egress::EgressPolicyConfig,
+        ),
+        DaemonError,
+    > {
+        let base = self.network_policy.current();
+        match &session.loadout {
+            None => {
+                let network = self.config.sandbox.network.clone();
+                let plan = axocoatl_config::workload::workload_settings(&self.config.sandbox)?
+                    .plan(&network);
+                Ok((network, plan, base))
+            }
+            Some(binding) => {
+                if !matches!(binding.network.as_str(), "egress" | "none")
+                    || binding.workload != "hardened"
+                {
+                    return Err(DaemonError::Session(format!(
+                        "Session {} is bound to loadout run {} with network {:?} and workload                          {:?}; a loadout Session runs only under egress or none with the                          hardened workload",
+                        session.id, binding.run_id, binding.network, binding.workload
+                    )));
+                }
+                let policy = self.egress_points.policy_for(&session.id, &base);
+                Ok((
+                    binding.network.clone(),
+                    axocoatl_config::workload::WorkloadPlan::Hardened { required: true },
+                    policy,
+                ))
+            }
+        }
+    }
+
+    /// The non-root users a Session's container runs its commands as. A
+    /// loadout Session requires them: its container's start refuses rootful
+    /// Podman rather than falling back to the image's user.
+    async fn session_workload_users(
+        &self,
+        session: &Session,
+        network: axocoatl_isolation::session_sandbox::SandboxNetwork,
+    ) -> Result<Option<axocoatl_isolation::session_sandbox::WorkloadUsers>, DaemonError> {
+        match self.session_sandbox_policy(session)?.1 {
+            axocoatl_config::workload::WorkloadPlan::Hardened { required: true }
+                if session.loadout.is_some() =>
+            {
+                let settings = axocoatl_config::workload::workload_settings(&self.config.sandbox)?;
+                Ok(Some(axocoatl_isolation::session_sandbox::WorkloadUsers {
+                    writer: settings.writer,
+                    helper: settings.helper,
+                }))
+            }
+            _ => configured_workload_users(&self.config.sandbox, network).await,
+        }
+    }
+
     /// Remember which configuration file this daemon loaded, so a Session
     /// whose Workspace contains it can say so.
     pub fn set_config_path(&self, path: &std::path::Path) {
@@ -11003,9 +11088,9 @@ impl AxocoatlDaemon {
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
-        if self.config.sandbox.network != "egress" {
+        if self.session_sandbox_policy(&session)?.0 != "egress" {
             return Err(DaemonError::InvalidRequest(
-                "this daemon does not run Sessions under sandbox.network: egress".to_string(),
+                "this Session does not run under network: egress".to_string(),
             ));
         }
         if session.status == axocoatl_session::SessionStatus::Closed {
@@ -11072,9 +11157,9 @@ impl AxocoatlDaemon {
             .read_after(session_id, after, limit)
             .await
             .map_err(|error| DaemonError::Session(error.to_string()))?;
-        let sandbox = &self.config.sandbox;
-        let private_destinations = if sandbox.network == "egress" {
-            self.network_policy.current().session_private
+        let (mode, _, policy) = self.session_sandbox_policy(&session)?;
+        let private_destinations = if mode == "egress" {
+            policy.session_private
         } else {
             Vec::new()
         };
@@ -11107,7 +11192,7 @@ impl AxocoatlDaemon {
         };
         Ok(crate::session_network::SessionNetworkView {
             session_id: session_id.to_string(),
-            mode: sandbox.network.clone(),
+            mode,
             sidecar,
             policies,
             private_destinations,
@@ -13871,7 +13956,7 @@ trap - 0 1 2 15
             ))
         })?;
         let config = &self.config.sandbox;
-        let network = attempt_sandbox_network(&config.network)?;
+        let network = attempt_sandbox_network(&self.session_sandbox_policy(session)?.0)?;
         // Under egress the attempt uses its Session's running proxy and
         // decision point, so its connections go to the Session's record.
         let egress = if network == axocoatl_isolation::session_sandbox::SandboxNetwork::Egress {
@@ -13921,7 +14006,7 @@ trap - 0 1 2 15
             ],
             shared_sidecar_session: egress.as_ref().map(|_| session.id.clone()),
             egress,
-            workload: configured_workload_users(config, network).await?,
+            workload: self.session_workload_users(session, network).await?,
         };
         let sandbox = SessionSandbox::start_in(
             container_id,

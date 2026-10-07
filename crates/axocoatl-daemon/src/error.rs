@@ -74,6 +74,11 @@ pub enum DaemonError {
     /// boundary returns 501; nothing ran.
     #[error("not implemented: {0}")]
     NotImplemented(&'static str),
+
+    /// The named loadout or run does not exist. The HTTP boundary returns
+    /// 404.
+    #[error("{0}")]
+    NotFound(String),
 }
 
 impl From<axocoatl_config::ConfigError> for DaemonError {

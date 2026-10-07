@@ -346,14 +346,15 @@ fn check_suites(outcome: &RunOutcome) -> (Suite, Vec<Suite>) {
             }
             if report.truncated > 0 {
                 suite.cases.push(
-                    Case::new(format!("{}.report", check.name), "truncated")
-                        .status(Status::Error {
-                        kind: "truncated".into(),
-                        message: format!(
+                    Case::new(format!("{}.report", check.name), "truncated").status(
+                        Status::Error {
+                            kind: "truncated".into(),
+                            message: format!(
                             "{} test cases of the report were left out to stay within the bound",
                             report.truncated
                         ),
-                    }),
+                        },
+                    ),
                 );
             }
             reports.push(suite);

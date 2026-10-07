@@ -1239,7 +1239,7 @@ impl AxocoatlDaemon {
                         working_dir: session.working_dir.clone(),
                         environment_generation: session.environment.generation,
                         backend: self.config.sandbox.backend.clone(),
-                        network: self.config.sandbox.network.clone(),
+                        network: self.session_sandbox_policy(&session)?.0,
                         require_resource_limits: self.config.sandbox.require_resource_limits,
                         image: session.image.clone(),
                         setup_command: session.environment.setup_command.clone(),

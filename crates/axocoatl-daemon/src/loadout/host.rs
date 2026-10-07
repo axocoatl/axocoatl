@@ -24,6 +24,39 @@ pub struct ReproRequest {
     pub timeout_ms: u64,
 }
 
+/// How a required check is named in the Outcome: its exact argv as applied,
+/// its loadout name and its timeout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckLabel {
+    pub argv: Vec<String>,
+    pub name: String,
+    pub timeout_ms: u64,
+}
+
+impl CheckLabel {
+    /// The labels of an applied edit's checks, aligned by index; a check
+    /// without options is `check-<n>` with the default timeout.
+    pub fn of_edit(edit: &SessionTeamEdit) -> Vec<CheckLabel> {
+        edit.required_checks
+            .iter()
+            .enumerate()
+            .map(|(index, argv)| {
+                let options = edit.check_options.get(index);
+                CheckLabel {
+                    argv: argv.clone(),
+                    name: options
+                        .and_then(|options| options.name.clone())
+                        .unwrap_or_else(|| format!("check-{}", index + 1)),
+                    timeout_ms: options.map_or(
+                        axocoatl_session::check_options::DEFAULT_CHECK_TIMEOUT_MS,
+                        |options| options.timeout_ms(),
+                    ),
+                }
+            })
+            .collect()
+    }
+}
+
 #[async_trait]
 pub trait RunHost: Send + Sync {
     /// Preview and apply a Team and budget edit for future turns. The run

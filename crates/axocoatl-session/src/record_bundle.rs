@@ -152,6 +152,12 @@ impl<W: std::io::Write> BundleWriter<W> {
         Ok(())
     }
 
+    /// The output written so far, for a caller that drains it between
+    /// sections (a streamed response). The digest is unaffected.
+    pub fn get_mut(&mut self) -> &mut W {
+        &mut self.out
+    }
+
     /// Section lines written so far.
     pub fn lines(&self) -> u64 {
         self.lines

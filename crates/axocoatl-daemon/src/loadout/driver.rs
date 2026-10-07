@@ -52,7 +52,8 @@ impl KindDriver for SingleTurnDriver {
     }
 }
 
-pub(crate) fn now_ms() -> u64 {
+/// Now, in Unix milliseconds.
+pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|time| time.as_millis() as u64)
