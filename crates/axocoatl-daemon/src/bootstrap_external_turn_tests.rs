@@ -398,10 +398,12 @@ async fn external_writers_start_turns_through_the_native_turn_path() {
 
 /// What the program's tool call runs in the checkout: the change the run
 /// checks for, then, for the test, every environment it can read (its own
-/// processes', the program's among them) and its home directory's listing.
+/// processes', the program's among them), its home directory's listing, and
+/// who it runs as.
 const PROGRAM_COMMAND: &str = "printf 'fixed\\n' > fixed.txt && \
 (for f in /proc/[0-9]*/environ; do tr '\\0' '\\n' < \"$f\"; echo; done) \
 > /tmp/axocoatl-program-env.txt 2>/dev/null; ls -a \"$HOME\" > /tmp/axocoatl-program-home.txt 2>&1; \
+(id -u; grep -E '^(NoNewPrivs|CapEff):' /proc/self/status) > /tmp/axocoatl-program-identity.txt 2>&1; \
 cat fixed.txt";
 
 /// One request the fake model API received.
@@ -1074,6 +1076,7 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool) {
     };
     let program_env = read("/tmp/axocoatl-program-env.txt").await;
     let program_home = read("/tmp/axocoatl-program-home.txt").await;
+    let program_identity = read("/tmp/axocoatl-program-identity.txt").await;
     let found = sandbox
         .exec(
             &[
@@ -1249,6 +1252,15 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool) {
         "{program_env}"
     );
     assert!(program_env.contains("HOME=/home/axocoatl"), "{program_env}");
+    // Its tool ran as the non-root writer user, without capabilities and
+    // under no-new-privileges (the supervisor's `--harden`).
+    let uid = program_identity.lines().next().unwrap_or_default();
+    assert!(!uid.is_empty() && uid != "0", "{program_identity}");
+    assert!(
+        program_identity.contains("NoNewPrivs:\t1")
+            && program_identity.contains("CapEff:\t0000000000000000"),
+        "{program_identity}"
+    );
     assert!(!program_env.contains(&secret), "{context}");
     assert_eq!(found.trim(), "", "{context}");
     for inspect in &inspected {
