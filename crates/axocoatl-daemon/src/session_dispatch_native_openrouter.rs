@@ -9,19 +9,22 @@ impl NativeDefinitionPreparation {
                     .ollama_base_url
                     .as_deref()
                     .ok_or_else(|| error("Ollama provider is not configured"))?;
-                let observation =
+                let observation = with_provider_retry(|| {
                     axocoatl_llm_ollama::observe_native_ollama_context(base, self.model())
-                        .await
-                        .map_err(error)?;
+                })
+                .await
+                .map_err(error)?;
                 self.observed(observation)
             }
             "openrouter" => {
                 let key = credentials.openrouter_key()?;
-                let profiles = axocoatl_llm_openai::observe_native_openrouter_profiles(
-                    "https://openrouter.ai/api/v1",
-                    key,
-                    self.model(),
-                )
+                let profiles = with_provider_retry(|| {
+                    axocoatl_llm_openai::observe_native_openrouter_profiles(
+                        "https://openrouter.ai/api/v1",
+                        key,
+                        self.model(),
+                    )
+                })
                 .await
                 .map_err(error)?;
                 self.openrouter_runtime(profiles)
@@ -70,6 +73,34 @@ impl NativeDefinitionPreparation {
             self.model(),
             refusals.into_iter().collect::<Vec<_>>().join("; ")
         )))
+    }
+}
+
+/// Run one provider metadata request (an endpoint or model observation, no
+/// inference and no charge) under the transient-error policy of
+/// [`crate::provider_retry`]: a 429, a 5xx, a timeout or a reset connection
+/// is tried once more after the provider's `Retry-After` (at most 30 s) or
+/// 2 s; anything else, or a second failure, stands.
+async fn with_provider_retry<T, F, Fut>(mut call: F) -> std::result::Result<T, axocoatl_llm::ProviderError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<T, axocoatl_llm::ProviderError>>,
+{
+    let mut attempt = 0;
+    loop {
+        let error = match call().await {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        let failure = crate::provider_retry::failure_of(&error);
+        match crate::provider_retry::decide(&failure, attempt) {
+            crate::provider_retry::RetryDecision::RetryAfter(wait) => {
+                tracing::info!(%error, ?wait, "provider metadata request failed; retrying once");
+                tokio::time::sleep(wait).await;
+                attempt += 1;
+            }
+            crate::provider_retry::RetryDecision::GiveUp => return Err(error),
+        }
     }
 }
 
@@ -281,13 +312,15 @@ impl NativeRuntimeConfiguration {
             Self::Ollama(runtime) => runtime.verify(credentials.ollama_base_url.as_deref()).await,
             Self::OpenRouter(runtime) => {
                 let key = credentials.openrouter_key()?;
-                let provider = axocoatl_llm_openai::NativeOpenRouterProvider::connect_observed(
-                    runtime.openrouter_observation.clone(),
-                    key,
-                    runtime.max_output_tokens,
-                    runtime.max_response_bytes,
-                    runtime.reasoning,
-                )
+                let provider = with_provider_retry(|| {
+                    axocoatl_llm_openai::NativeOpenRouterProvider::connect_observed(
+                        runtime.openrouter_observation.clone(),
+                        key,
+                        runtime.max_output_tokens,
+                        runtime.max_response_bytes,
+                        runtime.reasoning,
+                    )
+                })
                 .await
                 .map_err(error)?;
                 Ok(Arc::new(provider))
@@ -302,6 +335,56 @@ impl NativeRuntimeConfiguration {
         match self {
             Self::OpenRouter(runtime) => Some(&runtime.openrouter_observation.endpoint_tag),
             Self::Ollama(_) => None,
+        }
+    }
+}
+#[cfg(test)]
+mod metadata_retry_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn status(status: u16) -> axocoatl_llm::ProviderError {
+        axocoatl_llm::ProviderError::ApiError {
+            provider: "openrouter".into(),
+            status,
+            message: crate::provider_retry::with_retry_after(
+                "metadata".into(),
+                Some(std::time::Duration::ZERO),
+            ),
+        }
+    }
+
+    /// A transient metadata failure is tried once more; a rejection or a
+    /// second failure stands.
+    #[tokio::test]
+    async fn metadata_requests_follow_the_transient_error_policy() {
+        let calls = AtomicUsize::new(0);
+        let answer = with_provider_retry(|| {
+            let call = calls.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if call == 0 {
+                    Err(status(503))
+                } else {
+                    Ok("profiles")
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!((answer, calls.load(Ordering::SeqCst)), ("profiles", 2));
+        for (first, second) in [(401, 200), (502, 503)] {
+            let calls = AtomicUsize::new(0);
+            let result: std::result::Result<(), _> = with_provider_retry(|| {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                async move { Err(status(if call == 0 { first } else { second })) }
+            })
+            .await;
+            assert!(result.is_err());
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                if first == 401 { 1 } else { 2 },
+                "{first}"
+            );
         }
     }
 }
