@@ -493,13 +493,6 @@ async fn reproduce(
         Err(RunError::Deadline) => return Ok(unfinished(&mut detail, None)),
         Err(error) => return Err(error),
     };
-    if target.status == "missing" {
-        let why = target
-            .first_error
-            .clone()
-            .unwrap_or_else(|| format!("{path} does not exist in the Session's repository"));
-        return Ok(missing(&mut detail, why));
-    }
     let reference = match (&settings.reference_url, target.status.as_str()) {
         (Some(reference_url), "failed") => match repro_run(host, run, &path, reference_url).await {
             Ok(reference) => Some(reference),
