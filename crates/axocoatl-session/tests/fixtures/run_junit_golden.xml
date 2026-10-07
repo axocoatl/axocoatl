@@ -6,6 +6,7 @@
     <property name="axocoatl.loadout" value="fix@1 sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"/>
     <property name="axocoatl.verdict" value="checks_failed"/>
     <property name="axocoatl.exit_code" value="1"/>
+    <property name="axocoatl.usage" value="0 input + 0 output tokens, $0.0000 (known subtotal: some usage was not reported)"/>
     <property name="axocoatl.warning.same_model_reviewer" value="same model"/>
   </properties>
   <testsuite name="checks" tests="5" failures="2" errors="1" skipped="0">

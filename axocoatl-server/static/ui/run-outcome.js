@@ -7,7 +7,7 @@ import { adopt } from './sheets.js';
  * red), findings with their reproduction classification ("fails on clean
  * build" as its own label), everything not covered and why, warnings (the
  * same-model reviewer warning included), usage (a known subtotal when
- * incomplete), the network summary, a link to download the record bundle and
+ * incomplete, and a cost the run does not know as such), the network summary, a link to download the record bundle and
  * Keep as PR (`<ax-keep-pr>`, workstream keep).
  *
  * @element ax-run-outcome
@@ -77,10 +77,21 @@ const CHECK = {
   unavailable: ['record unavailable', 'attention'],
 };
 
+/**
+ * The cost in words: what the run cost, or, when a call's cost is not known
+ * (`cost_known: false`, such as a Codex writer, which reports no cost), what
+ * the run's grants reserved for it, never shown as a price.
+ */
+export function costText(usage = {}) {
+  const cost = Number(usage.cost_microunits) || 0;
+  const dollars = `$${(cost / 1e6).toFixed(4)}`;
+  if (usage.cost_known !== false) return dollars;
+  return cost > 0 ? `cost unknown (reserved up to ${dollars})` : 'cost unknown';
+}
+
 /** Usage in words, saying when the numbers are only a known subtotal. */
 export function usageText(usage = {}) {
-  const dollars = (Number(usage.cost_microunits) || 0) / 1e6;
-  const text = `${usage.input_tokens || 0} input + ${usage.output_tokens || 0} output tokens, $${dollars.toFixed(4)}`;
+  const text = `${usage.input_tokens || 0} input + ${usage.output_tokens || 0} output tokens, ${costText(usage)}`;
   const retries = usage.retries ? `, ${usage.retries} provider retr${usage.retries === 1 ? 'y' : 'ies'}` : '';
   return usage.complete === false ? `${text}${retries} (known subtotal: some usage was not reported)` : `${text}${retries}`;
 }

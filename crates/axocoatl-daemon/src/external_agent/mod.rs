@@ -161,6 +161,16 @@ pub fn runtime_provider(runtime: AgentRuntime) -> Option<&'static str> {
     }
 }
 
+/// The provider of the model API `runtime`'s program calls: `anthropic` for
+/// Claude Code, `openai` for Codex, as a loadout names the program's model.
+pub fn model_provider(runtime: AgentRuntime) -> Option<&'static str> {
+    match runtime {
+        AgentRuntime::Native => None,
+        AgentRuntime::ClaudeCode => Some(claude_code::MODEL_PROVIDER),
+        AgentRuntime::Codex => Some(codex::MODEL_PROVIDER),
+    }
+}
+
 /// Whether `runtime`'s program reports what its run cost. Claude Code
 /// does (`total_cost_usd`); Codex reports tokens only, so the cost its run
 /// reserves stays charged.

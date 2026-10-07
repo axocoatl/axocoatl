@@ -2,8 +2,9 @@
 //! Session: the built-in `fix` loadout with a scripted local model (writer
 //! and reviewer on the same model, so admission warns), `--keep branch`,
 //! `--junit` and `--record`. The record file must be the bundle the API
-//! serves after Keep, each warning prints once, and a refused run never
-//! says it started. Run explicitly:
+//! serves after Keep, byte for byte, as every later download is; each
+//! warning prints once, and a refused run never says it started. Run
+//! explicitly:
 //!
 //! ```text
 //! CONTAINER_CONNECTION=<machine> cargo test -p axocoatl-cli \
@@ -240,20 +241,27 @@ async fn run_cli(root: &Path, args: &[&std::ffi::OsStr]) -> Option<Output> {
         .map(Result::unwrap)
 }
 
-/// The bundle's header with its download time cleared (each download
-/// stamps its own) and its section lines; the end line is left out, since
-/// its digest covers the header.
-fn sections(bundle: &[u8]) -> (serde_json::Value, Vec<String>) {
-    let text = String::from_utf8(bundle.to_vec()).unwrap();
-    let lines: Vec<&str> = text.lines().collect();
-    assert!(lines.len() > 2, "{text}");
-    let mut header: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-    header["created_at_ms"] = 0.into();
-    let body = lines[1..lines.len() - 1]
-        .iter()
-        .map(|line| line.to_string())
-        .collect();
-    (header, body)
+/// Where two bundles first differ, by line (1 is the header), to show why
+/// they are not the same file.
+fn first_difference(left: &[u8], right: &[u8]) -> Option<(usize, String, String)> {
+    let (left, right) = (
+        String::from_utf8_lossy(left),
+        String::from_utf8_lossy(right),
+    );
+    let (mut left, mut right) = (left.lines(), right.lines());
+    for number in 1.. {
+        match (left.next(), right.next()) {
+            (None, None) => return None,
+            (one, other) if one == other => continue,
+            (one, other) => {
+                let cut = |line: Option<&str>| -> String {
+                    line.map_or("(no line)".into(), |line| line.chars().take(400).collect())
+                };
+                return Some((number, cut(one), cut(other)));
+            }
+        }
+    }
+    None
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -393,36 +401,54 @@ async fn a_kept_fix_run_writes_the_api_bundle_and_prints_each_warning_once() {
         "{branch}"
     );
 
-    // The file is the bundle `GET /api/runs/{id}/record` serves after Keep.
+    // The file is the bundle `GET /api/runs/{id}/record` serves after Keep,
+    // byte for byte, and so is every later download: the header carries the
+    // time the run finished, not the time of the download.
     let written = std::fs::read(&record).unwrap();
     let header: serde_json::Value =
         serde_json::from_str(String::from_utf8_lossy(&written).lines().next().unwrap()).unwrap();
     let run_id = header["run_id"].as_str().unwrap();
-    let served = client(port)
-        .get(format!("{base}/api/runs/{run_id}/record"))
+    let download = || async {
+        client(port)
+            .get(format!("{base}/api/runs/{run_id}/record"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .to_vec()
+    };
+    let served = download().await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let served_again = download().await;
+    assert!(
+        written == served,
+        "the written bundle differs from the API's at {:?}",
+        first_difference(&written, &served)
+    );
+    assert!(
+        served == served_again,
+        "two downloads differ at {:?}",
+        first_difference(&served, &served_again)
+    );
+    let status: serde_json::Value = client(port)
+        .get(format!("{base}/api/runs/{run_id}"))
         .bearer_auth(&token)
         .send()
         .await
         .unwrap()
-        .error_for_status()
-        .unwrap()
-        .bytes()
+        .json()
         .await
         .unwrap();
-    let (written_header, written_sections) = sections(&written);
-    let (served_header, served_sections) = sections(&served);
-    assert_eq!(written_header, served_header);
-    let first_difference = written_sections
-        .iter()
-        .zip(&served_sections)
-        .position(|(written, served)| written != served);
-    assert!(
-        first_difference.is_none() && written_sections.len() == served_sections.len(),
-        "the written bundle has {} section lines, the API's {}; first different line: {:?}",
-        written_sections.len(),
-        served_sections.len(),
-        first_difference
+    assert_eq!(
+        header["created_at_ms"], status["outcome"]["finished_at_ms"],
+        "{header}"
     );
+    let written_sections: Vec<&str> = std::str::from_utf8(&written).unwrap().lines().collect();
     assert!(
         written_sections.iter().any(|line| {
             let line: serde_json::Value = serde_json::from_str(line).unwrap();

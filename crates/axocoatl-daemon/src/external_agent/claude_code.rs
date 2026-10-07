@@ -32,6 +32,9 @@ pub const CLAUDE_CODE_VERSION: &str = "2.1.292";
 pub const CLAUDE_CODE_SECRET: &str = "claude-code-oauth";
 /// The definition provider of a Claude Code writer.
 pub const PROVIDER: &str = "claude-code";
+/// The provider of the model API the program calls, as a loadout names its
+/// model (`{provider: anthropic, model: …}`) and the Outcome records it.
+pub const MODEL_PROVIDER: &str = "anthropic";
 /// The model API host its route serves.
 pub const API_HOST: &str = "api.anthropic.com";
 /// The variable the route sets to its placeholder in the program's

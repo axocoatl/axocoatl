@@ -680,6 +680,9 @@ fn assemble(outcome: &RunOutcome, suites: Vec<Suite>) -> String {
         ),
         ("axocoatl.verdict", verdict),
         ("axocoatl.exit_code", outcome.exit_code.to_string()),
+        // Tokens and cost as the summary words them: a cost the run does
+        // not know is "cost unknown (reserved up to $X)", never a price.
+        ("axocoatl.usage", outcome.usage.text()),
     ] {
         let _ = writeln!(
             xml,
@@ -1120,6 +1123,35 @@ mod tests {
             ),
             "{xml}"
         );
+    }
+
+    /// A Codex writer reports no cost: its run's JUnit says the cost is not
+    /// known and what was reserved, not a price.
+    #[test]
+    fn an_unknown_cost_is_shown_as_reserved() {
+        let mut outcome = fixture();
+        outcome.usage = RunUsage {
+            input_tokens: 600,
+            output_tokens: 18,
+            cost_microunits: 333_333,
+            complete: true,
+            cost_known: false,
+            retries: 0,
+        };
+        let xml = render_junit(&outcome).unwrap();
+        assert!(
+            xml.contains(
+                "<property name=\"axocoatl.usage\" value=\"600 input + 18 output tokens, \
+                 cost unknown (reserved up to $0.3333)\"/>"
+            ),
+            "{xml}"
+        );
+        outcome.usage.cost_known = true;
+        outcome.usage.cost_microunits = 310;
+        let xml = render_junit(&outcome).unwrap();
+        assert!(xml.contains(
+            "<property name=\"axocoatl.usage\" value=\"600 input + 18 output tokens, $0.0003\"/>"
+        ));
     }
 
     #[test]

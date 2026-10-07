@@ -416,7 +416,11 @@ fn evidence_text(value: &crate::session_control_plane::EvidenceValue<String>) ->
 fn usage_of(value: &crate::session_control_plane::EvidenceValue<serde_json::Value>) -> RunUsage {
     use crate::session_control_plane::EvidenceValue;
     let EvidenceValue::Available { value } = value else {
-        return RunUsage::default();
+        // Usage not recorded: neither its tokens nor its cost are known.
+        return RunUsage {
+            cost_known: false,
+            ..RunUsage::default()
+        };
     };
     let (stats, complete) = match value.get("kind").and_then(|kind| kind.as_str()) {
         Some("measured") => (value.get("usage"), true),
@@ -433,6 +437,9 @@ fn usage_of(value: &crate::session_control_plane::EvidenceValue<serde_json::Valu
         output_tokens: number("output_tokens"),
         cost_microunits: 0,
         complete,
+        // The projection carries no cost: a call whose usage is not known
+        // has no known cost either.
+        cost_known: complete,
         retries: 0,
     }
 }
@@ -457,6 +464,29 @@ fn turn_state(state: &str) -> TurnState {
         "cancelled" | "finished" => TurnState::Stopped,
         "running" => TurnState::Running,
         _ => TurnState::Failed,
+    }
+}
+
+/// How the Outcome names the model of a node whose retained definition has
+/// `provider` and `model`, as [`crate::loadout::team_plan::model_identity`]
+/// names a loadout's Agents. An external writer's retained definition names
+/// its runtime as the provider (`claude-code`, `codex`); its identity is the
+/// provider of the model API its program calls (`anthropic`, `openai`), the
+/// program's model and that runtime.
+fn node_identity(provider: String, model: String) -> ModelIdentity {
+    match crate::external_agent::runtime_for_provider(&provider)
+        .and_then(crate::external_agent::model_provider)
+    {
+        Some(model_provider) => ModelIdentity {
+            provider: model_provider.into(),
+            model,
+            runtime: provider,
+        },
+        None => ModelIdentity {
+            provider,
+            model,
+            runtime: "native".into(),
+        },
     }
 }
 
@@ -493,6 +523,7 @@ pub fn observation_from_control_plane(
         .collect();
     let mut usage = RunUsage {
         complete: true,
+        cost_known: true,
         ..RunUsage::default()
     };
     let mut nodes = Vec::new();
@@ -509,11 +540,7 @@ pub fn observation_from_control_plane(
             ),
             _ => (String::new(), String::new(), String::new()),
         };
-        let identity = ModelIdentity {
-            provider,
-            model,
-            runtime: "native".into(),
-        };
+        let identity = node_identity(provider, model);
         let (kind, slot_id, required) = match helpers.get(node.node_id.as_str()) {
             Some(template) => (
                 "helper",
@@ -552,6 +579,7 @@ pub fn observation_from_control_plane(
                 .saturating_add(activation_usage.output_tokens);
             if !matches!(state, NodeState::NeverStarted | NodeState::Running) {
                 usage.complete &= activation_usage.complete;
+                usage.cost_known &= activation_usage.cost_known;
             }
             // An empty recorded reason says nothing: it is no reason. Nor is
             // the activation's own partial answer. An activation that ends
@@ -1678,18 +1706,26 @@ impl AxocoatlDaemon {
             .map_err(|error| DaemonError::Session(error.to_string()))
     }
 
-    /// The header of `run_id`'s record bundle.
+    /// The header of `run_id`'s record bundle. Its `created_at_ms` is when
+    /// the run finished (the Outcome's `finished_at_ms`), never the time of
+    /// the download, so every download of a finished run whose record and
+    /// Session did not change in between is the same file, byte for byte:
+    /// `axocoatl run --record`, `GET /api/runs/{run_id}/record` and the Run
+    /// outcome panel's download. A run that has not finished has no such
+    /// time yet; its bundle, a snapshot of a record still growing, carries
+    /// the time it was read.
     pub fn record_bundle_header(&self, run_id: &str) -> Result<BundleHeader, DaemonError> {
-        let manifest = self
-            .loadout_runs
-            .store()?
-            .manifest(run_id)
-            .map_err(record_error)?;
+        let store = self.loadout_runs.store()?;
+        let manifest = store.manifest(run_id).map_err(record_error)?;
+        let finished_at_ms = store
+            .outcome(run_id)
+            .map_err(record_error)?
+            .map(|outcome| outcome.finished_at_ms);
         Ok(BundleHeader {
             schema: RECORD_BUNDLE_SCHEMA.into(),
             run_id: manifest.run_id,
             session_id: manifest.session_id,
-            created_at_ms: now_ms(),
+            created_at_ms: finished_at_ms.unwrap_or_else(now_ms),
             axocoatl_version: env!("CARGO_PKG_VERSION").into(),
         })
     }
@@ -1931,9 +1967,10 @@ impl AxocoatlDaemon {
         let measured = self.loadout_turn_provider_usage(session_id, turn_id);
         let mut observation = observation_from_control_plane(&view, checks, reviewer, &measured);
         // Cost is charged to grants, one per call: the turn's cost is what
-        // its grants were charged (settled calls, and reservations of calls
-        // still running). Without the grants the cost is not known, so the
-        // usage is a known subtotal.
+        // its grants were charged (settled calls, and the reservations of
+        // calls still running or whose cost is not known, such as a Codex
+        // writer's, which `cost_known` then says). Without the grants the
+        // cost is not known, and the usage is a known subtotal.
         match self.session_control_grants(session_id, turn_id).await {
             Ok(grants) => {
                 observation.usage.cost_microunits = grants
@@ -1942,7 +1979,10 @@ impl AxocoatlDaemon {
                     .map(|grant| grant.usage.cost_microunits)
                     .fold(0u64, u64::saturating_add);
             }
-            Err(_) => observation.usage.complete = false,
+            Err(_) => {
+                observation.usage.complete = false;
+                observation.usage.cost_known = false;
+            }
         }
         Ok(Some((
             observation,
@@ -1954,10 +1994,11 @@ impl AxocoatlDaemon {
     /// calls, by activation id, from the turn's control authority: the held
     /// authority of the Session's current turn, or a closed turn's retained
     /// one. Every settled call counts, so a call that succeeded before its
-    /// activation failed is in the usage. An activation the authority does
-    /// not account (an external program's), or a turn whose authority cannot
-    /// be read, is left out; the observation then keeps the projection's
-    /// usage for it.
+    /// activation failed is in the usage, and so does an external writer's
+    /// one admitted call, whose program reported no cost when it is Codex
+    /// (`cost_known: false`). An activation the authority does not account,
+    /// or a turn whose authority cannot be read, is left out; the
+    /// observation then keeps the projection's usage for it.
     pub(crate) fn loadout_turn_provider_usage(
         &self,
         session_id: &str,
@@ -2016,6 +2057,7 @@ impl AxocoatlDaemon {
                             output_tokens: usage.tokens.usage.output_tokens as u64,
                             cost_microunits: usage.cost_microunits,
                             complete: usage.tokens.complete,
+                            cost_known: usage.cost_known,
                             retries: 0,
                         },
                     );
@@ -2572,6 +2614,7 @@ mod tests {
                 output_tokens: 80,
                 cost_microunits: 0,
                 complete: true,
+                cost_known: true,
                 retries: 0,
             },
         )]
@@ -2581,6 +2624,123 @@ mod tests {
         assert_eq!(with.usage.input_tokens, 1200);
         assert_eq!(with.usage.output_tokens, 80);
         assert!(with.usage.complete);
+        assert!(with.usage.cost_known);
+    }
+
+    /// `view` with its node's retained definition naming `provider` and
+    /// `model`.
+    fn defined(
+        mut view: crate::session_control_plane::SessionTurnControlPlane,
+        provider: &str,
+        model: &str,
+    ) -> crate::session_control_plane::SessionTurnControlPlane {
+        use crate::session_control_plane::{ControlPlaneDefinition, EvidenceValue};
+        let text = |value: &str| EvidenceValue::Available {
+            value: value.to_string(),
+        };
+        view.nodes[0].definition = EvidenceValue::Available {
+            value: ControlPlaneDefinition {
+                name: text("writer"),
+                role: text("Autonomous"),
+                provider: text(provider),
+                model: text(model),
+                instructions: EvidenceValue::NotRecorded,
+                tools: EvidenceValue::Available {
+                    value: vec!["bash".into()],
+                },
+                configuration_revision: EvidenceValue::NotRecorded,
+                snapshot: EvidenceValue::NotRecorded,
+            },
+        };
+        view
+    }
+
+    /// An external writer's retained definition names its runtime as the
+    /// provider. The Outcome names it as the loadout does
+    /// (`team_plan::model_identity`): the model API's provider, the
+    /// program's model and the runtime, never `{provider: codex, runtime:
+    /// native}`.
+    #[test]
+    fn an_external_writer_is_named_as_the_loadout_names_it() {
+        use crate::session_control_plane::EvidenceValue;
+        use axocoatl_config::loadout::ModelSpec;
+        let accepted = || {
+            projection(
+                "completed",
+                "accepted",
+                EvidenceValue::NotRecorded,
+                EvidenceValue::NotRecorded,
+            )
+        };
+        for (runtime, provider, model_provider, model) in [
+            (
+                AgentRuntime::ClaudeCode,
+                "claude-code",
+                "anthropic",
+                "claude-sonnet-5.5",
+            ),
+            (AgentRuntime::Codex, "codex", "openai", "gpt-5.6-codex"),
+        ] {
+            let view = defined(accepted(), provider, model);
+            let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+            let expected = crate::loadout::team_plan::model_identity(
+                &ModelSpec {
+                    provider: model_provider.into(),
+                    model: model.into(),
+                },
+                runtime,
+            );
+            assert_eq!(observed.nodes[0].model, expected);
+            assert_eq!(observed.nodes[0].model.runtime, provider);
+        }
+        let native = defined(accepted(), "ollama", "qwen3-coder:30b");
+        let observed = observation_from_control_plane(&native, &[], None, &HashMap::new());
+        assert_eq!(
+            observed.nodes[0].model,
+            ModelIdentity {
+                provider: "ollama".into(),
+                model: "qwen3-coder:30b".into(),
+                runtime: "native".into(),
+            }
+        );
+    }
+
+    /// A Codex activation's calls are measured with complete token usage
+    /// but no cost: the turn's usage says its cost is not known, while a
+    /// native call that settled with its cost keeps it known.
+    #[test]
+    fn a_call_without_a_cost_makes_the_turns_cost_unknown() {
+        use crate::session_control_plane::EvidenceValue;
+        let view = projection(
+            "completed",
+            "accepted",
+            EvidenceValue::NotRecorded,
+            EvidenceValue::NotRecorded,
+        );
+        let measured = |cost_known| -> HashMap<String, RunUsage> {
+            [(
+                "activation-1".to_string(),
+                RunUsage {
+                    input_tokens: 600,
+                    output_tokens: 18,
+                    cost_microunits: 0,
+                    complete: true,
+                    cost_known,
+                    retries: 0,
+                },
+            )]
+            .into_iter()
+            .collect()
+        };
+        let codex = observation_from_control_plane(&view, &[], None, &measured(false));
+        assert!(codex.usage.complete);
+        assert!(!codex.usage.cost_known);
+        let native = observation_from_control_plane(&view, &[], None, &measured(true));
+        assert!(native.usage.cost_known);
+        // Without the authority's measure, the projection carries no cost: a
+        // call whose usage is not known has no known cost either.
+        let unknown = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert!(!unknown.usage.complete && !unknown.usage.cost_known);
     }
 
     #[test]

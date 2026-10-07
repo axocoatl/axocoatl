@@ -1026,3 +1026,112 @@ async fn a_route_added_by_reload_closes_tunnels_to_its_host_and_ports() {
         .await
         .is_ok());
 }
+
+/// A loadout's run whose routes are the loadout's own and the one Axocoatl
+/// adds for its Codex writer, after one configured route.
+fn loadout_route_policy(port: u16, data: &std::path::Path) -> EgressPolicyConfig {
+    use axocoatl_config::loadout::{parse_loadout, resolve_loadout, LoadoutSource, ParamValues};
+    let text = format!(
+        r#"
+schema: axocoatl.loadout/1
+id: route-hints
+version: 1
+name: Route hints
+kind: custom
+agents:
+  - id: writer
+    role: writer
+    runtime: codex
+    model: {{ provider: openai, model: gpt-5.6-codex }}
+routes:
+  - host: {HOST}
+    ports: [{port}]
+    credential: test
+    inject: {{ header: Authorization, format: "Bearer {{}}" }}
+    for: [agent, setup]
+    rules: [{{ methods: [GET], path: /allowed }}]
+budgets:
+  agent: {{ activations: 1, invocations: 10, tokens: 1000, cost_usd: 1 }}
+  wall_clock: 10m
+prompt: "{{task}}"
+"#
+    );
+    let loadout = parse_loadout(&text, LoadoutSource::Builtin).unwrap();
+    let resolved = resolve_loadout(&loadout, &ParamValues::new(), "task", "/repo").unwrap();
+    // `axocoatl secret set codex-openai`, as it stores the route's secret.
+    let stored = crate::secret_store::secret_path(data, "codex-openai");
+    std::fs::create_dir_all(stored.parent().unwrap()).unwrap();
+    std::fs::write(&stored, "sk-test").unwrap();
+    let configured: EgressRouteYaml =
+        serde_yaml::from_str("{host: configured.test, access: read-only}").unwrap();
+    let base = EgressPolicyConfig {
+        routes: vec![configured],
+        credentials: credentials(),
+        ..EgressPolicyConfig::default()
+    };
+    crate::loadout::egress::loadout_policy(&base, &resolved, data).unwrap()
+}
+
+/// A loadout Session's routes come after the configured ones, so a refusal
+/// on one of them never tells the program or the person to edit a
+/// `sandbox.egress.routes[N]` the configuration does not have: a request no
+/// rule of the loadout's route allows names the loadout's route, and a
+/// process kind the route Axocoatl adds for the Codex writer does not serve
+/// is told whose route it is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_loadout_routes_refusals_name_the_loadout_not_the_configuration() {
+    let data = tempfile::tempdir().unwrap();
+    let f = fixture_with(|port| loadout_route_policy(port, data.path())).await;
+    let port = f.upstream.addr.port();
+    let (_grant, hash, _) = grant(&f.egress, spec(GrantKind::Agent, true)).await;
+    let (_terminal, terminal, _) = grant(&f.egress, spec(GrantKind::Terminal, true)).await;
+    let sidecar = RelaySidecar::attach(&f.egress, 1).await;
+    let pipe = sidecar
+        .open(1, RequestKind::Connect, HOST, port, &hash)
+        .await
+        .unwrap();
+    let ca = f.egress.authority_der().unwrap();
+    let tls = tls_client(pipe, &ca, HOST).await.unwrap();
+    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+        .await
+        .unwrap();
+    let connection = tokio::spawn(connection);
+    let host = format!("{HOST}:{port}");
+    let (status, body) = send(&mut sender, "/allowed", &host, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "from upstream"));
+    let (status, body) = send(&mut sender, "/v1/denied", &host, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let refusal: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(refusal["error"], "route_denied");
+    // The loadout's route is the Session's second.
+    assert!(
+        refusal["reason"].as_str().unwrap().contains("route#1"),
+        "{refusal}"
+    );
+    let hint = refusal["hint"].as_str().unwrap();
+    assert!(!hint.contains("sandbox.egress.routes"), "{hint}");
+    assert!(
+        hint.contains(&format!(
+            "add a rule such as {{methods: [GET], path: \"/v1/denied\"}} to the loadout's route for {HOST}"
+        )),
+        "{hint}"
+    );
+    drop(sender);
+    let _ = connection.await;
+
+    // The route Axocoatl adds for the Codex writer serves Agents' processes
+    // only: a terminal is refused with whose route it is.
+    let refused = sidecar
+        .open(2, RequestKind::Connect, "api.openai.com", 443, &terminal)
+        .await
+        .unwrap_err();
+    let DaemonFrame::Deny { reason, hint, .. } = refused else {
+        panic!("{refused:?}");
+    };
+    assert_eq!(reason, "route_not_for_binding");
+    assert!(!hint.contains("sandbox.egress.routes"), "{hint}");
+    assert!(
+        hint.contains("the route Axocoatl adds for the loadout's codex writer"),
+        "{hint}"
+    );
+}

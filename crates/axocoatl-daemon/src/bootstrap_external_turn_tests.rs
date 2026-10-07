@@ -1056,6 +1056,8 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool) {
         }
     };
     let session_id = accepted.session_id.clone();
+    // The run's JUnit, as `GET /api/runs/{id}/junit` serves it.
+    let junit = daemon.loadout_run_junit(&accepted.run_id).await;
     let seen = api.seen();
     let sandbox = daemon
         .session_sandboxes
@@ -1185,6 +1187,36 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool) {
         .and_then(|generation| generation.answer.as_deref())
         .unwrap_or_default();
     assert!(latest.starts_with(answer), "{context}");
+    // The writer is named as the loadout names it: the model API's
+    // provider, the program's model and the runtime.
+    assert_eq!(
+        writer.model,
+        crate::loadout::team_plan::model_identity(
+            &axocoatl_config::loadout::ModelSpec::parse(writer_model(runtime)).unwrap(),
+            runtime
+        ),
+        "{context}"
+    );
+    assert_eq!(writer.model.runtime, recipe, "{context}");
+    // Claude Code reports what its run cost. Codex reports tokens but no
+    // cost: the run's cost is what its calls reserved, which the Outcome and
+    // the JUnit file say, never a price.
+    let junit = junit.unwrap_or_else(|error| panic!("{error}\n{context}"));
+    assert!(outcome.usage.complete, "{context}");
+    match runtime {
+        AgentRuntime::Codex => {
+            assert!(!outcome.usage.cost_known, "{context}");
+            assert!(outcome.usage.cost_microunits > 0, "{context}");
+            assert!(
+                junit.contains("output tokens, cost unknown (reserved up to $"),
+                "{junit}"
+            );
+        }
+        _ => {
+            assert!(outcome.usage.cost_known, "{context}");
+            assert!(!junit.contains("cost unknown"), "{junit}");
+        }
+    }
     assert_eq!(outcome.checks.len(), 1, "{context}");
     let activations = if reviewed { 2 } else { 1 };
     assert_eq!(writer.generations.len(), activations, "{context}");

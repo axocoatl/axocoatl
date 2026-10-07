@@ -350,6 +350,7 @@ fn warnings(run: &RunContext, report: &KindReport, turns: &[TurnObservation]) ->
 fn usage(turns: &[TurnObservation], events: &[RunEvent]) -> RunUsage {
     let mut usage = RunUsage {
         complete: true,
+        cost_known: true,
         ..RunUsage::default()
     };
     for turn in turns {
@@ -359,6 +360,7 @@ fn usage(turns: &[TurnObservation], events: &[RunEvent]) -> RunUsage {
             .cost_microunits
             .saturating_add(turn.usage.cost_microunits);
         usage.complete &= turn.usage.complete;
+        usage.cost_known &= turn.usage.cost_known;
         usage.retries = usage.retries.saturating_add(turn.usage.retries);
     }
     let recorded = events
@@ -728,6 +730,7 @@ prompt: "{task}"
                 output_tokens: 5,
                 cost_microunits: 7,
                 complete: true,
+                cost_known: true,
                 retries: 0,
             },
         }
@@ -830,6 +833,25 @@ prompt: "{task}"
         Instant::now() + Duration::from_secs(600)
     }
 
+    /// A turn whose cost is not known (a Codex writer's) leaves the run's
+    /// cost unknown: the Outcome never presents a reservation as a price.
+    #[tokio::test]
+    async fn a_turn_without_a_known_cost_leaves_the_runs_cost_unknown() {
+        let run = context(&[], later());
+        let mut turn = observation(
+            TurnState::Completed,
+            vec![check(CheckState::Passed)],
+            review(true, "openai/gpt-oss-120b"),
+        );
+        turn.usage.cost_known = false;
+        turn.usage.cost_microunits = 333_333;
+        let outcome = run_to_outcome(&host(vec![turn]), &run).await.unwrap();
+        assert_eq!(outcome.exit_code, exit_code::PASS);
+        assert!(outcome.usage.complete);
+        assert!(!outcome.usage.cost_known);
+        assert_eq!(outcome.usage.cost_microunits, 333_333);
+    }
+
     #[tokio::test]
     async fn a_passing_run_exits_zero_and_is_recorded() {
         let run = context(&[], later());
@@ -851,6 +873,7 @@ prompt: "{task}"
         assert!(!outcome.loadout.builtin || outcome.loadout.kind == "custom");
         assert_eq!(outcome.turns.len(), 1);
         assert_eq!(outcome.usage.input_tokens, 10);
+        assert!(outcome.usage.cost_known);
         assert!(outcome.warnings.is_empty());
         let applied = host.applied.lock().unwrap();
         assert_eq!(applied.len(), 1);

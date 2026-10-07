@@ -34,6 +34,9 @@ pub const CODEX_VERSION: &str = "0.160.1";
 pub const CODEX_SECRET: &str = "codex-openai";
 /// The definition provider of a Codex writer.
 pub const PROVIDER: &str = "codex";
+/// The provider of the model API the program calls, as a loadout names its
+/// model (`{provider: openai, model: …}`) and the Outcome records it.
+pub const MODEL_PROVIDER: &str = "openai";
 /// The model API host its route serves.
 pub const API_HOST: &str = "api.openai.com";
 /// The variable the route sets to its placeholder in the program's

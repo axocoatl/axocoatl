@@ -41,6 +41,9 @@ pub struct BundleHeader {
     pub schema: String,
     pub run_id: String,
     pub session_id: String,
+    /// When the run finished (its Outcome's `finished_at_ms`), so each
+    /// download of a finished run is the same file; for a run that has not
+    /// finished, when the bundle was written.
     pub created_at_ms: u64,
     /// The Axocoatl version that wrote the bundle.
     pub axocoatl_version: String,

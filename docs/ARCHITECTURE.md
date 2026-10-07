@@ -699,10 +699,13 @@ at most 256 KiB) and `outcome.json` (written once), through `SecureDir`. Runs ar
 evicted and outlive their Session. A daemon restart during a run marks it failed; it is not
 resumed. `render_junit` writes the JUnit view (not covered is always a failure, fails on
 clean build is skipped). The record bundle (`axocoatl.record-bundle/1`) streams the
-manifest, loadout, Outcome, Session, team, every turn's control-plane projection, the
-History export, every network-record event and every run event as JSON Lines, ending with
-the line count and the SHA-256 of every preceding byte; `verify_bundle` checks order, count
-and digest. Routes never record credential values, so the bundle holds none.
+manifest, loadout, Outcome, Session, team (with each applied slot's `reset_history`, tools
+and definition), every turn's control-plane projection, the versioned History export,
+every network-record event and every run event as JSON Lines, ending with the line count
+and the SHA-256 of every preceding byte; `verify_bundle` checks order, count and digest.
+Its header carries the run's `finished_at_ms`, so every download of a finished run is the
+same bytes while its record and Session do not change. Routes never record credential
+values, so the bundle holds none.
 
 **Fix.** Every required review, in a loadout run or not, asks the reviewer to number its
 findings (`F1`, `F2`, …) and asks the lead to answer every finding in an `ADJUDICATIONS`
@@ -727,10 +730,10 @@ Model traffic goes through routes from `external_agent::routes_for` with credent
 `credentials` or the secret store (`{data root}/secrets/<name>`, `0600`, written from stdin
 by `axocoatl secret set`); the container holds placeholders and trusts the Session CA. The
 activation reserves its grant's limits up front (a Codex activation, whose cost is never
-reported and stays charged, reserves the cost left divided by the activations left), route
-requests count against its invocations, and the program's own usage report settles it;
-there is no per-call reservation, and the program's internal tool calls are evidence, not
-admitted calls.
+reported and stays charged, reserves the cost left divided by the activations left, and
+its run's `usage.cost_known` is false), route requests count against its invocations, and
+the program's own usage report settles it; there is no per-call reservation, and the
+program's internal tool calls are evidence, not admitted calls.
 
 **e2e.** An `e2e` check expands to a wrapper that forces `E2E_TELEMETRY_DISABLED=1`, sets
 the model and the route-backed key placeholder, runs `e2e run|explore --reporter json`

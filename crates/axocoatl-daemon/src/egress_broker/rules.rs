@@ -230,11 +230,28 @@ pub enum RouteUpstream {
     HostLoopback { port: u16 },
 }
 
+/// Where a route of a Session's policy comes from, so a refusal names the
+/// place a person changes it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum RouteOrigin {
+    /// `sandbox.egress.routes` of the configuration.
+    #[default]
+    Configured,
+    /// The `routes` of the loadout the Session runs.
+    Loadout,
+    /// Added by Axocoatl for the loadout's external writer, whose program
+    /// (`runtime`: `claude-code`, `codex`) calls its model API through it.
+    ExternalWriter { runtime: String },
+}
+
 /// One compiled route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Route {
-    /// Position in `sandbox.egress.routes`.
+    /// Position in the Session's routes: `sandbox.egress.routes`, then a
+    /// loadout's.
     pub index: usize,
+    /// Where the route comes from.
+    pub origin: RouteOrigin,
     /// Lowercase, without a trailing dot.
     pub host: String,
     pub ports: Vec<u16>,
@@ -549,6 +566,7 @@ impl Route {
         };
         Ok(Self {
             index,
+            origin: RouteOrigin::Configured,
             host,
             ports: axocoatl_config::egress::validate_ports(route.ports.as_deref())
                 .map_err(|error| format!("{field}.ports: {error}"))?,
@@ -582,6 +600,7 @@ impl Route {
         }
         Ok(Self {
             index,
+            origin: RouteOrigin::Configured,
             host: HOST_OLLAMA_ROUTE_HOST.to_string(),
             ports: vec![HOST_OLLAMA_ROUTE_PORT],
             bindings: host_ollama_bindings(route)
@@ -748,19 +767,53 @@ impl Route {
         } else {
             path.path.clone()
         };
-        let hint = match self.upstream {
-            RouteUpstream::HostLoopback { .. } => {
+        let rule = format!("{{methods: [{method}], path: \"{shown}\"}}");
+        let hint = match (&self.upstream, &self.origin) {
+            (RouteUpstream::HostLoopback { .. }, _) => {
                 "The route to Ollama on this computer carries ordinary HTTP requests only.".into()
             }
-            RouteUpstream::Tls => format!(
-                "Add a rule to sandbox.egress.routes[{}] such as {{methods: [{method}], path: \"{shown}\"}}, \
+            (RouteUpstream::Tls, RouteOrigin::Configured) => format!(
+                "Add a rule to sandbox.egress.routes[{}] such as {rule}, \
                  then run axocoatl network reload.",
                 self.index
+            ),
+            (RouteUpstream::Tls, RouteOrigin::Loadout) => format!(
+                "This route is the loadout's: add a rule such as {rule} to the loadout's route \
+                 for {}, then run the loadout again.",
+                self.host
+            ),
+            (RouteUpstream::Tls, RouteOrigin::ExternalWriter { runtime }) => format!(
+                "This route is the one Axocoatl adds for the loadout's {runtime} writer, and it \
+                 allows only the program's model calls. To allow more, list a route for {} with \
+                 a rule such as {rule} in the loadout's routes, which then replaces this one, and \
+                 run the loadout again.",
+                self.host
             ),
         };
         RuleDecision::Denied {
             reason: format!("no rule of {label} ({}) allows {method} {shown}", self.host),
             hint,
+        }
+    }
+
+    /// What to change when a connection to this route comes from a kind of
+    /// process its `for:` list does not name.
+    pub fn not_for_binding_hint(&self, port: u16) -> String {
+        let host = &self.host;
+        match &self.origin {
+            RouteOrigin::Configured => format!(
+                "{host}:{port} is an egress route that does not serve this kind of process. Add \
+                 the kind to the route's for: list in sandbox.egress.routes."
+            ),
+            RouteOrigin::Loadout => format!(
+                "{host}:{port} is a route of the loadout that does not serve this kind of \
+                 process. Add the kind to the route's for: list in the loadout's routes, then \
+                 run the loadout again."
+            ),
+            RouteOrigin::ExternalWriter { runtime } => format!(
+                "{host}:{port} is the route Axocoatl adds for the loadout's {runtime} writer, \
+                 and it serves only Agents' processes, such as the writer's program."
+            ),
         }
     }
 
@@ -821,6 +874,15 @@ impl RouteTable {
             compiled.push(Arc::new(Route::host_ollama(compiled.len(), route)?));
         }
         Ok(Self { routes: compiled })
+    }
+
+    /// The table with each route's origin set from `origins`, by position;
+    /// a route past its end is configured.
+    pub fn with_origins(mut self, origins: &[RouteOrigin]) -> Self {
+        for (route, origin) in self.routes.iter_mut().zip(origins) {
+            Arc::make_mut(route).origin = origin.clone();
+        }
+        self
     }
 
     pub fn is_empty(&self) -> bool {

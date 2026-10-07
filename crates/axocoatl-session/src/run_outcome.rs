@@ -422,17 +422,81 @@ impl NotCovered {
 }
 
 /// Tokens and cost of the run, with completeness.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// What the run's grants were charged: each call's reported cost, or,
+    /// for a call whose cost is not known, what it reserved.
     pub cost_microunits: u64,
     /// False when any call's usage was unknown; the numbers are then a known
     /// subtotal.
     pub complete: bool,
+    /// False when the cost of a call is not known: a program that reports
+    /// no cost (Codex), a call that ended before its provider reported one,
+    /// or grants that could not be read. `cost_microunits` then counts what
+    /// those calls reserved, which stays charged, not what they cost.
+    /// Records written before this field read as known.
+    #[serde(default = "cost_known_default")]
+    pub cost_known: bool,
     /// Provider calls retried under the transient-error policy.
     #[serde(default)]
     pub retries: u32,
+}
+
+fn cost_known_default() -> bool {
+    true
+}
+
+impl Default for RunUsage {
+    /// Nothing measured and nothing charged: tokens are not known to be
+    /// complete, and a cost of nothing is known.
+    fn default() -> Self {
+        Self {
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_microunits: 0,
+            complete: false,
+            cost_known: true,
+            retries: 0,
+        }
+    }
+}
+
+impl RunUsage {
+    /// The cost in words: `$0.0123`, or, when a call's cost is not known,
+    /// `cost unknown (reserved up to $0.3333)`, what the run's grants were
+    /// charged for those calls' reservations and every known cost.
+    pub fn cost_text(&self) -> String {
+        let dollars = format!("${:.4}", self.cost_microunits as f64 / 1_000_000.0);
+        match (self.cost_known, self.cost_microunits) {
+            (true, _) => dollars,
+            (false, 0) => "cost unknown".into(),
+            (false, _) => format!("cost unknown (reserved up to {dollars})"),
+        }
+    }
+
+    /// Usage in words, as the run summary, JUnit and the Run outcome panel
+    /// show it: tokens, the cost ([`Self::cost_text`]), provider retries,
+    /// and whether the numbers are only a known subtotal.
+    pub fn text(&self) -> String {
+        format!(
+            "{} input + {} output tokens, {}{}{}",
+            self.input_tokens,
+            self.output_tokens,
+            self.cost_text(),
+            if self.retries > 0 {
+                format!(", {} provider retries", self.retries)
+            } else {
+                String::new()
+            },
+            if self.complete {
+                ""
+            } else {
+                " (known subtotal: some usage was not reported)"
+            }
+        )
+    }
 }
 
 /// What the network record holds for the run's Session.
@@ -887,6 +951,49 @@ mod tests {
             }),
             exit_code::INTERRUPTED
         );
+    }
+
+    /// A Codex run's cost is only what its calls reserved: the summary
+    /// never shows that as the run's cost.
+    #[test]
+    fn an_unknown_cost_shows_what_was_reserved() {
+        let mut usage = RunUsage {
+            input_tokens: 600,
+            output_tokens: 18,
+            cost_microunits: 333_333,
+            complete: true,
+            cost_known: false,
+            retries: 0,
+        };
+        assert_eq!(
+            usage.text(),
+            "600 input + 18 output tokens, cost unknown (reserved up to $0.3333)"
+        );
+        usage.cost_microunits = 0;
+        assert_eq!(usage.cost_text(), "cost unknown");
+        usage.cost_known = true;
+        usage.cost_microunits = 310;
+        usage.retries = 2;
+        usage.complete = false;
+        assert_eq!(
+            usage.text(),
+            "600 input + 18 output tokens, $0.0003, 2 provider retries \
+             (known subtotal: some usage was not reported)"
+        );
+        // Nothing charged is a known cost; a record without the field was
+        // written when every cost shown was taken as known.
+        assert!(RunUsage::default().cost_known);
+        let old: RunUsage = serde_json::from_str(
+            r#"{"input_tokens":1,"output_tokens":2,"cost_microunits":3,"complete":true}"#,
+        )
+        .unwrap();
+        assert!(old.cost_known);
+        let value = serde_json::to_value(RunUsage {
+            cost_known: false,
+            ..RunUsage::default()
+        })
+        .unwrap();
+        assert_eq!(value["cost_known"], false);
     }
 
     #[test]

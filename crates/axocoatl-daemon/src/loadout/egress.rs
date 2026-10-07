@@ -12,6 +12,7 @@ use axocoatl_config::loadout::{AgentRuntime, ResolvedLoadout};
 use axocoatl_config::{CredentialSourceYaml, EgressAllowYaml, EgressRouteYaml};
 
 use super::RunError;
+use crate::egress_broker::RouteOrigin;
 use crate::session_egress::EgressPolicyConfig;
 
 /// What a loadout adds to a Session's egress policy, with every route's
@@ -21,6 +22,9 @@ pub struct LoadoutEgressOverlay {
     pub allow: Vec<EgressAllowYaml>,
     pub private_destinations: Vec<String>,
     pub routes: Vec<EgressRouteYaml>,
+    /// Where each of `routes` comes from: the loadout's own `routes`, or
+    /// the ones Axocoatl adds for an external writer.
+    pub route_origins: Vec<RouteOrigin>,
     /// Credentials the routes name that the configuration does not define:
     /// secrets stored with `axocoatl secret set`, read from their file.
     pub credentials: std::collections::BTreeMap<String, CredentialSourceYaml>,
@@ -42,7 +46,7 @@ impl LoadoutEgressOverlay {
                 policy.session_private.push(range.clone());
             }
         }
-        for route in &self.routes {
+        for (index, route) in self.routes.iter().enumerate() {
             match policy
                 .routes
                 .iter()
@@ -56,7 +60,20 @@ impl LoadoutEgressOverlay {
                         route.host
                     )))
                 }
-                None => policy.routes.push(route.clone()),
+                None => {
+                    // The routes before this one keep their origins (the
+                    // configured ones have none listed).
+                    policy
+                        .route_origins
+                        .resize(policy.routes.len(), RouteOrigin::Configured);
+                    policy.routes.push(route.clone());
+                    policy.route_origins.push(
+                        self.route_origins
+                            .get(index)
+                            .cloned()
+                            .unwrap_or(RouteOrigin::Loadout),
+                    );
+                }
             }
         }
         for (name, source) in &self.credentials {
@@ -69,8 +86,11 @@ impl LoadoutEgressOverlay {
     }
 }
 
-/// The routes an external runtime needs, when the loadout's writer is one.
-fn external_routes(resolved: &ResolvedLoadout) -> Result<Vec<EgressRouteYaml>, RunError> {
+/// The routes an external runtime needs, when the loadout's writer is one,
+/// each with the runtime it is for.
+fn external_routes(
+    resolved: &ResolvedLoadout,
+) -> Result<Vec<(EgressRouteYaml, RouteOrigin)>, RunError> {
     let mut routes = Vec::new();
     let mut seen = Vec::new();
     for agent in &resolved.loadout.file.agents {
@@ -80,7 +100,12 @@ fn external_routes(resolved: &ResolvedLoadout) -> Result<Vec<EgressRouteYaml>, R
         seen.push(agent.runtime);
         let needed = crate::external_agent::routes_for(agent.runtime)
             .map_err(|error| RunError::Infrastructure(error.to_string()))?;
-        routes.extend(needed);
+        let origin = RouteOrigin::ExternalWriter {
+            runtime: crate::external_agent::runtime_provider(agent.runtime)
+                .unwrap_or("external")
+                .to_string(),
+        };
+        routes.extend(needed.into_iter().map(|route| (route, origin.clone())));
     }
     Ok(routes)
 }
@@ -96,9 +121,13 @@ pub fn loadout_overlay(
 ) -> Result<LoadoutEgressOverlay, RunError> {
     let file = &resolved.loadout.file;
     let mut routes = file.routes.clone();
-    for route in external_routes(resolved)? {
+    let mut route_origins = vec![RouteOrigin::Loadout; routes.len()];
+    // A route the loadout lists for the same host replaces the one Axocoatl
+    // would add for its external writer.
+    for (route, origin) in external_routes(resolved)? {
         if !routes.iter().any(|existing| existing.host == route.host) {
             routes.push(route);
+            route_origins.push(origin);
         }
     }
     if file.sandbox.network == "none" && !routes.is_empty() {
@@ -148,6 +177,7 @@ pub fn loadout_overlay(
         allow: file.egress.allow.clone(),
         private_destinations: file.egress.private_destinations.clone(),
         routes,
+        route_origins,
         credentials,
     };
     // Refuse a conflict with the configured routes now, not when the
@@ -261,6 +291,56 @@ prompt: "{task}"
         base.routes.push(resolved.loadout.file.routes[0].clone());
         let policy = loadout_policy(&base, &resolved, data.path()).unwrap();
         assert_eq!(policy.routes.len(), 1, "the same route is not added twice");
+    }
+
+    /// Each route the loadout adds says whose it is, after the configured
+    /// ones, so a refusal names what to change: the loadout's own route, or
+    /// the one Axocoatl adds for its external writer, which a route the
+    /// loadout lists for the same host replaces.
+    #[test]
+    fn a_loadouts_routes_say_where_they_come_from() {
+        let data = tempfile::tempdir().unwrap();
+        for name in ["example-token", "claude-code-oauth"] {
+            let secret = crate::secret_store::secret_path(data.path(), name);
+            std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
+            std::fs::write(&secret, "value").unwrap();
+        }
+        let text = CUSTOM.replace(
+            "    tools: [read_file, write_file]\n",
+            "    runtime: claude-code\n",
+        );
+        let external = resolved(&text);
+        let mut base = EgressPolicyConfig::default();
+        let configured: EgressRouteYaml =
+            serde_yaml::from_str("{host: configured.test, access: read-only}").unwrap();
+        base.routes.push(configured);
+        let policy = loadout_policy(&base, &external, data.path()).unwrap();
+        let hosts: Vec<&str> = policy
+            .routes
+            .iter()
+            .map(|route| route.host.as_str())
+            .collect();
+        assert_eq!(
+            hosts,
+            ["configured.test", "api.example.com", "api.anthropic.com"]
+        );
+        assert_eq!(
+            policy.route_origins,
+            [
+                RouteOrigin::Configured,
+                RouteOrigin::Loadout,
+                RouteOrigin::ExternalWriter {
+                    runtime: "claude-code".into()
+                }
+            ]
+        );
+        // A route the loadout lists for the program's host replaces the one
+        // Axocoatl would add, and is the loadout's.
+        let own = text.replace("host: api.example.com", "host: api.anthropic.com");
+        let policy =
+            loadout_policy(&EgressPolicyConfig::default(), &resolved(&own), data.path()).unwrap();
+        assert_eq!(policy.routes.len(), 1);
+        assert_eq!(policy.route_origins, [RouteOrigin::Loadout]);
     }
 
     #[test]

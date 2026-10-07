@@ -37,7 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authenticated with `AXOCOATL_TOKEN` or the local API token; it never starts one.
   `--model role=provider:model` and `--param name=value` set parameters; `--check` and
   `--setup` give the check and setup commands. It prints progress to standard error and
-  a summary (or the Outcome as JSON with `--json`), and exits 0 when the run passes, 1
+  a summary (or, with `--json`, the Outcome as the only output on standard output, with
+  Keep's lines on standard error), and exits 0 when the run passes, 1
   when a required check failed, 2 when it needs attention (review not passed, a finding
   unanswered, anything not covered, a check that did not run, a budget or the wall clock
   exhausted, findings the loadout fails on, Keep failed), 3 for usage errors, 4 when the
@@ -46,10 +47,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (busy: run it again later; `POST /api/runs` answers `409` with
   `"code": "workspace_busy"`, and JUnit shows `<error type="busy">`). `--junit` writes JUnit of checks, check reports, review, adjudications,
   findings and coverage, with anything not covered as a failure. `--record` writes the
-  run's whole record (manifest, loadout text, Outcome, Session, team, turns, History,
-  every network-record event and every run event) as one JSON Lines bundle ending with
-  its line count and SHA-256, which `axocoatl record verify` checks. Both are written even
-  when the run fails. Ctrl-C stops the run and exits 6. The API is `POST /api/runs`,
+  run's whole record (manifest, loadout text, Outcome, Session, the team as applied with
+  each slot's `reset_history`, tools and definition, turns, the Session's versioned
+  History, every network-record event and every run event) as one JSON Lines bundle
+  ending with its line count and SHA-256, which `axocoatl record verify` checks. The
+  bundle's header carries the time the run finished, so `--record` and every later
+  download of a finished run are the same bytes while its record and Session do not
+  change. Both are written even when the run fails. Usage reads "cost unknown (reserved
+  up to $X)" in the summary, the JUnit `axocoatl.usage` property, the Run outcome panel
+  and the pull request body when a call's cost is not known (`usage.cost_known: false`),
+  such as a Codex writer's. Ctrl-C stops the run and exits 6. A run needs its
+  repository's Workspace to itself: when another Session's turn holds it, the run is
+  refused at once, before anything is created, naming that Session and turn (busy;
+  retry later), and once a run has what its Outcome needs it stops each of its own turns
+  that did not complete (phase `closing_turn`), so the next run is admitted. Loadout runs
+  need native Session history: a data root the daemon creates has it, and so does one
+  made beforehand, with `mkdir` or `axocoatl secret set`, that no daemon has used and
+  that holds no Session; a data root an earlier Axocoatl used needs
+  `axocoatl session upgrade --confirm` first, and until then a run exits 5 with a
+  message that says so. A `tokens` budget too small for one model call (2,048 plus the
+  Agent's `max_output_tokens`, 8,192 when unset) is refused by `axocoatl loadouts
+  validate`, and a run whose Ollama model's loaded context does not fit its budget is
+  refused before anything is created, naming the budget and the minimum (exit code 3).
+  When a required check failed, the JUnit verdict's message names that check first. The API is `POST /api/runs`,
   `GET /api/runs`, `GET /api/runs/{run_id}`, `/events`, `/stop`, `/junit` and `/record`;
   runs are kept under `loadout-runs/` in the data root and outlive their Session.
 - **Built-in `fix` loadout.** One writer, the repository's check command as a required
@@ -59,9 +79,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recorded and shown in the run output, JUnit, the Run outcome panel, the pull request
   body and the record; a finding left unanswered makes the run need attention. When the
   reviewer runs the writer's model, Axocoatl warns (`same_model_reviewer`) in loadout
-  validation, the API, Settings, Team and budget, the run output and the record.
+  validation, the API, Settings, Team and budget, the run output and the record. Like
+  the qa and audit blocks, `ADJUDICATIONS` is read after a heading in any case and with
+  or without Markdown marks, fenced or not, or as an answer that is only the JSON; a
+  block that is not valid JSON is reported, never guessed at.
 - **Built-in `qa` loadout.** One browser explorer with `browser` and `browser_check`,
-  writing only under `axocoatl-qa/`; no scouts, merge, reviewer or verifier. Each finding
+  writing only under `axocoatl-qa/`, which the run creates before the explorer's turn
+  when the repository has none; a run whose `axocoatl-qa` is a symbolic link or not a
+  directory is refused (exit 3). No scouts, merge, reviewer or verifier. Each finding
   names a Playwright reproduction that the host re-runs on the build under test and, when
   `reference_url` is given, on a clean reference build: confirmed only when it fails on
   the first and passes on the second, "fails on clean build" when it fails on both,
@@ -74,7 +99,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parallel with a fresh context, and an integrator merges their findings; a failed area
   is not covered. An invalid plan gets one retry that quotes the error, and a second
   leaves the whole scope not covered; when integration has no result, the workers'
-  findings are reported unmerged and integration is listed as not covered. Its documentation states the trade-off measured with Claude Code
+  findings are reported unmerged and integration is listed as not covered. A worker's
+  `FINDINGS` and `NOT_REACHED` keys are read in any case. A not-reached entry that names
+  another planned area is left to that area's worker, and one that names a repository
+  path that does not exist is a `note` on standard error and in the record; neither is
+  a gap. The attention line counts areas, not entries. Its documentation states the trade-off measured with Claude Code
   subagents, not through Axocoatl: more recall at lower precision and about three times
   the tokens on an audit larger than one context, as a sensitivity analysis.
 - **External agents.** A loadout's writer can be the Claude Code CLI
@@ -85,7 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   certificate authority is trusted through `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE`.
   Every model call is in the network record, and the program's JSON output is parsed into
   the activation's evidence and answer. Spend is bounded by an up-front reservation, the
-  route's request count and the program's own usage report, not per call.
+  route's request count and the program's own usage report, not per call. Each route
+  allows only the program's model calls, since every allowed request gets the
+  credential; Claude Code's requests for its account's policy limits and remote
+  settings are refused and recorded, and it runs without them. A refused request's 403
+  hint names the route Axocoatl added for the writer, and one on a loadout's own route
+  names the loadout's route, never a `sandbox.egress.routes` entry.
 - **`axocoatl secret set|list|remove`.** Stores a route credential, such as the output
   of `claude setup-token`, read from standard input only (a pipe or a file; a terminal,
   where the value would show, is refused), as an owner-only file under `secrets/` in the
@@ -300,13 +334,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution, such as every loadout run's. It now exports such a Session in the
   versioned form, as JSON or Markdown, like the record bundle and the other History
   reads; `GET /api/session-turns/search` with a `session_id` does the same.
-- **A data directory made before the daemon first started runs loadouts.** A data
-  directory created with `mkdir`, or by `axocoatl secret set`, before the first start
-  was treated as a 1.0-format root, so every run exited 5 with "this data directory has
-  not been upgraded". Such a directory, which no daemon has used and which holds no
-  Session, now starts in the native format like one the daemon creates. A run on a root
-  a daemon already used in the 1.0 format still exits 5, and the message now says to
-  stop Axocoatl, make a cold backup and run `axocoatl session upgrade --confirm`.
 
 ### Security
 - The docs site's build dependencies are updated: `http-cache-semantics` 4.3.0 fixes
