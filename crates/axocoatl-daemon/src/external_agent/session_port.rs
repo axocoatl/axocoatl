@@ -446,7 +446,8 @@ pub(crate) fn run_events(
         if let Some(error) = result.last_error() {
             reason.push_str(": ");
             reason.push_str(&external::bound_text(error, 2048));
-        } else if !stderr.trim().is_empty() {
+        }
+        if !stderr.trim().is_empty() {
             let tail: String = stderr
                 .chars()
                 .rev()
@@ -455,7 +456,7 @@ pub(crate) fn run_events(
                 .into_iter()
                 .rev()
                 .collect();
-            reason.push_str(": ");
+            reason.push_str("; its error output ends: ");
             reason.push_str(tail.trim());
         }
         Some(reason)

@@ -475,6 +475,26 @@ async fn external_sandbox(
     upstream: &EgressUpstream,
     authority: Arc<crate::session_egress::SessionEgress>,
 ) -> Arc<axocoatl_isolation::SessionSandbox> {
+    external_sandbox_with(
+        f,
+        image,
+        upstream,
+        authority,
+        Some(axocoatl_isolation::WorkloadUsers {
+            writer: (1000, 1000),
+            helper: (1001, 1001),
+        }),
+    )
+    .await
+}
+
+async fn external_sandbox_with(
+    f: &mut Fixture,
+    image: &str,
+    upstream: &EgressUpstream,
+    authority: Arc<crate::session_egress::SessionEgress>,
+    workload: Option<axocoatl_isolation::WorkloadUsers>,
+) -> Arc<axocoatl_isolation::SessionSandbox> {
     use axocoatl_isolation::{SandboxNetwork, SandboxPolicy, SessionSandbox};
     use sha2::{Digest, Sha256};
     let policy = SandboxPolicy {
@@ -498,10 +518,7 @@ async fn external_sandbox(
             max_connections: 32,
             labels: vec![upstream.label.clone(), TEST_LABEL.into()],
         }),
-        workload: Some(axocoatl_isolation::WorkloadUsers {
-            writer: (1000, 1000),
-            helper: (1001, 1001),
-        }),
+        workload,
         ..SandboxPolicy::default()
     };
     let sandbox = Arc::new(
@@ -1302,4 +1319,96 @@ async fn actual_pinned_claude_code_and_codex_run_through_the_route() {
         );
         assert_eq!(egress.live_bindings(), 0);
     }
+}
+
+/// Without hardened workload users the image's user is root, and an
+/// external program refuses to start: the activation fails saying why, and
+/// the model API is never called.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the egress-capable embedded helper"]
+async fn actual_external_program_refuses_a_session_without_workload_users() {
+    use crate::egress_broker::UpstreamConnector;
+    use crate::session_egress::route_tests::{loopback_is_public, Upstream};
+    use crate::session_egress::tests::{FakeRecord, FakeResolver};
+    use crate::session_egress::{EgressPolicyConfig, RouteSettings, SessionEgress};
+    use std::os::unix::fs::PermissionsExt;
+    let image = external_test_image();
+    let upstream_network = EgressUpstream::start();
+    let upstream = Upstream::start("api.anthropic.com").await;
+    let port = upstream.addr.port();
+    let store = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(store.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    crate::secret_store::set_secret(store.path(), "claude-code-oauth", b"sk-ant-oat01-root")
+        .unwrap();
+    let mut route = external_agent::routes_for(AgentRuntime::ClaudeCode)
+        .unwrap()
+        .remove(0);
+    route.ports = Some(vec![port]);
+    let mut f = fixture().await;
+    let record = Arc::new(FakeRecord::default());
+    let egress = SessionEgress::open_session(
+        f.owner.metadata().session_id.clone(),
+        EgressPolicyConfig {
+            routes: vec![route],
+            credentials: std::collections::BTreeMap::from([(
+                "claude-code-oauth".to_string(),
+                crate::secret_store::credential_source(store.path(), "claude-code-oauth")
+                    .unwrap()
+                    .unwrap(),
+            )]),
+            ..EgressPolicyConfig::default()
+        },
+        record.clone(),
+        FakeResolver::with(&[("api.anthropic.com", &["127.0.0.1"])]),
+        Some(f.owner.inner.data_root.child("egress-env").unwrap()),
+        loopback_is_public,
+        RouteSettings {
+            upstream: Arc::new(UpstreamConnector::with_local_check(Arc::new(|_| false))),
+            ..RouteSettings::default()
+        },
+    )
+    .await
+    .unwrap();
+    let sandbox =
+        external_sandbox_with(&mut f, &image, &upstream_network, egress.clone(), None).await;
+    git_init(f._workspace.path());
+    let config = external_agent::external_agent_config(
+        AgentConfig {
+            id: AgentId::new("conversation"),
+            ..Default::default()
+        },
+        AgentRuntime::ClaudeCode,
+        "claude-sonnet-4-5",
+    )
+    .unwrap();
+    let r = run_with_config(&mut f, config, &format!("FAKE-TASK FAKE-PORT={port}"));
+    let factory = r.controller.external_activation_factory(
+        Arc::new(NativeStub(AtomicUsize::new(0))),
+        Arc::new(Counter),
+        ExternalSettings {
+            source: Some(Arc::new(FakeRecordSource(record.clone()))),
+            meter_interval: Duration::from_millis(100),
+            adjust_argv: None,
+        },
+    );
+    let resources = factory.resources(&input_of(&r)).await.unwrap();
+    let settled = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(r.activation.clone(), resources, r.resource.clone())
+            .unwrap()
+            .run()
+            .await
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    sandbox.stop_checked().await.unwrap();
+    assert!(!settled.accepted);
+    let failure = settled.failure.unwrap_or_default();
+    assert!(
+        failure.contains("an external agent never runs as root"),
+        "{failure}"
+    );
+    assert!(upstream.seen().is_empty());
+    assert!(!std::path::Path::new(&f._workspace.path().join("src/fixed.txt")).exists());
 }

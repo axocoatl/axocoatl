@@ -351,11 +351,21 @@ pub fn program_argv(runtime: AgentRuntime, model: &str) -> Result<Vec<String>, E
     Ok(command)
 }
 
-/// Runs `"$@"` with its stdout in a private file bounded to `$1` bytes (the
+/// Refuses to run as root or without no-new-privileges (the hardened
+/// workload and the supervisor's `--harden`); then runs `"$@"` with its
+/// stdout in a private file bounded to `$1` bytes (the
 /// program is stopped by a closed pipe when it writes more), then prints the
 /// file, or, when it is longer than `$2`, its first and last halves around a
 /// marker line, and exits with the program's status.
 const OUTPUT_WRAPPER: &str = r#"set -u
+if [ "$(id -u)" = 0 ]; then
+  echo "axocoatl: an external agent never runs as root; this Session has no hardened workload users" >&2
+  exit 126
+fi
+if [ -r /proc/self/status ] && ! grep -q '^NoNewPrivs:[[:space:]]*1' /proc/self/status; then
+  echo "axocoatl: an external agent runs only under the supervisor's --harden" >&2
+  exit 126
+fi
 limit=$1; keep=$2; shift 2
 dir=$(mktemp -d /tmp/axocoatl-external.XXXXXX) || exit 125
 { "$@"; printf '%s' "$?" > "$dir/status"; } | head -c "$limit" > "$dir/out"
