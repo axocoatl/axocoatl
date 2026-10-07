@@ -1939,6 +1939,124 @@ impl AxocoatlDaemon {
     }
 }
 
+/// One slot of the current team as it was applied.
+#[derive(Debug, Clone, PartialEq)]
+struct AppliedSlot {
+    slot_id: String,
+    reset_history: bool,
+    definition: Option<InlineAgentDefinition>,
+    tools: Vec<String>,
+}
+
+/// What the Apply that approved `slot` applied to it (its `reset_history`
+/// and, for a loadout's Agent, its inline definition), and the tools its
+/// retained definition lists.
+fn applied_slot(
+    slot: &SessionTeamSlot,
+    content: &ExecutionContentStore,
+) -> Result<AppliedSlot, DaemonError> {
+    let edit = approval_for_slot(content, slot)?.and_then(|approval| {
+        approval
+            .edit
+            .slots
+            .into_iter()
+            .find(|edit| edit.slot_id == slot.slot_id.as_str())
+    });
+    Ok(AppliedSlot {
+        slot_id: slot.slot_id.as_str().to_string(),
+        reset_history: edit.as_ref().is_some_and(|edit| edit.reset_history),
+        definition: edit.and_then(|edit| edit.definition),
+        tools: slot_tools(slot, content)?,
+    })
+}
+
+impl AxocoatlDaemon {
+    /// The `team` section of a loadout run's record bundle: the Session's
+    /// team as [`Self::session_team`] shows it, with every applied slot as
+    /// it was applied. The team view offers `reset_history: false`, the
+    /// choice for the person's next edit, and shows a slot's definition only
+    /// through its fields; the record instead says whether the Apply started
+    /// the slot's Agent from a fresh conversation, the inline definition a
+    /// loadout gave it, and `tools`, the tools its retained definition lists.
+    pub async fn session_team_record(
+        &self,
+        session_id: &str,
+    ) -> Result<serde_json::Value, DaemonError> {
+        // An Apply between the two reads is read again, a few times at most.
+        for _ in 0..3 {
+            let view = self.session_team(session_id).await?;
+            let mut value = serde_json::to_value(&view).map_err(team_error)?;
+            if view.history_version != "execution_v2" || view.slots.is_empty() {
+                return Ok(value);
+            }
+            let token = self
+                .session_dispatch_lifecycles
+                .session_team_token(session_id)?;
+            let applied = self.session_dispatch_lifecycles.with_session_team_stores(
+                &token,
+                |canonical, content, _| {
+                    let store = SessionTeamStore::open_owned(
+                        canonical
+                            .component_namespace(ExecutionComponent::SessionTeam)
+                            .map_err(team_error)?,
+                        canonical,
+                        content,
+                        None,
+                    )
+                    .map_err(team_error)?;
+                    let Some(current) = store.current().map_err(team_error)? else {
+                        return Ok(None);
+                    };
+                    if current.configuration_revision != view.configuration_revision {
+                        return Ok(None);
+                    }
+                    current
+                        .graph
+                        .slots
+                        .iter()
+                        .map(|slot| applied_slot(slot, content))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(Some)
+                },
+            )?;
+            let Some(applied) = applied else {
+                continue;
+            };
+            if let Some(slots) = value
+                .get_mut("slots")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for slot in slots {
+                    let Some(known) = applied.iter().find(|applied| {
+                        slot.get("slot_id").and_then(serde_json::Value::as_str)
+                            == Some(applied.slot_id.as_str())
+                    }) else {
+                        continue;
+                    };
+                    let Some(fields) = slot.as_object_mut() else {
+                        continue;
+                    };
+                    fields.insert("reset_history".into(), known.reset_history.into());
+                    fields.insert(
+                        "tools".into(),
+                        serde_json::to_value(&known.tools).map_err(team_error)?,
+                    );
+                    if let Some(definition) = &known.definition {
+                        fields.insert(
+                            "definition".into(),
+                            serde_json::to_value(definition).map_err(team_error)?,
+                        );
+                    }
+                }
+            }
+            return Ok(value);
+        }
+        Err(team_error(
+            "the Session's team kept changing while it was read",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

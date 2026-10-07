@@ -446,13 +446,20 @@ fn turn_state(state: &str) -> TurnState {
 /// What the run driver observes of one turn's control-plane projection:
 /// nodes and their generations (answers bounded to 64 KiB by the
 /// projection), the required checks named by `checks`, the required review
-/// with every round, and usage.
+/// with every round, and usage. `measured` is what each activation's
+/// provider calls measured, by activation id
+/// ([`AxocoatlDaemon::loadout_turn_provider_usage`]): it counts every
+/// settled call, those of an activation that then failed included, where the
+/// projection has only the usage attached to an accepted answer. An
+/// activation it does not list keeps the projection's usage.
 pub fn observation_from_control_plane(
     view: &crate::session_control_plane::SessionTurnControlPlane,
     checks: &[CheckLabel],
     reviewer_fallback: Option<&ModelIdentity>,
+    measured: &HashMap<String, RunUsage>,
 ) -> TurnObservation {
-    use crate::session_control_plane::EvidenceValue;
+    use crate::session_control_plane::{ControlPlaneActivationRef, EvidenceValue};
+    let turn_stopped = turn_state(&view.state) == TurnState::Stopped;
     let helpers: HashMap<&str, &str> = view
         .edges
         .iter()
@@ -513,26 +520,38 @@ pub fn observation_from_control_plane(
                 _ => index as u32 + 1,
             };
             let state = node_state(&activation.state);
-            let activation_usage = usage_of(&activation.usage);
-            usage.input_tokens += activation_usage.input_tokens;
-            usage.output_tokens += activation_usage.output_tokens;
+            let activation_usage = match &activation.reference {
+                ControlPlaneActivationRef::Exact { activation } => {
+                    measured.get(activation.activation_id.as_str()).cloned()
+                }
+                ControlPlaneActivationRef::Legacy { .. } => None,
+            }
+            .unwrap_or_else(|| usage_of(&activation.usage));
+            usage.input_tokens = usage
+                .input_tokens
+                .saturating_add(activation_usage.input_tokens);
+            usage.output_tokens = usage
+                .output_tokens
+                .saturating_add(activation_usage.output_tokens);
             if !matches!(state, NodeState::NeverStarted | NodeState::Running) {
                 usage.complete &= activation_usage.complete;
             }
-            let reason = evidence_text(&activation.reason);
+            // An empty recorded reason says nothing: it is no reason.
+            let reason =
+                evidence_text(&activation.reason).filter(|reason| !reason.trim().is_empty());
             let failure = matches!(
                 state,
                 NodeState::Failed | NodeState::Stopped | NodeState::Blocked
             )
             .then(|| {
+                // Without a reason of its own, a node of a turn that was
+                // stopped ended because of the stop.
+                let stopped = state == NodeState::Stopped || (reason.is_none() && turn_stopped);
                 let message = reason
                     .clone()
                     .unwrap_or_else(|| format!("{} ended without a result", node.label));
                 NodeFailure {
-                    class: crate::loadout::driver::class_of(
-                        &message,
-                        (state == NodeState::Stopped).then_some("stopped"),
-                    ),
+                    class: crate::loadout::driver::class_of(&message, stopped.then_some("stopped")),
                     message,
                 }
             });
@@ -705,29 +724,12 @@ fn param_url(
     }
 }
 
-/// Whether `host` is one of the browser's declared hosts.
-fn browser_allows(config: &AxocoatlConfig, host: &str) -> bool {
-    let Some(browser) = &config.browser else {
-        return false;
-    };
-    browser.allow.iter().any(|entry| match entry {
-        axocoatl_config::EgressAllowYaml::Host(allowed) => {
-            let allowed = allowed.host.to_ascii_lowercase();
-            match allowed.strip_prefix("*.") {
-                Some(suffix) => host.ends_with(&format!(".{suffix}")),
-                None => allowed == host,
-            }
-        }
-        _ => false,
-    })
-}
-
 /// The Session ports a qa run's browser reaches the build under test (and
-/// the reference build) through. A URL must be a port of the Session
-/// (`http://localhost:<port>`) or a host under `browser.allow`; anything else
-/// is a usage error, never a run whose browser cannot reach its target.
+/// the reference build) through: the port of each URL on `localhost` or a
+/// loopback address. Any other host is left to
+/// [`crate::loadout::qa::validate_qa_admission`], which checks it against
+/// every kind of `browser.allow` entry (host, cidr, preset) in force now.
 fn qa_exposed_ports(
-    config: &AxocoatlConfig,
     file: &LoadoutFile,
     params: &axocoatl_config::loadout::ParamValues,
 ) -> Result<Vec<u16>, DaemonError> {
@@ -748,20 +750,10 @@ fn qa_exposed_ports(
             }
             continue;
         };
-        let parsed = reqwest::Url::parse(&url)
-            .map_err(|error| DaemonError::InvalidRequest(format!("{field} {url:?}: {error}")))?;
-        let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
-        let local = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]" | "::1");
-        if local {
-            let port = parsed.port_or_known_default().unwrap_or(80);
+        if let Some(port) = crate::loadout::qa::session_port(&url) {
             if !ports.contains(&port) {
                 ports.push(port);
             }
-        } else if !browser_allows(config, &host) {
-            return Err(DaemonError::InvalidRequest(format!(
-                "{field} {url} is neither a port of the Session (http://localhost:<port>) nor a \
-                 host under browser.allow, so the browser cannot reach it"
-            )));
         }
     }
     Ok(ports)
@@ -1014,14 +1006,19 @@ impl AxocoatlDaemon {
         .map(|command| command.trim().to_string())
         .filter(|command| !command.is_empty());
         refuse_hosts_under_network_none(&loadout.file)?;
-        let exposed_ports = qa_exposed_ports(&self.config, &loadout.file, &resolved.params)?;
+        let exposed_ports = qa_exposed_ports(&loadout.file, &resolved.params)?;
         if loadout.file.kind == axocoatl_config::loadout::LoadoutKind::Qa {
-            crate::loadout::qa::validate_qa_admission(
-                &resolved,
-                &exposed_ports,
-                self.config.browser.as_ref(),
-            )
-            .map_err(run_error)?;
+            // The lists in force now, so `axocoatl network reload` applies
+            // to the next run (the browser: block itself needs a restart).
+            let policy = self.network_policy.current();
+            let browser = policy
+                .browser
+                .as_ref()
+                .map(|(allow, private)| (allow.as_slice(), private.as_slice()));
+            let settings =
+                crate::loadout::qa::validate_qa_admission(&resolved, &exposed_ports, browser)
+                    .map_err(run_error)?;
+            crate::loadout::qa::check_repro_dir(&repo, &settings).map_err(run_error)?;
         }
         // An e2e check's agent needs tool calls and image input: refused
         // when OpenRouter's catalog says its model has neither, a warning
@@ -1298,8 +1295,18 @@ impl AxocoatlDaemon {
             .get_workspace(workspace_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("workspace '{workspace_id}' not found")))?;
+        // Never wait for the Workspace: its owner can be a turn that needs a
+        // person, which holds it until someone continues, stops or closes
+        // it. A run refuses at once and names who holds it.
         let operation = self.attempt_operation_for_workspace(workspace_id).await;
-        let _operation = operation.lock().await;
+        let _operation = match operation.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                return Err(self
+                    .workspace_in_use(workspace_id, &workspace.canonical_path)
+                    .await)
+            }
+        };
         if let Some((owner, set_id)) = self
             .unresolved_attempt_owner_for_workspace_id(workspace_id)
             .await?
@@ -1352,6 +1359,71 @@ impl AxocoatlDaemon {
                 }
             }
         }
+    }
+
+    /// The conflict a run gets when another operation holds its Workspace:
+    /// the open Sessions of the Workspace whose turn is running or needs a
+    /// person (each such turn holds the Workspace until it ends), or, when
+    /// none has one, every open Session of the Workspace.
+    async fn workspace_in_use(&self, workspace_id: &str, path: &std::path::Path) -> DaemonError {
+        let mut holders = Vec::new();
+        let mut open = Vec::new();
+        for session in self.list_sessions().await {
+            if session.workspace_id != workspace_id
+                || session.status == axocoatl_session::SessionStatus::Closed
+            {
+                continue;
+            }
+            let run = session
+                .loadout
+                .as_ref()
+                .map(|binding| format!(" (loadout run {})", binding.run_id))
+                .unwrap_or_default();
+            open.push(format!("{}{run}", session.id));
+            let open_turn = match self.active_session_turn(&session.id).await {
+                Ok(Some(active)) => Some(format!("turn {} is running", active.turn_id)),
+                _ => self
+                    .list_versioned_session_turns(&session.id)
+                    .await
+                    .ok()
+                    .and_then(|entries| {
+                        entries.into_iter().rev().find_map(|entry| match entry {
+                            axocoatl_session::session_history::SessionHistoryEntry::ExecutionV2(
+                                turn,
+                            ) if !turn.state.is_closed() => Some(format!(
+                                "turn {} {}",
+                                turn.turn_id.as_str(),
+                                if turn.state
+                                    == axocoatl_session::turn_contract::LogicalTurnState::Running
+                                {
+                                    "is running"
+                                } else {
+                                    "needs attention"
+                                }
+                            )),
+                            _ => None,
+                        })
+                    }),
+            };
+            if let Some(turn) = open_turn {
+                holders.push(format!("Session {}{run}, whose {turn}", session.id));
+            }
+        }
+        let held_by = if !holders.is_empty() {
+            format!("is held by {}", holders.join("; "))
+        } else if !open.is_empty() {
+            format!(
+                "is held by another operation of one of its open Sessions: {}",
+                open.join(", ")
+            )
+        } else {
+            "is held by another operation".to_string()
+        };
+        DaemonError::SessionConflict(format!(
+            "the Workspace {} {held_by}. A loadout run needs the Workspace to itself: let that \
+             turn finish, or stop it or close its Session, then run again",
+            path.display()
+        ))
     }
 
     /// Whether the loadout that created `session` has an e2e check, so its
@@ -1624,8 +1696,10 @@ impl AxocoatlDaemon {
             BundleCursor::Start => {
                 let outcome = store.outcome(run_id).map_err(record_error)?;
                 let session = self.get_session(&manifest.session_id).await;
-                let team = match self.session_team(&manifest.session_id).await {
-                    Ok(team) => value(serde_json::to_value(team))?,
+                // The team as applied: each slot's reset_history, inline
+                // definition and tools, not the choices the team view offers.
+                let team = match self.session_team_record(&manifest.session_id).await {
+                    Ok(team) => team,
                     Err(error) => serde_json::json!({ "unavailable": error.to_string() }),
                 };
                 Ok((
@@ -1666,7 +1740,7 @@ impl AxocoatlDaemon {
                 ))
             }
             BundleCursor::History => {
-                let history = match self.export_session_json(&manifest.session_id).await {
+                let history = match self.loadout_session_export(&manifest.session_id).await {
                     Ok(text) => {
                         serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text))
                     }
@@ -1719,6 +1793,18 @@ impl AxocoatlDaemon {
                 Ok((sections, BundleCursor::RunEvents { after: next }))
             }
             BundleCursor::Done => Ok((Vec::new(), BundleCursor::Done)),
+        }
+    }
+
+    /// The Session export of a record bundle's `history` section: the
+    /// versioned export when the Session's History holds native execution
+    /// (every loadout Session's turns are native, which the legacy rows
+    /// cannot represent), the legacy export otherwise.
+    async fn loadout_session_export(&self, session_id: &str) -> Result<String, DaemonError> {
+        if self.session_history_is_versioned(session_id).await {
+            self.export_versioned_session_json(session_id).await
+        } else {
+            self.export_session_json(session_id).await
         }
     }
 
@@ -1815,7 +1901,8 @@ impl AxocoatlDaemon {
         let Some(view) = self.session_turn_control_plane(session_id, turn_id).await? else {
             return Ok(None);
         };
-        let mut observation = observation_from_control_plane(&view, checks, reviewer);
+        let measured = self.loadout_turn_provider_usage(session_id, turn_id);
+        let mut observation = observation_from_control_plane(&view, checks, reviewer, &measured);
         // Cost is charged to grants, one per call: the turn's cost is what
         // its grants were charged (settled calls, and reservations of calls
         // still running). Without the grants the cost is not known, so the
@@ -1834,6 +1921,81 @@ impl AxocoatlDaemon {
             observation,
             crate::provider_retry::run_events(&view),
         )))
+    }
+
+    /// What each started activation of `turn_id` measured over its provider
+    /// calls, by activation id, from the turn's control authority: the held
+    /// authority of the Session's current turn, or a closed turn's retained
+    /// one. Every settled call counts, so a call that succeeded before its
+    /// activation failed is in the usage. An activation the authority does
+    /// not account (an external program's), or a turn whose authority cannot
+    /// be read, is left out; the observation then keeps the projection's
+    /// usage for it.
+    pub(crate) fn loadout_turn_provider_usage(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> HashMap<String, RunUsage> {
+        use axocoatl_session::control_authority::ControlAuthority;
+        use axocoatl_session::execution_namespace::ExecutionComponent;
+        use axocoatl_session::turn_contract::{ActivationState, LogicalTurnId};
+        let Ok(turn) = LogicalTurnId::new(turn_id) else {
+            return HashMap::new();
+        };
+        let Ok(token) = self
+            .session_dispatch_lifecycles
+            .session_team_token(session_id)
+        else {
+            return HashMap::new();
+        };
+        self.session_dispatch_lifecycles
+            .with_session_team_grant_stores(&token, |canonical, _, held| {
+                let snapshot = canonical
+                    .snapshot(&turn)
+                    .map_err(|error| DaemonError::Session(error.to_string()))?;
+                let held = held
+                    .filter(|(current, _)| **current == turn)
+                    .map(|(_, authority)| authority);
+                let mut measured = HashMap::new();
+                for item in snapshot.contract().activations() {
+                    if item.state == ActivationState::Unstarted {
+                        continue;
+                    }
+                    let usage = match held {
+                        Some(authority) => authority.provider_usage(&item.activation).ok(),
+                        None => canonical
+                            .existing_component_namespace(
+                                ExecutionComponent::ControlAuthority {
+                                    turn_id: turn.clone(),
+                                },
+                                std::path::Path::new("control-authority.v1.json"),
+                            )
+                            .ok()
+                            .and_then(|namespace| {
+                                ControlAuthority::read_provider_usage_owned(
+                                    namespace,
+                                    std::slice::from_ref(&item.activation),
+                                )
+                                .ok()
+                            }),
+                    };
+                    let Some(usage) = usage else {
+                        continue;
+                    };
+                    measured.insert(
+                        item.activation.activation_id.as_str().to_string(),
+                        RunUsage {
+                            input_tokens: usage.tokens.usage.input_tokens as u64,
+                            output_tokens: usage.tokens.usage.output_tokens as u64,
+                            cost_microunits: usage.cost_microunits,
+                            complete: usage.tokens.complete,
+                            retries: 0,
+                        },
+                    );
+                }
+                Ok(measured)
+            })
+            .unwrap_or_default()
     }
 
     /// Preview and apply `edit` on the Session's current configuration
@@ -2106,31 +2268,24 @@ mod tests {
         assert!(row.error.unwrap().contains("bad"));
     }
 
+    /// A qa URL on localhost or a loopback address is a Session port; any
+    /// other host exposes nothing here and is left to the qa admission
+    /// check, which reads every kind of browser.allow entry.
     #[test]
-    fn qa_targets_are_session_ports_or_declared_browser_hosts() {
+    fn qa_targets_on_loopback_are_session_ports() {
         let qa = builtin("qa");
         let mut params = axocoatl_config::loadout::ParamValues::new();
         params.insert("target_url".into(), "http://localhost:3000".into());
         params.insert("reference_url".into(), "http://127.0.0.1:3001/app".into());
-        let config = AxocoatlConfig::default();
         assert_eq!(
-            qa_exposed_ports(&config, &qa.file, &params).unwrap(),
+            qa_exposed_ports(&qa.file, &params).unwrap(),
             vec![3000, 3001]
         );
         params.insert("reference_url".into(), "https://staging.example.com".into());
-        assert!(matches!(
-            qa_exposed_ports(&config, &qa.file, &params),
-            Err(DaemonError::InvalidRequest(_))
-        ));
-        let config = AxocoatlConfig {
-            browser: Some(serde_yaml::from_str("allow:\n  - host: \"*.example.com\"\n").unwrap()),
-            ..Default::default()
-        };
-        assert_eq!(
-            qa_exposed_ports(&config, &qa.file, &params).unwrap(),
-            vec![3000]
-        );
-        assert!(qa_exposed_ports(&config, &builtin("fix").file, &params)
+        assert_eq!(qa_exposed_ports(&qa.file, &params).unwrap(), vec![3000]);
+        params.insert("target_url".into(), "http://192.168.1.5:8766".into());
+        assert!(qa_exposed_ports(&qa.file, &params).unwrap().is_empty());
+        assert!(qa_exposed_ports(&builtin("fix").file, &params)
             .unwrap()
             .is_empty());
     }
@@ -2147,6 +2302,170 @@ mod tests {
         let mut fix = builtin("fix").file.clone();
         fix.sandbox.network = "none".into();
         assert!(refuse_hosts_under_network_none(&fix).is_ok());
+    }
+
+    /// A native turn's projection with one writer node whose single
+    /// activation ended in `state`, with `reason` and `usage` as recorded.
+    fn projection(
+        turn_state: &str,
+        state: &str,
+        reason: crate::session_control_plane::EvidenceValue<String>,
+        usage: crate::session_control_plane::EvidenceValue<serde_json::Value>,
+    ) -> crate::session_control_plane::SessionTurnControlPlane {
+        use crate::session_control_plane::*;
+        use axocoatl_session::turn_contract::{
+            ActivationId, ActivationRef, ExecutionEpochId, LogicalTurnId, SessionId, TurnNodeId,
+        };
+        let unavailable = || ControlPlaneCapability {
+            enabled: false,
+            requires_revalidation: false,
+            reason: "test".into(),
+        };
+        let activation = ControlPlaneActivation {
+            reference: ControlPlaneActivationRef::Exact {
+                activation: ActivationRef {
+                    session_id: SessionId::new("ses-1").unwrap(),
+                    turn_id: LogicalTurnId::new("turn-1").unwrap(),
+                    execution_epoch_id: ExecutionEpochId::new("epoch-1").unwrap(),
+                    node_id: TurnNodeId::new("node-0").unwrap(),
+                    generation: 1,
+                    activation_id: ActivationId::new("activation-1").unwrap(),
+                },
+            },
+            generation: EvidenceValue::Available { value: 1 },
+            state: state.into(),
+            reason,
+            started_at: EvidenceValue::NotRecorded,
+            completed_at: EvidenceValue::NotRecorded,
+            input: EvidenceValue::NotRecorded,
+            output: EvidenceValue::NotRecorded,
+            partial_outputs: Vec::new(),
+            usage,
+            capabilities: ControlPlaneCapabilities {
+                inspect: true,
+                human_responses: Vec::new(),
+                stop: unavailable(),
+                retry: unavailable(),
+                guide: unavailable(),
+                revise: unavailable(),
+                revise_invalidates: Vec::new(),
+            },
+            evidence: Vec::new(),
+        };
+        SessionTurnControlPlane {
+            schema_version: 1,
+            history_version: "execution_v2".into(),
+            superseded_conversation: false,
+            session_id: "ses-1".into(),
+            turn_id: "turn-1".into(),
+            state: turn_state.into(),
+            stop_requested: None,
+            turn_revision: EvidenceValue::NotRecorded,
+            graph_revision: EvidenceValue::NotRecorded,
+            request: EvidenceValue::NotRecorded,
+            nodes: vec![ControlPlaneNode {
+                node_id: "node-0".into(),
+                definition_id: "writer".into(),
+                label: "writer".into(),
+                definition: EvidenceValue::NotRecorded,
+                dependencies: Vec::new(),
+                activations: vec![activation],
+            }],
+            edges: Vec::new(),
+            epochs: EvidenceValue::NotRecorded,
+            accepted_inputs: EvidenceValue::NotRecorded,
+            invocations: EvidenceValue::NotRecorded,
+            conditions: EvidenceValue::NotRecorded,
+            commands: EvidenceValue::NotRecorded,
+            turn_controls: None,
+            required_checks: Vec::new(),
+            required_check_readiness: None,
+            required_review: None,
+            review_rounds: Vec::new(),
+            decisions: EvidenceValue::NotRecorded,
+            warnings: Vec::new(),
+        }
+    }
+
+    /// An activation that failed with an empty recorded reason ends with
+    /// "<node> ended without a result", never an empty reason: as stopped
+    /// when its turn was stopped, as other otherwise.
+    #[test]
+    fn an_empty_reason_falls_back_to_the_node_ending_without_a_result() {
+        use crate::session_control_plane::EvidenceValue;
+        use axocoatl_session::run_outcome::FailureClass;
+        let empty = || EvidenceValue::Available {
+            value: String::new(),
+        };
+        let unknown = || EvidenceValue::Unknown {
+            reason: "No complete usage record is attached to the accepted output.".into(),
+        };
+        let failure = |view| {
+            observation_from_control_plane(&view, &[], None, &HashMap::new()).nodes[0].generations
+                [0]
+            .failure
+            .clone()
+            .unwrap()
+        };
+        let stopped = failure(projection("cancelled", "failed", empty(), unknown()));
+        assert_eq!(stopped.message, "writer ended without a result");
+        assert_eq!(stopped.class, FailureClass::Stopped);
+        let failed = failure(projection("needs_attention", "failed", empty(), unknown()));
+        assert_eq!(failed.message, "writer ended without a result");
+        assert_eq!(failed.class, FailureClass::Other);
+        // A recorded reason is kept, and a stopped turn does not reclassify
+        // a failure that has one.
+        let real = failure(projection(
+            "cancelled",
+            "failed",
+            EvidenceValue::Available {
+                value: "the provider's safety classifier stopped the stream".into(),
+            },
+            unknown(),
+        ));
+        assert_eq!(
+            real.message,
+            "the provider's safety classifier stopped the stream"
+        );
+        assert_ne!(real.class, FailureClass::Stopped);
+    }
+
+    /// A failed activation has no usage attached to an accepted answer, but
+    /// its provider calls were measured: the observation counts them (the
+    /// first call that succeeded before the provider failed included) and
+    /// the usage is complete, not a zero "known subtotal".
+    #[test]
+    fn a_failed_activation_counts_the_calls_it_measured() {
+        use crate::session_control_plane::EvidenceValue;
+        let view = projection(
+            "needs_attention",
+            "failed",
+            EvidenceValue::Available {
+                value: "Activation failed: LLM provider stream ended early".into(),
+            },
+            EvidenceValue::Unknown {
+                reason: "No complete usage record is attached to the accepted output.".into(),
+            },
+        );
+        let without = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert_eq!(without.usage.input_tokens, 0);
+        assert!(!without.usage.complete);
+        let measured: HashMap<String, RunUsage> = [(
+            "activation-1".to_string(),
+            RunUsage {
+                input_tokens: 1200,
+                output_tokens: 80,
+                cost_microunits: 0,
+                complete: true,
+                retries: 0,
+            },
+        )]
+        .into_iter()
+        .collect();
+        let with = observation_from_control_plane(&view, &[], None, &measured);
+        assert_eq!(with.usage.input_tokens, 1200);
+        assert_eq!(with.usage.output_tokens, 80);
+        assert!(with.usage.complete);
     }
 
     #[test]

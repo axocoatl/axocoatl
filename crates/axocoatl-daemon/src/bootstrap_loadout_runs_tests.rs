@@ -231,6 +231,36 @@ async fn team_child_body() {
     assert_eq!(team.slots[0].slot_id, "writer");
     assert_eq!(team.slots[0].model, MODEL);
     assert_eq!(team.required_checks, edit.required_checks);
+    // The record bundle's team section says what was applied: the writer
+    // starts from a fresh conversation, with the loadout's own definition
+    // and tools. The team view keeps offering reset_history: false, the
+    // choice for the person's next edit.
+    assert!(!team.slots[0].reset_history);
+    let record = daemon.session_team_record(&bound.id).await.unwrap();
+    let slot = &record["slots"][0];
+    assert_eq!(slot["slot_id"], "writer");
+    assert_eq!(slot["reset_history"], true, "{record}");
+    assert_eq!(
+        slot["tools"],
+        serde_json::json!([
+            "read_file",
+            "list_dir",
+            "grep",
+            "glob",
+            "write_file",
+            "edit_file",
+            "bash"
+        ]),
+        "{record}"
+    );
+    assert!(
+        slot["definition"]["source"]
+            .as_str()
+            .is_some_and(|source| source.contains("fix")),
+        "{record}"
+    );
+    assert_eq!(slot["definition"]["tools"], slot["tools"]);
+    assert_eq!(record["configuration_revision"], 1);
     let review = team.required_review.as_ref().unwrap();
     assert_eq!(review.template_id, "loadout-reviewer");
     assert!(review.inline.is_some());
@@ -469,6 +499,130 @@ async fn e2b_child_body() {
     daemon.shutdown().await.unwrap();
 }
 
+/// The configuration file of the admission test, with `browser.allow`.
+fn admission_yaml(base_url: &str, browser_allow: &str) -> String {
+    format!(
+        r#"
+agents:
+  - id: conversation
+    name: Conversation
+    provider: ollama
+    model: {MODEL}
+    tools: [read_file]
+providers:
+  ollama:
+    base_url: {base_url}
+sandbox:
+  backend: podman
+  network: bridge
+browser:
+  allow: [{browser_allow}]
+  private_destinations: [192.168.1.0/24]
+consolidation:
+  enabled: false
+"#
+    )
+}
+
+async fn admission_child_body() {
+    let server = model_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("axocoatl.yaml");
+    std::fs::write(
+        &path,
+        admission_yaml(&server.uri(), "{cidr: 192.168.1.0/24, ports: [8766]}"),
+    )
+    .unwrap();
+    let config = axocoatl_config::load_config(&path).await.unwrap();
+    let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
+    daemon.set_config_path(&path);
+    let repo = tempfile::tempdir().unwrap();
+    // A Session of the repository's Workspace holds it, as the Session of a
+    // turn that needs attention does until someone continues, stops or
+    // closes that turn.
+    let holder = native_session(&daemon, repo.path(), None).await;
+    let operation = daemon
+        .attempt_operation_for_workspace(&holder.workspace_id)
+        .await;
+    let held = operation.clone().lock_owned().await;
+    let request = |target: &str, id: &str| RunRequest {
+        loadout: "qa".into(),
+        task: "find the bugs".into(),
+        repo: repo.path().display().to_string(),
+        params: [
+            ("explorer_model".to_string(), format!("ollama:{MODEL}")),
+            ("target_url".to_string(), target.to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        keep: Default::default(),
+        check_command: None,
+        setup_command: None,
+        request_id: id.into(),
+    };
+    let admit = |request: RunRequest| {
+        let daemon = &daemon;
+        async move {
+            tokio::time::timeout(Duration::from_secs(60), daemon.admit_loadout_run(request))
+                .await
+                .expect("admission never waits for a held Workspace")
+        }
+    };
+    let conflict = |result: Result<(RunAccepted, RunContext), DaemonError>| match result {
+        Err(DaemonError::SessionConflict(message)) => message,
+        Err(other) => panic!("expected a conflict, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    };
+    let usage = |result: Result<(RunAccepted, RunContext), DaemonError>| match result {
+        Err(DaemonError::InvalidRequest(message)) => message,
+        Err(other) => panic!("expected a usage error, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    };
+
+    // A cidr entry of browser.allow admits a URL in its range: the run gets
+    // past the qa checks to the Workspace, which another Session holds, and
+    // is refused at once, naming that Session.
+    let message = conflict(admit(request("http://192.168.1.5:8766", "cidr")).await);
+    assert!(message.contains(&holder.id), "{message}");
+    assert!(
+        message.contains(&repo.path().canonicalize().unwrap().display().to_string()),
+        "{message}"
+    );
+    // Another port of the range is not admitted.
+    let message = usage(admit(request("http://192.168.1.5:8767", "cidr-port")).await);
+    assert!(message.contains("browser.allow"), "{message}");
+
+    // A host the lists do not name is a usage error, until `axocoatl network
+    // reload` adds it: admission reads the lists in force, not the ones the
+    // daemon started with.
+    let message = usage(admit(request("http://shop.example.test:8080", "host-before")).await);
+    assert!(message.contains("browser.allow"), "{message}");
+    std::fs::write(
+        &path,
+        admission_yaml(
+            &server.uri(),
+            "{cidr: 192.168.1.0/24, ports: [8766]}, {host: shop.example.test, ports: [8080]}",
+        ),
+    )
+    .unwrap();
+    daemon.reload_network_policy().await.unwrap();
+    let message = conflict(admit(request("http://shop.example.test:8080", "host-after")).await);
+    assert!(message.contains(&holder.id), "{message}");
+
+    // A reproductions directory that is a link is refused before anything
+    // is created.
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), repo.path().join("axocoatl-qa")).unwrap();
+    let message = usage(admit(request("http://192.168.1.5:8766", "linked")).await);
+    assert!(message.contains("symbolic link"), "{message}");
+    std::fs::remove_file(repo.path().join("axocoatl-qa")).unwrap();
+
+    // Nothing was admitted: no run record exists.
+    assert!(daemon.list_loadout_runs().await.unwrap().is_empty());
+    drop(held);
+    daemon.shutdown().await.unwrap();
+}
+
 /// Run `name` in a child process with its own data root and a fake Podman
 /// that reports `rootless`.
 async fn run_child(name: &str, rootless: bool) {
@@ -526,6 +680,22 @@ async fn loadout_sessions_bind_their_sandbox_apply_inline_teams_and_refuse_rootf
     run_child(
         "bootstrap::loadout_runs::daemon_tests::loadout_sessions_bind_their_sandbox_apply_inline_teams_and_refuse_rootful_podman",
         false,
+    )
+    .await;
+}
+
+/// qa admission against the live lists (a cidr entry, a reloaded host) and
+/// a Workspace another Session holds: refused at once with that Session
+/// named, never waiting.
+#[tokio::test]
+async fn qa_admission_reads_the_live_lists_and_never_waits_for_a_held_workspace() {
+    if std::env::var_os(CHILD).is_some() {
+        admission_child_body().await;
+        return;
+    }
+    run_child(
+        "bootstrap::loadout_runs::daemon_tests::qa_admission_reads_the_live_lists_and_never_waits_for_a_held_workspace",
+        true,
     )
     .await;
 }
