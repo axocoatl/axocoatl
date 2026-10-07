@@ -7,6 +7,13 @@
 //! on the host and is classified by **exit code** (stable across git versions),
 //! never by stderr text. The Podman backend never calls this — it bind-mounts
 //! the tree directly.
+//!
+//! Keep as PR (`keep_pr`) uses the second half of this module: host git on the
+//! person's repository without trusting what a Session could have written in
+//! it. Reads and the one branch creation run with every command-bearing
+//! setting overridden; the commit itself is built in a protected Git
+//! directory under Axocoatl's own data root, so repository-owned settings,
+//! hooks and filters never enter those processes.
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -491,6 +498,500 @@ fn repo_name(https_url: &str) -> String {
     } else {
         name.to_string()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Keep as PR: host git and gh on the person's repository.
+//
+// A Session's Agents can write the repository, `.git` included, so nothing a
+// repository could name (hooks, fsmonitor, filters, credential helpers, SSH
+// commands, signing programs) may run here. Two kinds of process do the work:
+//
+// - `repository_git`: `git -C <repo>` with every command-bearing setting
+//   overridden and no network protocol allowed. Used to read facts (HEAD,
+//   directories, remote URLs, identity) and to create the one branch ref.
+// - `ProtectedGit`: a Git directory of Axocoatl's own under the data root,
+//   whose objects are the repository's object directory and whose work tree is
+//   the Session's folder. Repository-local settings never load; the person's
+//   own global and system settings (credential helpers, URL rewrites, LFS) do.
+//   Used for the temporary index, the tree, the commit and the push.
+
+/// Where Keep finds host `git` and `gh`, and environment beyond the daemon's
+/// own. The default is the daemon's environment unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct HostTools {
+    /// Replaces `PATH` for `git` and `gh` (tests put fakes first).
+    pub path: Option<std::ffi::OsString>,
+    /// Extra environment for both programs (tests: `GIT_CONFIG_GLOBAL`).
+    pub env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+}
+
+impl HostTools {
+    fn apply(&self, command: &mut Command) {
+        if let Some(path) = &self.path {
+            command.env("PATH", path);
+        }
+        for (name, value) in &self.env {
+            command.env(name, value);
+        }
+    }
+}
+
+/// Local git work (reads, index, tree, commit, branch).
+pub(crate) const KEEP_LOCAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// `ls-remote` and `push`.
+pub(crate) const KEEP_NETWORK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+/// `gh pr create`.
+pub(crate) const KEEP_GH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Settings that would run a program, sign, recurse or push more than asked.
+/// Given on the command line, they outrank every configuration file.
+const KEEP_GIT_OVERRIDES: &[&str] = &[
+    "core.hooksPath=/dev/null",
+    "core.fsmonitor=false",
+    "core.untrackedCache=false",
+    "diff.external=",
+    "commit.gpgSign=false",
+    "tag.gpgSign=false",
+    "push.gpgSign=false",
+    "push.followTags=false",
+    "push.recurseSubmodules=no",
+    "submodule.recurse=false",
+    "gc.auto=0",
+    "maintenance.auto=false",
+    "protocol.ext.allow=never",
+];
+
+/// Environment that would point git at another repository, index, object
+/// store or configuration than the one each Keep process names itself.
+fn scrub_git_environment(command: &mut Command) {
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+        "GIT_SHALLOW_FILE",
+        "GIT_QUARANTINE_PATH",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_PREFIX",
+        "GH_REPO",
+    ] {
+        command.env_remove(name);
+    }
+}
+
+/// `git -C <repo>` for reads and the branch ref: the repository's settings
+/// are read (remotes, identity), but nothing they name can run and no
+/// network protocol is allowed.
+pub(crate) fn repository_git(tools: &HostTools, repo: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new("git");
+    scrub_git_environment(&mut command);
+    tools.apply(&mut command);
+    command
+        .kill_on_drop(true)
+        .current_dir(Path::new("/"))
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "/usr/bin/false")
+        .env("GIT_EXTERNAL_DIFF", "/usr/bin/false")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .arg("--no-optional-locks")
+        .arg("-C")
+        .arg(repo);
+    for setting in KEEP_GIT_OVERRIDES {
+        command.args(["-c", setting]);
+    }
+    command
+        .args(["-c", "credential.helper="])
+        .args(["-c", "core.sshCommand=/usr/bin/false"])
+        .args(["-c", "protocol.allow=never"])
+        .args(args);
+    command
+}
+
+/// `git` with no repository at all (`check-ref-format`).
+pub(crate) fn plain_git(tools: &HostTools, args: &[&str]) -> Command {
+    let mut command = Command::new("git");
+    scrub_git_environment(&mut command);
+    tools.apply(&mut command);
+    command
+        .kill_on_drop(true)
+        .current_dir(Path::new("/"))
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .arg("--no-optional-locks")
+        .args(args);
+    command
+}
+
+/// `gh` run from an empty directory of Axocoatl's own, so it finds no
+/// repository to read and every repository it acts on is named by `--repo`.
+pub(crate) fn gh_command(tools: &HostTools, cwd: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new("gh");
+    scrub_git_environment(&mut command);
+    tools.apply(&mut command);
+    command
+        .kill_on_drop(true)
+        .current_dir(cwd)
+        .env("GIT_CEILING_DIRECTORIES", cwd.parent().unwrap_or(cwd))
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_NO_UPDATE_NOTIFIER", "1")
+        .env("GH_NO_EXTENSION_UPDATE_NOTIFIER", "1")
+        .env("GH_SPINNER_DISABLED", "1")
+        .env("NO_COLOR", "1")
+        .env("CLICOLOR", "0")
+        .args(args);
+    command
+}
+
+/// Run one Keep process with no stdin and a deadline.
+pub(crate) async fn run_bounded(
+    mut command: Command,
+    timeout: std::time::Duration,
+    what: &str,
+) -> Result<Output, String> {
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    tokio::time::timeout(timeout, command.output())
+        .await
+        .map_err(|_| format!("{what} timed out after {} seconds", timeout.as_secs()))?
+        .map_err(|error| format!("could not run {what}: {error}"))
+}
+
+/// Like [`run_bounded`], writing `input` to the process's stdin first.
+pub(crate) async fn run_bounded_with_input(
+    mut command: Command,
+    input: Vec<u8>,
+    timeout: std::time::Duration,
+    what: &str,
+) -> Result<Output, String> {
+    use tokio::io::AsyncWriteExt;
+    command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let run = async {
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("could not run {what}: {error}"))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| format!("{what} has no stdin"))?;
+        let writer = async move {
+            let written = stdin.write_all(&input).await;
+            drop(stdin);
+            written
+        };
+        let (written, output) = tokio::join!(writer, child.wait_with_output());
+        let output = output.map_err(|error| format!("could not run {what}: {error}"))?;
+        written.map_err(|error| format!("could not write to {what}: {error}"))?;
+        Ok(output)
+    };
+    tokio::time::timeout(timeout, run)
+        .await
+        .map_err(|_| format!("{what} timed out after {} seconds", timeout.as_secs()))?
+}
+
+/// What the protected Git directory needs to know of the repository.
+pub(crate) struct ProtectedGitSpec<'a> {
+    /// The Session's folder, which is the repository's top level.
+    pub work_tree: &'a Path,
+    /// The repository's object directory.
+    pub objects: &'a Path,
+    /// The repository's `shallow` file, when it is a shallow clone.
+    pub shallow: Option<&'a Path>,
+    /// The commit the protected `HEAD` names.
+    pub head: &'a str,
+    /// `sha1` or `sha256`.
+    pub object_format: &'a str,
+    /// Copied settings that are plain data (`core.ignorecase`, ...).
+    pub settings: &'a [(String, String)],
+    /// The repository's own exclude patterns, copied as data.
+    pub exclude: Option<Vec<u8>>,
+}
+
+/// A Git directory of Axocoatl's own beside a repository: the repository's
+/// objects and work tree, Axocoatl's own settings, refs and index. Removed
+/// when dropped.
+pub(crate) struct ProtectedGit {
+    parent: SecureDir,
+    relative: PathBuf,
+    root: SecureDir,
+    git_dir: SecureDir,
+    gh_dir: SecureDir,
+    work_tree: PathBuf,
+    objects: PathBuf,
+    shallow: Option<PathBuf>,
+}
+
+impl ProtectedGit {
+    pub(crate) fn create(
+        control_root: &SecureDir,
+        spec: ProtectedGitSpec<'_>,
+    ) -> Result<Self, String> {
+        let hex = spec.head.len() == 40 || spec.head.len() == 64;
+        if !hex || !spec.head.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("HEAD is not a full hexadecimal object id".into());
+        }
+        let sha256 = match spec.object_format {
+            "sha1" => false,
+            "sha256" => true,
+            other => return Err(format!("unsupported Git object format {other:?}")),
+        };
+        let relative =
+            PathBuf::from("runtime/keep-pr").join(format!("keep-{}", uuid::Uuid::new_v4()));
+        let protect =
+            |error: std::io::Error| format!("could not prepare Keep's Git directory: {error}");
+        let root = control_root.child(&relative).map_err(protect)?;
+        let created = Self {
+            parent: control_root.clone(),
+            relative,
+            git_dir: root.child("git").map_err(protect)?,
+            gh_dir: root.child("gh").map_err(protect)?,
+            root,
+            work_tree: spec.work_tree.to_path_buf(),
+            objects: spec.objects.to_path_buf(),
+            shallow: spec.shallow.map(Path::to_path_buf),
+        };
+        created.git_dir.child("objects").map_err(protect)?;
+        created.git_dir.child("refs/heads").map_err(protect)?;
+        created.git_dir.child("refs/tags").map_err(protect)?;
+        let info = created.git_dir.child("info").map_err(protect)?;
+        if let Some(exclude) = &spec.exclude {
+            info.atomic_write("exclude", exclude).map_err(protect)?;
+        }
+        created
+            .git_dir
+            .atomic_write("HEAD", format!("{}\n", spec.head).as_bytes())
+            .map_err(protect)?;
+        let mut config = format!(
+            "[core]\n\trepositoryformatversion = {}\n\tbare = false\n\tfilemode = true\n\tsymlinks = true\n\tlogallrefupdates = false\n",
+            u8::from(sha256)
+        );
+        for (key, value) in spec.settings {
+            let Some(name) = key.strip_prefix("core.") else {
+                continue;
+            };
+            if name.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                && matches!(value.as_str(), "true" | "false")
+            {
+                config.push_str(&format!("\t{name} = {value}\n"));
+            }
+        }
+        if sha256 {
+            config.push_str("[extensions]\n\tobjectformat = sha256\n");
+        }
+        created
+            .git_dir
+            .atomic_write("config", config.as_bytes())
+            .map_err(protect)?;
+        Ok(created)
+    }
+
+    /// `git` in the protected directory: no repository-local setting loads.
+    pub(crate) fn command(&self, tools: &HostTools, args: &[&str]) -> Command {
+        let mut command = Command::new("git");
+        scrub_git_environment(&mut command);
+        tools.apply(&mut command);
+        command
+            .kill_on_drop(true)
+            .current_dir(&self.work_tree)
+            .env("GIT_DIR", self.git_dir.path())
+            .env("GIT_WORK_TREE", &self.work_tree)
+            .env("GIT_INDEX_FILE", self.git_dir.path().join("index"))
+            .env("GIT_OBJECT_DIRECTORY", &self.objects)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
+            .env("GIT_EXTERNAL_DIFF", "/usr/bin/false");
+        if let Some(shallow) = &self.shallow {
+            command.env("GIT_SHALLOW_FILE", shallow);
+        }
+        command.arg("--no-optional-locks");
+        for setting in KEEP_GIT_OVERRIDES {
+            command.args(["-c", setting]);
+        }
+        command.args(args);
+        command
+    }
+
+    /// An empty directory `gh` runs in.
+    pub(crate) fn gh_dir(&self) -> &Path {
+        self.gh_dir.path()
+    }
+
+    /// Write a file of Axocoatl's own beside the protected directory.
+    pub(crate) fn write(&self, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+        self.root
+            .atomic_write(name, bytes)
+            .map_err(|error| format!("could not write {name}: {error}"))?;
+        Ok(self.root.path().join(name))
+    }
+}
+
+impl Drop for ProtectedGit {
+    fn drop(&mut self) {
+        if let Err(error) = self.parent.remove_dir_all(&self.relative) {
+            tracing::warn!(
+                path = %self.parent.path().join(&self.relative).display(),
+                %error,
+                "could not remove Keep's protected Git directory"
+            );
+        }
+    }
+}
+
+/// Whether `path` (not followed) changed its status after `since_ms`: its
+/// inode change time, which no process can set back, is at or after it.
+/// A missing file did not change.
+#[cfg(unix)]
+pub(crate) fn changed_since(path: &Path, since_ms: u64) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            let changed_ms =
+                i128::from(metadata.ctime()) * 1000 + i128::from(metadata.ctime_nsec()) / 1_000_000;
+            Ok(changed_ms >= i128::from(since_ms))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn changed_since(path: &Path, since_ms: u64) -> std::io::Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            let modified = metadata
+                .modified()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_millis())
+                .unwrap_or(0);
+            Ok(modified >= u128::from(since_ms))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Replace the user information of every `scheme://user[:secret]@host` in
+/// `text` with `***`, so a credential in a remote URL never reaches an error,
+/// a response or a log.
+pub fn redact_url_credentials(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(index) = rest.find("://") {
+        let (head, tail) = rest.split_at(index + 3);
+        out.push_str(head);
+        let end = tail
+            .find(|ch: char| {
+                ch == '/' || ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>')
+            })
+            .unwrap_or(tail.len());
+        let authority = &tail[..end];
+        match authority.rfind('@') {
+            Some(at) => {
+                out.push_str("***@");
+                out.push_str(&authority[at + 1..]);
+            }
+            None => out.push_str(authority),
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `HOST/OWNER/REPO` for `gh --repo`, from a remote URL that names a hosted
+/// repository (`https://host/owner/repo(.git)`, `git@host:owner/repo.git`,
+/// `ssh://git@host/owner/repo`). `None` for anything else.
+pub fn hosted_repository_slug(url: &str) -> Option<String> {
+    let https = normalize_to_https(url)?;
+    let rest = https.strip_prefix("https://")?;
+    let mut parts = rest.trim_end_matches('/').split('/');
+    let (host, owner, repo) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let repo = repo.strip_suffix(".git").unwrap_or(repo);
+    let plain = |value: &str| {
+        !value.is_empty()
+            && !value.starts_with(['.', '-'])
+            && value
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+    };
+    let host_ok = !host.is_empty()
+        && !host.starts_with(['.', '-'])
+        && host
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | ':'));
+    (host_ok && plain(owner) && plain(repo)).then(|| format!("{host}/{owner}/{repo}"))
+}
+
+/// Whether Keep may push to `url`, the effective push URL after the person's
+/// own URL rewrites. Remote-helper transports (`<transport>::<address>`) are
+/// refused; a local repository is accepted only outside the Session's folder,
+/// where an Agent could have planted a repository whose hooks the push would
+/// run on the host.
+pub(crate) fn check_push_url(url: &str, session_root: &Path) -> Result<(), String> {
+    let shown = redact_url_credentials(url);
+    if url.is_empty() || url.chars().any(char::is_control) || url.starts_with('-') {
+        return Err(format!("the push URL {shown:?} is not usable"));
+    }
+    if url.contains("::") {
+        return Err(format!(
+            "the push URL {shown} uses a remote helper transport, which Keep as PR does not run"
+        ));
+    }
+    let lower = url.to_ascii_lowercase();
+    let local = if let Some(path) = url.strip_prefix("file://") {
+        Some(PathBuf::from(path))
+    } else if url.starts_with('/') {
+        Some(PathBuf::from(url))
+    } else if ["https://", "http://", "ssh://", "git+ssh://", "ssh+git://"]
+        .iter()
+        .any(|scheme| lower.starts_with(scheme))
+    {
+        None
+    } else if url.contains("://") {
+        return Err(format!(
+            "the push URL {shown} uses a transport Keep as PR does not push over"
+        ));
+    } else {
+        // scp-like `host:path`; a relative local path has no ':' before '/'.
+        let colon = url.find(':');
+        let slash = url.find('/');
+        match (colon, slash) {
+            (Some(colon), Some(slash)) if colon < slash => None,
+            (Some(_), None) => None,
+            _ => {
+                return Err(format!(
+                    "the push URL {shown} is a relative path; name the repository by an absolute path or a URL"
+                ))
+            }
+        }
+    };
+    if let Some(path) = local {
+        let target = std::fs::canonicalize(&path)
+            .map_err(|error| format!("the push repository {shown} cannot be opened: {error}"))?;
+        let root = std::fs::canonicalize(session_root)
+            .map_err(|error| format!("the Session's folder cannot be opened: {error}"))?;
+        if target.starts_with(&root) {
+            return Err(format!(
+                "the push repository {shown} is inside the Session's folder, which the run's Agents could write"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
