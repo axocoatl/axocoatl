@@ -1,12 +1,15 @@
 ---
 title: What we measured
-description: A pre-registered benchmark of review strategies with local models, what it shows, how it maps to Axocoatl, and its limits.
+description: A pre-registered benchmark of review strategies with local models, studies of one agent against several run with Claude Code subagents, what each shows, how it maps to Axocoatl, and their limits.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 Axocoatl makes claims about results only from measurements. This page states them
-once, with the setup and the limits, so you can judge how far they reach.
+once, with the setup and the limits, so you can judge how far they reach. The
+[claims ledger](https://github.com/axocoatl/axocoatl/blob/main/docs/CLAIMS.md) maps every
+public number to its evidence, its model and the harness it ran in, and lists the claims
+we withdrew.
 
 ## The benchmark
 
@@ -61,8 +64,11 @@ Agent that reviews need not share one. Make a stronger model the team's
 [required reviewer](/configure/agents/#required-review), and the host runs it on the
 exact result after your [required checks](/configure/agents/#required-checks) pass,
 sends its findings back to the lead, and records every step in the Session. The
-reviewer can be a bigger local model through Ollama or a hosted model through
-OpenRouter. [Set up cross-model review →](/configure/cross-model-review/)
+reviewer can be a bigger local model through Ollama, as measured here, or a hosted model
+through OpenRouter, which we have not measured. The built-in
+[`fix` loadout](/workbench/fix-qa-audit/#fix) runs this pattern headless and warns when
+the reviewer is the writer's model.
+[Set up cross-model review →](/configure/cross-model-review/)
 
 <Aside>
 None of this says the default team, a lead with helpers, beats a single Agent. In our
@@ -70,6 +76,46 @@ evaluation before 1.1.0, a single Agent was as accurate as the lead with helpers
 the fewest tokens, and one Agent remains the cheaper choice for small tasks. See
 [What helpers cost](/understand/coordination/#what-helpers-cost).
 </Aside>
+
+## One agent or several, on the same model
+
+These studies ran Claude Opus as Claude Code subagents, on the host, outside Axocoatl.
+They are not Axocoatl results, and Axocoatl's own runs of the same setups have not been
+measured. They are why the built-in [loadouts](/workbench/fix-qa-audit/) have one writer
+or one explorer, and why `audit` is opt-in.
+
+{/* measured: claude-code-subagents single-vs-multi 2026-10-06 */}
+
+**One agent against a planner, parallel workers and an integrator** (pre-registered;
+the same model and effort for every agent; up to 5 paired runs per kind of work):
+
+| Work | Quality, several agents against one | Wall-clock time | Tokens |
+| --- | --- | --- | --- |
+| Fits in one context: 40 research questions, independent modules, a coupled feature change | the same: both scored 100% | 1.6× to 4.9× as long | 4× to 5.5× |
+| Larger than one context: an audit of 5.2 to 5.7 million characters of source, 150 planted defects | recall +11 points (99% against 87%; interval +4 to +19), precision −8 points | about the same | about 3× |
+
+The audit row is a sensitivity analysis, not a pre-registered result: the study's
+pre-registered exclusion rule excluded 9 of its 10 attempts, and these figures put them
+back.
+
+{/* /measured */}
+
+{/* measured: claude-code-subagents qa 2026-10-04..06 */}
+
+**QA of a web app** (each finding needed an executable reproduction):
+
+| App | Setup | Recall | Precision | Tokens |
+| --- | --- | --- | --- | --- |
+| 16 planted bugs, 5 runs each (exploratory) | one explorer | 97.5% | 98.8% | 1× |
+| | one explorer and a verifier (the verifier removed nothing) | 100% | 100% | |
+| | a lead and two scouts | 98.8% | 95.7% | 2.1× |
+| 66 planted bugs (pre-registered; 10 and 5 runs) | a lead and three scouts against one explorer | +2.3 points, not significant (p = 0.77) | | +31% |
+
+{/* /measured */}
+
+Several agents paid off only where one agent could not hold the work, and there they
+traded precision and tokens for recall. Where one agent could hold it, they cost more and
+took longer for the same result.
 
 ## An earlier result: the coordination design we removed
 
@@ -88,5 +134,10 @@ lists what was removed.
 - **Six tasks, 25 tests, one language.** All tasks are Python maintenance work.
 - **Two local models.** Other writers, reviewers or hosted models may behave differently,
   and a reviewer stronger than the writer is the comparison, not any particular model.
-- **Tokens, not time or money.** Token multiples are relative to one pass on the same
-  tasks. We did not measure wall-clock time and make no speed claim.
+- **Tokens, not time or money.** In the review benchmark, token multiples are relative to
+  one pass on the same tasks; we did not measure its wall-clock time and make no speed
+  claim for review.
+- **Claude Code subagents are not Axocoatl.** The one-agent-or-several and QA studies
+  used one model, Claude Opus, in Claude Code. They describe those setups, not Axocoatl
+  or other models, and their results have not been reproduced through Axocoatl.
+- **Hosted reviewers.** No reviewer through OpenRouter has been measured.

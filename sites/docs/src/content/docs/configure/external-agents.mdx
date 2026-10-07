@@ -1,0 +1,158 @@
+---
+title: External agents
+description: Run the Claude Code CLI or the Codex CLI as a loadout's writer inside a Session container, with its model credential added on your computer by a route, every model call in the network record, and its output in the Session record.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+A loadout's writer can be an external coding-agent program instead of Axocoatl's own tool
+loop: the Claude Code CLI (`runtime: claude-code`) or the Codex CLI (`runtime: codex`).
+The program runs inside the Session container, not on your computer, under the same
+rules as any loadout Session:
+
+- network `egress`: the program reaches its model API only through a route, and other
+  hosts only when the loadout or your configuration lists them;
+- the `hardened` workload: it runs as the non-root `writer_user` through the in-sandbox
+  supervisor with `--harden`, under its seccomp filter and in a Landlock domain of its
+  own;
+- the activation is admitted, granted and captured like a native writer: Axocoatl
+  captures the repository before and after it, checks the change against the writer's
+  `writes`, and then runs the loadout's required checks and review.
+
+The program's credential never enters the container. The container holds a placeholder
+in the variable the program reads, and the daemon adds the real value on your computer,
+on the route, to each request the route's rules allow.
+
+## Build the image
+
+<Steps>
+
+1. Build a Session image from Axocoatl's pinned recipe:
+
+   ```sh
+   axocoatl recipe build claude-code     # or: axocoatl recipe build codex
+   ```
+
+   This builds an image named `localhost/axocoatl-recipe-…` with Podman from a base and
+   the recipe's pinned versions, prints it, and records its image id. Sessions trust a recipe image by
+   that id, as they do the browser image, without `allow_untrusted_images`. Recipes can
+   be combined, as in `axocoatl recipe build claude-code e2e`. `axocoatl recipe list`
+   shows the recipes and the images built from them. The build downloads the base image
+   and the programs; that is network access you start, on your computer.
+
+2. Name the recipe in the loadout:
+
+   ```yaml
+   environment:
+     recipes: [claude-code]
+   ```
+
+</Steps>
+
+## Store the credential
+
+`axocoatl secret set <name>` reads a value from standard input and stores it in the data
+root as `secrets/<name>`, a file only your user can read (`0600`), replaced atomically.
+It never takes the value as an argument, never prints it, and never writes it to a log or
+a record.
+
+```sh
+# Claude Code: the long-lived token `claude setup-token` prints
+claude setup-token | axocoatl secret set claude-code-oauth
+
+# Codex: an OpenAI API key; paste it, then press Ctrl-D
+axocoatl secret set codex-openai
+```
+
+A value is one line of at most 8 KiB with no control characters; one trailing line break
+is ignored. If the command prints more than the token, run `axocoatl secret set` and
+paste the token alone. `axocoatl secret list` prints the stored names, never values, and
+`axocoatl secret remove <name>` deletes one. A route's `credential` resolves to a
+`credentials` entry in the configuration first, then to a stored secret of that name.
+
+You supply the credential, for your own account. Axocoatl does not obtain or refresh it.
+
+## Name the program in a loadout
+
+```yaml
+schema: axocoatl.loadout/1
+id: fix-claude-code
+version: 1
+name: Fix with Claude Code
+kind: fix
+params:
+  writer_model:   { kind: model, required: true, description: "anthropic:<model> for Claude Code" }
+  reviewer_model: { kind: model, required: true, description: a different provider:model }
+agents:
+  - id: writer
+    role: writer
+    runtime: claude-code
+    model: { param: writer_model }
+checks:
+  - { name: tests, run: { detected: true }, timeout: 5m }
+review:
+  model: { param: reviewer_model }
+  rounds: 2
+  tools: [read_file, list_dir, grep, glob]
+budgets:
+  agent:    { activations: 3, invocations: 300, tokens: 4000000, cost_usd: 10 }
+  reviewer: { activations: 2, invocations: 80, tokens: 1000000, cost_usd: 2 }
+  wall_clock: 60m
+prompt: |
+  {task}
+environment:
+  recipes: [claude-code]
+```
+
+```sh
+axocoatl run fix-claude-code --task "…" \
+  --model writer=anthropic:<model> --model reviewer=ollama:gpt-oss:120b
+```
+
+For Claude Code the model is `{provider: anthropic, model: …}`, for Codex
+`{provider: openai, model: …}`: the model name the program itself takes. An external
+program brings its own tools, so `tools` is ignored, and only a `writer` may be external.
+
+## The routes Axocoatl adds
+
+You do not list these routes; the run adds them to its Session's egress policy.
+
+| Runtime | Host | Credential | Added as | Placeholder variable |
+| --- | --- | --- | --- | --- |
+| `claude-code` | `api.anthropic.com` | `claude-code-oauth` | `Authorization: Bearer <value>` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `codex` | `api.openai.com` | `codex-openai` | `Authorization: Bearer <value>` | `OPENAI_API_KEY` |
+
+The Claude Code route allows only the Messages API paths the pinned version uses. The
+program also runs with `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`,
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `DISABLE_AUTOUPDATER=1`. The Session's
+certificate authority, which signs the route's TLS on your computer, is trusted through
+`NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE`. How routes check and record requests is in
+[Credentials and routes](/configure/credentials/).
+
+## What is recorded
+
+- **Every model call.** Each request the program makes on its route is written to the
+  Session's network record before it is sent, with the rule that allowed it and the name
+  of the credential, never its value. **Session network** shows them.
+- **The program's output.** Claude Code's `stream-json` and Codex's JSON Lines output
+  (at most 16 MiB) is parsed into the activation's evidence: its text, and bounded
+  previews of its tool calls and their results. Its final text is the activation's
+  answer, which the checks and the reviewer then judge.
+- **The change.** The repository captures before and after the activation, as for any
+  writer. A change outside `writes` fails the activation.
+
+## What is enforced, and what is not
+
+| | |
+| --- | --- |
+| Where it runs | Enforced: inside the Session container, as the non-root writer user, under `--harden`. |
+| What it can reach | Enforced: only the route to its model API and the hosts the loadout and your configuration allow. |
+| Its credential | Enforced: added on your computer; the container holds a placeholder. A token the API returns in a response body would reach the container, as on any route. |
+| Its time | Enforced: the activation's wall-clock timeout, and the run's wall clock. |
+| Its spend | Bounded, not per call. The activation reserves its grant's whole token and cost limits before the program starts. Each request on the route counts against the grant's invocations, and the host stops the program when they run out. The program's own usage report settles the reservation; without one, usage is marked incomplete and the reservation stays charged. |
+| Its tool calls | Recorded, not admitted. The program's own tool calls are evidence in the record; Axocoatl does not approve or refuse them one by one. They run as the writer user inside the container, like a writer's `bash`. |
+
+<Aside type="caution">
+Check the terms of the account whose credential you store. Axocoatl only runs the program
+you choose with the credential you supply.
+</Aside>

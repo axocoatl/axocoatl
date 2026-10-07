@@ -43,6 +43,38 @@ With local Podman, model provider API keys stay in the Axocoatl daemon and are n
 passed into the container. Files in the Workspace, such as a `.env` file, are
 visible to tools, and on E2B the Git token is visible to every command in the VM.
 
+## Loadout runs
+
+A Session that [`axocoatl run`](/reference/run/) creates for a
+[loadout](/configure/loadouts/) does not use your global network default:
+
+- it runs under `network: egress` (or `none`, when the loadout says so), with the
+  daemon's egress lists plus the loadout's own `egress` and `routes`, for that Session
+  only;
+- it runs the `hardened` workload: Agents' commands, setup and required checks as the
+  non-root writer user, read-only Agents as the non-root helper user, tool calls and
+  checks under the supervisor's seccomp filter and in a Landlock domain of their own;
+- a loadout cannot ask for `bridge` or the `image` workload, and when the host cannot
+  provide `egress` and the `hardened` workload (rootful Podman, `backend: e2b`) the run
+  fails with exit code 5 instead of running with less.
+
+`sandbox.network` and `sandbox.workload` keep the values you set for every other
+Session. What `egress` and the workload users cover, and what they do not, is the same
+as below.
+
+An [external agent](/configure/external-agents/) (Claude Code or Codex CLI) runs inside
+that container as the writer user. Its model credential is added on your computer by a
+route; the container holds a placeholder. Its own tool calls are recorded as evidence but
+not admitted one by one, and its spend is bounded by an up-front reservation, the route's
+request count and the program's own usage report, not per call.
+
+[Keep as PR](/workbench/keep-as-pr/) runs `git` and `gh` on your computer with your own
+credentials. It never force-pushes and refuses the remote's default branch.
+
+The [record bundle](/reference/run/#record-bundle) ends with a SHA-256 over its contents.
+It shows that the file was not changed after it was written; it is not a signature, so
+anyone who can write the file can write a new digest too.
+
 ## Keep the server local by default
 
 The default listener is `127.0.0.1:8080`. Same-origin CORS is the default and
@@ -485,6 +517,11 @@ this contract, and Axocoatl cannot change or always detect those settings.
   These permissions do not encrypt the literal key at rest.
 - For environment placeholders, inject credentials into the process or service
   through an approved OS secret mechanism.
+- `axocoatl secret set <name>` stores a route credential in the data root as
+  `secrets/<name>` (`0600`). It reads the value from standard input, never from an
+  argument, so the value is not in the process list. A route adds it on your computer; it never enters a
+  container, a record or a log. It is not encrypted at rest, and a backup of the data
+  root includes it.
 - Scope E2B Git tokens, MCP credentials, webhook headers, API keys, and bearer
   tokens to the smallest usable authority. The E2B Git token is an environment
   variable of the remote VM, so every command in that VM can read it, including

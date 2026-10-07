@@ -105,7 +105,7 @@ for scout and reviewer only if it has helpers.
 To change the team, edit these entries and restart the daemon:
 
 - change `model` on all three for a different local model;
-- rewrite a `system_prompt`; short, plain instructions suit small local models;
+- rewrite a `system_prompt`;
 - add another Worker with `writes: []` to have it offered as a helper too, or remove one;
 - remove `writes: []` from a Worker and it is no longer offered; `delegate` then refuses
   it if it can write files or run commands.
@@ -292,8 +292,10 @@ limit must be at least that allowance plus three, for the captures of its own ch
 and one answer: 9 for one check, 11 for two. Apply is refused when no required Agent
 has `bash` or that Agent's limit is too small, and so is a request sent to a single
 Agent that could not pay for them. A lead that pays cannot start a helper whose limits
-would cut into the allowance. Each check may run for up to three minutes and keeps up
-to 768 KiB of output and 256 KiB of errors.
+would cut into the allowance. Each check may run for three minutes unless the team sets
+another timeout for it, from 1 second to 30 minutes (a [loadout](/configure/loadouts/#checks)'s
+`timeout`, or `check_options` in the [Team and budget API](/reference/http-api/#native-session-controls)),
+and keeps up to 768 KiB of output and 256 KiB of errors.
 
 If the checks cannot be paid for because the paying Agent's budget is spent, has
 expired or was revoked, the turn needs attention and says why, for example "Required

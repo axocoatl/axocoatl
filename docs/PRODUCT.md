@@ -25,9 +25,11 @@ A new Session starts with one Agent, the lead that writes. Read-only helpers it 
 delegate to (Scout and Reviewer) are opt-in, and a team can require checks and a review
 that the host runs before a turn completes. Per-Agent write scopes, grants, and budgets
 bound what each activation may do, and the Session records every activation, tool call,
-and budget decision. Small local models through Ollama are a first-class target, so the
-native path retries a stream that ends early, masks stale tool output, and fits requests
-to the model's context window.
+and budget decision. The native path retries a stream that ends early and a transient
+provider failure once, masks stale tool output, and fits requests to the model's context
+window; what still fails is recorded and shown, never dropped. Public claims about how
+well any model or setup works come only from measured results, listed with their evidence
+in `docs/CLAIMS.md`.
 
 A folder-anchored session is the unit of work. Its conversation is the permanent spine.
 Files/editor/Source Control, Preview, comparison, and agent graph open as focused tools;
@@ -275,6 +277,54 @@ the user can refresh and open the file. A changed or missing source is a reason 
 review the note, not a verdict that the note is false. Parsed source, human decisions,
 model interpretations, accepted execution, and passing checks remain distinct facts.
 
+## Loadouts and headless runs
+
+A loadout is a versioned YAML file (`axocoatl.loadout/1`) that declares one run: its
+Agents with roles and models, required checks with per-check timeouts, an optional
+required reviewer, an egress allowlist and routes, budgets and the prompt. Three are
+built into the executable: `fix`, `qa` and `audit` (opt-in, run only when named). A
+person's own loadouts are files in the `loadouts/` directory beside the user
+configuration; a built-in id cannot be reused.
+
+`axocoatl run <loadout> --task "…"` runs one headless against the running daemon. The
+daemon creates an ordinary Session for the repository, bound to the loadout, and that
+Session always runs under `network: egress` (or `none`) with the `hardened`, non-root
+workload; global defaults stay as the person set them, and a host that cannot provide
+that refuses the run instead of weakening it. The run drives one turn (three for an
+audit) through the same Team and budget, grant, check, review and record machinery as
+the workbench, then decides an Outcome and an exit code: 0 pass, 1 required checks
+failed, 2 needs attention, 3 usage, 4 daemon unavailable, 5 infrastructure, 6
+interrupted. It can write JUnit and a single-file record bundle, and Keep as PR commits a
+passing run to a new branch and, opt-in, opens a pull request with host `git` and `gh`.
+
+The built-in loadouts follow what was measured (`docs/CLAIMS.md`; the one-agent-or-several
+and QA studies ran with Claude Code subagents, not through Axocoatl):
+
+- `fix`: one writer, the repository's check command as a required check, and a required
+  review by `reviewer_model`, up to 3 rounds. Axocoatl warns, in every surface, when the
+  reviewer runs the writer's model. The writer answers every review finding with accept
+  or reject and a reason; each answer is an adjudication, recorded and shown, and an
+  unanswered finding needs attention.
+- `qa`: one browser explorer, no scouts, merge or verifier. Each finding names a
+  Playwright reproduction the host re-runs on the build under test and, when configured,
+  a clean reference: confirmed only when it fails on the first and passes on the second;
+  failing on both is "fails on clean build", not confirmed. Areas not reached or blocked
+  (provider refusal or classifier stop, provider failure, budget) are not covered and
+  need attention.
+- `audit`: a planner splits the scope into 2 to 8 areas, one read-only worker per area
+  runs in parallel with a fresh context, and an integrator merges the findings.
+
+The workbench shows loadouts in Settings (YAML, parameters and a read-only lattice that
+displays the graph and never executes it) and shows a run's Session with a loadout badge
+and a Run outcome panel. Runs start from `axocoatl run`, not from the workbench.
+
+External coding agents (the Claude Code CLI and the Codex CLI) can be a loadout's writer.
+They run as programs inside the Session container as the non-root writer user; their
+model credential, stored with `axocoatl secret set` from stdin, is added by an egress
+route on the host, and the container holds a placeholder. Every model call is in the
+network record, and their output is parsed into the Session record. tester-army/e2e can
+run as a required check, with its report parsed into the Outcome.
+
 ## Product language
 
 | Product term | Meaning |
@@ -291,6 +341,10 @@ model interpretations, accepted execution, and passing checks remain distinct fa
 | Grant | The activation, invocation, token, cost, and expiry limits a person applies in Team & budget. |
 | Required check | A command the host runs after the Agents finish; the turn completes only when it passes. |
 | Required review | A read-only reviewer the host runs after the checks pass; its verdict gates completion. |
+| Loadout | A versioned YAML file that declares a whole run: Agents and models, checks, reviewer, network, budgets and prompt. |
+| Run | One headless execution of a loadout through `axocoatl run`: its Session, record, Outcome and exit code. |
+| Adjudication | The writer's answer to one review finding: accept or reject, with a reason. |
+| Not covered | An area, helper, slot or check that ended without a result, with its reason; never counted as a pass. |
 
 Use internal words such as variant, lane, fan-out, worktree, branch, adopt, and discard in
 code and APIs. On the product surface, prefer plain language. Git implementation details

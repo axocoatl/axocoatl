@@ -35,6 +35,7 @@
           <!-- measured: axocoatl-1.1.0 2026-10-01 -->
           <p>In a pre-registered benchmark (6 Python tasks, 25 withheld tests, local qwen3-coder 30B writer, one run per task, temperature 0), one Axocoatl Agent passed 17 of 25 tests. With a Required review by a stronger local model, gpt-oss 120B, the same writer passed 19 of 25 at 2.6× the tokens; the reviewer reported 15 defects and 14 were real. More looks by the same model added nothing: a fresh same-model reviewer approved every change, including three with real defects.</p>
           <!-- /measured -->
+          <p>The measured reviewer ran locally. A reviewer through OpenRouter is configured the same way but has not been measured.</p>
           <p><a href="/#measured">What we measured →</a> · <a href="https://docs.axocoatl.ai/configure/cross-model-review/">Set up cross-model review →</a></p></div>
       </div>
     </section>
@@ -195,7 +196,7 @@
     </section>
 
     <section class="container section section-rule" id="durable-runtime">
-      <div class="section-head"><span class="eyebrow">Runtime underneath</span><h2>Durable where durability matters.</h2><p>Native execution handles small local models specifically: an Ollama stream that ends early is retried once, older tool output is replaced by a short placeholder in later requests, and a request that would overflow the context window is trimmed instead of failing.</p></div>
+      <div class="section-head"><span class="eyebrow">Runtime underneath</span><h2>Durable where durability matters.</h2><p>Native execution handles provider failures and short context windows: a transient provider error or an Ollama stream that ends early is retried once, older tool output is replaced by a short placeholder in later requests, a request that would overflow the context window is trimmed instead of failing, and what still fails is recorded.</p></div>
       <div class="grid-3">
         <article class="card"><span class="card-kicker">Actors</span><h3>Supervised execution</h3><p>Configured agents run as actors inside one Rust daemon. The daemon owns providers, tools, events, and sandbox lifecycle.</p></article>
         <article class="card"><span class="card-kicker">History</span><h3>Canonical Session ledger</h3><p>Accepted turns, bounded tool evidence, output, failure, cancellation, and interruption remain in canonical History across reconnects. After a daemon restart, interrupted work remains visible. Native work requires explicit continuation; it is not silently replayed.</p></article>

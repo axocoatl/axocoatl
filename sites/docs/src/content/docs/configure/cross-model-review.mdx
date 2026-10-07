@@ -1,6 +1,6 @@
 ---
 title: Cross-model review
-description: Have a stronger model review a local writer's change as the team's required review, on the same machine through Ollama or hosted through OpenRouter.
+description: Have a different, stronger model review a writer's change as the team's required review. We measured a bigger local reviewer through Ollama; a hosted reviewer through OpenRouter is configured the same way but was not measured.
 ---
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -8,8 +8,13 @@ import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 Each Agent template names its own provider and model, so the Agent that writes and the
 Agent that reviews do not have to share one. A common setup is a local model as the
 lead, which writes, and a stronger model as the team's required reviewer, which only
-reads. In [our benchmark](/understand/what-we-measured/), a stronger reviewer helped
-where more looks from the same model did not.
+reads. In [our benchmark](/understand/what-we-measured/), a stronger local reviewer,
+gpt-oss 120B through Ollama, helped where more looks from the same model did not. A
+hosted reviewer through OpenRouter is set up the same way, but we have not measured one.
+
+The built-in [`fix` loadout](/workbench/fix-qa-audit/#fix) runs this pattern headless:
+one writer, the repository's checks, and a required review by `reviewer_model`, which
+should be a different model from the writer's.
 
 The host, not the lead, runs a required reviewer: after the lead finishes and the
 [required checks](/configure/agents/#required-checks) pass, Axocoatl starts the reviewer
@@ -82,6 +87,10 @@ reasoning models qualify. See
 [Configure OpenRouter](/configure/providers/#configure-openrouter). The reviewer is
 shown the request, the lead's answer and the change, so they leave your machine for
 OpenRouter.
+
+This setup was not part of our benchmark: the measured reviewer was gpt-oss 120B running
+locally, and no OpenRouter reviewer has been measured. Which hosted model reviews well
+is for you to check on your own tasks.
 
 </TabItem>
 </Tabs>

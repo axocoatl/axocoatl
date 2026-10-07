@@ -76,6 +76,8 @@ const retiredPositioning = [
   ['egress control', /egress control/i],
   ['zero trust', /zero[- ]trust/i],
   ['go-to', /\bgo-to\b/i],
+  // Withdrawn in 1.3.0 because nothing measured it (docs/CLAIMS.md).
+  ['first-class target (withdrawn claim)', /first-class target/i],
 ];
 function checkRetiredPositioning(source, label) {
   for (const [term, pattern] of retiredPositioning) {

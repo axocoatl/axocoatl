@@ -54,10 +54,30 @@ runs before a turn completes, are opt-in.
 - **Each Agent has its own provider and model.** Local models through Ollama,
   hosted models through OpenRouter, with budgets enforced on both. Adapters for
   Anthropic, OpenAI, Gemini and Mistral are included on the compatibility path.
-- **Small local models are a first-class target.** An Ollama stream that ends early
-  is retried once, older tool output is replaced by a short placeholder in later
-  requests, and a request that would overflow a small context window is trimmed
-  instead of failing.
+- **Provider failures are handled, and recorded.** A call that fails with 429, a 5xx
+  status, a timeout or a reset connection is retried once on the same model; 400 to 403
+  are not retried. An Ollama stream that ends early is retried once, older tool output
+  is replaced by a short placeholder in later requests, and a request that would
+  overflow the context window is trimmed instead of failing.
+
+### Run it headless
+
+- **Loadouts.** A versioned YAML file declares a whole run: Agents and models, required
+  checks with their timeouts, a required reviewer, network, budgets and prompt. Three are
+  built in: `fix` (one writer, your checks, review by a different model, every finding
+  answered accept or reject with a reason), `qa` (one browser explorer whose findings
+  carry Playwright reproductions the host re-runs) and `audit` (opt-in: plan, parallel
+  read-only area workers, integrate).
+- **`axocoatl run`.** Runs a loadout against the running daemon and exits 0 (pass),
+  1 (checks failed), 2 (needs attention: review not passed, a finding unanswered,
+  anything not covered) or higher for usage and infrastructure errors. It writes JUnit
+  and a single-file record bundle of the whole run. A loadout's Session always runs
+  under network egress with non-root workload users; your global defaults do not change.
+- **External agents and e2e.** The Claude Code CLI or Codex CLI can be a loadout's
+  writer, inside the Session container, with its model credential added on your computer
+  by a route. tester-army/e2e can be a required check. **Keep as PR** commits a passing
+  run to a new branch and, if you ask, opens a pull request, without touching your
+  checkout.
 
 Axocoatl adds no product telemetry and needs no Axocoatl account.
 
@@ -92,9 +112,24 @@ second and last review round, after which Axocoatl stops revising.
 Extra tokens helped when they bought a stronger model's judgment, not more looks
 from the same model. Axocoatl lets each Agent use its own model, so a local writer
 can be reviewed by a stronger model, and the host still runs your checks and records
-every step. We do not claim the default team beats a single Agent; one Agent remains
-the cheaper choice for small tasks. Details and limits:
-[What we measured](https://docs.axocoatl.ai/understand/what-we-measured/).
+every step. The reviewer we measured ran locally; reviewers through OpenRouter have not
+been measured. We do not claim the default team beats a single Agent; one Agent remains
+the cheaper choice for small tasks.
+
+<!-- measured: claude-code-subagents single-vs-multi 2026-10-06 -->
+**One agent or several, on the same model** (Claude Opus as Claude Code subagents, not
+through Axocoatl): on work that fits in one context, one agent and a planner with
+parallel workers both scored 100%, and the multi-agent setup took 1.6× to 4.9× as long
+and 4× to 5.5× the tokens. On an audit larger than one context, the multi-agent setup
+found 11 points more (99% against 87%) at 8 points lower precision and about 3× the
+tokens; that result is a sensitivity analysis, because the study's pre-registered
+exclusion rule removed 9 of its 10 attempts.
+<!-- /measured -->
+
+This is why the built-in loadouts have one writer or one explorer and `audit` is
+opt-in. Details and limits:
+[What we measured](https://docs.axocoatl.ai/understand/what-we-measured/), and every
+public number with its evidence in [`docs/CLAIMS.md`](docs/CLAIMS.md).
 
 ---
 
@@ -303,6 +338,11 @@ Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
 - **Grant** — the limits you approve in Team & budget for an Agent: activations,
   invocations, tokens, cost, and expiry. Every provider and tool call is reserved
   against it before it runs; raising a limit takes a human decision.
+- **Loadout** — a versioned YAML file that declares a whole run: Agents and models,
+  required checks, a required reviewer, network, budgets and prompt. `axocoatl run`
+  runs one; Settings only displays it. A **run** ends with an Outcome and an exit code;
+  an **adjudication** is the writer's accept or reject, with a reason, of one review
+  finding; **not covered** lists what ended without a result, never counted as a pass.
 - **Required checks and required review** — optional completion conditions for a
   native team. Checks are commands the host runs between two captures of the
   repository; review is a read-only reviewer the host runs, in a fresh conversation,
@@ -378,6 +418,11 @@ axocoatl dev | serve             Run daemon (+ IPC) / production server
 axocoatl url                     Print the browser sign-in link
 axocoatl chat -a <agent>         Interactive chat
 axocoatl session upgrade --confirm  Convert stopped legacy Session storage after backup
+axocoatl run <loadout> --task "…"  Run a loadout headless; --junit, --record, --keep
+axocoatl loadouts list|show|validate
+axocoatl record verify <file>    Check a run's record bundle
+axocoatl secret set <name>       Store a route credential read from stdin
+axocoatl recipe build <recipe>…  Build a Session image (claude-code, codex, e2e)
 axocoatl workflow list | run     Compatibility view/run for manual Automations
 axocoatl agents list|status|restart
 axocoatl tokens report           Per-agent token usage
@@ -403,6 +448,8 @@ GET  /api/workspaces/{id}/sessions     POST /api/workspaces/{id}/sessions
 GET  /api/sessions/{id}/turns          GET  /api/session-turns/search?q=...
 GET  /api/sessions/{id}/export         POST /api/sessions/{id}/rewind
 GET  /api/sessions/{id}/attachments    POST /api/sessions/{id}/attachments
+GET  /api/loadouts                     POST /api/runs
+GET  /api/runs/{run_id}                GET  /api/runs/{run_id}/record
 GET  /ws   (WebSocket streaming)
 ```
 

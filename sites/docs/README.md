@@ -72,6 +72,13 @@ output in `scripts/audit-gate-fixtures/`; the documentation gate runs it too.
 - Runtime behavior comes from `docs/ARCHITECTURE.md` and current source.
 - Voice and visual identity come from `BRAND.md`.
 - CLI and HTTP reference pages are checked against the command and router source by
-  `npm run check:content`.
+  `npm run check:content`, and every page must be in the sidebar.
+- Performance and quality claims come only from measured results listed in
+  `docs/CLAIMS.md`. `npm run check:content` also checks the public surfaces (this site,
+  the README, `llms.txt`, `docs/PRODUCT.md`, `docs/ARCHITECTURE.md` and the marketing
+  pages): every `measured:` block id must be in the ledger, withdrawn claims must not
+  reappear, Claude Opus results must be labeled as Claude Code subagents and not
+  Axocoatl, and measured review results next to OpenRouter must say that OpenRouter
+  reviewers were not measured.
 
 Do not publish, deploy, or change marketing copy from this package.
