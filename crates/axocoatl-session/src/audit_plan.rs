@@ -8,7 +8,8 @@
 //! worker a `NOT_REACHED` list.
 //!
 //! The parsers read model answers, so they accept the common variations of
-//! that shape (Markdown-decorated headings, `{"findings": [...]}` objects,
+//! that shape (Markdown-decorated headings, a block without its fence, an
+//! answer that is only the block's JSON, `{"findings": [...]}` objects,
 //! `file` + `line` instead of `location`, severity words such as `major`)
 //! and refuse what they cannot read with an error the host can quote back.
 //! They never drop a finding silently: entries beyond a bound are reported
@@ -21,6 +22,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::review_adjudication::{fenced_blocks, headed_block, whole_json, HeadedBlock};
 use crate::run_outcome::{Finding, FindingSource, Severity};
 
 pub const AREAS_HEADING: &str = "AREAS";
@@ -100,10 +102,7 @@ pub fn parse_plan(answer: &str, min: u32, max: u32) -> Result<AuditPlan, AuditPl
             "the loadout's area bounds are empty ({min} to {max})"
         )));
     }
-    let text = block(answer, AREAS_HEADING, |value| {
-        value.get("areas").is_some_and(Value::is_array)
-    })?
-    .ok_or_else(|| {
+    let text = block(answer, AREAS_HEADING, Some("areas"))?.ok_or_else(|| {
         invalid(
             "the answer has no AREAS block: write a line AREAS, then a fenced JSON block \
              {\"areas\": [{\"name\", \"scope\", \"paths\"}]}",
@@ -247,10 +246,7 @@ fn area_paths(value: Option<&Value>) -> Result<Vec<String>, String> {
 /// it found nothing) and its `NOT_REACHED` list (absent means none). Each
 /// finding is attributed to `area` and its id is prefixed with it.
 pub fn parse_area_report(answer: &str, area: &str) -> Result<AreaReport, AuditPlanError> {
-    let text = block(answer, FINDINGS_HEADING, |value| {
-        value.get("findings").is_some_and(Value::is_array)
-    })?
-    .ok_or_else(|| {
+    let text = block(answer, FINDINGS_HEADING, Some("findings"))?.ok_or_else(|| {
         invalid(
             "the answer has no FINDINGS block: write a line FINDINGS, then a fenced JSON \
              array of findings ([] when there are none)",
@@ -278,7 +274,7 @@ pub fn parse_area_report(answer: &str, area: &str) -> Result<AreaReport, AuditPl
             report.findings.push(finding);
         }
     }
-    let not_reached = match block(answer, NOT_REACHED_HEADING, |_| false)? {
+    let not_reached = match block(answer, NOT_REACHED_HEADING, None)? {
         Some(text) => parse_not_reached(&text)?,
         None => embedded_not_reached,
     };
@@ -294,10 +290,7 @@ pub fn parse_area_report(answer: &str, area: &str) -> Result<AreaReport, AuditPl
 /// Read the integrator's merged findings from its `FINDINGS` block. Ids that
 /// are missing or repeated get `A<n>`.
 pub fn parse_integrated(answer: &str) -> Result<Vec<Finding>, AuditPlanError> {
-    let text = block(answer, FINDINGS_HEADING, |value| {
-        value.get("findings").is_some_and(Value::is_array)
-    })?
-    .ok_or_else(|| {
+    let text = block(answer, FINDINGS_HEADING, Some("findings"))?.ok_or_else(|| {
         invalid(
             "the answer has no FINDINGS block: write a line FINDINGS, then a fenced JSON \
              array of the merged findings ([] when there are none)",
@@ -561,103 +554,34 @@ fn bounded(text: &str, max: usize) -> String {
     format!("{}{MARK}", &text[..end])
 }
 
-/// One piece of an answer: a heading line or a fenced block.
-enum Item<'a> {
-    Heading { name: String, inline: &'a str },
-    Fence(String),
-}
-
-/// The answer's headings and fenced blocks, in order. Lines inside a fence
-/// are never headings.
-fn items(answer: &str) -> Vec<Item<'_>> {
-    let mut items = Vec::new();
-    let mut lines = answer.lines();
-    while let Some(line) = lines.next() {
-        if let Some((marker, length)) = fence_open(line) {
-            let mut body = Vec::new();
-            for inner in lines.by_ref() {
-                let closing = inner.trim();
-                if closing.len() >= length && closing.chars().all(|c| c == marker) {
-                    break;
-                }
-                body.push(inner);
+/// The text of `heading`'s block: the block after its last heading, fenced
+/// or not ([`headed_block`]). Without the heading, and when `key` names the
+/// object the block is (`{"areas": [...]}`), the last fenced block that is
+/// such an object, else the whole answer when it is exactly the block's JSON
+/// (that object, or a bare array). `Ok(None)` when there is none; an error
+/// when the heading has nothing after it.
+fn block(answer: &str, heading: &str, key: Option<&str>) -> Result<Option<String>, AuditPlanError> {
+    match headed_block(answer, heading, &KNOWN_HEADINGS) {
+        HeadedBlock::Found(text) => Ok(Some(text)),
+        HeadedBlock::Empty => Err(invalid(format!(
+            "the {heading} block is not valid JSON: nothing follows the {heading} heading"
+        ))),
+        HeadedBlock::Absent => {
+            let Some(key) = key else {
+                return Ok(None);
+            };
+            let keyed = |value: &Value| value.get(key).is_some_and(Value::is_array);
+            let fenced = fenced_blocks(answer).into_iter().rev().find(|body| {
+                serde_json::from_str::<Value>(body.trim()).is_ok_and(|value| keyed(&value))
+            });
+            if fenced.is_some() {
+                return Ok(fenced);
             }
-            items.push(Item::Fence(body.join("\n")));
-        } else if let Some((name, inline)) = heading(line) {
-            items.push(Item::Heading { name, inline });
+            Ok(whole_json(answer)
+                .filter(|value| keyed(value) || value.is_array())
+                .map(|_| answer.trim().to_owned()))
         }
     }
-    items
-}
-
-fn fence_open(line: &str) -> Option<(char, usize)> {
-    let trimmed = line.trim_start();
-    let marker = trimmed.chars().next().filter(|c| matches!(c, '`' | '~'))?;
-    let length = trimmed.chars().take_while(|c| *c == marker).count();
-    (length >= 3).then_some((marker, length))
-}
-
-/// A known heading line, with the text after its colon.
-fn heading(line: &str) -> Option<(String, &str)> {
-    let text = line.trim().trim_start_matches(|c: char| {
-        matches!(c, '#' | '*' | '_' | '>' | '-') || c.is_whitespace()
-    });
-    let (head, rest) = match text.find(':') {
-        Some(index) => (&text[..index], &text[index + 1..]),
-        None => (text, ""),
-    };
-    let head = head.trim_end_matches(|c: char| matches!(c, '*' | '_' | '#') || c.is_whitespace());
-    if head.is_empty() || head.len() > 32 {
-        return None;
-    }
-    let name = head.to_ascii_uppercase().replace([' ', '-'], "_");
-    KNOWN_HEADINGS
-        .contains(&name.as_str())
-        .then(|| (name, rest.trim().trim_matches(['*', '_']).trim()))
-}
-
-/// The content of `heading`'s block: the fenced block of its last
-/// occurrence that has one, else the text after its last colon. Without the
-/// heading, the last fenced block that `fallback` accepts. `Ok(None)` when
-/// neither exists; an error when the heading is present without content.
-fn block(
-    answer: &str,
-    heading: &str,
-    fallback: impl Fn(&Value) -> bool,
-) -> Result<Option<String>, AuditPlanError> {
-    let items = items(answer);
-    let mut seen = false;
-    let mut inline = None;
-    for (index, item) in items.iter().enumerate().rev() {
-        let Item::Heading { name, inline: text } = item else {
-            continue;
-        };
-        if name != heading {
-            continue;
-        }
-        seen = true;
-        if let Some(Item::Fence(body)) = items.get(index + 1) {
-            return Ok(Some(body.clone()));
-        }
-        if inline.is_none() && !text.is_empty() {
-            inline = Some((*text).to_owned());
-        }
-    }
-    if let Some(text) = inline {
-        return Ok(Some(text));
-    }
-    if seen {
-        return Err(invalid(format!(
-            "the {heading} heading has no fenced JSON block after it"
-        )));
-    }
-    Ok(items.iter().rev().find_map(|item| match item {
-        Item::Fence(body) => serde_json::from_str::<Value>(body.trim())
-            .ok()
-            .filter(|value| fallback(value))
-            .map(|_| body.clone()),
-        Item::Heading { .. } => None,
-    }))
 }
 
 #[cfg(test)]
@@ -747,7 +671,111 @@ mod tests {
         let error = parse_plan("**AREAS:**\nsee below", 2, 8)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("no fenced JSON block"), "{error}");
+        assert!(
+            error.starts_with("the AREAS block is not valid JSON: "),
+            "{error}"
+        );
+        let error = parse_plan("I split it up.\n\n## AREAS\n", 2, 8)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "the AREAS block is not valid JSON: nothing follows the AREAS heading"
+        );
+    }
+
+    /// Answers of the 1.3.0 smoke test's audit runs, exactly as recorded:
+    /// the planner and the integrator answered with only the JSON they were
+    /// asked for, without a heading or a fence, and both were refused ("no
+    /// AREAS block", "no FINDINGS block"); run 2 audited nothing.
+    const AUDIT_RUN_1_PLAN: &str =
+        include_str!("../tests/fixtures/answers/audit-run1-plan-first.txt");
+    const AUDIT_RUN_2_PLAN: &str = include_str!("../tests/fixtures/answers/audit-run2-plan.txt");
+    const AUDIT_RUN_1_INTEGRATE: &str =
+        include_str!("../tests/fixtures/answers/audit-run1-integrate.txt");
+
+    #[test]
+    fn the_recorded_json_only_plans_are_read() {
+        for answer in [AUDIT_RUN_1_PLAN, AUDIT_RUN_2_PLAN] {
+            assert!(answer.starts_with("{\"areas\": [{\"name\": \"auth\""));
+            let plan = parse_plan(answer, 2, 8).unwrap();
+            let names: Vec<_> = plan.areas.iter().map(|a| a.name.as_str()).collect();
+            assert_eq!(names, ["auth", "billing", "ingest", "notify"]);
+        }
+        let plan = parse_plan(AUDIT_RUN_2_PLAN, 2, 8).unwrap();
+        assert_eq!(plan.areas[3].paths, ["notify/**/*"]);
+        // The plan's bounds still apply to a JSON-only answer.
+        let error = parse_plan(AUDIT_RUN_1_PLAN, 2, 3).unwrap_err().to_string();
+        assert!(error.contains("4 areas"), "{error}");
+    }
+
+    #[test]
+    fn the_recorded_json_only_integration_is_read() {
+        assert!(AUDIT_RUN_1_INTEGRATE.starts_with("{\n  \"findings\": [\n"));
+        let findings = parse_integrated(AUDIT_RUN_1_INTEGRATE).unwrap();
+        let ids: Vec<_> = findings.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "auth-F1",
+                "billing-F1",
+                "ingest-F1",
+                "notify-F1",
+                "notify-F2",
+                "notify-F3"
+            ]
+        );
+        assert!(findings
+            .iter()
+            .all(|f| f.source == FindingSource::Integrator));
+        assert_eq!(findings[2].location.as_deref(), Some("ingest/feed.go:29"));
+        assert_eq!(findings[3].area.as_deref(), Some("notify"));
+        assert_eq!(findings[3].severity, Some(Severity::High));
+    }
+
+    #[test]
+    fn unfenced_blocks_after_headings_are_read() {
+        // A worker's report with both blocks unfenced.
+        let report = parse_area_report(
+            "I read src/db.\n\nFINDINGS\n[{\"title\": \"Unchecked unwrap\", \"location\": \
+             \"src/db.rs:3\"}]\n\nNOT_REACHED\n[\"migrations\"]\n",
+            "db",
+        )
+        .unwrap();
+        assert_eq!(report.findings[0].id, "db-1");
+        assert_eq!(report.not_reached, ["migrations"]);
+        // A JSON value on the heading's line that continues on the next ones.
+        let report = parse_area_report(
+            "FINDINGS: [\n  {\"title\": \"a\"},\n  {\"title\": \"b\"}\n]\nNOT_REACHED: none",
+            "db",
+        )
+        .unwrap();
+        assert_eq!(report.findings.len(), 2);
+        assert!(report.not_reached.is_empty());
+        // An unfenced list after NOT_REACHED ends at its paragraph.
+        let report = parse_area_report(
+            "FINDINGS: []\nNOT_REACHED\n- the cache layer\n- vendored code\n\nThat is all.",
+            "db",
+        )
+        .unwrap();
+        assert_eq!(report.not_reached, ["the cache layer", "vendored code"]);
+        // The integrator's object under a heading, without a fence.
+        let findings =
+            parse_integrated("Merged.\n\n## FINDINGS\n{\"findings\": [{\"title\": \"t\"}]}\n")
+                .unwrap();
+        assert_eq!(findings[0].id, "A1");
+        // A worker answer that is only a bare array of findings.
+        let report = parse_area_report("[{\"title\": \"t\"}]", "db").unwrap();
+        assert_eq!(report.findings.len(), 1);
+        assert!(report.not_reached.is_empty());
+        // Unfenced JSON that does not parse is reported as such.
+        let error = parse_area_report("FINDINGS\n[{\"title\": }]", "db")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.starts_with("the FINDINGS block is not valid JSON: "),
+            "{error}"
+        );
     }
 
     #[test]

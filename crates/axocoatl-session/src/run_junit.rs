@@ -6,24 +6,28 @@
 //! alone never shows a run that needs attention as green).
 //!
 //! Rules: a check `failed`/`timed_out` is a `<failure>`, `not_run` /
-//! `unavailable` an `<error>`; a review that did not pass is a `<failure>`;
+//! `unavailable` an `<error>`, and a check's reason that its status does not
+//! carry (a passed check whose report could not be read) is in its
+//! `<system-out>`; a review that did not pass is a `<failure>`;
 //! a `missing` adjudication is a `<failure type="missing">`, `accept` and
 //! `reject` pass with the reason in `<system-out>`; findings `confirmed` and
 //! `reproduced` are `<failure>`s when the loadout fails on findings (else
 //! `<system-out>`), `fails_on_clean_build` and `not_reproduced` are
 //! `<skipped>`, `repro_error` and `missing` are `<error>`s; every not-covered
-//! entry is a `<failure type="not_covered">`, never skipped. Text is
-//! XML-escaped with control characters other than tab and newline removed,
-//! each message is at most 4 KiB, and the document at most 8 MiB: cases past
-//! that are summarized in one `truncated` case.
+//! entry is a `<failure type="not_covered">` whose message is
+//! [`NotCovered::reason`](crate::run_outcome::NotCovered::reason), never
+//! skipped. Text is XML-escaped with control characters other than tab and
+//! newline removed, each message is at most 4 KiB, and the document at most
+//! 8 MiB: cases past that are summarized in one `truncated` case.
 //!
 //! Owner: workstream `core`.
 
 use std::fmt::Write as _;
 
+use crate::review_adjudication::round_findings;
 use crate::run_outcome::{
-    AdjudicationDecision, CheckState, Finding, FindingSource, ReproClassification, RunOutcome,
-    RunVerdict,
+    AdjudicationDecision, CheckState, Finding, FindingSource, ReproClassification,
+    ReviewVerdictKind, RunOutcome, RunVerdict,
 };
 
 /// Largest JUnit document produced, in bytes; test cases past it are
@@ -311,7 +315,17 @@ fn check_suites(outcome: &RunOutcome) -> (Suite, Vec<Suite>) {
             }
             case.body = Some(body);
         }
-        case.system_out = Some(format!("argv: {}", check.argv.join(" ")));
+        // A reason the status does not already carry (a passed check whose
+        // report could not be read, say) is kept in the test case.
+        let shown = match &case.status {
+            Status::Failure { message, .. } | Status::Error { message, .. } => message == &reason,
+            Status::Passed | Status::Skipped { .. } => false,
+        };
+        let mut out = format!("argv: {}", check.argv.join(" "));
+        if !reason.is_empty() && !shown {
+            let _ = write!(out, "\nreason: {reason}");
+        }
+        case.system_out = Some(out);
         checks.cases.push(case);
         if let Some(report) = &check.report {
             let mut suite = Suite::new(format!("check:{}", check.name));
@@ -491,12 +505,17 @@ pub fn render_junit_with(
             review.max_rounds
         );
         for round in &review.rounds {
+            let findings = round_findings(round).len();
             let _ = write!(
                 out,
-                "\nround {}: {:?}, {} findings",
+                "\nround {}: {}, {findings} finding{}",
                 round.round,
-                round.verdict,
-                round.findings.len()
+                match round.verdict {
+                    ReviewVerdictKind::Approve => "approve",
+                    ReviewVerdictKind::Changes => "changes",
+                    ReviewVerdictKind::Unreadable => "unreadable",
+                },
+                if findings == 1 { "" } else { "s" }
             );
         }
         case.system_out = Some(out);
@@ -532,14 +551,10 @@ pub fn render_junit_with(
     suites.push(findings);
     let mut coverage = Suite::new("coverage");
     for entry in &outcome.not_covered {
-        let class = serde_json::to_value(entry.class)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_else(|| "other".into());
         coverage.cases.push(
             Case::new("axocoatl.coverage", &entry.area).status(Status::Failure {
                 kind: "not_covered".into(),
-                message: format!("{class}: {}", entry.detail),
+                message: entry.reason(),
             }),
         );
     }
@@ -764,6 +779,14 @@ mod tests {
                 e2e,
                 check("lint", CheckState::TimedOut),
                 check("types", CheckState::NotRun),
+                CheckResult {
+                    reason: Some(
+                        "the report /tmp/axocoatl-check-reports/smoke/report.json could not be \
+                         read: IO error"
+                            .into(),
+                    ),
+                    ..check("smoke", CheckState::Passed)
+                },
             ],
             review: Some(ReviewOutcome {
                 reviewer: identity("openai/gpt-oss-120b"),
@@ -804,13 +827,22 @@ mod tests {
                 finding("B2", "search", ReproClassification::FailsOnCleanBuild),
                 finding("B3", "search", ReproClassification::ReproError),
             ],
-            not_covered: vec![NotCovered {
-                area: "gift cards".into(),
-                class: FailureClass::ProviderRefusal,
-                detail: "classifier stop".into(),
-                node_id: None,
-                turn_id: None,
-            }],
+            not_covered: vec![
+                NotCovered {
+                    area: "gift cards".into(),
+                    class: FailureClass::ProviderRefusal,
+                    detail: "classifier stop".into(),
+                    node_id: None,
+                    turn_id: None,
+                },
+                NotCovered {
+                    area: "checkout".into(),
+                    class: FailureClass::NotReached,
+                    detail: "not_reached: ran out of steps".into(),
+                    node_id: None,
+                    turn_id: None,
+                },
+            ],
             warnings: vec![RunWarning {
                 code: SAME_MODEL_REVIEWER.into(),
                 message: "same model".into(),
@@ -867,10 +899,19 @@ mod tests {
         assert!(xml.contains("<failure type=\"confirmed\""));
         assert!(xml.contains("<skipped message=\"fails on clean build\"/>"));
         assert!(xml.contains("<error type=\"repro_error\""));
-        // Not covered is a failure, never skipped.
+        // Not covered is a failure, never skipped, naming its class once.
         assert!(xml.contains(
             "<failure type=\"not_covered\" message=\"provider_refusal: classifier stop\"/>"
         ));
+        assert!(xml
+            .contains("<failure type=\"not_covered\" message=\"not_reached: ran out of steps\"/>"));
+        // A passed check keeps the reason its report could not be read.
+        assert!(xml.contains(
+            "<system-out>argv: npm test\nreason: the report \
+             /tmp/axocoatl-check-reports/smoke/report.json could not be read: IO error</system-out>"
+        ));
+        // The review's rounds: their verdicts and finding counts, in words.
+        assert!(xml.contains("\nround 1: changes, 2 findings</system-out>"));
         // Properties.
         assert!(xml.contains(&format!("value=\"fix@1 sha256:{}\"", "c".repeat(64))));
         assert!(xml.contains("<property name=\"axocoatl.exit_code\" value=\"1\"/>"));
@@ -906,6 +947,51 @@ mod tests {
         assert!(xml.contains("<testcase classname=\"axocoatl.run\" name=\"verdict\""));
         assert!(xml.ends_with("</testsuites>\n"));
         assert!(!xml.contains(&"x".repeat(MAX_JUNIT_MESSAGE_BYTES + 1)));
+    }
+
+    #[test]
+    fn review_rounds_count_findings_in_words() {
+        let mut outcome = fixture();
+        let review = outcome.review.as_mut().unwrap();
+        review.rounds[0].findings_text = "F1: src/paginate.js:7: off by one".into();
+        review.rounds.push(ReviewRound {
+            round: 2,
+            verdict: ReviewVerdictKind::Approve,
+            passed: true,
+            findings_text: "Nothing must change.".into(),
+            findings: Vec::new(),
+            continued: false,
+            candidate_sha256: None,
+        });
+        let xml = render_junit(&outcome).unwrap();
+        assert!(
+            xml.contains(
+                "\nround 1: changes, 1 finding\nround 2: approve, 0 findings</system-out>"
+            ),
+            "{xml}"
+        );
+        assert!(!xml.contains("1 findings"));
+    }
+
+    #[test]
+    fn a_failed_check_reason_is_its_message_and_not_repeated() {
+        let mut outcome = fixture();
+        let mut failed = check("e2e", CheckState::Failed);
+        failed.reason = Some("e2e failed; the report could not be read".into());
+        let mut timed_out = check("slow", CheckState::TimedOut);
+        timed_out.reason = Some("the report could not be read".into());
+        outcome.checks = vec![failed, timed_out];
+        let xml = render_junit(&outcome).unwrap();
+        assert!(xml.contains(
+            "<failure type=\"failed\" message=\"e2e failed; the report could not be read\">"
+        ));
+        assert_eq!(
+            xml.matches("e2e failed; the report could not be read")
+                .count(),
+            1
+        );
+        // The timeout is the message; the reason goes to system-out.
+        assert!(xml.contains("reason: the report could not be read</system-out>"));
     }
 
     #[test]

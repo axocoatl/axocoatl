@@ -7,7 +7,14 @@
 //! finding of the round must be answered; an answer that leaves one out is
 //! recorded as `missing` and the run needs attention.
 //!
+//! Models do not always fence what they are asked to fence, so a block is
+//! read (here and for the QA explorer's and the audit's blocks) as a fenced
+//! block after its heading, a JSON value under the heading without a fence,
+//! or, with no heading at all, an answer that is exactly the expected JSON.
+//!
 //! Owner: workstream `review-qa`.
+
+use serde_json::Value;
 
 use crate::run_outcome::{
     Adjudication, AdjudicationDecision, NodeObservation, ReviewFinding, ReviewRound,
@@ -20,17 +27,20 @@ pub const ADJUDICATIONS_HEADING: &str = "ADJUDICATIONS";
 pub const MAX_FINDINGS_PER_ROUND: usize = 64;
 /// Longest reason kept per adjudication, in bytes.
 pub const MAX_REASON_BYTES: usize = 2 * 1024;
-/// Why every finding of a round is missing when its block is not JSON.
+/// Why every finding of a round is missing when its block cannot be read:
+/// the recorded reason starts with this, then says why (`...: the
+/// ADJUDICATIONS block is not valid JSON: ...`).
 pub const UNREADABLE_BLOCK: &str = "unreadable adjudications block";
 /// Why every finding of a round is missing when the answer has no block.
 pub const NO_BLOCK: &str = "the writer's answer has no ADJUDICATIONS block";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AdjudicationError {
-    /// The answer has no fenced block after an `ADJUDICATIONS` heading.
+    /// The answer has no `ADJUDICATIONS` heading and is not itself a JSON
+    /// array.
     #[error("adjudications: {NO_BLOCK}")]
     NoBlock,
-    /// The block is not a JSON array.
+    /// The block is not valid JSON or not a JSON array; the text says which.
     #[error("adjudications: {UNREADABLE_BLOCK}: {0}")]
     Invalid(String),
 }
@@ -161,18 +171,7 @@ fn push_line(text: &mut String, line: &str) {
     text.push_str(line);
 }
 
-/// Whether `line` is the heading `heading`: the word alone on its line, with
-/// optional Markdown heading marks, emphasis and a trailing colon.
-fn is_heading(line: &str, heading: &str) -> bool {
-    line.trim()
-        .trim_start_matches('#')
-        .trim()
-        .trim_matches(|c: char| matches!(c, '*' | '_' | '`' | ':'))
-        .trim()
-        .eq_ignore_ascii_case(heading)
-}
-
-/// The fence a line opens or closes (three or more backticks or tildes).
+/// The fence a line opens (three or more backticks or tildes).
 fn fence(line: &str) -> Option<(char, usize)> {
     let trimmed = line.trim_start();
     let first = trimmed.chars().next()?;
@@ -183,38 +182,232 @@ fn fence(line: &str) -> Option<(char, usize)> {
     (count >= 3).then_some((first, count))
 }
 
-/// The body of each fenced block that is the first fenced block after a
-/// `heading` line, in order. An unclosed block runs to the end. The QA
-/// explorer's `FINDINGS` and `COVERAGE` blocks are read the same way.
-pub(crate) fn fenced_blocks_after(answer: &str, heading: &str) -> Vec<String> {
-    let mut blocks = Vec::new();
-    let mut armed = false;
-    let mut open: Option<((char, usize), Vec<&str>, bool)> = None;
-    for line in answer.lines() {
-        if let Some(((mark, count), body, keep)) = &mut open {
-            if fence(line).is_some_and(|(m, c)| m == *mark && c >= *count)
-                && line.trim().trim_start_matches(*mark).trim().is_empty()
-            {
-                if *keep {
-                    blocks.push(body.join("\n"));
+/// Whether `line` closes a fence opened with `count` `mark`s.
+fn closes_fence(line: &str, mark: char, count: usize) -> bool {
+    let trimmed = line.trim();
+    trimmed.len() >= count && trimmed.chars().all(|c| c == mark)
+}
+
+/// Whether `line` is one of `headings`, and where on the line its block
+/// starts. A heading is the word (any case; `_`, `-` or a space between
+/// words) with optional Markdown heading, list or quote marks, emphasis, code
+/// marks and a colon. Text after the colon starts its block
+/// (`FINDINGS: []`); without such text the block starts on the next line.
+fn heading_line(line: &str, headings: &[&str]) -> Option<(String, Option<usize>)> {
+    let text = line.trim_start_matches(|c: char| {
+        matches!(c, '#' | '*' | '_' | '>' | '-' | '`') || c.is_whitespace()
+    });
+    let lead = line.len() - text.len();
+    let (head, inline) = match text.find(':') {
+        Some(index) => (&text[..index], Some(lead + index + 1)),
+        None => (text, None),
+    };
+    let head =
+        head.trim_end_matches(|c: char| matches!(c, '*' | '_' | '#' | '`') || c.is_whitespace());
+    if head.is_empty() || head.len() > 32 {
+        return None;
+    }
+    let name = head.to_ascii_uppercase().replace([' ', '-'], "_");
+    let name = headings.iter().find(|heading| **heading == name)?;
+    let inline = inline.and_then(|at| {
+        let rest = &line[at..];
+        let start = at + rest.len()
+            - rest
+                .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '*' | '_'))
+                .len();
+        (start < line.len()).then_some(start)
+    });
+    Some(((*name).to_owned(), inline))
+}
+
+/// One heading line or fenced block of an answer.
+struct Piece {
+    /// Where its line starts in the answer.
+    start: usize,
+    kind: PieceKind,
+}
+
+enum PieceKind {
+    /// `after`: where the heading's block starts in the answer.
+    Heading {
+        name: String,
+        after: usize,
+    },
+    Fence(String),
+}
+
+/// The answer's `headings` lines and fenced blocks, in order. Lines inside a
+/// fence are never headings; an unclosed fence runs to the end.
+fn pieces(answer: &str, headings: &[&str]) -> Vec<Piece> {
+    let mut lines = Vec::new();
+    let mut offset = 0;
+    for raw in answer.split_inclusive('\n') {
+        lines.push((
+            offset,
+            offset + raw.len(),
+            raw.trim_end_matches(['\n', '\r']),
+        ));
+        offset += raw.len();
+    }
+    let mut pieces = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let (start, next, line) = lines[index];
+        index += 1;
+        if let Some((mark, count)) = fence(line) {
+            let mut body = Vec::new();
+            while index < lines.len() {
+                let inner = lines[index].2;
+                index += 1;
+                if closes_fence(inner, mark, count) {
+                    break;
                 }
-                open = None;
-            } else {
-                body.push(line);
+                body.push(inner);
             }
+            pieces.push(Piece {
+                start,
+                kind: PieceKind::Fence(body.join("\n")),
+            });
+        } else if let Some((name, inline)) = heading_line(line, headings) {
+            pieces.push(Piece {
+                start,
+                kind: PieceKind::Heading {
+                    name,
+                    after: inline.map_or(next, |at| start + at),
+                },
+            });
+        }
+    }
+    pieces
+}
+
+/// The JSON object or array `text` starts with, as the text it spans, when
+/// nothing but whitespace follows it on its last line (so `[1] I accept F1`
+/// is text, not the array `[1]`); later lines are ignored. `None` when `text`
+/// does not start with a valid one.
+fn leading_json(text: &str) -> Option<&str> {
+    if !text.starts_with(['[', '{']) {
+        return None;
+    }
+    let mut values = serde_json::Deserializer::from_str(text).into_iter::<serde::de::IgnoredAny>();
+    values.next()?.ok()?;
+    let end = values.byte_offset();
+    let line_rest = text[end..].split('\n').next().unwrap_or_default();
+    line_rest.trim().is_empty().then(|| &text[..end])
+}
+
+/// The first JSON object or array ([`leading_json`]) that starts a line of
+/// `answer[start..end]`; the value itself may run past `end`.
+fn first_json_line(answer: &str, start: usize, end: usize) -> Option<&str> {
+    let mut at = start;
+    while at < end {
+        let line = &answer[at..];
+        let begin = at + line.len() - line.trim_start_matches([' ', '\t']).len();
+        if let Some(value) = leading_json(&answer[begin..]) {
+            return Some(value);
+        }
+        at += answer[at..end].find('\n')? + 1;
+    }
+    None
+}
+
+/// The whole answer as one JSON object or array, when it is exactly that
+/// (surrounding whitespace aside).
+pub(crate) fn whole_json(answer: &str) -> Option<Value> {
+    let trimmed = answer.trim();
+    if !trimmed.starts_with(['[', '{']) {
+        return None;
+    }
+    serde_json::from_str(trimmed).ok()
+}
+
+/// Every fenced block's body, in order.
+pub(crate) fn fenced_blocks(answer: &str) -> Vec<String> {
+    pieces(answer, &[])
+        .into_iter()
+        .filter_map(|piece| match piece.kind {
+            PieceKind::Fence(body) => Some(body),
+            PieceKind::Heading { .. } => None,
+        })
+        .collect()
+}
+
+/// What follows a heading in a model's answer ([`headed_block`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HeadedBlock {
+    /// No line of the answer is the heading.
+    Absent,
+    /// The heading is there with nothing after it.
+    Empty,
+    /// The block's text, to be read as its parser reads a block.
+    Found(String),
+}
+
+/// The block of `heading` in `answer`. `headings` are the headings the
+/// caller reads; a heading's block never reaches past the next of them.
+///
+/// After each line that is the heading ([`heading_line`]), the block is, in
+/// order: an unfenced JSON object or array that starts a line before the
+/// next heading or fence (on the heading's line after its colon, right below
+/// it, or after a line of text; what follows the value on later lines is
+/// ignored); else the fenced block that follows before the next heading;
+/// else the text that follows (a value that starts like JSON up to the next
+/// heading or fence, so its error is reported, otherwise the first
+/// paragraph), which a parser that wants JSON then reports as not valid
+/// JSON. Of several headings, the last with a JSON value or a fenced block
+/// wins, else the last with any text.
+pub(crate) fn headed_block(answer: &str, heading: &str, headings: &[&str]) -> HeadedBlock {
+    let pieces = pieces(answer, headings);
+    let mut seen = false;
+    let mut block = None;
+    let mut text = None;
+    for (index, piece) in pieces.iter().enumerate() {
+        let PieceKind::Heading { name, after } = &piece.kind else {
+            continue;
+        };
+        if name != heading {
             continue;
         }
-        if let Some(found) = fence(line) {
-            open = Some((found, Vec::new(), armed));
-            armed = false;
-        } else if is_heading(line, heading) {
-            armed = true;
+        seen = true;
+        let rest = &answer[*after..];
+        let start = after + rest.len() - rest.trim_start().len();
+        let next = pieces.get(index + 1);
+        let end = next.map_or(answer.len(), |piece| piece.start).max(start);
+        if let Some(value) = first_json_line(answer, start, end) {
+            block = Some(value.to_owned());
+            continue;
+        }
+        if let Some(Piece {
+            kind: PieceKind::Fence(body),
+            ..
+        }) = next
+        {
+            block = Some(body.clone());
+            continue;
+        }
+        let following = answer[start..end].trim();
+        let following = if following.starts_with(['[', '{']) {
+            following.to_owned()
+        } else {
+            following
+                .lines()
+                .take_while(|line| !line.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .trim_matches(['*', '_'])
+                .trim()
+                .to_owned()
+        };
+        if !following.is_empty() {
+            text = Some(following);
         }
     }
-    if let Some((_, body, true)) = open {
-        blocks.push(body.join("\n"));
+    match block.or(text) {
+        Some(found) => HeadedBlock::Found(found),
+        None if seen => HeadedBlock::Empty,
+        None => HeadedBlock::Absent,
     }
-    blocks
 }
 
 /// At most `max` bytes of `text`, cut on a character boundary.
@@ -243,21 +436,35 @@ fn normalize_id(id: &str) -> Option<String> {
     Some(format!("F{}", digits.parse::<u32>().ok()?))
 }
 
-/// Read the `ADJUDICATIONS` block of a writer's answer: the last fenced block
-/// that follows an `ADJUDICATIONS` heading. It must be a JSON array; an entry
-/// without a readable `id` or a `decision` of `accept` or `reject` is left
-/// out (its finding is then missing). Reasons are kept to
-/// [`MAX_REASON_BYTES`].
+/// Read the `ADJUDICATIONS` block of a writer's answer: the block after the
+/// last `ADJUDICATIONS` heading, fenced or not (`headed_block`), or,
+/// without the heading, the whole answer when it is exactly a JSON array. It
+/// must be a JSON array; an entry without a readable `id` or a `decision` of
+/// `accept` or `reject` is left out (its finding is then missing). Reasons
+/// are kept to [`MAX_REASON_BYTES`].
 pub fn parse_adjudications(answer: &str) -> Result<Vec<WrittenAdjudication>, AdjudicationError> {
-    let block = fenced_blocks_after(answer, ADJUDICATIONS_HEADING)
-        .pop()
-        .ok_or(AdjudicationError::NoBlock)?;
-    let value: serde_json::Value = serde_json::from_str(block.trim())
-        .map_err(|error| AdjudicationError::Invalid(clip(&error.to_string(), 200)))?;
-    let serde_json::Value::Array(entries) = value else {
-        return Err(AdjudicationError::Invalid(
-            "the block is not a JSON array".into(),
-        ));
+    let value = match headed_block(answer, ADJUDICATIONS_HEADING, &[ADJUDICATIONS_HEADING]) {
+        HeadedBlock::Found(block) => serde_json::from_str(block.trim()).map_err(|error| {
+            AdjudicationError::Invalid(format!(
+                "the {ADJUDICATIONS_HEADING} block is not valid JSON: {}",
+                clip(&error.to_string(), 200)
+            ))
+        })?,
+        HeadedBlock::Empty => {
+            return Err(AdjudicationError::Invalid(format!(
+                "the {ADJUDICATIONS_HEADING} block is not valid JSON: nothing follows the \
+                 {ADJUDICATIONS_HEADING} heading"
+            )))
+        }
+        HeadedBlock::Absent => match whole_json(answer) {
+            Some(value @ Value::Array(_)) => value,
+            _ => return Err(AdjudicationError::NoBlock),
+        },
+    };
+    let Value::Array(entries) = value else {
+        return Err(AdjudicationError::Invalid(format!(
+            "the {ADJUDICATIONS_HEADING} block is not a JSON array"
+        )));
     };
     let mut written = Vec::with_capacity(entries.len());
     for entry in entries {
@@ -394,9 +601,9 @@ pub fn adjudicate_with_notes(
                     .extend(missing_all(NO_BLOCK.into(), Some(generation.generation)));
                 continue;
             }
-            Err(AdjudicationError::Invalid(_)) => {
+            Err(AdjudicationError::Invalid(why)) => {
                 report.adjudications.extend(missing_all(
-                    UNREADABLE_BLOCK.into(),
+                    format!("{UNREADABLE_BLOCK}: {why}"),
                     Some(generation.generation),
                 ));
                 continue;
@@ -563,6 +770,13 @@ mod tests {
         );
     }
 
+    fn invalid(answer: &str) -> String {
+        match parse_adjudications(answer) {
+            Err(AdjudicationError::Invalid(why)) => why,
+            other => panic!("{answer:?} gave {other:?}"),
+        }
+    }
+
     #[test]
     fn a_missing_or_unreadable_block_is_an_error() {
         assert_eq!(
@@ -570,17 +784,30 @@ mod tests {
             Err(AdjudicationError::NoBlock)
         );
         assert_eq!(
-            parse_adjudications("ADJUDICATIONS\nnothing fenced"),
+            parse_adjudications("I fixed everything."),
             Err(AdjudicationError::NoBlock)
         );
-        assert!(matches!(
-            parse_adjudications("ADJUDICATIONS\n```json\n[{\"id\": \"F1\",]\n```"),
-            Err(AdjudicationError::Invalid(_))
-        ));
-        assert!(matches!(
-            parse_adjudications("ADJUDICATIONS\n```\n{\"id\": \"F1\"}\n```"),
-            Err(AdjudicationError::Invalid(_))
-        ));
+        // A heading with something unreadable after it is not "no block".
+        let why = invalid("ADJUDICATIONS\nnothing fenced");
+        assert!(
+            why.starts_with("the ADJUDICATIONS block is not valid JSON: "),
+            "{why}"
+        );
+        let why = invalid("Done.\n\n## ADJUDICATIONS\n");
+        assert_eq!(
+            why,
+            "the ADJUDICATIONS block is not valid JSON: nothing follows the ADJUDICATIONS heading"
+        );
+        let why = invalid("ADJUDICATIONS\n```json\n[{\"id\": \"F1\",]\n```");
+        assert!(why.contains("not valid JSON"), "{why}");
+        let why = invalid("ADJUDICATIONS\n```\n{\"id\": \"F1\"}\n```");
+        assert_eq!(why, "the ADJUDICATIONS block is not a JSON array");
+        // Unfenced JSON that does not parse is reported, not skipped.
+        let why = invalid("ADJUDICATIONS:\n[{\"id\": \"F1\", \"decision\": accept}]");
+        assert!(why.contains("not valid JSON"), "{why}");
+        assert!(AdjudicationError::Invalid(why)
+            .to_string()
+            .starts_with("adjudications: unreadable adjudications block: the ADJUDICATIONS"));
         // An unclosed block still counts as the block.
         assert_eq!(
             parse_adjudications(
@@ -601,6 +828,92 @@ mod tests {
         let written = parse_adjudications(&answer).unwrap();
         assert!(written[0].reason.len() <= MAX_REASON_BYTES);
         assert!(written[0].reason.len() > MAX_REASON_BYTES - 4);
+    }
+
+    /// The writer's answers of the 1.3.0 smoke test's fix run 2, exactly as
+    /// recorded: generation 2 answered review round 1 with an unfenced
+    /// array after the heading, and both findings were recorded `missing`
+    /// ("no ADJUDICATIONS block") although the writer had answered them.
+    const FIX_RUN_2_GENERATION_1: &str =
+        include_str!("../tests/fixtures/answers/fix-run2-writer-generation1.txt");
+    const FIX_RUN_2_GENERATION_2: &str =
+        include_str!("../tests/fixtures/answers/fix-run2-writer-generation2.txt");
+
+    #[test]
+    fn the_recorded_unfenced_answer_of_fix_run_2_answers_both_findings() {
+        assert!(FIX_RUN_2_GENERATION_2.starts_with("ADJUDICATIONS:\n[\n  {\n"));
+        let written = parse_adjudications(FIX_RUN_2_GENERATION_2).unwrap();
+        let ids: Vec<_> = written.iter().map(|w| (w.id.as_str(), w.accept)).collect();
+        assert_eq!(ids, [("F1", true), ("F2", true)]);
+        assert!(written[1]
+            .reason
+            .starts_with("The fix correctly adds validation"));
+        // Through the path the run took: round 1's two findings, answered by
+        // generation 2.
+        let rounds = [round(
+            1,
+            "F1: src/paginate.js:7: The function `pageCount` does not validate the `total` \
+             argument.\nF2: src/paginate.js:21: The function `pageItems` does not enforce that \
+             `page` is an integer.",
+            true,
+        )];
+        let node = writer(&[Some(FIX_RUN_2_GENERATION_1), Some(FIX_RUN_2_GENERATION_2)]);
+        let report = adjudicate_with_notes(&rounds, &node);
+        let decisions: Vec<_> = report
+            .adjudications
+            .iter()
+            .map(|a| (a.finding_id.as_str(), a.decision, a.writer_generation))
+            .collect();
+        assert_eq!(
+            decisions,
+            [
+                ("F1", AdjudicationDecision::Accept, Some(2)),
+                ("F2", AdjudicationDecision::Accept, Some(2)),
+            ]
+        );
+        assert!(report.notes.is_empty(), "{:?}", report.notes);
+        // Generation 1 put its array on the heading's line.
+        let written = parse_adjudications(FIX_RUN_2_GENERATION_1).unwrap();
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].id, "F1");
+    }
+
+    #[test]
+    fn unfenced_blocks_and_whole_answers_are_read() {
+        let entry = r#"{"id": "F1", "decision": "accept", "reason": "fixed"}"#;
+        // Unfenced after the heading, with text and a diff after the array.
+        let answer = format!(
+            "**Adjudications:**\n\n[{entry}]\n\nHere is the change:\n```diff\n-a\n+b\n```\n"
+        );
+        assert_eq!(parse_adjudications(&answer).unwrap().len(), 1);
+        // Text between the heading and the block, fenced or not.
+        let answer = format!("ADJUDICATIONS\nBelow.\n\n```json\n[{entry}]\n```");
+        assert_eq!(parse_adjudications(&answer).unwrap().len(), 1);
+        let answer = format!("## ADJUDICATIONS\nHere they are:\n\n[\n  {entry}\n]\n");
+        assert_eq!(parse_adjudications(&answer).unwrap().len(), 1);
+        // A line that only starts like JSON is text, not the array `[1]`.
+        let answer = format!("ADJUDICATIONS\n[1] I accept F1.\n```json\n[{entry}]\n```");
+        assert_eq!(parse_adjudications(&answer).unwrap()[0].reason, "fixed");
+        let why = invalid("ADJUDICATIONS\n[1] I accept F1.");
+        assert!(why.contains("not valid JSON"), "{why}");
+        // A later heading with a block wins over an earlier one; a later
+        // heading with only text does not.
+        let answer = format!(
+            "ADJUDICATIONS: []\nOn reflection:\nADJUDICATIONS:\n[{entry}]\nADJUDICATIONS: see above"
+        );
+        assert_eq!(parse_adjudications(&answer).unwrap().len(), 1);
+        // No heading: the whole answer when it is exactly a JSON array.
+        assert_eq!(
+            parse_adjudications(&format!("\n  [{entry}]  \n"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(parse_adjudications(entry), Err(AdjudicationError::NoBlock));
+        assert_eq!(
+            parse_adjudications(&format!("Answers: [{entry}]")),
+            Err(AdjudicationError::NoBlock)
+        );
     }
 
     fn round(number: u32, text: &str, continued: bool) -> ReviewRound {
@@ -667,7 +980,13 @@ mod tests {
         assert_eq!(adjudications.len(), 2);
         for adjudication in &adjudications {
             assert_eq!(adjudication.decision, AdjudicationDecision::Missing);
-            assert_eq!(adjudication.reason, UNREADABLE_BLOCK);
+            assert!(
+                adjudication.reason.starts_with(&format!(
+                    "{UNREADABLE_BLOCK}: the ADJUDICATIONS block is not valid JSON: "
+                )),
+                "{}",
+                adjudication.reason
+            );
             assert_eq!(adjudication.writer_generation, Some(2));
             assert_eq!(adjudication.round, 1);
         }

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="axocoatl" tests="14" failures="8" errors="2" skipped="1" time="512.300">
+<testsuites name="axocoatl" tests="16" failures="9" errors="2" skipped="1" time="512.300">
   <properties>
     <property name="axocoatl.run_id" value="run-00000000-0000-4000-8000-000000000001"/>
     <property name="axocoatl.session_id" value="ses-1"/>
@@ -8,7 +8,7 @@
     <property name="axocoatl.exit_code" value="1"/>
     <property name="axocoatl.warning.same_model_reviewer" value="same model"/>
   </properties>
-  <testsuite name="checks" tests="4" failures="2" errors="1" skipped="0">
+  <testsuite name="checks" tests="5" failures="2" errors="1" skipped="0">
     <testcase classname="axocoatl.check" name="tests">
       <system-out>argv: npm test</system-out>
     </testcase>
@@ -26,6 +26,10 @@ assertion &lt;failed&gt; &amp; more[31m
       <error type="not_run" message="types did not run on the final result"/>
       <system-out>argv: npm test</system-out>
     </testcase>
+    <testcase classname="axocoatl.check" name="smoke">
+      <system-out>argv: npm test
+reason: the report /tmp/axocoatl-check-reports/smoke/report.json could not be read: IO error</system-out>
+    </testcase>
   </testsuite>
   <testsuite name="check:e2e" tests="2" failures="1" errors="0" skipped="0">
     <testcase classname="e2e.checkout" name="pays with a saved card" time="1.500">
@@ -37,7 +41,7 @@ assertion &lt;failed&gt; &amp; more[31m
     <testcase classname="axocoatl.review" name="required-review">
       <failure type="changes" message="the reviewer asked for changes"/>
       <system-out>reviewer openrouter:openai/gpt-oss-120b (native), 1 of 3 rounds
-round 1: Changes, 0 findings</system-out>
+round 1: changes, 2 findings</system-out>
     </testcase>
   </testsuite>
   <testsuite name="adjudications" tests="2" failures="1" errors="0" skipped="0">
@@ -64,14 +68,17 @@ repro: .axocoatl/qa/B2.spec.ts</system-out>
       <system-out>repro: .axocoatl/qa/B3.spec.ts</system-out>
     </testcase>
   </testsuite>
-  <testsuite name="coverage" tests="1" failures="1" errors="0" skipped="0">
+  <testsuite name="coverage" tests="2" failures="2" errors="0" skipped="0">
     <testcase classname="axocoatl.coverage" name="gift cards">
       <failure type="not_covered" message="provider_refusal: classifier stop"/>
+    </testcase>
+    <testcase classname="axocoatl.coverage" name="checkout">
+      <failure type="not_covered" message="not_reached: ran out of steps"/>
     </testcase>
   </testsuite>
   <testsuite name="run" tests="1" failures="1" errors="0" skipped="0">
     <testcase classname="axocoatl.run" name="verdict">
-      <failure type="checks_failed" message="The required check types did not run on the final result; The required review did not pass: the reviewer asked for changes; The writer did not answer 1 review finding; 1 area was not covered; 1 finding needs attention"/>
+      <failure type="checks_failed" message="The required check types did not run on the final result; The required review did not pass: the reviewer asked for changes; The writer did not answer 1 review finding; 2 areas were not covered; 1 finding needs attention"/>
     </testcase>
   </testsuite>
 </testsuites>

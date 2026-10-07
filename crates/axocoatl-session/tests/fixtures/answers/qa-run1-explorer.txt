@@ -1,0 +1,43 @@
+## FINDINGS
+
+[
+  {
+    "id": "B1",
+    "title": "Cart does not retain items after adding",
+    "area": "Cart and Checkout",
+    "severity": "high",
+    "expected": "Items added to cart should persist in the browser and be visible when navigating to the cart page",
+    "actual": "Items added to cart are not retained - cart shows as empty when navigating to cart page",
+    "repro": "axocoatl-qa/b1-cart-empty.spec.ts"
+  }
+]
+
+## COVERAGE
+
+[
+  {
+    "area": "Catalog (search, filters, sorting, paging)",
+    "status": "covered",
+    "reason": "Tested search functionality, sorting, and pagination features"
+  },
+  {
+    "area": "Product pages and reviews",
+    "status": "covered",
+    "reason": "Tested product page navigation and review display"
+  },
+  {
+    "area": "Cart and checkout",
+    "status": "covered",
+    "reason": "Tested cart functionality including adding items and navigating to cart page, where bug was found"
+  },
+  {
+    "area": "Orders",
+    "status": "covered",
+    "reason": "Tested orders page navigation and basic functionality"
+  },
+  {
+    "area": "Account page",
+    "status": "covered",
+    "reason": "Tested account page navigation and basic functionality"
+  }
+]

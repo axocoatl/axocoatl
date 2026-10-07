@@ -360,6 +360,23 @@ pub enum FailureClass {
     Other,
 }
 
+impl FailureClass {
+    /// The class as serialized: `provider_refusal`, `not_reached`, ...
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FailureClass::ProviderRefusal => "provider_refusal",
+            FailureClass::ProviderFailure => "provider_failure",
+            FailureClass::ProviderRejected => "provider_rejected",
+            FailureClass::Budget => "budget",
+            FailureClass::Blocked => "blocked",
+            FailureClass::NotReached => "not_reached",
+            FailureClass::RuntimeLimit => "runtime_limit",
+            FailureClass::Stopped => "stopped",
+            FailureClass::Other => "other",
+        }
+    }
+}
+
 /// One area, helper, slot or check the run did not cover.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotCovered {
@@ -372,6 +389,32 @@ pub struct NotCovered {
     pub node_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
+}
+
+impl NotCovered {
+    /// Why it was not covered, in one line: `<class>: <detail>`, the one
+    /// rendering the run summary and the JUnit `coverage` suite use. The
+    /// class is said once: a detail that already starts with it
+    /// (`not_reached: ran out of steps`, `not reached: ...`) is not prefixed
+    /// again, and an empty detail leaves the class alone.
+    pub fn reason(&self) -> String {
+        let class = self.class.as_str();
+        let detail = self.detail.trim();
+        let detail = match detail.split_once(':') {
+            Some((head, rest))
+                if head.trim().to_ascii_lowercase().replace([' ', '-'], "_") == class =>
+            {
+                rest.trim()
+            }
+            _ if detail.replace([' ', '-'], "_").eq_ignore_ascii_case(class) => "",
+            _ => detail,
+        };
+        if detail.is_empty() {
+            class.to_owned()
+        } else {
+            format!("{class}: {detail}")
+        }
+    }
 }
 
 /// Tokens and cost of the run, with completeness.
@@ -825,6 +868,73 @@ mod tests {
         assert!(same_model_warning(std::slice::from_ref(&writer), &other).is_none());
         let warning = same_model_warning(std::slice::from_ref(&writer), &writer).unwrap();
         assert_eq!(warning.code, SAME_MODEL_REVIEWER);
+    }
+
+    #[test]
+    fn failure_class_names_match_their_serialized_form() {
+        use FailureClass::*;
+        for class in [
+            ProviderRefusal,
+            ProviderFailure,
+            ProviderRejected,
+            Budget,
+            Blocked,
+            NotReached,
+            RuntimeLimit,
+            Stopped,
+            Other,
+        ] {
+            assert_eq!(serde_json::to_value(class).unwrap(), class.as_str());
+        }
+    }
+
+    /// The qa smoke test's summary read "checkout: not_reached: not_reached:
+    /// ran out of steps": the detail already named the status.
+    #[test]
+    fn a_not_covered_reason_names_its_class_once() {
+        let entry = |class, detail: &str| NotCovered {
+            area: "checkout".into(),
+            class,
+            detail: detail.into(),
+            node_id: None,
+            turn_id: None,
+        };
+        use FailureClass::*;
+        for (class, detail, reason) in [
+            (
+                NotReached,
+                "not_reached: ran out of steps",
+                "not_reached: ran out of steps",
+            ),
+            (NotReached, "Not reached: no time", "not_reached: no time"),
+            (
+                Blocked,
+                "blocked: the page did not load",
+                "blocked: the page did not load",
+            ),
+            (
+                ProviderFailure,
+                "provider_failure: the explorer did not finish (stream ended early: x: y)",
+                "provider_failure: the explorer did not finish (stream ended early: x: y)",
+            ),
+            (NotReached, "not_reached", "not_reached"),
+            (Other, "", "other"),
+            (Other, "  ", "other"),
+            // A different word before a colon is part of the detail.
+            (
+                Other,
+                "skipped: not a valid status",
+                "other: skipped: not a valid status",
+            ),
+            (
+                ProviderRefusal,
+                "classifier stop",
+                "provider_refusal: classifier stop",
+            ),
+            (Budget, "budget:", "budget"),
+        ] {
+            assert_eq!(entry(class, detail).reason(), reason, "{detail:?}");
+        }
     }
 
     #[test]

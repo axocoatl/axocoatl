@@ -1,0 +1,13 @@
+ADJUDICATIONS:
+[
+  {
+    "id": "F1",
+    "decision": "accept",
+    "reason": "The fix correctly adds validation to the pageCount function to check that 'total' is a non-negative integer, throwing a RangeError when it's negative, non-integer, or NaN as required by the contract."
+  },
+  {
+    "id": "F2",
+    "decision": "accept",
+    "reason": "The fix correctly adds validation to the pageItems function to check that 'page' is an integer, returning an empty array when it's not an integer as required by the contract."
+  }
+]

@@ -2,16 +2,17 @@
 //! the classification of each reproduction.
 //!
 //! The explorer's final answer carries two fenced JSON blocks headed
-//! `FINDINGS` and `COVERAGE` (shapes in the spec, "qa"). The host re-runs
-//! each reproduction with `browser_check` against the build under test and,
-//! when configured, the reference build, and classifies it with
-//! [`classify`].
+//! `FINDINGS` and `COVERAGE` (shapes in the spec, "qa"); each is read the way
+//! [`crate::review_adjudication`] reads a headed block, so an unfenced array
+//! right after its heading is read too. The host re-runs each reproduction
+//! with `browser_check` against the build under test and, when configured,
+//! the reference build, and classifies it with [`classify`].
 //!
 //! Owner: workstream `review-qa`.
 
 use serde::{Deserialize, Serialize};
 
-use crate::review_adjudication::fenced_blocks_after;
+use crate::review_adjudication::{headed_block, whole_json, HeadedBlock};
 use crate::run_outcome::{ReproClassification, ReproRun, Severity};
 
 pub const FINDINGS_HEADING: &str = "FINDINGS";
@@ -103,17 +104,35 @@ fn clip(text: &str, max: usize) -> String {
     format!("{}…", &text[..end])
 }
 
-/// The array in the last `heading` block, `None` without one.
+/// The array in the `heading` block, `None` without one. Without a
+/// `FINDINGS` or `COVERAGE` heading, an answer that is exactly one JSON
+/// object `{"findings": [...], "coverage": [...]}` carries the blocks.
 fn block_array(
     answer: &str,
     heading: &str,
 ) -> Result<Option<Vec<serde_json::Value>>, QaReportError> {
-    let Some(block) = fenced_blocks_after(answer, heading).pop() else {
-        return Ok(None);
+    let block = match headed_block(answer, heading, &[FINDINGS_HEADING, COVERAGE_HEADING]) {
+        HeadedBlock::Found(block) => block,
+        HeadedBlock::Empty => {
+            return Err(QaReportError::Invalid(format!(
+                "the {heading} block is not valid JSON: nothing follows the {heading} heading"
+            )))
+        }
+        HeadedBlock::Absent => {
+            return Ok(match whole_json(answer) {
+                Some(serde_json::Value::Object(mut object)) => {
+                    match object.remove(&heading.to_ascii_lowercase()) {
+                        Some(serde_json::Value::Array(entries)) => Some(entries),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+        }
     };
     let value: serde_json::Value = serde_json::from_str(block.trim()).map_err(|error| {
         QaReportError::Invalid(format!(
-            "the {heading} block is not JSON: {}",
+            "the {heading} block is not valid JSON: {}",
             clip(&error.to_string(), 200)
         ))
     })?;
@@ -154,14 +173,14 @@ fn normalize_status(status: &str) -> String {
     status.trim().to_ascii_lowercase().replace([' ', '-'], "_")
 }
 
-/// Read the explorer's `FINDINGS` and `COVERAGE` blocks: the last fenced
-/// block after each heading, each a JSON array. A block that is not a JSON
-/// array is an error (the report cannot be read). An entry the host cannot
-/// read (a finding without an id, title, expected or actual; a coverage
-/// entry without an area or status), entries past the bounds, and repeated
-/// finding ids are listed in [`ExplorerReport::problems`]; a repeated id gets
-/// a `-2`, `-3`, ... suffix so both findings stay. Unknown fields are
-/// ignored; long text is bounded.
+/// Read the explorer's `FINDINGS` and `COVERAGE` blocks: the block after
+/// each heading, fenced or not (the last heading's wins), each a JSON array.
+/// A heading whose block is not a JSON array is an error (the report cannot
+/// be read). An entry the host cannot read (a finding without an id, title,
+/// expected or actual; a coverage entry without an area or status), entries
+/// past the bounds, and repeated finding ids are listed in
+/// [`ExplorerReport::problems`]; a repeated id gets a `-2`, `-3`, ... suffix
+/// so both findings stay. Unknown fields are ignored; long text is bounded.
 pub fn parse_explorer_report(answer: &str) -> Result<ExplorerReport, QaReportError> {
     let mut report = ExplorerReport::default();
     if let Some(entries) = block_array(answer, FINDINGS_HEADING)? {
@@ -380,12 +399,75 @@ mod tests {
     fn an_unreadable_block_is_an_error() {
         assert!(matches!(
             parse_explorer_report("FINDINGS\n```json\n[{\"id\": \"B1\",]\n```"),
-            Err(QaReportError::Invalid(message)) if message.contains("FINDINGS")
+            Err(QaReportError::Invalid(message))
+                if message.starts_with("the FINDINGS block is not valid JSON: ")
         ));
         assert!(matches!(
             parse_explorer_report("COVERAGE\n```json\n{\"area\": \"x\"}\n```"),
-            Err(QaReportError::Invalid(message)) if message.contains("COVERAGE")
+            Err(QaReportError::Invalid(message))
+                if message == "the COVERAGE block is not a JSON array"
         ));
+        // A heading with no JSON after it is unreadable, not absent.
+        assert!(matches!(
+            parse_explorer_report("## FINDINGS\nNo bugs found.\n\n## COVERAGE\n```json\n[]\n```"),
+            Err(QaReportError::Invalid(message))
+                if message.starts_with("the FINDINGS block is not valid JSON: ")
+        ));
+        // One heading's block never reaches into the next heading's.
+        assert!(matches!(
+            parse_explorer_report(
+                "FINDINGS\n\nCOVERAGE\n```json\n[{\"area\": \"x\", \"status\": \"covered\"}]\n```"
+            ),
+            Err(QaReportError::Invalid(message))
+                if message == "the FINDINGS block is not valid JSON: nothing follows the FINDINGS heading"
+        ));
+    }
+
+    /// The explorer's answer in the 1.3.0 smoke test's qa run 1, exactly as
+    /// recorded: both blocks unfenced after Markdown headings. The run listed
+    /// "no FINDINGS report" and "no coverage report" for it.
+    #[test]
+    fn the_recorded_unfenced_answer_of_qa_run_1_is_read() {
+        let answer = include_str!("../tests/fixtures/answers/qa-run1-explorer.txt");
+        assert!(answer.starts_with("## FINDINGS\n\n[\n"));
+        let report = parse_explorer_report(answer).unwrap();
+        assert!(report.findings_block && report.coverage_block);
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(report.findings.len(), 1);
+        let finding = &report.findings[0];
+        assert_eq!(finding.id, "B1");
+        assert_eq!(finding.area.as_deref(), Some("Cart and Checkout"));
+        assert_eq!(finding.severity, Some(Severity::High));
+        assert_eq!(
+            finding.repro.as_deref(),
+            Some("axocoatl-qa/b1-cart-empty.spec.ts")
+        );
+        assert_eq!(report.coverage.len(), 5);
+        assert!(report.coverage.iter().all(CoverageEntry::is_covered));
+        assert_eq!(report.coverage[4].area, "Account page");
+    }
+
+    #[test]
+    fn inline_blocks_and_a_whole_json_answer_are_read() {
+        let report = parse_explorer_report(
+            "FINDINGS: []\nCOVERAGE: [{\"area\": \"search\", \"status\": \"covered\"}]",
+        )
+        .unwrap();
+        assert!(report.findings_block && report.findings.is_empty());
+        assert_eq!(report.coverage.len(), 1);
+        // No headings: an answer that is exactly the two blocks as one object.
+        let report = parse_explorer_report(
+            r#" {"findings": [{"id": "B1", "title": "t", "expected": "e", "actual": "a",
+                "repro": "axocoatl-qa/b1.spec.ts"}],
+                "coverage": [{"area": "cart", "status": "blocked", "reason": "login"}]} "#,
+        )
+        .unwrap();
+        assert!(report.findings_block && report.coverage_block);
+        assert_eq!(report.findings[0].id, "B1");
+        assert_eq!(report.coverage[0].status, BLOCKED);
+        // A bare array cannot say which block it is: neither is read.
+        let report = parse_explorer_report("[]").unwrap();
+        assert!(!report.findings_block && !report.coverage_block);
     }
 
     #[test]
