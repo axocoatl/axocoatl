@@ -67,7 +67,13 @@ own model memory.
 Account for:
 
 - Podman images and writable layers;
-- Session- and Attempt-owned root `node_modules` volumes for Node projects;
+- Session- and Attempt-owned root `node_modules` volumes for Node projects. Closing a
+  Session keeps its volume so Reopen reuses the installed dependencies; deleting the
+  Session removes it. Close removes the volumes a Session's runtime fills again when it
+  starts (`axo-egr-`, `axo-egi-` and `axo-svc-` sockets and the `axo-ca-` trust files),
+  so a closed Session leaves only its dependency volume. If Podman cannot remove one
+  because another container still uses it, the Close still succeeds and the daemon log
+  names the volume;
 - every Workspace repository and its build artifacts;
 - `.axo-variants/` clones and manifests during unresolved Attempts;
 - the full Axocoatl data root, attachments, and retained native Ways decisions;

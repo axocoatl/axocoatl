@@ -42,7 +42,11 @@ When an old Agent's role was not recorded, its private state stays archived and 
 future conversation starts empty. Review **Team & budget** before new work.
 The upgrade holds the same exclusive data-root leases as the daemon, and an interrupted
 conversion resumes from its recorded source. Older binaries cannot write the upgraded
-root. Ordinary startup never implicitly converts an existing legacy root.
+root. Ordinary startup never implicitly converts an existing legacy root: one that a
+daemon has used, or that holds Sessions. A data directory that existed before the
+daemon first started, but that no daemon has used and that holds no Session (made with
+`mkdir`, or by `axocoatl secret set`), is not a legacy root: it starts in the native
+format, as one the daemon creates does, and keeps the files in it.
 
 <Steps>
 

@@ -48,6 +48,17 @@ serve` or the [service](/operate/service/)) over its HTTP API. It never starts o
 
 A daemon that cannot be reached, or that refuses the credential, is exit code 4.
 
+## The data directory
+
+Loadout runs need native Session history. A data directory the daemon creates is
+native, and so is one that existed before the daemon first started but that no daemon
+has used and that holds no Session, such as a directory you made with `mkdir` or in
+which `axocoatl secret set` stored a credential. A data directory that a daemon already
+used in the 1.0 Session format still uses it, and a run on it exits with code 5 and the
+message to stop Axocoatl, make a cold backup, and run `axocoatl session upgrade
+--confirm` with the same `--config` and `AXOCOATL_DATA_DIR`, then start Axocoatl again.
+See [Upgrade](/operate/upgrade/).
+
 ## What it prints
 
 1. Once the daemon has admitted the run: the run id, the Session id and any warnings, on
@@ -84,9 +95,11 @@ writes `--junit` and `--record`, and exits with code 6.
 | 4 | The daemon could not be reached, or it refused the credential. |
 | 5 | Infrastructure: the Session environment failed, the Session could not run under egress with the `hardened` workload (rootful Podman, `backend: e2b`), a recipe image was not built, OpenRouter's catalog could not be read for an e2e check, a provider is not configured, or another daemon error. |
 | 6 | You interrupted the run. |
+| 7 | Busy: another run, or a Session's turn, holds the repository's Workspace, so the run was not admitted or its next turn could not start. Nothing is wrong with the run; run it again once that turn ends. The message names the Session and turn that hold the Workspace when they are known. |
 
 When several of 1, 2, 5 and 6 apply, the code is the first of 5, 6, 1, 2 in that order,
-and 0 only when none does. Code 3 usually comes before a run starts, and also ends a
+and 0 only when none does. Code 7 takes the place of 5 when the run could not go on only
+because the Workspace was held. Code 3 usually comes before a run starts, and also ends a
 started run whose loadout the daemon could not apply as written, such as budgets too small
 for its checks. Code 4 can come at any point, when the daemon stops answering. Nothing is
 a pass by default: a check that did not run, a review finding nobody answered and an area
@@ -102,6 +115,7 @@ case $? in
   0) echo "passed" ;;
   1) echo "checks failed" ;;
   2) echo "needs a person" ;;
+  7) echo "the Workspace is busy; run again later" ;;
   *) echo "could not run" ;;
 esac
 ```
@@ -162,7 +176,7 @@ The JUnit file has one `testsuite` per kind of result, and a last one for the ve
 | A reproduction that could not run, or is missing | `<error>` |
 | Anything not covered | `<failure type="not_covered">`, never skipped |
 | A warning, such as the same-model reviewer | a property `axocoatl.warning.<code>` |
-| The run's verdict | suite `run`, case `verdict`: a `<failure>` with the reasons when checks failed or the run needs attention, an `<error>` when it was interrupted or could not run, so a CI job that reads only JUnit still sees a run that did not pass |
+| The run's verdict | suite `run`, case `verdict`: a `<failure>` with the reasons when checks failed or the run needs attention, an `<error>` when it was interrupted or could not run (`type="busy"` when another run or Session held the Workspace, exit code 7), so a CI job that reads only JUnit still sees a run that did not pass |
 
 Text is XML-escaped and control characters other than tab and newline are removed. Each
 message is at most 4 KiB and the file at most 8 MiB; cases beyond that are summarized in

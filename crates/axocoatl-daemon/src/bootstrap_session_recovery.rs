@@ -9,10 +9,71 @@ use axocoatl_session::execution_ownership::UpgradedFormatOwnership;
 use axocoatl_session::execution_store::{ExecutionStoreOwner, SessionExecutionStore};
 use axocoatl_session::turn_contract::SessionId;
 
-/// Minted only by an exclusive mkdir of the final data-root component in this
-/// process. Existing empty directories do not acquire first-install authority.
+/// Minted by an exclusive mkdir of the final data-root component in this
+/// process, or by [`unowned_data_root`] for an existing directory that no
+/// daemon has owned and that holds no Session.
 pub(super) struct CreatedDataRoot {
     directory: SecureDir,
+    /// The directory existed before this process: it may hold files other
+    /// commands wrote (a stored secret, a model cache), but no daemon state.
+    existing: bool,
+}
+
+/// The stores in which a daemon keeps Sessions and their history. A data
+/// root that holds any of them with content is never installed in the native
+/// format implicitly.
+const SESSION_STORES: [&str; 3] = ["sessions", "session-history", "checkpoints"];
+
+/// Whether `name` in `root` is absent or an empty directory. Anything else,
+/// or anything that cannot be read, counts as content.
+fn absent_or_empty(root: &SecureDir, name: &str) -> bool {
+    match root.existing_child(Path::new(name)) {
+        Ok(child) => child
+            .entries_limited(1)
+            .is_ok_and(|entries| entries.is_empty()),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+
+/// An existing data root that no daemon has owned yet and that holds no
+/// Session: no format boundary (`.axocoatl-daemon.lock`, which every daemon
+/// and `axocoatl session upgrade` create when they first own a root), no
+/// conversion in progress and no Session, history or checkpoint. Such a root
+/// starts in the native format like one the daemon creates itself: there is
+/// nothing to convert, and no older daemon has state in it that the format
+/// would lock out. Call before the data-root lease exists.
+pub(super) fn unowned_data_root(directory: &SecureDir) -> Option<CreatedDataRoot> {
+    let owned = holds_any(
+        directory,
+        &[
+            axocoatl_session::execution_ownership::LEGACY_LOCK_NAME,
+            axocoatl_session::execution_ownership::RETIRED_LOCK_NAME,
+            super::session_migration::STARTUP_MIGRATION_FILE,
+        ],
+    );
+    (!owned && holds_no_session_state(directory)).then(|| CreatedDataRoot {
+        directory: directory.clone(),
+        existing: true,
+    })
+}
+
+/// Whether `root` has an entry with one of `names`; a root that cannot be
+/// listed counts as having one.
+fn holds_any(root: &SecureDir, names: &[&str]) -> bool {
+    match root.entries_limited(1024) {
+        Ok(entries) => entries.iter().any(|entry| {
+            names
+                .iter()
+                .any(|name| entry.name == std::ffi::OsStr::new(name))
+        }),
+        Err(_) => true,
+    }
+}
+
+fn holds_no_session_state(root: &SecureDir) -> bool {
+    SESSION_STORES
+        .iter()
+        .all(|store| absent_or_empty(root, store))
 }
 
 pub(super) fn open_data_root(
@@ -33,7 +94,13 @@ pub(super) fn open_data_root(
         Ok(directory) => {
             directory.sync_all().map_err(recovery_error)?;
             parent.sync_all().map_err(recovery_error)?;
-            Ok((directory.clone(), Some(CreatedDataRoot { directory })))
+            Ok((
+                directory.clone(),
+                Some(CreatedDataRoot {
+                    directory,
+                    existing: false,
+                }),
+            ))
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => parent
             .existing_child(Path::new(name))
@@ -52,14 +119,33 @@ impl CreatedDataRoot {
             .ownership
             .verify_root(&self.directory)
             .map_err(recovery_error)?;
-        let entries = self.directory.entries_limited(2).map_err(recovery_error)?;
-        if entries.len() != 1
-            || entries[0].name != axocoatl_session::execution_ownership::LEGACY_LOCK_NAME
-            || entries[0].file_type != SecureEntryType::File
-        {
-            return Err(DaemonError::Session(
-                "new data root changed before its format boundary was installed".into(),
-            ));
+        if self.existing {
+            // Held now: the lease created the boundary. Nothing that would
+            // need converting may have appeared since the root was checked.
+            let unchanged = matches!(
+                lease.ownership,
+                axocoatl_session::execution_ownership::DataRootFormatOwnership::Legacy(_)
+            ) && holds_no_session_state(&self.directory)
+                && !holds_any(
+                    &self.directory,
+                    &[
+                        axocoatl_session::execution_ownership::RETIRED_LOCK_NAME,
+                        super::session_migration::STARTUP_MIGRATION_FILE,
+                    ],
+                );
+            if !unchanged {
+                return Ok(lease);
+            }
+        } else {
+            let entries = self.directory.entries_limited(2).map_err(recovery_error)?;
+            if entries.len() != 1
+                || entries[0].name != axocoatl_session::execution_ownership::LEGACY_LOCK_NAME
+                || entries[0].file_type != SecureEntryType::File
+            {
+                return Err(DaemonError::Session(
+                    "new data root changed before its format boundary was installed".into(),
+                ));
+            }
         }
         Ok(DataDirLease {
             ownership: axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(
@@ -267,6 +353,73 @@ mod tests {
         let existing = parent.path().join("existing-empty");
         std::fs::create_dir(&existing).unwrap();
         assert!(open_data_root(&existing).unwrap().1.is_none());
+    }
+
+    /// A directory made before the daemon first started (`mkdir`, or
+    /// `axocoatl secret set`) that no daemon has owned and that holds no
+    /// Session starts in the native format and keeps its files. A root a
+    /// daemon owned (its regular lock file), one with Session state, and one
+    /// that gains a Session before the lease keep the legacy format.
+    #[test]
+    fn an_unowned_root_without_sessions_starts_native_and_an_owned_one_does_not() {
+        let parent = tempfile::tempdir().unwrap();
+        let legacy = |lease: &DataDirLease| {
+            matches!(
+                lease.ownership,
+                axocoatl_session::execution_ownership::DataRootFormatOwnership::Legacy(_)
+            )
+        };
+        let made = parent.path().join("made");
+        std::fs::create_dir(&made).unwrap();
+        std::fs::create_dir(made.join("secrets")).unwrap();
+        std::fs::write(made.join("secrets").join("route-key"), b"value").unwrap();
+        let (directory, created) = open_data_root(&made).unwrap();
+        assert!(created.is_none());
+        let lease = unowned_data_root(&directory)
+            .expect("an unowned root without Sessions")
+            .upgrade(DataDirLease::acquire(&directory).unwrap())
+            .unwrap();
+        assert!(!legacy(&lease));
+        assert_eq!(
+            std::fs::read(made.join("secrets").join("route-key")).unwrap(),
+            b"value"
+        );
+        drop(lease);
+        // Owned now: never treated as unowned again, and it reopens native.
+        assert!(unowned_data_root(&directory).is_none());
+        assert!(!legacy(&DataDirLease::acquire(&directory).unwrap()));
+
+        let owned = parent.path().join("owned");
+        std::fs::create_dir(&owned).unwrap();
+        std::fs::write(
+            owned.join(axocoatl_session::execution_ownership::LEGACY_LOCK_NAME),
+            b"",
+        )
+        .unwrap();
+        let (directory, _) = open_data_root(&owned).unwrap();
+        assert!(unowned_data_root(&directory).is_none());
+        assert!(legacy(&DataDirLease::acquire(&directory).unwrap()));
+
+        let with_session = parent.path().join("with-session");
+        std::fs::create_dir_all(with_session.join("sessions")).unwrap();
+        std::fs::write(with_session.join("sessions").join("ses-1.json"), b"{}").unwrap();
+        let (directory, _) = open_data_root(&with_session).unwrap();
+        assert!(unowned_data_root(&directory).is_none());
+
+        let racing = parent.path().join("racing");
+        std::fs::create_dir(&racing).unwrap();
+        let (directory, _) = open_data_root(&racing).unwrap();
+        let unowned = unowned_data_root(&directory).expect("unowned before the lease");
+        std::fs::create_dir(racing.join("session-history")).unwrap();
+        std::fs::write(
+            racing.join("session-history").join("turns.v1.jsonl"),
+            b"x\n",
+        )
+        .unwrap();
+        let lease = unowned
+            .upgrade(DataDirLease::acquire(&directory).unwrap())
+            .unwrap();
+        assert!(legacy(&lease));
     }
 
     #[test]

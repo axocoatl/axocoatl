@@ -103,17 +103,19 @@ pub fn spawn_run_driver(state: AppState, context: RunContext) {
     });
 }
 
-/// `POST /api/runs`: admit the run, start its driver task, return 202.
+/// `POST /api/runs`: admit the run, start its driver task, return 202. A
+/// Workspace that another run or Session holds is a `409` with the code
+/// `workspace_busy`, which `axocoatl run` exits 7 on.
 pub async fn start_loadout_run(
     State(state): State<AppState>,
     Json(request): Json<RunRequest>,
-) -> Result<(StatusCode, Json<RunAccepted>), RouteError> {
+) -> Result<(StatusCode, Json<RunAccepted>), CodedRouteError> {
     let (accepted, context) = state
         .read()
         .await
         .admit_loadout_run(request)
         .await
-        .map_err(attempt_err)?;
+        .map_err(coded_err)?;
     spawn_run_driver(state.clone(), context);
     Ok((StatusCode::ACCEPTED, Json(accepted)))
 }
@@ -286,9 +288,39 @@ pub async fn loadout_run_record_route(
     Ok(response)
 }
 
+/// Why the task that sent one turn failed: the daemon's error, and its
+/// detail when the error was a busy Workspace.
+#[derive(Debug, Clone)]
+struct SendFailure {
+    message: String,
+    busy: Option<String>,
+}
+
+impl SendFailure {
+    fn of(error: &axocoatl_daemon::DaemonError) -> Self {
+        Self {
+            message: error.to_string(),
+            busy: match error {
+                axocoatl_daemon::DaemonError::WorkspaceBusy(detail) => Some(detail.clone()),
+                _ => None,
+            },
+        }
+    }
+
+    /// The run's error when the turn never started: busy (exit 7) when
+    /// another Session or operation held the Workspace, infrastructure
+    /// otherwise.
+    fn not_started(&self) -> RunError {
+        match &self.busy {
+            Some(detail) => RunError::Busy(format!("the turn could not start: {detail}")),
+            None => RunError::Infrastructure(format!("the turn could not start: {}", self.message)),
+        }
+    }
+}
+
 /// The outcome of the task that sent one turn.
 type SendResults =
-    Arc<std::sync::Mutex<std::collections::HashMap<String, Option<Result<(), String>>>>>;
+    Arc<std::sync::Mutex<std::collections::HashMap<String, Option<Result<(), SendFailure>>>>>;
 
 /// The run driver's host over the live daemon. Each method takes the
 /// daemon's read lock only for the call it makes, never across a wait.
@@ -346,7 +378,7 @@ impl DaemonRunHost {
             .clone()
     }
 
-    fn send_result(&self, turn_id: &str) -> Option<Result<(), String>> {
+    fn send_result(&self, turn_id: &str) -> Option<Result<(), SendFailure>> {
         self.sends
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
@@ -416,7 +448,7 @@ impl RunHost for DaemonRunHost {
                 .unwrap_or_else(|poison| poison.into_inner())
                 .insert(
                     turn,
-                    Some(result.map(|_| ()).map_err(|error| error.to_string())),
+                    Some(result.map(|_| ()).map_err(|error| SendFailure::of(&error))),
                 );
         });
         Ok(turn_id)
@@ -454,11 +486,7 @@ impl RunHost for DaemonRunHost {
                 }
                 // The turn never started: the send failed before the turn
                 // had a record.
-                (None, Some(Err(error))) => {
-                    return Err(RunError::Infrastructure(format!(
-                        "the turn could not start: {error}"
-                    )))
-                }
+                (None, Some(Err(failure))) => return Err(failure.not_started()),
                 _ => {}
             }
             if std::time::Instant::now() >= deadline {
@@ -473,12 +501,12 @@ impl RunHost for DaemonRunHost {
                     usage: Default::default(),
                 }));
             }
-            if let (Some(observation), Some(Err(error))) = (&observed, &sent) {
+            if let (Some(observation), Some(Err(failure))) = (&observed, &sent) {
                 // The send ended with an error while the projection still
                 // says running: report it as the turn's end.
                 let mut observation = observation.clone();
                 observation.state = TurnState::Failed;
-                observation.attention_reason = Some(error.clone());
+                observation.attention_reason = Some(failure.message.clone());
                 self.record_retries(turn_id, retries).await?;
                 return Ok(observation);
             }
@@ -560,5 +588,35 @@ impl RunHost for DaemonRunHost {
             .await
             .finish_loadout_run(run_id, outcome)
             .map_err(daemon_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A turn the daemon could not start because the Workspace was held
+    /// ends the run busy (exit 7); any other failure stays infrastructure.
+    #[test]
+    fn a_turn_refused_for_a_held_workspace_is_busy() {
+        let busy = SendFailure::of(&axocoatl_daemon::DaemonError::WorkspaceBusy(
+            "the Workspace is held by another Session's turn".into(),
+        ));
+        let error = busy.not_started();
+        assert!(matches!(error, RunError::Busy(_)), "{error}");
+        assert_eq!(
+            error.to_string(),
+            "Workspace busy: the turn could not start: the Workspace is held by another \
+             Session's turn"
+        );
+        let other = SendFailure::of(&axocoatl_daemon::DaemonError::SessionConflict(
+            "the Session is closing".into(),
+        ));
+        let error = other.not_started();
+        assert!(matches!(error, RunError::Infrastructure(_)), "{error}");
+        assert_eq!(
+            error.to_string(),
+            "the turn could not start: Session conflict: the Session is closing"
+        );
     }
 }

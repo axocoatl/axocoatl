@@ -7,7 +7,7 @@
 //! summary (or the Outcome as JSON) to stdout, and the process exits with
 //! the Outcome's exit code: 0 pass, 1 checks failed, 2 needs attention, 3
 //! usage, 4 daemon unreachable or token refused, 5 infrastructure, 6
-//! interrupted.
+//! interrupted, 7 busy (another run or Session holds the Workspace).
 
 use std::collections::{BTreeMap, HashSet};
 use std::io::Write;
@@ -343,20 +343,29 @@ impl Daemon {
             return Ok(response);
         }
         let text = response.text().await.unwrap_or_default();
-        let message = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
+        let body = serde_json::from_str::<serde_json::Value>(&text).ok();
+        let code = body
+            .as_ref()
+            .and_then(|value| value.get("code"))
+            .and_then(|code| code.as_str());
+        let message = body
+            .as_ref()
             .and_then(|value| {
                 value
                     .get("error")
                     .and_then(|e| e.as_str())
                     .map(str::to_string)
             })
-            .unwrap_or(text);
+            .unwrap_or_else(|| text.clone());
         Err(match status.as_u16() {
             401 | 403 => Failure::unreachable(format!(
                 "the daemon refused the API token ({status}): {message}"
             )),
             404 | 422 => Failure::usage(message),
+            409 if code == Some(axocoatl_daemon::WORKSPACE_BUSY_CODE) => Failure {
+                code: exit_code::BUSY,
+                message,
+            },
             _ => Failure::infrastructure(format!("{status}: {message}")),
         })
     }
@@ -1288,6 +1297,54 @@ mod tests {
             .unwrap_err();
         assert_eq!(failure.code, exit_code::USAGE, "{}", failure.message);
         drop(repo);
+    }
+
+    /// The daemon's 409 with the code `workspace_busy` (another run or
+    /// Session holds the Workspace) exits 7 with the daemon's reason; a
+    /// conflict without that code stays exit 5.
+    #[tokio::test]
+    async fn a_busy_workspace_exits_seven_and_another_conflict_five() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let busy = "Workspace busy: the Workspace /repo is held by Session ses-1 (loadout run \
+                    run-1), whose turn turn-1 is running";
+        Mock::given(method("POST"))
+            .and(path("/api/runs"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(
+                serde_json::json!({"error": busy, "code": axocoatl_daemon::WORKSPACE_BUSY_CODE}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/other"))
+            .respond_with(
+                ResponseTemplate::new(409)
+                    .set_body_json(serde_json::json!({"error": "Session conflict: closing"})),
+            )
+            .mount(&server)
+            .await;
+        let daemon = Daemon {
+            base: server.uri(),
+            token: None,
+            client: reqwest::Client::new(),
+        };
+        let failure = daemon
+            .post_json::<serde_json::Value>("/api/runs", &serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(failure.code, exit_code::BUSY);
+        assert_eq!(failure.message, busy);
+        let failure = daemon
+            .post_json::<serde_json::Value>("/api/other", &serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure.code,
+            exit_code::INFRASTRUCTURE,
+            "{}",
+            failure.message
+        );
     }
 
     #[test]

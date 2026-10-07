@@ -3,7 +3,149 @@
 use super::*;
 use axocoatl_session::execution_ownership::DataRootFormatOwnership;
 
+/// Who holds a Workspace, as its open Sessions show it.
+#[derive(Debug, Default)]
+pub(super) struct WorkspaceHolders {
+    /// One entry per open Session of the Workspace whose turn is running or
+    /// needs a person: each such turn holds the Workspace until it ends.
+    pub(super) turns: Vec<String>,
+    /// Every open Session of the Workspace, with its loadout run.
+    pub(super) open: Vec<String>,
+}
+
+impl WorkspaceHolders {
+    /// `is held by …` for a refusal: the open turns when there are any,
+    /// otherwise the open Sessions.
+    pub(super) fn held_by(&self) -> String {
+        if !self.turns.is_empty() {
+            format!("is held by {}", self.turns.join("; "))
+        } else if !self.open.is_empty() {
+            format!(
+                "is held by another operation of one of its open Sessions: {}",
+                self.open.join(", ")
+            )
+        } else {
+            "is held by another operation".to_string()
+        }
+    }
+}
+
 impl AxocoatlDaemon {
+    /// The open Sessions of `workspace_id` (all but `except`) and those
+    /// among them whose turn is running or needs a person, named with their
+    /// loadout run and turn.
+    pub(super) async fn workspace_holders(
+        &self,
+        workspace_id: &str,
+        except: Option<&str>,
+    ) -> WorkspaceHolders {
+        let mut holders = WorkspaceHolders::default();
+        for session in self.list_sessions().await {
+            if session.workspace_id != workspace_id
+                || session.status == axocoatl_session::SessionStatus::Closed
+                || except == Some(session.id.as_str())
+            {
+                continue;
+            }
+            let run = session
+                .loadout
+                .as_ref()
+                .map(|binding| format!(" (loadout run {})", binding.run_id))
+                .unwrap_or_default();
+            holders.open.push(format!("{}{run}", session.id));
+            let open_turn = match self.active_session_turn(&session.id).await {
+                Ok(Some(active)) => Some(format!("turn {} is running", active.turn_id)),
+                _ => self
+                    .list_versioned_session_turns(&session.id)
+                    .await
+                    .ok()
+                    .and_then(|entries| {
+                        entries.into_iter().rev().find_map(|entry| match entry {
+                            axocoatl_session::session_history::SessionHistoryEntry::ExecutionV2(
+                                turn,
+                            ) if !turn.state.is_closed() => Some(format!(
+                                "turn {} {}",
+                                turn.turn_id.as_str(),
+                                if turn.state
+                                    == axocoatl_session::turn_contract::LogicalTurnState::Running
+                                {
+                                    "is running"
+                                } else {
+                                    "needs attention"
+                                }
+                            )),
+                            _ => None,
+                        })
+                    }),
+            };
+            if let Some(turn) = open_turn {
+                holders
+                    .turns
+                    .push(format!("Session {}{run}, whose {turn}", session.id));
+            }
+        }
+        holders
+    }
+
+    /// Close and Delete act on a Session's Workspace, so they wait for its
+    /// Workspace operation. When another Session's turn holds it, that wait
+    /// would last until the turn ends (and a needs-attention turn holds it
+    /// until a person acts). Refuse at once instead, naming that turn, and
+    /// change nothing; the same request succeeds once the turn has ended.
+    pub(super) async fn refuse_lifecycle_while_another_turn_holds_workspace(
+        &self,
+        id: &str,
+        action: &str,
+    ) -> Result<(), DaemonError> {
+        let Some(session) = self.get_session(id).await else {
+            return Ok(());
+        };
+        let operation = self
+            .attempt_operation_for_workspace(&session.workspace_id)
+            .await;
+        if operation.try_lock().is_ok() {
+            return Ok(());
+        }
+        let holders = self
+            .workspace_holders(&session.workspace_id, Some(id))
+            .await;
+        if holders.turns.is_empty() {
+            // A short operation, or this Session's own turn, which Close
+            // has asked to stop: wait for it as before.
+            return Ok(());
+        }
+        Err(DaemonError::WorkspaceBusy(format!(
+            "Session {id} was not {action}d: its Workspace {} {}. A Session is {action}d only \
+             while no other Session's turn holds its Workspace: let that turn finish, or stop \
+             it, then {action} this Session again",
+            session.working_dir.display(),
+            holders.held_by()
+        )))
+    }
+
+    /// After Close stopped a local Session's containers: remove the volumes
+    /// its runtime fills again whenever it starts (the egress proxy's socket,
+    /// identity-socket and service-socket volumes and the trust volume), so a
+    /// closed Session leaves none behind. The Node dependency volume stays,
+    /// so Reopen reuses the installed dependencies; Delete removes it. A
+    /// volume Podman cannot remove (another container still uses it) does
+    /// not undo the Close; the daemon log names it.
+    pub(super) async fn remove_closed_session_runtime_volumes(&self, id: &str) {
+        let Some(session) = self.get_session(id).await else {
+            return;
+        };
+        if !self.local_runtime_repair(&session) {
+            return;
+        }
+        if let Err(error) = SessionSandbox::remove_runtime_volumes(id).await {
+            tracing::warn!(
+                session = %id,
+                %error,
+                "a closed Session's runtime volumes were not all removed"
+            );
+        }
+    }
+
     pub(super) fn uses_native_session_history(&self) -> bool {
         matches!(
             self._data_dir_lease.ownership,
@@ -278,3 +420,7 @@ impl AxocoatlDaemon {
         })
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_session_lifecycle_tests.rs"]
+mod lifecycle_tests;

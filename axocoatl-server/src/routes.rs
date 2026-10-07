@@ -623,6 +623,7 @@ fn measured_daemon_failure_response(
         &failure.error,
         axocoatl_daemon::DaemonError::AttemptConflict(_)
             | axocoatl_daemon::DaemonError::SessionConflict(_)
+            | axocoatl_daemon::DaemonError::WorkspaceBusy(_)
     ) {
         StatusCode::CONFLICT
     } else {
@@ -2193,8 +2194,12 @@ pub async fn search_session_turns(
     State(state): State<AppState>,
     Query(query): Query<SessionTurnSearchQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    let versioned = versioned_history(query.history_version)?;
     let daemon = state.read().await;
+    // A search of one Session answers as its other History reads do.
+    let versioned = match (query.history_version, query.session_id.as_deref()) {
+        (None, Some(session_id)) => daemon.session_history_is_versioned(session_id).await,
+        (version, _) => versioned_history(version)?,
+    };
     if versioned {
         history_json(
             daemon
@@ -2226,9 +2231,11 @@ pub async fn export_session(
     Path(id): Path<String>,
     Query(query): Query<SessionExportQuery>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
-    let versioned = versioned_history(query.history_version)?;
     let format = query.format.as_deref().unwrap_or("markdown");
     let daemon = state.read().await;
+    // Without `history_version`, a Session whose History holds native
+    // execution exports in the versioned form, as the record bundle does.
+    let versioned = history_version_for(&daemon, &id, query.history_version).await?;
     let (body, content_type, extension) = match format {
         "json" => (
             if versioned {
@@ -2722,7 +2729,8 @@ fn export_content_disposition(name: &str, extension: &str) -> HeaderValue {
 fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorResponse>) {
     let status = match &error {
         axocoatl_daemon::DaemonError::AttemptConflict(_)
-        | axocoatl_daemon::DaemonError::SessionConflict(_) => StatusCode::CONFLICT,
+        | axocoatl_daemon::DaemonError::SessionConflict(_)
+        | axocoatl_daemon::DaemonError::WorkspaceBusy(_) => StatusCode::CONFLICT,
         axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::UNPROCESSABLE_ENTITY,
         axocoatl_daemon::DaemonError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
         axocoatl_daemon::DaemonError::NotFound(_) => StatusCode::NOT_FOUND,
@@ -2734,6 +2742,28 @@ fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorRe
             error: error.to_string(),
         }),
     )
+}
+
+/// An error body with a machine-readable `code` when the refusal has one:
+/// `{"error": "…", "code": "workspace_busy"}` for a Workspace that another
+/// run, Session turn or operation holds (409; retry later).
+#[derive(Serialize)]
+pub struct CodedErrorResponse {
+    pub error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<&'static str>,
+}
+
+pub type CodedRouteError = (StatusCode, Json<CodedErrorResponse>);
+
+/// [`attempt_err`]'s statuses, with the `workspace_busy` code on a busy
+/// Workspace, so a client can tell "retry later" from any other conflict.
+pub(crate) fn coded_err(error: axocoatl_daemon::DaemonError) -> CodedRouteError {
+    let code = error
+        .is_workspace_busy()
+        .then_some(axocoatl_daemon::WORKSPACE_BUSY_CODE);
+    let (status, Json(ErrorResponse { error })) = attempt_err(error);
+    (status, Json(CodedErrorResponse { error, code }))
 }
 
 #[derive(Serialize)]
@@ -2749,6 +2779,7 @@ fn ways_control_err(error: axocoatl_daemon::WaysControlFailure) -> WaysControlRo
         error.error.as_ref(),
         axocoatl_daemon::DaemonError::AttemptConflict(_)
             | axocoatl_daemon::DaemonError::SessionConflict(_)
+            | axocoatl_daemon::DaemonError::WorkspaceBusy(_)
     ) {
         StatusCode::CONFLICT
     } else {
@@ -3512,11 +3543,15 @@ pub struct CloseSessionQuery {
     pub force: bool,
 }
 
+/// DELETE /api/sessions/{id}: Close, or Delete with `force=true`. A
+/// Workspace another Session's turn holds is a `409` with the code
+/// `workspace_busy` at once (nothing changed; retry once that turn ends),
+/// another conflict a `409`, anything else a `500`.
 pub async fn close_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(q): Query<CloseSessionQuery>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<serde_json::Value>, CodedRouteError> {
     let daemon = state.read().await;
     let result = if q.force {
         daemon.delete_session(&id).await
@@ -3525,13 +3560,17 @@ pub async fn close_session(
     };
     result
         .map(|_| Json(serde_json::json!({ "ok": true, "deleted": q.force })))
-        .map_err(|e| {
-            (
+        .map_err(|error| match error {
+            axocoatl_daemon::DaemonError::WorkspaceBusy(_)
+            | axocoatl_daemon::DaemonError::SessionConflict(_)
+            | axocoatl_daemon::DaemonError::AttemptConflict(_) => coded_err(error),
+            other => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
+                Json(CodedErrorResponse {
+                    error: other.to_string(),
+                    code: None,
                 }),
-            )
+            ),
         })
 }
 
