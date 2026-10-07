@@ -16,8 +16,7 @@
 //!   enters the container;
 //! - runs `e2e <command> --reporter json <args>` with the report document
 //!   on its stdout redirected to `/tmp/axocoatl-check-reports/<name>/report.json`
-//!   (outside the Workspace, so the check changes no repository path) and
-//!   e2e's diagnostics to a log beside it;
+//!   (outside the Workspace) and e2e's diagnostics to a log beside it;
 //! - prints at most [`E2E_STDOUT_TAIL_BYTES`] of that log, then
 //!   `AXOCOATL-CHECK-REPORT sha256=<hex>` of the report as its last stdout
 //!   line, and exits with e2e's status.
@@ -26,6 +25,18 @@
 //! stdout retains (a prefix of 768 KiB), so the marker is always recorded;
 //! [`collect_reports`] reads it from `CheckResult::stdout_tail`, which must
 //! keep at least the last line (the marker is 94 bytes).
+//!
+//! e2e itself still writes its output directory in the Workspace (`.e2e/`
+//! by default: `report.json`, `artifacts/`). The repository must ignore
+//! those paths, as `e2e init` writes them into `.gitignore`; otherwise the
+//! check changes the captured tree and its turn reports changed files. The
+//! project's own `node_modules` provides what its tests and config import
+//! (`e2e`, `@e2e-dev/web`, `ai`, the provider package), installed by the
+//! loadout's setup command; the recipe provides the pinned CLI and browser.
+//!
+//! The check's model calls leave the container only through its route, and
+//! only when the check process holds an egress credential: that grant is the
+//! daemon's check dispatch, not this module.
 
 use std::fmt::Write as _;
 use std::time::Duration;
