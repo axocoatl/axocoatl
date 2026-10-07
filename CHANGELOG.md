@@ -5,7 +5,7 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.0] - Unreleased
+## [1.3.0] - 2026-10-06
 
 ### Added
 - **Loadouts.** A loadout is a versioned YAML file (`axocoatl.loadout/1`) that declares
@@ -63,13 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names a Playwright reproduction that the host re-runs on the build under test and, when
   `reference_url` is given, on a clean reference build: confirmed only when it fails on
   the first and passes on the second, "fails on clean build" when it fails on both,
-  reproduced without a reference. Areas the explorer did not reach or was blocked on, and
+  reproduced without a reference. Every re-run is a `browser_check` call in the Session's
+  network record. Areas the explorer did not reach or was blocked on, and
   everything left when it stopped on a provider refusal or classifier stop, a provider
   failure or its budget, are listed as not covered, and the run needs attention.
 - **Built-in `audit` loadout (opt-in).** Runs only when named. A planner splits the
   scope into 2 to 8 areas in a structured block, one read-only worker per area runs in
   parallel with a fresh context, and an integrator merges their findings; a failed area
-  is not covered. Its documentation states the trade-off measured with Claude Code
+  is not covered. An invalid plan gets one retry that quotes the error, and a second
+  leaves the whole scope not covered; when integration has no result, the workers'
+  findings are reported unmerged and integration is listed as not covered. Its documentation states the trade-off measured with Claude Code
   subagents, not through Axocoatl: more recall at lower precision and about three times
   the tokens on an audit larger than one context, as a sensitivity analysis.
 - **External agents.** A loadout's writer can be the Claude Code CLI
@@ -93,7 +96,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The check forces `E2E_TELEMETRY_DISABLED=1`, mounts `.e2e/cache` read-only, sends e2e's
   model calls through a route with the key added on the host, and parses its JUnit or
   `report.json`, bound to the run by a digest marker, into the check's result in the
-  Outcome. An OpenRouter model without tool calls and image input is refused.
+  Outcome. An OpenRouter model without tool calls and image input is refused. Under
+  `network: egress` an e2e check's process gets its own egress credential, as a writer's
+  shell does, so it reaches the loadout's routes and allowlist with every connection
+  recorded; every other required check still has no network there.
 - **Keep as PR.** `axocoatl run --keep branch|pr`, **Keep as PR** in the Run outcome
   panel and `POST /api/sessions/{id}/keep-pr` commit a passing run's changed paths to a
   new branch with host `git` through a temporary index, leaving HEAD, the index, the
@@ -101,14 +107,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the run. Opt-in, they push the branch without `--force`, never to the remote's default
   branch, and open a pull request with `gh` whose body lists the check results, the review
   verdict and adjudications, findings, everything not covered, warnings and the run id.
+  Keep also refuses paths that a turn outside the run changed, and runs no hook, filter,
+  fsmonitor, signing program or credential helper the repository configures.
 - **Per-check timeouts.** A Team and budget edit's `check_options`, aligned with
   `required_checks`, gives each required check a name, a timeout from 1 second to 30
-  minutes (3 minutes by default, as before) and a report to parse. Teams applied before
-  this release keep working unchanged.
+  minutes (3 minutes by default, as before), a report to parse and, with `egress: true`,
+  an egress credential for the check's process under `network: egress`. Teams applied
+  before this release keep working unchanged.
 - **`sandbox.egress.host_ollama`.** An opt-in route from Session containers to an Ollama
   server on a loopback port of this computer, as `https://ollama.host.axocoatl.internal`
-  under `network: egress`, with every request and response in the network record. Off by
-  default; it does nothing under `bridge` and `none`.
+  under `network: egress` (set as `OLLAMA_HOST`), with every request and response in the
+  network record. Off by default; under `bridge` and `none` it does nothing and
+  `axocoatl validate` warns. `axocoatl network reload` turns it on, moves it or turns it
+  off live, and names under `axocoatl.internal` are refused otherwise.
 - `GET /api/sessions/{id}/team` returns `warnings`, such as the same-model reviewer
   warning, and the Team and budget review shows them.
 - `docs/CLAIMS.md`, a ledger of every public performance or quality claim with its
@@ -133,8 +144,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   429, a 5xx status, a timeout or a reset connection is retried once, after its
   `Retry-After` (at most 30 seconds) or 2 seconds, on the same pinned model and endpoint,
   as a new call with its own reservation; the failed call keeps its accounting. 400, 401,
-  402 and 403, refusals and safety stops are not retried. Each retry is recorded on the
-  activation's evidence and, in a run, as a `provider_retry` event.
+  402 and 403, refusals and safety stops are not retried, and a completion the provider
+  refused is now reported as a refusal. Each retry is recorded on the activation's
+  evidence and, in a run, as a `provider_retry` event.
 - **What fails is listed as not covered.** A helper, slot or area that ends without a
   result keeps a failure class (`provider_refusal`, `provider_failure`,
   `provider_rejected`, `budget`, `blocked`, `not_reached`, `runtime_limit`, `stopped`,

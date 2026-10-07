@@ -99,22 +99,22 @@ node demo/one-app/films/record-capture.mjs \
 
 node demo/one-app/films/stage-film.mjs \
   session-workbench \
-  demo/one-app/films/source/v1.2.0/session-workbench/timeline.json \
+  demo/one-app/films/source/v1.3.0/session-workbench/timeline.json \
   /private/tmp/axocoatl-v1.1.0-film-stage/session-workbench \
   --replace
 
 ./demo/one-app/films/encode-film.sh \
   session-workbench \
   /private/tmp/axocoatl-v1.1.0-film-stage/session-workbench \
-  sites/marketing/assets/films/v1.2.0 \
-  "$(node -p 'require("./demo/one-app/films/source/v1.2.0/session-workbench/stage.json").poster_frame')" \
+  sites/marketing/assets/films/v1.3.0 \
+  "$(node -p 'require("./demo/one-app/films/source/v1.3.0/session-workbench/stage.json").poster_frame')" \
   --replace
 
 node demo/one-app/films/write-provenance.mjs \
   session-workbench \
   --binary "$PWD/target/release/axocoatl" \
   --frames /private/tmp/axocoatl-v1.1.0-film-stage/session-workbench \
-  --evidence demo/one-app/films/source/v1.2.0/session-workbench/evidence.json \
+  --evidence demo/one-app/films/source/v1.3.0/session-workbench/evidence.json \
   --replace
 ```
 

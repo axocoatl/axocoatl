@@ -116,6 +116,52 @@
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
 
       <article class="release">
+        <span class="release-tag">v1.3.0</span>
+        <span class="release-date">2026-10-06</span>
+        <h2>A whole run in one file, headless, with a record you can verify.</h2>
+
+        <p>A loadout is a versioned YAML file that declares the Agents and their models, the
+          required checks with their timeouts, the required reviewer, the egress allowlist and
+          routes, the budgets and the prompt. <code>axocoatl run &lt;loadout&gt; --task "…"</code>
+          runs it against the running daemon in a Session under <code>network: egress</code>
+          with commands as non-root users, and exits 0 on a pass, 1 on a failed check and 2
+          when something needs a person. <code>--junit</code> and <code>--record</code> write
+          JUnit and the run's whole record as one file that <code>axocoatl record verify</code>
+          checks.</p>
+
+        <h3>Added</h3>
+        <ul>
+          <li>Built-in loadouts: <code>fix</code> (one writer, required checks, review by a
+              different model for up to three rounds, and the writer's answer to every
+              finding, recorded), <code>qa</code> (one browser explorer whose findings each
+              need a reproduction the host re-runs, against a clean reference build when you
+              give one) and the opt-in <code>audit</code> (read-only area workers in parallel,
+              then integration). What a run did not cover is listed, never passed over.</li>
+          <li>The Claude Code and Codex CLIs as a loadout's writer, inside the Session as the
+              non-root writer user. Their credential, stored with
+              <code>axocoatl secret set</code> from standard input, is added on your computer
+              by a route; the container holds a placeholder, and every model call is in the
+              network record.</li>
+          <li>tester-army/e2e as a required check, with its report in the run's Outcome and
+              its model calls through a route.</li>
+          <li>Keep as PR: a passing run's changes on a new branch with your own
+              <code>git</code>, without touching your checkout, and opt-in a pull request
+              with <code>gh</code>. Never a force-push, never the default branch.</li>
+          <li>Per-check timeouts up to 30 minutes, one retry of a transient provider error on
+              the same model, and an opt-in route to an Ollama server on this computer.</li>
+        </ul>
+
+        <h3>Changed</h3>
+        <ul>
+          <li>The claim that Axocoatl targets small local models first is withdrawn: nothing measured it.
+              Results measured with Claude Code subagents are labeled as such, never as
+              Axocoatl results.</li>
+          <li>Before a Session written by 1.2.0 is converted to segment files, its directory is
+              copied once to <code>backups/before-segments/</code> in the data root.</li>
+        </ul>
+      </article>
+
+      <article class="release">
         <span class="release-tag">v1.2.0</span>
         <span class="release-date">2026-10-03</span>
         <h2>Agents' commands reach only the hosts you list.</h2>
