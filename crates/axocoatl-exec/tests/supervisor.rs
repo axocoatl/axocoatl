@@ -685,6 +685,33 @@ fn read_pid(path: &Path) -> i32 {
     std::fs::read_to_string(path).unwrap().parse().unwrap()
 }
 
+/// Start `cat` with `marker` in its environment and return once it has
+/// echoed a line, so its execve has finished. `Command::spawn` returns as
+/// soon as the child is committed to its exec, but the kernel records the new
+/// program's environment for `/proc/<pid>/environ` later in execve, and until
+/// then the file reads as empty. Closing its stdin ends it.
+fn spawn_running_with_marker(marker: &str) -> Child {
+    use std::io::BufRead;
+    let mut child = Command::new("cat")
+        .env("AXO_PROC_MARKER", marker)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"running\n")
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.as_mut().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert_eq!(line, "running\n");
+    child
+}
+
 // This test is also a subprocess fixture. It is a no-op during the normal test
 // run; only the helper's own child receives these per-Command environment vars.
 #[test]
@@ -775,7 +802,10 @@ fn fixture_process() {
             let marker = std::fs::read_to_string(directory.join("marker")).unwrap();
             let answer =
                 |error: std::io::Error| format!("errno-{}", error.raw_os_error().unwrap_or(-1));
+            // An empty read is not a denial: the kernel answers it for a
+            // process that has exited or is still inside execve.
             let environ = |pid: u32| match std::fs::read(format!("/proc/{pid}/environ")) {
+                Ok(bytes) if bytes.is_empty() => "empty".to_owned(),
                 Ok(bytes) if bytes.windows(marker.len()).any(|w| w == marker.as_bytes()) => {
                     "marker".to_owned()
                 }
@@ -813,13 +843,7 @@ fn fixture_process() {
                     Err(error) => answer(error),
                 }
             };
-            // Command::spawn returns after the child's exec, so its
-            // environment is already the one given here.
-            let mut child = Command::new("sleep")
-                .arg("30")
-                .env("AXO_PROC_MARKER", &marker)
-                .spawn()
-                .unwrap();
+            let mut child = spawn_running_with_marker(&marker);
             println!(
                 "environ={}\nmaps={}\nmem={}\nchild_environ={}",
                 environ(victim),
@@ -1411,7 +1435,7 @@ fn yama_ptrace_scope() -> u32 {
 /// `--serve --harden` puts its command in a Landlock domain even without a
 /// write restriction, so the command cannot read the environment, memory map
 /// or memory of a process it did not start, even one of the same user (here
-/// a `sleep` started by this test). Its own children stay readable. Without
+/// a `cat` started by this test). Its own children stay readable. Without
 /// `--harden` the same command reads the other process's environment.
 #[test]
 fn hardened_commands_cannot_read_other_processes_memory_or_environment() {
@@ -1420,11 +1444,7 @@ fn hardened_commands_cannot_read_other_processes_memory_or_environment() {
     }
     let directory = tempfile::tempdir().unwrap();
     let marker = format!("axo-proc-marker-{}", std::process::id());
-    let mut victim = Command::new("sleep")
-        .arg("30")
-        .env("AXO_PROC_MARKER", &marker)
-        .spawn()
-        .unwrap();
+    let mut victim = spawn_running_with_marker(&marker);
     std::fs::write(directory.path().join("victim-pid"), victim.id().to_string()).unwrap();
     std::fs::write(directory.path().join("marker"), &marker).unwrap();
     let plain = fixture_answers("proc-access", directory.path(), false);
