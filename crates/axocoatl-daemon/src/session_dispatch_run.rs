@@ -307,17 +307,21 @@ impl SessionDispatchController {
             reservation: checkpoint,
             candidate: Mutex::new(None),
         });
-        let provider = Arc::new(super::provider::SessionProvider::new(
-            self.clone(),
-            activation.clone(),
-            provider,
-            profile.provider,
-            profile.model,
-        ));
         let observer = Arc::new(super::stream::ActivationStreamObserver::new(
             self.clone(),
             activation.clone(),
         ));
+        // Provider retries are recorded on the activation's own stream.
+        let provider = Arc::new(
+            super::provider::SessionProvider::new(
+                self.clone(),
+                activation.clone(),
+                provider,
+                profile.provider,
+                profile.model,
+            )
+            .with_retry_observer(observer.clone()),
+        );
         let host_delegate_tool = self.scoped_delegate_tool(&activation)?;
         let host_knowledge_tool = self.scoped_knowledge_tool(&activation)?;
         // A Coordinator template runs here as a lead like any other Agent: its

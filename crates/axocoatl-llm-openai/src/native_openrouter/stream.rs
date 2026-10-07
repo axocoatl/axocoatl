@@ -151,6 +151,25 @@ impl ReasoningDetails {
     }
 }
 
+/// An error OpenRouter reported inside the stream. Its numeric `code` is
+/// the upstream's HTTP status when it is one, so a Session can tell a
+/// transient failure (429, 5xx) from a rejection.
+fn stream_error(failure: &Value) -> ProviderError {
+    const PARTIAL: &str = "provider reported an error; retained accounting remains partial";
+    match failure
+        .get("code")
+        .and_then(Value::as_u64)
+        .filter(|code| (400..600).contains(code))
+    {
+        Some(status) => ProviderError::ApiError {
+            provider: PROVIDER.into(),
+            status: status as u16,
+            message: format!("native OpenRouter: {PARTIAL}"),
+        },
+        None => protocol(PARTIAL),
+    }
+}
+
 pub(super) fn decode(
     response: reqwest::Response,
     request: ChatRequest,
@@ -181,7 +200,7 @@ pub(super) fn decode(
             let chunk = next_stream_item(&mut bytes, deadline, STREAM_IDLE_TIMEOUT, PROVIDER).await?;
             let eof = chunk.is_none();
             let frames = match chunk {
-                Some(chunk) => decoder.push(&chunk.map_err(|e| network_error(&e, &[&key]))?)?,
+                Some(chunk) => decoder.push(&chunk.map_err(|e| transport_error(&e, &[&key]))?)?,
                 None => decoder.finish()?,
             };
             for frame in frames {
@@ -265,10 +284,8 @@ pub(super) fn decode(
                         Err(protocol("response used a service tier the request never chose"))?;
                     }
                 }
-                if value.get("error").is_some_and(|v| !v.is_null()) {
-                    Err(protocol(
-                        "provider reported an error; retained accounting remains partial",
-                    ))?;
+                if let Some(failure) = value.get("error").filter(|v| !v.is_null()) {
+                    Err(stream_error(failure))?;
                 }
                 let choices = value
                     .get("choices")

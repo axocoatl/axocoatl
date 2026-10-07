@@ -506,7 +506,7 @@ fn endpoint(base: &str, path: &str) -> Result<String, ProviderError> {
     let official = parsed.scheme() == "https"
         && parsed.host_str() == Some("openrouter.ai")
         && parsed.path().trim_end_matches('/') == "/api/v1";
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-loopback-endpoint"))]
     let official = official
         || (parsed.scheme() == "http"
             && matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")));
@@ -528,15 +528,16 @@ pub(super) async fn metadata(
         client.get(endpoint(base, path)?).bearer_auth(key).send(),
     )
     .await
-    .map_err(|_| invalid("OpenRouter metadata timed out"))?
-    .map_err(|e| network_error(&e, &[key]))?;
+    .map_err(|_| ProviderError::Network("timed out: OpenRouter metadata did not answer".into()))?
+    .map_err(|e| super::transport_error(&e, &[key]))?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
+        let retry_after = super::retry_after_secs(response.headers());
         let detail = read_error_text(response, &[key]).await;
         return Err(ProviderError::ApiError {
             provider: PROVIDER.into(),
             status,
-            message: detail,
+            message: super::with_retry_after(detail, retry_after),
         });
     }
     tokio::time::timeout(RESPONSE_TIMEOUT, read_json(response, PROVIDER))

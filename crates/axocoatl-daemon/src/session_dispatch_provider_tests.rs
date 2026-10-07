@@ -901,3 +901,652 @@ async fn a_tool_call_leaves_the_estimate_of_the_call_that_reads_its_result() {
     }
     assert!(fixture.controller.lock().unwrap().follow_ups.is_empty());
 }
+
+// ------------------------------------------------------------ retry policy
+
+/// What a scripted executor does on each call, in order.
+enum Scripted {
+    /// `chat_stream` / `chat_with_accounting` fails before any response.
+    Open(ProviderError),
+    /// The stream yields these items.
+    Events(Vec<std::result::Result<StreamEvent, ProviderError>>),
+}
+
+struct ScriptedProvider {
+    calls: AtomicUsize,
+    script: Mutex<std::collections::VecDeque<Scripted>>,
+}
+
+impl ScriptedProvider {
+    fn new(script: Vec<Scripted>) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            script: Mutex::new(script.into()),
+        })
+    }
+    fn next(&self) -> Scripted {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.script
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("an unscripted provider call")
+    }
+}
+
+#[async_trait]
+impl LlmProvider for ScriptedProvider {
+    fn provider_id(&self) -> &str {
+        "controlled"
+    }
+    fn model_id(&self) -> &str {
+        "controlled-model"
+    }
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            streaming: true,
+            ..Default::default()
+        }
+    }
+    fn execution_bounds(&self, _: &ChatRequest) -> Option<ProviderExecutionBounds> {
+        Some(ProviderExecutionBounds {
+            token_limit: 100,
+            cost_microunits: 10,
+            response_bytes: 4096,
+        })
+    }
+    async fn chat(&self, _: ChatRequest) -> std::result::Result<ChatResponse, ProviderError> {
+        unreachable!("the Session boundary uses chat_with_accounting")
+    }
+    async fn chat_with_accounting(&self, _: ChatRequest) -> AccountedChatOutcome {
+        let response = match self.next() {
+            Scripted::Open(error) => Err(error),
+            Scripted::Events(_) => Ok(ChatResponse {
+                content: "answer".into(),
+                tool_calls: vec![],
+                finish_reason: FinishReason::Stop,
+                usage: TokenUsageStats::new(10, 2),
+                model: "controlled-model".into(),
+                provider: "controlled".into(),
+            }),
+        };
+        let usage = match &response {
+            Ok(_) => MeasuredTokenUsage::known(TokenUsageStats::new(10, 2)),
+            Err(_) => MeasuredTokenUsage::lower_bound(TokenUsageStats::default()),
+        };
+        AccountedChatOutcome {
+            response,
+            usage,
+            cost_microunits: None,
+        }
+    }
+    async fn chat_stream(
+        &self,
+        _: ChatRequest,
+    ) -> std::result::Result<
+        Pin<Box<dyn Stream<Item = std::result::Result<StreamEvent, ProviderError>> + Send>>,
+        ProviderError,
+    > {
+        match self.next() {
+            Scripted::Open(error) => Err(error),
+            Scripted::Events(events) => Ok(Box::pin(tokio_stream::iter(events))),
+        }
+    }
+}
+
+/// A status error that names `Retry-After: 0 s`, so tests do not wait.
+fn unavailable(status: u16) -> ProviderError {
+    ProviderError::ApiError {
+        provider: "controlled".into(),
+        status,
+        message: crate::provider_retry::with_retry_after(
+            "unavailable".into(),
+            Some(std::time::Duration::ZERO),
+        ),
+    }
+}
+
+fn answer() -> Vec<std::result::Result<StreamEvent, ProviderError>> {
+    vec![
+        Ok(StreamEvent::TextDelta {
+            delta: "answer".into(),
+        }),
+        Ok(StreamEvent::Usage(TokenUsageStats::new(10, 2))),
+        Ok(StreamEvent::Done {
+            finish_reason: FinishReason::Stop,
+        }),
+    ]
+}
+
+fn scripted_fixture(
+    script: Vec<Scripted>,
+    limits: GrantLimits,
+) -> (Fixture, SessionProvider, Arc<ScriptedProvider>) {
+    let inner = ScriptedProvider::new(script);
+    let fixture = fixture_with_limits(limits, "in-process-test");
+    {
+        let mut state = fixture.controller.lock().unwrap();
+        let bound = state
+            .bind_with_provider_gate(
+                fixture.activation.clone(),
+                fixture.profile.clone(),
+                &serde_json::to_string(&fixture.config).unwrap(),
+                AgentRunControl::new(axocoatl_actor::AgentRunId::new("activation")),
+                true,
+                now_ms().unwrap(),
+            )
+            .unwrap();
+        state
+            .bound
+            .insert(fixture.activation.activation_id.clone(), bound);
+        let snapshot = state.current(&fixture.activation).unwrap();
+        let DispatchState {
+            memory,
+            content,
+            canonical,
+            ..
+        } = &mut *state;
+        memory
+            .reserve_candidate(canonical, &fixture.activation)
+            .unwrap();
+        content
+            .reserve_activation_output(
+                &snapshot,
+                &fixture.activation,
+                axocoatl_session::execution_content::ActivationOutputLimits {
+                    partial_records: 0,
+                    partial_bytes: 0,
+                    settlement_bytes: 1024 * 1024,
+                },
+            )
+            .unwrap();
+    }
+    let observer = fixture
+        .controller
+        .stream_observer_for_test(fixture.activation.clone());
+    let wrapped = SessionProvider::new(
+        fixture.controller.clone(),
+        fixture.activation.clone(),
+        inner.clone(),
+        fixture.profile.provider.clone(),
+        fixture.profile.model.clone(),
+    )
+    .with_retry_observer(observer);
+    (fixture, wrapped, inner)
+}
+
+fn roomy() -> GrantLimits {
+    GrantLimits {
+        activations: 8,
+        invocations: 32,
+        tokens: 1000,
+        cost_microunits: 100,
+    }
+}
+
+/// The retries recorded on the activation's stream.
+fn recorded_retries(fixture: &Fixture) -> Vec<String> {
+    let state = fixture.controller.lock().unwrap();
+    let snapshot = state.current(&fixture.activation).unwrap();
+    state
+        .content
+        .activation_stream(&snapshot, &fixture.activation)
+        .unwrap()
+        .into_iter()
+        .filter_map(|view| match view.content.payload {
+            axocoatl_session::execution_content::ActivationStreamPayload::ProviderRetry {
+                reason,
+            } => Some(reason),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn drain(
+    stream: &mut Pin<Box<dyn Stream<Item = std::result::Result<StreamEvent, ProviderError>> + Send>>,
+) -> std::result::Result<(), ProviderError> {
+    while let Some(event) = stream.next().await {
+        if let StreamEvent::Done { .. } = event? {
+            return Ok(());
+        }
+    }
+    Err(ProviderError::Stream("ended without Done".into()))
+}
+
+/// A 503 before anything streamed is sent again once, as a new call with
+/// its own reservation: the failed call keeps its whole reservation (1.2),
+/// the retry settles to what it used, and the retry is recorded on the
+/// activation before it is sent.
+#[tokio::test]
+async fn a_transient_failure_is_retried_once_as_a_new_reserved_call() {
+    let (fixture, wrapped, inner) = scripted_fixture(
+        vec![Scripted::Open(unavailable(503)), Scripted::Events(answer())],
+        roomy(),
+    );
+    let mut stream = wrapped
+        .chat_stream(ChatRequest::simple("input"))
+        .await
+        .unwrap();
+    drain(&mut stream).await.unwrap();
+    drop(stream);
+    assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+    let usage = provider_usage(&fixture);
+    assert_eq!(usage.calls, 2);
+    assert_eq!(usage.unsettled_calls, 0);
+    // The failed call's usage is unknown, so the total is a lower bound.
+    assert!(!usage.tokens.complete);
+    let charged = fixture
+        .controller
+        .lock()
+        .unwrap()
+        .authority
+        .usage("grant")
+        .unwrap();
+    assert_eq!(charged.invocations, 2);
+    assert_eq!(charged.tokens, 100 + 12, "first reservation kept, retry settled");
+    let retries = recorded_retries(&fixture);
+    assert_eq!(retries.len(), 1, "{retries:?}");
+    assert!(
+        retries[0].starts_with("HTTP 503 from controlled; retrying once in 0 s"),
+        "{retries:?}"
+    );
+}
+
+/// A failure before the first streamed item (a reset, a timeout) is retried
+/// too; one after the provider produced anything never is.
+#[tokio::test]
+async fn only_a_failure_before_anything_streamed_is_retried() {
+    let (fixture, wrapped, inner) = scripted_fixture(
+        vec![
+            Scripted::Events(vec![Err(ProviderError::Network(
+                "connection reset: the peer closed".into(),
+            ))]),
+            Scripted::Events(answer()),
+        ],
+        roomy(),
+    );
+    let mut stream = wrapped
+        .chat_stream(ChatRequest::simple("input"))
+        .await
+        .unwrap();
+    drain(&mut stream).await.unwrap();
+    assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(recorded_retries(&fixture).len(), 1);
+
+    let (fixture, wrapped, inner) = scripted_fixture(
+        vec![Scripted::Events(vec![
+            Ok(StreamEvent::TextDelta {
+                delta: "half".into(),
+            }),
+            Err(unavailable(503)),
+        ])],
+        roomy(),
+    );
+    let mut stream = wrapped
+        .chat_stream(ChatRequest::simple("input"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        stream.next().await,
+        Some(Ok(StreamEvent::TextDelta { .. }))
+    ));
+    assert!(matches!(
+        stream.next().await,
+        Some(Err(ProviderError::ApiError { status: 503, .. }))
+    ));
+    assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+    assert!(recorded_retries(&fixture).is_empty());
+}
+
+/// A second failure ends the call; rejections and refusals are never
+/// retried.
+#[tokio::test]
+async fn a_second_failure_and_every_rejection_end_the_call() {
+    let (fixture, wrapped, inner) = scripted_fixture(
+        vec![
+            Scripted::Open(unavailable(502)),
+            Scripted::Open(unavailable(504)),
+        ],
+        roomy(),
+    );
+    let error = wrapped
+        .chat_stream(ChatRequest::simple("input"))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, ProviderError::ApiError { status: 504, .. }));
+    assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(provider_usage(&fixture).calls, 2);
+    assert_eq!(recorded_retries(&fixture).len(), 1);
+    for rejected in [
+        unavailable(400),
+        unavailable(401),
+        unavailable(402),
+        unavailable(403),
+        ProviderError::ContentFiltered {
+            provider: "controlled".into(),
+            reason: "safety".into(),
+        },
+    ] {
+        let (fixture, wrapped, inner) =
+            scripted_fixture(vec![Scripted::Open(rejected)], roomy());
+        assert!(wrapped
+            .chat_stream(ChatRequest::simple("input"))
+            .await
+            .is_err());
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(provider_usage(&fixture).calls, 1);
+        assert!(recorded_retries(&fixture).is_empty());
+    }
+}
+
+/// The retry is admitted like any call: when the grant cannot pay for it
+/// after the failed call kept its reservation, the original failure stands
+/// and nothing more is sent.
+#[tokio::test]
+async fn a_retry_the_grant_cannot_pay_is_not_sent() {
+    let (fixture, wrapped, inner) = scripted_fixture(
+        vec![Scripted::Open(unavailable(503)), Scripted::Events(answer())],
+        GrantLimits {
+            tokens: 150,
+            ..roomy()
+        },
+    );
+    let error = wrapped
+        .chat_stream(ChatRequest::simple("input"))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, ProviderError::ApiError { status: 503, .. }));
+    assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(provider_usage(&fixture).calls, 1);
+}
+
+/// The non-streaming path follows the same policy.
+#[tokio::test]
+async fn non_streaming_calls_are_retried_under_the_same_policy() {
+    let (fixture, wrapped, inner) = scripted_fixture(
+        vec![Scripted::Open(unavailable(429)), Scripted::Events(vec![])],
+        roomy(),
+    );
+    let outcome = wrapped
+        .chat_with_accounting(ChatRequest::simple("summarize"))
+        .await;
+    assert_eq!(outcome.response.unwrap().content, "answer");
+    assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(provider_usage(&fixture).calls, 2);
+    assert_eq!(recorded_retries(&fixture).len(), 1);
+}
+
+/// A completion the provider ended with its content filter is reported as a
+/// refusal, so the activation's recorded failure says the provider refused.
+#[tokio::test]
+async fn a_content_filter_stop_is_reported_as_a_refusal() {
+    let (_fixture, wrapped, _) = scripted_fixture(
+        vec![Scripted::Events(vec![
+            Ok(StreamEvent::Usage(TokenUsageStats::new(10, 0))),
+            Ok(StreamEvent::Done {
+                finish_reason: FinishReason::ContentFilter,
+            }),
+        ])],
+        roomy(),
+    );
+    let mut stream = wrapped
+        .chat_stream(ChatRequest::simple("input"))
+        .await
+        .unwrap();
+    let error = drain(&mut stream).await.err().unwrap();
+    assert!(
+        matches!(error, ProviderError::ContentFiltered { .. }),
+        "{error:?}"
+    );
+    let text = format!(
+        "Activation failed: {}",
+        axocoatl_actor::AgentError::Provider(error.to_string())
+    );
+    assert_eq!(
+        axocoatl_session::failure_class::classify_failure_text(&text),
+        axocoatl_session::run_outcome::FailureClass::ProviderRefusal,
+        "{text}"
+    );
+}
+
+// ---------------------------------------- native OpenRouter over the wire
+
+const OPENROUTER_MODEL: &str = "meta-llama/test-instruct";
+
+async fn openrouter_metadata(server: &wiremock::MockServer) {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{
+            "id": OPENROUTER_MODEL,
+            "architecture": {"input_modalities":["text"],"output_modalities":["text"]},
+            "supported_parameters": ["max_tokens","tools"]
+        }]})))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/models/{OPENROUTER_MODEL}/endpoints")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":{
+            "id": OPENROUTER_MODEL,
+            "endpoints": [{
+                "model_id": OPENROUTER_MODEL, "provider_name": "FiniteProvider",
+                "tag": "finite/exact", "context_length": 2048, "max_completion_tokens": 128,
+                "supported_parameters": ["max_tokens","tools"],
+                "pricing": {"prompt":"0.000001","completion":"0.000002"},
+                "status": 0, "supports_implicit_caching": false
+            }]
+        }})))
+        .mount(server)
+        .await;
+}
+
+fn openrouter_reply() -> String {
+    let first = serde_json::json!({"id":"gen-fixture","model":OPENROUTER_MODEL,"provider":"FiniteProvider","choices":[{"index":0,"delta":{"content":"verified"},"finish_reason":"stop"}]});
+    let usage = serde_json::json!({"id":"gen-fixture","model":OPENROUTER_MODEL,"provider":"FiniteProvider","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6,"cost":0.000008,"is_byok":false}});
+    format!("data: {first}\n\ndata: {usage}\n\ndata: [DONE]\n\n")
+}
+
+/// The Session boundary over a real native OpenRouter executor whose
+/// inference endpoint answers `first` once and then the normal reply.
+async fn openrouter_session(
+    first: wiremock::ResponseTemplate,
+) -> (wiremock::MockServer, Fixture, SessionProvider) {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    openrouter_metadata(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(first)
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(openrouter_reply(), "text/event-stream"),
+        )
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    let profile = axocoatl_llm_openai::observe_native_openrouter_profiles(
+        &server.uri(),
+        "fixture-inference-key",
+        OPENROUTER_MODEL,
+    )
+    .await
+    .unwrap()
+    .remove(0);
+    let executor = Arc::new(
+        axocoatl_llm_openai::NativeOpenRouterProvider::connect_observed(
+            profile,
+            "fixture-inference-key",
+            32,
+            65536,
+            None,
+        )
+        .await
+        .unwrap(),
+    );
+    let fixture = fixture_with_config(
+        GrantLimits {
+            activations: 8,
+            invocations: 32,
+            tokens: 100_000,
+            cost_microunits: 100_000,
+        },
+        "in-process-test",
+        AgentConfig {
+            id: AgentId::new("conversation"),
+            name: "Writer".into(),
+            provider: "openrouter".into(),
+            model: OPENROUTER_MODEL.into(),
+            tools: vec![],
+            ..Default::default()
+        },
+        "answer once",
+    );
+    {
+        let mut state = fixture.controller.lock().unwrap();
+        let bound = state
+            .bind_with_provider_gate(
+                fixture.activation.clone(),
+                fixture.profile.clone(),
+                &serde_json::to_string(&fixture.config).unwrap(),
+                AgentRunControl::new(axocoatl_actor::AgentRunId::new("activation")),
+                true,
+                now_ms().unwrap(),
+            )
+            .unwrap();
+        state
+            .bound
+            .insert(fixture.activation.activation_id.clone(), bound);
+        let snapshot = state.current(&fixture.activation).unwrap();
+        let DispatchState {
+            memory,
+            content,
+            canonical,
+            ..
+        } = &mut *state;
+        memory
+            .reserve_candidate(canonical, &fixture.activation)
+            .unwrap();
+        content
+            .reserve_activation_output(
+                &snapshot,
+                &fixture.activation,
+                axocoatl_session::execution_content::ActivationOutputLimits {
+                    partial_records: 0,
+                    partial_bytes: 0,
+                    settlement_bytes: 1024 * 1024,
+                },
+            )
+            .unwrap();
+    }
+    let observer = fixture
+        .controller
+        .stream_observer_for_test(fixture.activation.clone());
+    let wrapped = SessionProvider::new(
+        fixture.controller.clone(),
+        fixture.activation.clone(),
+        executor,
+        "openrouter".into(),
+        OPENROUTER_MODEL.into(),
+    )
+    .with_retry_observer(observer);
+    (server, fixture, wrapped)
+}
+
+async fn inference_requests(server: &wiremock::MockServer) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.method.as_str() == "POST")
+        .count()
+}
+
+/// OpenRouter answers 503 (with `Retry-After: 1`) and then the reply: the
+/// Session sends the same pinned endpoint one more call after a second,
+/// both calls are accounted, and the failed one keeps its reservation.
+#[tokio::test]
+async fn native_openrouter_503_is_retried_once_and_both_calls_are_accounted() {
+    let (server, fixture, wrapped) = openrouter_session(
+        wiremock::ResponseTemplate::new(503)
+            .insert_header("Retry-After", "1")
+            .set_body_string("upstream busy"),
+    )
+    .await;
+    let request = ChatRequest::simple("Answer once");
+    let reservation = wrapped.execution_bounds(&request).unwrap();
+    let started = std::time::Instant::now();
+    let mut stream = wrapped.chat_stream(request).await.unwrap();
+    drain(&mut stream).await.unwrap();
+    drop(stream);
+    assert!(started.elapsed() >= std::time::Duration::from_secs(1));
+    assert_eq!(inference_requests(&server).await, 2);
+    // Both requests named the same pinned endpoint.
+    for request in server.received_requests().await.unwrap() {
+        if request.method.as_str() == "POST" {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body["provider"]["only"], serde_json::json!(["finite/exact"]));
+            assert_eq!(body["model"], OPENROUTER_MODEL);
+        }
+    }
+    let usage = provider_usage(&fixture);
+    assert_eq!(usage.calls, 2);
+    assert_eq!(usage.unsettled_calls, 0);
+    assert!(!usage.tokens.complete, "the failed call's usage is unknown");
+    let charged = fixture
+        .controller
+        .lock()
+        .unwrap()
+        .authority
+        .usage("grant")
+        .unwrap();
+    assert_eq!(charged.invocations, 2);
+    // The failed call keeps its whole reservation; the retry settles to the
+    // 6 tokens and the cost OpenRouter reported for it.
+    assert_eq!(charged.tokens, reservation.token_limit + 6);
+    assert_eq!(charged.cost_microunits, reservation.cost_microunits + 8);
+    let retries = recorded_retries(&fixture);
+    assert_eq!(retries.len(), 1);
+    assert!(
+        retries[0].starts_with("HTTP 503 from openrouter; retrying once in 1 s"),
+        "{retries:?}"
+    );
+    let plane = fixture.controller.control_plane().unwrap();
+    let events = crate::provider_retry::run_events(&plane);
+    assert!(
+        matches!(events.as_slice(), [axocoatl_session::run_record::RunEvent::ProviderRetry {
+            node_id, status: Some(503), ..
+        }] if node_id == "counter"),
+        "{events:?}"
+    );
+}
+
+/// A 401 is a rejection: nothing more is sent.
+#[tokio::test]
+async fn native_openrouter_401_is_not_retried() {
+    let (server, fixture, wrapped) = openrouter_session(
+        wiremock::ResponseTemplate::new(401).set_body_string("no such key"),
+    )
+    .await;
+    let error = wrapped
+        .chat_stream(ChatRequest::simple("Answer once"))
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(error, ProviderError::ApiError { status: 401, .. }),
+        "{error:?}"
+    );
+    assert_eq!(inference_requests(&server).await, 1);
+    assert_eq!(provider_usage(&fixture).calls, 1);
+    assert!(recorded_retries(&fixture).is_empty());
+}

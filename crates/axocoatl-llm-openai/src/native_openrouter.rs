@@ -1,5 +1,8 @@
 //! Audited OpenRouter text/tool execution. The retained exact endpoint and wire
-//! ceilings are verified before each single inference request; no retry/fallback.
+//! ceilings are verified before each single inference request; this provider
+//! never retries and never falls back. It states what a Session's retry
+//! policy needs: the status and `Retry-After` of a refused request, and
+//! whether a transport failure was a timeout or a reset connection.
 //! Requires an operator-declared OpenRouter-credit billing configuration. BYOK
 //! is unsupported; enabling it externally invalidates this execution contract.
 //!
@@ -52,6 +55,87 @@ fn invalid(reason: impl Into<String>) -> ProviderError {
 }
 fn protocol(reason: impl Into<String>) -> ProviderError {
     ProviderError::Stream(format!("native OpenRouter: {}", reason.into()))
+}
+
+/// How a refused request states its `Retry-After` at the end of the error
+/// message: `… (Retry-After: 5 s)`. The Session's retry policy reads it.
+pub const RETRY_AFTER_SUFFIX: &str = " (Retry-After: ";
+
+/// A response's `Retry-After`, in whole seconds from now: delta-seconds or
+/// an HTTP date (a date in the past is zero).
+pub fn retry_after_secs(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    let value = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(seconds);
+    }
+    let at = httpdate::parse_http_date(value).ok()?;
+    Some(
+        at.duration_since(std::time::SystemTime::now())
+            .map_or(0, |wait| {
+                wait.as_secs()
+                    .saturating_add(u64::from(wait.subsec_nanos() > 0))
+            }),
+    )
+}
+
+/// `message` with `retry_after` appended as [`RETRY_AFTER_SUFFIX`] states it.
+pub fn with_retry_after(message: String, retry_after: Option<u64>) -> String {
+    match retry_after {
+        Some(seconds) => format!("{message}{RETRY_AFTER_SUFFIX}{seconds} s)"),
+        None => message,
+    }
+}
+
+/// A transport failure, named `timed out: …` or `connection reset: …` when
+/// it was one, so a retry policy can tell them from other failures. Never
+/// carries a secret.
+pub(crate) fn transport_error(error: &reqwest::Error, secrets: &[&str]) -> ProviderError {
+    let ProviderError::Network(message) = network_error(error, secrets) else {
+        return network_error(error, secrets);
+    };
+    let kind = if error.is_timeout() {
+        Some("timed out")
+    } else if connection_reset(error) {
+        Some("connection reset")
+    } else {
+        None
+    };
+    ProviderError::Network(match kind {
+        Some(kind) => format!("{kind}: {message}"),
+        None => message,
+    })
+}
+
+/// Whether a request failed because the peer reset or closed the connection.
+fn connection_reset(error: &reqwest::Error) -> bool {
+    use std::io::ErrorKind;
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            if matches!(
+                io.kind(),
+                ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::BrokenPipe
+                    | ErrorKind::UnexpectedEof
+            ) {
+                return true;
+            }
+        }
+        let text = cause.to_string().to_ascii_lowercase();
+        if text.contains("connection reset")
+            || text.contains("connection closed before message completed")
+            || text.contains("broken pipe")
+        {
+            return true;
+        }
+        source = cause.source();
+    }
+    false
 }
 
 pub struct NativeOpenRouterProvider {
@@ -400,14 +484,15 @@ impl LlmProvider for NativeOpenRouterProvider {
         )
         .await
         .map_err(|_| protocol("response headers timed out"))?
-        .map_err(|e| network_error(&e, &[&self.inner.api_key]))?;
+        .map_err(|e| transport_error(&e, &[&self.inner.api_key]))?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
+            let retry_after = retry_after_secs(response.headers());
             let detail = read_error_text(response, &[&self.inner.api_key]).await;
             return Err(ProviderError::ApiError {
                 provider: PROVIDER.into(),
                 status,
-                message: detail,
+                message: with_retry_after(detail, retry_after),
             });
         }
         Ok(stream::decode(

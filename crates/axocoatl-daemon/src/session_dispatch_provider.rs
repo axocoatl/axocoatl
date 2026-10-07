@@ -4,6 +4,15 @@
 //! capabilities must establish actual total spend limits; request estimates do
 //! not grant authority. A dropped call retains incomplete observed usage and
 //! its conservative charge. No provider completion escapes before settlement.
+//!
+//! A transient failure (429, 5xx, timeout, connection reset) that arrives
+//! before the provider produced anything is retried once, after the
+//! provider's `Retry-After` (at most 30 s) or 2 s, on the same executor, so
+//! the same pinned model and endpoint ([`crate::provider_retry`]). The
+//! failed call keeps its own settlement: an incomplete call keeps its whole
+//! reservation. The retry is a new call admitted against the grant like any
+//! other; when the grant cannot pay for it the original failure stands. Each
+//! retry is recorded on the activation's stream before it is sent.
 
 use std::io::{self, Write};
 use std::pin::Pin;
@@ -22,8 +31,9 @@ use axocoatl_session::control_authority::{
 use axocoatl_session::turn_contract::ActivationRef;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tokio_stream::Stream;
+use tokio_stream::{Stream, StreamExt};
 
+use crate::provider_retry::{self, ProviderFailure, RetryDecision};
 use crate::session_dispatch::SessionDispatchController;
 
 #[path = "session_dispatch_provider_framing.rs"]
@@ -38,6 +48,15 @@ pub(crate) struct SessionProvider {
     inner: Arc<dyn LlmProvider>,
     expected_provider: String,
     expected_model: String,
+    /// The activation's own stream observer, where each retry is recorded.
+    retry_observer: Option<Arc<dyn axocoatl_actor::AgentStreamObserver>>,
+}
+
+/// One attempt's outcome: the stream, a provider failure that may be
+/// retried, or an error that ends the call (a settlement failure).
+enum Attempt<T> {
+    Done(T),
+    Failed(ProviderError),
 }
 
 impl SessionProvider {
@@ -54,7 +73,195 @@ impl SessionProvider {
             inner,
             expected_provider,
             expected_model,
+            retry_observer: None,
         }
+    }
+
+    /// Record each provider retry on `observer`, the activation's own
+    /// stream observer, as a `provider_retry` observation.
+    pub(crate) fn with_retry_observer(
+        mut self,
+        observer: Arc<dyn axocoatl_actor::AgentStreamObserver>,
+    ) -> Self {
+        self.retry_observer = Some(observer);
+        self
+    }
+
+    /// How long to wait before retrying `error` after attempt `attempt`, or
+    /// `None` when the policy gives up. A retry that cannot be recorded on
+    /// the activation is not made.
+    fn retry_wait(&self, error: &ProviderError, attempt: u32) -> Option<std::time::Duration> {
+        let failure = provider_retry::failure_of(error);
+        let RetryDecision::RetryAfter(wait) = provider_retry::decide(&failure, attempt) else {
+            return None;
+        };
+        self.record_retry(&failure, wait).then_some(wait)
+    }
+
+    fn record_retry(&self, failure: &ProviderFailure, wait: std::time::Duration) -> bool {
+        let note = provider_retry::retry_note(
+            failure,
+            wait,
+            &self.expected_provider,
+            &self.expected_model,
+        );
+        match &self.retry_observer {
+            Some(observer) => match observer
+                .observe(&axocoatl_actor::AgentStreamChunk::ProviderRetry { reason: note })
+            {
+                Ok(()) => true,
+                Err(reason) => {
+                    tracing::warn!(
+                        activation = %self.activation.activation_id.as_str(),
+                        %reason,
+                        "a provider retry could not be recorded; the failure stands"
+                    );
+                    false
+                }
+            },
+            None => {
+                tracing::info!(
+                    activation = %self.activation.activation_id.as_str(),
+                    %note,
+                    "provider retry without an activation stream observer"
+                );
+                true
+            }
+        }
+    }
+
+    /// Admit the retry of a failed call. When the grant cannot pay for it,
+    /// or the activation may no longer call, the original failure stands.
+    fn admit_retry(&self, request: &ChatRequest, failure: &ProviderError) -> Option<PendingCall> {
+        match self.admit(request) {
+            Ok(pending) => Some(pending),
+            Err(refused) => {
+                tracing::info!(
+                    activation = %self.activation.activation_id.as_str(),
+                    %refused,
+                    %failure,
+                    "the provider retry was not admitted; the first failure stands"
+                );
+                None
+            }
+        }
+    }
+
+    /// One non-streaming call under `pending`, settled exactly as 1.2
+    /// settles it. `Failed` carries a provider failure whose call settled,
+    /// which may be retried; any other error ends the call.
+    async fn accounted_once(
+        &self,
+        mut pending: PendingCall,
+        request: ChatRequest,
+        usage: &mut MeasuredTokenUsage,
+        cost_microunits: &mut Option<u64>,
+    ) -> Result<Attempt<ChatResponse>, ProviderError> {
+        let outcome = self.inner.chat_with_accounting(request).await;
+        *usage = outcome.usage.clone();
+        *cost_microunits = outcome.cost_microunits;
+        // Retain both independently authoritative dimensions before refusing
+        // either boundary, including a response that exceeds both bounds.
+        let usage_result = pending.observe_usage(outcome.usage);
+        let cost_result = outcome
+            .cost_microunits
+            .map(|cost| pending.observe_cost(cost))
+            .transpose();
+        if let Err(error) = usage_result.and(cost_result.map(|_| ())) {
+            *usage = pending.observed_usage(false);
+            return Err(pending.violation(error));
+        }
+        let response = match outcome.response {
+            Ok(response) => response,
+            Err(error) => {
+                // A parser may have received usage before the body became
+                // invalid. Preserve its subtotal without treating failure
+                // as proof of a complete provider exchange.
+                *usage = pending.observed_usage(false);
+                pending.finish(ProviderCallTerminal::Failed, false)?;
+                return Ok(Attempt::Failed(error));
+            }
+        };
+        if response.usage != usage.usage {
+            // Conflicting evidence is not permission to discard the larger
+            // observed dimension, nor to release a successful response.
+            pending.retain_highwater(&response.usage);
+            *usage = pending.observed_usage(false);
+            return Err(
+                pending.violation("provider response and accounting observations disagree".into())
+            );
+        }
+        if let Err(error) = pending.observe_response(&response) {
+            *usage = pending.observed_usage(false);
+            return Err(pending.violation(error));
+        }
+        let failed = matches!(
+            response.finish_reason,
+            FinishReason::Error | FinishReason::ContentFilter
+        );
+        pending.finish(
+            if failed {
+                ProviderCallTerminal::Failed
+            } else {
+                ProviderCallTerminal::Completed
+            },
+            true,
+        )?;
+        if failed {
+            return Err(failed_completion(
+                &self.expected_provider,
+                &response.finish_reason,
+            ));
+        }
+        pending.note_follow_up();
+        Ok(Attempt::Done(response))
+    }
+
+    /// Open one stream under `pending`. With `prefetch`, the stream's first
+    /// item is read before it is handed on, so a failure before the
+    /// provider produced anything can be retried; that failure is settled
+    /// exactly as the stream would have settled it.
+    async fn stream_once(
+        &self,
+        mut pending: PendingCall,
+        request: ChatRequest,
+        attempt: u32,
+    ) -> Result<Attempt<ProviderStream>, ProviderError> {
+        let mut inner = match self.inner.chat_stream(request).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                pending.finish(ProviderCallTerminal::Failed, false)?;
+                return Ok(Attempt::Failed(error));
+            }
+        };
+        let retryable = |error: &ProviderError| {
+            matches!(
+                provider_retry::decide(&provider_retry::failure_of(error), attempt),
+                RetryDecision::RetryAfter(_)
+            )
+        };
+        let first = if attempt < provider_retry::MAX_PROVIDER_RETRIES {
+            match inner.next().await {
+                Some(Err(error)) if retryable(&error) => {
+                    // Nothing was observed before it, so no terminal usage was
+                    // reported: the whole reservation stays, as 1.2 keeps it.
+                    pending.finish(ProviderCallTerminal::Interrupted, false)?;
+                    return Ok(Attempt::Failed(error));
+                }
+                first => Some(first),
+            }
+        } else {
+            None
+        };
+        Ok(Attempt::Done(Box::pin(framing::FramedProviderStream::new(
+            Box::pin(SessionProviderStream {
+                inner,
+                pending,
+                finished: false,
+                first,
+                provider: self.expected_provider.clone(),
+            }),
+        ))))
     }
 
     fn admit(&self, request: &ChatRequest) -> Result<PendingCall, ProviderError> {
@@ -159,62 +366,25 @@ impl LlmProvider for SessionProvider {
         let mut cost_microunits = None;
         let response = async {
             let mut pending = self.admit(&request)?;
-            let outcome = self.inner.chat_with_accounting(request).await;
-            usage = outcome.usage.clone();
-            cost_microunits = outcome.cost_microunits;
-            // Retain both independently authoritative dimensions before refusing
-            // either boundary, including a response that exceeds both bounds.
-            let usage_result = pending.observe_usage(outcome.usage);
-            let cost_result = outcome
-                .cost_microunits
-                .map(|cost| pending.observe_cost(cost))
-                .transpose();
-            if let Err(error) = usage_result.and(cost_result.map(|_| ())) {
-                usage = pending.observed_usage(false);
-                return Err(pending.violation(error));
-            }
-            let response = match outcome.response {
-                Ok(response) => response,
-                Err(error) => {
-                    // A parser may have received usage before the body became
-                    // invalid. Preserve its subtotal without treating failure
-                    // as proof of a complete provider exchange.
-                    usage = pending.observed_usage(false);
-                    pending.finish(ProviderCallTerminal::Failed, false)?;
+            let mut attempt = 0;
+            loop {
+                let error = match self
+                    .accounted_once(pending, request.clone(), &mut usage, &mut cost_microunits)
+                    .await?
+                {
+                    Attempt::Done(response) => return Ok(response),
+                    Attempt::Failed(error) => error,
+                };
+                let Some(wait) = self.retry_wait(&error, attempt) else {
                     return Err(error);
-                }
-            };
-            if response.usage != usage.usage {
-                // Conflicting evidence is not permission to discard the larger
-                // observed dimension, nor to release a successful response.
-                pending.retain_highwater(&response.usage);
-                usage = pending.observed_usage(false);
-                return Err(pending
-                    .violation("provider response and accounting observations disagree".into()));
+                };
+                tokio::time::sleep(wait).await;
+                attempt += 1;
+                pending = match self.admit_retry(&request, &error) {
+                    Some(pending) => pending,
+                    None => return Err(error),
+                };
             }
-            if let Err(error) = pending.observe_response(&response) {
-                usage = pending.observed_usage(false);
-                return Err(pending.violation(error));
-            }
-            let failed = matches!(
-                response.finish_reason,
-                FinishReason::Error | FinishReason::ContentFilter
-            );
-            pending.finish(
-                if failed {
-                    ProviderCallTerminal::Failed
-                } else {
-                    ProviderCallTerminal::Completed
-                },
-                true,
-            )?;
-            if failed {
-                return Err(ProviderError::Stream(
-                    "provider reported a failed completion".into(),
-                ));
-            }
-            pending.note_follow_up();
-            Ok(response)
         }
         .await;
         AccountedChatOutcome {
@@ -224,26 +394,41 @@ impl LlmProvider for SessionProvider {
         }
     }
 
-    async fn chat_stream(
-        &self,
-        request: ChatRequest,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>
-    {
+    async fn chat_stream(&self, request: ChatRequest) -> Result<ProviderStream, ProviderError> {
         let mut pending = self.admit(&request)?;
-        let inner = match self.inner.chat_stream(request).await {
-            Ok(stream) => stream,
-            Err(error) => {
-                pending.finish(ProviderCallTerminal::Failed, false)?;
+        let mut attempt = 0;
+        loop {
+            let error = match self.stream_once(pending, request.clone(), attempt).await? {
+                Attempt::Done(stream) => return Ok(stream),
+                Attempt::Failed(error) => error,
+            };
+            let Some(wait) = self.retry_wait(&error, attempt) else {
                 return Err(error);
-            }
-        };
-        Ok(Box::pin(framing::FramedProviderStream::new(Box::pin(
-            SessionProviderStream {
-                inner,
-                pending,
-                finished: false,
-            },
-        ))))
+            };
+            tokio::time::sleep(wait).await;
+            attempt += 1;
+            pending = match self.admit_retry(&request, &error) {
+                Some(pending) => pending,
+                None => return Err(error),
+            };
+        }
+    }
+}
+
+type ProviderStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>;
+
+/// The error for a completion the provider ended as failed: a refusal or a
+/// safety stop (`content_filter`) is named as one, so the activation's
+/// recorded failure says the provider refused.
+fn failed_completion(provider: &str, finish_reason: &FinishReason) -> ProviderError {
+    match finish_reason {
+        FinishReason::ContentFilter => ProviderError::ContentFiltered {
+            provider: provider.to_owned(),
+            reason: "the provider stopped the response with a content filter or safety \
+                     classifier (finish reason content_filter); nothing from it ran"
+                .into(),
+        },
+        _ => ProviderError::Stream("provider reported a failed completion".into()),
     }
 }
 
@@ -527,6 +712,9 @@ struct SessionProviderStream {
     inner: Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
     pending: PendingCall,
     finished: bool,
+    /// The first item, when it was read before the stream was handed on.
+    first: Option<Option<Result<StreamEvent, ProviderError>>>,
+    provider: String,
 }
 
 impl Stream for SessionProviderStream {
@@ -537,7 +725,11 @@ impl Stream for SessionProviderStream {
         if this.finished {
             return Poll::Ready(None);
         }
-        let event = match this.inner.as_mut().poll_next(context) {
+        let polled = match this.first.take() {
+            Some(first) => Poll::Ready(first),
+            None => this.inner.as_mut().poll_next(context),
+        };
+        let event = match polled {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(Some(Ok(event))) => event,
             Poll::Ready(Some(Err(error))) => {
@@ -588,9 +780,7 @@ impl Stream for SessionProviderStream {
                 return Poll::Ready(Some(Err(error)));
             }
             if failed {
-                return Poll::Ready(Some(Err(ProviderError::Stream(
-                    "provider reported a failed completion".into(),
-                ))));
+                return Poll::Ready(Some(Err(failed_completion(&this.provider, finish_reason))));
             }
             this.pending.note_follow_up();
         }

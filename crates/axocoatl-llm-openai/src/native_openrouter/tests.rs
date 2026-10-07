@@ -1260,3 +1260,91 @@ async fn budgets_see_the_whole_response_and_the_replayed_reasoning() {
         .unwrap();
     assert_eq!(capped.token_limit, 1_000_000 + 5120);
 }
+
+/// A refused request states its status and `Retry-After` (seconds or an
+/// HTTP date); the provider sends once and leaves any retry to the Session.
+#[tokio::test]
+async fn refusals_state_their_status_and_retry_after_and_are_sent_once() {
+    for (status, retry_after, expected) in [
+        (429, Some("7".to_string()), Some(" (Retry-After: 7 s)")),
+        (
+            503,
+            Some(httpdate::fmt_http_date(
+                std::time::SystemTime::now() - std::time::Duration::from_secs(5),
+            )),
+            Some(" (Retry-After: 0 s)"),
+        ),
+        (401, None, None),
+    ] {
+        let server = MockServer::start().await;
+        metadata(&server).await;
+        let mut template = ResponseTemplate::new(status).set_body_string("refused");
+        if let Some(value) = &retry_after {
+            template = template.insert_header("Retry-After", value.as_str());
+        }
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(template)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = match provider(&server)
+            .await
+            .chat_stream(ChatRequest::simple("one call"))
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("{status} must be refused"),
+        };
+        let ProviderError::ApiError {
+            status: got,
+            message,
+            ..
+        } = error
+        else {
+            panic!("{status}: {error:?}")
+        };
+        assert_eq!(got, status);
+        match expected {
+            Some(suffix) => assert!(message.ends_with(suffix), "{message}"),
+            None => assert!(!message.contains(RETRY_AFTER_SUFFIX), "{message}"),
+        }
+        assert!(!message.contains(KEY));
+    }
+}
+
+/// An error OpenRouter reports inside the stream carries the upstream's
+/// status when its code is one.
+#[tokio::test]
+async fn an_error_inside_the_stream_carries_its_status() {
+    for (code, status) in [(json!(502), Some(502u16)), (json!("server_error"), None)] {
+        let server = MockServer::start().await;
+        metadata(&server).await;
+        let body = format!(
+            ": OPENROUTER PROCESSING\n\ndata: {}\n\n",
+            json!({"id":"gen-fixture","model":MODEL,"provider":"FiniteProvider",
+                   "error":{"code":code,"message":"upstream failed"},"choices":[]})
+        );
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut stream = provider(&server)
+            .await
+            .chat_stream(ChatRequest::simple("one call"))
+            .await
+            .unwrap();
+        let first = stream.next().await.unwrap();
+        match (first, status) {
+            (Err(ProviderError::ApiError { status: got, .. }), Some(status)) => {
+                assert_eq!(got, status)
+            }
+            (Err(ProviderError::Stream(message)), None) => {
+                assert!(message.contains("provider reported an error"), "{message}")
+            }
+            (other, _) => panic!("{code}: {other:?}"),
+        }
+    }
+}
