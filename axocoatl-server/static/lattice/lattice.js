@@ -16,6 +16,8 @@
  * @attr {number}  snap              Snap-to-grid spacing in lattice units; 0 disables
  * @attr {"dots"|"grid"|"none"} background  Background pattern
  * @attr {"edit"|"view"} mode Interaction mode (default "edit"). View allows inspection only.
+ * @attr {boolean} readonly  Display only: View that cannot be switched back to Edit. For
+ *                           graphs that are shown and never run, such as a loadout.
  * @attr {boolean} fit-view-on-init  Auto fit-view once after first render
  *
  * @cssprop --ax-bg          Canvas background color
@@ -232,6 +234,7 @@ const ATTR = {
   FIT_ON_INIT: 'fit-view-on-init',
   VIRTUALIZE: 'virtualize',
   MODE: 'mode',
+  READONLY: 'readonly',
 };
 
 export class AxLatticeElement extends HTMLElement {
@@ -371,6 +374,7 @@ export class AxLatticeElement extends HTMLElement {
   attributeChangedCallback(name, _old, val) {
     switch (name) {
       case ATTR.MODE:
+      case ATTR.READONLY:
         this.#applyMode();
         break;
       case ATTR.ZOOM:
@@ -408,12 +412,28 @@ export class AxLatticeElement extends HTMLElement {
 
   // ── Public API ─────────────────────────────────────────────────────────
 
-  /** View mode disables editing; host DOM updates remain authoritative. */
-  get mode() { return this.getAttribute(ATTR.MODE) === 'view' ? 'view' : 'edit'; }
+  /**
+   * View mode disables editing; host DOM updates remain authoritative. A
+   * `readonly` lattice is always in View: setting `mode` to `edit` has no
+   * effect until `readonly` is removed.
+   */
+  get mode() {
+    if (this.readonly) return 'view';
+    return this.getAttribute(ATTR.MODE) === 'view' ? 'view' : 'edit';
+  }
   set mode(value) { this.setAttribute(ATTR.MODE, value === 'view' ? 'view' : 'edit'); }
+
+  /** Display only: every editing gesture and method is disabled for good. */
+  get readonly() { return this.hasAttribute(ATTR.READONLY); }
+  set readonly(value) {
+    if (value) this.setAttribute(ATTR.READONLY, '');
+    else this.removeAttribute(ATTR.READONLY);
+  }
 
   #applyMode() {
     const viewing = this.mode === 'view';
+    if (this.readonly) this.setAttribute('aria-readonly', 'true');
+    else this.removeAttribute('aria-readonly');
     const description = this.getAttribute('aria-roledescription');
     if (!description || ['graph editor', 'execution graph'].includes(description)) {
       this.setAttribute('aria-roledescription', viewing ? 'execution graph' : 'graph editor');

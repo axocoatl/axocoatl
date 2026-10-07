@@ -464,7 +464,8 @@ pub async fn run_to_outcome_with(
         )
         .await?;
     }
-    host.finish(&run.run_id, &outcome).await?;
+    // The Ended event is the record's last line; outcome.json, written
+    // once after it, closes the record to further events.
     let ended = RunEvent::Ended {
         at_ms: now_ms(),
         outcome: Box::new(outcome.clone()),
@@ -483,6 +484,7 @@ pub async fn run_to_outcome_with(
         )
         .await?;
     }
+    host.finish(&run.run_id, &outcome).await?;
     Ok(outcome)
 }
 

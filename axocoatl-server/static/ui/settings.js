@@ -25,6 +25,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'skills', title: 'Skills', hint: 'What agents may call' },
   { id: 'mcp', title: 'MCP servers', hint: 'Tools from outside' },
   { id: 'automations', title: 'Automations', hint: 'Work that starts itself' },
+  { id: 'loadouts', title: 'Loadouts', hint: 'Whole runs, declared in a file' },
 ];
 
 function deepActiveElement() {

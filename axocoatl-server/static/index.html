@@ -42,6 +42,18 @@
     color: var(--muted); font: var(--fs-xs)/1.45 var(--font-mono);
     white-space: pre-wrap; overflow-wrap: anywhere;
   }
+  /* A loadout Session: its badge in the header row and its run's Outcome. */
+  .session-active .sa-chip.loadout {
+    cursor: pointer; background: rgba(var(--axo-bronze-rgb), .10);
+    border-color: rgba(var(--axo-bronze-rgb), .32);
+  }
+  .session-active .sa-chip.loadout:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .session-run-outcome {
+    flex-shrink: 0; max-height: 46vh; overflow: auto; padding: 6px 12px;
+    border-bottom: 1px solid var(--border); background: var(--bg-2);
+  }
+  .session-run-outcome > summary { cursor: pointer; font: var(--fs-xs) var(--font-sans); color: var(--muted); }
+  .session-run-outcome[open] > summary { margin-bottom: 6px; }
   .session-graph-layout { display: flex; width: 100%; height: 100%; min-height: 0; gap: 12px; }
   .session-graph-layout > ax-lattice {
     flex: 1 1 0; min-width: 0; --ax-bg: var(--bg); --ax-fg: var(--text);
@@ -105,6 +117,8 @@
   import '/ui/settings-skills.js';
   import '/ui/settings-mcp.js';
   import '/ui/automation-settings.js';
+  import '/ui/settings-loadouts.js';
+  import '/ui/run-outcome.js';
   import '/ui/settings.js';
   import '/ui/terminal.js';
   import '/ui/browser.js';
@@ -160,6 +174,7 @@
     <ax-settings-skills id="settings-skills" data-settings-section="skills" hidden></ax-settings-skills>
     <ax-settings-mcp id="settings-mcp" data-settings-section="mcp" hidden></ax-settings-mcp>
     <ax-automation-settings id="settings-automations" data-settings-section="automations" hidden></ax-automation-settings>
+    <ax-settings-loadouts id="settings-loadouts" data-settings-section="loadouts" hidden></ax-settings-loadouts>
   </ax-settings>
   <ax-mcp-approval id="mcp-approval"></ax-mcp-approval>
   <ax-session-history id="session-history"></ax-session-history>
@@ -281,6 +296,11 @@
                  show what this session is running.  `+` controls land in B2
                  when the daemon supports hot-add. -->
             <div class="session-active" id="session-active"></div>
+            <!-- A Session a loadout run created shows that run's Outcome. -->
+            <details class="session-run-outcome hide" id="session-run-outcome">
+              <summary>Run outcome</summary>
+              <ax-run-outcome id="run-outcome"></ax-run-outcome>
+            </details>
             <section class="session-environment hide" id="session-environment"
               aria-labelledby="session-environment-title">
               <div class="session-environment-copy" aria-live="polite">
@@ -4009,6 +4029,7 @@ function sessionHome() { return $('#session-home'); }
       else if (id === 'skills') void $('#settings-skills')?.refresh?.();
       else if (id === 'mcp') void $('#settings-mcp')?.refresh?.();
       else if (id === 'automations') void $('#settings-automations')?.refresh?.();
+      else if (id === 'loadouts') void $('#settings-loadouts')?.refresh?.();
     });
     st.addEventListener('agents-change', (e) => {
       S.agents = e.detail.agents;
@@ -8282,9 +8303,36 @@ function applySessionEnvironmentUpdate(
 }
 
 // Render the active-agents/skills chip row at the top of the Activity pane.
+/** The loadout badge and Run outcome panel of a Session a loadout run created. */
+function renderSessionLoadout(session, host) {
+  const panel = $('#session-run-outcome');
+  const outcome = $('#run-outcome');
+  const binding = session?.loadout;
+  if (!binding) {
+    panel?.classList.add('hide');
+    if (panel) panel.open = false;
+    return;
+  }
+  const badge = el('button', 'sa-chip loadout', `Loadout ${binding.loadout.id}@${binding.loadout.version}`);
+  badge.type = 'button';
+  badge.title = `Run ${binding.run_id} · network ${binding.network}, hardened workload · sha256:${binding.loadout.digest}`;
+  badge.addEventListener('click', () => {
+    if (!panel) return;
+    panel.open = true;
+    void outcome?.refresh?.();
+    panel.scrollIntoView?.({ block: 'nearest' });
+  });
+  host.appendChild(badge);
+  if (panel && outcome) {
+    panel.classList.remove('hide');
+    if (outcome.getAttribute('run-id') !== binding.run_id) outcome.setAttribute('run-id', binding.run_id);
+  }
+}
+
 function renderSessionActive(session) {
   const host = $('#session-active'); if (!host) return;
   host.innerHTML = '';
+  renderSessionLoadout(session, host);
   const approved = session.currentTeam?.approved;
   const roster = approved ? session.currentTeam.slots.map(slot => ({id:slot.slot_id, name:slot.name, model:slot.model}))
     : sessionActiveAgentIds(session).map(id => (S.agents || []).find(agent => agent.id === id) || {id});

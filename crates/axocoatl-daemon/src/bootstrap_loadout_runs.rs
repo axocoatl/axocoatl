@@ -1041,14 +1041,14 @@ impl AxocoatlDaemon {
                 ));
             }
             let outcome = ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
-            store.finish(&run_id, &outcome).map_err(record_error)?;
             let _ = store.append(
                 &run_id,
                 &RunEvent::Ended {
                     at_ms: now_ms(),
-                    outcome: Box::new(outcome),
+                    outcome: Box::new(outcome.clone()),
                 },
             );
+            store.finish(&run_id, &outcome).map_err(record_error)?;
         }
         let wall_clock = crate::loadout::team_plan::wall_clock_ms(&resolved).map_err(run_error)?;
         let context = RunContext {
@@ -1377,9 +1377,14 @@ impl AxocoatlDaemon {
     ) -> Result<RunEventsPage, DaemonError> {
         let limit = limit.clamp(1, 1000);
         let store = self.loadout_runs.store()?;
+        // Read whether the run has ended before its events: the Outcome is
+        // written after the last event, so a page that says finished holds
+        // every event up to the end (or the next page does, when `limit`
+        // cut it).
+        let ended = store.is_finished(run_id).map_err(record_error)?;
         let events = store.events(run_id, after, limit).map_err(record_error)?;
         let next_after = events.last().map(|(seq, _)| *seq).or(after);
-        let finished = store.is_finished(run_id).map_err(record_error)?;
+        let finished = ended && events.len() < limit;
         Ok(RunEventsPage {
             events,
             next_after,
@@ -1492,8 +1497,9 @@ impl AxocoatlDaemon {
             }
             BundleCursor::History => {
                 let history = match self.export_session_json(&manifest.session_id).await {
-                    Ok(text) => serde_json::from_str(&text)
-                        .unwrap_or(serde_json::Value::String(text)),
+                    Ok(text) => {
+                        serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text))
+                    }
                     Err(error) => serde_json::json!({ "unavailable": error.to_string() }),
                 };
                 Ok((
@@ -1720,17 +1726,16 @@ impl AxocoatlDaemon {
                         "the daemon restarted during the run; it was not resumed".into(),
                         Vec::new(),
                     );
-                    if let Err(error) = store.finish(&run_id, &outcome) {
-                        tracing::warn!(run = %run_id, %error, "ending an interrupted loadout run failed");
-                        continue;
-                    }
                     let _ = store.append(
                         &run_id,
                         &RunEvent::Ended {
                             at_ms: now_ms(),
-                            outcome: Box::new(outcome),
+                            outcome: Box::new(outcome.clone()),
                         },
                     );
+                    if let Err(error) = store.finish(&run_id, &outcome) {
+                        tracing::warn!(run = %run_id, %error, "ending an interrupted loadout run failed");
+                    }
                 }
             }
             Err(error) => tracing::warn!(%error, "listing loadout runs failed"),

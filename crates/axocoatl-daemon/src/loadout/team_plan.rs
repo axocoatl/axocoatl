@@ -22,6 +22,9 @@ use crate::{
 
 /// The template id an inline loadout reviewer is shown under.
 pub const LOADOUT_REVIEWER_TEMPLATE: &str = "loadout-reviewer";
+/// The output bound per request of a loadout Agent or reviewer that names
+/// none: a native Agent always runs with an explicit sampling maximum.
+pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 8192;
 
 /// One slot to create: a loadout Agent, possibly instantiated per area.
 #[derive(Debug, Clone, PartialEq)]
@@ -230,7 +233,7 @@ pub fn team_edit(
                 .instructions
                 .clone()
                 .or_else(|| agent.instructions.clone()),
-            max_output_tokens: agent.max_output_tokens,
+            max_output_tokens: Some(agent.max_output_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)),
             // `writes` absent in the loadout is every path (writers only);
             // the edit always says so explicitly.
             writes: Some(agent.writes.clone()),
@@ -269,7 +272,11 @@ pub fn team_edit(
                     template_id: LOADOUT_REVIEWER_TEMPLATE.into(),
                     max_rounds: review.rounds,
                     limits: grant_limits(limits),
-                    max_output_tokens: review.max_output_tokens,
+                    max_output_tokens: Some(
+                        review
+                            .max_output_tokens
+                            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
+                    ),
                     inline: Some(InlineReviewer {
                         name: "reviewer".into(),
                         provider: model.provider.clone(),

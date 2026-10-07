@@ -75,17 +75,16 @@ async fn fail_run(host: &DaemonRunHost, context: &RunContext, reason: String) {
     outcome.error = Some(reason);
     outcome.finished_at_ms = axocoatl_daemon::loadout::driver::now_ms();
     outcome.decide(Default::default());
-    if host.finish(&context.run_id, &outcome).await.is_ok() {
-        let _ = host
-            .record(
-                &context.run_id,
-                RunEvent::Ended {
-                    at_ms: outcome.finished_at_ms,
-                    outcome: Box::new(outcome),
-                },
-            )
-            .await;
-    }
+    let _ = host
+        .record(
+            &context.run_id,
+            RunEvent::Ended {
+                at_ms: outcome.finished_at_ms,
+                outcome: Box::new(outcome.clone()),
+            },
+        )
+        .await;
+    let _ = host.finish(&context.run_id, &outcome).await;
 }
 
 /// Start the driver task of an admitted run, once.
