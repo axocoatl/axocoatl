@@ -206,14 +206,15 @@ else `AXOCOATL_URL`, else the configured server address, and authenticate with
 
 | Command | Purpose |
 | --- | --- |
-| `axocoatl secret set <NAME>` | Read one value from standard input, never from an argument, and store it as `secrets/<NAME>` in the data root (`0600`, replaced atomically). It is never printed. A route's `credential` can name it. See [Store the credential](/configure/external-agents/#store-the-credential) |
+| `axocoatl secret set <NAME> [-c CONFIG]` | Read one value from standard input, never from an argument, and store it as `secrets/<NAME>` in the data root (`0600`, replaced atomically). Standard input must be a pipe or a file; a terminal is refused (exit code 3). It is never printed. A route's `credential` can name it. See [Store the credential](/configure/external-agents/#store-the-credential) |
 | `axocoatl secret list` | Print the stored secret names, never values |
 | `axocoatl secret remove <NAME>` | Delete one stored secret |
-| `axocoatl recipe build <RECIPE>...` | Build one Session image with Podman from Axocoatl's pinned recipes `claude-code`, `codex` and `e2e`, combined in that order, and record its image id; Sessions trust it by that id |
+| `axocoatl recipe build <RECIPE>... [-c CONFIG]` | Build one Session image with Podman from Axocoatl's pinned recipes `claude-code`, `codex` and `e2e`, combined in that order, and record its image id in the data root; Sessions trust it by that id |
 | `axocoatl recipe list` | List the recipes and the images built from them |
 
-`recipe build` downloads its base image and the pinned programs; that is network access
-you start, on your computer. See [External agents](/configure/external-agents/) and
+`secret` and `recipe` use the data root of `--config` or `AXOCOATL_DATA_DIR`; give them
+the daemon's, so it finds what they store. `recipe build` downloads its base image and the
+pinned programs; that is network access you start, on your computer. See [External agents](/configure/external-agents/) and
 [The e2e check](/configure/e2e-check/).
 
 ## Global help and version

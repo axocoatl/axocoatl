@@ -704,10 +704,12 @@ History export, every network-record event and every run event as JSON Lines, en
 the line count and the SHA-256 of every preceding byte; `verify_bundle` checks order, count
 and digest. Routes never record credential values, so the bundle holds none.
 
-**Fix.** The host numbers review findings (`F1`, `F2`, …), asks the writer to answer every
-finding in an `ADJUDICATIONS` block when it sends findings back, and
-`review_adjudication::adjudicate` pairs each round sent back with the writer generation
-that answered it; a finding without an answer is `missing`.
+**Fix.** Every required review, in a loadout run or not, asks the reviewer to number its
+findings (`F1`, `F2`, …) and asks the lead to answer every finding in an `ADJUDICATIONS`
+block when the host sends findings back. In a `fix` run (with `review.adjudicate`, the
+default), `review_adjudication::adjudicate` pairs each round sent back with the writer
+generation that answered it; a finding without an answer, or answered without a reason, is
+`missing`.
 
 **QA.** The explorer reports `FINDINGS` and `COVERAGE` blocks. For each finding the host
 runs its reproduction with `browser_check` against the target and, when configured, the
@@ -729,22 +731,27 @@ invocations, and the program's own usage report settles it; there is no per-call
 reservation, and the program's internal tool calls are evidence, not admitted calls.
 
 **e2e.** An `e2e` check expands to a wrapper that forces `E2E_TELEMETRY_DISABLED=1`, sets
-the model and the route-backed key placeholder, writes JUnit or `report.json` under
-`/tmp/axocoatl-check-reports/<name>/`, prints the report's SHA-256 as its last line and
-exits with e2e's status. The Session container mounts `.e2e/cache` read-only. After the
+the model and the route-backed key placeholder, runs `e2e run|explore --reporter json`
+with the report written to `/tmp/axocoatl-check-reports/<name>/report.json`, prints the
+report's SHA-256 as its last line and exits with e2e's status. Its check definition
+carries `egress: true`, so under `network: egress` that check's process alone gets its
+own egress credential until it settles; other required checks have no network. Admission
+checks an OpenRouter model's tool-call and image-input capabilities in OpenRouter's
+public catalog, a request the host makes outside the Session's network record. The Session container mounts `.e2e/cache` read-only. After the
 final turn, `collect_reports` reads each report (at most 4 MiB) and attaches it only when
 its digest matches the marker of the final recorded check run.
 
 **Keep as PR.** For a passing run, host `git` commits exactly the run's attributed paths
 through a temporary `GIT_INDEX_FILE` seeded from HEAD (`update-index`, `write-tree`,
-`commit-tree -p HEAD`, `branch`), refusing paths that were dirty before the run and an
-existing branch; HEAD, the index, the current branch and the working tree are unchanged.
+`commit-tree -p HEAD`, `update-ref` of a new branch), refusing paths that were dirty before the run, paths
+whose status changed after the run ended (by inode change time) and an existing branch;
+HEAD, the index, the current branch and the working tree are unchanged.
 Opt-in, it pushes without `--force` to a new remote branch that is not the default branch
 and opens a pull request with `gh`, whose body carries checks, review, adjudications,
 findings, not-covered entries, warnings and the run id.
 
 **Runtime policy.** Native provider calls that fail with 429, 5xx, a timeout or a reset
-connection are retried once (after `Retry-After`, at most 30 s, or 2 s) on the same pinned
+connection before the provider sent anything are retried once (after `Retry-After`, at most 30 s, or 2 s) on the same pinned
 model, as a new call with its own reservation; 400 to 403, refusals and safety stops are
 not retried. A failed helper, slot or area keeps a classifiable failure so the Outcome
 lists it as not covered. `check_options[i].timeout_ms` (1 s to 30 min, 180 s by default)

@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loadout's, for that Session only. Global defaults do not change. A loadout cannot ask
   for `bridge` or the `image` workload, and a host that cannot provide egress and the
   `hardened` workload (rootful Podman, E2B) fails the run with exit code 5 instead of
-  falling back. Session records carry the binding as `loadout` (`null` for every other
+  falling back. Session records carry the binding as `loadout` (absent for every other
   Session).
 - **`axocoatl run`.** `axocoatl run <loadout> --task "…"` runs a loadout headless against
   the running daemon, found from `--url`, `AXOCOATL_URL` or the configuration and
@@ -85,18 +85,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the activation's evidence and answer. Spend is bounded by an up-front reservation, the
   route's request count and the program's own usage report, not per call.
 - **`axocoatl secret set|list|remove`.** Stores a route credential, such as the output
-  of `claude setup-token`, read from standard input only, as an owner-only file under
-  `secrets/` in the data root. It is never printed, logged or recorded. A loadout route's
+  of `claude setup-token`, read from standard input only (a pipe or a file; a terminal,
+  where the value would show, is refused), as an owner-only file under `secrets/` in the
+  data root. It is never printed, logged or recorded. A loadout route's
   `credential` resolves to a `credentials` entry first, then to a stored secret.
 - **`axocoatl recipe build|list`.** Builds a Session image from Axocoatl's pinned recipes
   (`claude-code`, `codex`, `e2e`, combinable) with Podman and trusts it by its recorded
   image id.
 - **The e2e check.** A loadout check can run tester-army/e2e (`e2e@0.18.0`, Apache-2.0)
-  inside the Session container from the `e2e` recipe (Node 22.22.3 or later, Chromium).
-  The check forces `E2E_TELEMETRY_DISABLED=1`, mounts `.e2e/cache` read-only, sends e2e's
-  model calls through a route with the key added on the host, and parses its JUnit or
-  `report.json`, bound to the run by a digest marker, into the check's result in the
-  Outcome. An OpenRouter model without tool calls and image input is refused. Under
+  inside the Session container from the `e2e` recipe (Node 24.21.0 and Playwright's
+  Chromium headless shell). The check forces `E2E_TELEMETRY_DISABLED=1`, mounts
+  `.e2e/cache` read-only, sends e2e's model calls through a route with the key added on
+  the host, and parses its JSON report, bound to the run by a digest marker, into the
+  check's result in the Outcome. An OpenRouter model that OpenRouter's catalog does not
+  list with tool calls and image input is refused. Under
   `network: egress` an e2e check's process gets its own egress credential, as a writer's
   shell does, so it reaches the loadout's routes and allowlist with every connection
   recorded; every other required check still has no network there.
@@ -104,7 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panel and `POST /api/sessions/{id}/keep-pr` commit a passing run's changed paths to a
   new branch with host `git` through a temporary index, leaving HEAD, the index, the
   current branch and the working tree unchanged, and refuse paths that were dirty before
-  the run. Opt-in, they push the branch without `--force`, never to the remote's default
+  the run or that changed after it ended. Opt-in, they push the branch without `--force`, never to the remote's default
   branch, and open a pull request with `gh` whose body lists the check results, the review
   verdict and adjudications, findings, everything not covered, warnings and the run id.
   Keep also refuses paths that a turn outside the run changed, and runs no hook, filter,
@@ -113,14 +115,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   service's `PATH` after Podman's.
 - **Per-check timeouts.** A Team and budget edit's `check_options`, aligned with
   `required_checks`, gives each required check a name, a timeout from 1 second to 30
-  minutes (3 minutes by default, as before), a report to parse and, with `egress: true`,
-  an egress credential for the check's process under `network: egress`. Teams applied
-  before this release keep working unchanged.
+  minutes (3 minutes by default, as before), a report (which a loadout run reads for its
+  e2e checks) and, with `egress: true`, an egress credential for the check's process
+  under `network: egress`. Teams applied before this release keep working unchanged.
 - **`sandbox.egress.host_ollama`.** An opt-in route from Session containers to an Ollama
   server on a loopback port of this computer, as `https://ollama.host.axocoatl.internal`
   under `network: egress` (set as `OLLAMA_HOST`), with every request and response in the
-  network record. Off by default; under `bridge` and `none` it does nothing and
-  `axocoatl validate` warns. `axocoatl network reload` turns it on, moves it or turns it
+  network record. Off by default; when `sandbox.network` is `bridge` or `none`, only
+  loadout Sessions, which always run under egress, reach it, and `axocoatl validate`
+  warns. `axocoatl network reload` turns it on, moves it or turns it
   off live, and names under `axocoatl.internal` are refused otherwise.
 - `GET /api/sessions/{id}/team` returns `warnings`, such as the same-model reviewer
   warning, and the Team and budget review shows them.
@@ -143,12 +146,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Transient provider errors are retried once.** A native provider call that fails with
-  429, a 5xx status, a timeout or a reset connection is retried once, after its
+  429, a 5xx status, a timeout or a reset connection before the provider sent anything is
+  retried once, after its
   `Retry-After` (at most 30 seconds) or 2 seconds, on the same pinned model and endpoint,
   as a new call with its own reservation; the failed call keeps its accounting. 400, 401,
   402 and 403, refusals and safety stops are not retried, and a completion the provider
   refused is now reported as a refusal. Each retry is recorded on the activation's
   evidence and, in a run, as a `provider_retry` event.
+- **Required reviews number their findings and ask for an answer to each.** Every
+  required review, in the workbench too, asks the reviewer to number its findings `F1`,
+  `F2`, … and, when the host sends them back, asks the lead to answer each one in an
+  `ADJUDICATIONS` block with accept or reject and a reason. A `fix` loadout run records
+  those answers; elsewhere they are part of the lead's reply.
 - **What fails is listed as not covered.** A helper, slot or area that ends without a
   result keeps a failure class (`provider_refusal`, `provider_failure`,
   `provider_rejected`, `budget`, `blocked`, `not_reached`, `runtime_limit`, `stopped`,

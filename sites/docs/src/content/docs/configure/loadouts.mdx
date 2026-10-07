@@ -157,7 +157,7 @@ Unknown fields are refused everywhere in the file.
 | `version` | integer | The loadout's own version, from 1. Shown as `id@version`. |
 | `name`, `description` | string | `name` must not be empty. |
 | `kind` | `fix`, `qa`, `audit` or `custom` | Selects how the run is driven; see [kinds](#kinds). |
-| `opt_in` | boolean | Listed, but runs only when named explicitly. |
+| `opt_in` | boolean | Marks the loadout opt-in: Settings and `axocoatl loadouts list` show a badge. Nothing runs a loadout by default; each run names the one it runs. |
 | `params` | map | Parameters a run supplies; see [parameters](#parameters). |
 | `agents` | list | 1 to 8 Agents; see [Agents](#agents). |
 | `checks` | list | 0 to 16 required checks with unique names; see [checks](#checks). |
@@ -166,8 +166,8 @@ Unknown fields are refused everywhere in the file.
 | `routes` | list | Routes with the same fields as [`sandbox.egress.routes`](/reference/config/#sandboxegressroutes). A `credential` names a `credentials` entry or a secret stored with [`axocoatl secret set`](/configure/external-agents/#store-the-credential). |
 | `budgets` | map | `agent` (limits of each Agent without its own `budget`), `reviewer` (required with `review`: the reviewer's limits for all rounds of one turn) and `wall_clock` (such as `60m`). Limits are `activations`, `invocations` and `tokens`, each at least 1, and `cost_usd`, 0 to 10,000. |
 | `prompt` | string | The turn's request. Must contain `{task}`; may also use `{repo}`, `{target_url}` and `{reference_url}`. |
-| `sandbox` | map | `network: egress` (the default) or `none`, and `workload: hardened`. `bridge` and `image` are refused; `none` refuses `egress.allow` and `routes`. |
-| `environment` | map | `image` (a curated or trusted image) or `recipes` (images built by [`axocoatl recipe build`](/configure/external-agents/#build-the-image)), not both, and `setup`, the exact setup command a run approves. |
+| `sandbox` | map | `network: egress` (the default) or `none`, and `workload: hardened`. `bridge` and `image` are refused; `none` refuses `egress.allow`, `routes`, an external Agent (it needs a route) and Agents that list `web_search`, `web_fetch`, `browser` or `browser_check`. |
+| `environment` | map | `image` (a curated or trusted image) or `recipes` (the image [`axocoatl recipe build`](/configure/external-agents/#build-the-image) built from exactly those recipes; a run whose image was not built fails with exit code 5 and names the command), not both, and `setup`, the exact setup command a run approves. |
 | `qa` | map | `qa` kind only: `target_url`, `reference_url`, `repro_dir`, `fail_on_findings` (default `true`). |
 | `audit` | map | `audit` kind only: `min_areas`, `max_areas` (2 ≤ min ≤ max ≤ 8), `fail_on_findings` (default `false`). |
 
@@ -192,8 +192,8 @@ is the test case name in the JUnit file. `run` sets exactly one of:
 
 - `argv: [..]`, an exact argument list;
 - `shell: "…"` or `shell: {param: name}`, run as `sh -c`;
-- `detected: true`, the Session's detected check command, or `--check` when the
-  repository has none; a run with neither is a usage error (exit code 3);
+- `detected: true`, the Session's detected check command, or the `--check` command in
+  its place; a run with neither is a usage error (exit code 3);
 - `e2e: {args, model_route, model}`, the [e2e check](/configure/e2e-check/).
 
 `timeout` is a duration such as `90s`, `3m` or `1h`: three minutes when left out, at
@@ -204,9 +204,12 @@ on the exact final files, between two captures, on the writer's allowance.
 
 `review` is `{model, rounds, tools, instructions, max_output_tokens, adjudicate}`:
 `rounds` 1 to 3; `tools` only from `read_file`, `list_dir`, `grep`, `glob` and
-`workspace_knowledge`; `adjudicate` (default `true`) makes the writer answer every
-finding with accept or reject and a reason. The reviewer runs as a
-[required review](/configure/agents/#required-review).
+`workspace_knowledge`. The reviewer runs as a
+[required review](/configure/agents/#required-review): the host asks it to number its
+findings and asks the writer to answer each one it sends back with accept or reject and a
+reason. In a `fix` loadout, `adjudicate` (default `true`) records each answer as an
+adjudication, and an unanswered finding makes the run need attention; with `false`, or in
+a `custom` loadout, the answers are not recorded or checked.
 
 When the reviewer's model is the writer's model, validation warns
 (`same_model_reviewer`), and the warning is repeated in the API, Settings, Team and
@@ -215,11 +218,12 @@ budget, the run output and the record. It is a warning, not a refusal. See
 
 ### Parameters
 
-`params` maps a name (1-32 lowercase letters, digits, `-` or `_`) to `{kind, required,
-default, description}`. `kind` is `model` (`provider:model`), `text` or `url` (`http://`
-or `https://`). A required parameter has no default. Fields that accept `{param: name}`
-are `agents[].model`, `review.model`, `checks[].run.shell`, `checks[].run.e2e.model`,
-`environment.setup`, `qa.target_url` and `qa.reference_url`.
+`params` maps a name (1-32 lowercase letters, digits, `-` or `_`, starting with a letter)
+to `{kind, required, default, description}`. `kind` is `model` (`provider:model`), `text`
+or `url` (`http://` or `https://`). A required parameter has no default. Fields that
+accept `{param: name}` take a parameter of one kind: `agents[].model` and `review.model` a
+`model`; `checks[].run.shell`, `checks[].run.e2e.model` and `environment.setup` a `text`;
+`qa.target_url` and `qa.reference_url` a `url`.
 
 A run gives values with `--param name=value` and `--model role=provider:model`. An
 unknown parameter name is refused, so a typo never runs with a default, and a missing

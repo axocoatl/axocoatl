@@ -402,7 +402,7 @@ sandbox:
   network: egress
   egress:
     host_ollama:
-      port: 11434          # a loopback TCP port on this computer
+      port: 11434          # a loopback TCP port on this computer, not the daemon's own
       for: [agent]         # agent, terminal, setup; default [agent]
 ```
 
@@ -412,8 +412,9 @@ computer's loopback interface. Off when absent. Under `network: egress`, the pro
 resolves in DNS: the egress decision point recognizes it, the daemon ends TLS with the
 Session's certificate authority and forwards each request over plain HTTP to
 `127.0.0.1:<port>`, and every request and response is written to the Session's network
-record like any route's. Only loopback is reached; no other host port is. Under `bridge`
-and `none` the setting does nothing and validation warns. Without it, the name is
+record like any route's. Only loopback is reached; no other host port is. When
+`sandbox.network` is `bridge` or `none`, only [loadout](/configure/loadouts/) Sessions,
+which always run under `egress`, reach it, and validation warns. Without it, the name is
 refused like any unlisted host.
 
 This route is for programs inside the Session, such as a test suite that calls a local

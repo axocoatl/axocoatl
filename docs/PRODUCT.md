@@ -344,7 +344,7 @@ run as a required check, with its report parsed into the Outcome.
 | Loadout | A versioned YAML file that declares a whole run: Agents and models, checks, reviewer, network, budgets and prompt. |
 | Run | One headless execution of a loadout through `axocoatl run`: its Session, record, Outcome and exit code. |
 | Adjudication | The writer's answer to one review finding: accept or reject, with a reason. |
-| Not covered | An area, helper, slot or check that ended without a result, with its reason; never counted as a pass. |
+| Not covered | An area, Agent, helper or QA reproduction that ended without a result, with its reason; never counted as a pass. A check that did not run makes the run need attention too. |
 
 Use internal words such as variant, lane, fan-out, worktree, branch, adopt, and discard in
 code and APIs. On the product surface, prefer plain language. Git implementation details

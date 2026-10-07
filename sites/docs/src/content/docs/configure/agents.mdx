@@ -323,7 +323,8 @@ starts the reviewer in a fresh conversation. It is shown the request, each requi
 Agent's final answer (up to 16 KiB each) and the change the turn made: every file
 whose patch against HEAD differs from the one captured when the turn began, up to 48
 KiB, with a note when it was cut. It is asked to start its answer with `VERDICT: APPROVE`
-or `VERDICT: CHANGES`, followed by findings as `path:line: what to change`. A verdict
+or `VERDICT: CHANGES`, followed by findings, each on its own line, numbered `F1`, `F2`, …
+and written as `path:line: what to change`. A verdict
 line anywhere in the answer counts, ignoring case and Markdown emphasis, and the rest of
 the answer is the findings. The turn completes only when the reviewer approves the exact
 result it was shown. An answer without a readable verdict approves nothing: one with no
@@ -336,7 +337,11 @@ changed before or while it read fails the verdict.
 
 When the reviewer asks for changes, Axocoatl sends its findings to the lead as a
 revision in a new epoch, the way **Revise** does, then runs the required checks and the
-review again on the new result. After the last round, or when more than one required
+review again on the new result. The revision asks the lead to answer every finding in an
+`ADJUDICATIONS` block, accept or reject with a reason, then fix each one it accepts;
+findings without numbers are answered as one finding, `F1`. A
+[`fix` loadout](/workbench/fix-qa-audit/#fix) run records each answer as an adjudication;
+in the workbench the answer is part of the lead's reply. After the last round, or when more than one required
 Agent's result was reviewed, the turn needs your attention with the findings: Revise
 the lead with them, change the files yourself and **Continue** the review, or
 **Finish**. The turn controls show the verdict, the findings and the round. Continuing

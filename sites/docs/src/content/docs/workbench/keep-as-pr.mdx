@@ -25,10 +25,21 @@ Three ways to ask for it:
 - None of the run's changed paths had uncommitted changes before the run began. The run's
   manifest lists those paths; when one of them is among the run's changes, Keep is
   refused rather than mixing your edits into the commit.
-- The branch does not exist yet. The default name is `axocoatl/<loadout>-<run id prefix>`.
+- None of the run's changed paths changed in your working tree after the run ended, by
+  the file's status-change time. The checks and the review judged the files as the run
+  left them, so a later edit is refused rather than committed under their results.
+- `HEAD` is still the commit the run started from, and Git's settings did not change
+  after the run started.
+- The run's changes can be attributed exactly, no turn of the Session outside the run
+  changed the same paths, and the run did not change Git's own files.
+- The branch does not exist yet, and it is not the branch checked out. The default name
+  is `axocoatl/<loadout>-<run id prefix>`. A branch an earlier Keep of the same run
+  created at the same commit is the exception: keeping again continues from it, for
+  example to open the pull request afterwards, and creates nothing new.
 
 The run's changed paths are the Session's changes attributed to the run's turns, the same
-attribution as [Last turn](/workbench/git/).
+attribution as [Last turn](/workbench/git/). Other changes in your working tree are not
+committed; the response lists them as `not_committed` and says so in its `warnings`.
 
 ## The commit
 
@@ -38,7 +49,8 @@ Axocoatl uses the host's `git` with a temporary index, so nothing you have open 
 2. exactly the run's paths are added or removed in it from the working tree;
 3. `git write-tree` and `git commit-tree -p HEAD` make the commit, with the title and the
    run id in its message;
-4. `git branch <name> <commit>` creates the branch.
+4. `git update-ref` creates the branch at that commit only if no branch of that name
+   exists yet.
 
 `HEAD`, the real index, the current branch and the working tree are the same afterwards.
 The changes stay in your working tree too; switch to the branch, or discard them, when
@@ -48,10 +60,10 @@ you choose.
 
 With `--keep pr`, **Open a PR**, or `"open_pr": true`:
 
-- Keep refuses a branch name equal to the remote's default branch, or one under which the
-  current branch is pushed;
+- Keep refuses a branch name equal to the remote's default branch;
 - it pushes with `git push <remote> <branch>:refs/heads/<branch>`, never with `--force`,
-  and refuses when that remote branch already exists; the remote defaults to `origin`;
+  and refuses when that remote branch already exists, unless an earlier Keep of the same
+  run pushed it; the remote defaults to `origin`;
 - it opens the pull request with `gh pr create --head <branch> --base <default branch>`,
   with the title and a body file.
 
@@ -75,6 +87,8 @@ A failed Keep after a passing run makes `axocoatl run` print the reason and exit
 code 2.
 
 <Aside>
-Keep commits only the run's attributed paths. If you edited one of those paths during the
-run, Keep refuses rather than merging your edit; commit it yourself.
+Keep commits only the run's attributed paths. If you edit one of those paths after the run
+ends, Keep refuses rather than committing your edit with the run's results; commit it
+yourself. Keep cannot tell your edits from the run's while the run is going, so leave the
+run's paths alone until it ends.
 </Aside>

@@ -124,7 +124,7 @@
           required checks with their timeouts, the required reviewer, the egress allowlist and
           routes, the budgets and the prompt. <code>axocoatl run &lt;loadout&gt; --task "…"</code>
           runs it against the running daemon in a Session under <code>network: egress</code>
-          with commands as non-root users, and exits 0 on a pass, 1 on a failed check and 2
+          (or <code>none</code>) with commands as non-root users, and exits 0 on a pass, 1 on a failed check and 2
           when something needs a person. <code>--junit</code> and <code>--record</code> write
           JUnit and the run's whole record as one file that <code>axocoatl record verify</code>
           checks.</p>

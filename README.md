@@ -54,9 +54,9 @@ runs before a turn completes, are opt-in.
 - **Each Agent has its own provider and model.** Local models through Ollama,
   hosted models through OpenRouter, with budgets enforced on both. Adapters for
   Anthropic, OpenAI, Gemini and Mistral are included on the compatibility path.
-- **Provider failures are handled, and recorded.** A call that fails with 429, a 5xx
-  status, a timeout or a reset connection is retried once on the same model; 400 to 403
-  are not retried. An Ollama stream that ends early is retried once, older tool output
+- **Provider failures are handled, and recorded.** A native Session's model call that
+  fails with 429, a 5xx status, a timeout or a reset connection before any response
+  arrives is retried once on the same model; 400 to 403 are not retried. An Ollama stream that ends early is retried once, older tool output
   is replaced by a short placeholder in later requests, and a request that would
   overflow the context window is trimmed instead of failing.
 
@@ -72,7 +72,7 @@ runs before a turn completes, are opt-in.
   1 (checks failed), 2 (needs attention: review not passed, a finding unanswered,
   anything not covered) or higher for usage and infrastructure errors. It writes JUnit
   and a single-file record bundle of the whole run. A loadout's Session always runs
-  under network egress with non-root workload users; your global defaults do not change.
+  under network egress (or none) with non-root workload users; your global defaults do not change.
 - **External agents and e2e.** The Claude Code CLI or Codex CLI can be a loadout's
   writer, inside the Session container, with its model credential added on your computer
   by a route. tester-army/e2e can be a required check. **Keep as PR** commits a passing

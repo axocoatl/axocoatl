@@ -21,9 +21,9 @@ axocoatl run fix --task "…" \
 One turn with one writer, one required check and a required review:
 
 1. The **writer** (`writer_model`) makes the change with the repository tools.
-2. The required check `tests` runs the Session's detected check command, or `--check`
-   when the repository has none, on the exact final files, with a 3-minute timeout. A run
-   with neither is a usage error.
+2. The required check `tests` runs the Session's detected check command, or the
+   `--check` command in its place, on the exact final files, with a 3-minute timeout. A
+   run with neither is a usage error.
 3. The **reviewer** (`reviewer_model`) reads the result in a fresh conversation with
    `read_file`, `list_dir`, `grep` and `glob` only, numbers each finding `F1`, `F2`, …
    and ends with `VERDICT: APPROVE` or `VERDICT: CHANGES`.
@@ -33,11 +33,12 @@ One turn with one writer, one required check and a required review:
    accepts. The checks and the review run again on the new result, for up to 3 rounds.
 
 Each answer is an **adjudication**, recorded with its round, finding, decision and
-reason. A finding the writer did not answer is recorded as `missing`, and an answer
-without a readable block makes every finding of that round `missing` with the reason
-"unreadable adjudications block". A rejection with a reason is an answer: a reviewer can
-be wrong, and the writer is expected to check each finding against the task before
-changing code. A missing answer makes the run need attention (exit code 2).
+reason. A finding the writer did not answer, or answered without a reason, is recorded
+as `missing`. An answer with no `ADJUDICATIONS` block, or one whose block cannot be read
+("unreadable adjudications block"), makes every finding of that round `missing`. A
+rejection with a reason is an answer: a reviewer can be wrong, and the writer is expected
+to check each finding against the task before changing code. A missing answer makes the
+run need attention (exit code 2).
 
 Adjudications appear in the run summary, the JUnit `adjudications` suite, the Run
 outcome panel, the [pull request body](/workbench/keep-as-pr/) and the record.
@@ -89,8 +90,9 @@ its answer with two fenced JSON blocks:
 - `COVERAGE`: each area as `covered`, `not_reached` or `blocked`, with a reason.
 
 The host then runs each reproduction itself, with `browser_check`, one worker and no
-retries, against `target_url` and, when you give one, `reference_url`, a clean build of
-the same app:
+retries, against `target_url` and, when you give one and the test failed there,
+`reference_url`, a clean build of the same app. Each run is a `browser_check` call in the
+Session's network record:
 
 | Fails on the build under test | Passes on the reference | Classification |
 | --- | --- | --- |
@@ -105,9 +107,12 @@ A finding is confirmed only when its reproduction fails on the build under test 
 passes on the reference. Confirmed and reproduced findings make the run need attention
 (exit code 2), because the loadout's `fail_on_findings` is on.
 
-Both URLs must be reachable from the browser container: an exposed port of the Session,
-`http://localhost:<port>`, or a host under [`browser.allow`](/configure/browser/#declared-hosts).
-A URL it cannot reach refuses the run before it starts (exit code 3). To compare against
+The loadout needs the browser tools: a `browser:` block in your configuration and
+`axocoatl browser install` (see [Browser](/configure/browser/)). Both URLs must be
+reachable from the browser container: an exposed port of the Session,
+`http://localhost:<port>`, or a host under [`browser.allow`](/configure/browser/#declared-hosts),
+and the reference must not be the build under test. Without a `browser:` block, or with
+a URL it cannot reach, the run is refused before it starts (exit code 3). To compare against
 a clean build, run it on a second exposed port, or list its host.
 
 ### Not covered is never a pass
@@ -115,10 +120,14 @@ a clean build, run it on a second exposed port, or list its host.
 Everything the explorer did not cover is listed under **not covered**, with a reason:
 
 - each area it reported as `not_reached` or `blocked`;
-- when the explorer itself failed, every area it did not report as covered, plus "remaining
-  app", with the class: `provider_refusal` (the provider refused or a safety classifier
-  stopped the stream), `provider_failure`, `budget` or `runtime_limit`;
-- when its answer has no `COVERAGE` block, "whole app (no coverage report)".
+- when the explorer itself failed, "remaining app", which says which areas it did report
+  as covered, with the failure class, such as `provider_refusal` (the provider refused or
+  a safety classifier stopped the stream), `provider_failure`, `budget` or
+  `runtime_limit`;
+- when its answer has no `COVERAGE` block, "whole app (no coverage report)", and with no
+  `FINDINGS` block, its findings;
+- each finding whose reproduction is missing, or could not run, or that the wall clock
+  left unrun.
 
 Each entry makes the run need attention and is a failure in the JUnit file.
 
@@ -158,24 +167,28 @@ axocoatl run audit --task "Security-relevant defects in the request parsing code
 three turns in one Session, each with its own Team and budget:
 
 1. **Plan.** The planner, alone and read-only, splits the scope into 2 to 8 areas in one
-   `AREAS` JSON block: each area's name and the paths it covers. An invalid plan gets one
-   more turn with the error; a second invalid plan ends the run needing attention, with
-   "whole scope" not covered.
+   `AREAS` JSON block: each area's name, its scope and the paths it covers. An invalid
+   plan gets one more turn with the error; a second invalid plan ends the run needing
+   attention, with "whole scope" not covered.
 2. **Areas.** One worker per area, made from the `worker` Agent: read-only (`writes: []`,
-   its `bash` under Landlock with no repository writes and no TCP), each in a fresh
-   conversation, with no dependencies between them, so the controller starts them
-   together. Each reports `FINDINGS` and what it did `NOT_REACHED`. A failed worker makes
-   its area not covered, with its failure class.
+   its `bash` under Landlock with no repository writes and no TCP, which needs Linux 6.7
+   or later; [without it](/configure/agents/#limit-which-files-an-agent-may-change) its
+   `bash` does not run), each in a fresh conversation, with no dependencies between them,
+   so the controller starts them together. Each reports `FINDINGS` and what it did
+   `NOT_REACHED`. A failed worker makes its area not covered, with its failure class.
 3. **Integrate.** The integrator gets every accepted worker report (each up to 24 KiB,
    with a note when cut) and the list of areas not covered, and answers with one merged
    `FINDINGS` block.
 
 Audit turns have no required checks and no review. Findings do not fail the run by
-default (`fail_on_findings: false`); anything not covered does. Each worker gets
-`budgets.agent`, and the wall clock bounds all three turns.
+default (`fail_on_findings: false`); anything not covered does. Each worker gets the
+`worker` Agent's `budget`, or `budgets.agent` without one, and the wall clock bounds all
+three turns. When integration gives no result, the workers' findings are reported
+unmerged and integration is listed as not covered.
 
-Workers start together, but they share one Session container and one checkout, so their
-commands queue, and a local model server may answer one request at a time.
+Workers start together and their model calls overlap, but they share one Session
+container and one checkout, and a local model server may answer one request at a time.
+How much faster parallel workers finish through Axocoatl has not been measured.
 
 ### The measured trade-off
 

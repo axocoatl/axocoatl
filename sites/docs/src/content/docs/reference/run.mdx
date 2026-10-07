@@ -19,7 +19,7 @@ axocoatl run <LOADOUT> (--task <TEXT> | --task-file <FILE|->)
 
 | Flag | Meaning |
 | --- | --- |
-| `<LOADOUT>` | A loadout id: `fix`, `qa`, `audit` or one of yours. `audit` is opt-in and runs only when named, as here. |
+| `<LOADOUT>` | A loadout id: `fix`, `qa`, `audit` or one of yours. Every run names its loadout, so the opt-in `audit` runs only when you ask for it here. |
 | `--task <TEXT>` | The request, as you would type it in a Session. |
 | `--task-file <FILE>` | Read the request from a file; `-` reads standard input. |
 | `--repo <DIR>` | The repository; default the current directory. The daemon resolves it to a canonical path and uses the Workspace for it, creating one if needed. |
@@ -27,7 +27,7 @@ axocoatl run <LOADOUT> (--task <TEXT> | --task-file <FILE|->)
 | `--record <FILE>` | Write the [record bundle](#record-bundle). |
 | `--model <ROLE>=<PROVIDER:MODEL>` | Sets the parameter `<ROLE>_model`, such as `--model writer=ollama:qwen3-coder:30b`. Repeatable. |
 | `--param <NAME>=<VALUE>` | Sets a loadout parameter. Repeatable. An unknown name is a usage error. |
-| `--check <CMD>` | The command a `detected: true` check runs when the repository has no detected check command. |
+| `--check <CMD>` | The command a `detected: true` check runs, as `sh -c`, in place of the repository's detected check command. Needed when the repository has none. |
 | `--setup <CMD>` | The exact setup command this run approves, in place of the loadout's `environment.setup`. |
 | `--keep none\|branch\|pr` | What to do with a passing run's changes; default `none`. See [Keep as PR](/workbench/keep-as-pr/). |
 | `--json` | Print the Outcome as JSON on standard output instead of the summary. |
@@ -61,7 +61,8 @@ A daemon that cannot be reached, or that refuses the credential, is exit code 4.
    record id. With `--json` it prints the Outcome instead.
 
 `--junit` and `--record` are written even when the run fails, each to a temporary file
-that is then renamed, so a reader never sees half a file.
+that is then renamed, so a reader never sees half a file. When the run passed but one of
+them could not be written, `axocoatl run` exits with that error's code instead of 0.
 
 **Ctrl-C** asks the daemon to stop the run, waits up to 30 seconds for its Outcome,
 writes `--junit` and `--record`, and exits with code 6.
@@ -73,15 +74,17 @@ writes `--junit` and `--record`, and exits with code 6.
 | 0 | Pass: every required check passed, the review (if any) approved, every review finding was answered, nothing is not covered, and no finding the loadout fails on. |
 | 1 | A required check failed or timed out on the final result. |
 | 2 | Needs attention: the review did not pass, a finding was not answered, something was not covered, a check never ran on the final result, a turn needs attention or was blocked, a budget or the wall clock ran out, findings the loadout fails on (`fail_on_findings`), or Keep failed. |
-| 3 | Usage: a bad flag, an unknown or invalid loadout, a missing or unknown parameter, an opt-in loadout not named, a QA URL the browser cannot reach, or an e2e model that OpenRouter does not list with tool calls and image input. |
+| 3 | Usage: a bad flag; an unknown loadout or one that cannot be used; a missing or unknown parameter; a `detected` check with no detected command and no `--check`; a route credential that is neither configured nor stored, or a route that differs from one your configuration has for the same host; for `qa`, no `browser:` block or a URL the browser cannot reach; an e2e model that OpenRouter does not list with tool calls and image input; or budgets that cannot pay for the run's checks or review. |
 | 4 | The daemon could not be reached, or it refused the credential. |
-| 5 | Infrastructure: the Session environment failed, the Session could not run under egress with the `hardened` workload, a provider is not configured, or another daemon error. |
+| 5 | Infrastructure: the Session environment failed, the Session could not run under egress with the `hardened` workload (rootful Podman, `backend: e2b`), a recipe image was not built, OpenRouter's catalog could not be read for an e2e check, a provider is not configured, or another daemon error. |
 | 6 | You interrupted the run. |
 
-When several apply, the code is the first of 5, 6, 1, 2 in that order, and 0 only when
-none does. Codes 3 and 4 happen before a run starts. Nothing is a pass by default: a
-check that did not run, a review finding nobody answered and an area nobody reached each
-make the run need attention.
+When several of 1, 2, 5 and 6 apply, the code is the first of 5, 6, 1, 2 in that order,
+and 0 only when none does. Code 3 usually comes before a run starts, and also ends a
+started run whose loadout the daemon could not apply as written, such as budgets too small
+for its checks. Code 4 can come at any point, when the daemon stops answering. Nothing is
+a pass by default: a check that did not run, a review finding nobody answered and an area
+nobody reached each make the run need attention.
 
 The reasons are listed under `attention` in the Outcome, in words.
 
@@ -148,12 +151,12 @@ The JUnit file has one `testsuite` per kind of result, and a last one for the ve
 | A review that did not pass | `<failure>` |
 | An adjudication the writer did not give | `<failure type="missing">` |
 | A rejected finding | a passing case with the reason in `<system-out>` |
-| A confirmed or reproduced finding | `<failure>` when the loadout fails on findings, otherwise `<system-out>` |
+| A confirmed or reproduced QA finding, or an audit finding | `<failure>` when the loadout fails on findings, otherwise a passing case with the finding in `<system-out>` |
 | A finding that fails on the clean build, or did not reproduce | `<skipped>` |
 | A reproduction that could not run, or is missing | `<error>` |
 | Anything not covered | `<failure type="not_covered">`, never skipped |
 | A warning, such as the same-model reviewer | a property `axocoatl.warning.<code>` |
-| The run's verdict | suite `run`, case `verdict`: a `<failure>` with the reasons whenever the run did not pass, so a CI job that reads only JUnit still sees it |
+| The run's verdict | suite `run`, case `verdict`: a `<failure>` with the reasons when checks failed or the run needs attention, an `<error>` when it was interrupted or could not run, so a CI job that reads only JUnit still sees a run that did not pass |
 
 Text is XML-escaped and control characters other than tab and newline are removed. Each
 message is at most 4 KiB and the file at most 8 MiB; cases beyond that are summarized in
@@ -199,7 +202,8 @@ Each run is kept under `loadout-runs/<run id>/` in the data root: `manifest.json
 written once when the run is admitted; `events.jsonl`, appended as the run proceeds; and
 `outcome.json`, written once when it ends. Deleting the Session does not delete them.
 If the daemon restarts during a run, the run ends as failed with the reason "the daemon
-restarted during the run"; it is not resumed.
+restarted during the run; it was not resumed". A repeated `request_id` returns the same
+run only while the daemon process that admitted it is running.
 
 <Aside>
 A run is an ordinary Session. Open it in the workbench to read its turns, the Agent graph,

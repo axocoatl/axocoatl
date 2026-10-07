@@ -89,7 +89,7 @@ the configuration directory's loadouts/ folder. Settings displays loadouts; it n
 runs one.
 
 `axocoatl run <loadout> --task "..."` runs one against the running daemon. A loadout's
-Session runs under network egress with non-root workload users; global defaults do not
+Session runs under network egress (or none) with non-root workload users; global defaults do not
 change. Exit codes: 0 pass, 1 required checks failed, 2 needs attention (review not
 passed, a finding unanswered, anything not covered, budget), 3 usage, 4 daemon
 unavailable, 5 infrastructure, 6 interrupted. `--junit` writes JUnit of checks and

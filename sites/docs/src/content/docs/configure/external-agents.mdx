@@ -34,11 +34,15 @@ on the route, to each request the route's rules allow.
    ```
 
    This builds an image named `localhost/axocoatl-recipe-…` with Podman from a base and
-   the recipe's pinned versions, prints it, and records its image id. Sessions trust a recipe image by
-   that id, as they do the browser image, without `allow_untrusted_images`. Recipes can
+   the recipe's pinned versions, prints it, and records its image id in the data root.
+   Sessions trust a recipe image by that id, as they do the browser image, without
+   `allow_untrusted_images`. Run it with the daemon's `--config` (or
+   `AXOCOATL_DATA_DIR`), so the id lands in the data root the daemon reads. Recipes can
    be combined, as in `axocoatl recipe build claude-code e2e`. `axocoatl recipe list`
-   shows the recipes and the images built from them. The build downloads the base image
-   and the programs; that is network access you start, on your computer.
+   shows the recipes and the images built from them. The image's tag carries a digest of
+   its recipes, so after an upgrade that changes a recipe, a run asks you to build again.
+   The build downloads the base image and the programs; that is network access you start,
+   on your computer.
 
 2. Name the recipe in the loadout:
 
@@ -54,21 +58,25 @@ on the route, to each request the route's rules allow.
 `axocoatl secret set <name>` reads a value from standard input and stores it in the data
 root as `secrets/<name>`, a file only your user can read (`0600`), replaced atomically.
 It never takes the value as an argument, never prints it, and never writes it to a log or
-a record.
+a record. Standard input must be a pipe or a file: when it is a terminal, where typing or
+pasting would show the value, the command refuses and prints how to pipe it. Like
+`recipe build`, it uses the data root of `--config` or `AXOCOATL_DATA_DIR`.
 
 ```sh
 # Claude Code: the long-lived token `claude setup-token` prints
 claude setup-token | axocoatl secret set claude-code-oauth
 
-# Codex: an OpenAI API key; paste it, then press Ctrl-D
-axocoatl secret set codex-openai
+# Codex: an OpenAI API key, from the environment or from a file
+printenv OPENAI_API_KEY | axocoatl secret set codex-openai
+axocoatl secret set codex-openai < openai-key.txt
 ```
 
 A value is one line of at most 8 KiB with no control characters; one trailing line break
-is ignored. If the command prints more than the token, run `axocoatl secret set` and
-paste the token alone. `axocoatl secret list` prints the stored names, never values, and
+is ignored. If the command prints more than the token, put the token alone in a file and
+redirect it. `axocoatl secret list` prints the stored names, never values, and
 `axocoatl secret remove <name>` deletes one. A route's `credential` resolves to a
-`credentials` entry in the configuration first, then to a stored secret of that name.
+`credentials` entry in the configuration first, then to a stored secret of that name; a
+name found in neither refuses the run (exit code 3).
 
 You supply the credential, for your own account. Axocoatl does not obtain or refresh it.
 
@@ -117,13 +125,13 @@ program brings its own tools, so `tools` is ignored, and only a `writer` may be 
 
 You do not list these routes; the run adds them to its Session's egress policy.
 
-| Runtime | Host | Credential | Added as | Placeholder variable |
-| --- | --- | --- | --- | --- |
-| `claude-code` | `api.anthropic.com` | `claude-code-oauth` | `Authorization: Bearer <value>` | `CLAUDE_CODE_OAUTH_TOKEN` |
-| `codex` | `api.openai.com` | `codex-openai` | `Authorization: Bearer <value>` | `OPENAI_API_KEY` |
+| Runtime | Host | Requests allowed | Credential | Added as | Placeholder variable |
+| --- | --- | --- | --- | --- | --- |
+| `claude-code` | `api.anthropic.com` | `POST /v1/messages` | `claude-code-oauth` | `Authorization: Bearer <value>` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `codex` | `api.openai.com` | `POST /v1/responses` | `codex-openai` | `Authorization: Bearer <value>` | `OPENAI_API_KEY` |
 
-The Claude Code route allows only the Messages API paths the pinned version uses. The
-program also runs with `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`,
+Each route refuses every other request. Claude Code also runs with
+`DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`,
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `DISABLE_AUTOUPDATER=1`. The Session's
 certificate authority, which signs the route's TLS on your computer, is trusted through
 `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE`. How routes check and record requests is in
@@ -149,7 +157,7 @@ certificate authority, which signs the route's TLS on your computer, is trusted 
 | What it can reach | Enforced: only the route to its model API and the hosts the loadout and your configuration allow. |
 | Its credential | Enforced: added on your computer; the container holds a placeholder. A token the API returns in a response body would reach the container, as on any route. |
 | Its time | Enforced: the activation's wall-clock timeout, and the run's wall clock. |
-| Its spend | Bounded, not per call. The activation reserves its grant's whole token and cost limits before the program starts. Each request on the route counts against the grant's invocations, and the host stops the program when they run out. The program's own usage report settles the reservation; without one, usage is marked incomplete and the reservation stays charged. |
+| Its spend | Bounded, not per call. The activation reserves its grant's whole token and cost limits before the program starts. Each request on the route counts against the grant's invocations, and the host stops the program when they run out. Claude Code also gets its own spending stop, `--max-budget-usd`, at what the grant still allows. The program's own usage report settles the reservation; without one, usage is marked incomplete and the reservation stays charged. Codex reports tokens but no cost, so its cost reservation stays charged. |
 | Its tool calls | Recorded, not admitted. The program's own tool calls are evidence in the record; Axocoatl does not approve or refuse them one by one. They run as the writer user inside the container, like a writer's `bash`. |
 
 <Aside type="caution">

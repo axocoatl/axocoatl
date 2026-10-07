@@ -71,7 +71,7 @@ run them.
 | Loadout | A versioned file that declares a run. Three are built in: `fix`, `qa` and `audit` (opt-in). |
 | Run | One execution of a loadout; its Session, record and Outcome. |
 | Adjudication | The writer's answer to one review finding: accept or reject, with a reason. A finding left unanswered makes the run need attention. |
-| Not covered | An area, helper, slot or check that ended without a result, with the reason. It is never counted as a pass. |
+| Not covered | An area, Agent, helper or QA reproduction that ended without a result, with the reason. It is never counted as a pass. A check that did not run makes the run need attention too. |
 | Fails on clean build | A QA finding whose reproduction also fails on the reference build; listed, never confirmed. |
 
 See [Loadouts](/configure/loadouts/) and [Fix, QA and audit runs](/workbench/fix-qa-audit/).
