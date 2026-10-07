@@ -1,0 +1,53 @@
+# Built-in loadout: qa. Owner: workstream review-qa.
+# One browser explorer; no scouts, no merge, no verifier. Every finding needs
+# an executable reproduction (a Playwright test under repro_dir). With a
+# reference build, a finding is confirmed only when its reproduction fails on
+# the build under test and passes on the reference. Areas the explorer did not
+# reach or was blocked on are listed as not covered, never a silent pass.
+schema: axocoatl.loadout/1
+id: qa
+version: 1
+name: QA
+description: >-
+  One explorer drives the app in a browser and reports findings, each with an
+  executable reproduction the host re-runs against the build under test and,
+  when configured, a clean reference build.
+kind: qa
+params:
+  explorer_model:
+    kind: model
+    required: true
+    description: provider:model of the explorer (needs tool calls)
+  target_url:
+    kind: url
+    default: http://localhost:3000
+    description: the build under test, as the browser container reaches it
+  reference_url:
+    kind: url
+    description: a clean reference build; without it findings are reproduced, not confirmed
+agents:
+  - id: explorer
+    role: explorer
+    model: { param: explorer_model }
+    tools: [read_file, list_dir, grep, glob, write_file, browser, browser_check]
+    writes: [".axocoatl/qa/**"]
+    instructions: >-
+      Explore the app area by area. For every bug you report, write a
+      Playwright test under .axocoatl/qa/ that fails because of the bug and
+      confirm it with browser_check. End with a FINDINGS JSON block and a
+      COVERAGE JSON block listing every area as covered, not_reached or
+      blocked with the reason.
+qa:
+  target_url: { param: target_url }
+  reference_url: { param: reference_url }
+  repro_dir: .axocoatl/qa
+  fail_on_findings: true
+budgets:
+  agent: { activations: 2, invocations: 600, tokens: 6000000, cost_usd: 15 }
+  wall_clock: 90m
+prompt: |
+  Explore the app at {target_url} and report its bugs.
+  {task}
+sandbox:
+  network: egress
+  workload: hardened

@@ -2,9 +2,11 @@ pub mod automation;
 pub mod browser;
 mod convert;
 pub mod egress;
+pub mod egress_host_ollama;
 pub mod egress_presets;
 pub mod egress_routes;
 pub mod error;
+pub mod loadout;
 pub mod secret;
 pub mod types;
 pub mod web;
@@ -615,6 +617,7 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
     workload::validate_workload(config)?;
     validate_egress(config)?;
     validate_egress_routes(config)?;
+    egress_host_ollama::validate_host_ollama(config)?;
     validate_web(config)?;
     validate_browser(config)?;
 

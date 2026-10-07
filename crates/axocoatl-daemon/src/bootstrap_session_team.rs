@@ -134,6 +134,14 @@ pub struct SessionTeamEdit {
     /// historical serialized shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_review: Option<ReviewSetting>,
+    /// Per-check options (name, timeout, report), aligned by index with
+    /// `required_checks`. Empty: every check takes the defaults (three
+    /// minutes), and the historical serialized shape is kept. Validation and
+    /// the path to the admitted definitions belong to workstream `runtime`
+    /// (`axocoatl_session::check_options`); until then a non-empty list is
+    /// refused at Apply.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub check_options: Vec<axocoatl_session::check_options::RequiredCheckOptions>,
 }
 fn default_review_rounds() -> u32 {
     axocoatl_session::turn_review::DEFAULT_REVIEW_ROUNDS
@@ -211,6 +219,11 @@ pub struct SessionTeamView {
     /// Slot ids whose current definition lists `web_search` or `web_fetch`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub web_slots: Vec<String>,
+    /// Warnings about the current team, such as a required reviewer on the
+    /// writer's model (`same_model_reviewer`). Filled by workstream `core`
+    /// with `axocoatl_session::run_outcome::same_model_warning`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<axocoatl_session::run_outcome::RunWarning>,
 }
 /// Whether a tools list names a web tool.
 fn lists_web_tool(tools: &[String]) -> bool {
@@ -514,6 +527,11 @@ fn check_required_checks(edit: &SessionTeamEdit, conditions: usize) -> Result<()
              4096 bytes and without NUL characters",
         )
     })?;
+    if !edit.check_options.is_empty() {
+        // Workstream `runtime` carries the options to the admitted
+        // definitions; until then they are refused rather than ignored.
+        return Err(DaemonError::NotImplemented("required check options"));
+    }
     Ok(())
 }
 /// A required review names 1 to 3 rounds and a reviewer budget that pays for
@@ -655,6 +673,7 @@ impl AxocoatlDaemon {
                 proposed_delegation: None,
                 web_templates: vec![],
                 web_slots: vec![],
+                warnings: vec![],
             });
         }
         let suggested_check = session
@@ -751,6 +770,7 @@ impl AxocoatlDaemon {
                         proposed_delegation: None,
                         web_templates: web_templates.clone(),
                         web_slots,
+                        warnings: vec![],
                     });
                 }
                 let selected: Vec<String> = match &session.mode {
@@ -821,6 +841,7 @@ impl AxocoatlDaemon {
                     proposed_delegation,
                     web_templates,
                     web_slots,
+                    warnings: vec![],
                 })
             },
         )

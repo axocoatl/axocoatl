@@ -79,6 +79,31 @@ pub fn build_router(
         .route("/api/events/recent", get(routes::recent_events))
         .route("/api/workflows", get(routes::list_workflows))
         .route("/api/session-teams", get(routes::list_session_teams))
+        .route("/api/loadouts", get(routes::list_loadouts))
+        .route(
+            "/api/loadouts/validate",
+            post(routes::validate_loadout).layer(DefaultBodyLimit::max(128 * 1024)),
+        )
+        .route("/api/loadouts/{id}", get(routes::get_loadout))
+        .route(
+            "/api/runs",
+            get(routes::list_loadout_runs).post(routes::start_loadout_run),
+        )
+        .route("/api/runs/{run_id}", get(routes::get_loadout_run))
+        .route(
+            "/api/runs/{run_id}/events",
+            get(routes::loadout_run_events_route),
+        )
+        .route("/api/runs/{run_id}/stop", post(routes::stop_loadout_run))
+        .route(
+            "/api/runs/{run_id}/junit",
+            get(routes::loadout_run_junit_route),
+        )
+        .route(
+            "/api/runs/{run_id}/record",
+            get(routes::loadout_run_record_route),
+        )
+        .route("/api/sessions/{id}/keep-pr", post(routes::keep_pr))
         .route(
             "/api/workflows/{workflow_id}/execute",
             post(routes::execute_workflow),

@@ -1,0 +1,68 @@
+# Built-in loadout: audit (opt-in). Owner: workstream audit.
+# A planner splits the scope into 2-8 areas (structured JSON); the daemon runs
+# one read-only worker per area in parallel, each with a fresh context; an
+# integrator merges the findings. Measured trade-off (Claude Code subagents,
+# sensitivity analysis, not an Axocoatl result): recall +11 points, precision
+# -8 points, about 3x the tokens of one agent on an audit larger than one
+# context.
+schema: axocoatl.loadout/1
+id: audit
+version: 1
+name: Audit
+description: >-
+  Plan the scope into areas, audit each area in parallel with a fresh
+  read-only worker, then integrate. Costs about three times the tokens of one
+  agent; use it when the scope is larger than one context.
+kind: audit
+opt_in: true
+params:
+  planner_model:
+    kind: model
+    required: true
+    description: provider:model of the planner
+  worker_model:
+    kind: model
+    required: true
+    description: provider:model of each area worker
+  integrator_model:
+    kind: model
+    required: true
+    description: provider:model of the integrator
+agents:
+  - id: planner
+    role: planner
+    model: { param: planner_model }
+    tools: [read_file, list_dir, grep, glob]
+    writes: []
+    instructions: >-
+      Split the scope into 2 to 8 areas that together cover it without
+      overlap. Answer with one AREAS JSON block only.
+  - id: worker
+    role: worker
+    model: { param: worker_model }
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    instructions: >-
+      Audit only your area. Report each defect with file:line, evidence and
+      severity in a FINDINGS JSON block, and say what you did not reach.
+  - id: integrator
+    role: integrator
+    model: { param: integrator_model }
+    tools: [read_file, list_dir, grep, glob]
+    writes: []
+    instructions: >-
+      The host gives you every area worker's findings in one turn after the
+      areas finish. Merge them: remove duplicates, keep every distinct defect,
+      and answer with one FINDINGS JSON block.
+audit:
+  min_areas: 2
+  max_areas: 8
+  fail_on_findings: false
+budgets:
+  agent: { activations: 2, invocations: 300, tokens: 3000000, cost_usd: 8 }
+  wall_clock: 120m
+prompt: |
+  Audit this repository: {task}
+sandbox:
+  network: egress
+  workload: hardened

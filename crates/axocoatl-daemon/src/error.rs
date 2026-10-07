@@ -69,6 +69,11 @@ pub enum DaemonError {
     /// 422.
     #[error("{0}")]
     InvalidRequest(String),
+
+    /// A 1.3 hook that its workstream has not filled in yet. The HTTP
+    /// boundary returns 501; nothing ran.
+    #[error("not implemented: {0}")]
+    NotImplemented(&'static str),
 }
 
 impl From<axocoatl_config::ConfigError> for DaemonError {

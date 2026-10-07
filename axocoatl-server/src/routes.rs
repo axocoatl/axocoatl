@@ -2702,6 +2702,7 @@ fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorRe
         axocoatl_daemon::DaemonError::AttemptConflict(_)
         | axocoatl_daemon::DaemonError::SessionConflict(_) => StatusCode::CONFLICT,
         axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        axocoatl_daemon::DaemonError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
         _ => StatusCode::BAD_REQUEST,
     };
     (
@@ -7999,6 +8000,7 @@ mod tests {
                     .then(|| "exact setup failed".to_string()),
                 ..axocoatl_session::SessionEnvironment::default()
             },
+            loadout: None,
             created_at: 1,
             last_active: 1,
         }
@@ -9835,4 +9837,16 @@ workflows:
 mod session_grants;
 pub use session_grants::{
     decide_session_grant, preview_session_grant, revoke_session_grant, session_control_grants,
+};
+
+// 1.3 loadouts: one owning workstream per file (docs/design/1.3-loadouts.md).
+#[path = "routes_keep_pr.rs"]
+mod keep_pr_routes;
+pub use keep_pr_routes::keep_pr;
+#[path = "routes_loadouts.rs"]
+pub mod loadout_routes;
+pub use loadout_routes::{
+    get_loadout, get_loadout_run, list_loadout_runs, list_loadouts, loadout_run_events_route,
+    loadout_run_junit_route, loadout_run_record_route, start_loadout_run, stop_loadout_run,
+    validate_loadout,
 };

@@ -5,6 +5,9 @@ use axocoatl_core::SecureDir;
 use clap::{Parser, Subcommand};
 
 mod ollama_setup;
+mod recipe_cmd;
+mod run_cmd;
+mod secret_cmd;
 mod user_paths;
 
 /// Standalone commands retain a failed daemon until cleanup succeeds or this
@@ -177,6 +180,33 @@ enum Commands {
     Network {
         #[command(subcommand)]
         command: NetworkCommands,
+    },
+
+    /// Run a loadout headless against the running daemon
+    Run(Box<run_cmd::RunArgs>),
+
+    /// Loadouts: list, show and validate
+    Loadouts {
+        #[command(subcommand)]
+        command: run_cmd::LoadoutCommands,
+    },
+
+    /// Record bundles of loadout runs
+    Record {
+        #[command(subcommand)]
+        command: run_cmd::RecordCommands,
+    },
+
+    /// Secrets that egress routes add to requests (values are read from stdin)
+    Secret {
+        #[command(subcommand)]
+        command: secret_cmd::SecretCommands,
+    },
+
+    /// Session image recipes (Claude Code, Codex, e2e)
+    Recipe {
+        #[command(subcommand)]
+        command: recipe_cmd::RecipeCommands,
     },
 }
 
@@ -442,6 +472,11 @@ async fn main() {
         Commands::Network { command } => match command {
             NetworkCommands::Reload => cmd_network_reload().await,
         },
+        Commands::Run(args) => std::process::exit(run_cmd::cmd_run(*args).await),
+        Commands::Loadouts { command } => std::process::exit(run_cmd::cmd_loadouts(command).await),
+        Commands::Record { command } => std::process::exit(run_cmd::cmd_record(command).await),
+        Commands::Secret { command } => std::process::exit(secret_cmd::cmd_secret(command).await),
+        Commands::Recipe { command } => std::process::exit(recipe_cmd::cmd_recipe(command).await),
     }
 }
 

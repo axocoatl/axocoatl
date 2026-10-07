@@ -1,0 +1,55 @@
+# Built-in loadout: fix. Owner: workstream review-qa.
+# One writer, the project's required checks, and a required review by a
+# different model (up to three rounds). The writer answers every review
+# finding with accept or reject and a reason; the host records each answer.
+schema: axocoatl.loadout/1
+id: fix
+version: 1
+name: Fix
+description: >-
+  One writer makes the change; the host runs the required checks on the exact
+  final files and a reviewer on a different model must approve the result.
+kind: fix
+params:
+  writer_model:
+    kind: model
+    required: true
+    description: provider:model of the writer
+  reviewer_model:
+    kind: model
+    required: true
+    description: provider:model of the reviewer (use a different model than the writer)
+agents:
+  - id: writer
+    role: writer
+    model: { param: writer_model }
+    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
+    instructions: >-
+      You own this change. Find the relevant code and tests, make the change,
+      run the project's check command and fix failures, then compare your diff
+      with the task. When the host sends you review findings, answer every
+      finding in an ADJUDICATIONS block: its id, accept or reject, and the
+      reason. Fix each finding you accept.
+checks:
+  - name: tests
+    run: { detected: true }
+    timeout: 3m
+review:
+  model: { param: reviewer_model }
+  rounds: 3
+  tools: [read_file, list_dir, grep, glob]
+  adjudicate: true
+  instructions: >-
+    Review the change against the task and against every contract and edge
+    case the docs, comments and tests describe. Number each finding F1, F2, ...
+    with file:line and the defect. End with VERDICT: APPROVE or VERDICT: CHANGES.
+    Change nothing.
+budgets:
+  agent: { activations: 4, invocations: 400, tokens: 4000000, cost_usd: 10 }
+  reviewer: { activations: 3, invocations: 120, tokens: 1500000, cost_usd: 3 }
+  wall_clock: 60m
+prompt: |
+  {task}
+sandbox:
+  network: egress
+  workload: hardened

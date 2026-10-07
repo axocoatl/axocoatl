@@ -43,6 +43,17 @@ pub mod session_repository;
 #[path = "bootstrap_session_writers.rs"]
 mod session_writers;
 
+// 1.3 loadouts. Each file has one owning workstream; see
+// docs/design/1.3-loadouts.md ("Ownership").
+#[path = "bootstrap_external_agent.rs"]
+pub(crate) mod external_agent_host;
+#[path = "bootstrap_keep_pr.rs"]
+pub(crate) mod keep_pr_host;
+#[path = "bootstrap_loadout_runs.rs"]
+pub(crate) mod loadout_runs;
+#[path = "bootstrap_qa_repro.rs"]
+pub(crate) mod qa_repro_host;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::Path;
@@ -29992,6 +30003,7 @@ providers:
             post_create_commands: Vec::new(),
             check_command: None,
             environment: axocoatl_session::SessionEnvironment::default(),
+            loadout: None,
             created_at: 1_700_000_000,
             last_active: 1_700_000_000,
         }

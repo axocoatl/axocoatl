@@ -31,6 +31,7 @@ axocoatl-memory = { version = "1.2.0", path = "../crates/axocoatl-memory", defau
 axocoatl-mcp = { version = "1.2.0", path = "../crates/axocoatl-mcp" }
 axocoatl-a2a = { version = "1.2.0", path = "../crates/axocoatl-a2a" }
 axocoatl-isolation = { version = "1.2.0", path = "../crates/axocoatl-isolation" }
+async-trait = { workspace = true }
 axum = { workspace = true }
 tokio-stream = { workspace = true }
 tokio = { workspace = true }

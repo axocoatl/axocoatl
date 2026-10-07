@@ -828,6 +828,24 @@ pub struct EgressConfigYaml {
     /// request by request and, with a credential, signs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<EgressRouteYaml>,
+    /// Opt-in route from Session containers to an Ollama server on this
+    /// computer's loopback, recorded like any route. Absent: no route.
+    /// Validation and the relay are workstream `runtime`'s
+    /// ([`crate::egress_host_ollama`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_ollama: Option<HostOllamaRouteYaml>,
+}
+
+/// `sandbox.egress.host_ollama`: the loopback port of an Ollama server on
+/// this computer that Session containers may reach under `network: egress`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostOllamaRouteYaml {
+    /// A loopback TCP port, such as 11434.
+    pub port: u16,
+    /// Which processes the route serves. Defaults to `[agent]`.
+    #[serde(default, rename = "for", skip_serializing_if = "Option::is_none")]
+    pub bindings: Option<Vec<RouteForYaml>>,
 }
 
 impl Default for EgressConfigYaml {
@@ -839,6 +857,7 @@ impl Default for EgressConfigYaml {
             max_connections: default_egress_max_connections(),
             record_max_events: None,
             routes: Vec::new(),
+            host_ollama: None,
         }
     }
 }

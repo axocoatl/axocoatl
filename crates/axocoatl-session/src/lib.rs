@@ -10,6 +10,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod audit_plan;
+pub mod check_options;
+pub mod check_report;
 pub mod control_authority;
 pub mod control_command;
 pub mod devcontainer;
@@ -18,10 +21,17 @@ pub mod execution_legacy;
 pub mod execution_namespace;
 pub mod execution_ownership;
 pub mod execution_store;
+pub mod failure_class;
 pub mod invocation_audit;
 pub mod native_history;
 pub mod network_record;
 pub mod path_scope;
+pub mod qa_repro;
+pub mod record_bundle;
+pub mod review_adjudication;
+pub mod run_junit;
+pub mod run_outcome;
+pub mod run_record;
 pub mod segment_log;
 pub mod session_attachment;
 pub mod session_history;
@@ -368,6 +378,11 @@ pub struct Session {
     /// Truthful, durable preparation state for this Session's sandbox.
     #[serde(default)]
     pub environment: SessionEnvironment,
+    /// The loadout run that created this Session, when one did. Its
+    /// `network` and `workload` replace the global sandbox defaults for this
+    /// Session only. Absent keeps the shape of Sessions written before 1.3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loadout: Option<run_record::SessionLoadoutBinding>,
     /// Unix-seconds timestamps.
     pub created_at: u64,
     pub last_active: u64,
@@ -439,6 +454,7 @@ impl Session {
             post_create_commands,
             check_command,
             environment: SessionEnvironment::planned(setup_command, setup_approved, setup_reviewed),
+            loadout: None,
             created_at: now,
             last_active: now,
         }

@@ -24,6 +24,7 @@ axocoatl-actor = { version = "1.2.0", path = "../crates/axocoatl-actor" }
 axocoatl-server = { version = "1.2.0", path = "../axocoatl-server" }
 axocoatl-memory = { version = "1.2.0", path = "../crates/axocoatl-memory" }
 axocoatl-service = { version = "1.2.0", path = "../crates/axocoatl-service" }
+axocoatl-session = { version = "1.2.0", path = "../crates/axocoatl-session" }
 axocoatl-isolation = { version = "1.2.0", path = "../crates/axocoatl-isolation" }
 axocoatl-llm-ollama = { version = "1.2.0", path = "../crates/axocoatl-llm-ollama" }
 axocoatl-mcp = { version = "1.2.0", path = "../crates/axocoatl-mcp" }
