@@ -690,12 +690,15 @@ impl FakeModelApi {
     }
 }
 
+/// How each sent turn's Send ended, once it has.
+type SendResults = Arc<StdMutex<HashMap<String, Option<Result<(), String>>>>>;
+
 /// The run driver's view of the daemon, as the server's `DaemonRunHost`
 /// gives it, for a run driven in this process.
 struct TestRunHost {
     daemon: Arc<AxocoatlDaemon>,
     checks: StdMutex<Vec<crate::loadout::host::CheckLabel>>,
-    sends: Arc<StdMutex<HashMap<String, Option<Result<(), String>>>>>,
+    sends: SendResults,
     observed: StdMutex<Vec<axocoatl_session::run_outcome::TurnObservation>>,
 }
 
