@@ -50,19 +50,25 @@ A daemon that cannot be reached, or that refuses the credential, is exit code 4.
 
 ## What it prints
 
-1. The run id, the Session id and any warnings, on standard error.
+1. Once the daemon has admitted the run: the run id, the Session id and any warnings, on
+   standard error. Admission prepares the Session's environment first; when that takes
+   more than a few seconds, a line says the command is waiting. A refused run prints its
+   reason and never says that it started.
 2. One line per phase, turn start and end, warning, not-covered entry and provider retry,
-   on standard error, while the run proceeds.
+   on standard error, while the run proceeds. Each warning is printed once.
 3. When the run finishes, a summary on standard output: the verdict; each check with its
    state, exit code and report counts; the review verdict and rounds; each adjudication
-   (finding, decision, reason); the findings, with "fails on clean build" shown as such;
-   every not-covered entry with its reason; the warnings, including the same-model
-   warning; usage (marked "known subtotal" when a call's usage is unknown); and the
-   record id. With `--json` it prints the Outcome instead.
+   (finding, decision, reason); the findings, each with its area, severity and location
+   when known, and "fails on clean build" shown as such; every not-covered entry with its
+   reason; the warnings, including the same-model warning; usage (marked "known subtotal"
+   when a call's usage is unknown); and the record id. With `--json` it prints the
+   Outcome instead, and what Keep did goes to standard error.
 
 `--junit` and `--record` are written even when the run fails, each to a temporary file
-that is then renamed, so a reader never sees half a file. When the run passed but one of
-them could not be written, `axocoatl run` exits with that error's code instead of 0.
+that is then renamed, so a reader never sees half a file. With `--keep`, Keep runs first,
+so the `--record` file holds its `keep` event like `GET /api/runs/{run_id}/record`. When
+the run passed but one of the files could not be written, `axocoatl run` exits with that
+error's code instead of 0.
 
 **Ctrl-C** asks the daemon to stop the run, waits up to 30 seconds for its Outcome,
 writes `--junit` and `--record`, and exits with code 6.
