@@ -26,6 +26,8 @@ not always write one, so the host reads each block in any of these forms:
   qa, an object with `findings` and `coverage` keys; for audit, an object `{"areas":
   [...]}` or `{"findings": [...]}` (a worker's may also hold `not_reached`), or the
   array alone, or the last fenced block that is such an object.
+  An audit object's keys are read in any case, with words joined by `_`, `-`, a space
+  or nothing: `FINDINGS`, `NOT_REACHED` and `notReached` all count.
 
 A block that is there but is not the JSON it should be is reported as unreadable, with
 the parser's error, never guessed at; what the block would have said is then missing or
@@ -204,6 +206,9 @@ three turns in one Session, each with its own Team and budget:
    `bash` does not run), each in a fresh conversation, with no dependencies between them,
    so the controller starts them together. Each reports `FINDINGS` and what it did
    `NOT_REACHED`. A failed worker makes its area not covered, with its failure class.
+   A not-reached entry that names another planned area is left to that area's worker,
+   and one that names a repository path that does not exist is a note on standard error
+   and in the record; neither makes the area not covered.
 3. **Integrate.** The integrator gets every accepted worker report (each up to 24 KiB,
    with a note when cut) and the list of areas not covered, and answers with one merged
    `FINDINGS` block.
