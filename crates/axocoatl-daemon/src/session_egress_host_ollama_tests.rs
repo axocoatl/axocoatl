@@ -21,20 +21,20 @@ use tokio::net::TcpListener;
 
 /// One request the fake Ollama server received.
 #[derive(Debug, Clone)]
-struct Seen {
-    method: String,
-    path: String,
-    host: String,
+pub(crate) struct Seen {
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) host: String,
 }
 
 /// A plain-HTTP server standing in for Ollama on a free loopback port.
-struct FakeOllama {
-    addr: SocketAddr,
+pub(crate) struct FakeOllama {
+    pub(crate) addr: SocketAddr,
     seen: Arc<Mutex<Vec<Seen>>>,
 }
 
 impl FakeOllama {
-    async fn start() -> Self {
+    pub(crate) async fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
@@ -77,7 +77,7 @@ impl FakeOllama {
         Self { addr, seen }
     }
 
-    fn seen(&self) -> Vec<Seen> {
+    pub(crate) fn seen(&self) -> Vec<Seen> {
         self.seen.lock().unwrap().clone()
     }
 }

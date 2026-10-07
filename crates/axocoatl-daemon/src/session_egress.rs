@@ -2516,7 +2516,7 @@ mod attempt_tests;
 
 #[cfg(test)]
 #[path = "session_egress_host_ollama_tests.rs"]
-mod host_ollama_tests;
+pub(crate) mod host_ollama_tests;
 #[cfg(test)]
 #[path = "session_egress_route_tests.rs"]
 pub(crate) mod route_tests;

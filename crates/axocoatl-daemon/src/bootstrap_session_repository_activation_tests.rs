@@ -163,10 +163,13 @@ fn required_check_conditions(
     content: &mut ExecutionContentStore,
     node: &TurnNodeId,
     checks: &[Vec<String>],
+    options: &[axocoatl_session::check_options::RequiredCheckOptions],
 ) -> Vec<CompletionCondition> {
-    use axocoatl_session::turn_checks::{check_definitions, readiness_text, CheckGroup};
+    use axocoatl_session::turn_checks::{
+        check_definitions_with_options, readiness_text, CheckGroup,
+    };
     let group = CheckGroup::required();
-    let definitions = check_definitions(checks).unwrap();
+    let definitions = check_definitions_with_options(checks, options).unwrap();
     if definitions.is_empty() {
         return vec![];
     }
@@ -206,6 +209,19 @@ fn run_with(
     repository_recorded: bool,
     writes: Option<&[&str]>,
     checks: &[Vec<String>],
+) -> Run {
+    run_with_check_options(f, tools, repository_recorded, writes, checks, &[])
+}
+
+/// As `run_with`, with each required check's options as Team Apply
+/// admits them.
+fn run_with_check_options(
+    f: &mut Fixture,
+    tools: &[&str],
+    repository_recorded: bool,
+    writes: Option<&[&str]>,
+    checks: &[Vec<String>],
+    options: &[axocoatl_session::check_options::RequiredCheckOptions],
 ) -> Run {
     let canonical = f._canonical.take().unwrap();
     let session_id = canonical.owner().session_id.clone();
@@ -255,7 +271,7 @@ fn run_with(
                     definition_id: definition_id.clone(),
                     snapshot: definition.reference().clone(),
                 },
-                required_check_conditions(content, &activation.node_id, checks),
+                required_check_conditions(content, &activation.node_id, checks, options),
             ))
         })
         .unwrap();
@@ -2769,6 +2785,9 @@ async fn actual_repository_edit_refuses_invalid_utf8_without_rewriting_existing_
 
 #[path = "bootstrap_session_repository_driver_tests.rs"]
 mod driver_tests;
+
+#[path = "bootstrap_session_runtime_policy_tests.rs"]
+mod runtime_policy_tests;
 
 #[path = "bootstrap_session_browser_tests.rs"]
 mod browser_tests;
