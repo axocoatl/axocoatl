@@ -1051,6 +1051,9 @@ mod review_tests;
 #[path = "bootstrap_native_team_continue_tests.rs"]
 mod team_continue_tests;
 
+#[path = "bootstrap_native_parallel_tests.rs"]
+mod parallel_tests;
+
 #[path = "bootstrap_native_long_session_tests.rs"]
 mod long_session_tests;
 
