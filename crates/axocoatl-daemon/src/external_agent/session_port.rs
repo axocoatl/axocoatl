@@ -760,7 +760,14 @@ impl SessionDispatchController {
         let request = ExecRequest {
             protocol: axocoatl_exec::protocol::PROTOCOL_VERSION,
             invocation_id: format!("external:{}", activation.activation_id.as_str()),
-            argv: program.argv,
+            // In the checkout, as the native shell runs (`cd` to the root,
+            // a positional argument, never shell source).
+            argv: ["sh", "-c", "cd \"$1\" && shift && exec \"$@\"", "sh"]
+                .iter()
+                .map(|arg| (*arg).to_string())
+                .chain(std::iter::once(owner.root().to_string_lossy().into_owned()))
+                .chain(program.argv)
+                .collect(),
             timeout_ms,
             stdout_bytes: external::MAX_READ_BACK_BYTES + 4096,
             stderr_bytes: STDERR_BYTES,
