@@ -129,6 +129,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   work now waits for it in the new epoch and runs once it is accepted; work that also
   depends on failed work left unselected stays blocked until that is continued too.
 
+### Security
+- The docs site's build dependencies are updated: `http-cache-semantics` 4.3.0 fixes
+  GHSA-ch52-4w7c-c8xp, so its reviewed exception is removed; `sharp` 0.35.5, with
+  libvips 1.3.4, fixes GHSA-wq5f-xc86-pv6w; `source-map-js` 1.2.2 fixes
+  GHSA-68fv-2mgg-jv7q; and `smol-toml` 1.9.0 fixes GHSA-r4xh-jqrq-34v2. None of them is
+  part of the shipped binary.
+
 ## [1.2.0] - 2026-10-03
 
 ### Added
