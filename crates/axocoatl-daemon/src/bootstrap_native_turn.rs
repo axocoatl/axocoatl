@@ -296,6 +296,34 @@ pub(super) fn finish_owned_setup<'a>(
     }
 }
 
+/// Validate one selected slot's retained definition as Begin admits it: an
+/// external writer (`claude-code`, `codex`) as `external_agent_config`
+/// shapes it, which is how Apply retained it
+/// (`prepare_external_session_team_definition`); every other definition as
+/// the native factory's exact bounded actor.
+fn validate_slot_definition(
+    config: &AgentConfig,
+    definition_id: &AgentDefinitionId,
+    revision: u64,
+    limits: &axocoatl_session::control_authority::GrantLimits,
+) -> Result<(), DaemonError> {
+    if crate::external_agent::runtime_for_provider(&config.provider).is_some() {
+        crate::external_agent::validate_external_config(config).map_err(failure)?;
+        if revision == 0 {
+            return Err(failure("definition revision must be positive"));
+        }
+        return Ok(());
+    }
+    crate::session_dispatch::NativeDefinitionPreparation::new(
+        config.clone(),
+        definition_id.clone(),
+        revision,
+        limits.clone(),
+    )
+    .map(|_| ())
+    .map_err(failure)
+}
+
 pub(super) fn prepare_admission(
     registry: &session_dispatch::SessionDispatchRegistry,
     token: &session_dispatch::SessionTeamToken,
@@ -503,13 +531,7 @@ pub(super) fn prepare_admission(
                     "explicit grant/evidence differs from the applied team budget/profile",
                 ));
             }
-            crate::session_dispatch::NativeDefinitionPreparation::new(
-                config.clone(),
-                definition_id.clone(),
-                *definition_revision,
-                limits.clone(),
-            )
-            .map_err(failure)?;
+            validate_slot_definition(&config, definition_id, *definition_revision, limits)?;
             let effective_grant = model::grant_for_model(
                 grant,
                 approved_profile,
