@@ -126,7 +126,10 @@ async fn reload_child_body() {
     // Unchanged: nothing applied, nothing recorded.
     let report = daemon.reload_network_policy().await.unwrap();
     assert!(report.applied.is_empty(), "{report:?}");
-    assert_eq!(report.unchanged.len(), 6);
+    assert_eq!(
+        report.unchanged.len(),
+        crate::session_network_reload::LIVE_KEYS.len()
+    );
     assert!(report.restart_required.is_empty() && report.revisions.is_empty());
 
     // A host added to each list applies to the running Session at once.

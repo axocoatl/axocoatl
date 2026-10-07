@@ -601,6 +601,7 @@ fn check_credential_source(field: &str, source: &CredentialSourceYaml) -> Result
 /// routes that weaken the policy.
 pub fn validate_egress_routes(config: &AxocoatlConfig) -> Result<Vec<ConfigWarning>, ConfigError> {
     let mut warnings = validate_credentials(config)?;
+    warnings.extend(crate::egress_host_ollama::host_ollama_warnings(config));
     let Some(egress) = &config.sandbox.egress else {
         return Ok(warnings);
     };
@@ -702,6 +703,13 @@ fn check_route(
     }
     let host =
         netaddr::normalize_host_name(&route.host).map_err(|error| host_error(error.to_string()))?;
+    if crate::egress_host_ollama::is_reserved_route_host(&host) {
+        return Err(host_error(format!(
+            "names under {} are Axocoatl's own; the route to Ollama on this computer is \
+             sandbox.egress.host_ollama",
+            crate::egress_host_ollama::RESERVED_ROUTE_SUFFIX.trim_start_matches('.')
+        )));
+    }
 
     let credentialed = match (&route.credential, &route.inject) {
         (Some(name), Some(inject)) => {

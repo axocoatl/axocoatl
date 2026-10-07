@@ -811,3 +811,68 @@ async fn a_rejected_request_is_an_api_error_and_never_retried() {
         );
     }
 }
+
+/// A refused request states its status and the server's `Retry-After`, so a
+/// Session's retry policy can wait for it; the provider itself sends once.
+#[tokio::test]
+async fn a_busy_server_states_its_status_and_retry_after() {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(
+            ResponseTemplate::new(503)
+                .insert_header("Retry-After", "4")
+                .set_body_raw(
+                    json!({"error": "server busy"}).to_string(),
+                    "application/json",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let provider = NativeOllamaProvider::connect(config(&server))
+        .await
+        .unwrap();
+    let outcome = provider
+        .chat_with_accounting(ChatRequest::simple("hi"))
+        .await;
+    match outcome.response {
+        Err(ProviderError::ApiError {
+            status: 503,
+            message,
+            ..
+        }) => assert!(message.ends_with(" (Retry-After: 4 s)"), "{message}"),
+        other => panic!("expected a 503, got {other:?}"),
+    }
+}
+
+#[test]
+fn retry_after_reads_seconds_and_http_dates() {
+    let header = |value: &str| {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            reqwest::header::HeaderValue::from_str(value).unwrap(),
+        );
+        headers
+    };
+    assert_eq!(retry_after_secs(&header("12")), Some(12));
+    assert_eq!(
+        retry_after_secs(&header("Sun, 06 Nov 1994 08:49:37 GMT")),
+        Some(0)
+    );
+    let later =
+        httpdate::fmt_http_date(std::time::SystemTime::now() + std::time::Duration::from_secs(120));
+    let wait = retry_after_secs(&header(&later)).unwrap();
+    assert!((118..=121).contains(&wait), "{wait}");
+    assert_eq!(retry_after_secs(&header("soon")), None);
+    assert_eq!(retry_after_secs(&reqwest::header::HeaderMap::new()), None);
+    assert!(matches!(
+        with_retry_after(
+            ProviderError::Network("x".into()),
+            Some(3)
+        ),
+        ProviderError::Network(message) if message == "x"
+    ));
+}

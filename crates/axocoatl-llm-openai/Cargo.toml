@@ -25,6 +25,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 async-stream = { workspace = true }
+httpdate = "1.0.3"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
@@ -35,3 +36,7 @@ axocoatl-token = { version = "1.2.0", path = "../axocoatl-token" }
 [features]
 default = []
 llm-integration-tests = []
+# Tests only: lets native OpenRouter use a plain-HTTP loopback endpoint so a
+# local mock server can stand in for openrouter.ai. Never enable it in a
+# build that runs Sessions.
+test-loopback-endpoint = []

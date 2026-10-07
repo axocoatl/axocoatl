@@ -7,6 +7,10 @@
 //! route host as the server name and offers only `http/1.1`. The upstream's
 //! certificate is checked with this computer's own trust settings
 //! (`rustls-platform-verifier`), plus the route's `upstream_ca` when set.
+//!
+//! The one exception is the explicit `sandbox.egress.host_ollama` route:
+//! plain HTTP to `127.0.0.1:<port>` on this computer, its configured port
+//! and nothing else ([`UpstreamConnector::connect_host_loopback`]).
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -137,6 +141,40 @@ impl UpstreamConnector {
         let config = Arc::new(config);
         configs.insert(key, config.clone());
         Ok(config)
+    }
+
+    /// Open a plain HTTP/1.1 connection to `127.0.0.1:port` for a
+    /// `host_ollama` route. Only the route's own configured port is passed
+    /// here; the own-address check that refuses this computer for every
+    /// other route does not apply to it, by the person's explicit setting.
+    pub async fn connect_host_loopback(
+        &self,
+        port: u16,
+    ) -> Result<SendRequest<UpstreamBody>, UpstreamError> {
+        let target = SocketAddr::from(([127, 0, 0, 1], port));
+        let tcp = match tokio::time::timeout(self.connect_timeout, TcpStream::connect(target)).await
+        {
+            Ok(Ok(tcp)) => tcp,
+            Ok(Err(error)) => {
+                return Err(UpstreamError(format!(
+                    "Ollama on this computer ({target}) could not be reached: {error}"
+                )))
+            }
+            Err(_) => {
+                return Err(UpstreamError(format!(
+                    "Ollama on this computer ({target}) could not be reached: connect timed out"
+                )))
+            }
+        };
+        let _ = tcp.set_nodelay(true);
+        let (sender, connection) =
+            hyper::client::conn::http1::handshake::<_, UpstreamBody>(TokioIo::new(tcp))
+                .await
+                .map_err(|error| UpstreamError(format!("{target}: HTTP: {error}")))?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        Ok(sender)
     }
 
     /// Open an HTTP/1.1 connection over TLS to `route` at the first of

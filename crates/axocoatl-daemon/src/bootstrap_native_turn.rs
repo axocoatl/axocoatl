@@ -583,6 +583,7 @@ pub(super) fn prepare_admission(
             .map_err(failure)?;
         // Every slot's grant carries the same approved Apply.
         let required_checks = session_team::approved_required_checks(content, selected_slots[0])?;
+        let check_options = session_team::approved_check_options(content, selected_slots[0])?;
         let review = session_team::approved_review(content, selected_slots[0])?;
         drop(team);
         if !required_checks.is_empty() {
@@ -622,7 +623,7 @@ pub(super) fn prepare_admission(
                      whole team"
                 )));
             }
-            inject_checks(content, &mut graph, &required_checks)?;
+            inject_checks(content, &mut graph, &required_checks, &check_options)?;
             graph.validate(&request.session_id).map_err(failure)?;
         }
         if let Some(review) = &review {
@@ -758,11 +759,14 @@ pub(super) fn prepare_admission(
 
 /// Add the required checks to an admitted graph: a repository capture, each
 /// command and a capture, all over the graph's required nodes, then the
-/// readiness review. Retries retain the same definitions and criterion.
+/// readiness review. Each command carries the timeout its Apply gave it in
+/// `options` (three minutes without one). Retries retain the same
+/// definitions and criterion.
 fn inject_checks(
     content: &mut axocoatl_session::execution_content::ExecutionContentStore,
     graph: &mut TurnGraphSnapshot,
     checks: &[Vec<String>],
+    options: &[axocoatl_session::check_options::RequiredCheckOptions],
 ) -> Result<(), DaemonError> {
     let group = CheckGroup::required();
     let readiness = axocoatl_session::turn_checks::readiness_text(checks);
@@ -772,7 +776,9 @@ fn inject_checks(
         .filter(|node| node.required)
         .map(|node| node.node_id.clone())
         .collect();
-    let definitions = axocoatl_session::turn_checks::check_definitions(checks).map_err(failure)?;
+    let definitions =
+        axocoatl_session::turn_checks::check_definitions_with_options(checks, options)
+            .map_err(failure)?;
     if definitions.is_empty() {
         return Ok(());
     }

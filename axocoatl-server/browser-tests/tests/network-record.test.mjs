@@ -383,6 +383,7 @@ test('the reload and proposal routes of the real daemon answer as documented', {
     assert.deepEqual(reload.body.unchanged, [
       'sandbox.egress.allow', 'sandbox.egress.private_destinations', 'sandbox.egress.routes',
       'credentials', 'browser.allow', 'browser.private_destinations',
+      'sandbox.egress.host_ollama',
     ]);
 
     await writeFile(configPath, original.replace('  network: none\n', '  network: none\n  egress:\n    allow: [npm]\n'));

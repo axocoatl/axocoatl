@@ -84,6 +84,93 @@ fn invalid(message: impl Into<String>) -> ProviderError {
 fn protocol(message: impl Into<String>) -> ProviderError {
     ProviderError::Stream(format!("native Ollama: {}", message.into()))
 }
+/// How a refused request states its `Retry-After` at the end of the error
+/// message: `… (Retry-After: 5 s)`. The Session's retry policy reads it.
+pub const RETRY_AFTER_SUFFIX: &str = " (Retry-After: ";
+
+/// A response's `Retry-After`, in whole seconds from now: delta-seconds or
+/// an HTTP date (a date in the past is zero).
+fn retry_after_secs(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    let value = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(seconds);
+    }
+    let at = httpdate::parse_http_date(value).ok()?;
+    Some(
+        at.duration_since(std::time::SystemTime::now())
+            .map_or(0, |wait| {
+                wait.as_secs()
+                    .saturating_add(u64::from(wait.subsec_nanos() > 0))
+            }),
+    )
+}
+
+/// `error` with the response's `Retry-After` stated, when it is a status
+/// error and the response gave one.
+fn with_retry_after(error: ProviderError, retry_after: Option<u64>) -> ProviderError {
+    match (error, retry_after) {
+        (
+            ProviderError::ApiError {
+                provider,
+                status,
+                message,
+            },
+            Some(seconds),
+        ) => ProviderError::ApiError {
+            provider,
+            status,
+            message: format!("{message}{RETRY_AFTER_SUFFIX}{seconds} s)"),
+        },
+        (error, _) => error,
+    }
+}
+
+/// A transport failure, named `timed out: …` or `connection reset: …` when
+/// it was one, so a retry policy can tell them from other failures.
+fn transport_error(error: &reqwest::Error) -> ProviderError {
+    use std::io::ErrorKind;
+    let message = match network_error(error, &[]) {
+        ProviderError::Network(message) => message,
+        other => return other,
+    };
+    let mut reset = false;
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        if cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+            matches!(
+                io.kind(),
+                ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::BrokenPipe
+                    | ErrorKind::UnexpectedEof
+            )
+        }) {
+            reset = true;
+            break;
+        }
+        let text = cause.to_string().to_ascii_lowercase();
+        if text.contains("connection reset")
+            || text.contains("connection closed before message completed")
+            || text.contains("broken pipe")
+        {
+            reset = true;
+            break;
+        }
+        source = cause.source();
+    }
+    ProviderError::Network(if error.is_timeout() {
+        format!("timed out: {message}")
+    } else if reset {
+        format!("connection reset: {message}")
+    } else {
+        message
+    })
+}
+
 /// Ollama closed the response without its `done` record. Tool calls are only
 /// released at `done`, so nothing from this response ran.
 fn incomplete_stream(message: impl Into<String>) -> ProviderError {
@@ -335,8 +422,9 @@ impl NativeOllamaProvider {
             tokio::time::timeout(RESPONSE_TIMEOUT, self.client.post(url).json(&body).send())
                 .await
                 .map_err(|_| protocol("request header timeout"))?
-                .map_err(|error| network_error(&error, &[]))?;
+                .map_err(|error| transport_error(&error))?;
         let status = response.status().as_u16();
+        let retry_after = retry_after_secs(response.headers());
         let cap = self.config.max_response_bytes;
         let too_long = response.content_length().is_some_and(|n| n > cap as u64);
         let mut bytes = response.bytes_stream();
@@ -358,7 +446,7 @@ impl NativeOllamaProvider {
                 };
                 let eof = next.is_none();
                 if let Some(chunk) = next {
-                    let chunk = match chunk { Ok(chunk) => chunk, Err(error) => { yield Err(network_error(&error, &[])); return; } };
+                    let chunk = match chunk { Ok(chunk) => chunk, Err(error) => { yield Err(transport_error(&error)); return; } };
                     if chunk.len() > cap.saturating_sub(received) {
                         yield Err(protocol("response exceeds its byte limit")); return;
                     }
@@ -389,7 +477,7 @@ impl NativeOllamaProvider {
                     }
                     let events = match state.record(&value, status) {
                         Ok(events) => events,
-                        Err(error) => { yield Err(error); return; }
+                        Err(error) => { yield Err(with_retry_after(error, retry_after)); return; }
                     };
                     for event in events {
                         if let Err(error) = state.charge(&event) { yield Err(error); return; }
@@ -401,11 +489,11 @@ impl NativeOllamaProvider {
             // A refused request with no readable body is a rejection, not a
             // response that ended early, so it is never retried.
             if !(200..300).contains(&status) {
-                yield Err(ProviderError::ApiError {
+                yield Err(with_retry_after(ProviderError::ApiError {
                     provider: PROVIDER.into(),
                     status,
                     message: "native Ollama rejected or failed the bounded inference request".into(),
-                });
+                }, retry_after));
                 return;
             }
             if let Some((usage, error)) = state.take_rejection() {

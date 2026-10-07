@@ -67,6 +67,8 @@ libc = "0.2"
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 wiremock = { workspace = true }
+# A local mock server stands in for openrouter.ai in the retry tests.
+axocoatl-llm-openai = { version = "1.2.0", path = "../axocoatl-llm-openai", features = ["test-loopback-endpoint"] }
 tempfile = "3.27"
 rustls-webpki = { version = "0.103", default-features = false, features = ["ring", "std"] }
 tracing-subscriber = { workspace = true }

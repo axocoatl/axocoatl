@@ -17,12 +17,16 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use axocoatl_config::egress_host_ollama::{
+    host_ollama_bindings, HOST_OLLAMA_ROUTE_HOST, HOST_OLLAMA_ROUTE_PORT,
+};
 use axocoatl_config::egress_routes::{
     canonical_segment, check_owner_only_file, expand_user_path, parse_path_glob, PathGlob,
     MAX_CA_FILE_BYTES, MAX_SECRET_FILE_BYTES, READ_ONLY_METHODS,
 };
 use axocoatl_config::{
-    CredentialSourceYaml, EgressRouteYaml, RouteAccessYaml, RouteForYaml, RouteInjectYaml,
+    CredentialSourceYaml, EgressRouteYaml, HostOllamaRouteYaml, RouteAccessYaml, RouteForYaml,
+    RouteInjectYaml,
 };
 use axocoatl_session::network_record::BindingKind;
 use hyper::header::HeaderName;
@@ -34,6 +38,9 @@ use super::x509;
 
 /// Longest credential value accepted.
 pub const MAX_SECRET_BYTES: usize = 8 * 1024;
+
+/// Largest request body on a host route, as a configured route's default.
+const HOST_ROUTE_MAX_REQUEST_BYTES: u64 = 1 << 30;
 
 /// Where a route's credential value is read, each time a request needs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +218,18 @@ enum Rules {
     List(Vec<CompiledRule>),
 }
 
+/// Where a route's requests go once the broker has checked them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteUpstream {
+    /// The route host over TLS, at the addresses the decision point
+    /// resolved and classified (`sandbox.egress.routes`).
+    Tls,
+    /// Plain HTTP to `127.0.0.1:<port>` on this computer
+    /// (`sandbox.egress.host_ollama`). The decision point does not resolve
+    /// the route host; nothing but this port is reachable through it.
+    HostLoopback { port: u16 },
+}
+
 /// One compiled route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Route {
@@ -232,6 +251,8 @@ pub struct Route {
     /// Pass `Set-Cookie` and `Set-Cookie2` on a credentialed route.
     pub allow_set_cookie: bool,
     pub max_request_bytes: u64,
+    /// Where checked requests go.
+    pub upstream: RouteUpstream,
 }
 
 /// What a route decided about one request.
@@ -547,12 +568,52 @@ impl Route {
             allow_encoded_responses: route.allow_encoded_responses,
             allow_set_cookie: route.allow_set_cookie,
             max_request_bytes: route.max_request_bytes,
+            upstream: RouteUpstream::Tls,
         })
     }
 
-    /// `route#<index>`, as the record names it.
+    /// The route of `sandbox.egress.host_ollama`, after the `index` routes of
+    /// `sandbox.egress.routes`: every request but `CONNECT` on
+    /// [`HOST_OLLAMA_ROUTE_HOST`] for the processes it lists, no credential,
+    /// to `127.0.0.1:<port>`.
+    pub fn host_ollama(index: usize, route: &HostOllamaRouteYaml) -> Result<Self, String> {
+        if route.port == 0 {
+            return Err("sandbox.egress.host_ollama.port: 1-65535".into());
+        }
+        Ok(Self {
+            index,
+            host: HOST_OLLAMA_ROUTE_HOST.to_string(),
+            ports: vec![HOST_OLLAMA_ROUTE_PORT],
+            bindings: host_ollama_bindings(route)
+                .into_iter()
+                .map(binding_kind)
+                .collect(),
+            credential: None,
+            rules: Rules::Access(RouteAccessYaml::Full),
+            upstream_roots: Vec::new(),
+            upstream_roots_id: None,
+            env_placeholders: Vec::new(),
+            allow_encoded_responses: false,
+            allow_set_cookie: false,
+            max_request_bytes: HOST_ROUTE_MAX_REQUEST_BYTES,
+            upstream: RouteUpstream::HostLoopback { port: route.port },
+        })
+    }
+
+    /// The loopback port of a `host_ollama` route.
+    pub fn host_loopback_port(&self) -> Option<u16> {
+        match self.upstream {
+            RouteUpstream::HostLoopback { port } => Some(port),
+            RouteUpstream::Tls => None,
+        }
+    }
+
+    /// `route#<index>` (or `host_ollama`), as the record names it.
     pub fn label(&self) -> String {
-        format!("route#{}", self.index)
+        match self.upstream {
+            RouteUpstream::Tls => format!("route#{}", self.index),
+            RouteUpstream::HostLoopback { .. } => "host_ollama".into(),
+        }
     }
 
     /// Whether an egress credential of `kind` may use this route.
@@ -593,7 +654,7 @@ impl Route {
                 "inject": inject,
             })
         });
-        serde_json::json!({
+        let mut canonical = serde_json::json!({
             "host": self.host,
             "ports": self.ports,
             "for": self.bindings,
@@ -604,7 +665,13 @@ impl Route {
             "allow_encoded_responses": self.allow_encoded_responses,
             "allow_set_cookie": self.allow_set_cookie,
             "max_request_bytes": self.max_request_bytes,
-        })
+        });
+        // Only a host route names its upstream, so the digest of every
+        // policy without one is what it was before host routes existed.
+        if let RouteUpstream::HostLoopback { port } = self.upstream {
+            canonical["upstream"] = serde_json::json!({ "host_loopback": port });
+        }
+        canonical
     }
 
     /// One line for the Session policy's rendered rules, such as
@@ -639,8 +706,12 @@ impl Route {
             })
             .collect::<Vec<_>>()
             .join(", ");
+        let upstream = match self.upstream {
+            RouteUpstream::HostLoopback { port } => format!(" to 127.0.0.1:{port}"),
+            RouteUpstream::Tls => String::new(),
+        };
         format!(
-            "{}:{ports} ({}: {rules}{credential}, for {kinds})",
+            "{}:{ports} ({}{upstream}: {rules}{credential}, for {kinds})",
             self.host,
             self.label()
         )
@@ -677,13 +748,19 @@ impl Route {
         } else {
             path.path.clone()
         };
-        RuleDecision::Denied {
-            reason: format!("no rule of {label} ({}) allows {method} {shown}", self.host),
-            hint: format!(
+        let hint = match self.upstream {
+            RouteUpstream::HostLoopback { .. } => {
+                "The route to Ollama on this computer carries ordinary HTTP requests only.".into()
+            }
+            RouteUpstream::Tls => format!(
                 "Add a rule to sandbox.egress.routes[{}] such as {{methods: [{method}], path: \"{shown}\"}}, \
                  then run axocoatl network reload.",
                 self.index
             ),
+        };
+        RuleDecision::Denied {
+            reason: format!("no rule of {label} ({}) allows {method} {shown}", self.host),
+            hint,
         }
     }
 
@@ -712,15 +789,38 @@ impl RouteTable {
         credentials: &BTreeMap<String, CredentialSourceYaml>,
         workspaces: &[PathBuf],
     ) -> Result<Self, String> {
-        Ok(Self {
-            routes: routes
-                .iter()
-                .enumerate()
-                .map(|(index, route)| {
-                    Route::compile(index, route, credentials, workspaces).map(Arc::new)
-                })
-                .collect::<Result<_, String>>()?,
-        })
+        Self::compile_with_host_ollama(routes, credentials, workspaces, None)
+    }
+
+    /// Compile `sandbox.egress.routes` and, when set,
+    /// `sandbox.egress.host_ollama` after them. A configured route can never
+    /// claim the host route's name.
+    pub fn compile_with_host_ollama(
+        routes: &[EgressRouteYaml],
+        credentials: &BTreeMap<String, CredentialSourceYaml>,
+        workspaces: &[PathBuf],
+        host_ollama: Option<&HostOllamaRouteYaml>,
+    ) -> Result<Self, String> {
+        let mut compiled: Vec<Arc<Route>> = routes
+            .iter()
+            .enumerate()
+            .map(|(index, route)| {
+                Route::compile(index, route, credentials, workspaces).map(Arc::new)
+            })
+            .collect::<Result<_, String>>()?;
+        if let Some(route) = compiled
+            .iter()
+            .find(|route| axocoatl_config::egress_host_ollama::is_reserved_route_host(&route.host))
+        {
+            return Err(format!(
+                "sandbox.egress.routes[{}].host: {} is a name Axocoatl reserves",
+                route.index, route.host
+            ));
+        }
+        if let Some(route) = host_ollama {
+            compiled.push(Arc::new(Route::host_ollama(compiled.len(), route)?));
+        }
+        Ok(Self { routes: compiled })
     }
 
     pub fn is_empty(&self) -> bool {

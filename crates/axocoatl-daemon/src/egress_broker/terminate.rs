@@ -714,10 +714,15 @@ impl Connection {
                 return Ok(sender);
             }
         }
-        self.upstream
-            .connect(&self.route, &self.ctx.addrs, self.ctx.port)
-            .await
-            .map_err(|error| error.0)
+        match self.route.host_loopback_port() {
+            Some(port) => self.upstream.connect_host_loopback(port).await,
+            None => {
+                self.upstream
+                    .connect(&self.route, &self.ctx.addrs, self.ctx.port)
+                    .await
+            }
+        }
+        .map_err(|error| error.0)
     }
 
     async fn handle(self: Arc<Self>, request: Request<Incoming>) -> Response<ClientBody> {
@@ -1004,10 +1009,12 @@ impl Connection {
             }
             headers.append(name.clone(), value.clone());
         }
-        let host_value = if self.ctx.port == 443 {
-            route.host.clone()
-        } else {
-            format!("{}:{}", route.host, self.ctx.port)
+        // A host route's upstream is this computer's loopback: it is sent
+        // the request as one addressed to itself.
+        let host_value = match route.host_loopback_port() {
+            Some(port) => format!("127.0.0.1:{port}"),
+            None if self.ctx.port == 443 => route.host.clone(),
+            None => format!("{}:{}", route.host, self.ctx.port),
         };
         if let Ok(value) = HeaderValue::from_str(&host_value) {
             headers.insert(header::HOST, value);
