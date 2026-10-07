@@ -44,7 +44,7 @@ const RESPONSE_BYTES: usize = 1024 * 1024;
 /// stderr kept from a run.
 const STDERR_BYTES: usize = 64 * 1024;
 /// How often a running program's route requests are counted.
-pub(crate) const DEFAULT_METER_INTERVAL: Duration = Duration::from_millis(500);
+pub(crate) const DEFAULT_METER_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Network record events, by sequence number, for counting a run's route
 /// requests. The Session's own record in production; a test may supply
@@ -215,12 +215,18 @@ impl DispatchState {
         &self,
         input: &ActivationInputManifest,
     ) -> Result<Option<ResolvedExternal>> {
-        self.execution_admission()?;
-        let snapshot = self.current(&input.activation)?;
-        let resolved = self
-            .content
-            .validate_input(&snapshot, input)
-            .map_err(error)?;
+        // Whether the definition is external at all. Anything this cannot
+        // read is left to the native factory, which refuses it in its own
+        // words.
+        let Ok(snapshot) = self
+            .execution_admission()
+            .and_then(|()| self.current(&input.activation))
+        else {
+            return Ok(None);
+        };
+        let Ok(resolved) = self.content.validate_input(&snapshot, input) else {
+            return Ok(None);
+        };
         let ActivationEvidenceContent::Definition {
             definition_id,
             profile,
@@ -230,7 +236,9 @@ impl DispatchState {
         else {
             return Ok(None);
         };
-        let config: AgentConfig = serde_json::from_str(&configuration).map_err(error)?;
+        let Ok(config) = serde_json::from_str::<AgentConfig>(&configuration) else {
+            return Ok(None);
+        };
         if external::runtime_for_provider(&config.provider).is_none() {
             return Ok(None);
         }

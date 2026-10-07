@@ -48,9 +48,14 @@ pub enum SecretCommands {
 /// The hint printed when stdin is a terminal: values never come from
 /// argv or from typing them where they would echo.
 fn pipe_hint(name: &str) -> String {
+    let source = match name {
+        "claude-code-oauth" => "claude setup-token",
+        "codex-openai" => "printenv OPENAI_API_KEY",
+        _ => "<command that prints it>",
+    };
     format!(
         "axocoatl secret set reads the value from stdin, not from the command line or the \
-         keyboard. Pipe it in, for example:\n  claude setup-token | axocoatl secret set {name}\n  \
+         keyboard. Pipe it in, for example:\n  {source} | axocoatl secret set {name}\n  \
          axocoatl secret set {name} < token-file"
     )
 }

@@ -218,6 +218,28 @@ pub fn credential_source(
     }))
 }
 
+/// [`credential_source`] for the secrets directory itself
+/// (`{data root}/secrets`, `AxocoatlDaemon::secret_store_dir`), as
+/// `loadout::egress::loadout_policy` receives it.
+pub fn credential_source_in(
+    secrets_dir: &Path,
+    name: &str,
+) -> Result<Option<CredentialSourceYaml>, SecretStoreError> {
+    check_name(name)?;
+    let directory = match SecureDir::open_existing_all(secrets_dir) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !directory.has_exact_file(name)? {
+        return Ok(None);
+    }
+    Ok(Some(CredentialSourceYaml {
+        env: None,
+        file: Some(secrets_dir.join(name).to_string_lossy().into_owned()),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +290,19 @@ mod tests {
         assert_eq!(source.file.as_deref(), Some(path.to_str().unwrap()));
         assert_eq!(
             credential_source(root.path(), "codex-openai").unwrap(),
+            None
+        );
+        let secrets = root.path().join(SECRETS_DIR);
+        assert_eq!(
+            credential_source_in(&secrets, "claude-code-oauth").unwrap(),
+            credential_source(root.path(), "claude-code-oauth").unwrap()
+        );
+        assert_eq!(
+            credential_source_in(&secrets, "codex-openai").unwrap(),
+            None
+        );
+        assert_eq!(
+            credential_source_in(&root.path().join("missing"), "codex-openai").unwrap(),
             None
         );
     }
