@@ -6,6 +6,7 @@
 //! permission to run exactly those checks against this turn's repository and
 //! nothing else: no tool, graph command or allowance is widened.
 use super::*;
+use crate::check_options::MAX_CHECK_TIMEOUT_MS;
 use crate::turn_checks::REQUIRED_CHECK_PREFIX;
 use crate::turn_contract::{GraphNode, TurnGraphSnapshot};
 
@@ -109,6 +110,9 @@ impl ControlAuthority {
         }
         let mut next = state.data.clone();
         next.grants[index].host_checks = permissions;
+        // Refuse here what reopening would refuse: a check over its bound
+        // (thirty minutes) is never authorized.
+        validate_host_checks(&next, &next.grants[index])?;
         self.commit(&mut state, next)
     }
 
@@ -328,7 +332,9 @@ pub(super) fn validate_permissions(
             || permission.nodes.len() > MAX_CONTRACT_NODES
             || nodes.len() != permission.nodes.len()
             || permission.max_timeout_ms == 0
-            || permission.max_timeout_ms > 180_000
+            // A required check may take up to thirty minutes (1.3; three
+            // minutes before), the bound its admitted definition is held to.
+            || permission.max_timeout_ms > MAX_CHECK_TIMEOUT_MS
             || permission
                 .max_stdout_bytes
                 .saturating_add(permission.max_stderr_bytes)

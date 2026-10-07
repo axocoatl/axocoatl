@@ -33,6 +33,15 @@ fn fixture(nodes: &[&str]) -> Fixture {
 }
 
 fn fixture_with(nodes: &[&str], checks: &[Vec<String>]) -> Fixture {
+    fixture_with_definitions(nodes, check_definitions(checks).unwrap())
+}
+
+/// A turn whose graph carries exactly `definitions` as its required check
+/// group, however they were made.
+fn fixture_with_definitions(
+    nodes: &[&str],
+    definitions: Vec<RepositoryCheckDefinition>,
+) -> Fixture {
     let source: serde_json::Value = serde_json::from_str(include_str!(
         "../tests/fixtures/turn_contract/check_only_recovery_preserves_accepted_generations.json"
     ))
@@ -61,7 +70,6 @@ fn fixture_with(nodes: &[&str], checks: &[Vec<String>]) -> Fixture {
             .unwrap(),
     )
     .unwrap();
-    let definitions = check_definitions(checks).unwrap();
     let repository = content
         .retain_activation_evidence(ActivationEvidenceContent::Repository {
             description: "owned exact candidate".into(),
@@ -741,4 +749,102 @@ fn a_lead_pays_for_checks_only_when_its_own_profile_has_bash() {
     g.authorize(&gate).unwrap();
     assert!(gate.grant_pays_required_checks("grant-a").unwrap());
     assert!(!gate.grant_pays_required_checks("grant-b").unwrap());
+}
+
+/// What Team Apply admits with `check_options`: a check with a ten-minute
+/// timeout gets a definition with that timeout and a permission whose bound
+/// covers it, and a claim of that check is allowed under it. A definition
+/// over thirty minutes is never authorized, and a graph admitted by 1.2 (all
+/// checks three minutes) still is.
+#[test]
+fn check_timeouts_reach_the_permission_up_to_thirty_minutes() {
+    use crate::check_options::{RequiredCheckOptions, MAX_CHECK_TIMEOUT_MS};
+    use crate::turn_checks::check_definitions_with_options;
+    let checks = vec![vec!["npx".to_string(), "e2e".to_string()]];
+    let long = RequiredCheckOptions {
+        timeout_ms: Some(600_000),
+        ..RequiredCheckOptions::default()
+    };
+    let definitions = check_definitions_with_options(&checks, &[long]).unwrap();
+    assert_eq!(definitions[1].timeout_ms, 600_000);
+    // The captures around it keep three minutes.
+    assert_eq!(definitions[0].timeout_ms, 180_000);
+    assert_eq!(definitions[2].timeout_ms, 180_000);
+    let mut f = fixture_with_definitions(&["a"], definitions.clone());
+    let node = TurnNodeId::new("a").unwrap();
+    let policy = policy("paying-grant", &node, &["bash"]);
+    let gate = f.gate();
+    gate.install_grant(policy.clone(), 0).unwrap();
+    f.authorize(&gate).unwrap();
+    let permissions = host_checks(&gate, &policy.id);
+    assert!(permissions
+        .iter()
+        .any(|permission| permission.max_timeout_ms == 600_000));
+    validate_data(&gate.lock().unwrap().data).unwrap();
+    // The check itself is claimed under that permission.
+    let activation = f.accept(&node, "conversation-a");
+    let run = ConditionRunRef {
+        session_id: f.begin.session_id.clone(),
+        turn_id: f.begin.turn_id.clone(),
+        epoch_id: activation.execution_epoch_id.clone(),
+        condition_id: ConditionId::new(CheckGroup::required().condition_id(1)).unwrap(),
+        run_id: ConditionRunId::new("long-check").unwrap(),
+        activations: vec![activation],
+    };
+    let arguments = f
+        .content
+        .reserve_condition_arguments(&f.snapshot(), &run, &f.repository)
+        .unwrap();
+    assert_eq!(arguments.definition().timeout_ms, 600_000);
+    append(
+        &mut f.canonical,
+        &f.begin.turn_id,
+        TurnContractEvent::RecordConditionIntent {
+            run: run.clone(),
+            intent: arguments.reference().clone(),
+        },
+    );
+    let grant = grant_ref(&mut f.content, &policy);
+    let claim = gate
+        .claim_condition_run(
+            &f.canonical,
+            &f.content,
+            &arguments,
+            &grant,
+            "owned-check",
+            100,
+        )
+        .unwrap();
+    gate.validate_condition_claim(&f.canonical, &claim, 101)
+        .unwrap();
+    assert_eq!(
+        gate.condition_call(&run.run_id)
+            .unwrap()
+            .unwrap()
+            .timeout_ms,
+        600_000
+    );
+    // The bound is thirty minutes: a longer definition is never authorized.
+    let mut over = definitions.clone();
+    over[1].timeout_ms = MAX_CHECK_TIMEOUT_MS + 1;
+    let f = fixture_with_definitions(&["a"], over);
+    let gate = f.gate();
+    gate.install_grant(policy.clone(), 0).unwrap();
+    assert!(f.authorize(&gate).is_err());
+    assert!(!gate.grant_pays_required_checks(&policy.id).unwrap());
+    // Exactly thirty minutes is.
+    let mut most = definitions;
+    most[1].timeout_ms = MAX_CHECK_TIMEOUT_MS;
+    let f = fixture_with_definitions(&["a"], most);
+    let gate = f.gate();
+    gate.install_grant(policy.clone(), 0).unwrap();
+    f.authorize(&gate).unwrap();
+    // A 1.2 graph: every check three minutes.
+    let f = fixture(&["a"]);
+    let gate = f.gate();
+    gate.install_grant(policy.clone(), 0).unwrap();
+    f.authorize(&gate).unwrap();
+    assert!(host_checks(&gate, &policy.id)
+        .iter()
+        .all(|permission| permission.max_timeout_ms == 180_000));
 }

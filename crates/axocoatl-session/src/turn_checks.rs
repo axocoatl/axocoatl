@@ -8,6 +8,10 @@
 //! [`REQUIRED_CHECK_PREFIX`].
 use serde::Serialize;
 
+use crate::check_options::{
+    validate_check_options, RequiredCheckOptions, DEFAULT_CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS,
+    MIN_CHECK_TIMEOUT_MS,
+};
 use crate::execution_content::{
     ConditionProcessStatus, ExecutionContentError, ExecutionContentStore,
     RepositoryCheckDefinition, REPOSITORY_SNAPSHOT_COMMAND, REPOSITORY_SNAPSHOT_COMMAND_V1,
@@ -85,18 +89,86 @@ pub fn group_of(graph: &TurnGraphSnapshot) -> Option<(CheckGroup, usize)> {
 /// capture it was admitted with.
 const CAPTURE_COMMANDS: [&str; 2] = [REPOSITORY_SNAPSHOT_COMMAND, REPOSITORY_SNAPSHOT_COMMAND_V1];
 
+/// How long each repository capture around the checks may take.
+const CAPTURE_TIMEOUT_MS: u64 = DEFAULT_CHECK_TIMEOUT_MS;
+
 /// The exact definitions of a group: a capture, each command, and a capture.
 /// The foreground command lifetime and capture ceilings apply; this adds no
-/// tool capability, cost or token grant.
+/// tool capability, cost or token grant. Every check takes the default
+/// timeout (three minutes), as every check did before 1.3.
 pub fn check_definitions(
     checks: &[Vec<String>],
 ) -> Result<Vec<RepositoryCheckDefinition>, ExecutionContentError> {
-    check_definitions_with(checks, REPOSITORY_SNAPSHOT_COMMAND)
+    check_definitions_with_options(checks, &[])
+}
+
+/// The exact definitions of a group whose checks carry `options`, aligned
+/// by index with `checks` (empty: every check takes the defaults). A check's
+/// `timeout_ms` becomes its definition's timeout; the captures keep three
+/// minutes. Options are checked with [`validate_check_options`] first; call
+/// that directly for the reason in words.
+pub fn check_definitions_with_options(
+    checks: &[Vec<String>],
+    options: &[RequiredCheckOptions],
+) -> Result<Vec<RepositoryCheckDefinition>, ExecutionContentError> {
+    validate_check_options(checks, options)
+        .map_err(|_| ExecutionContentError::Invalid("invalid required check options"))?;
+    let timeouts: Vec<u64> = (0..checks.len())
+        .map(|index| {
+            options
+                .get(index)
+                .map_or(DEFAULT_CHECK_TIMEOUT_MS, RequiredCheckOptions::timeout_ms)
+        })
+        .collect();
+    check_definitions_with(checks, &timeouts, REPOSITORY_SNAPSHOT_COMMAND)
+}
+
+/// The timeouts the commands of `group` were admitted with in `graph`, in
+/// order: each recorded definition's own, which must lie between
+/// [`MIN_CHECK_TIMEOUT_MS`] and [`MAX_CHECK_TIMEOUT_MS`]. A command whose
+/// condition is missing takes the default; the comparison with the recorded
+/// definitions then fails closed.
+fn admitted_timeouts(
+    graph: &TurnGraphSnapshot,
+    content: &ExecutionContentStore,
+    group: &CheckGroup,
+    checks: usize,
+) -> Result<Vec<u64>, ExecutionContentError> {
+    (1..=checks)
+        .map(|index| {
+            let id = group.condition_id(index);
+            let recorded = graph
+                .conditions
+                .iter()
+                .find_map(|condition| match &condition.kind {
+                    ConditionKind::RepositoryCheck { definition }
+                        if condition.condition_id.as_str() == id =>
+                    {
+                        Some(definition)
+                    }
+                    _ => None,
+                });
+            let Some(recorded) = recorded else {
+                return Ok(DEFAULT_CHECK_TIMEOUT_MS);
+            };
+            let timeout = content
+                .resolve_repository_check_definition(recorded)?
+                .timeout_ms;
+            if !(MIN_CHECK_TIMEOUT_MS..=MAX_CHECK_TIMEOUT_MS).contains(&timeout) {
+                return Err(ExecutionContentError::Invalid(
+                    "a required check's timeout is outside 1 second to 30 minutes",
+                ));
+            }
+            Ok(timeout)
+        })
+        .collect()
 }
 
 /// The definitions of `checks` in `group` as `graph` was admitted with them:
 /// the current form, or the form with an earlier capture command that a turn
-/// admitted before it changed still carries. Any other capture fails closed.
+/// admitted before it changed still carries, each command with the timeout
+/// it was admitted with (three minutes for every graph admitted before 1.3).
+/// Any other capture, or a timeout outside the bounds, fails closed.
 pub fn admitted_check_definitions(
     graph: &TurnGraphSnapshot,
     content: &ExecutionContentStore,
@@ -119,8 +191,9 @@ pub fn admitted_check_definitions(
         return check_definitions(checks);
     };
     let recorded = content.resolve_repository_check_definition(recorded)?;
+    let timeouts = admitted_timeouts(graph, content, group, checks.len())?;
     for capture in CAPTURE_COMMANDS {
-        let definitions = check_definitions_with(checks, capture)?;
+        let definitions = check_definitions_with(checks, &timeouts, capture)?;
         if definitions.first() == Some(&recorded) {
             return Ok(definitions);
         }
@@ -130,8 +203,10 @@ pub fn admitted_check_definitions(
     ))
 }
 
+/// `timeouts` is aligned with `checks`.
 fn check_definitions_with(
     checks: &[Vec<String>],
+    timeouts: &[u64],
     capture: &str,
 ) -> Result<Vec<RepositoryCheckDefinition>, ExecutionContentError> {
     if checks.is_empty() {
@@ -140,18 +215,23 @@ fn check_definitions_with(
     if checks.len().saturating_add(3) > MAX_COMPLETION_CONDITIONS {
         return Err(ExecutionContentError::Capacity);
     }
+    if timeouts.len() != checks.len() {
+        return Err(ExecutionContentError::Invalid(
+            "check timeouts are not aligned with the checks",
+        ));
+    }
     let capture = RepositoryCheckDefinition {
         argv: vec!["sh".into(), "-c".into(), capture.into()],
-        timeout_ms: 180_000,
+        timeout_ms: CAPTURE_TIMEOUT_MS,
         stdout_bytes: 768 * 1024,
         stderr_bytes: 256 * 1024,
     };
     let mut definitions = vec![capture.clone()];
-    for argv in checks {
+    for (argv, timeout_ms) in checks.iter().zip(timeouts) {
         check_command(argv)?;
         definitions.push(RepositoryCheckDefinition {
             argv: argv.clone(),
-            timeout_ms: 180_000,
+            timeout_ms: *timeout_ms,
             stdout_bytes: 768 * 1024,
             stderr_bytes: 256 * 1024,
         });
@@ -542,7 +622,12 @@ mod tests {
         let checks = vec![vec!["cargo".to_string(), "test".to_string()]];
         let group = CheckGroup::required();
         let current = check_definitions(&checks).unwrap();
-        let earlier = check_definitions_with(&checks, REPOSITORY_SNAPSHOT_COMMAND_V1).unwrap();
+        let earlier = check_definitions_with(
+            &checks,
+            &[DEFAULT_CHECK_TIMEOUT_MS],
+            REPOSITORY_SNAPSHOT_COMMAND_V1,
+        )
+        .unwrap();
         assert_ne!(current, earlier);
         assert_eq!(current[0].argv[2], REPOSITORY_SNAPSHOT_COMMAND);
         for definitions in [current.clone(), earlier] {
@@ -564,6 +649,79 @@ mod tests {
             admitted_check_definitions(&graph, &content, &group, &checks).unwrap(),
             current
         );
+    }
+
+    /// Per-check timeouts reach the admitted definitions and are read back
+    /// from the graph a turn was admitted with; a 1.2 graph keeps three
+    /// minutes everywhere, and a recorded timeout outside 1 second to 30
+    /// minutes fails closed.
+    #[test]
+    fn check_options_carry_each_timeout_into_the_admitted_definitions() {
+        let root = tempfile::tempdir().unwrap();
+        let mut content = content_store(root.path());
+        let checks = vec![
+            vec!["npm".to_string(), "test".to_string()],
+            vec!["npx".to_string(), "e2e".to_string()],
+        ];
+        let group = CheckGroup::required();
+        let options = vec![
+            RequiredCheckOptions::default(),
+            RequiredCheckOptions {
+                name: Some("e2e".into()),
+                timeout_ms: Some(600_000),
+                report: None,
+            },
+        ];
+        let definitions = check_definitions_with_options(&checks, &options).unwrap();
+        let timeouts: Vec<u64> = definitions.iter().map(|d| d.timeout_ms).collect();
+        assert_eq!(timeouts, [180_000, 180_000, 600_000, 180_000]);
+        // No options is exactly the 1.2 form.
+        assert_eq!(
+            check_definitions_with_options(&checks, &[]).unwrap(),
+            check_definitions(&checks).unwrap()
+        );
+        let graph = graph_with(&mut content, &group, definitions.clone());
+        assert_eq!(
+            admitted_check_definitions(&graph, &content, &group, &checks).unwrap(),
+            definitions
+        );
+        // A graph admitted by 1.2 still verifies, at three minutes.
+        let earlier = check_definitions(&checks).unwrap();
+        let graph = graph_with(&mut content, &group, earlier.clone());
+        assert_eq!(
+            admitted_check_definitions(&graph, &content, &group, &checks).unwrap(),
+            earlier
+        );
+        // The bounds hold at admission and when a graph is read back.
+        for timeout in [0, MIN_CHECK_TIMEOUT_MS - 1, MAX_CHECK_TIMEOUT_MS + 1] {
+            let options = vec![
+                RequiredCheckOptions::default(),
+                RequiredCheckOptions {
+                    timeout_ms: Some(timeout),
+                    ..RequiredCheckOptions::default()
+                },
+            ];
+            assert!(
+                check_definitions_with_options(&checks, &options).is_err(),
+                "{timeout}"
+            );
+            let mut recorded = definitions.clone();
+            recorded[2].timeout_ms = timeout.max(1);
+            let graph = graph_with(&mut content, &group, recorded);
+            assert!(
+                admitted_check_definitions(&graph, &content, &group, &checks).is_err(),
+                "{timeout}"
+            );
+        }
+        let mut most = definitions.clone();
+        most[2].timeout_ms = MAX_CHECK_TIMEOUT_MS;
+        let graph = graph_with(&mut content, &group, most.clone());
+        assert_eq!(
+            admitted_check_definitions(&graph, &content, &group, &checks).unwrap(),
+            most
+        );
+        // Options must line up with the checks.
+        assert!(check_definitions_with_options(&checks, &options[..1]).is_err());
     }
 
     #[test]
