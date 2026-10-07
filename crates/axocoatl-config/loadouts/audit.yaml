@@ -24,8 +24,9 @@ version: 1
 name: Audit
 description: >-
   Plan the scope into areas, audit each area in parallel with a fresh
-  read-only worker, then integrate. Costs about three times the tokens of one
-  agent; use it when the scope is larger than one context.
+  read-only worker, then integrate. Use it when the scope is larger than one
+  context. Measured with Claude Code subagents, not Axocoatl: about three times
+  the tokens of one agent (a sensitivity analysis).
 kind: audit
 opt_in: true
 params:

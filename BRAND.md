@@ -6,7 +6,7 @@ page, doc, or post conflicts with current product fact, fix the fact source and 
 file together. The goal is consistency that compounds: every page reinforces every
 other page, and a year from now we still sound like ourselves.
 
-Last updated: 2026-10-01.
+Last updated: 2026-10-06.
 
 ---
 
@@ -19,7 +19,7 @@ Polished demos and final answers can hide the facts that matter: who changed wha
 what executed, what failed, what it cost, and what remains for the engineer to decide.
 
 We optimize for the unglamorous reality: agents that work against real files on
-models the engineer chooses, including small local ones; one Agent that writes
+models the engineer chooses, local or hosted; one Agent that writes
 while helpers only read; checks and review that the host runs instead of taking
 the model's word; limits a person approves; and a record of every activation,
 tool call and budget decision. The repository stays under the engineer's control,
@@ -61,13 +61,18 @@ product is used, not the category. The default is one Agent; helpers are opt-in.
 ### Claims come only from measured results
 
 A performance or quality claim needs a measured result behind it, stated with its
-setup and limits (tasks, model, runs, temperature). Our current numbers come from a
-pre-registered benchmark run in a plain agent loop; each public surface states them
-once, between `<!-- measured: … -->` and `<!-- /measured -->` (`{/* measured: … */}`
-in MDX), so they can be replaced in one edit when the Axocoatl run lands. The lesson
-we may draw: extra tokens helped when they bought a stronger model's judgment, not
-more looks from the same model. Do not generalize beyond that, do not claim speed,
-and do not claim the default team beats a single Agent.
+setup and limits (tasks, model, harness, runs, temperature). `docs/CLAIMS.md` is the
+ledger: every public number, where it appears, its evidence, the model, the harness
+(Axocoatl, a plain agent loop, or Claude Code subagents), the sample size and its
+status (measured, sensitivity analysis, withdrawn). Each public surface states its
+numbers once, between `<!-- measured: … -->` and `<!-- /measured -->`
+(`{/* measured: … */}` in MDX), and every block id is in the ledger. Results measured
+with Claude Code subagents on Claude Opus are always labeled "Claude Code subagents,
+not Axocoatl"; they are never Axocoatl results. The lesson we may draw: extra tokens
+helped when they bought a stronger model's judgment, not more looks from the same
+model. Do not generalize beyond that, do not claim speed, and do not claim the default
+team beats a single Agent. "Small local models are a first-class target" is withdrawn:
+nothing measured it.
 
 ### Claims we do not make
 
@@ -85,9 +90,13 @@ and do not claim the default team beats a single Agent.
 - **No superlatives about isolation.** Isolation is a pillar, stated as mechanisms:
   "Tools run in a rootless Podman container. Network access is on by default; set
   `network: none` for repositories you don't trust." Never call Axocoatl or its
-  sandbox the strongest, best, "secure", "safe" or "hardened", and do not claim egress
-  control, credential isolation or zero trust. Sandbox runtimes that control network
-  and credentials more strictly exist, and Axocoatl does not integrate with them.
+  sandbox the strongest, best, "secure", "safe" or "hardened", and do not claim zero
+  trust. Egress control and route credentials are stated as their mechanisms, with
+  their limits: under `network: egress` a Session reaches only the hosts it lists, a
+  route adds its credential on the host so the container holds a placeholder, and every
+  connection is in the network record; the default is still `bridge`. Sandbox runtimes
+  that control network and credentials more strictly exist, and Axocoatl does not
+  integrate with them.
 - **Write scopes, stated narrowly.** Read-only helpers get no file-writing tools, and
   their shell runs under Landlock (no repository writes, no TCP) where Linux 6.7 or later allows it; otherwise they
   get no shell. A path-scoped writer's file tools refuse other paths, and every change

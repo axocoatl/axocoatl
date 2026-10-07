@@ -80,6 +80,34 @@ run cannot change the cache your other e2e runs use; the rest of the Workspace s
 writable. Every model call e2e makes is a request on the route and is in the Session's
 network record.
 
+Under `network: egress` a required check normally has no network: the proxy refuses
+every connection it makes. An e2e check is the exception. Its process gets an egress
+credential of its own for as long as it runs, as a writer's shell does, so it reaches the
+loadout's routes and allowlist and nothing else, with every connection recorded. Other
+required checks of the same loadout still get none.
+
+## What the repository needs
+
+- **The model choice.** e2e has no environment variable for the model: the project's
+  `e2e.config.ts` picks it. The wrapper exports `AXOCOATL_E2E_MODEL`,
+  `AXOCOATL_E2E_BASE_URL` and `AXOCOATL_E2E_API_KEY` (the placeholder), and for
+  well-known hosts it also sets the provider's own key variable to the placeholder. A
+  config that ignores `AXOCOATL_E2E_MODEL` runs its own model; the check's result then
+  says which model the report shows, and the capability check above covers only the
+  model the loadout declares.
+- **Ignored output.** e2e always writes its output directory into the Workspace
+  (`.e2e/report.json` and `.e2e/artifacts/` by default). The repository must ignore those
+  paths, as `e2e init` does in `.gitignore`; otherwise the files change between the
+  captures around the check and readiness fails with changed files.
+- **Its own dependencies.** The project's `node_modules` must provide `e2e@0.18.0`,
+  `@e2e-dev/web@0.13.0` (Playwright 1.63.0, which matches the Chromium in the recipe
+  image), `ai` and the provider package. They come from the loadout's setup command,
+  which needs the registry under `egress.allow`. Another `@e2e-dev/web` version looks for
+  another Chromium build, which it cannot download under egress.
+- **CI mode.** The check runs e2e with `CI=1`: one worker, one retry of a failing test
+  and a read-only replay cache. A retried failing agent step can spend its model calls
+  twice.
+
 ## Models
 
 e2e's agent needs a model that calls tools and reads images. For an OpenRouter model,

@@ -122,7 +122,7 @@ Every finding had to come with an executable reproduction that a validator re-ra
 
 | Id | Text | Where | Basis | Status |
 | --- | --- | --- | --- | --- |
-| P1 | `audit` built-in description: "Costs about three times the tokens of one agent; use it when the scope is larger than one context" | `crates/axocoatl-config/loadouts/audit.yaml`, shown by `GET /api/loadouts`, Settings and `axocoatl loadouts` | S4, S5 | sensitivity analysis, Claude Code subagents. The description does not carry that label itself; the docs page `workbench/fix-qa-audit` does. The file's header comment states it. |
+| P1 | `audit` built-in description: "Measured with Claude Code subagents, not Axocoatl: about three times the tokens of one agent (a sensitivity analysis)" | `crates/axocoatl-config/loadouts/audit.yaml`, shown by `GET /api/loadouts`, Settings and `axocoatl loadouts` | S4, S5 | sensitivity analysis, Claude Code subagents; the description carries the label itself, as do the docs page `workbench/fix-qa-audit` and the file's header comment. |
 | P2 | The same-model warning | see R12 | R4, R5, R8 | measured, plain loop |
 
 ## Withdrawn claims
