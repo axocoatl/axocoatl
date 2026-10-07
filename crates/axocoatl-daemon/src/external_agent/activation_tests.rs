@@ -323,6 +323,57 @@ async fn a_misshapen_external_definition_is_refused() {
     assert_eq!(native.0.load(Ordering::SeqCst), 0);
 }
 
+/// A grant with nothing left to spend refuses the run before anything is
+/// reserved: an external program's spending is known only from its own
+/// report.
+#[tokio::test]
+async fn an_external_run_needs_a_spending_allowance() {
+    let mut f = fixture().await;
+    let config = external_agent::external_agent_config(
+        AgentConfig {
+            id: AgentId::new("conversation"),
+            ..Default::default()
+        },
+        AgentRuntime::Codex,
+        "gpt-5.5",
+    )
+    .unwrap();
+    let r = run_with_limits(
+        &mut f,
+        config,
+        "x",
+        GrantLimits {
+            activations: 2,
+            invocations: 12,
+            tokens: 100_000,
+            cost_microunits: 0,
+        },
+    );
+    let factory = r.controller.external_activation_factory(
+        Arc::new(NativeStub(AtomicUsize::new(0))),
+        Arc::new(Counter),
+        ExternalSettings::default(),
+    );
+    let resources = factory.resources(&input_of(&r)).await.unwrap();
+    let provider = resources.provider.clone();
+    let _prepared = r
+        .controller
+        .prepare_repository_activation(r.activation.clone(), resources, r.resource.clone())
+        .unwrap();
+    let refused = provider
+        .validate_request(&axocoatl_llm::ChatRequest::simple("x"))
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("no spending allowance left"), "{refused}");
+    assert_eq!(
+        r.controller
+            .activation_provider_usage(&r.activation)
+            .unwrap()
+            .calls,
+        0
+    );
+}
+
 /// The program runs only inside its activation's admitted model call.
 #[tokio::test]
 async fn an_external_program_runs_only_inside_its_admitted_model_call() {

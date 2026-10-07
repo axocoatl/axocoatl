@@ -497,6 +497,32 @@ impl LlmProvider for ExternalProgramProvider {
     fn model_constraints_known(&self, _request: &ChatRequest) -> bool {
         false
     }
+    /// Refused before anything is reserved when the grant has nothing left
+    /// to spend or no invocation for a model request: a program's spending
+    /// is known only from its own report (Codex reports none), so a zero
+    /// spending ceiling cannot stand for a known zero charge.
+    fn validate_request(&self, request: &ChatRequest) -> std::result::Result<(), ProviderError> {
+        axocoatl_llm::validate_provider_request(request, &self.provider)?;
+        let Some(allowance) = self.controller.agent_allowance(&self.activation) else {
+            return Ok(());
+        };
+        let refusal = if allowance.cost_microunits == Some(0) {
+            Some("the grant has no spending allowance left, and an external program's spending is known only from its own report")
+        } else if allowance.invocations == Some(0) {
+            Some("the grant has no invocation left for the program's model requests")
+        } else if allowance.tokens == Some(0) {
+            Some("the grant has no tokens left")
+        } else {
+            None
+        };
+        match refusal {
+            Some(reason) => Err(ProviderError::BudgetExhausted {
+                provider: self.provider.clone(),
+                message: format!("the external program cannot run: {reason}"),
+            }),
+            None => Ok(()),
+        }
+    }
     /// The run reserves everything the grant still allows: its tokens and
     /// its spending.
     fn execution_bounds(&self, _request: &ChatRequest) -> Option<ProviderExecutionBounds> {
