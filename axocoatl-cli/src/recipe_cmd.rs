@@ -168,4 +168,74 @@ mod tests {
             .iter()
             .any(|line| line.contains(&record.image) && line.contains("id abababababab")));
     }
+
+    /// `axocoatl recipe build claude-code` and `codex` with Podman: each
+    /// image carries its Containerfile digest, its record makes exactly its
+    /// image id trusted, and the pinned programs print their pinned
+    /// versions inside it with no network.
+    ///
+    /// ```text
+    /// CONTAINER_CONNECTION=axocoatl-ci-pr74 \
+    ///   cargo test -p axocoatl-cli actual_recipe_builds -- --ignored
+    /// ```
+    #[tokio::test]
+    #[ignore = "requires Podman (CONTAINER_CONNECTION) and network access for the pinned packages"]
+    async fn actual_recipe_builds_record_trusted_pinned_images() {
+        use std::os::unix::fs::PermissionsExt;
+        let data = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(data.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        for (recipe, command, version) in [
+            ("claude-code", "claude", "2.1.292"),
+            ("codex", "codex", "0.160.1"),
+        ] {
+            let names = vec![recipe.to_string()];
+            let record = axocoatl_daemon::browser_install::build_recipe_image(&names)
+                .await
+                .unwrap();
+            assert_eq!(record.image, recipes::image_name(&names).unwrap());
+            recipe_images::record_image_at(data.path(), record.clone()).unwrap();
+            let root = axocoatl_core::SecureDir::open(data.path()).unwrap();
+            assert!(recipe_images::is_trusted_image(&root, &record.image_id));
+            let output = std::process::Command::new("podman")
+                .args([
+                    "run",
+                    "--rm",
+                    "--pull=never",
+                    "--network",
+                    "none",
+                    "--user",
+                    "1000:1000",
+                    "-e",
+                    "HOME=/tmp",
+                    &record.image_id,
+                    command,
+                    "--version",
+                ])
+                .output()
+                .unwrap();
+            let printed = String::from_utf8_lossy(&output.stdout);
+            assert!(output.status.success(), "{recipe}: {output:?}");
+            assert!(printed.contains(version), "{recipe}: {printed}");
+            let node = std::process::Command::new("podman")
+                .args([
+                    "run",
+                    "--rm",
+                    "--pull=never",
+                    "--network",
+                    "none",
+                    &record.image_id,
+                    "node",
+                    "--version",
+                ])
+                .output()
+                .unwrap();
+            assert!(String::from_utf8_lossy(&node.stdout).starts_with("v24."));
+        }
+        assert_eq!(
+            recipe_images::recorded_images_at(data.path())
+                .unwrap()
+                .len(),
+            2
+        );
+    }
 }
