@@ -236,6 +236,12 @@ mod tests {
                 .unwrap()
                 .as_millis() as u64;
             std::fs::write(work.join("a.txt"), "fixed\n").unwrap();
+            // The run ends after its change.
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            outcome.finished_at_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
             let request = KeepPrRequest {
                 run_id: run_id.into(),
                 branch: None,

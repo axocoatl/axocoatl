@@ -12,6 +12,8 @@ use std::sync::Mutex;
 const RUN: &str = "run-0f8c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
 const SESSION: &str = "ses-11111111-2222-4333-8444-555555555555";
 
+/// A passing fix Outcome written now: the run ended after every change the
+/// test made before calling this.
 fn outcome() -> RunOutcome {
     RunOutcome {
         schema: RUN_OUTCOME_SCHEMA.into(),
@@ -27,7 +29,7 @@ fn outcome() -> RunOutcome {
         },
         task: "Fix the off-by-one in pagination\nSecond line".into(),
         started_at_ms: 1,
-        finished_at_ms: 2,
+        finished_at_ms: now_ms(),
         verdict: RunVerdict::Pass,
         exit_code: 0,
         attention: Vec::new(),
@@ -941,6 +943,8 @@ impl Fixture {
         write(&self.repo.join("docs/c.md"), "# doc, edited by hand\n");
         write(&self.repo.join("notes.txt"), "scratch\n");
         write(&self.repo.join("target/out.bin"), "ignored\n");
+        // The run ends after its changes (an Outcome made later says so).
+        std::thread::sleep(std::time::Duration::from_millis(20));
         RunAttribution {
             paths: ["a.txt", "src/new.rs", "b.txt"]
                 .iter()
@@ -1403,6 +1407,49 @@ async fn keep_refuses_what_it_must_not_commit_or_push() {
             .await,
         "settings changed after the run started",
     );
+}
+
+/// The run's checks and review judged its files as the run left them: a run
+/// path edited after the run ended is refused, never committed.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_run_path_changed_after_the_run_ended_is_refused() {
+    let fixture = Fixture::new();
+    let attribution = fixture.run_changes();
+    let manifest = fixture.manifest();
+    let ended = outcome();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    write(
+        &fixture.repo.join("a.txt"),
+        "one, fixed, then edited by hand\n",
+    );
+    // A path the run did not change may change later; it is never committed.
+    write(&fixture.repo.join("notes.txt"), "more scratch\n");
+    match fixture
+        .keep(&request(), &manifest, &ended, &attribution, None)
+        .await
+    {
+        Err(KeepPrError::Refused(message)) => {
+            assert!(message.contains("changed after the run ended"), "{message}");
+            assert!(message.contains("a.txt"), "{message}");
+            assert!(!message.contains("src/new.rs"), "{message}");
+            assert!(!message.contains("notes.txt"), "{message}");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert_eq!(
+        fixture.branches(),
+        "refs/heads/work",
+        "a branch was created"
+    );
+    // A run that ended after the edit keeps the same paths, the deleted one
+    // included.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let kept = fixture
+        .keep(&request(), &manifest, &outcome(), &attribution, None)
+        .await
+        .unwrap();
+    assert_eq!(kept.paths, vec!["a.txt", "b.txt", "src/new.rs"]);
 }
 
 #[cfg(unix)]

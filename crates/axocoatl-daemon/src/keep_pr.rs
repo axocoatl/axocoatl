@@ -1886,6 +1886,26 @@ async fn build_commit(
             listed(&dirty)
         )));
     }
+    // The run's checks and review judged the files as the run left them. A
+    // run path whose file changed after the run ended (by its status-change
+    // time, which no process can set back) holds work they never saw, such
+    // as an edit made by hand afterwards: it is refused, never committed.
+    let mut later = Vec::new();
+    for path in &run_paths {
+        let after_end = git_host::changed_since(&repo.root.join(path), job.outcome.finished_at_ms)
+            .map_err(|error| KeepPrError::Git(format!("could not read {path}: {error}")))?;
+        if after_end {
+            later.push(path.clone());
+        }
+    }
+    if !later.is_empty() {
+        return Err(refused(format!(
+            "{} changed after the run ended, so a commit would hold work its checks and review never saw: {}; commit {} yourself, or start a new run",
+            if later.len() == 1 { "a path the run changed" } else { "paths the run changed" },
+            listed(&later),
+            if later.len() == 1 { "it" } else { "them" },
+        )));
+    }
     let not_committed: Vec<String> = changed
         .iter()
         .filter(|path| !attributed.contains(*path) && !was_dirty(path, &job.manifest.dirty_paths))
