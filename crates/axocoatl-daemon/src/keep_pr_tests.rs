@@ -1726,12 +1726,23 @@ fn push_urls_are_checked_after_the_persons_rewrites() {
 async fn a_missing_gh_is_named_and_the_pushed_branch_stays() {
     let fixture = Fixture::new();
     let attribution = fixture.run_changes();
+    // The PATH Keep searches holds git and nothing else, so no host's `gh`
+    // (a CI runner has one in /usr/bin) can stand in for the missing one.
+    // Git finds its own helpers through its exec path, and runs shell
+    // commands with an absolute `/bin/sh`.
     let only_git = fixture.dir.path().join("only-git");
     std::fs::create_dir_all(&only_git).unwrap();
     let real_git = sh(fixture.dir.path(), "command -v git");
     std::os::unix::fs::symlink(real_git, only_git.join("git")).unwrap();
     let mut tools = fixture.tools.clone();
-    tools.path = Some(format!("{}:/usr/bin:/bin", only_git.display()).into());
+    tools.path = Some(only_git.clone().into_os_string());
+    assert_eq!(
+        std::fs::read_dir(&only_git)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>(),
+        ["git"]
+    );
     let mut open = request();
     open.open_pr = true;
     let manifest = fixture.manifest();
