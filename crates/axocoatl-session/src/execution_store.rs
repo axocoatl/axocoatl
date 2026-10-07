@@ -427,7 +427,12 @@ impl SessionExecutionStore {
             }
         }
         match &head.segments {
-            None => head = migrate_single_file(&dir, head)?,
+            None => {
+                // The first conversion of any journal of this Session: keep
+                // a copy that an older release can open again.
+                crate::segment_backup::back_up_before_conversion(&ownership, &owner, &dir)?;
+                head = migrate_single_file(&dir, head)?
+            }
             Some(marker) if marker.matches(&SPEC) => {
                 if !head.records.is_empty() || !head.requests.is_empty() {
                     return Err(ExecutionStoreError::Invalid(

@@ -313,6 +313,17 @@ impl UpgradedFormatOwnership {
         Ok(session)
     }
 
+    /// `backups/before-segments` under the held root, where a Session's
+    /// directory is copied before its journals are first converted to segment
+    /// logs. Created on first use; each entry is synced before it is returned.
+    pub(crate) fn before_segments_backup_directory(&self) -> Result<SecureDir, OwnershipError> {
+        self.verify_installed()?;
+        let backups = durable_child(&self._lease.root, crate::segment_backup::BACKUPS_DIR)?;
+        let directory = durable_child(&backups, crate::segment_backup::BEFORE_SEGMENTS_DIR)?;
+        self.verify_installed()?;
+        Ok(directory)
+    }
+
     /// Only the canonical store can provision writable children under the held
     /// boundary. Each parent entry is synced before a storage capability escapes.
     pub(crate) fn session_directory(&self, session_id: &str) -> Result<SecureDir, OwnershipError> {

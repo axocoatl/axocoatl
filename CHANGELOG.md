@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are copied into segments, and a small head file replaces it last, so a crash during
   the conversion leaves the old file to convert again. Once converted, a Session cannot
   be opened by 1.2.0 or earlier, which refuses the new head file rather than misread it.
+  Before a Session's first conversion, its whole directory is copied, once, to
+  `backups/before-segments/<key>/session` in the data root, with a `backup.json` naming
+  the Session written last; `<key>` is the SHA-256 of the Session id. With the daemon
+  stopped, copying that directory back over `execution-v2/<key>` restores the files
+  1.2.0 wrote (see Upgrade in the docs). If the copy cannot be made, the Session is not
+  converted and does not open. The backups stay until you remove them.
 - `sandbox.egress.record_max_events` is ignored: a Session's network record keeps every
   event. It is still accepted, and `axocoatl validate`, `axocoatl doctor` and daemon start
   warn that it can be removed. `GET /api/sessions/{id}/network` returns `record` as
