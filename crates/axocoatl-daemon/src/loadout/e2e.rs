@@ -558,6 +558,19 @@ pub async fn collect_reports(
                 }
             }
             Err(reason) => {
+                // A check that named its report but whose report could not
+                // be read or bound leaves a trace in the daemon log, not
+                // only a reason in the Outcome.
+                if report_marker(&result.stdout_tail).is_some() {
+                    tracing::warn!(
+                        run = %run.run_id,
+                        session = %run.session_id,
+                        check = %check.name,
+                        path = %spec.path,
+                        %reason,
+                        "an e2e check's report could not be read into the Outcome"
+                    );
+                }
                 result.report = None;
                 add_reason(result, reason);
             }
@@ -565,6 +578,12 @@ pub async fn collect_reports(
     }
     Ok(())
 }
+
+// The report is read with `RunHost::read_sandbox_file(.., MAX_REPORT_BYTES + 1)`,
+// and the daemon's bounded read retains one byte more than it is asked for to
+// prove a larger file. That read is an observed exec of the Session container,
+// whose stdout limit must admit it, or no report is ever read.
+const _: () = assert!(MAX_REPORT_BYTES + 2 <= axocoatl_isolation::OBSERVED_STDOUT_MAX_BYTES);
 
 // ---------------------------------------------------------------------------
 // Model capability (admission)
@@ -1387,6 +1406,281 @@ exit 1
             .as_deref()
             .unwrap()
             .contains("container gone"));
+    }
+
+    #[derive(Clone, Default)]
+    struct CapturedLog(std::sync::Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLog {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A report the check named but the host could not read is a warning in
+    /// the daemon log, with the run, the check and why; a check that named
+    /// no report logs nothing.
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_unreadable_named_report_is_logged_as_a_warning() {
+        let captured = CapturedLog::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+
+        let bytes = report_bytes(None);
+        let host = FakeHost::default();
+        *host.failure.lock().unwrap() = Some(RunError::Infrastructure(
+            "execution observation limits are invalid".into(),
+        ));
+        let mut checks = vec![result("e2e", CheckState::Passed, marked(&bytes))];
+        collect_reports(&host, &run_context(), &mut checks)
+            .await
+            .unwrap();
+        assert!(checks[0].report.is_none());
+        let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        assert!(log.contains("WARN"), "{log}");
+        assert!(
+            log.contains("an e2e check's report could not be read into the Outcome"),
+            "{log}"
+        );
+        assert!(
+            log.contains("run=run-1") && log.contains("check=e2e"),
+            "{log}"
+        );
+        assert!(
+            log.contains("execution observation limits are invalid"),
+            "{log}"
+        );
+
+        captured.0.lock().unwrap().clear();
+        let mut checks = vec![result("e2e", CheckState::NotRun, "no marker\n".into())];
+        collect_reports(&FakeHost::default(), &run_context(), &mut checks)
+            .await
+            .unwrap();
+        assert!(checks[0].reason.is_some());
+        assert!(captured.0.lock().unwrap().is_empty());
+    }
+
+    /// The daemon's own report read, on a real Session container: an e2e
+    /// report larger than a command's 1 MiB of output is read whole through
+    /// `AxocoatlDaemon::loadout_read_sandbox_file` (the server's `RunHost`)
+    /// and attached; one past `MAX_REPORT_BYTES` is refused by size, not by
+    /// the read. Needs Podman, `docker.io/library/alpine:3.20` and network
+    /// access for the Session image's packages:
+    ///
+    /// ```text
+    /// CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-daemon --lib \
+    ///   actual_session_container_report_larger_than_a_command_output_is_read -- --ignored
+    /// ```
+    #[tokio::test]
+    #[ignore = "requires Podman (CONTAINER_CONNECTION), docker.io/library/alpine:3.20 and package network access"]
+    async fn actual_session_container_report_larger_than_a_command_output_is_read() {
+        const CHILD: &str = "AXOCOATL_E2E_REPORT_TEST_CHILD";
+        const NAME: &str = "loadout::e2e::tests::actual_session_container_report_larger_than_a_command_output_is_read";
+        // The daemon reads its data root from the process environment, so
+        // the body runs in a child process with its own.
+        if std::env::var_os(CHILD).is_none() {
+            let root = tempfile::tempdir().unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_secs(600),
+                tokio::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", NAME, "--nocapture", "--ignored"])
+                    .env(CHILD, "1")
+                    .env("AXOCOATL_DATA_DIR", root.path().join("data"))
+                    .env("AXOCOATL_SOCKET_PATH", "ipc/daemon.sock")
+                    .current_dir(root.path())
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+
+        /// The server's `RunHost` read, and nothing else.
+        struct DaemonReads(crate::AxocoatlDaemon);
+
+        #[async_trait]
+        impl RunHost for DaemonReads {
+            async fn apply_team(&self, _: &str, _: SessionTeamEdit) -> Result<(), RunError> {
+                Err(RunError::NotImplemented("apply_team"))
+            }
+            async fn send_turn(&self, _: &str, _: &str) -> Result<String, RunError> {
+                Err(RunError::NotImplemented("send_turn"))
+            }
+            async fn wait_turn(
+                &self,
+                _: &str,
+                _: &str,
+                _: Instant,
+            ) -> Result<TurnObservation, RunError> {
+                Err(RunError::NotImplemented("wait_turn"))
+            }
+            async fn stop_turn(&self, _: &str, _: &str) -> Result<(), RunError> {
+                Err(RunError::NotImplemented("stop_turn"))
+            }
+            async fn run_repro(&self, _: &str, _: &ReproRequest) -> Result<ReproRun, RunError> {
+                Err(RunError::NotImplemented("run_repro"))
+            }
+            async fn read_sandbox_file(
+                &self,
+                session_id: &str,
+                path: &str,
+                max_bytes: usize,
+            ) -> Result<Option<Vec<u8>>, RunError> {
+                self.0
+                    .loadout_read_sandbox_file(session_id, path, max_bytes)
+                    .await
+                    .map_err(RunError::from)
+            }
+            async fn record(&self, _: &str, _: RunEvent) -> Result<(), RunError> {
+                Ok(())
+            }
+        }
+
+        let config = axocoatl_config::parse_config(
+            r#"
+agents:
+  - id: conversation
+    name: Conversation
+    provider: ollama
+    model: report-test:latest
+    tools: [read_file]
+providers:
+  ollama:
+    base_url: http://127.0.0.1:9
+sandbox:
+  backend: podman
+  network: bridge
+consolidation:
+  enabled: false
+"#,
+            std::path::Path::new("e2e-report.yaml"),
+        )
+        .unwrap();
+        let daemon = crate::AxocoatlDaemon::bootstrap_headless(config)
+            .await
+            .unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let work_dir = std::fs::canonicalize(work.path()).unwrap();
+        let session = daemon
+            .create_session_with_environment(
+                "e2e report",
+                &work_dir.to_string_lossy(),
+                axocoatl_session::SessionMode::SingleAgent {
+                    agent_id: "conversation".into(),
+                },
+                vec![],
+                vec![],
+                None,
+                // No setup command, and that reviewed: the container starts.
+                None,
+                false,
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            session.environment.state,
+            axocoatl_session::SessionEnvironmentState::Ready,
+            "{:?}",
+            session.environment.error
+        );
+        let container = format!("axo-ses-{}", session.id);
+        // Whatever an assertion does, the Session's containers go.
+        struct Cleanup(String);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("podman")
+                    .args(["rm", "-f", "--ignore", &self.0])
+                    .output();
+            }
+        }
+        let _cleanup = Cleanup(container.clone());
+
+        let spec = report_spec("e2e");
+        let place = |bytes: &[u8]| {
+            std::fs::write(work_dir.join("staged-report.json"), bytes).unwrap();
+            let staged = work_dir.join("staged-report.json");
+            let container = container.clone();
+            let path = spec.path.clone();
+            async move {
+                let placed = tokio::process::Command::new("podman")
+                    .args(["exec", &container, "sh", "-c"])
+                    .arg("mkdir -p \"$(dirname \"$2\")\" && cp \"$1\" \"$2\"")
+                    .args(["sh"])
+                    .arg(&staged)
+                    .arg(&path)
+                    .output()
+                    .await
+                    .unwrap();
+                assert!(
+                    placed.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&placed.stderr)
+                );
+            }
+        };
+
+        // About 1.9 MiB: more than a command's output, less than a report's bound.
+        let message = "m".repeat(3000);
+        let results: Vec<serde_json::Value> = (0..600)
+            .map(|index| {
+                json!({"titlePath": ["suite", format!("case {index}")],
+                       "file": "tests/large.e2e.ts", "targetId": "web",
+                       "status": "failed", "attempts": [{"status": "failed", "durationMs": 1,
+                        "error": {"category": "test", "code": "ASSERTION_FAILED",
+                                  "message": message}}]})
+            })
+            .collect();
+        let bytes = serde_json::to_vec(
+            &json!({"schemaVersion": "report-1", "run": {"results": results, "errors": []}}),
+        )
+        .unwrap();
+        assert!(bytes.len() > 1024 * 1024 && bytes.len() < MAX_REPORT_BYTES);
+        place(&bytes).await;
+
+        let host = DaemonReads(daemon);
+        let mut context = run_context();
+        context.session_id = session.id.clone();
+        let mut checks = vec![result("e2e", CheckState::Failed, marked(&bytes))];
+        collect_reports(&host, &context, &mut checks).await.unwrap();
+        let report = checks[0]
+            .report
+            .as_ref()
+            .unwrap_or_else(|| panic!("not attached: {:?}", checks[0].reason));
+        assert_eq!(report.sha256, report_digest(&bytes));
+        assert_eq!((report.passed, report.failed), (0, 600));
+        assert_eq!(checks[0].reason, None);
+
+        // One byte past the bound is read and refused by its size.
+        let large = vec![b' '; MAX_REPORT_BYTES + 1];
+        place(&large).await;
+        let mut checks = vec![result("e2e", CheckState::Passed, marked(&large))];
+        collect_reports(&host, &context, &mut checks).await.unwrap();
+        assert!(checks[0].report.is_none());
+        let reason = checks[0].reason.as_deref().unwrap();
+        assert!(reason.contains("larger than"), "{reason}");
+        assert!(!reason.contains("limits are invalid"), "{reason}");
+
+        let stopped = host.0.shutdown_session_runtimes_checked().await;
+        stopped.unwrap();
     }
 
     #[tokio::test]

@@ -396,34 +396,77 @@ fn an_external_definition_is_the_autonomous_writer_with_bash() {
     );
 }
 
-/// The bounded output wrapper, run by this computer's `sh` with small
+/// Run `script` (a wrapper body) with this computer's `sh` and the wrapper's
+/// arguments: `limit`, `keep`, then `sh -c program`, with `stdin` on its
+/// stdin. On Linux, `no_new_privs` sets no-new-privileges on the shell
+/// first, as the supervisor's `--harden` does. Returns stdout, stderr and the
+/// exit code.
+fn run_wrapper(
+    script: &str,
+    limit: usize,
+    keep: usize,
+    program: &str,
+    stdin: &str,
+    no_new_privs: bool,
+) -> (String, String, Option<i32>) {
+    use std::io::Write;
+    let mut command = std::process::Command::new("sh");
+    command
+        .args(["-c", script, "sh"])
+        .arg(limit.to_string())
+        .arg(keep.to_string())
+        .args(["sh", "-c", program])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if no_new_privs {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: prctl is async-signal-safe and touches only the child.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0 {
+                        Ok(())
+                    } else {
+                        Err(std::io::Error::last_os_error())
+                    }
+                });
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        panic!("no-new-privileges exists only on Linux");
+    }
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.code(),
+    )
+}
+
+fn running_as_root() -> bool {
+    // SAFETY: geteuid has no preconditions.
+    unsafe { libc::geteuid() == 0 }
+}
+
+/// The bounding part of the wrapper, run by this computer's `sh` with small
 /// limits: whole output when it fits; first and last halves around a marker
 /// when it does not; the program stopped at the file limit; its exit status
 /// kept; its stdin passed through.
 #[test]
 fn the_output_wrapper_bounds_the_file_and_keeps_the_status() {
-    let run = |limit: usize, keep: usize, script: &str, stdin: &str| {
-        use std::io::Write;
-        let mut child = std::process::Command::new("sh")
-            .args(["-c", OUTPUT_WRAPPER, "sh"])
-            .arg(limit.to_string())
-            .arg(keep.to_string())
-            .args(["sh", "-c", script])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
-        let output = child.wait_with_output().unwrap();
-        (
-            String::from_utf8_lossy(&output.stdout).into_owned(),
-            output.status.code(),
-        )
+    let bounded = format!("set -u\n{BOUNDED_OUTPUT}");
+    let run = |limit: usize, keep: usize, program: &str, stdin: &str| {
+        let (out, _, code) = run_wrapper(&bounded, limit, keep, program, stdin, false);
+        (out, code)
     };
     let (out, code) = run(1000, 500, "cat; echo; echo done; exit 3", "prompt");
     assert_eq!(out, "prompt\ndone\n");
@@ -439,4 +482,46 @@ fn the_output_wrapper_bounds_the_file_and_keeps_the_status() {
     let (out, code) = run(5000, 100_000, endless, "");
     assert_ne!(code, Some(0));
     assert!(out.contains("\"limit\":5000"), "{out}");
+}
+
+/// The whole wrapper, as `command_argv` runs it, refuses a process without
+/// no-new-privileges before the program starts: a Linux test process has
+/// `NoNewPrivs: 0`, and where `/proc/self/status` does not exist (macOS)
+/// nothing proves it, so the guard fails closed. Root is refused first.
+#[test]
+fn the_output_wrapper_refuses_a_process_without_no_new_privileges() {
+    let wrapper = output_wrapper();
+    let argv = command_argv(AgentRuntime::ClaudeCode, "claude-sonnet-4-5").unwrap();
+    assert_eq!(argv[2], wrapper);
+    let marker = tempfile::tempdir().unwrap();
+    let ran = marker.path().join("ran");
+    let program = format!("echo started > '{}'; echo output", ran.display());
+    let (out, err, code) = run_wrapper(&wrapper, 1000, 500, &program, "prompt", false);
+    assert_eq!(code, Some(126), "{err}");
+    assert_eq!(out, "");
+    assert!(!ran.exists(), "the program must not start");
+    let reason = if running_as_root() {
+        "never runs as root"
+    } else {
+        "runs only under the supervisor's --harden"
+    };
+    assert!(err.contains(reason), "{err}");
+}
+
+/// Under no-new-privileges, as the supervisor's `--harden` runs it, the
+/// whole wrapper runs the program and keeps its output and status. Linux
+/// only; a root test process sees the root refusal instead.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_output_wrapper_runs_the_program_under_no_new_privileges() {
+    let wrapper = output_wrapper();
+    let program = "grep '^NoNewPrivs:' /proc/self/status; cat; echo; echo done; exit 3";
+    let (out, err, code) = run_wrapper(&wrapper, 1000, 500, program, "prompt", true);
+    if running_as_root() {
+        assert_eq!(code, Some(126), "{err}");
+        assert!(err.contains("never runs as root"), "{err}");
+        return;
+    }
+    assert_eq!(code, Some(3), "{err}");
+    assert_eq!(out, "NoNewPrivs:\t1\nprompt\ndone\n");
 }
