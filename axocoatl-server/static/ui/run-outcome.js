@@ -85,6 +85,28 @@ export function usageText(usage = {}) {
   return usage.complete === false ? `${text}${retries} (known subtotal: some usage was not reported)` : `${text}${retries}`;
 }
 
+const asciiLower = (text) => text.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+const asClass = (text) => text.replace(/[ -]/g, '_');
+
+/**
+ * Why an area was not covered, in one line: `<class>: <detail>`. This
+ * mirrors `NotCovered::reason` (crates/axocoatl-session/src/run_outcome.rs),
+ * the one rendering the run summary, its progress lines, JUnit and Keep as
+ * PR use: the class is said once (a detail that already starts with it is
+ * not prefixed again), and an empty detail leaves the class alone.
+ */
+export function notCoveredReason(entry = {}) {
+  const cls = String(entry.class || 'other');
+  let detail = String(entry.detail ?? '').trim();
+  const colon = detail.indexOf(':');
+  if (colon >= 0 && asClass(asciiLower(detail.slice(0, colon).trim())) === cls) {
+    detail = detail.slice(colon + 1).trim();
+  } else if (asciiLower(asClass(detail)) === asciiLower(cls)) {
+    detail = '';
+  }
+  return detail ? `${cls}: ${detail}` : cls;
+}
+
 export class AxRunOutcome extends HTMLElement {
   static get observedAttributes() { return ['run-id']; }
 
@@ -249,7 +271,7 @@ export class AxRunOutcome extends HTMLElement {
       const section = this.#section('Not covered');
       const list = el('ul');
       for (const entry of outcome.not_covered) {
-        const li = el('li', '', `${entry.area} — ${entry.class.replaceAll('_', ' ')}: ${entry.detail}`);
+        const li = el('li', '', `${entry.area}: ${notCoveredReason(entry)}`);
         li.dataset.class = entry.class;
         list.append(li);
       }

@@ -1335,6 +1335,16 @@ mod tests {
             .unwrap();
         std::fs::write(&file, fix.text.replace("id: fix", "id: my-fix")).unwrap();
         assert_eq!(validate(&file).unwrap(), 0);
+        // A tokens budget that no model call fits is invalid (exit 3); the
+        // daemon checks the model's real context when the run is admitted.
+        std::fs::write(
+            &file,
+            fix.text
+                .replace("id: fix", "id: my-fix")
+                .replace("tokens: 4000000", "tokens: 8000"),
+        )
+        .unwrap();
+        assert_eq!(validate(&file).unwrap(), exit_code::USAGE);
     }
 
     /// The qa smoke test printed "checkout: not_reached: not_reached: ran out

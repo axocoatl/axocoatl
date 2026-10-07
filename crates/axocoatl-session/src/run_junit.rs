@@ -26,7 +26,7 @@ use std::fmt::Write as _;
 
 use crate::review_adjudication::round_findings;
 use crate::run_outcome::{
-    AdjudicationDecision, CheckState, Finding, FindingSource, ReproClassification,
+    AdjudicationDecision, CheckState, Finding, FindingSource, NotCovered, ReproClassification,
     ReviewVerdictKind, RunOutcome, RunVerdict,
 };
 
@@ -446,17 +446,47 @@ fn finding_case(finding: &Finding, fail_on_findings: bool) -> Case {
     case
 }
 
+/// Each required check that failed or timed out on the final result, in
+/// words: what makes a verdict `checks_failed`.
+fn failed_checks(outcome: &RunOutcome) -> Vec<String> {
+    outcome
+        .checks
+        .iter()
+        .filter_map(|check| match check.state {
+            CheckState::Failed => Some(match check.exit_code {
+                Some(code) => format!(
+                    "The required check {} failed (exit code {code})",
+                    check.name
+                ),
+                None => format!("The required check {} failed", check.name),
+            }),
+            CheckState::TimedOut => Some(format!(
+                "The required check {} ran past its {} s timeout",
+                check.name,
+                check.timeout_ms / 1000
+            )),
+            CheckState::Passed | CheckState::NotRun | CheckState::Unavailable => None,
+        })
+        .collect()
+}
+
 fn verdict_case(outcome: &RunOutcome) -> Case {
     let case = Case::new("axocoatl.run", "verdict");
     let reasons = outcome.attention.join("; ");
     match outcome.verdict {
         RunVerdict::Pass => case,
+        // The failed checks come first: they decide the verdict, and the
+        // attention reasons alone may not name them.
         RunVerdict::ChecksFailed => case.status(Status::Failure {
             kind: "checks_failed".into(),
-            message: if reasons.is_empty() {
-                "a required check failed".into()
-            } else {
-                reasons
+            message: {
+                let mut reasons = failed_checks(outcome);
+                reasons.extend(outcome.attention.iter().cloned());
+                if reasons.is_empty() {
+                    "a required check failed".into()
+                } else {
+                    reasons.join("; ")
+                }
             },
         }),
         RunVerdict::NeedsAttention => case.status(Status::Failure {
@@ -550,9 +580,19 @@ pub fn render_junit_with(
     }
     suites.push(findings);
     let mut coverage = Suite::new("coverage");
-    for entry in &outcome.not_covered {
+    for (index, entry) in outcome.not_covered.iter().enumerate() {
+        // An area with several entries (each part a worker did not reach)
+        // gets one test case per entry, numbered so their names differ.
+        let same = |other: &&NotCovered| other.area == entry.area;
+        let total = outcome.not_covered.iter().filter(same).count();
+        let name = if total > 1 {
+            let nth = outcome.not_covered[..index].iter().filter(same).count() + 1;
+            format!("{} ({nth} of {total})", entry.area)
+        } else {
+            entry.area.clone()
+        };
         coverage.cases.push(
-            Case::new("axocoatl.coverage", &entry.area).status(Status::Failure {
+            Case::new("axocoatl.coverage", name).status(Status::Failure {
                 kind: "not_covered".into(),
                 message: entry.reason(),
             }),
@@ -992,6 +1032,86 @@ mod tests {
         );
         // The timeout is the message; the reason goes to system-out.
         assert!(xml.contains("reason: the report could not be read</system-out>"));
+    }
+
+    /// The e2e re-smoke's JUnit said only "A turn ended needing attention"
+    /// for a run whose required check failed.
+    #[test]
+    fn a_checks_failed_verdict_names_the_failed_check() {
+        let mut outcome = fixture();
+        let mut e2e = check("e2e", CheckState::Failed);
+        e2e.exit_code = Some(127);
+        outcome.checks = vec![e2e, check("lint", CheckState::Passed)];
+        outcome.review = None;
+        outcome.adjudications.clear();
+        outcome.findings.clear();
+        outcome.not_covered.clear();
+        outcome.decide(VerdictInputs {
+            turn_needs_attention: true,
+            ..VerdictInputs::default()
+        });
+        assert_eq!(outcome.verdict, RunVerdict::ChecksFailed);
+        assert_eq!(outcome.attention, ["A turn ended needing attention"]);
+        let xml = render_junit(&outcome).unwrap();
+        assert!(
+            xml.contains(
+                "<failure type=\"checks_failed\" message=\"The required check e2e failed \
+                 (exit code 127); A turn ended needing attention\"/>"
+            ),
+            "{xml}"
+        );
+        // A timeout is named as such, and with no other reason the check
+        // alone is the message.
+        outcome.checks = vec![check("slow", CheckState::TimedOut)];
+        outcome.decide(VerdictInputs::default());
+        let xml = render_junit(&outcome).unwrap();
+        assert!(
+            xml.contains(
+                "<failure type=\"checks_failed\" message=\"The required check slow ran past its \
+                 180 s timeout\"/>"
+            ),
+            "{xml}"
+        );
+    }
+
+    /// Several not-covered entries of one area are one area in the verdict
+    /// and distinct test cases in the coverage suite.
+    #[test]
+    fn coverage_cases_of_one_area_are_numbered() {
+        let mut outcome = fixture();
+        let entry = |area: &str, detail: &str| NotCovered {
+            area: area.into(),
+            class: FailureClass::NotReached,
+            detail: detail.into(),
+            node_id: None,
+            turn_id: None,
+        };
+        outcome.checks.clear();
+        outcome.review = None;
+        outcome.adjudications.clear();
+        outcome.findings.clear();
+        outcome.not_covered = vec![
+            entry("ingest", "ingest/src/lib.rs"),
+            entry("notify", "notify/__init__.py"),
+            entry("ingest", "ingest/src/main.rs"),
+        ];
+        outcome.decide(VerdictInputs::default());
+        let xml = render_junit(&outcome).unwrap();
+        for name in ["ingest (1 of 2)", "notify", "ingest (2 of 2)"] {
+            assert!(
+                xml.contains(&format!(
+                    "<testcase classname=\"axocoatl.coverage\" name=\"{name}\">"
+                )),
+                "{name}: {xml}"
+            );
+        }
+        assert!(xml.contains("message=\"not_reached: ingest/src/main.rs\""));
+        assert!(
+            xml.contains(
+                "<failure type=\"needs_attention\" message=\"2 areas were not covered\"/>"
+            ),
+            "{xml}"
+        );
     }
 
     #[test]

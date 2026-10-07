@@ -9,8 +9,10 @@
 //!
 //! The parsers read model answers, so they accept the common variations of
 //! that shape (Markdown-decorated headings, a block without its fence, an
-//! answer that is only the block's JSON, `{"findings": [...]}` objects,
-//! `file` + `line` instead of `location`, severity words such as `major`)
+//! answer that is only the block's JSON, `{"findings": [...]}` objects with
+//! their keys in any letter case (`{"FINDINGS": [...], "NOT_REACHED":
+//! [...]}`), `file` + `line` instead of `location`, severity words such as
+//! `major`)
 //! and refuse what they cannot read with an error the host can quote back.
 //! They never drop a finding silently: entries beyond a bound are reported
 //! (as a `NOT_REACHED` entry for a worker, as an error for the integrator).
@@ -111,7 +113,7 @@ pub fn parse_plan(answer: &str, min: u32, max: u32) -> Result<AuditPlan, AuditPl
     let value: Value = serde_json::from_str(text.trim())
         .map_err(|error| invalid(format!("the AREAS block is not valid JSON: {error}")))?;
     let entries = match &value {
-        Value::Object(object) => match object.get("areas") {
+        Value::Object(object) => match key_value(object, "areas") {
             Some(Value::Array(entries)) => entries,
             _ => {
                 return Err(invalid(
@@ -338,12 +340,12 @@ fn findings_entries(text: &str) -> Result<(Vec<Value>, Vec<String>), AuditPlanEr
     match value {
         Value::Array(entries) => Ok((entries, Vec::new())),
         Value::Object(mut object) => {
-            let Some(Value::Array(entries)) = object.remove("findings") else {
+            let Some(Value::Array(entries)) = take_key(&mut object, "findings") else {
                 return Err(invalid(
                     "the FINDINGS block is not a JSON array of findings",
                 ));
             };
-            let not_reached = match object.remove("not_reached") {
+            let not_reached = match take_key(&mut object, "not_reached") {
                 Some(value) => not_reached_items(value)?,
                 None => Vec::new(),
             };
@@ -467,7 +469,7 @@ fn parse_not_reached(text: &str) -> Result<Vec<String>, AuditPlanError> {
 fn not_reached_items(value: Value) -> Result<Vec<String>, AuditPlanError> {
     let entries = match value {
         Value::Array(entries) => entries,
-        Value::Object(mut object) => match object.remove("not_reached") {
+        Value::Object(mut object) => match take_key(&mut object, "not_reached") {
             Some(Value::Array(entries)) => entries,
             _ => return Err(invalid("the NOT_REACHED block is not a JSON array")),
         },
@@ -554,12 +556,49 @@ fn bounded(text: &str, max: usize) -> String {
     format!("{}{MARK}", &text[..end])
 }
 
+/// Whether an object key a model wrote names `key`: the same letters in any
+/// case, with `_`, `-` and spaces ignored (`NOT_REACHED`, `notReached` and
+/// `not reached` all name `not_reached`).
+fn key_names(written: &str, key: &str) -> bool {
+    let letters = |text: &str| {
+        text.chars()
+            .filter(|c| !matches!(c, '_' | '-' | ' '))
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    letters(written) == letters(key)
+}
+
+/// The value of `key` in `object` ([`key_names`]): the exact key first, else
+/// the first key that names it.
+fn key_value<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a Value> {
+    object.get(key).or_else(|| {
+        object
+            .iter()
+            .find(|(written, _)| key_names(written, key))
+            .map(|(_, value)| value)
+    })
+}
+
+/// [`key_value`], removed from `object`.
+fn take_key(object: &mut serde_json::Map<String, Value>, key: &str) -> Option<Value> {
+    if let Some(value) = object.remove(key) {
+        return Some(value);
+    }
+    let written = object
+        .keys()
+        .find(|written| key_names(written, key))?
+        .clone();
+    object.remove(&written)
+}
+
 /// The text of `heading`'s block: the block after its last heading, fenced
 /// or not ([`headed_block`]). Without the heading, and when `key` names the
 /// object the block is (`{"areas": [...]}`), the last fenced block that is
 /// such an object, else the whole answer when it is exactly the block's JSON
-/// (that object, or a bare array). `Ok(None)` when there is none; an error
-/// when the heading has nothing after it.
+/// (that object, or a bare array). The object's key may be in any letter
+/// case ([`key_names`]). `Ok(None)` when there is none; an error when the
+/// heading has nothing after it.
 fn block(answer: &str, heading: &str, key: Option<&str>) -> Result<Option<String>, AuditPlanError> {
     match headed_block(answer, heading, &KNOWN_HEADINGS) {
         HeadedBlock::Found(text) => Ok(Some(text)),
@@ -570,7 +609,12 @@ fn block(answer: &str, heading: &str, key: Option<&str>) -> Result<Option<String
             let Some(key) = key else {
                 return Ok(None);
             };
-            let keyed = |value: &Value| value.get(key).is_some_and(Value::is_array);
+            let keyed = |value: &Value| {
+                value
+                    .as_object()
+                    .and_then(|object| key_value(object, key))
+                    .is_some_and(Value::is_array)
+            };
             let fenced = fenced_blocks(answer).into_iter().rev().find(|body| {
                 serde_json::from_str::<Value>(body.trim()).is_ok_and(|value| keyed(&value))
             });
@@ -731,6 +775,62 @@ mod tests {
         assert_eq!(findings[2].location.as_deref(), Some("ingest/feed.go:29"));
         assert_eq!(findings[3].area.as_deref(), Some("notify"));
         assert_eq!(findings[3].severity, Some(Severity::High));
+    }
+
+    /// The notify worker's answer in run 1 of the 1.3.0 re-smoke, exactly as
+    /// recorded: one unfenced JSON object whose block keys are uppercase.
+    /// It was refused ("no FINDINGS block") and notify was listed as not
+    /// covered although the integrator merged its three findings.
+    const AUDIT_RUN_1_WORKER_NOTIFY: &str =
+        include_str!("../tests/fixtures/answers/audit-run1-worker-notify.txt");
+
+    #[test]
+    fn the_recorded_uppercase_json_object_report_is_read() {
+        assert!(AUDIT_RUN_1_WORKER_NOTIFY.starts_with("{\n  \"FINDINGS\": [\n"));
+        let report = parse_area_report(AUDIT_RUN_1_WORKER_NOTIFY, "notify").unwrap();
+        let ids: Vec<_> = report.findings.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(ids, ["notify-F1", "notify-F2", "notify-F3"]);
+        assert_eq!(report.findings[0].severity, Some(Severity::Critical));
+        assert_eq!(
+            report.findings[0].location.as_deref(),
+            Some("notify/webhook.py:10")
+        );
+        assert!(report
+            .findings
+            .iter()
+            .all(|f| f.area.as_deref() == Some("notify")));
+        // NOT_REACHED is read from the same object.
+        assert_eq!(report.not_reached, ["auth", "billing", "ingest"]);
+        // The integrator's answer and a plan in the same shape are read too.
+        let findings = parse_integrated(AUDIT_RUN_1_WORKER_NOTIFY).unwrap();
+        assert_eq!(findings.len(), 3);
+        let plan = parse_plan(
+            "{\"AREAS\": [{\"name\": \"a\", \"scope\": \"x\"}, {\"name\": \"b\", \"scope\": \"y\"}]}",
+            2,
+            8,
+        )
+        .unwrap();
+        assert_eq!(plan.areas.len(), 2);
+        // Other spellings of the keys, fenced and not.
+        let report = parse_area_report(
+            "```json\n{\"Findings\": [{\"title\": \"t\"}], \"notReached\": [\"tests\"]}\n```",
+            "db",
+        )
+        .unwrap();
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.not_reached, ["tests"]);
+        let report = parse_area_report(
+            "FINDINGS\n{\"FINDINGS\": [], \"Not Reached\": [\"vendor\"]}",
+            "db",
+        )
+        .unwrap();
+        assert!(report.findings.is_empty());
+        assert_eq!(report.not_reached, ["vendor"]);
+        // A key that only resembles one is still refused.
+        let error = parse_area_report("{\"FINDINGS_LIST\": []}", "db")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no FINDINGS block"), "{error}");
     }
 
     #[test]

@@ -1,0 +1,30 @@
+{
+  "FINDINGS": [
+    {
+      "id": "F1",
+      "title": "Hardcoded Webhook Token",
+      "detail": "The webhook module contains a hardcoded secret token 'sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef' in notify/webhook.py at line 10. This is a critical security defect as it exposes authentication credentials that should be managed through secure configuration mechanisms rather than being embedded in source code.",
+      "severity": "critical",
+      "location": "notify/webhook.py:10"
+    },
+    {
+      "id": "F2",
+      "title": "Hardcoded Webhook URL",
+      "detail": "The webhook module contains a hardcoded URL 'https://hooks.example.invalid/orders' in notify/webhook.py at line 5. While this appears to be a placeholder, it represents a potential issue for production deployment if not properly configured. This could lead to sending events to an incorrect endpoint if not replaced with a dynamic configuration.",
+      "severity": "high",
+      "location": "notify/webhook.py:5"
+    },
+    {
+      "id": "F3",
+      "title": "Potential Insecure HTTP Usage",
+      "detail": "The notify module uses urllib.request for HTTP communication without any explicit TLS verification. While urllib.request typically validates certificates by default, the hardcoded URL and token usage combined with basic HTTP client usage could be vulnerable if not properly secured in production environments. The module should ensure secure HTTP practices are followed.",
+      "severity": "medium",
+      "location": "notify/webhook.py:12"
+    }
+  ],
+  "NOT_REACHED": [
+    "auth",
+    "billing",
+    "ingest"
+  ]
+}

@@ -17,7 +17,7 @@ const outcome = {
   loadout: { id: 'qa', version: 1, kind: 'qa', digest: 'c'.repeat(64), builtin: true },
   task: 'Explore checkout', started_at_ms: 1, finished_at_ms: 2,
   verdict: 'needs_attention', exit_code: 2,
-  attention: ['1 area was not covered', 'The writer did not answer 1 review finding'],
+  attention: ['3 areas were not covered', 'The writer did not answer 1 review finding'],
   turns: [{ turn_id: 'turn-1', purpose: 'run', state: 'completed' }],
   checks: [{
     name: 'e2e', argv: ['sh', '-c', 'e2e run'], state: 'failed', timeout_ms: 600000, exit_code: 1,
@@ -44,7 +44,11 @@ const outcome = {
     { id: 'B2', source: 'explorer', title: 'search flickers', detail: '', area: 'search',
       repro: { path: 'axocoatl-qa/b2.spec.ts', classification: 'fails_on_clean_build' } },
   ],
-  not_covered: [{ area: 'gift cards', class: 'provider_refusal', detail: 'classifier stop' }],
+  not_covered: [
+    { area: 'gift cards', class: 'provider_refusal', detail: 'classifier stop' },
+    { area: 'checkout', class: 'not_reached', detail: 'Not reached: ran out of steps' },
+    { area: 'writer', class: 'stopped', detail: '' },
+  ],
   warnings: [{ code: 'same_model_reviewer', message: 'The reviewer runs the writer’s model (openrouter:qwen/qwen3-coder).' }],
   usage: { input_tokens: 1200, output_tokens: 300, cost_microunits: 12345, complete: false, retries: 1 },
   network: { events: 9, allowed_connections: 4, refused_connections: 1, route_requests: 3, routes: [['openrouter.ai', 3]] },
@@ -80,7 +84,11 @@ test('the run outcome panel shows every part of an Outcome, missing adjudication
     assert.match(await panel.locator('li[data-finding="B1"]').textContent(), /confirmed/);
     assert.match(await panel.locator('li[data-finding="B2"]').textContent(), /fails on clean build/);
     // Not covered with its reason, the same-model warning, usage and network.
-    assert.match(await panel.locator('li[data-class="provider_refusal"]').textContent(), /gift cards — provider refusal: classifier stop/);
+    // Each line is `NotCovered::reason` as the run summary and JUnit print
+    // it: the class once, an empty detail leaving the class alone.
+    assert.equal(await panel.locator('li[data-class="provider_refusal"]').textContent(), 'gift cards: provider_refusal: classifier stop');
+    assert.equal(await panel.locator('li[data-class="not_reached"]').textContent(), 'checkout: not_reached: ran out of steps');
+    assert.equal(await panel.locator('li[data-class="stopped"]').textContent(), 'writer: stopped');
     assert.equal(await panel.locator('.warning[data-code="same_model_reviewer"]').count(), 1);
     assert.match(await panel.locator('p.usage').textContent(), /known subtotal/);
     assert.match(await panel.locator('section[data-section="network"]').textContent(), /openrouter\.ai: 3/);
@@ -93,6 +101,34 @@ test('the run outcome panel shows every part of an Outcome, missing adjudication
     // The run record's latest Keep is shown in the Keep element.
     await keep.locator('.result').filter({ hasText: 'axocoatl/qa-00000000' }).waitFor();
     assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('the panel renders why something was not covered exactly as NotCovered::reason does', async () => {
+  const context = await newAuthorizedContext(browser), page = await context.newPage();
+  await page.route('**/not-covered-reason-fixture', (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><body></body></html>' }));
+  try {
+    await page.goto(`${runtime.baseUrl}/not-covered-reason-fixture`);
+    // The cases of a_not_covered_reason_names_its_class_once in
+    // crates/axocoatl-session/src/run_outcome.rs: [class, detail, reason].
+    const cases = [
+      ['not_reached', 'not_reached: ran out of steps', 'not_reached: ran out of steps'],
+      ['not_reached', 'Not reached: no time', 'not_reached: no time'],
+      ['blocked', 'blocked: the page did not load', 'blocked: the page did not load'],
+      ['provider_failure', 'provider_failure: the explorer did not finish (stream ended early: x: y)',
+        'provider_failure: the explorer did not finish (stream ended early: x: y)'],
+      ['not_reached', 'not_reached', 'not_reached'],
+      ['other', '', 'other'],
+      ['other', '  ', 'other'],
+      ['other', 'skipped: not a valid status', 'other: skipped: not a valid status'],
+      ['provider_refusal', 'classifier stop', 'provider_refusal: classifier stop'],
+      ['budget', 'budget:', 'budget'],
+    ];
+    const rendered = await page.evaluate(async (cases) => {
+      const { notCoveredReason } = await import('/ui/run-outcome.js');
+      return cases.map(([cls, detail]) => notCoveredReason({ area: 'checkout', class: cls, detail }));
+    }, cases);
+    assert.deepEqual(rendered, cases.map(([, , reason]) => reason));
   } finally { await context.close(); }
 });
 

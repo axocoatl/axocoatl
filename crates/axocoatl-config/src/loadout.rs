@@ -50,6 +50,14 @@ pub const USER_LOADOUT_DIR: &str = "loadouts";
 pub const TASK_PLACEHOLDER: &str = "{task}";
 /// Placeholders a prompt may use.
 pub const PROMPT_PLACEHOLDERS: [&str; 4] = ["{task}", "{repo}", "{target_url}", "{reference_url}"];
+/// The output bound per request of a loadout Agent or reviewer that names
+/// none: a native Agent always runs with an explicit sampling maximum.
+pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 8192;
+/// The smallest context a native model call runs with (the audited native
+/// Ollama profile starts at 2048 tokens). A model's real context is known
+/// only at run admission; a loadout whose tokens cannot hold even this
+/// context plus the output bound can never make a call.
+pub const MIN_CALL_CONTEXT_TOKENS: u64 = 2048;
 
 const FIX_YAML: &str = include_str!("../loadouts/fix.yaml");
 const QA_YAML: &str = include_str!("../loadouts/qa.yaml");
@@ -603,6 +611,102 @@ fn check_limits(field: &str, limits: &LoadoutLimits) -> Result<(), LoadoutError>
     Ok(())
 }
 
+/// One native model caller of a loadout (an Agent or the reviewer), its
+/// tokens budget and its output bound per call ([`call_budgets`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallBudget {
+    /// The Agent's id; `None` for the reviewer.
+    pub agent: Option<String>,
+    /// `Agent writer` or `the reviewer`.
+    pub who: String,
+    /// The loadout field that holds its tokens, such as
+    /// `budgets.agent.tokens`.
+    pub tokens_field: String,
+    pub tokens: u64,
+    /// The field that sets its output bound, such as
+    /// `agents.writer.max_output_tokens`.
+    pub output_field: String,
+    pub max_output_tokens: u64,
+    pub model: ParamOr<ModelSpec>,
+}
+
+impl CallBudget {
+    /// The fewest tokens one call needs: the model's `context` (the model's
+    /// own when known, else [`MIN_CALL_CONTEXT_TOKENS`]) plus the output
+    /// bound.
+    pub fn minimum(&self, context: Option<u64>) -> u64 {
+        context
+            .unwrap_or(MIN_CALL_CONTEXT_TOKENS)
+            .saturating_add(self.max_output_tokens)
+    }
+
+    /// Why one call cannot fit, as the error of [`Self::tokens_field`]:
+    /// the budget and the minimum in words; `None` when it fits. `model`
+    /// names the resolved model when known.
+    pub fn refusal(&self, context: Option<u64>, model: Option<&str>) -> Option<LoadoutError> {
+        let minimum = self.minimum(context);
+        if self.tokens >= minimum {
+            return None;
+        }
+        let model = model.map(|model| format!(" ({model})")).unwrap_or_default();
+        let context = match context {
+            Some(context) => format!("the model's {context}-token context"),
+            None => format!("a context of at least {MIN_CALL_CONTEXT_TOKENS} tokens"),
+        };
+        Some(invalid(
+            self.tokens_field.clone(),
+            format!(
+                "{} tokens is less than one model call of {}{model} needs: {context} plus {} \
+                 output tokens ({}), at least {minimum} tokens; raise it to at least {minimum} \
+                 or lower {}",
+                self.tokens, self.who, self.max_output_tokens, self.output_field, self.output_field
+            ),
+        ))
+    }
+}
+
+/// Every native model caller of `file`: each Agent that runs in Axocoatl's
+/// own tool loop, with its own `budget` or `budgets.agent`, and the
+/// reviewer with `budgets.reviewer`. External programs (`claude-code`,
+/// `codex`) are left out: their spend is reserved up front, not per call.
+pub fn call_budgets(file: &LoadoutFile) -> Vec<CallBudget> {
+    let mut budgets: Vec<CallBudget> = file
+        .agents
+        .iter()
+        .filter(|agent| agent.runtime == AgentRuntime::Native)
+        .map(|agent| {
+            let (tokens_field, limits) = match &agent.budget {
+                Some(limits) => (format!("agents.{}.budget.tokens", agent.id), limits),
+                None => ("budgets.agent.tokens".to_string(), &file.budgets.agent),
+            };
+            CallBudget {
+                agent: Some(agent.id.clone()),
+                who: format!("Agent {}", agent.id),
+                tokens_field,
+                tokens: limits.tokens,
+                output_field: format!("agents.{}.max_output_tokens", agent.id),
+                max_output_tokens: agent.max_output_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+                    as u64,
+                model: agent.model.clone(),
+            }
+        })
+        .collect();
+    if let (Some(review), Some(limits)) = (&file.review, &file.budgets.reviewer) {
+        budgets.push(CallBudget {
+            agent: None,
+            who: "the reviewer".into(),
+            tokens_field: "budgets.reviewer.tokens".into(),
+            tokens: limits.tokens,
+            output_field: "review.max_output_tokens".into(),
+            max_output_tokens: review
+                .max_output_tokens
+                .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS) as u64,
+            model: review.model.clone(),
+        });
+    }
+    budgets
+}
+
 /// Validate a parsed loadout. Returns warnings; errors name the field.
 pub fn validate_loadout(file: &LoadoutFile) -> Result<Vec<LoadoutWarning>, LoadoutError> {
     let mut warnings = Vec::new();
@@ -813,6 +917,14 @@ pub fn validate_loadout(file: &LoadoutFile) -> Result<Vec<LoadoutWarning>, Loado
             "budgets.reviewer",
             "a loadout with a review sets the reviewer's limits",
         ));
+    }
+    // A model's real context is known only at admission, which checks it;
+    // a budget below the smallest context plus the output bound can never
+    // make a call.
+    for budget in call_budgets(file) {
+        if let Some(error) = budget.refusal(None, None) {
+            return Err(error);
+        }
     }
     if parse_duration_secs(&file.budgets.wall_clock).is_none() {
         return Err(invalid(
@@ -1435,6 +1547,82 @@ mod tests {
             check_timeout_secs(&check).unwrap(),
             DEFAULT_CHECK_TIMEOUT_SECS
         );
+    }
+
+    /// The qa re-smoke's `qa-tight` loadout validated with a budget too
+    /// small for one model call, and its run then failed with exit 5 and an
+    /// unreadable message. Validation refuses what no model's context can
+    /// fit; admission checks the model's real context (the daemon's run
+    /// admission tests).
+    #[test]
+    fn a_tokens_budget_below_one_call_is_refused() {
+        let text = QA_YAML.replace("tokens: 6000000", "tokens: 10000");
+        let error = parse_loadout(&text, LoadoutSource::Builtin).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "loadout field budgets.agent.tokens: 10000 tokens is less than one model call of \
+             Agent explorer needs: a context of at least 2048 tokens plus 8192 output tokens \
+             (agents.explorer.max_output_tokens), at least 10240 tokens; raise it to at least \
+             10240 or lower agents.explorer.max_output_tokens"
+        );
+        // Exactly the minimum is enough; a smaller output bound lowers it.
+        assert!(parse_loadout(
+            &QA_YAML.replace("tokens: 6000000", "tokens: 10240"),
+            LoadoutSource::Builtin
+        )
+        .is_ok());
+        let smaller = QA_YAML.replace("tokens: 6000000", "tokens: 5000").replace(
+            "    writes: [\"axocoatl-qa/**\"]\n",
+            "    writes: [\"axocoatl-qa/**\"]\n    max_output_tokens: 2048\n",
+        );
+        assert!(parse_loadout(&smaller, LoadoutSource::Builtin).is_ok());
+        // The reviewer's own budget and bound.
+        let text = FIX_YAML.replace("tokens: 1500000", "tokens: 9000");
+        let error = parse_loadout(&text, LoadoutSource::Builtin).unwrap_err();
+        assert!(
+            error.to_string().starts_with(
+                "loadout field budgets.reviewer.tokens: 9000 tokens is less than one \
+                              model call of the reviewer needs"
+            ),
+            "{error}"
+        );
+        // An Agent's own budget is named as such.
+        let fix = builtin("fix");
+        let mut file = fix.file.clone();
+        file.agents[0].budget = Some(LoadoutLimits {
+            tokens: 100,
+            ..file.budgets.agent.clone()
+        });
+        let error = validate_loadout(&file).unwrap_err().to_string();
+        assert!(
+            error.starts_with(&format!(
+                "loadout field agents.{}.budget.tokens: 100 tokens",
+                file.agents[0].id
+            )),
+            "{error}"
+        );
+        // With the model's context known (admission), the minimum is that
+        // context plus the output bound.
+        let budget = &call_budgets(&builtin("qa").file)[0];
+        assert_eq!(budget.minimum(Some(32768)), 40960);
+        let tight = CallBudget {
+            tokens: 40000,
+            ..budget.clone()
+        };
+        let error = tight
+            .refusal(Some(32768), Some("ollama:qwen3-coder:axocoatl-launch"))
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains(
+                "40000 tokens is less than one model call of Agent explorer \
+                            (ollama:qwen3-coder:axocoatl-launch) needs: the model's 32768-token \
+                            context plus 8192 output tokens"
+            ),
+            "{error}"
+        );
+        assert!(error.contains("at least 40960"), "{error}");
+        assert!(tight.refusal(Some(30000), None).is_none());
     }
 
     #[test]

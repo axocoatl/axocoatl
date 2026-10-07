@@ -23,7 +23,7 @@ use axocoatl_session::execution_content::{
     ActivationRepositorySnapshot, ExecutionTurnView, RepositorySnapshotPhase,
 };
 use axocoatl_session::run_outcome::{
-    AdjudicationDecision, CheckState, FailureClass, FindingSource, KeepResult, ReproClassification,
+    AdjudicationDecision, CheckState, FindingSource, KeepResult, ReproClassification,
     ReviewVerdictKind, RunOutcome, RunVerdict, Severity, RUN_OUTCOME_SCHEMA,
 };
 use axocoatl_session::run_record::{RunEvent, RunManifest, RunRecordError, RunRecordStore};
@@ -394,20 +394,6 @@ fn severity_words(severity: Severity) -> &'static str {
     }
 }
 
-fn class_words(class: FailureClass) -> &'static str {
-    match class {
-        FailureClass::ProviderRefusal => "provider refusal",
-        FailureClass::ProviderFailure => "provider failure",
-        FailureClass::ProviderRejected => "provider rejected",
-        FailureClass::Budget => "budget",
-        FailureClass::Blocked => "blocked",
-        FailureClass::NotReached => "not reached",
-        FailureClass::RuntimeLimit => "runtime limit",
-        FailureClass::Stopped => "stopped",
-        FailureClass::Other => "other",
-    }
-}
-
 /// Text from a run (task, findings, reasons) as one Markdown-inert line:
 /// whitespace collapsed, Markdown and HTML escaped, `@` mentions defused,
 /// at most `max_chars` characters.
@@ -717,12 +703,14 @@ pub fn pr_body(outcome: &RunOutcome) -> Result<String, KeepPrError> {
             "Nothing: every area, helper, slot and check of the run reported a result.\n",
         );
     } else {
+        // The Outcome's one rendering of why (`NotCovered::reason`), as the
+        // run summary, its progress lines, JUnit and the Run outcome panel
+        // show it.
         for entry in outcome.not_covered.iter().take(MAX_TABLE_ROWS) {
             body.push_str(&format!(
-                "- **{}** ({}): {}\n",
+                "- **{}**: {}\n",
                 md(&entry.area, 80),
-                class_words(entry.class),
-                md(&entry.detail, 300)
+                md(&entry.reason(), 300)
             ));
         }
         if outcome.not_covered.len() > MAX_TABLE_ROWS {

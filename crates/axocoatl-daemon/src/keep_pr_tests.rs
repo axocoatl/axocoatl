@@ -2,9 +2,9 @@
 //! repositories, a local bare remote and a fake `gh`.
 use super::*;
 use axocoatl_session::run_outcome::{
-    Adjudication, CheckReport, CheckResult, Finding, LoadoutRef, ModelIdentity, NetworkSummary,
-    NotCovered, ReproResult, ReviewFinding, ReviewOutcome, ReviewRound, RunTurnRef, RunUsage,
-    RunWarning, TurnState,
+    Adjudication, CheckReport, CheckResult, FailureClass, Finding, LoadoutRef, ModelIdentity,
+    NetworkSummary, NotCovered, ReproResult, ReviewFinding, ReviewOutcome, ReviewRound, RunTurnRef,
+    RunUsage, RunWarning, TurnState,
 };
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -329,7 +329,12 @@ fn the_body_carries_checks_review_adjudications_not_covered_and_the_record() {
     failing.adjudications.clear();
     failing.checks.clear();
     let body = pr_body(&failing).unwrap();
-    assert!(body.contains("- **gift cards** (provider refusal): classifier stop"));
+    // The Outcome's one rendering of why (`NotCovered::reason`), Markdown
+    // escaped.
+    assert!(
+        body.contains("- **gift cards**: provider\\_refusal: classifier stop"),
+        "{body}"
+    );
     assert!(body.contains("This run had no required review."));
     assert!(body.contains("This run had no required checks."));
     assert!(body.contains("nothing to adjudicate"));

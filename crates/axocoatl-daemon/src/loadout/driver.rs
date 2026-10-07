@@ -616,7 +616,7 @@ review:
   tools: [read_file]
 budgets:
   agent: { activations: 2, invocations: 40, tokens: 100000, cost_usd: 1 }
-  reviewer: { activations: 2, invocations: 4, tokens: 10000, cost_usd: 1 }
+  reviewer: { activations: 2, invocations: 4, tokens: 100000, cost_usd: 1 }
   wall_clock: 10m
 prompt: "{task}"
 "#;

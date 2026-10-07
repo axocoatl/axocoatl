@@ -10,7 +10,11 @@
 //!    supervisor's write restriction), a fresh context (`reset_history`), no
 //!    dependencies, required, no checks and no review, so the controller
 //!    starts every one at once. A worker without a result, an unreadable
-//!    report and every `NOT_REACHED` entry are listed as not covered.
+//!    report and every `NOT_REACHED` entry of its own area are listed as not
+//!    covered. An entry that names another planned area is dropped (that
+//!    area's own worker audits it), and one that names a repository path
+//!    that does not exist is recorded as a note, not a gap
+//!    ([`classify_not_reached`]).
 //! 3. **Integrate**: the `integrator` slot alone receives every worker's
 //!    report (each bounded to 24 KiB, truncation noted) and the not-covered
 //!    list, and answers with the merged `FINDINGS`. When integration has no
@@ -25,14 +29,17 @@
 //! Owner: audit.
 
 use std::fmt::Write as _;
+use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use axocoatl_config::loadout::{AuditSettings, LoadoutAgent, LoadoutRole, ResolvedLoadout};
 use axocoatl_session::audit_plan::{
-    parse_area_report, parse_integrated, parse_plan, AreaReport, AuditArea, AuditPlan,
+    normalize_area_name, parse_area_report, parse_integrated, parse_plan, AreaReport, AuditArea,
+    AuditPlan,
 };
 use axocoatl_session::failure_class::{classify_failure, FailureFacts};
+use axocoatl_session::path_scope::{in_git_directory, pattern_matches};
 use axocoatl_session::run_outcome::{
     FailureClass, Finding, NodeObservation, NodeState, NotCovered, RunTurnRef, TurnObservation,
     TurnState,
@@ -62,6 +69,9 @@ const STOP_GRACE: Duration = Duration::from_secs(30);
 /// Not-covered entries listed in the integrate request; the rest are counted.
 const MAX_LISTED_NOT_COVERED: usize = 64;
 const MAX_LISTED_DETAIL_BYTES: usize = 300;
+/// Most repository entries looked at to tell whether a `NOT_REACHED` path
+/// pattern names anything; past it the entry stays a gap.
+const MAX_PATH_WALK_ENTRIES: usize = 20_000;
 
 /// Builds the Team and budget edit of one turn; `team_plan::team_edit` in
 /// the daemon, a recording fake in tests.
@@ -268,18 +278,225 @@ pub fn worker_instructions(base: Option<&str>, area: &AuditArea, plan: &AuditPla
         .collect();
     let _ = writeln!(
         text,
-        "Other workers audit the other areas ({}) at the same time, each with a fresh context; \
-         stay inside yours. You are read-only: change no file.",
+        "Other workers audit the other areas ({}) at the same time, each with a fresh context, \
+         so those areas are covered: never list them as not reached. Stay inside yours. You are \
+         read-only: change no file.",
         others.join(", ")
     );
     text.push_str(
         "\nEnd your answer with two blocks:\nFINDINGS\n```json\n[{\"id\": \"F1\", \"title\": \
          \"...\", \"detail\": \"what is wrong and your evidence\", \"severity\": \
          \"low|medium|high|critical\", \"location\": \"path:line\"}]\n```\nNOT_REACHED\n```json\n\
-         [\"each part of your area you did not examine, and why\"]\n```\nWrite [] for a block \
-         with no entries.",
+         [\"each existing path of your area you did not examine, and why\"]\n```\nWrite [] for a \
+         block with no entries: NOT_REACHED is [] when you examined all of your area.",
     );
     text
+}
+
+/// What one `NOT_REACHED` entry of an area worker's report is
+/// ([`classify_not_reached`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotReachedItem {
+    /// A part of the worker's own area it did not examine: not covered.
+    Gap,
+    /// Another planned area (by name, or a path only that area's patterns
+    /// name): its own worker audits it, so it is no gap of this one.
+    OtherArea(String),
+    /// A repository path or pattern that names nothing in the repository: a
+    /// note, not a gap.
+    NoSuchPath(String),
+}
+
+/// Classify one `NOT_REACHED` entry of `area`'s worker against the plan and
+/// the repository at `repo` (the run's canonical repository on the host;
+/// the audit is read-only, so it holds what the workers read). When the
+/// repository cannot be read, or a pattern matches too much of it to tell,
+/// the entry stays a gap: nothing is dropped on a guess.
+pub fn classify_not_reached(
+    item: &str,
+    area: &AuditArea,
+    plan: &AuditPlan,
+    repo: &Path,
+) -> NotReachedItem {
+    let subject = item_subject(item);
+    let others = || plan.areas.iter().filter(|other| other.name != area.name);
+    if let Some(name) = area_word(subject) {
+        if let Some(other) = others().find(|other| other.name == name) {
+            return NotReachedItem::OtherArea(other.name.clone());
+        }
+    }
+    let Some(path) = path_token(subject) else {
+        return NotReachedItem::Gap;
+    };
+    let own = area
+        .paths
+        .iter()
+        .any(|pattern| pattern_matches(pattern, &path));
+    if !own {
+        if let Some(other) = others().find(|other| {
+            other
+                .paths
+                .iter()
+                .any(|pattern| pattern_matches(pattern, &path))
+        }) {
+            return NotReachedItem::OtherArea(other.name.clone());
+        }
+    }
+    match path_exists(repo, &path) {
+        Some(false) => NotReachedItem::NoSuchPath(path),
+        Some(true) | None => NotReachedItem::Gap,
+    }
+}
+
+/// The entry without a trailing `(reason)`, quotes, bold marks or end
+/// punctuation: `"src/a.rs (budget)"` and `**src/a.rs**` are `src/a.rs`.
+fn item_subject(item: &str) -> &str {
+    let mut subject = item.trim();
+    if subject.ends_with(')') {
+        if let Some(open) = subject.rfind(" (") {
+            subject = subject[..open].trim_end();
+        }
+    }
+    if let Some(inner) = subject
+        .strip_prefix("**")
+        .and_then(|rest| rest.strip_suffix("**"))
+        .filter(|inner| !inner.is_empty())
+    {
+        subject = inner;
+    }
+    subject
+        .trim_matches(|c: char| matches!(c, '`' | '"' | '\''))
+        .trim_end_matches(['.', ',', ';', ':'])
+        .trim()
+}
+
+/// The area name an entry says, when it is only a name: `billing`, `the
+/// billing area`, `Billing module`, `billing/`, `API routes`
+/// (`api-routes`).
+fn area_word(subject: &str) -> Option<String> {
+    let lower = subject.to_ascii_lowercase();
+    let mut word = lower.trim();
+    word = word.strip_prefix("the ").unwrap_or(word).trim();
+    for suffix in [" area", " module", " directory", " package", "/**", "/"] {
+        word = word.strip_suffix(suffix).unwrap_or(word).trim();
+    }
+    if word.is_empty() || word.contains('/') {
+        return None;
+    }
+    normalize_area_name(word)
+}
+
+/// The repository-relative path or pattern an entry names, when it is one:
+/// one word with a `/`, a wildcard or a file extension, never absolute,
+/// never leaving the repository and never inside `.git`. A `:line` suffix
+/// and a leading `./` are dropped.
+fn path_token(subject: &str) -> Option<String> {
+    if subject.is_empty()
+        || subject.contains(char::is_whitespace)
+        || subject.contains("://")
+        || subject.contains('\\')
+        || subject.starts_with(['/', '~'])
+    {
+        return None;
+    }
+    let mut path = subject.strip_prefix("./").unwrap_or(subject);
+    if let Some((head, tail)) = path.rsplit_once(':') {
+        if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit() || c == '-') {
+            path = head;
+        }
+    }
+    let path = path.trim_end_matches('/');
+    if path.is_empty()
+        || path.contains(':')
+        || in_git_directory(path)
+        || path
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return None;
+    }
+    let extension = path
+        .rsplit('/')
+        .next()
+        .and_then(|name| name.rsplit_once('.'))
+        .is_some_and(|(stem, extension)| {
+            !stem.is_empty()
+                && (1..=10).contains(&extension.len())
+                && extension.chars().all(|c| c.is_ascii_alphanumeric())
+        });
+    (path.contains(['/', '*', '?']) || extension).then(|| path.to_owned())
+}
+
+/// Whether `path` names anything under `repo`: `Some(true)` or
+/// `Some(false)`, `None` when it cannot tell (the repository cannot be read,
+/// or a pattern needs more than [`MAX_PATH_WALK_ENTRIES`] entries looked
+/// at). A literal path with a `/` is looked up; a pattern, or a name without
+/// a `/` (which may be at any depth), is matched against the files and
+/// directories under its literal leading directories. Links are not
+/// followed.
+fn path_exists(repo: &Path, path: &str) -> Option<bool> {
+    if !std::fs::metadata(repo).ok()?.is_dir() {
+        return None;
+    }
+    let pattern = path.contains(['*', '?']) || !path.contains('/');
+    if !pattern {
+        return match std::fs::symlink_metadata(repo.join(path)) {
+            Ok(_) => Some(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(false),
+            Err(_) => None,
+        };
+    }
+    // The literal directories before the first wildcard (none for a bare
+    // name, which matches at any depth).
+    let mut start = String::new();
+    if path.contains('/') {
+        for segment in path.split('/') {
+            if segment.contains(['*', '?']) {
+                break;
+            }
+            if !start.is_empty() {
+                start.push('/');
+            }
+            start.push_str(segment);
+        }
+    }
+    let root = repo.join(&start);
+    match std::fs::symlink_metadata(&root) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Some(pattern_matches(path, &start)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(false),
+        Err(_) => return None,
+    }
+    let mut pending = vec![(root, start)];
+    let mut seen = 0usize;
+    while let Some((directory, relative)) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).ok()? {
+            let entry = entry.ok()?;
+            seen += 1;
+            if seen > MAX_PATH_WALK_ENTRIES {
+                return None;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let child = if relative.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{relative}/{name}")
+            };
+            if in_git_directory(&child) {
+                continue;
+            }
+            if pattern_matches(path, &child) {
+                return Some(true);
+            }
+            if entry.file_type().ok()?.is_dir() {
+                pending.push((entry.path(), child));
+            }
+        }
+    }
+    Some(false)
 }
 
 /// The areas turn's request (each worker's own instructions name its area).
@@ -855,14 +1072,73 @@ impl Audit<'_> {
             };
             match parse_area_report(&answer, &area.name) {
                 Ok(report) => {
-                    for item in &report.not_reached {
-                        self.not_covered(NotCovered {
-                            area: format!("{}: {item}", area.name),
-                            class: FailureClass::NotReached,
-                            detail: "the area worker reported it did not reach this".into(),
-                            node_id: node_id.clone(),
-                            turn_id: turn_id.clone(),
+                    let classified = {
+                        let (items, own, planned, repo) = (
+                            report.not_reached.clone(),
+                            area.clone(),
+                            plan.clone(),
+                            self.run.options.repo.clone(),
+                        );
+                        tokio::task::spawn_blocking(move || {
+                            items
+                                .into_iter()
+                                .map(|item| {
+                                    let kind = classify_not_reached(&item, &own, &planned, &repo);
+                                    (item, kind)
+                                })
+                                .collect::<Vec<_>>()
                         })
+                        .await
+                        .map_err(|error| {
+                            RunError::Infrastructure(format!(
+                                "reading the {} worker's NOT_REACHED list: {error}",
+                                area.name
+                            ))
+                        })?
+                    };
+                    let mut other_areas = Vec::new();
+                    for (item, kind) in classified {
+                        match kind {
+                            NotReachedItem::OtherArea(name) => {
+                                if !other_areas.contains(&name) {
+                                    other_areas.push(name);
+                                }
+                            }
+                            NotReachedItem::NoSuchPath(path) => {
+                                self.phase(
+                                    "note",
+                                    format!(
+                                        "{} listed {path} as not reached, and no such path \
+                                         exists in the repository; a note, not a gap",
+                                        worker_slot_id(&area.name)
+                                    ),
+                                )
+                                .await?;
+                            }
+                            NotReachedItem::Gap => {
+                                self.not_covered(NotCovered {
+                                    area: area.name.clone(),
+                                    class: FailureClass::NotReached,
+                                    detail: format!(
+                                        "{item} (the area worker reported it did not reach this)"
+                                    ),
+                                    node_id: node_id.clone(),
+                                    turn_id: turn_id.clone(),
+                                })
+                                .await?;
+                            }
+                        }
+                    }
+                    if !other_areas.is_empty() {
+                        self.phase(
+                            "note",
+                            format!(
+                                "{} listed other planned areas as not reached ({}); their own \
+                                 workers audit them, so they are not gaps",
+                                worker_slot_id(&area.name),
+                                other_areas.join(", ")
+                            ),
+                        )
                         .await?;
                     }
                     results.push(AreaResult {
