@@ -24,6 +24,9 @@ pub const RUN_MANIFEST_SCHEMA: &str = "axocoatl.run-manifest/1";
 pub const MAX_RUN_EVENT_BYTES: usize = 256 * 1024;
 /// Most events one run records.
 pub const MAX_RUN_EVENTS: usize = 100_000;
+/// The phase of a Keep as PR result: the one event a run's record takes
+/// after its Outcome is written (`RunRecordStore::append_after_end`).
+pub const KEEP_PHASE: &str = "keep";
 
 /// `run-<uuid v4>`.
 pub fn is_run_id(id: &str) -> bool {
@@ -276,6 +279,28 @@ impl RunRecordStore {
     /// Append one event and sync it before returning. Returns its sequence
     /// number (1 for the first event).
     pub fn append(&self, run_id: &str, event: &RunEvent) -> Result<u64, RunRecordError> {
+        self.append_checked(run_id, event, false)
+    }
+
+    /// Append a Keep as PR result ([`KEEP_PHASE`]) to a run that has ended:
+    /// Keep runs after the Outcome is written, which itself never changes.
+    /// Any other event is refused once the run has ended, as by
+    /// [`Self::append`]; a run that has not ended takes it like any event.
+    pub fn append_after_end(&self, run_id: &str, event: &RunEvent) -> Result<u64, RunRecordError> {
+        if !matches!(event, RunEvent::Phase { phase, .. } if phase == KEEP_PHASE) {
+            return Err(RunRecordError::Invalid(
+                "only a Keep result is recorded after a run has ended".into(),
+            ));
+        }
+        self.append_checked(run_id, event, true)
+    }
+
+    fn append_checked(
+        &self,
+        run_id: &str,
+        event: &RunEvent,
+        after_end: bool,
+    ) -> Result<u64, RunRecordError> {
         let dir = self.run_dir(run_id)?;
         let mut line = serde_json::to_vec(event)?;
         line.push(b'\n');
@@ -298,7 +323,7 @@ impl RunRecordStore {
                 "run {run_id} has recorded {MAX_RUN_EVENTS} events, the most one run keeps"
             )));
         }
-        if dir.has_exact_file(OUTCOME_FILE)? {
+        if !after_end && dir.has_exact_file(OUTCOME_FILE)? {
             return Err(RunRecordError::Invalid(format!(
                 "run {run_id} has ended; its record takes no more events"
             )));
@@ -590,11 +615,23 @@ mod tests {
         other.exit_code = exit_code::NEEDS_ATTENTION;
         other.verdict = RunVerdict::NeedsAttention;
         assert!(store.finish(&id, &other).is_err());
-        assert_eq!(store.outcome(&id).unwrap(), Some(done));
+        assert_eq!(store.outcome(&id).unwrap(), Some(done.clone()));
         assert!(
             store.append(&id, &phase(30, "late")).is_err(),
             "an ended run takes no more events"
         );
+        // Only a Keep result is recorded after the end, and only through
+        // append_after_end; the Outcome stays as written.
+        assert!(store.append(&id, &phase(31, KEEP_PHASE)).is_err());
+        assert!(store.append_after_end(&id, &phase(32, "late")).is_err());
+        let before = store.events(&id, None, 10).unwrap().len();
+        let seq = store.append_after_end(&id, &phase(33, KEEP_PHASE)).unwrap();
+        assert_eq!(seq as usize, before + 1);
+        assert!(
+            matches!(&store.events(&id, None, 10).unwrap().last().unwrap().1,
+            RunEvent::Phase { phase, .. } if phase == KEEP_PHASE)
+        );
+        assert_eq!(store.outcome(&id).unwrap(), Some(done));
     }
 
     #[test]

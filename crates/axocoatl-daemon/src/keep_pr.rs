@@ -38,7 +38,7 @@ use crate::git_host::{
 pub const KEEP_BRANCH_PREFIX: &str = "axocoatl/";
 /// The `RunEvent::Phase` name of a Keep result; its `detail` is the
 /// [`KeepResult`] as JSON ([`keep_event`], [`keep_result_of`]).
-pub const KEEP_PHASE: &str = "keep";
+pub use axocoatl_session::run_record::KEEP_PHASE;
 /// The remote Keep pushes to when the request names none.
 pub const DEFAULT_REMOTE: &str = "origin";
 
@@ -868,7 +868,7 @@ impl KeepRunRecord for RunRecordStore {
     }
 
     fn record_keep(&self, run_id: &str, result: &KeepResult) -> Result<(), KeepPrError> {
-        self.append(run_id, &keep_event(result, now_ms()))
+        self.append_after_end(run_id, &keep_event(result, now_ms()))
             .map(|_| ())
             .map_err(record_error)
     }

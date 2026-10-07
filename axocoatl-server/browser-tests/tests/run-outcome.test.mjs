@@ -40,9 +40,9 @@ const outcome = {
   ],
   findings: [
     { id: 'B1', source: 'explorer', title: 'total ignores coupon', detail: 'coupon not applied', area: 'checkout',
-      repro: { path: '.axocoatl/qa/b1.spec.ts', classification: 'confirmed' } },
+      repro: { path: 'axocoatl-qa/b1.spec.ts', classification: 'confirmed' } },
     { id: 'B2', source: 'explorer', title: 'search flickers', detail: '', area: 'search',
-      repro: { path: '.axocoatl/qa/b2.spec.ts', classification: 'fails_on_clean_build' } },
+      repro: { path: 'axocoatl-qa/b2.spec.ts', classification: 'fails_on_clean_build' } },
   ],
   not_covered: [{ area: 'gift cards', class: 'provider_refusal', detail: 'classifier stop' }],
   warnings: [{ code: 'same_model_reviewer', message: 'The reviewer runs the writer’s model (openrouter:qwen/qwen3-coder).' }],
@@ -57,7 +57,8 @@ test('the run outcome panel shows every part of an Outcome, missing adjudication
   await page.route('**/run-outcome-fixture', (route) => route.fulfill({ contentType: 'text/html', body:
     `<!doctype html><html><head><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-run-outcome run-id="${RUN}"></ax-run-outcome><script type="module" src="/ui/run-outcome.js"></script></body></html>` }));
   await page.route(`**/api/runs/${RUN}`, (route) => route.fulfill({ json: {
-    run_id: RUN, session_id: 'ses-1', loadout: 'qa@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome } }));
+    run_id: RUN, session_id: 'ses-1', loadout: 'qa@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome,
+    keep: { branch: 'axocoatl/qa-00000000', commit: 'a'.repeat(40) } } }));
   try {
     await page.goto(`${runtime.baseUrl}/run-outcome-fixture`);
     const panel = page.locator('ax-run-outcome');
@@ -88,6 +89,9 @@ test('the run outcome panel shows every part of an Outcome, missing adjudication
     const keep = panel.locator('ax-keep-pr');
     assert.equal(await keep.getAttribute('run-id'), RUN);
     assert.equal(await keep.getAttribute('session-id'), 'ses-1');
+    assert.equal(await keep.getAttribute('loadout'), 'qa');
+    // The run record's latest Keep is shown in the Keep element.
+    await keep.locator('.result').filter({ hasText: 'axocoatl/qa-00000000' }).waitFor();
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
