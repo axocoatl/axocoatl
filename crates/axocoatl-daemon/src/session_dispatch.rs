@@ -126,6 +126,13 @@ pub use repository_activation::RepositoryActivationResource;
 pub use run::{AutonomousActivationResources, PreparedActivation, SettledActivation};
 #[path = "session_dispatch_native.rs"]
 mod native;
+// 1.3 external agents (workstream `agents`): the controller's port for
+// Claude Code and Codex activations.
+#[path = "external_agent/session_port.rs"]
+mod external_port;
+pub(crate) use external_port::ExternalSettings;
+#[cfg(test)]
+pub(crate) use external_port::RouteRequestSource;
 pub(crate) use native::{
     CapturedNativeDefinition, NativeDefinitionPreparation, NativeProviderCredentials,
 };

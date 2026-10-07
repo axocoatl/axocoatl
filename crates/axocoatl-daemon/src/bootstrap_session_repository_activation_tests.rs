@@ -2931,3 +2931,7 @@ async fn recovered_closed_registry_preserves_command_and_tool_evidence_without_e
         .is_ok());
     sandbox.stop_checked().await.unwrap();
 }
+
+// 1.3 external agents (workstream `agents`), on these fixtures.
+#[path = "external_agent/activation_tests.rs"]
+mod external_agent_tests;
