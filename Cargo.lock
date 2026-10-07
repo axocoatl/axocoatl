@@ -692,6 +692,7 @@ dependencies = [
  "axocoatl-core",
  "base64 0.22.1",
  "memchr",
+ "quick-xml",
  "serde",
  "serde_json",
  "sha2",
