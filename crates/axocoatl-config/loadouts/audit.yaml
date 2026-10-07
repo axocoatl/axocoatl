@@ -1,10 +1,23 @@
 # Built-in loadout: audit (opt-in). Owner: workstream audit.
-# A planner splits the scope into 2-8 areas (structured JSON); the daemon runs
-# one read-only worker per area in parallel, each with a fresh context; an
-# integrator merges the findings. Measured trade-off (Claude Code subagents,
-# sensitivity analysis, not an Axocoatl result): recall +11 points, precision
-# -8 points, about 3x the tokens of one agent on an audit larger than one
-# context.
+#
+# Three turns in one Session, each after its own Team and budget Apply:
+#   1. plan: the planner splits the scope into 2-8 areas (an AREAS JSON
+#      block); an invalid plan gets one retry that quotes the error, and a
+#      second invalid plan leaves the whole scope not covered;
+#   2. areas: the daemon runs one read-only worker per area in parallel, each
+#      with a fresh context and no dependencies (no checks, no review);
+#   3. integrate: the integrator merges every worker's report. Integration is
+#      its own turn, so the integrator has no depends_on.
+# A worker without a result and every NOT_REACHED entry are listed as not
+# covered, which makes the run need attention (exit 2). Findings alone do
+# not change the exit code unless fail_on_findings is true.
+#
+# Measured trade-off, not an Axocoatl result: on an audit larger than one
+# context, orchestrated read-only area workers had recall +11 points (99% vs
+# 87%) and precision -8 points at about 3x the tokens and the same wall time,
+# measured with Claude Code subagents on Claude Opus (not through Axocoatl).
+# The +11 is a sensitivity analysis (the study's preregistered exclusion rule
+# excluded 9 of 10 attempts), not a preregistered result.
 schema: axocoatl.loadout/1
 id: audit
 version: 1
@@ -35,16 +48,19 @@ agents:
     tools: [read_file, list_dir, grep, glob]
     writes: []
     instructions: >-
-      Split the scope into 2 to 8 areas that together cover it without
-      overlap. Answer with one AREAS JSON block only.
+      Read enough of the repository to split the scope into areas that
+      together cover it without overlap, each small enough for one context.
+      Change nothing. Answer with one AREAS JSON block only.
   - id: worker
     role: worker
     model: { param: worker_model }
     tools: [read_file, list_dir, grep, glob, bash]
     writes: []
     instructions: >-
-      Audit only your area. Report each defect with file:line, evidence and
-      severity in a FINDINGS JSON block, and say what you did not reach.
+      Audit only your area. Change nothing; your commands cannot write to the
+      repository. Report each defect with file:line, evidence and severity in
+      a FINDINGS JSON block, and list every part of your area you did not
+      examine in a NOT_REACHED JSON block.
   - id: integrator
     role: integrator
     model: { param: integrator_model }
@@ -52,8 +68,8 @@ agents:
     writes: []
     instructions: >-
       The host gives you every area worker's findings in one turn after the
-      areas finish. Merge them: remove duplicates, keep every distinct defect,
-      and answer with one FINDINGS JSON block.
+      areas finish. Merge them: remove duplicates, keep every distinct defect
+      with its area, and answer with one FINDINGS JSON block.
 audit:
   min_areas: 2
   max_areas: 8
