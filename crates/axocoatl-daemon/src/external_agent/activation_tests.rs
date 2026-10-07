@@ -264,12 +264,17 @@ async fn external_definitions_get_the_program_provider_and_others_the_native_fac
             .controller
             .prepare_repository_activation(r.activation.clone(), resources, r.resource.clone())
             .unwrap();
-        // Bound, the run reserves everything the grant still allows; nothing
-        // follows it.
+        // Bound, the run reserves the tokens the grant still allows and its
+        // cost (Codex, which reports none, a share per activation left of
+        // the grant's two); nothing follows it.
         let bounds = provider.execution_bounds(&request).unwrap();
+        let cost = match runtime {
+            AgentRuntime::Codex => 500_000,
+            _ => 1_000_000,
+        };
         assert_eq!(
             (bounds.token_limit, bounds.cost_microunits),
-            (100_000, 1_000_000)
+            (100_000, cost)
         );
         assert_eq!(
             provider
@@ -372,6 +377,59 @@ async fn an_external_run_needs_a_spending_allowance() {
             .calls,
         0
     );
+}
+
+/// A program run reserves the tokens its grant still allows and, for Claude
+/// Code, which reports its cost, all of the cost too. Codex reports no cost,
+/// so its reservation stays charged: it reserves an equal share of the cost
+/// per activation left, leaving the grant's later activations theirs.
+#[tokio::test]
+async fn a_program_without_a_cost_report_reserves_a_share_per_activation_left() {
+    for (runtime, model, cost) in [
+        (AgentRuntime::ClaudeCode, "claude-sonnet-4-5", 900_000),
+        (AgentRuntime::Codex, "gpt-5.5", 300_000),
+    ] {
+        let mut f = fixture().await;
+        let config = external_agent::external_agent_config(
+            AgentConfig {
+                id: AgentId::new("conversation"),
+                ..Default::default()
+            },
+            runtime,
+            model,
+        )
+        .unwrap();
+        let r = run_with_limits(
+            &mut f,
+            config,
+            "x",
+            GrantLimits {
+                activations: 3,
+                invocations: 12,
+                tokens: 100_000,
+                cost_microunits: 900_000,
+            },
+        );
+        let factory = r.controller.external_activation_factory(
+            Arc::new(NativeStub(AtomicUsize::new(0))),
+            Arc::new(Counter),
+            ExternalSettings::default(),
+        );
+        let resources = factory.resources(&input_of(&r)).await.unwrap();
+        let provider = resources.provider.clone();
+        let _prepared = r
+            .controller
+            .prepare_repository_activation(r.activation.clone(), resources, r.resource.clone())
+            .unwrap();
+        let bounds = provider
+            .execution_bounds(&axocoatl_llm::ChatRequest::simple("x"))
+            .unwrap();
+        assert_eq!(
+            (bounds.token_limit, bounds.cost_microunits),
+            (100_000, cost),
+            "{runtime:?}"
+        );
+    }
 }
 
 /// The program runs only inside its activation's admitted model call.

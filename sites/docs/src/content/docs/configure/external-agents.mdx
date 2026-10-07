@@ -130,7 +130,10 @@ You do not list these routes; the run adds them to its Session's egress policy.
 | `claude-code` | `api.anthropic.com` | `POST /v1/messages` | `claude-code-oauth` | `Authorization: Bearer <value>` | `CLAUDE_CODE_OAUTH_TOKEN` |
 | `codex` | `api.openai.com` | `POST /v1/responses` | `codex-openai` | `Authorization: Bearer <value>` | `OPENAI_API_KEY` |
 
-Each route refuses every other request. Claude Code also runs with
+Each route refuses every other request. Claude Code 2.1.292 also asks the route for its
+account's policy limits and remote settings (`GET /api/claude_code/policy_limits` and
+`GET /api/claude_code/settings`); the route refuses both, the network record shows the
+refusals, and Claude Code goes on without them. Claude Code also runs with
 `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`,
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `DISABLE_AUTOUPDATER=1`. The Session's
 certificate authority, which signs the route's TLS on your computer, is trusted through
@@ -157,7 +160,7 @@ certificate authority, which signs the route's TLS on your computer, is trusted 
 | What it can reach | Enforced: only the route to its model API and the hosts the loadout and your configuration allow. |
 | Its credential | Enforced: added on your computer; the container holds a placeholder. A token the API returns in a response body would reach the container, as on any route. |
 | Its time | Enforced: the activation's wall-clock timeout, and the run's wall clock. |
-| Its spend | Bounded, not per call. The activation reserves its grant's whole token and cost limits before the program starts. Each request on the route counts against the grant's invocations, and the host stops the program when they run out. Claude Code also gets its own spending stop, `--max-budget-usd`, at what the grant still allows. The program's own usage report settles the reservation; without one, usage is marked incomplete and the reservation stays charged. Codex reports tokens but no cost, so its cost reservation stays charged. |
+| Its spend | Bounded, not per call. The activation reserves what its grant still allows before the program starts: all of its tokens and, for Claude Code, all of its cost. Each request on the route counts against the grant's invocations, and the host stops the program when they run out. Claude Code also gets its own spending stop, `--max-budget-usd`, at what the grant still allows. The program's own usage report settles the reservation; without one, usage is marked incomplete and the reservation stays charged. Codex reports tokens but no cost, so its cost reservation stays charged: each Codex activation reserves an equal share of the cost left, divided by the activations left with its own, so a later activation, such as the revision a review asks for, can still run. |
 | Its tool calls | Recorded, not admitted. The program's own tool calls are evidence in the record; Axocoatl does not approve or refuse them one by one. They run as the writer user inside the container, like a writer's `bash`. |
 
 <Aside type="caution">

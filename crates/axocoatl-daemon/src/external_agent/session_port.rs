@@ -290,6 +290,26 @@ impl DispatchState {
     }
 }
 
+impl DispatchState {
+    /// The activations `activation`'s grant still allows, this one included
+    /// (its own start is already counted).
+    fn external_activations_left(&self, activation: &ActivationRef) -> Option<u32> {
+        let bound = self
+            .bound
+            .get(&activation.activation_id)
+            .filter(|bound| bound.activation == *activation)?;
+        let grant = bound.grant.grant_id.as_str();
+        let limits = self.authority.grant_status(grant).ok()?.policy.limits;
+        let usage = self.authority.usage(grant).ok()?;
+        Some(
+            limits
+                .activations
+                .saturating_sub(usage.activations)
+                .saturating_add(1),
+        )
+    }
+}
+
 /// External definitions run their program; every other one goes to the
 /// native factory.
 struct ExternalActivationFactory {
@@ -523,13 +543,25 @@ impl LlmProvider for ExternalProgramProvider {
             None => Ok(()),
         }
     }
-    /// The run reserves everything the grant still allows: its tokens and
-    /// its spending.
+    /// The run reserves the tokens the grant still allows, and its spending:
+    /// all of it for a program that reports its cost, an equal share of it
+    /// per activation left for one that does not
+    /// ([`external::cost_reservation`]).
     fn execution_bounds(&self, _request: &ChatRequest) -> Option<ProviderExecutionBounds> {
-        let allowance = self.controller.agent_allowance(&self.activation)?;
+        let (allowance, activations_left) = {
+            let state = self.controller.lock().ok()?;
+            (
+                state.agent_allowance(&self.activation)?,
+                state.external_activations_left(&self.activation)?,
+            )
+        };
         Some(ProviderExecutionBounds {
             token_limit: allowance.tokens.unwrap_or(0).max(1),
-            cost_microunits: allowance.cost_microunits.unwrap_or(0),
+            cost_microunits: external::cost_reservation(
+                self.runtime,
+                allowance.cost_microunits.unwrap_or(0),
+                activations_left,
+            ),
             response_bytes: RESPONSE_BYTES,
         })
     }
@@ -1184,6 +1216,23 @@ mod tests {
         let seen = kinds(&events);
         assert_eq!(seen.len(), 1, "{seen:?}");
         assert!(seen[0].contains("more than the 1000 its grant still allowed"));
+    }
+
+    #[test]
+    fn only_a_program_without_a_cost_report_reserves_a_share_of_the_cost() {
+        use crate::external_agent::cost_reservation;
+        assert_eq!(
+            cost_reservation(AgentRuntime::ClaudeCode, 1_000_000, 3),
+            1_000_000
+        );
+        assert_eq!(cost_reservation(AgentRuntime::Codex, 1_000_000, 3), 333_333);
+        // The second of three, after the first kept its share charged.
+        assert_eq!(cost_reservation(AgentRuntime::Codex, 666_667, 2), 333_333);
+        assert_eq!(cost_reservation(AgentRuntime::Codex, 666_666, 1), 666_666);
+        // A share is never a zero charge for an unknown cost.
+        assert_eq!(cost_reservation(AgentRuntime::Codex, 2, 3), 1);
+        assert_eq!(cost_reservation(AgentRuntime::Codex, 0, 3), 0);
+        assert_eq!(cost_reservation(AgentRuntime::Codex, 10, 0), 10);
     }
 
     #[test]

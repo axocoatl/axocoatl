@@ -23,6 +23,7 @@ use axocoatl_session::run_outcome::LoadoutRef;
 use axocoatl_session::run_record::SessionLoadoutBinding;
 use axocoatl_session::session_history::SessionHistoryEntry;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const CHILD: &str = "AXOCOATL_EXTERNAL_TURN_TEST_CHILD";
 const MODULE: &str = "bootstrap::external_agent_host::turn_tests";
@@ -58,6 +59,24 @@ prompt: "{{task}}"
 environment: {{ recipes: [{recipe}] }}
 "#
     )
+}
+
+/// A fix loadout whose writer is `runtime`'s program, reviewed by a native
+/// Ollama model for up to two rounds.
+fn external_fix_loadout(runtime: AgentRuntime) -> String {
+    external_loadout(runtime)
+        .replace("id: external-", "id: external-fix-")
+        .replace("kind: custom", "kind: fix")
+        .replace(
+            "  writer_model:",
+            "  reviewer_model: { kind: model, required: true, description: the reviewer }\n  writer_model:",
+        )
+        .replace(
+            "budgets:\n  agent: { activations: 1, invocations: 20,",
+            "review:\n  model: { param: reviewer_model }\n  rounds: 2\n  tools: [read_file, list_dir, grep, glob]\n\
+             budgets:\n  reviewer: { activations: 2, invocations: 20, tokens: 400000, cost_usd: 1 }\n\
+             \x20 agent: { activations: 3, invocations: 40,",
+        )
 }
 
 /// `provider:model` for `runtime`'s writer.
@@ -409,6 +428,19 @@ struct FakeModelApi {
 const CLAUDE_ANSWER: &str = "FIXED-BY-CLAUDE-CODE";
 const CODEX_ANSWER: &str = "FIXED-BY-CODEX";
 
+/// The program's final text: `answer`, and when the request carries review
+/// findings, the writer's answer to them.
+fn final_answer(answer: &str, body: &serde_json::Value) -> String {
+    if body.to_string().contains("ADJUDICATIONS") {
+        format!(
+            "{answer}\n\nADJUDICATIONS\n```json\n[{{\"id\":\"F1\",\"decision\":\"accept\",\
+             \"reason\":\"fixed.txt now ends with a line break\"}}]\n```"
+        )
+    } else {
+        answer.to_string()
+    }
+}
+
 fn sse(events: &[serde_json::Value]) -> String {
     events
         .iter()
@@ -441,7 +473,7 @@ fn anthropic_answer(body: &serde_json::Value) -> (String, &'static str) {
         )
     } else if has_result {
         (
-            serde_json::json!({"type": "text", "text": CLAUDE_ANSWER}),
+            serde_json::json!({"type": "text", "text": final_answer(CLAUDE_ANSWER, body)}),
             "end_turn",
         )
     } else {
@@ -530,7 +562,8 @@ fn openai_answer(body: &serde_json::Value) -> (String, &'static str) {
             "status": "completed"}),
         None => serde_json::json!({"type": "message", "id": "msg_axocoatl", "role": "assistant",
             "status": "completed", "content": [{"type": "output_text",
-            "text": if has_result { CODEX_ANSWER } else { "ok" }, "annotations": []}]}),
+            "text": if has_result { final_answer(CODEX_ANSWER, body) } else { "ok".into() },
+            "annotations": []}]}),
     };
     let response = |status: &str, output: serde_json::Value| {
         serde_json::json!({"id": "resp_axocoatl", "object": "response", "created_at": 1,
@@ -867,8 +900,11 @@ fn git(repo: &std::path::Path, args: &[&str]) {
 /// run driver's Apply, Send and wait, the required check and the Outcome.
 /// The program talks to a fake model API through the Session's route, at
 /// its real host and port: only the route broker's resolver, address
-/// classes, upstream port and upstream trust are the test's.
-async fn pinned_run_child_body(runtime: AgentRuntime) {
+/// classes, upstream port and upstream trust are the test's. A `reviewed`
+/// run is a fix loadout whose native reviewer (a fake Ollama model) asks for
+/// changes once, so the writer runs its program a second time, answers the
+/// finding and is approved.
+async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool) {
     use axocoatl_session::network_record::{Decision, NetworkEvent};
     use axocoatl_session::run_outcome::{RunVerdict, TurnState};
     let (recipe, host, credential, placeholder, answer) = match runtime {
@@ -903,17 +939,30 @@ async fn pinned_run_child_body(runtime: AgentRuntime) {
         .to_string();
 
     // The daemon's configuration and the user loadout next to it.
+    let (reviewer, reviews) = reviewer_model_server().await;
     let home = tempfile::tempdir().unwrap();
     let config_file = home.path().join("config.yaml");
-    let yaml = "agents: []\nsandbox:\n  backend: podman\n  network: bridge\nconsolidation:\n  enabled: false\n";
-    std::fs::write(&config_file, yaml).unwrap();
+    let yaml = format!(
+        "agents: []\nproviders:\n  ollama:\n    base_url: {}\nsandbox:\n  backend: podman\n  \
+         network: bridge\nconsolidation:\n  enabled: false\n",
+        reviewer.uri()
+    );
+    std::fs::write(&config_file, &yaml).unwrap();
     std::fs::create_dir(home.path().join("loadouts")).unwrap();
+    let (loadout_id, loadout_text) = if reviewed {
+        (
+            format!("external-fix-{recipe}"),
+            external_fix_loadout(runtime),
+        )
+    } else {
+        (format!("external-{recipe}"), external_loadout(runtime))
+    };
     std::fs::write(
-        home.path().join(format!("loadouts/external-{recipe}.yaml")),
-        external_loadout(runtime),
+        home.path().join(format!("loadouts/{loadout_id}.yaml")),
+        loadout_text,
     )
     .unwrap();
-    let config = axocoatl_config::parse_config(yaml, &config_file).unwrap();
+    let config = axocoatl_config::parse_config(&yaml, &config_file).unwrap();
     let daemon = Arc::new(AxocoatlDaemon::bootstrap_headless(config).await.unwrap());
     daemon.set_config_path(&config_file);
 
@@ -963,20 +1012,20 @@ async fn pinned_run_child_body(runtime: AgentRuntime) {
     git(&repo, &["commit", "-q", "-m", "initial"]);
 
     let cleanup = PodmanCleanup(StdMutex::new(Vec::new()));
+    let mut params = ParamValues::new();
+    params.insert("writer_model".into(), writer_model(runtime).into());
+    if reviewed {
+        params.insert("reviewer_model".into(), format!("ollama:{REVIEW_MODEL}"));
+    }
     let request = crate::loadout::api::RunRequest {
-        loadout: format!("external-{recipe}"),
+        loadout: loadout_id.clone(),
         task: "Create fixed.txt in the repository.".into(),
         repo: repo.display().to_string(),
-        params: [(
-            "writer_model".to_string(),
-            writer_model(runtime).to_string(),
-        )]
-        .into_iter()
-        .collect(),
+        params,
         keep: Default::default(),
         check_command: None,
         setup_command: None,
-        request_id: format!("external-{recipe}"),
+        request_id: loadout_id.clone(),
     };
     let result = async {
         let (accepted, context) = daemon.admit_loadout_run(request).await?;
@@ -1120,15 +1169,37 @@ async fn pinned_run_child_body(runtime: AgentRuntime) {
     assert_eq!(observed.len(), 1, "{context}");
     let turn = &observed[0];
     assert_eq!(turn.state, TurnState::Completed, "{context}");
-    let writer = &turn.nodes[0];
-    assert_eq!(
-        writer
-            .latest()
-            .and_then(|generation| generation.answer.as_deref()),
-        Some(answer),
-        "{context}"
-    );
+    let writer = turn
+        .nodes
+        .iter()
+        .find(|node| node.kind != "reviewer")
+        .expect("the writer's node");
+    let latest = writer
+        .latest()
+        .and_then(|generation| generation.answer.as_deref())
+        .unwrap_or_default();
+    assert!(latest.starts_with(answer), "{context}");
     assert_eq!(outcome.checks.len(), 1, "{context}");
+    let activations = if reviewed { 2 } else { 1 };
+    assert_eq!(writer.generations.len(), activations, "{context}");
+    if reviewed {
+        // The reviewer asked for changes once; the writer's second program
+        // run answered the finding and the reviewer approved.
+        let review = outcome.review.as_ref().expect("the run's review");
+        assert!(review.passed, "{context}");
+        assert_eq!(review.rounds.len(), 2, "{context}");
+        assert_eq!(reviews.load(Ordering::SeqCst), 2, "{context}");
+        assert_eq!(outcome.adjudications.len(), 1, "{context}");
+        assert_eq!(
+            outcome.adjudications[0].decision,
+            axocoatl_session::run_outcome::AdjudicationDecision::Accept,
+            "{context}"
+        );
+        assert!(latest.contains("ADJUDICATIONS"), "{context}");
+    } else {
+        assert!(outcome.review.is_none(), "{context}");
+        assert_eq!(reviews.load(Ordering::SeqCst), 0, "{context}");
+    }
     // The program's own edit landed in the Workspace.
     assert_eq!(
         std::fs::read_to_string(repo.join("fixed.txt")).unwrap(),
@@ -1141,7 +1212,7 @@ async fn pinned_run_child_body(runtime: AgentRuntime) {
         .iter()
         .filter(|request| request.method == "POST")
         .collect();
-    assert!(calls.len() >= 2, "{context}");
+    assert_eq!(calls.len(), 2 * activations, "{context}");
     assert_eq!(calls.len(), seen.len(), "{context}");
     let path = match runtime {
         AgentRuntime::ClaudeCode => "/v1/messages",
@@ -1267,9 +1338,8 @@ async fn pinned_run_child_body(runtime: AgentRuntime) {
     };
     for wanted in [
         format!(
-            "[external agent] {program}, model {}: exit 0, {} model request(s)",
+            "[external agent] {program}, model {}: exit 0, 2 model request(s)",
             program_model(runtime),
-            calls.len()
         ),
         tool.to_string(),
         usage.to_string(),
@@ -1279,13 +1349,78 @@ async fn pinned_run_child_body(runtime: AgentRuntime) {
     drop(cleanup);
 }
 
+/// The reviewer's model.
+const REVIEW_MODEL: &str = "review-model:latest";
+
+/// An audited local Ollama with [`REVIEW_MODEL`], whose chat answers ask
+/// for one change and then approve; the counter counts its chats.
+async fn reviewer_model_server() -> (wiremock::MockServer, Arc<AtomicUsize>) {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    let digest = "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
+    let model = serde_json::json!({"name": REVIEW_MODEL, "model": REVIEW_MODEL,
+        "digest": digest, "details": {"format": "gguf"}, "context_length": 32768});
+    for (verb, route, body) in [
+        (
+            "GET",
+            "/api/version",
+            serde_json::json!({"version": "0.20.6"}),
+        ),
+        (
+            "GET",
+            "/api/status",
+            serde_json::json!({"cloud": {"disabled": true}}),
+        ),
+        (
+            "POST",
+            "/api/show",
+            serde_json::json!({"details": {"format": "gguf"}, "capabilities": ["completion", "tools"]}),
+        ),
+        ("GET", "/api/tags", serde_json::json!({"models": [model]})),
+        ("GET", "/api/ps", serde_json::json!({"models": [model]})),
+    ] {
+        Mock::given(method(verb))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("POST"))
+        .and(path("/api/generate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "model": REVIEW_MODEL, "created_at": "2026-10-07T00:00:00Z",
+            "response": "", "done": true, "done_reason": "load"
+        })))
+        .mount(&server)
+        .await;
+    let reviews = Arc::new(AtomicUsize::new(0));
+    let counted = reviews.clone();
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(move |_: &wiremock::Request| {
+            let content = if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                "VERDICT: CHANGES\nF1: fixed.txt: write the file once more and say so."
+            } else {
+                "VERDICT: APPROVE"
+            };
+            let reply = serde_json::json!({"model": REVIEW_MODEL,
+                "message": {"role": "assistant", "content": content},
+                "done": true, "done_reason": "stop", "prompt_eval_count": 50, "eval_count": 10});
+            ResponseTemplate::new(200).set_body_raw(format!("{reply}\n"), "application/x-ndjson")
+        })
+        .mount(&server)
+        .await;
+    (server, reviews)
+}
+
 /// Claude Code 2.1.292 from `localhost/axocoatl-recipe-claude-code`, as
 /// `axocoatl run` runs it (see [`pinned_run_child_body`]).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the claude-code recipe image"]
 async fn actual_loadout_run_with_the_pinned_claude_code() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run_child_body(AgentRuntime::ClaudeCode).await;
+        pinned_run_child_body(AgentRuntime::ClaudeCode, false).await;
         return;
     }
     run_child("actual_loadout_run_with_the_pinned_claude_code", None, true).await;
@@ -1297,8 +1432,42 @@ async fn actual_loadout_run_with_the_pinned_claude_code() {
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
 async fn actual_loadout_run_with_the_pinned_codex() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run_child_body(AgentRuntime::Codex).await;
+        pinned_run_child_body(AgentRuntime::Codex, false).await;
         return;
     }
     run_child("actual_loadout_run_with_the_pinned_codex", None, true).await;
+}
+
+/// A fix run with the pinned Claude Code as its writer and a native
+/// reviewer that asks for changes once (see [`pinned_run_child_body`]).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the claude-code recipe image"]
+async fn actual_reviewed_loadout_run_with_the_pinned_claude_code() {
+    if std::env::var_os(CHILD).is_some() {
+        pinned_run_child_body(AgentRuntime::ClaudeCode, true).await;
+        return;
+    }
+    run_child(
+        "actual_reviewed_loadout_run_with_the_pinned_claude_code",
+        None,
+        true,
+    )
+    .await;
+}
+
+/// A fix run with the pinned Codex as its writer and a native reviewer
+/// that asks for changes once (see [`pinned_run_child_body`]).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
+async fn actual_reviewed_loadout_run_with_the_pinned_codex() {
+    if std::env::var_os(CHILD).is_some() {
+        pinned_run_child_body(AgentRuntime::Codex, true).await;
+        return;
+    }
+    run_child(
+        "actual_reviewed_loadout_run_with_the_pinned_codex",
+        None,
+        true,
+    )
+    .await;
 }

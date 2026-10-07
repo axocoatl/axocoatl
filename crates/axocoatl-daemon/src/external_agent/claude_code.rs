@@ -8,9 +8,13 @@
 //! (the Session container is the boundary; the program runs as the non-root
 //! writer user, where the flag is accepted), and `--no-session-persistence`
 //! keeps sessions off disk. With `CLAUDE_CODE_OAUTH_TOKEN` set (to the
-//! route's placeholder) and nonessential traffic disabled, the only request
-//! is `POST /v1/messages?beta=true` to `api.anthropic.com`, with
-//! `Authorization: Bearer <token>`; the route replaces the placeholder.
+//! route's placeholder) and nonessential traffic disabled, its model
+//! requests are `POST /v1/messages?beta=true` to `api.anthropic.com`, with
+//! `Authorization: Bearer <token>`; the route replaces the placeholder. It
+//! also asks `api.anthropic.com` for `GET /api/claude_code/policy_limits` and
+//! `GET /api/claude_code/settings`, which the route refuses (and records); a
+//! run goes on without them (`actual_loadout_run_with_the_pinned_claude_code`
+//! in `bootstrap_external_turn_tests.rs`).
 
 use serde_json::Value;
 
