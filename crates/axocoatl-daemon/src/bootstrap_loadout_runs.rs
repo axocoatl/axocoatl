@@ -1812,15 +1812,25 @@ impl AxocoatlDaemon {
         checks: &[CheckLabel],
         reviewer: Option<&ModelIdentity>,
     ) -> Result<Option<(TurnObservation, Vec<RunEvent>)>, DaemonError> {
-        Ok(self
-            .session_turn_control_plane(session_id, turn_id)
-            .await?
-            .map(|view| {
-                (
-                    observation_from_control_plane(&view, checks, reviewer),
-                    crate::provider_retry::run_events(&view),
-                )
-            }))
+        let Some(view) = self.session_turn_control_plane(session_id, turn_id).await? else {
+            return Ok(None);
+        };
+        let mut observation = observation_from_control_plane(&view, checks, reviewer);
+        // Cost is charged to grants, one per call: the turn's cost is what
+        // its grants were charged (settled calls, and reservations of calls
+        // still running). Without the grants the cost is not known, so the
+        // usage is a known subtotal.
+        match self.session_control_grants(session_id, turn_id).await {
+            Ok(grants) => {
+                observation.usage.cost_microunits = grants
+                    .grants
+                    .iter()
+                    .map(|grant| grant.usage.cost_microunits)
+                    .fold(0u64, u64::saturating_add);
+            }
+            Err(_) => observation.usage.complete = false,
+        }
+        Ok(Some((observation, crate::provider_retry::run_events(&view))))
     }
 
     /// Preview and apply `edit` on the Session's current configuration

@@ -17,6 +17,9 @@ const DIGEST = 'a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72
 let runtime, modelServer;
 const chats = [], workspaces = [];
 let calls = 0;
+// A chat whose request names SLOW-TASK is held until the test releases it.
+let releaseSlow = () => {};
+const slow = new Promise((resolve) => { releaseSlow = resolve; });
 
 const binary = () => process.env.AXOCOATL_E2E_BINARY
   ? path.resolve(process.env.AXOCOATL_E2E_BINARY)
@@ -54,6 +57,7 @@ before(async () => {
     if (req.url === '/api/chat') {
       const body = raw ? JSON.parse(raw) : null;
       chats.push(body);
+      if (raw.includes('SLOW-TASK')) await slow;
       const reply = { model: MODEL, message: answer(body), done: true, done_reason: 'stop', prompt_eval_count: 12, eval_count: 3 };
       res.writeHead(200, { 'content-type': 'application/x-ndjson' });
       res.end(`${JSON.stringify(reply)}\n`);
@@ -73,6 +77,7 @@ before(async () => {
   runtime = await launchTestDaemon({ nativeDataRoot: true, ollamaBaseUrl: `http://127.0.0.1:${modelServer.address().port}` });
 });
 after(async () => {
+  releaseSlow();
   await runtime?.stop();
   for (const dir of workspaces) await rm(dir, { recursive: true, force: true });
   await new Promise((resolve) => modelServer?.close(resolve));
@@ -106,6 +111,7 @@ test('the built-in fix loadout runs under egress, passes, warns about the same m
   assert.equal(outcome.verdict, 'pass');
   assert.deepEqual(outcome.checks.map((check) => [check.name, check.state]), [['tests', 'passed']]);
   assert.equal(outcome.review.passed, true, JSON.stringify(outcome.review));
+  assert.equal(outcome.usage.complete, true, JSON.stringify(outcome.usage));
   assert.equal(outcome.review.rounds[0].verdict, 'approve');
   assert.deepEqual(outcome.adjudications, [], 'an approving first round sends nothing back');
   assert.ok(outcome.warnings.some((warning) => warning.code === 'same_model_reviewer'), JSON.stringify(outcome.warnings));
@@ -129,4 +135,41 @@ test('the built-in fix loadout runs under egress, passes, warns about the same m
   const verified = await run(binary(), ['record', 'verify', recordPath]);
   assert.equal(verified.code, 0, verified.stdout + verified.stderr);
   assert.ok(chats.some((body) => /VERDICT/.test(JSON.stringify(body))), 'the reviewer was asked');
+});
+
+test('Ctrl-C stops a running loadout run: exit 6, the run interrupted, and its JUnit and record still written', { timeout: 600_000 }, async () => {
+  const projects = await mkdtemp(path.join(tmpdir(), 'axocoatl-fix-stop-'));
+  workspaces.push(projects);
+  const repo = await realpath(projects);
+  await writeFile(path.join(repo, 'README.md'), '# fixture\n');
+  await git(repo, 'init', '-q', '-b', 'main');
+  await git(repo, 'add', 'README.md');
+  await git(repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Add a README');
+  const out = await mkdtemp(path.join(runtime.runRoot, 'stop-'));
+  const junitPath = path.join(out, 'junit.xml'), recordPath = path.join(out, 'run.axorecord.jsonl');
+  const model = `ollama:${MODEL}`;
+  const child = spawn(binary(), ['run', 'fix', '--task', 'SLOW-TASK: add NOTES.md.', '--repo', repo,
+    '--model', `writer=${model}`, '--model', `reviewer=${model}`, '--check', 'test -f NOTES.md',
+    '--junit', junitPath, '--record', recordPath, '--url', runtime.baseUrl],
+  { env: { ...process.env, AXOCOATL_TOKEN: runtime.token }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
+  // Interrupt once the writer's model call is in flight.
+  for (let waited = 0; waited < 600 && !chats.some((body) => JSON.stringify(body).includes('SLOW-TASK')); waited += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  assert.ok(chats.some((body) => JSON.stringify(body).includes('SLOW-TASK')), stderr);
+  child.kill('SIGINT');
+  const code = await exited;
+  releaseSlow();
+  assert.equal(code, 6, `${stdout}\n${stderr}`);
+  const runId = stderr.match(/run-[0-9a-f-]{36}/)?.[0];
+  assert.ok(runId, stderr);
+  const status = await (await fetch(`${runtime.baseUrl}/api/runs/${runId}`, { headers: { authorization: `Bearer ${runtime.token}` } })).json();
+  assert.equal(status.outcome?.verdict, 'interrupted', JSON.stringify(status));
+  assert.equal(status.outcome.exit_code, 6);
+  assert.match(await readFile(junitPath, 'utf8'), /<property name="axocoatl.exit_code" value="6"\/>/);
+  assert.equal((await run(binary(), ['record', 'verify', recordPath])).code, 0);
 });
