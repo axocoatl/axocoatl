@@ -293,6 +293,67 @@ async fn team_child_body() {
     assert_eq!(team.configuration_revision, 2);
     assert!(team.warnings.is_empty(), "{:?}", team.warnings);
 
+    // An external writer (Claude Code) applies inline too: its retained
+    // definition names the runtime as its provider and the program's model,
+    // as the autonomous writer with bash and no per-call limits.
+    let external = axocoatl_config::loadout::parse_loadout(
+        r#"
+schema: axocoatl.loadout/1
+id: cc-fix
+version: 1
+name: Claude Code fix
+kind: custom
+agents:
+  - id: writer
+    role: writer
+    runtime: claude-code
+    model: { provider: anthropic, model: claude-sonnet-5-5 }
+    tools: [bash]
+checks:
+  - { name: tests, run: { argv: [sh, -c, "true"] }, timeout: 2m }
+budgets:
+  agent: { activations: 1, invocations: 20, tokens: 100000, cost_usd: 1 }
+  wall_clock: 10m
+prompt: "{task}"
+environment: { recipes: [claude-code] }
+"#,
+        axocoatl_config::loadout::LoadoutSource::Builtin,
+    )
+    .unwrap();
+    let resolved = resolve_loadout(&external, &ParamValues::new(), "fix it", "/repo").unwrap();
+    let edit = crate::loadout::team_plan::team_edit(
+        &resolved,
+        &crate::loadout::team_plan::default_slots(&resolved).unwrap(),
+        true,
+        0,
+    )
+    .unwrap();
+    daemon.apply_loadout_team(&bound.id, edit).await.unwrap();
+    let team = daemon.session_team(&bound.id).await.unwrap();
+    assert_eq!(team.configuration_revision, 3);
+    assert_eq!(team.slots[0].provider, "claude-code");
+    assert_eq!(team.slots[0].model, "claude-sonnet-5-5");
+    let tools = daemon
+        .session_dispatch_lifecycles
+        .with_session_team_stores(&token, |canonical, content, _| {
+            let store = SessionTeamStore::open_owned(
+                canonical
+                    .component_namespace(ExecutionComponent::SessionTeam)
+                    .map_err(|error| DaemonError::Session(error.to_string()))?,
+                canonical,
+                content,
+                None,
+            )
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+            let current = store
+                .current()
+                .map_err(|error| DaemonError::Session(error.to_string()))?
+                .unwrap();
+            session_team::slot_tools_for_tests(&current.graph.slots[0], content)
+        })
+        .unwrap();
+    assert_eq!(tools, ["bash"]);
+
     // Admission refuses a host that cannot run a loadout hardened: this fake
     // Podman runs as root.
     let fix_repo = tempfile::tempdir().unwrap();
