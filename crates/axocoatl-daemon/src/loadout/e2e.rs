@@ -1058,6 +1058,87 @@ exit 1
         }
     }
 
+    /// The registry's e2e recipe fragment on a Node base: it builds, and the
+    /// image runs the pinned CLI and Chromium for a non-root user with no
+    /// network. Needs Podman (`CONTAINER_CONNECTION`) and network access to
+    /// npm, Debian and Playwright's CDN for the build;
+    /// `AXO_E2E_RECIPE_BASE` names another base image.
+    #[tokio::test]
+    #[ignore = "requires podman and network for the image build"]
+    async fn the_e2e_recipe_builds_with_the_pinned_cli_node_and_chromium() {
+        use tokio::process::Command;
+
+        let fragment = axocoatl_isolation::recipes::recipe("e2e")
+            .expect("the e2e recipe is registered")
+            .fragment;
+        let base = std::env::var("AXO_E2E_RECIPE_BASE")
+            .unwrap_or_else(|_| "docker.io/library/node:22-bookworm-slim".into());
+        let context = tempfile::tempdir().unwrap();
+        std::fs::write(
+            context.path().join("Containerfile"),
+            format!("FROM {base}\n{fragment}"),
+        )
+        .unwrap();
+        let tag = format!(
+            "localhost/axocoatl-e2e-recipe-test:{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let built = Command::new("podman")
+            .args(["build", "--layers=false", "-t", &tag, "-f"])
+            .arg(context.path().join("Containerfile"))
+            .arg(context.path())
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let ran = Command::new("podman")
+            .args([
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--user",
+                "1000:1000",
+                &tag,
+                "sh",
+                "-c",
+                "e2e --version && node --version && ls \"$PLAYWRIGHT_BROWSERS_PATH\" && \
+                 printf '%s|%s\\n' \"$E2E_TELEMETRY_DISABLED\" \"$DO_NOT_TRACK\"",
+            ])
+            .output()
+            .await
+            .unwrap();
+        let _ = Command::new("podman")
+            .args(["rmi", "--force", &tag])
+            .output()
+            .await;
+        assert!(
+            ran.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ran.stderr)
+        );
+        let stdout = String::from_utf8(ran.stdout).unwrap();
+        let mut lines = stdout.lines();
+        assert_eq!(lines.next(), Some(E2E_VERSION));
+        let node = lines.next().unwrap().trim_start_matches('v');
+        let parts: Vec<u32> = node.split('.').map(|part| part.parse().unwrap()).collect();
+        assert!(
+            (parts[0] == 22 && (parts[1], parts[2]) >= (22, 3))
+                || (parts[0] == 24 && parts[1] >= 8)
+                || parts[0] > 24,
+            "Node {node} is below e2e's floor (^22.22.3 or >=24.8.0)"
+        );
+        assert!(
+            stdout.contains("chromium_headless_shell-"),
+            "no Chromium in the image: {stdout}"
+        );
+        assert!(stdout.lines().any(|line| line == "1|1"), "{stdout}");
+    }
+
     /// A Session container holding files, for `read_sandbox_file`.
     #[derive(Default)]
     struct FakeHost {
