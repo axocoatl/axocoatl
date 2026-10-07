@@ -1830,7 +1830,10 @@ impl AxocoatlDaemon {
             }
             Err(_) => observation.usage.complete = false,
         }
-        Ok(Some((observation, crate::provider_retry::run_events(&view))))
+        Ok(Some((
+            observation,
+            crate::provider_retry::run_events(&view),
+        )))
     }
 
     /// Preview and apply `edit` on the Session's current configuration

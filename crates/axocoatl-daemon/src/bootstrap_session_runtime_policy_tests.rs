@@ -241,3 +241,132 @@ async fn actual_egress_reaches_host_ollama_only_through_its_route() {
         "{events:#?}"
     );
 }
+
+/// Under `network: egress` a required check admitted with `egress` (as an
+/// e2e check is) gets an egress credential for its own process and reaches
+/// the Session's route; a check admitted without it, in the same pass, is
+/// refused by the proxy as before 1.3. Both checks assert what they saw, so
+/// the turn completes only if each got exactly its own network.
+#[tokio::test]
+#[ignore = "requires Podman (CONTAINER_CONNECTION), AXO_SUPERVISOR_TEST_IMAGE and the egress-capable embedded helper"]
+async fn actual_only_a_check_admitted_with_egress_reaches_the_sessions_route() {
+    use crate::session_egress::host_ollama_tests::FakeOllama;
+    use crate::session_egress::tests::{FakeRecord, FakeResolver};
+    use crate::session_egress::{EgressPolicyConfig, RouteSettings, SessionEgress};
+    use axocoatl_session::network_record::{Decision as Recorded, NetworkEvent};
+    let upstream_label = EgressUpstream::start();
+    let ollama = FakeOllama::start().await;
+    let port = ollama.addr.port();
+    let mut f = fixture().await;
+    let record = Arc::new(FakeRecord::default());
+    let resolver = FakeResolver::with(&[]);
+    let env_dir = f.owner.inner.data_root.child("egress-env").unwrap();
+    let egress = SessionEgress::open_session(
+        f.owner.metadata().session_id.clone(),
+        EgressPolicyConfig {
+            host_ollama: Some(axocoatl_config::HostOllamaRouteYaml {
+                port,
+                bindings: None,
+            }),
+            ..EgressPolicyConfig::default()
+        },
+        record.clone(),
+        resolver.clone(),
+        Some(env_dir),
+        axocoatl_core::netaddr::classify,
+        RouteSettings::default(),
+    )
+    .await
+    .unwrap();
+    let sandbox = actual_egress_sandbox(&mut f, &upstream_label, egress.clone()).await;
+    git_init(f._workspace.path());
+    // git's answer to the stand-in's 404 says the request got there; a
+    // refused connection says something else.
+    let probe = "out=$(git ls-remote https://ollama.host.axocoatl.internal/{path}.git 2>&1); \
+                 echo \"$out\"; case \"$out\" in *404*|*'not found'*) reached=yes;; *) reached=no;; esac";
+    let checks = vec![
+        vec![
+            "sh".into(),
+            "-c".into(),
+            format!(
+                "{}; test \"$reached\" = yes",
+                probe.replace("{path}", "with-egress")
+            ),
+        ],
+        vec![
+            "sh".into(),
+            "-c".into(),
+            format!(
+                "{}; test \"$reached\" = no",
+                probe.replace("{path}", "without-egress")
+            ),
+        ],
+    ];
+    let options = vec![
+        RequiredCheckOptions {
+            name: Some("e2e".into()),
+            egress: true,
+            ..RequiredCheckOptions::default()
+        },
+        RequiredCheckOptions {
+            name: Some("tests".into()),
+            ..RequiredCheckOptions::default()
+        },
+    ];
+    let r = run_with_check_options(&mut f, &["bash"], true, None, &checks, &options);
+    let authorized = r
+        .controller
+        .authorize_required_checks(r.resource.reference());
+    let provider = Provider::new(vec![]);
+    let factory = Arc::new(Factory {
+        config: r.config.clone(),
+        profile: r.profile.clone(),
+        provider: provider.clone(),
+    });
+    let outcome = tokio::time::timeout(Duration::from_secs(240), async {
+        r.controller
+            .autonomous_turn_driver(vec![seed(&r)], factory.clone())?
+            .run()
+            .await
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let plane = r.controller.control_plane();
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+
+    authorized.unwrap();
+    let outcome = outcome.unwrap().unwrap();
+    let plane = plane.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "{:#?}",
+        plane.required_checks
+    );
+    assert_eq!(plane.required_checks[0].state, "passed");
+    assert_eq!(plane.required_checks[1].state, "passed");
+    assert!(idle.unwrap());
+    // Only the egress check's request reached the stand-in, and the record
+    // holds it.
+    let seen = ollama.seen();
+    assert!(
+        seen.iter()
+            .any(|request| request.path == "/with-egress.git/info/refs"),
+        "{seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|request| request.path.contains("without")),
+        "{seen:?}"
+    );
+    let events = record.events();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, NetworkEvent::Request {
+            decision: Recorded::Allow, path, ..
+        } if path == "/with-egress.git/info/refs")),
+        "{events:#?}"
+    );
+    assert!(resolver.queries().is_empty(), "{:?}", resolver.queries());
+}
