@@ -408,7 +408,7 @@ sandbox:
 
 An explicit, opt-in route from Session containers to an Ollama server on this
 computer's loopback interface. Off when absent. Under `network: egress`, the processes
-`for` names get `OLLAMA_HOST=https://ollama.host.axocoatl.internal`. That name never
+`for` names get `OLLAMA_HOST=https://ollama.host.axocoatl.internal:443`. That name never
 resolves in DNS: the egress decision point recognizes it, the daemon ends TLS with the
 Session's certificate authority and forwards each request over plain HTTP to
 `127.0.0.1:<port>`, and every request and response is written to the Session's network
