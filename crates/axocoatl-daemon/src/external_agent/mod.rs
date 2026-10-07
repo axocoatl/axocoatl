@@ -11,6 +11,7 @@
 
 pub mod claude_code;
 pub mod codex;
+pub mod recipe_images;
 
 use axocoatl_config::loadout::AgentRuntime;
 use axocoatl_config::EgressRouteYaml;
