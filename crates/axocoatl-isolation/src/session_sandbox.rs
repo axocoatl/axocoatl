@@ -338,6 +338,42 @@ pub struct SandboxPolicy {
     pub shared_sidecar_session: Option<String>,
 }
 
+/// The Workspace directory of tester-army/e2e's replay cache.
+pub const E2E_CACHE_DIR: &str = ".e2e/cache";
+
+/// Mounts a Session container adds inside its read-write Workspace.
+/// Nothing else about the container changes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkspaceMounts {
+    /// Mount `<workspace>/.e2e/cache` ([`E2E_CACHE_DIR`]) read-only over
+    /// the Workspace, so a required e2e check replays recorded actions but
+    /// records none: nothing a run's tests do can plant replays a later run
+    /// would trust. The directory is created empty (owner-only) when it is
+    /// missing; a symlink anywhere on its path refuses the start, and its
+    /// identity is verified immediately before and after `podman run`.
+    pub read_only_e2e_cache: bool,
+}
+
+/// One Workspace directory mounted read-only over the Workspace mount, at
+/// its own canonical path.
+#[derive(Debug, Clone)]
+struct ReadOnlyBind {
+    directory: SecureDir,
+    path: String,
+}
+
+impl ReadOnlyBind {
+    fn verify(&self) -> Result<(), IsolationError> {
+        self.directory.verify_ambient_identity().map_err(|error| {
+            IsolationError::OciSetupFailed(format!(
+                "the read-only Workspace directory '{}' no longer resolves to its retained \
+                 directory: {error}",
+                self.path
+            ))
+        })
+    }
+}
+
 /// The users of a hardened Session container. PID 1 stays root; every
 /// `podman exec` names one of these users (or root, for provisioning), and
 /// the writer's id is the one the Workspace's owner maps to
@@ -929,19 +965,42 @@ impl SessionSandbox {
         post_create_commands: &[String],
         policy: &SandboxPolicy,
     ) -> Result<Self, IsolationError> {
+        Self::start_with_mounts(
+            session_id,
+            working_dir,
+            image,
+            exposed_ports,
+            post_create_commands,
+            policy,
+            WorkspaceMounts::default(),
+        )
+        .await
+    }
+
+    /// [`Self::start`] with extra [`WorkspaceMounts`].
+    pub async fn start_with_mounts(
+        session_id: &str,
+        working_dir: &Path,
+        image: Option<&str>,
+        exposed_ports: &[u16],
+        post_create_commands: &[String],
+        policy: &SandboxPolicy,
+        mounts: WorkspaceMounts,
+    ) -> Result<Self, IsolationError> {
         let working_dir = SecureDir::open(working_dir).map_err(|error| {
             IsolationError::OciSetupFailed(format!(
                 "opening retained Session Workspace '{}': {error}",
                 working_dir.display()
             ))
         })?;
-        Self::start_in(
+        Self::start_in_with_mounts(
             session_id,
             &working_dir,
             image,
             exposed_ports,
             post_create_commands,
             policy,
+            mounts,
         )
         .await
     }
@@ -956,6 +1015,31 @@ impl SessionSandbox {
         exposed_ports: &[u16],
         post_create_commands: &[String],
         policy: &SandboxPolicy,
+    ) -> Result<Self, IsolationError> {
+        Self::start_in_with_mounts(
+            session_id,
+            working_dir,
+            image,
+            exposed_ports,
+            post_create_commands,
+            policy,
+            WorkspaceMounts::default(),
+        )
+        .await
+    }
+
+    /// [`Self::start_in`] with extra [`WorkspaceMounts`]: the daemon passes
+    /// `read_only_e2e_cache` when it starts the Session container of a
+    /// loadout run with an e2e check (`loadout::e2e::workspace_mounts`), on
+    /// every start of that container.
+    pub async fn start_in_with_mounts(
+        session_id: &str,
+        working_dir: &SecureDir,
+        image: Option<&str>,
+        exposed_ports: &[u16],
+        post_create_commands: &[String],
+        policy: &SandboxPolicy,
+        mounts: WorkspaceMounts,
     ) -> Result<Self, IsolationError> {
         let session_id = session_id.to_string();
         let start_lock = Self::start_lock(&Self::container_name(&session_id));
@@ -977,6 +1061,7 @@ impl SessionSandbox {
                 &exposed_ports,
                 &post_create_commands,
                 &policy,
+                mounts,
             )
             .await;
             let container_id = result
@@ -1074,6 +1159,51 @@ impl SessionSandbox {
         Ok((working_dir, masks))
     }
 
+    /// The read-only binds `mounts` asks for in the Workspace opened as
+    /// `working_dir` (canonical path `canonical_dir`). Each directory is
+    /// opened (created when missing) without following a symlink on any
+    /// component, and must resolve to its own path below the Workspace.
+    fn read_only_binds(
+        working_dir: &SecureDir,
+        canonical_dir: &Path,
+        mounts: WorkspaceMounts,
+    ) -> Result<Vec<ReadOnlyBind>, IsolationError> {
+        let mut binds = Vec::new();
+        if mounts.read_only_e2e_cache {
+            let refuse = |reason: String| {
+                IsolationError::OciSetupFailed(format!(
+                    "the e2e check's replay cache '{}/{E2E_CACHE_DIR}' cannot be mounted \
+                     read-only: {reason}",
+                    canonical_dir.display()
+                ))
+            };
+            let directory = working_dir.child(E2E_CACHE_DIR).map_err(|error| {
+                refuse(format!(
+                    "{error} (it must be a real directory: a symlink on its path is refused)"
+                ))
+            })?;
+            let expected = canonical_dir.join(E2E_CACHE_DIR);
+            let canonical = std::fs::canonicalize(directory.path())
+                .map_err(|error| refuse(error.to_string()))?;
+            if canonical != expected {
+                return Err(refuse(format!(
+                    "it resolves to '{}', outside its place in the Workspace",
+                    canonical.display()
+                )));
+            }
+            let path = expected.to_string_lossy().into_owned();
+            if path.contains([':', ',']) {
+                return Err(refuse(
+                    "its path contains ':' or ',', which a Podman volume cannot name".into(),
+                ));
+            }
+            let bind = ReadOnlyBind { directory, path };
+            bind.verify()?;
+            binds.push(bind);
+        }
+        Ok(binds)
+    }
+
     fn verify_start_authorities(
         working_dir: &SecureDir,
         control_plane_roots: &[SecureDir],
@@ -1102,6 +1232,7 @@ impl SessionSandbox {
         exposed_ports: &[u16],
         post_create_commands: &[String],
         policy: &SandboxPolicy,
+        mounts: WorkspaceMounts,
     ) -> Result<Self, IsolationError> {
         // A configured image and the image actually executing repository code
         // must never disagree. Reject an untrusted request with an actionable
@@ -1188,6 +1319,20 @@ impl SessionSandbox {
         control_plane_dirs.dedup();
         let (working_dir_path, control_plane_masks) =
             Self::control_plane_paths(working_dir.path(), &control_plane_dirs)?;
+        // Recovery containers run no project command and change nothing in
+        // the Workspace, so they take no extra mounts.
+        let read_only_binds = if policy.passive_start {
+            Vec::new()
+        } else {
+            Self::read_only_binds(working_dir, &working_dir_path, mounts)?
+        };
+        let read_only_paths: Vec<String> = read_only_binds
+            .iter()
+            .map(|bind| bind.path.clone())
+            .collect();
+        let verify_read_only_binds = || -> Result<(), IsolationError> {
+            read_only_binds.iter().try_for_each(ReadOnlyBind::verify)
+        };
         let mut effective_policy = policy.clone();
         effective_policy.control_plane_dirs = control_plane_masks;
         if policy.passive_start {
@@ -1401,6 +1546,7 @@ impl SessionSandbox {
         let container_id = loop {
             Self::verify_start_authorities(working_dir, &policy.control_plane_roots)?;
             Self::verify_supervisor_policy(&effective_policy)?;
+            verify_read_only_binds()?;
             match Self::run_container(
                 session_id,
                 &container,
@@ -1410,6 +1556,7 @@ impl SessionSandbox {
                 with_limits,
                 &publish,
                 &effective_policy,
+                &read_only_paths,
             )
             .await
             {
@@ -1467,6 +1614,7 @@ impl SessionSandbox {
 
         if let Err(error) = Self::verify_start_authorities(working_dir, &policy.control_plane_roots)
             .and_then(|()| Self::verify_supervisor_policy(&effective_policy))
+            .and_then(|()| verify_read_only_binds())
         {
             let cleanup = lifecycle.finish(SandboxLifecycleDisposition::Remove).await;
             return Err(match cleanup {
@@ -2940,6 +3088,7 @@ impl SessionSandbox {
     /// tested). Carries the always-on hardening (no-new-privileges, capability
     /// drops), the policy-driven network posture, and the optional resource
     /// caps.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn build_run_args(
         session_id: &str,
@@ -2951,6 +3100,35 @@ impl SessionSandbox {
         ports: &[u16],
         policy: &SandboxPolicy,
     ) -> Vec<String> {
+        Self::build_run_args_with_mounts(
+            session_id,
+            container,
+            dir,
+            image,
+            node_dependency_volume,
+            with_limits,
+            ports,
+            policy,
+            &[],
+        )
+    }
+
+    /// [`Self::build_run_args`] with `read_only` Workspace directories
+    /// (canonical paths below `dir`) bound read-only at their own paths over
+    /// the read-write Workspace mount. Podman mounts the deeper destination
+    /// after its parent, so the read-only view wins.
+    #[allow(clippy::too_many_arguments)]
+    fn build_run_args_with_mounts(
+        session_id: &str,
+        container: &str,
+        dir: &str,
+        image: &str,
+        node_dependency_volume: Option<&str>,
+        with_limits: bool,
+        ports: &[u16],
+        policy: &SandboxPolicy,
+        read_only: &[String],
+    ) -> Vec<String> {
         let mount = format!("{dir}:{dir}:rw");
         let mut args: Vec<String> = vec![
             "run".into(),
@@ -2959,9 +3137,16 @@ impl SessionSandbox {
             container.into(),
             "-v".into(),
             mount,
-            "-w".into(),
-            dir.into(),
         ];
+        for path in read_only
+            .iter()
+            .filter(|path| Path::new(path).starts_with(dir) && path.as_str() != dir)
+        {
+            args.push("-v".into());
+            args.push(format!("{path}:{path}:ro"));
+        }
+        args.push("-w".into());
+        args.push(dir.into());
         if let Some(program) = &policy.supervisor_program {
             // The supervised start path resolved this image before selecting
             // the executable. Never fall back to pulling after that pin.
@@ -3181,8 +3366,9 @@ impl SessionSandbox {
         with_limits: bool,
         ports: &[u16],
         policy: &SandboxPolicy,
+        read_only: &[String],
     ) -> Result<String, String> {
-        let args = Self::build_run_args(
+        let args = Self::build_run_args_with_mounts(
             session_id,
             container,
             dir,
@@ -3191,6 +3377,7 @@ impl SessionSandbox {
             with_limits,
             ports,
             policy,
+            read_only,
         );
 
         let mut command = Command::new(PODMAN);
@@ -7573,5 +7760,237 @@ mod tests {
         SessionSandbox::remove_named_with_dependencies(&sandbox_id)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn read_only_binds_open_or_create_the_e2e_cache_without_symlinks() {
+        let workspace = tempfile::tempdir().unwrap();
+        let canonical = std::fs::canonicalize(workspace.path()).unwrap();
+        let opened = SecureDir::open(&canonical).unwrap();
+
+        // Not asked for: nothing is created and nothing is mounted.
+        assert!(
+            SessionSandbox::read_only_binds(&opened, &canonical, WorkspaceMounts::default())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!canonical.join(".e2e").exists());
+
+        // Missing: created empty, owner-only, at its canonical path.
+        let mounts = WorkspaceMounts {
+            read_only_e2e_cache: true,
+        };
+        let binds = SessionSandbox::read_only_binds(&opened, &canonical, mounts).unwrap();
+        assert_eq!(binds.len(), 1);
+        let cache = canonical.join(E2E_CACHE_DIR);
+        assert_eq!(binds[0].path, cache.to_string_lossy());
+        assert!(cache.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&cache).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "created owner-only, got {mode:o}");
+        }
+        binds[0].verify().unwrap();
+
+        // Existing entries stay as they are.
+        std::fs::write(cache.join("entry.json"), "{}").unwrap();
+        let again = SessionSandbox::read_only_binds(&opened, &canonical, mounts).unwrap();
+        assert_eq!(again[0].path, binds[0].path);
+        assert_eq!(
+            std::fs::read_to_string(cache.join("entry.json")).unwrap(),
+            "{}"
+        );
+
+        // A directory swapped after it was opened no longer verifies.
+        std::fs::rename(&cache, canonical.join(".e2e/moved")).unwrap();
+        std::fs::create_dir(&cache).unwrap();
+        assert!(again[0].verify().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_binds_refuse_symlinks_and_files() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("cache")).unwrap();
+        let mounts = WorkspaceMounts {
+            read_only_e2e_cache: true,
+        };
+        let refused = |prepare: &dyn Fn(&Path)| {
+            let workspace = tempfile::tempdir().unwrap();
+            let canonical = std::fs::canonicalize(workspace.path()).unwrap();
+            prepare(&canonical);
+            let opened = SecureDir::open(&canonical).unwrap();
+            let error =
+                SessionSandbox::read_only_binds(&opened, &canonical, mounts).expect_err("refused");
+            assert!(
+                error.to_string().contains("cannot be mounted read-only"),
+                "{error}"
+            );
+        };
+        // `.e2e` itself a symlink out of the Workspace.
+        refused(&|root| std::os::unix::fs::symlink(outside.path(), root.join(".e2e")).unwrap());
+        // `.e2e/cache` a symlink out of the Workspace.
+        refused(&|root| {
+            std::fs::create_dir(root.join(".e2e")).unwrap();
+            std::os::unix::fs::symlink(outside.path().join("cache"), root.join(".e2e/cache"))
+                .unwrap();
+        });
+        // `.e2e/cache` a symlink inside the Workspace.
+        refused(&|root| {
+            std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+            std::fs::create_dir(root.join(".e2e")).unwrap();
+            std::os::unix::fs::symlink(root.join("elsewhere"), root.join(".e2e/cache")).unwrap();
+        });
+        // A file where the directory belongs.
+        refused(&|root| {
+            std::fs::create_dir(root.join(".e2e")).unwrap();
+            std::fs::write(root.join(".e2e/cache"), "not a directory").unwrap();
+        });
+        assert!(outside
+            .path()
+            .join("cache")
+            .read_dir()
+            .unwrap()
+            .next()
+            .is_none());
+    }
+
+    #[test]
+    fn read_only_binds_mount_over_the_workspace_and_nothing_else_changes() {
+        let policy = SandboxPolicy {
+            network: SandboxNetwork::None,
+            ..SandboxPolicy::default()
+        };
+        let plain = SessionSandbox::build_run_args(
+            "ses-a",
+            "axo-ses-a",
+            "/work/repo",
+            "img",
+            None,
+            false,
+            &[],
+            &policy,
+        );
+        let with_cache = SessionSandbox::build_run_args_with_mounts(
+            "ses-a",
+            "axo-ses-a",
+            "/work/repo",
+            "img",
+            None,
+            false,
+            &[],
+            &policy,
+            &[
+                "/work/repo/.e2e/cache".to_string(),
+                // Never outside the Workspace, and never the Workspace itself.
+                "/elsewhere/.e2e/cache".to_string(),
+                "/work/repo".to_string(),
+                "/work/repository/.e2e/cache".to_string(),
+            ],
+        );
+        let rw = with_cache
+            .iter()
+            .position(|arg| arg == "/work/repo:/work/repo:rw")
+            .unwrap();
+        assert_eq!(
+            &with_cache[rw + 1..rw + 3],
+            ["-v", "/work/repo/.e2e/cache:/work/repo/.e2e/cache:ro"]
+        );
+        let mut without = with_cache.clone();
+        without.drain(rw + 1..rw + 3);
+        assert_eq!(without, plain);
+        assert_eq!(
+            with_cache.iter().filter(|arg| arg.ends_with(":ro")).count(),
+            1
+        );
+    }
+
+    /// End-to-end: with the option, the e2e replay cache is read-only in the
+    /// Session container while the rest of the Workspace stays writable;
+    /// without it nothing changes. Needs Podman (`CONTAINER_CONNECTION`).
+    #[tokio::test]
+    #[ignore = "requires podman; run with: cargo test -p axocoatl-isolation -- --ignored"]
+    async fn e2e_cache_is_read_only_and_the_workspace_stays_writable() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(workspace.path()).unwrap();
+        std::fs::create_dir_all(root.join(".e2e/cache")).unwrap();
+        std::fs::write(root.join(".e2e/cache/recorded.json"), "recorded").unwrap();
+        let policy = SandboxPolicy {
+            runtime_authority: Some("f".repeat(64)),
+            ..SandboxPolicy::default()
+        };
+        let session = format!("e2e-cache-{}", uuid::Uuid::new_v4().simple());
+        let sandbox = SessionSandbox::start_with_mounts(
+            &session,
+            &root,
+            None,
+            &[],
+            &[],
+            &policy,
+            WorkspaceMounts {
+                read_only_e2e_cache: true,
+            },
+        )
+        .await
+        .expect("sandbox with a read-only e2e cache should start");
+        let run = |script: &'static str| {
+            let sandbox = &sandbox;
+            async move {
+                sandbox
+                    .exec(&["sh", "-c", script], Duration::from_secs(20))
+                    .await
+                    .unwrap()
+            }
+        };
+        // The recorded entry is readable; nothing can be added, changed or
+        // removed under the cache, by any user of the container.
+        assert!(run("test \"$(cat .e2e/cache/recorded.json)\" = recorded")
+            .await
+            .ok());
+        let write = run("printf planted > .e2e/cache/planted.json").await;
+        assert!(!write.ok(), "writing into .e2e/cache must fail");
+        assert!(!run("printf changed > .e2e/cache/recorded.json").await.ok());
+        assert!(!run("rm -f .e2e/cache/recorded.json").await.ok());
+        assert!(!run("mkdir .e2e/cache/sub").await.ok());
+        // The rest of the Workspace, `.e2e` included, stays writable.
+        assert!(
+            run("printf report > .e2e/report.json && printf ok > probe.txt")
+                .await
+                .ok()
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("probe.txt")).unwrap(),
+            "ok"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".e2e/report.json")).unwrap(),
+            "report"
+        );
+        assert!(!root.join(".e2e/cache/planted.json").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join(".e2e/cache/recorded.json")).unwrap(),
+            "recorded"
+        );
+        sandbox.stop().await;
+
+        // Without the option the same Workspace's cache is writable.
+        let control = SessionSandbox::start(&session, &root, None, &[], &[], &policy)
+            .await
+            .expect("plain sandbox should start");
+        assert!(control
+            .exec(
+                &["sh", "-c", "printf written > .e2e/cache/control.json"],
+                Duration::from_secs(20),
+            )
+            .await
+            .unwrap()
+            .ok());
+        assert_eq!(
+            std::fs::read_to_string(root.join(".e2e/cache/control.json")).unwrap(),
+            "written"
+        );
+        control.stop().await;
+        let _ = SessionSandbox::remove_named_with_dependencies(&session).await;
     }
 }
