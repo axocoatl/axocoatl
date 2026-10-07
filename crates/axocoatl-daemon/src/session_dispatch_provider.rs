@@ -52,8 +52,10 @@ pub(crate) struct SessionProvider {
     retry_observer: Option<Arc<dyn axocoatl_actor::AgentStreamObserver>>,
 }
 
-/// One attempt's outcome: the stream, a provider failure that may be
-/// retried, or an error that ends the call (a settlement failure).
+/// One attempt's outcome: what it produced, or a provider failure whose call
+/// is already settled and which the policy may retry. An error that ends the
+/// whole call (a settlement failure or a boundary violation) is returned as
+/// the attempt's own `Err` instead.
 enum Attempt<T> {
     Done(T),
     Failed(ProviderError),
@@ -217,10 +219,12 @@ impl SessionProvider {
         Ok(Attempt::Done(response))
     }
 
-    /// Open one stream under `pending`. With `prefetch`, the stream's first
-    /// item is read before it is handed on, so a failure before the
-    /// provider produced anything can be retried; that failure is settled
-    /// exactly as the stream would have settled it.
+    /// Open one stream under `pending`. While a retry is still allowed
+    /// (`attempt` below the policy's limit), the stream's first item is read
+    /// before it is handed on, so a transient failure before the provider
+    /// produced anything can be retried; that failure is settled exactly as
+    /// the stream would have settled it. Any other first item is handed on
+    /// unchanged, and the last attempt's stream is handed on unread.
     async fn stream_once(
         &self,
         mut pending: PendingCall,
