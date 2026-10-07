@@ -716,6 +716,26 @@ async fn changes_go_back_to_the_lead_and_a_second_round_approves() {
     assert_eq!(second.outcome, ConditionOutcome::Passed);
     assert_eq!(second_proof["round"], 2);
     assert_eq!(second.activations[0].generation, 2);
+    // A loadout run reads every round from the same proofs, with the
+    // findings sent back split by id.
+    let rounds: Vec<_> = run
+        .controller
+        .with_team_stores(|_, content, _| {
+            Ok(
+                axocoatl_session::turn_review::review_proofs(&run.outcome.snapshot, content)
+                    .unwrap()
+                    .iter()
+                    .map(|proof| proof.to_round())
+                    .collect(),
+            )
+        })
+        .unwrap();
+    assert_eq!(rounds.len(), 2);
+    assert!(rounds[0].continued && !rounds[1].continued && rounds[1].passed);
+    assert_eq!(rounds[0].findings.len(), 1);
+    assert_eq!(rounds[0].findings[0].id, "F1");
+    assert_eq!(rounds[0].findings[0].text, FINDING);
+    assert!(rounds[1].findings.is_empty());
     // Only the verdict about the current answer counts.
     let current = contract
         .current_condition(&first.condition_id)

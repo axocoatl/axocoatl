@@ -13,11 +13,10 @@
 
 use async_trait::async_trait;
 use axocoatl_config::loadout::{LoadoutRole, ResolvedLoadout};
-use axocoatl_session::review_adjudication::{adjudicate_with_notes, split_findings};
+use axocoatl_session::review_adjudication::{adjudicate_with_notes, findings_of};
 use axocoatl_session::run_outcome::{
     same_model_warning, Adjudication, AdjudicationDecision, ModelIdentity, NodeObservation,
-    ReviewFinding, ReviewRound, ReviewVerdictKind, RunTurnRef, RunWarning, TurnObservation,
-    SAME_MODEL_REVIEWER,
+    RunTurnRef, RunWarning, TurnObservation, SAME_MODEL_REVIEWER,
 };
 use axocoatl_session::run_record::RunEvent;
 
@@ -71,21 +70,6 @@ fn writer_node<'a>(
                 .iter()
                 .find(|node| node.required && node.kind != "reviewer")
         })
-}
-
-/// The findings of one round as the Outcome lists them: a request for
-/// changes is always split (unnumbered text is one finding, `F1`); another
-/// verdict's text is split only when the reviewer numbered it, so "Nothing
-/// must change." is not a finding.
-fn round_findings(round: &ReviewRound) -> Vec<ReviewFinding> {
-    let split = split_findings(&round.findings_text).unwrap_or_default();
-    if round.verdict == ReviewVerdictKind::Changes {
-        return split;
-    }
-    match split.as_slice() {
-        [only] if only.text == round.findings_text.trim() => Vec::new(),
-        _ => split,
-    }
 }
 
 /// The writer and reviewer identities the loadout resolved to, and the
@@ -149,7 +133,7 @@ pub fn fix_report(run: &RunContext, mut turn: TurnObservation) -> KindReport {
     if let Some(review) = turn.review.as_mut() {
         for round in &mut review.rounds {
             if round.findings.is_empty() {
-                round.findings = round_findings(round);
+                round.findings = findings_of(round.verdict, &round.findings_text);
             }
         }
     }
@@ -274,7 +258,9 @@ async fn record_report(
 
 #[cfg(test)]
 mod tests {
-    use axocoatl_session::run_outcome::{NodeState, ReviewOutcome, TurnState};
+    use axocoatl_session::run_outcome::{
+        NodeState, ReviewOutcome, ReviewRound, ReviewVerdictKind, TurnState,
+    };
 
     use super::super::qa::tests::{context, generation, node, turn, FakeHost};
     use super::*;

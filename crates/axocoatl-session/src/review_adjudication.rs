@@ -11,6 +11,7 @@
 
 use crate::run_outcome::{
     Adjudication, AdjudicationDecision, NodeObservation, ReviewFinding, ReviewRound,
+    ReviewVerdictKind,
 };
 
 /// Heading of the writer's adjudication block.
@@ -298,10 +299,23 @@ pub struct AdjudicationReport {
     pub notes: Vec<String>,
 }
 
+/// The findings a round with `verdict` and `findings_text` lists: a request
+/// for changes is always split ([`split_findings`]: unnumbered text is one
+/// finding, `F1`); another verdict's text is split only when the reviewer
+/// numbered it, so "Nothing must change." is not a finding.
+pub fn findings_of(verdict: ReviewVerdictKind, findings_text: &str) -> Vec<ReviewFinding> {
+    let split = split_findings(findings_text).unwrap_or_default();
+    match (verdict, split.as_slice()) {
+        (ReviewVerdictKind::Changes, _) => split,
+        (_, [only]) if only.text == findings_text.trim() => Vec::new(),
+        _ => split,
+    }
+}
+
 /// The findings of `round`: as split already, or split from its text.
 pub fn round_findings(round: &ReviewRound) -> Vec<ReviewFinding> {
     if round.findings.is_empty() {
-        split_findings(&round.findings_text).unwrap_or_default()
+        findings_of(round.verdict, &round.findings_text)
     } else {
         round.findings.clone()
     }
@@ -502,6 +516,15 @@ mod tests {
             }]
         );
         assert!(split_findings("  \n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn only_requests_for_changes_turn_unnumbered_text_into_a_finding() {
+        use ReviewVerdictKind::*;
+        assert_eq!(ids(&findings_of(Changes, "fix the loop")), ["F1"]);
+        assert!(findings_of(Approve, "Nothing must change.").is_empty());
+        assert!(findings_of(Unreadable, "Looks fine to me.").is_empty());
+        assert_eq!(ids(&findings_of(Approve, "F1: a nit")), ["F1"]);
     }
 
     #[test]

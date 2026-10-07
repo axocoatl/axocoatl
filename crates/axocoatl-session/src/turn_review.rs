@@ -346,6 +346,68 @@ pub struct ReviewProof {
     pub continued: bool,
 }
 
+impl ReviewProof {
+    /// This round as a loadout run's Outcome lists it, with its findings
+    /// split by id (`F1`, `F2`, ...) when it asked for changes. A request for
+    /// changes without ids is one finding, `F1`; another verdict's text is
+    /// split only when the reviewer numbered it.
+    pub fn to_round(&self) -> crate::run_outcome::ReviewRound {
+        use crate::run_outcome::{ReviewRound, ReviewVerdictKind};
+        let verdict = match self.verdict {
+            ReviewVerdict::Approve => ReviewVerdictKind::Approve,
+            ReviewVerdict::Changes => ReviewVerdictKind::Changes,
+            ReviewVerdict::Unreadable => ReviewVerdictKind::Unreadable,
+        };
+        let findings = crate::review_adjudication::findings_of(verdict, &self.findings);
+        ReviewRound {
+            round: self.round,
+            verdict,
+            passed: self.passed,
+            findings_text: self.findings.clone(),
+            findings,
+            continued: self.continued,
+            candidate_sha256: self.candidate_sha256.clone(),
+        }
+    }
+}
+
+/// Every review proof `snapshot` recorded, oldest first: one per round the
+/// reviewer answered, and one with round 0 for each time the review could
+/// not run (the result could not be captured, or the reviewer could not
+/// start). Empty when its graph carries no review.
+pub fn review_proofs(
+    snapshot: &DurableTurnSnapshot,
+    content: &ExecutionContentStore,
+) -> Result<Vec<ReviewProof>, ExecutionContentError> {
+    let contract = snapshot.contract();
+    let Some(graph) = contract.graph() else {
+        return Ok(Vec::new());
+    };
+    if review_criterion(graph, content)?.is_none() {
+        return Ok(Vec::new());
+    }
+    let id = review_condition_id();
+    let mut proofs = Vec::new();
+    for observation in contract
+        .conditions()
+        .iter()
+        .filter(|observation| observation.condition_id == id)
+    {
+        let ActivationEvidenceContent::Guidance { text } =
+            &content.resolve_activation_evidence(&observation.evidence)?
+        else {
+            return Err(ExecutionContentError::Invalid(
+                "the review proof is not retained guidance",
+            ));
+        };
+        proofs.push(
+            serde_json::from_str(text)
+                .map_err(|_| ExecutionContentError::Invalid("the review proof cannot be read"))?,
+        );
+    }
+    Ok(proofs)
+}
+
 /// The review of `snapshot`, when its graph carries one: the current
 /// verdict, or the latest one and whether a new round is under way.
 pub fn project_review(
@@ -567,6 +629,48 @@ mod tests {
             assert_eq!(verdict, ReviewVerdict::Unreadable, "{answer}");
             assert_eq!(findings, answer.trim());
         }
+    }
+
+    /// A recorded proof becomes the Outcome's round: its verdict, whether it
+    /// was sent back, and its findings split by id.
+    #[test]
+    fn a_proof_is_a_round_with_findings_split_by_id() {
+        use crate::run_outcome::ReviewVerdictKind;
+        let proof = |verdict, findings: &str, continued| ReviewProof {
+            kind: "required_review".into(),
+            round: 2,
+            max_rounds: 3,
+            verdict,
+            findings: findings.into(),
+            passed: verdict == ReviewVerdict::Approve,
+            reason: None,
+            candidate_sha256: Some("tree".into()),
+            continued,
+        };
+        let round = proof(
+            ReviewVerdict::Changes,
+            "**F1** src/a.rs:1: x\n- F2: src/b.rs:2: y",
+            true,
+        )
+        .to_round();
+        assert_eq!(round.round, 2);
+        assert_eq!(round.verdict, ReviewVerdictKind::Changes);
+        assert!(round.continued && !round.passed);
+        assert_eq!(round.candidate_sha256.as_deref(), Some("tree"));
+        let ids: Vec<_> = round.findings.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(ids, ["F1", "F2"]);
+        assert_eq!(round.findings[1].text, "src/b.rs:2: y");
+        let approved = proof(ReviewVerdict::Approve, "Nothing must change.", false).to_round();
+        assert!(approved.findings.is_empty() && approved.passed);
+        assert_eq!(approved.findings_text, "Nothing must change.");
+        let unreadable = proof(ReviewVerdict::Unreadable, "Looks fine.", false).to_round();
+        assert_eq!(unreadable.verdict, ReviewVerdictKind::Unreadable);
+        // A proof recorded before 1.3 reads with the same fields.
+        let old: ReviewProof = serde_json::from_str(
+            r#"{"kind":"required_review","round":1,"max_rounds":2,"verdict":"changes","findings":"x","passed":false}"#,
+        )
+        .unwrap();
+        assert_eq!(old.to_round().findings[0].id, "F1");
     }
 
     #[test]
