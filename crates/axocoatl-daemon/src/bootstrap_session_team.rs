@@ -373,6 +373,17 @@ pub(crate) fn approved_required_checks(
         .map(|approval| approval.edit.required_checks)
         .unwrap_or_default())
 }
+/// The per-check options (name, timeout, report) of the Apply that approved
+/// this slot's grant, aligned with [`approved_required_checks`]. Empty for
+/// an Apply without them, so every check takes the defaults.
+pub(crate) fn approved_check_options(
+    content: &ExecutionContentStore,
+    slot: &SessionTeamSlot,
+) -> Result<Vec<axocoatl_session::check_options::RequiredCheckOptions>, DaemonError> {
+    Ok(approval_for_slot(content, slot)?
+        .map(|approval| approval.edit.check_options)
+        .unwrap_or_default())
+}
 /// The required review of the Apply that approved this slot's grant. Its
 /// retained definition must be the setting the Apply names.
 pub(crate) fn approved_review(
@@ -521,17 +532,21 @@ fn check_required_checks(edit: &SessionTeamEdit, conditions: usize) -> Result<()
             "A team can have at most {most} required checks; remove some"
         )));
     }
-    axocoatl_session::turn_checks::check_definitions(&edit.required_checks).map_err(|_| {
+    axocoatl_session::check_options::validate_check_options(
+        &edit.required_checks,
+        &edit.check_options,
+    )
+    .map_err(|reason| team_error(format!("Invalid required check options: {reason}")))?;
+    axocoatl_session::turn_checks::check_definitions_with_options(
+        &edit.required_checks,
+        &edit.check_options,
+    )
+    .map_err(|_| {
         team_error(
             "Each required check must be a command of at most 64 arguments, each at most \
              4096 bytes and without NUL characters",
         )
     })?;
-    if !edit.check_options.is_empty() {
-        // Workstream `runtime` carries the options to the admitted
-        // definitions; until then they are refused rather than ignored.
-        return Err(DaemonError::NotImplemented("required check options"));
-    }
     Ok(())
 }
 /// A required review names 1 to 3 rounds and a reviewer budget that pays for

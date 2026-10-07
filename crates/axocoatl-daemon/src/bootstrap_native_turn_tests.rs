@@ -42,7 +42,16 @@ async fn native_fixture_with_checks_and_invocations(
     checks: &[Vec<String>],
     invocations: u32,
 ) -> NativeFixture {
-    let approval = serde_json::json!({
+    native_fixture_with_check_options(checks, serde_json::json!([]), invocations).await
+}
+/// As `native_fixture_with_checks_and_invocations`, with the Apply's
+/// `check_options` (an empty list is an Apply without them).
+async fn native_fixture_with_check_options(
+    checks: &[Vec<String>],
+    options: serde_json::Value,
+    invocations: u32,
+) -> NativeFixture {
+    let mut approval = serde_json::json!({
         "kind": "authenticated_session_team_apply",
         "edit": {
             "command_id": "apply-initial-team",
@@ -54,6 +63,12 @@ async fn native_fixture_with_checks_and_invocations(
         },
         "templates": [],
     });
+    if options
+        .as_array()
+        .is_some_and(|options| !options.is_empty())
+    {
+        approval["edit"]["check_options"] = options;
+    }
     native_fixture_with(
         invocations,
         &approval.to_string(),
@@ -555,6 +570,83 @@ async fn approved_required_checks_become_turn_conditions_and_survive_exact_retry
             "required-check:2",
             "required-check:ready"
         ]
+    );
+}
+/// An Apply's `check_options` reach the turn: the admitted definition of a
+/// check with a ten-minute timeout carries it, the paying grant's permission
+/// covers it, and the control-plane projection reads the checks back from
+/// the admitted graph.
+#[tokio::test]
+async fn applied_check_timeouts_reach_the_admitted_definitions_and_authority() {
+    let checks = vec![
+        vec!["sh".into(), "-c".into(), "test -f done.txt".into()],
+        vec!["sh".into(), "-c".into(), "sleep 1".into()],
+    ];
+    let f = native_fixture_with_check_options(
+        &checks,
+        serde_json::json!([{}, {"name": "slow", "timeout_ms": 600000}]),
+        24,
+    )
+    .await;
+    let token = f
+        .registry
+        .session_team_token(f.request.session_id.as_str())
+        .unwrap();
+    let data = SecureDir::open(f.repository._data.path()).unwrap();
+    let source = f.request.source().unwrap();
+    let first = prepare_admission(&f.registry, &token, &data, &f.request, &source).unwrap();
+    let graph = first.content.graph.clone();
+    let timeouts = f
+        .registry
+        .with_session_team_stores(&token, |_, content, _| {
+            Ok((0..4)
+                .map(|index| {
+                    let ConditionKind::RepositoryCheck { definition } =
+                        &graph.conditions[index].kind
+                    else {
+                        panic!("a repository check")
+                    };
+                    content
+                        .resolve_repository_check_definition(definition)
+                        .unwrap()
+                        .timeout_ms
+                })
+                .collect::<Vec<_>>())
+        })
+        .unwrap();
+    assert_eq!(timeouts, [180_000, 180_000, 600_000, 180_000]);
+    let (controller, repository) = begin(&f, &f.request);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let factory = Arc::new(RefusingFactory(calls.clone()));
+    let NativeFirstTurnStart::Prepared(prepared) = finish_owned_setup(
+        &f.registry,
+        controller.clone(),
+        repository,
+        &source,
+        crate::stream::StreamBus::new(64),
+        factory,
+    )
+    .unwrap() else {
+        panic!("first owned handoff must prepare")
+    };
+    let permissions = controller
+        .with_grant_stores(|_, _, held| {
+            Ok(held
+                .unwrap()
+                .1
+                .grant_pays_required_checks("grant-1")
+                .unwrap())
+        })
+        .unwrap();
+    assert!(permissions, "node-1 has bash and pays for the checks");
+    let _ = prepared.run().await.unwrap();
+    let view = controller.control_plane().unwrap();
+    assert_eq!(
+        view.required_checks
+            .iter()
+            .map(|check| check.argv.clone())
+            .collect::<Vec<_>>(),
+        checks
     );
 }
 #[tokio::test]
