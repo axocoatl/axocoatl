@@ -61,8 +61,25 @@ pub fn argv(model: &str) -> Result<Vec<String>, ExternalAgentError> {
     .collect())
 }
 
+/// `--max-budget-usd` at `cost_microunits`: Claude Code's own spending stop
+/// (its cost is its own computation from list prices), set to what the
+/// activation's grant still allows.
+pub fn budget_args(cost_microunits: u64) -> Vec<String> {
+    vec![
+        "--max-budget-usd".into(),
+        format!(
+            "{}.{:06}",
+            cost_microunits / 1_000_000,
+            cost_microunits % 1_000_000
+        ),
+    ]
+}
+
+/// Dollars to micro-dollars, rounded up, after dropping floating-point noise
+/// below a thousandth of a micro-dollar (`0.000123` is 123, not 124).
 fn usd_to_microunits(cost: f64) -> Option<u64> {
-    (cost.is_finite() && cost >= 0.0).then(|| (cost * 1_000_000.0).ceil() as u64)
+    (cost.is_finite() && cost >= 0.0)
+        .then(|| ((cost * 1_000_000_000.0).round() / 1000.0).ceil() as u64)
 }
 
 /// Text of a `tool_result` content (a string or a list of text blocks).

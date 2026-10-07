@@ -1,5 +1,12 @@
 //! Native Agent definitions and activation factories built from the daemon's
 //! actual configuration and the Session's retained stores.
+//!
+//! 1.3 (workstream `agents`): a definition whose `provider` names an external
+//! runtime (`claude-code`, `codex`; see `crate::external_agent`) is retained
+//! as it is, without a native provider observation, and its activations run
+//! the program instead of a model: the factory routes them to the controller's
+//! external port. Admission, grant, captures, write-scope judgement and
+//! settlement are the native writer's, unchanged.
 use super::*;
 use crate::session_dispatch::{
     AutonomousActivationFactory, CapturedNativeDefinition, NativeDefinitionPreparation,
@@ -39,6 +46,14 @@ impl AxocoatlDaemon {
         revision: u64,
         initial_limits: GrantLimits,
     ) -> Result<CapturedNativeDefinition, DaemonError> {
+        if crate::external_agent::runtime_for_provider(&config.provider).is_some() {
+            return self.prepare_external_session_team_definition(
+                token,
+                config,
+                definition_id,
+                revision,
+            );
+        }
         crate::session_dispatch::validate_repository_tools(&config.tools).map_err(native_error)?;
         // A listed host tool (web_search, web_fetch, browser, browser_check)
         // must be available before the team is admitted.
@@ -144,13 +159,73 @@ impl AxocoatlDaemon {
                 .register_host_invocation_tool(tool)
                 .map_err(native_error)?;
         }
-        controller
+        let native = controller
             .native_provider_factory(
                 &self.data_root,
                 self.configured_native_provider_credentials(),
                 self.counter.clone(),
             )
-            .map_err(native_error)
+            .map_err(native_error)?;
+        // External definitions run their program; all others stay native.
+        Ok(controller.external_activation_factory(
+            native,
+            self.counter.clone(),
+            crate::session_dispatch::ExternalSettings::default(),
+        ))
+    }
+
+    /// Retain an external writer's definition (see `crate::external_agent`):
+    /// the configuration exactly as `external_agent_config` shaped it, with
+    /// its profile. Nothing is observed from a provider; the program and its
+    /// model are named by the definition and run from the Session's image.
+    fn prepare_external_session_team_definition(
+        &self,
+        token: &session_dispatch::SessionTeamToken,
+        config: AgentConfig,
+        definition_id: AgentDefinitionId,
+        revision: u64,
+    ) -> Result<CapturedNativeDefinition, DaemonError> {
+        crate::external_agent::validate_external_config(&config)
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        if revision == 0 {
+            return Err(native_error("definition revision must be positive"));
+        }
+        let profile = axocoatl_session::control_authority::ExecutionProfile {
+            definition: definition_id.as_str().to_owned(),
+            provider: config.provider.clone(),
+            model: config.model.clone(),
+            isolation: "in-process".into(),
+            tools: config.tools.clone(),
+            write_scope: config.writes.clone(),
+        };
+        let configuration = serde_json::to_string(&config).map_err(native_error)?;
+        let data_root = &self.data_root;
+        let definition = self.session_dispatch_lifecycles.with_session_team_stores(
+            token,
+            |canonical, content, _| {
+                canonical
+                    .verify_data_root(data_root)
+                    .map_err(native_error)?;
+                content
+                    .retain_activation_evidence(
+                        axocoatl_session::execution_content::ActivationEvidenceContent::Definition {
+                            definition_id: definition_id.clone(),
+                            revision,
+                            profile: profile.clone(),
+                            configuration: configuration.clone(),
+                        },
+                    )
+                    .map(|receipt| receipt.reference().clone())
+                    .map_err(native_error)
+            },
+        )?;
+        Ok(CapturedNativeDefinition {
+            definition: axocoatl_session::turn_contract::DefinitionSnapshotRef {
+                definition_id,
+                snapshot: definition,
+            },
+            profile,
+        })
     }
 
     fn configured_native_provider_credentials(&self) -> NativeProviderCredentials {
