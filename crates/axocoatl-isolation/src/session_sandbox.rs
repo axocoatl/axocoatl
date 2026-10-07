@@ -69,6 +69,11 @@ const SETUP_OUTPUT_MAX_BYTES: usize = 16 * 1024;
 /// command. Readers continue draining after this limit so a chatty child
 /// cannot block on a full pipe or grow the daemon heap without bound.
 pub(crate) const COMMAND_OUTPUT_MAX_BYTES: usize = 1024 * 1024;
+/// Maximum retained stdout of an observed exec ([`SessionSandbox::exec_observed`]).
+/// A bounded file read through it, such as an e2e check's `report.json` (at
+/// most 4 MiB, plus the bytes that prove a larger file), needs more than a
+/// foreground command's output.
+pub const OBSERVED_STDOUT_MAX_BYTES: usize = 8 * 1024 * 1024;
 const OUTPUT_TRUNCATION_MARKER_PREFIX: &str = "\n… ";
 /// Dynamic host-port allocation should almost never collide, but Podman's
 /// rootless proxy can race while it is reconciling a just-removed container.
@@ -4143,7 +4148,7 @@ impl SessionSandbox {
         stdout_limit: usize,
         stderr_limit: usize,
     ) -> Result<CapturedCommandOutput, IsolationError> {
-        if stdout_limit > COMMAND_OUTPUT_MAX_BYTES
+        if stdout_limit > OBSERVED_STDOUT_MAX_BYTES
             || stderr_limit > COMMAND_OUTPUT_MAX_BYTES
             || timeout.is_zero()
         {
@@ -5390,21 +5395,65 @@ mod tests {
     async fn observed_exec_invalid_limits_refuse_before_starting_the_command() {
         let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join("must-not-exist");
-        for (timeout, limit) in [
-            (Duration::ZERO, 1),
-            (Duration::from_secs(1), COMMAND_OUTPUT_MAX_BYTES + 1),
+        for (timeout, stdout_limit, stderr_limit) in [
+            (Duration::ZERO, 1, 0),
+            (Duration::from_secs(1), OBSERVED_STDOUT_MAX_BYTES + 1, 0),
+            // Only stdout may carry a bounded file; stderr stays a command's.
+            (Duration::from_secs(1), 1, COMMAND_OUTPUT_MAX_BYTES + 1),
         ] {
             let mut command = Command::new("sh");
             command
                 .args(["-c", "printf started > \"$1\"", "test"])
                 .arg(&marker);
             assert!(SessionSandbox::run_bounded_command_with_capture_owned(
-                command, None, timeout, limit, 0
+                command,
+                None,
+                timeout,
+                stdout_limit,
+                stderr_limit
             )
             .await
             .is_err());
             assert!(!marker.exists());
         }
+    }
+
+    /// A bounded file read is an observed exec whose stdout limit is the
+    /// file's bound plus the bytes that prove a larger file: an e2e check's
+    /// report is up to 4 MiB, more than a command's 1 MiB of output. Such a
+    /// read is accepted and returns the whole file.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn observed_exec_reads_a_bounded_file_larger_than_a_command_output() {
+        const REPORT_BOUND: usize = 4 * 1024 * 1024;
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("report.json");
+        let bytes: Vec<u8> = (0..3 * 1024 * 1024 + 17)
+            .map(|index| b'a' + (index % 26) as u8)
+            .collect();
+        assert!(bytes.len() > COMMAND_OUTPUT_MAX_BYTES);
+        std::fs::write(&file, &bytes).unwrap();
+        let limit = REPORT_BOUND + 2;
+        assert!(limit <= OBSERVED_STDOUT_MAX_BYTES);
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "exec head -c \"$2\" -- \"$1\"", "sh"])
+            .arg(&file)
+            .arg(limit.to_string());
+        let result = SessionSandbox::run_bounded_command_with_capture_owned(
+            command,
+            None,
+            Duration::from_secs(30),
+            limit,
+            4096,
+        )
+        .await
+        .unwrap()
+        .into_observation();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.stdout.complete);
+        assert_eq!(result.stdout.observed_bytes, bytes.len() as u64);
+        assert!(result.stdout.retained == bytes);
     }
 
     #[cfg(unix)]
