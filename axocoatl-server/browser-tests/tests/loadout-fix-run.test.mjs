@@ -105,7 +105,8 @@ test('the built-in fix loadout runs under egress, passes, warns about the same m
     '--model', `writer=${model}`, '--model', `reviewer=${model}`, '--check', 'test -f NOTES.md',
     '--keep', 'branch', '--junit', junitPath, '--record', recordPath, '--json', '--url', runtime.baseUrl],
   { AXOCOATL_TOKEN: runtime.token });
-  const outcome = JSON.parse(result.stdout.slice(0, result.stdout.lastIndexOf('}') + 1));
+  // With --json, standard output is exactly one Outcome document; Keep's lines go to stderr.
+  const outcome = JSON.parse(result.stdout);
   assert.equal(outcome.exit_code, 0, `${result.stdout}\n${result.stderr}`);
   assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
   assert.equal(outcome.verdict, 'pass');
@@ -115,14 +116,14 @@ test('the built-in fix loadout runs under egress, passes, warns about the same m
   assert.equal(outcome.review.rounds[0].verdict, 'approve');
   assert.deepEqual(outcome.adjudications, [], 'an approving first round sends nothing back');
   assert.ok(outcome.warnings.some((warning) => warning.code === 'same_model_reviewer'), JSON.stringify(outcome.warnings));
-  assert.match(result.stderr, /same/i, 'the run output names the same-model warning');
+  assert.equal(result.stderr.match(/^! warning same_model_reviewer:/gm)?.length, 1, `the same-model warning prints once:\n${result.stderr}`);
   // The run's Session is bound to the loadout under egress, hardened.
   const session = await (await fetch(`${runtime.baseUrl}/api/sessions/${outcome.session_id}`, { headers: { authorization: `Bearer ${runtime.token}` } })).json();
   assert.equal(session.loadout.network, 'egress');
   assert.equal(session.loadout.workload, 'hardened');
   // Keep as branch: a new branch holds exactly NOTES.md; the checkout is untouched.
-  assert.match(result.stdout, /Kept: branch axocoatl\/fix-[0-9a-f]{8} at [0-9a-f]{40}/);
-  const branch = result.stdout.match(/Kept: branch (\S+)/)[1];
+  assert.match(result.stderr, /Kept: branch axocoatl\/fix-[0-9a-f]{8} at [0-9a-f]{40}/);
+  const branch = result.stderr.match(/Kept: branch (\S+)/)[1];
   assert.equal(await git(repo, 'rev-parse', 'HEAD'), head);
   assert.equal(await git(repo, 'branch', '--show-current'), 'main');
   assert.equal(await git(repo, 'show', `${branch}:NOTES.md`), 'kept by the fix run');
@@ -132,6 +133,9 @@ test('the built-in fix loadout runs under egress, passes, warns about the same m
   assert.equal(status.keep?.branch, branch, JSON.stringify({ ...status, outcome: undefined }));
   // JUnit and the record bundle are written, and the bundle verifies.
   assert.match(await readFile(junitPath, 'utf8'), /<property name="axocoatl.warning.same_model_reviewer"/);
+  // Keep ran before the record was written, so the bundle holds its event.
+  const recordLines = (await readFile(recordPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+  assert.ok(recordLines.some((line) => line.section === 'run_event' && line.data?.event?.phase === 'keep'), 'the record holds the keep event');
   const verified = await run(binary(), ['record', 'verify', recordPath]);
   assert.equal(verified.code, 0, verified.stdout + verified.stderr);
   assert.ok(chats.some((body) => /VERDICT/.test(JSON.stringify(body))), 'the reviewer was asked');
