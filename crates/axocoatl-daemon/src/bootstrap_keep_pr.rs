@@ -14,7 +14,7 @@ use crate::keep_pr::{
 };
 use axocoatl_session::run_outcome::RunOutcome;
 use axocoatl_session::run_record::RunRecordStore;
-use axocoatl_session::session_history::SessionHistoryEntry;
+use axocoatl_session::session_history::{HistoryVisibility, SessionHistoryEntry};
 
 /// One Keep at a time: two requests for one run must not race to create
 /// its branch or push it twice.
@@ -39,14 +39,15 @@ impl AxocoatlDaemon {
     }
 
     /// [`Self::keep_as_pr`] with its run record, host tools and, in tests, a
-    /// given attribution instead of the Session history's.
+    /// given attribution (the run's, then the other turns') instead of the
+    /// Session history's.
     pub(crate) async fn keep_as_pr_with(
         &self,
         session_id: &str,
         request: KeepPrRequest,
         record: &dyn KeepRunRecord,
         tools: &HostTools,
-        attribution: Option<RunAttribution>,
+        attribution: Option<(RunAttribution, RunAttribution)>,
     ) -> Result<KeepPrResponse, DaemonError> {
         crate::keep_pr::validate_request(&request)?;
         let session = self
@@ -57,8 +58,8 @@ impl AxocoatlDaemon {
         let (manifest, outcome) = crate::keep_pr::load_run(record, session_id, &request.run_id)?;
         let branch = crate::keep_pr::branch_name(&request, &outcome.loadout.id);
         let result = async {
-            let attribution = match attribution {
-                Some(attribution) => attribution,
+            let (attribution, outside) = match attribution {
+                Some(given) => given,
                 None => self.keep_run_attribution(&session, &outcome).await?,
             };
             let results = record.keep_results(&request.run_id)?;
@@ -70,6 +71,7 @@ impl AxocoatlDaemon {
                 manifest: &manifest,
                 outcome: &outcome,
                 attribution: &attribution,
+                outside: &outside,
                 previous: previous.as_ref(),
                 tools,
             })
@@ -94,12 +96,13 @@ impl AxocoatlDaemon {
         }
     }
 
-    /// The paths the run's turns changed, from this Session's history.
+    /// The paths the run's turns changed, then the paths the Session's other
+    /// turns changed, from this Session's history.
     async fn keep_run_attribution(
         &self,
         session: &Session,
         outcome: &RunOutcome,
-    ) -> Result<RunAttribution, KeepPrError> {
+    ) -> Result<(RunAttribution, RunAttribution), KeepPrError> {
         if outcome.turns.is_empty() {
             return Err(KeepPrError::Refused(format!(
                 "run {} records no turns, so nothing is attributed to it",
@@ -128,7 +131,22 @@ impl AxocoatlDaemon {
                 }
             }
         }
-        Ok(attribution)
+        let mut outside = RunAttribution::default();
+        for entry in history.entries(HistoryVisibility::IncludingSuperseded) {
+            if outcome
+                .turns
+                .iter()
+                .any(|turn| turn.turn_id == entry.turn_id())
+            {
+                continue;
+            }
+            match entry {
+                SessionHistoryEntry::ExecutionV2(view) => outside.add_execution_turn(view),
+                SessionHistoryEntry::LegacyV1(legacy) => outside
+                    .add_legacy_turn(&legacy.id, rehydrated_turn_touched_paths(session, legacy)),
+            }
+        }
+        Ok((attribution, outside))
     }
 }
 
@@ -237,7 +255,9 @@ mod tests {
                 )],
             };
             let keep =
-                |request: KeepPrRequest, session: String, attribution: Option<RunAttribution>| {
+                |request: KeepPrRequest,
+                 session: String,
+                 attribution: Option<(RunAttribution, RunAttribution)>| {
                     let tools = tools.clone();
                     let record = &record;
                     let daemon = &daemon;
@@ -318,7 +338,7 @@ mod tests {
             let kept = keep(
                 request.clone(),
                 session.id.clone(),
-                Some(attributed.clone()),
+                Some((attributed.clone(), RunAttribution::default())),
             )
             .await
             .unwrap();
@@ -332,9 +352,13 @@ mod tests {
             assert_eq!(keeps.len(), 2);
             assert_eq!(keeps[1].1, kept.keep_result());
             // Keeping again continues from the recorded branch.
-            let again = keep(request.clone(), session.id.clone(), Some(attributed))
-                .await
-                .unwrap();
+            let again = keep(
+                request.clone(),
+                session.id.clone(),
+                Some((attributed, RunAttribution::default())),
+            )
+            .await
+            .unwrap();
             assert_eq!(again.commit, kept.commit);
             daemon.shutdown().await.unwrap();
             return;

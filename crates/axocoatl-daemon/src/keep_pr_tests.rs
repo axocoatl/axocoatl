@@ -969,6 +969,7 @@ impl Fixture {
             manifest,
             outcome,
             attribution,
+            outside: &RunAttribution::default(),
             previous,
             tools: &self.tools,
         })
@@ -1233,6 +1234,42 @@ async fn keep_refuses_what_it_must_not_commit_or_push() {
             .await,
         "cannot be attributed exactly",
     );
+    // A turn outside the run changed a run path too, or cannot be attributed.
+    let mut outside = RunAttribution::default();
+    outside.paths.insert("a.txt".into());
+    let shared = keep(KeepJob {
+        session_root: &fixture.repo,
+        control_root: &fixture.data,
+        request: &request(),
+        manifest: &manifest,
+        outcome: &outcome(),
+        attribution: &attribution,
+        outside: &outside,
+        previous: None,
+        tools: &fixture.tools,
+    })
+    .await;
+    refused(shared, "outside the run also changed a.txt");
+    let mut outside = RunAttribution::default();
+    outside
+        .unattributable
+        .push("writer in turn-9: it has no After capture".into());
+    let unknown_outside = keep(KeepJob {
+        session_root: &fixture.repo,
+        control_root: &fixture.data,
+        request: &request(),
+        manifest: &manifest,
+        outcome: &outcome(),
+        attribution: &attribution,
+        outside: &outside,
+        previous: None,
+        tools: &fixture.tools,
+    })
+    .await;
+    refused(
+        unknown_outside,
+        "outside the run changed files that cannot be attributed",
+    );
     // The run changed Git's own files.
     let mut hooks = attribution.clone();
     hooks.paths.insert(".git/hooks/pre-push".into());
@@ -1491,6 +1528,7 @@ async fn a_later_keep_continues_from_the_branch_an_earlier_keep_created() {
                 manifest: &manifest,
                 outcome: &run_outcome,
                 attribution: &attribution,
+                outside: &RunAttribution::default(),
                 previous: previous.as_ref(),
                 tools: &tools,
             })
@@ -1658,6 +1696,7 @@ async fn a_missing_gh_is_named_and_the_pushed_branch_stays() {
         manifest: &manifest,
         outcome: &run_outcome,
         attribution: &attribution,
+        outside: &RunAttribution::default(),
         previous: None,
         tools: &tools,
     })

@@ -1355,6 +1355,9 @@ pub struct KeepJob<'a> {
     pub manifest: &'a RunManifest,
     pub outcome: &'a RunOutcome,
     pub attribution: &'a RunAttribution,
+    /// What the Session's turns outside the run changed (a turn sent after
+    /// it finished, say). A run path one of them changed too is refused.
+    pub outside: &'a RunAttribution,
     /// The latest recorded Keep of this run that created its branch.
     pub previous: Option<&'a KeepResult>,
     pub tools: &'a HostTools,
@@ -2073,6 +2076,24 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
         return Err(refused(format!(
             "the run changed Git's own files ({}); Keep as PR does not run host git on a repository whose Git settings or hooks the run changed",
             listed(&git_paths)
+        )));
+    }
+    let shared: Vec<String> = job
+        .outside
+        .paths
+        .intersection(&job.attribution.paths)
+        .cloned()
+        .collect();
+    if !shared.is_empty() {
+        return Err(refused(format!(
+            "turns of the Session outside the run also changed {}, so the run's work cannot be kept apart from theirs",
+            listed(&shared)
+        )));
+    }
+    if !job.outside.unattributable.is_empty() {
+        return Err(refused(format!(
+            "a turn of the Session outside the run changed files that cannot be attributed, so they could be among the run's paths: {}",
+            bounded(&job.outside.unattributable.join("; "), 1200)
         )));
     }
     if let Some(path) = job
