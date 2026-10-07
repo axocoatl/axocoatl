@@ -1385,20 +1385,13 @@ pub(crate) mod tests {
         let observed = explorer_turn(NodeState::Accepted, Some(&answer), None);
         let host = FakeHost::with_turn(observed.clone());
         host.script("axocoatl-qa/b1.spec.ts", TARGET, "failed");
-        match QaDriver.drive(&host, &run).await {
-            Err(RunError::NotImplemented(what)) => {
-                assert!(what.starts_with("loadout::"), "{what}")
-            }
-            Ok(report) => {
-                assert_eq!(report.turns, vec![observed]);
-                assert_eq!(
-                    classification(&report, "B1"),
-                    ReproClassification::Reproduced
-                );
-                assert_eq!(host.sent.lock().unwrap().len(), 1);
-            }
-            Err(other) => panic!("{other:?}"),
-        }
+        let report = QaDriver.drive(&host, &run).await.unwrap();
+        assert_eq!(report.turns, vec![observed]);
+        assert_eq!(
+            classification(&report, "B1"),
+            ReproClassification::Reproduced
+        );
+        assert_eq!(host.sent.lock().unwrap().len(), 1);
     }
 
     #[test]

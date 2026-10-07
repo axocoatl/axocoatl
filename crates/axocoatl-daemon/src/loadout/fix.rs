@@ -500,28 +500,27 @@ mod tests {
         );
     }
 
-    /// The driver runs the loadout's one turn and then the report. Until
-    /// core's `run_single_turn` lands on this branch it answers not
-    /// implemented; after that it reports the observed turn.
+    /// The driver runs the loadout's one turn (admission has filled the
+    /// detected check) and then the report, recording its adjudications.
     #[tokio::test]
     async fn the_driver_reports_the_observed_turn() {
-        let run = fix_context(WRITER, WRITER);
+        let mut run = fix_context(WRITER, WRITER);
+        crate::loadout::team_plan::fill_detected_checks(
+            &mut run.resolved,
+            Some("cargo test"),
+            None,
+        )
+        .unwrap();
         let third = adjudications(&[("F1", "accept", "done")]);
         let observed = reviewed_turn("qwen/qwen3-coder", Some(&third));
         let host = FakeHost::with_turn(observed);
-        match FixDriver.drive(&host, &run).await {
-            Err(RunError::NotImplemented(what)) => {
-                assert!(what.starts_with("loadout::"), "{what}")
-            }
-            Ok(report) => {
-                assert_eq!(report.adjudications.len(), 3);
-                assert_eq!(report.warnings[0].code, SAME_MODEL_REVIEWER);
-                assert!(host
-                    .events()
-                    .iter()
-                    .any(|event| matches!(event, RunEvent::Adjudication { .. })));
-            }
-            Err(other) => panic!("{other:?}"),
-        }
+        let report = FixDriver.drive(&host, &run).await.unwrap();
+        assert_eq!(report.adjudications.len(), 3);
+        assert_eq!(report.warnings[0].code, SAME_MODEL_REVIEWER);
+        assert_eq!(host.sent.lock().unwrap().len(), 1);
+        assert!(host
+            .events()
+            .iter()
+            .any(|event| matches!(event, RunEvent::Adjudication { .. })));
     }
 }
