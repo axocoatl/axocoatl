@@ -663,8 +663,23 @@ async fn changes_go_back_to_the_lead_and_a_second_round_approves() {
         revised.contains("Lead answer, generation 1"),
         "the lead reads its previous answer"
     );
+    // The lead is asked to answer each finding by id, and is told the
+    // unnumbered findings are one finding, F1.
+    assert!(
+        revised.contains(
+            "Answer every finding below in an ADJUDICATIONS block: a fenced JSON array of"
+        ) && revised.contains("one entry per finding, then fix each finding you accept."),
+        "{revised}"
+    );
+    assert!(revised.contains("they are one finding, F1."), "{revised}");
     let reviewer_requests = scenario.reviewer_requests.lock().unwrap().clone();
     assert_eq!(reviewer_requests.len(), 2);
+    for (_, text) in &reviewer_requests {
+        assert!(
+            text.contains("Number each finding F1, F2, ... at the start of its line"),
+            "every round's prompt asks for numbered findings: {text}"
+        );
+    }
     assert!(reviewer_requests[1].1.contains("Lead answer, generation 2"));
     assert!(!reviewer_requests[1].1.contains("Lead answer, generation 1"));
     assert!(reviewer_requests[1].1.contains("review round 2 of 2"));
