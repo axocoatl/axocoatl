@@ -109,6 +109,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verdict and adjudications, findings, everything not covered, warnings and the run id.
   Keep also refuses paths that a turn outside the run changed, and runs no hook, filter,
   fsmonitor, signing program or credential helper the repository configures.
+  `axocoatl service install` now records the directories of `git` and `gh` on the
+  service's `PATH` after Podman's.
 - **Per-check timeouts.** A Team and budget edit's `check_options`, aligned with
   `required_checks`, gives each required check a name, a timeout from 1 second to 30
   minutes (3 minutes by default, as before), a report to parse and, with `egress: true`,

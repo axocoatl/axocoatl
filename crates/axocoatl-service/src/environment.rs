@@ -4,10 +4,11 @@
 //! installing shell's: launchd gives a LaunchAgent
 //! `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, which does not contain a Homebrew
 //! Podman in `/opt/homebrew/bin`. Install therefore records what the daemon
-//! needs to reach Podman, and nothing else: a `PATH` with the directory of the
-//! `podman` found at install time plus the standard system directories, and
-//! the Podman connection selection (`CONTAINER_CONNECTION`, `CONTAINER_HOST`)
-//! when it is set. Provider keys and other secrets are never read here, so
+//! needs to reach Podman and the host tools Keep as PR runs, and nothing
+//! else: a `PATH` with the directory of the `podman` found at install time,
+//! then the directories of `git` and `gh` when they are found elsewhere, plus
+//! the standard system directories, and the Podman connection selection
+//! (`CONTAINER_CONNECTION`, `CONTAINER_HOST`) when it is set. Provider keys and other secrets are never read here, so
 //! they cannot reach the service definition.
 
 use std::ffi::OsString;
@@ -15,6 +16,10 @@ use std::path::{Path, PathBuf};
 
 /// Standard system directories, after the directory of `podman`.
 pub const SYSTEM_PATH: [&str; 5] = ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+
+/// Host programs Keep as PR runs, whose directories are recorded after
+/// Podman's when they are on the install-time `PATH`. Neither is required.
+pub const KEEP_TOOLS: [&str; 2] = ["git", "gh"];
 
 /// Podman's connection selection, carried from the install-time environment.
 pub const CARRIED_VARIABLES: [&str; 2] = ["CONTAINER_CONNECTION", "CONTAINER_HOST"];
@@ -45,8 +50,9 @@ impl ServiceEnvironment {
 
         // A relative `PATH` entry means nothing to a service, so only an
         // absolute one can supply `podman`.
-        let podman = var("PATH").and_then(|path| {
-            std::env::split_paths(&path)
+        let path = var("PATH");
+        let podman = path.as_ref().and_then(|path| {
+            std::env::split_paths(path)
                 .filter(|directory| directory.is_absolute())
                 .map(|directory| directory.join("podman"))
                 .find(|candidate| is_executable(candidate))
@@ -65,6 +71,24 @@ impl ServiceEnvironment {
             None => warnings.push(
                 "podman was not found on PATH, so the service cannot find it either. Install Podman, then run `axocoatl service install` again.".to_string(),
             ),
+        }
+        // Keep as PR runs the person's own git and gh on the host; a missing
+        // one is reported when Keep needs it, not here.
+        for tool in KEEP_TOOLS {
+            let found = path.as_ref().and_then(|path| {
+                std::env::split_paths(path)
+                    .filter(|directory| directory.is_absolute())
+                    .find(|directory| is_executable(&directory.join(tool)))
+            });
+            if let Some(directory) = found
+                .as_deref()
+                .and_then(Path::to_str)
+                .filter(|directory| usable_path_entry(directory))
+            {
+                if !directories.iter().any(|existing| existing == directory) {
+                    directories.push(directory.to_string());
+                }
+            }
         }
         for directory in SYSTEM_PATH {
             if !directories.iter().any(|existing| existing == directory) {
@@ -198,6 +222,26 @@ mod tests {
         assert_eq!(
             value(&environment, "PATH"),
             Some("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+        );
+        assert!(environment.warnings().is_empty());
+    }
+
+    #[test]
+    fn records_the_directories_of_git_and_gh_after_podmans() {
+        let (environment, _) = capture(
+            &[(
+                "PATH",
+                "/Users/test/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin",
+            )],
+            &[
+                "/opt/homebrew/bin/podman",
+                "/usr/bin/git",
+                "/Users/test/bin/gh",
+            ],
+        );
+        assert_eq!(
+            value(&environment, "PATH"),
+            Some("/opt/homebrew/bin:/usr/bin:/Users/test/bin:/usr/local/bin:/bin:/usr/sbin:/sbin")
         );
         assert!(environment.warnings().is_empty());
     }

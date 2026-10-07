@@ -60,7 +60,10 @@ rounds, a table of adjudications, the findings, everything not covered, the warn
 the run id with the command to verify its [record bundle](/reference/run/#record-bundle).
 
 `git` and `gh` run on your computer with your own credentials and configuration. Nothing
-runs in a container for this, and Axocoatl reads no credential.
+runs in a container for this, and Axocoatl reads no credential. The daemon finds them on
+its own `PATH`: a service installed with `axocoatl service install` records the
+directories of the `git` and `gh` your shell found at install time, and a refusal names
+the `PATH` it searched.
 
 ## What is recorded
 

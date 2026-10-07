@@ -65,14 +65,17 @@ shell's. launchd, for example, gives a LaunchAgent only
 Podman in `/opt/homebrew/bin`. Install therefore writes into the definition:
 
 - `PATH`: the directory of the `podman` that your shell finds at install time,
-  followed by `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+  then the directories of the `git` and `gh` it finds, which
+  [Keep as PR](/workbench/keep-as-pr/) runs, followed by
+  `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
 - `CONTAINER_CONNECTION` and `CONTAINER_HOST`, when they are set at install
   time, so the service uses the same Podman connection as your shell. A
   `CONTAINER_HOST` that contains a password is not recorded.
 
 Install prints what it recorded and warns when it found no `podman`. It never
 writes provider keys or other secrets into the definition. Run
-`axocoatl service install` again after you move Podman or change its connection.
+`axocoatl service install` again after you move Podman, `git` or `gh`, or change
+the Podman connection.
 If the service was running, load the new definition with
 `axocoatl service stop && axocoatl service start`.
 
