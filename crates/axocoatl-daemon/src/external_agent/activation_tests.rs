@@ -51,7 +51,12 @@ fn run_with_config(f: &mut Fixture, config: AgentConfig, request: &str) -> Run {
     )
 }
 
-fn run_with_limits(f: &mut Fixture, config: AgentConfig, request: &str, limits: GrantLimits) -> Run {
+fn run_with_limits(
+    f: &mut Fixture,
+    config: AgentConfig,
+    request: &str,
+    limits: GrantLimits,
+) -> Run {
     let canonical = f._canonical.take().unwrap();
     let session_id = canonical.owner().session_id.clone();
     let registry = SessionDispatchRegistry::default();
@@ -853,7 +858,6 @@ async fn actual_external_claude_code_runs_through_the_route_as_the_hardened_writ
     }
 }
 
-
 /// The route requests of an external program count against its grant's
 /// invocations: once it has made more than the grant still allowed when it
 /// started, the host stops it, and the activation fails saying so.
@@ -964,7 +968,10 @@ async fn actual_external_program_is_stopped_when_its_requests_pass_the_grant() {
         .count();
     assert!((1..20).contains(&calls), "{calls}");
     // No usage report: the whole reservation stays charged.
-    let usage = r.controller.activation_provider_usage(&r.activation).unwrap();
+    let usage = r
+        .controller
+        .activation_provider_usage(&r.activation)
+        .unwrap();
     assert!(!usage.tokens.complete);
     assert_eq!(egress.live_bindings(), 0);
 }
@@ -1036,42 +1043,46 @@ impl ModelApi {
                     let Ok(tls) = acceptor.accept(tcp).await else {
                         return;
                     };
-                    let service = hyper::service::service_fn(move |request: hyper::Request<Incoming>| {
-                        let seen = seen.clone();
-                        async move {
-                            let authorization = request
-                                .headers()
-                                .get_all(hyper::header::AUTHORIZATION)
-                                .iter()
-                                .map(|value| String::from_utf8_lossy(value.as_bytes()).into())
-                                .collect();
-                            let method = request.method().to_string();
-                            let path = request.uri().path().to_string();
-                            seen.lock().unwrap().push(ApiSeen {
-                                method: method.clone(),
-                                path: path.clone(),
-                                authorization,
-                            });
-                            let _ = request.into_body().collect().await;
-                            let body = match (method.as_str(), path.as_str()) {
-                                ("POST", "/v1/messages") => Some(ANTHROPIC_SSE),
-                                ("POST", "/v1/responses") => Some(OPENAI_SSE),
-                                _ => None,
-                            };
-                            let mut response = hyper::Response::new(Full::new(bytes::Bytes::from_static(
-                                body.unwrap_or("{\"error\":\"not found\"}").as_bytes(),
-                            )));
-                            if body.is_some() {
-                                response.headers_mut().insert(
-                                    hyper::header::CONTENT_TYPE,
-                                    hyper::header::HeaderValue::from_static("text/event-stream"),
-                                );
-                            } else {
-                                *response.status_mut() = hyper::StatusCode::NOT_FOUND;
+                    let service =
+                        hyper::service::service_fn(move |request: hyper::Request<Incoming>| {
+                            let seen = seen.clone();
+                            async move {
+                                let authorization = request
+                                    .headers()
+                                    .get_all(hyper::header::AUTHORIZATION)
+                                    .iter()
+                                    .map(|value| String::from_utf8_lossy(value.as_bytes()).into())
+                                    .collect();
+                                let method = request.method().to_string();
+                                let path = request.uri().path().to_string();
+                                seen.lock().unwrap().push(ApiSeen {
+                                    method: method.clone(),
+                                    path: path.clone(),
+                                    authorization,
+                                });
+                                let _ = request.into_body().collect().await;
+                                let body = match (method.as_str(), path.as_str()) {
+                                    ("POST", "/v1/messages") => Some(ANTHROPIC_SSE),
+                                    ("POST", "/v1/responses") => Some(OPENAI_SSE),
+                                    _ => None,
+                                };
+                                let mut response =
+                                    hyper::Response::new(Full::new(bytes::Bytes::from_static(
+                                        body.unwrap_or("{\"error\":\"not found\"}").as_bytes(),
+                                    )));
+                                if body.is_some() {
+                                    response.headers_mut().insert(
+                                        hyper::header::CONTENT_TYPE,
+                                        hyper::header::HeaderValue::from_static(
+                                            "text/event-stream",
+                                        ),
+                                    );
+                                } else {
+                                    *response.status_mut() = hyper::StatusCode::NOT_FOUND;
+                                }
+                                Ok::<_, std::convert::Infallible>(response)
                             }
-                            Ok::<_, std::convert::Infallible>(response)
-                        }
-                    });
+                        });
                     let _ = hyper::server::conn::http1::Builder::new()
                         .serve_connection(hyper_util::rt::TokioIo::new(tls), service)
                         .await;
@@ -1121,8 +1132,7 @@ async fn actual_pinned_claude_code_and_codex_run_through_the_route() {
             (300, 9),
         ),
     ] {
-        let image =
-            axocoatl_isolation::recipes::image_name(&[recipe.to_string()]).unwrap();
+        let image = axocoatl_isolation::recipes::image_name(&[recipe.to_string()]).unwrap();
         assert!(
             std::process::Command::new("podman")
                 .args(["image", "exists", &image])
@@ -1184,7 +1194,10 @@ async fn actual_pinned_claude_code_and_codex_run_through_the_route() {
         let adjust: Arc<dyn Fn(Vec<String>) -> Vec<String> + Send + Sync> = match runtime {
             AgentRuntime::ClaudeCode => Arc::new(move |mut argv: Vec<String>| {
                 let at = argv.iter().position(|arg| arg == "env").unwrap() + 1;
-                argv.insert(at, format!("ANTHROPIC_BASE_URL=https://api.anthropic.com:{port}"));
+                argv.insert(
+                    at,
+                    format!("ANTHROPIC_BASE_URL=https://api.anthropic.com:{port}"),
+                );
                 argv
             }),
             _ => Arc::new(move |argv: Vec<String>| {
@@ -1221,7 +1234,10 @@ async fn actual_pinned_claude_code_and_codex_run_through_the_route() {
         sandbox.stop_checked().await.unwrap();
         let settled = settled.unwrap().unwrap();
         assert!(idle.unwrap());
-        let log = r.controller.activation_stream_for_test(&r.activation).join("");
+        let log = r
+            .controller
+            .activation_stream_for_test(&r.activation)
+            .join("");
         let events = record.events();
         assert!(
             settled.accepted,
@@ -1256,17 +1272,28 @@ async fn actual_pinned_claude_code_and_codex_run_through_the_route() {
                     decision: Recorded::Deny,
                     reason,
                     ..
-                } => Some(format!("{opened}:{port} {}", reason.as_deref().unwrap_or(""))),
+                } => Some(format!(
+                    "{opened}:{port} {}",
+                    reason.as_deref().unwrap_or("")
+                )),
                 _ => None,
             })
             .collect();
         eprintln!("{recipe}: refused connections {refused:?}");
         for event in &events {
-            if let NetworkEvent::Open { host: opened, decision: Recorded::Allow, .. } = event {
+            if let NetworkEvent::Open {
+                host: opened,
+                decision: Recorded::Allow,
+                ..
+            } = event
+            {
                 assert_eq!(opened, host, "{recipe}: {events:#?}");
             }
         }
-        let measured = r.controller.activation_provider_usage(&r.activation).unwrap();
+        let measured = r
+            .controller
+            .activation_provider_usage(&r.activation)
+            .unwrap();
         assert!(measured.tokens.complete, "{recipe}: {log}");
         assert!(
             measured.tokens.usage.input_tokens >= usage.0

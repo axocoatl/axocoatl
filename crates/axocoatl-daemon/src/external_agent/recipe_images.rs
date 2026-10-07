@@ -147,7 +147,7 @@ pub fn recorded_images(root: &SecureDir) -> Result<Vec<RecipeImageRecord>, Recip
         .into_iter()
         .filter(|record| record.validate().is_ok())
         .collect();
-    images.sort_by(|left, right| right.built_at_ms.cmp(&left.built_at_ms));
+    images.sort_by_key(|record| std::cmp::Reverse(record.built_at_ms));
     Ok(images)
 }
 
@@ -160,7 +160,7 @@ pub fn record_image(root: &SecureDir, record: RecipeImageRecord) -> Result<(), R
         .retain(|existing| existing.image != record.image);
     file.images.push(record);
     file.images
-        .sort_by(|left, right| right.built_at_ms.cmp(&left.built_at_ms));
+        .sort_by_key(|record| std::cmp::Reverse(record.built_at_ms));
     file.images.truncate(MAX_RECORDED_IMAGES);
     let directory = root.child(RECIPES_DIR)?;
     directory.restrict_owner_only()?;

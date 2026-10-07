@@ -49,8 +49,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExternalAgentError {
-    #[error("external agent: not implemented: {0}")]
-    NotImplemented(&'static str),
     #[error("external agent: {0}")]
     Invalid(String),
 }

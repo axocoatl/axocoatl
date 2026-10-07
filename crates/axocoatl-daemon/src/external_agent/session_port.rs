@@ -135,6 +135,10 @@ impl RouteRequestSource for RecordSource {
     }
 }
 
+/// A test's change to the argv a run uses.
+#[cfg(test)]
+pub(crate) type AdjustArgv = Arc<dyn Fn(Vec<String>) -> Vec<String> + Send + Sync>;
+
 /// How external runs are observed.
 #[derive(Clone)]
 pub(crate) struct ExternalSettings {
@@ -143,7 +147,7 @@ pub(crate) struct ExternalSettings {
     pub(crate) meter_interval: Duration,
     /// Tests point the pinned programs at a local upstream's port.
     #[cfg(test)]
-    pub(crate) adjust_argv: Option<Arc<dyn Fn(Vec<String>) -> Vec<String> + Send + Sync>>,
+    pub(crate) adjust_argv: Option<AdjustArgv>,
 }
 
 impl Default for ExternalSettings {

@@ -161,8 +161,8 @@ pub fn parse_output(stdout: &[u8]) -> Result<ExternalActivationResult, ExternalA
                     });
                 }
             }
-            Some("system") => match str_at(value, &["subtype"]) {
-                Some("api_retry") => items.push(ExternalItem::Error {
+            Some("system") if str_at(value, &["subtype"]) == Some("api_retry") => {
+                items.push(ExternalItem::Error {
                     message: format!(
                         "model request retried (attempt {} of {}): {}{}",
                         u64_at(value, &["attempt"]).unwrap_or(0),
@@ -171,9 +171,8 @@ pub fn parse_output(stdout: &[u8]) -> Result<ExternalActivationResult, ExternalA
                         u64_at(value, &["error_status"])
                             .map_or_else(String::new, |status| format!(" (HTTP {status})")),
                     ),
-                }),
-                _ => {}
-            },
+                })
+            }
             Some("rate_limit_event") => {
                 let status = str_at(value, &["rate_limit_info", "status"]).unwrap_or("unknown");
                 if status != "allowed" {

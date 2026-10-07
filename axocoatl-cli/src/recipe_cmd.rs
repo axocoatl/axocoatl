@@ -163,7 +163,7 @@ mod tests {
         }
         let record =
             recipe_images::record_for(&["claude-code".to_string()], &"ab".repeat(32), 1).unwrap();
-        let lines = list_lines(&[record.clone()]);
+        let lines = list_lines(std::slice::from_ref(&record));
         assert!(lines
             .iter()
             .any(|line| line.contains(&record.image) && line.contains("id abababababab")));

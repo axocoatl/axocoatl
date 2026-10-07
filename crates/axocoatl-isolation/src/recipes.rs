@@ -60,8 +60,6 @@ pub const RECIPE_DIGEST_LABEL: &str = "io.axocoatl.recipe-digest";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RecipeError {
-    #[error("recipe: not implemented: {0}")]
-    NotImplemented(&'static str),
     #[error("recipe: {0}")]
     Invalid(String),
 }

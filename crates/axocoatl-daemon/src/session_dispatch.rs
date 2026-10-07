@@ -130,7 +130,9 @@ mod native;
 // Claude Code and Codex activations.
 #[path = "external_agent/session_port.rs"]
 mod external_port;
-pub(crate) use external_port::{ExternalSettings, RouteRequestSource};
+pub(crate) use external_port::ExternalSettings;
+#[cfg(test)]
+pub(crate) use external_port::RouteRequestSource;
 pub(crate) use native::{
     CapturedNativeDefinition, NativeDefinitionPreparation, NativeProviderCredentials,
 };

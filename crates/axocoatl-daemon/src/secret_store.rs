@@ -32,8 +32,6 @@ pub const MAX_SECRETS: usize = axocoatl_config::egress_routes::MAX_CREDENTIALS;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecretStoreError {
-    #[error("secret store: not implemented: {0}")]
-    NotImplemented(&'static str),
     #[error("secret store: {0}")]
     Invalid(String),
     #[error("secret store: {0}")]
