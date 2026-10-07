@@ -692,3 +692,45 @@ fn path_globs_match_whole_segments() {
     assert!(glob("/**/x").starts_with_any());
     assert!(!glob("/x/**").starts_with_any());
 }
+
+/// Axocoatl's own route names cannot be claimed by a configured route, and
+/// `host_ollama` parses and validates through the whole configuration.
+#[test]
+fn routes_cannot_claim_axocoatl_names_and_host_ollama_validates_in_the_whole_config() {
+    for host in [
+        "ollama.host.axocoatl.internal",
+        "OLLAMA.HOST.AXOCOATL.INTERNAL.",
+        "x.axocoatl.internal",
+    ] {
+        let error = parse(&with_route(&format!("host: {host}, access: full"))).unwrap_err();
+        assert!(error.contains("are Axocoatl's own"), "{host}: {error}");
+    }
+    let yaml = "sandbox:\n  network: egress\n  egress:\n    host_ollama: {port: 11434}\n";
+    let config = parse(yaml).unwrap();
+    assert_eq!(
+        config
+            .sandbox
+            .egress
+            .as_ref()
+            .and_then(|egress| egress.host_ollama.as_ref())
+            .map(|route| route.port),
+        Some(11434)
+    );
+    assert!(
+        warnings_of(&config).is_empty(),
+        "{:?}",
+        warnings_of(&config)
+    );
+    let error =
+        parse("sandbox:\n  network: egress\n  egress:\n    host_ollama: {port: 0}\n").unwrap_err();
+    assert!(error.contains("host_ollama.port"), "{error}");
+    let bridge =
+        parse("sandbox:\n  network: bridge\n  egress:\n    host_ollama: {port: 11434}\n").unwrap();
+    assert!(
+        warnings_of(&bridge)
+            .iter()
+            .any(|warning| warning.contains("only loadout Sessions")),
+        "{:?}",
+        warnings_of(&bridge)
+    );
+}

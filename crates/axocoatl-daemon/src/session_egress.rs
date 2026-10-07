@@ -15,6 +15,13 @@
 //! the route's rules, adds the route's credential and sends the request to
 //! the addresses resolved for the connection. On a route's ports the route
 //! decides, whatever `allow` lists.
+//!
+//! `sandbox.egress.host_ollama` adds one more route: a `CONNECT` to
+//! `ollama.host.axocoatl.internal:443` from a process kind it serves is
+//! answered with a relay without resolving the name, and the broker sends
+//! its requests over plain HTTP to `127.0.0.1:<port>` on this computer,
+//! recording each one like any route's. Without the setting that name, like
+//! every name under `axocoatl.internal`, is refused whatever `allow` lists.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -23,8 +30,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
+use axocoatl_config::egress_host_ollama::{is_reserved_route_host, HOST_OLLAMA_URL};
 use axocoatl_config::AxocoatlConfig;
-use axocoatl_config::{CredentialSourceYaml, EgressAllowYaml, EgressRouteYaml};
+use axocoatl_config::{
+    CredentialSourceYaml, EgressAllowYaml, EgressRouteYaml, HostOllamaRouteYaml,
+};
 use axocoatl_core::netaddr::{self, AddrClass};
 use axocoatl_core::SecureDir;
 use axocoatl_exec::egress::protocol::{credential_hash, credential_tag, MAX_ALLOW_ADDRS};
@@ -205,6 +215,9 @@ pub struct EgressPolicyConfig {
     pub routes: Vec<EgressRouteYaml>,
     /// `credentials`, where the routes' credentials are read. Never values.
     pub credentials: BTreeMap<String, CredentialSourceYaml>,
+    /// `sandbox.egress.host_ollama`, part of the Session scope: the route to
+    /// an Ollama server on this computer's loopback. Absent: no such route.
+    pub host_ollama: Option<HostOllamaRouteYaml>,
 }
 
 impl EgressPolicyConfig {
@@ -228,6 +241,7 @@ impl EgressPolicyConfig {
                 .map(|browser| (browser.allow.clone(), browser.private_destinations.clone())),
             routes: egress.routes,
             credentials: config.credentials.clone(),
+            host_ollama: egress.host_ollama,
         }
     }
 }
@@ -545,6 +559,9 @@ fn hint(reason: &str, host: &str, port: u16) -> String {
         ),
         "route_not_for_binding" => format!(
             "{host}:{port} is an egress route that does not serve this kind of process. Add the kind to the route's for: list in sandbox.egress.routes."
+        ),
+        "reserved_host" => format!(
+            "{host} is a name Axocoatl reserves for its own routes. The route to Ollama on this computer is off; ask the user to set sandbox.egress.host_ollama and run axocoatl network reload."
         ),
         _ => "Axocoatl refused this connection.".into(),
     }
@@ -872,7 +889,12 @@ impl SessionEgress {
                     &config.session_private,
                     session_rules,
                 )?;
-                let routes = RouteTable::compile(&config.routes, &config.credentials, workspaces)?;
+                let routes = RouteTable::compile_with_host_ollama(
+                    &config.routes,
+                    &config.credentials,
+                    workspaces,
+                    config.host_ollama.as_ref(),
+                )?;
                 let entries = routes
                     .routes()
                     .iter()
@@ -1363,6 +1385,7 @@ impl SessionEgress {
             applied.session_private = config.session_private.clone();
             applied.routes = config.routes.clone();
             applied.credentials = config.credentials.clone();
+            applied.host_ollama = config.host_ollama.clone();
         }
         if adopt(EgressScope::Browser) {
             applied.browser = config.browser.clone();
@@ -1877,6 +1900,11 @@ impl SessionEgress {
                 return deny(400, "invalid_host");
             };
             let route = routes.find(&name, open.port);
+            // Axocoatl's own names reach only its own routes, never DNS or
+            // the allowlist.
+            if route.is_none() && is_reserved_route_host(&name) {
+                return deny(403, "reserved_host");
+            }
             let rule = match &route {
                 Some(route) => {
                     let refuse = |reason| Verdict {
@@ -1897,6 +1925,23 @@ impl SessionEgress {
                     None => return deny(403, "not_allowed"),
                 },
             };
+            // The host route goes to this computer's loopback, which the
+            // broker reaches itself: no name is resolved and no address is
+            // given to the sidecar.
+            if let Some(route) = route
+                .as_ref()
+                .filter(|route| route.host_loopback_port().is_some())
+            {
+                return Verdict {
+                    decision: Decision::Relay,
+                    reason: None,
+                    status: None,
+                    rule: Some(rule),
+                    addrs: vec![IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)],
+                    revision: Some(revision),
+                    route: Some(route.clone()),
+                };
+            }
             // Only now, after the allowlist or a route matched, does the
             // name resolve.
             let mut addrs = match self.resolver.resolve(&name, open.port).await {
@@ -2338,6 +2383,9 @@ impl SessionEgress {
             for name in &route.env_placeholders {
                 contents.push_str(&format!("{name}=axocoatl-route:{}\n", route.host));
             }
+            if route.host_loopback_port().is_some() {
+                contents.push_str(&format!("OLLAMA_HOST={HOST_OLLAMA_URL}\n"));
+            }
         }
         contents
     }
@@ -2466,6 +2514,9 @@ impl SessionEgress {
 #[path = "session_egress_attempt_tests.rs"]
 mod attempt_tests;
 
+#[cfg(test)]
+#[path = "session_egress_host_ollama_tests.rs"]
+mod host_ollama_tests;
 #[cfg(test)]
 #[path = "session_egress_route_tests.rs"]
 pub(crate) mod route_tests;

@@ -420,7 +420,7 @@ async fn pump_relay(
 // ---------------------------------------------------------------- client
 
 /// A TLS client over a relayed connection's pipe, trusting `ca` only.
-async fn tls_client(
+pub(crate) async fn tls_client(
     pipe: tokio::io::DuplexStream,
     ca: &CertificateDer<'static>,
     server_name: &str,
@@ -440,7 +440,7 @@ async fn tls_client(
         .await
 }
 
-async fn send(
+pub(crate) async fn send(
     sender: &mut hyper::client::conn::http1::SendRequest<Empty<Bytes>>,
     path: &str,
     host: &str,
@@ -534,7 +534,7 @@ async fn fixture() -> Fixture {
     fixture_with(route_config).await
 }
 
-fn spec(kind: GrantKind, trust_mounted: bool) -> GrantSpec {
+pub(crate) fn spec(kind: GrantKind, trust_mounted: bool) -> GrantSpec {
     GrantSpec {
         invocation_id: Some("inv-r".into()),
         activation_id: Some("act-r".into()),
@@ -545,7 +545,10 @@ fn spec(kind: GrantKind, trust_mounted: bool) -> GrantSpec {
 }
 
 /// A credential and its hash, and its env file's contents.
-async fn grant(egress: &SessionEgress, spec: GrantSpec) -> (EgressGrant, String, String) {
+pub(crate) async fn grant(
+    egress: &SessionEgress,
+    spec: GrantSpec,
+) -> (EgressGrant, String, String) {
     let grant = egress.grant(spec).await.unwrap();
     let contents = std::fs::read_to_string(grant.env_file.as_ref().unwrap()).unwrap();
     let token = contents
@@ -558,7 +561,10 @@ async fn grant(egress: &SessionEgress, spec: GrantSpec) -> (EgressGrant, String,
 }
 
 /// Wait until the record holds an event `wanted` matches.
-async fn recorded(record: &FakeRecord, wanted: impl Fn(&NetworkEvent) -> bool) -> NetworkEvent {
+pub(crate) async fn recorded(
+    record: &FakeRecord,
+    wanted: impl Fn(&NetworkEvent) -> bool,
+) -> NetworkEvent {
     for _ in 0..500 {
         if let Some(event) = record.events().into_iter().find(|event| wanted(event)) {
             return event;
@@ -568,7 +574,7 @@ async fn recorded(record: &FakeRecord, wanted: impl Fn(&NetworkEvent) -> bool) -
     panic!("not recorded: {:#?}", record.events());
 }
 
-fn position(events: &[NetworkEvent], wanted: impl Fn(&NetworkEvent) -> bool) -> usize {
+pub(crate) fn position(events: &[NetworkEvent], wanted: impl Fn(&NetworkEvent) -> bool) -> usize {
     events
         .iter()
         .position(wanted)

@@ -4,7 +4,8 @@
 //! The daemon reads the file it was started with again and validates all of
 //! it. Only these change while it runs: `sandbox.egress.allow`,
 //! `sandbox.egress.private_destinations`, `sandbox.egress.routes`,
-//! `credentials`, `browser.allow` and `browser.private_destinations`. Each
+//! `credentials`, `browser.allow`, `browser.private_destinations` and
+//! `sandbox.egress.host_ollama`. Each
 //! running decision point records its new policy (`policy`, `source:
 //! config_reload`), new connections use it at once, and open connections
 //! that no rule allows any more, or whose route changed, are closed. Every
@@ -28,13 +29,14 @@ use crate::session_egress::{EgressPolicyConfig, SessionEgress};
 use crate::session_egress_policy::CompiledPolicy;
 
 /// The settings a reload applies, as dotted keys.
-pub const LIVE_KEYS: [&str; 6] = [
+pub const LIVE_KEYS: [&str; 7] = [
     "sandbox.egress.allow",
     "sandbox.egress.private_destinations",
     "sandbox.egress.routes",
     "credentials",
     "browser.allow",
     "browser.private_destinations",
+    "sandbox.egress.host_ollama",
 ];
 
 /// How deep `restart_required` names a changed setting.
@@ -225,6 +227,26 @@ fn route_entries(routes: &[EgressRouteYaml]) -> Vec<String> {
         .collect()
 }
 
+/// The host Ollama route as text, when set.
+fn host_ollama_entries(route: &Option<axocoatl_config::HostOllamaRouteYaml>) -> Vec<String> {
+    route
+        .iter()
+        .map(|route| {
+            let kinds = axocoatl_config::egress_host_ollama::host_ollama_bindings(route)
+                .iter()
+                .map(|kind| serde_json::to_value(kind).unwrap_or_default())
+                .map(|kind| kind.as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "{} to 127.0.0.1:{}, for {kinds}",
+                axocoatl_config::egress_host_ollama::HOST_OLLAMA_ROUTE_HOST,
+                route.port
+            )
+        })
+        .collect()
+}
+
 /// Each credential as its name and where it is read; there is no value to
 /// show.
 fn credential_entries(
@@ -264,6 +286,10 @@ pub fn list_changes(current: &EgressPolicyConfig, next: &EgressPolicyConfig) -> 
         credential_entries(&current.credentials),
         credential_entries(&next.credentials),
     );
+    let host_ollama = (
+        host_ollama_entries(&current.host_ollama),
+        host_ollama_entries(&next.host_ollama),
+    );
     let pairs = [
         (&session_before.0, &session_after.0),
         (&session_before.1, &session_after.1),
@@ -271,6 +297,7 @@ pub fn list_changes(current: &EgressPolicyConfig, next: &EgressPolicyConfig) -> 
         (&credentials.0, &credentials.1),
         (&browser_before.0, &browser_after.0),
         (&browser_before.1, &browser_after.1),
+        (&host_ollama.0, &host_ollama.1),
     ];
     LIVE_KEYS
         .iter()
@@ -327,6 +354,7 @@ pub fn live_changes(
         (current.credentials != next.credentials),
         (current_browser.0 != next_browser.0),
         (current_browser.1 != next_browser.1),
+        (current.host_ollama != next.host_ollama),
     ];
     let mut changed = Vec::new();
     let mut same = Vec::new();
@@ -349,6 +377,7 @@ fn without_live_lists(config: &AxocoatlConfig) -> Value {
     egress.allow.clear();
     egress.private_destinations.clear();
     egress.routes.clear();
+    egress.host_ollama = None;
     config.credentials.clear();
     if let Some(browser) = config.browser.as_mut() {
         browser.allow.clear();
@@ -447,8 +476,27 @@ mod tests {
                 "sandbox.egress.private_destinations",
                 "sandbox.egress.routes",
                 "credentials",
-                "browser.private_destinations"
+                "browser.private_destinations",
+                "sandbox.egress.host_ollama"
             ]
+        );
+        // The host Ollama route is live too, and named without needing a
+        // restart.
+        let mut ollama = next.clone();
+        ollama.sandbox.egress.as_mut().unwrap().host_ollama =
+            Some(axocoatl_config::HostOllamaRouteYaml {
+                port: 11434,
+                bindings: None,
+            });
+        assert!(restart_required(&started, &ollama).is_empty());
+        let with_route = applicable_policy(&started, &current, &ollama);
+        let (changed, _) = live_changes(&policy, &with_route);
+        assert_eq!(changed, ["sandbox.egress.host_ollama"]);
+        let changes = list_changes(&policy, &with_route);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            changes[0].added,
+            ["ollama.host.axocoatl.internal to 127.0.0.1:11434, for agent"]
         );
 
         next.sandbox.network = "bridge".into();
