@@ -85,15 +85,24 @@ for (const file of contentFiles) {
 const cliSource = fs.readFileSync(path.join(repoRoot, 'axocoatl-cli/src/main.rs'), 'utf8');
 const cliReference = fs.readFileSync(path.join(contentRoot, 'reference/cli.mdx'), 'utf8');
 
-function enumBody(name) {
-  const match = cliSource.match(new RegExp(`enum ${name} \\{([\\s\\S]*?)\\n\\}`));
-  if (!match) throw new Error(`could not find ${name} in CLI source`);
+function enumBodyIn(source, name, file) {
+  const match = source.match(new RegExp(`enum ${name} \\{([\\s\\S]*?)\\n\\}`));
+  if (!match) throw new Error(`could not find ${name} in ${file}`);
   return match[1];
 }
 
-function variants(name) {
-  return [...enumBody(name).matchAll(/^    ([A-Z][A-Za-z0-9_]*)\s*(?:\{|,)/gm)]
+function enumBody(name) {
+  return enumBodyIn(cliSource, name, 'axocoatl-cli/src/main.rs');
+}
+
+function variantNames(body) {
+  // Struct (`Name {`), unit (`Name,`) and tuple (`Name(`) variants.
+  return [...body.matchAll(/^    ([A-Z][A-Za-z0-9_]*)\s*(?:\{|,|\()/gm)]
     .map((match) => match[1].replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase());
+}
+
+function variants(name) {
+  return variantNames(enumBody(name));
 }
 
 for (const command of variants('Commands')) {
@@ -120,6 +129,21 @@ for (const [group, name] of [
   }
 }
 
+// Subcommands defined outside main.rs: loadout runs, records, secrets, recipes.
+for (const [group, file, name] of [
+  ['loadouts', 'axocoatl-cli/src/run_cmd.rs', 'LoadoutCommands'],
+  ['record', 'axocoatl-cli/src/run_cmd.rs', 'RecordCommands'],
+  ['secret', 'axocoatl-cli/src/secret_cmd.rs', 'SecretCommands'],
+  ['recipe', 'axocoatl-cli/src/recipe_cmd.rs', 'RecipeCommands'],
+]) {
+  const source = fs.readFileSync(path.join(repoRoot, file), 'utf8');
+  for (const command of variantNames(enumBodyIn(source, name, file))) {
+    if (!cliReference.includes(`axocoatl ${group} ${command}`)) {
+      failures.push(`CLI reference is missing subcommand: axocoatl ${group} ${command}`);
+    }
+  }
+}
+
 const routerSource = fs.readFileSync(path.join(repoRoot, 'axocoatl-server/src/lib.rs'), 'utf8');
 const httpReference = fs.readFileSync(path.join(contentRoot, 'reference/http-api.mdx'), 'utf8');
 const websocketReference = fs.readFileSync(path.join(contentRoot, 'reference/websocket.mdx'), 'utf8');
@@ -139,9 +163,73 @@ for (const key of rootKeys) {
   if (!configReference.includes(`\`${key}\``)) failures.push(`config reference is missing root key: ${key}`);
 }
 
+const astroConfig = fs.readFileSync(path.join(docsRoot, 'astro.config.mjs'), 'utf8');
 for (const section of ['Start', 'Use the workbench', 'Configure', 'Operate', 'Understand', 'Reference']) {
-  const config = fs.readFileSync(path.join(docsRoot, 'astro.config.mjs'), 'utf8');
-  if (!config.includes(`label: '${section}'`)) failures.push(`sidebar is missing section: ${section}`);
+  if (!astroConfig.includes(`label: '${section}'`)) failures.push(`sidebar is missing section: ${section}`);
+}
+
+// Every page is reachable from the sidebar (the splash page and 404 aside).
+for (const file of contentFiles) {
+  const slug = path.relative(contentRoot, file).replace(/\.mdx?$/, '').split(path.sep).join('/');
+  if (slug === 'index' || slug === '404') continue;
+  if (!astroConfig.includes(`slug: '${slug}'`)) failures.push(`page is not in the sidebar: ${slug}`);
+}
+
+// Claims. Public copy states only measured results (BRAND.md); docs/CLAIMS.md maps
+// each one to its evidence. These checks cover the public surfaces: the README,
+// llms.txt, the product and architecture documents, every docs page, and the
+// marketing pages other than the changelog.
+function walkPublicHtml(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (['node_modules', 'assets', 'changelog', '_brand', 'scripts', 'components', 'styles'].includes(entry.name)) return [];
+      return walkPublicHtml(target);
+    }
+    return entry.name.endsWith('.html') ? [target] : [];
+  });
+}
+const publicSurfaces = [
+  ...['README.md', 'llms.txt', 'docs/PRODUCT.md', 'docs/ARCHITECTURE.md']
+    .map((relative) => path.join(repoRoot, relative)),
+  ...contentFiles,
+  ...walkPublicHtml(path.join(repoRoot, 'sites/marketing')),
+].filter((file) => fs.existsSync(file));
+const claimsLedgerPath = path.join(repoRoot, 'docs/CLAIMS.md');
+const claimsLedger = fs.existsSync(claimsLedgerPath) ? fs.readFileSync(claimsLedgerPath, 'utf8') : '';
+if (!claimsLedger) failures.push('docs/CLAIMS.md, the claims ledger, is missing');
+
+// Claims that were withdrawn because nothing measured them.
+const withdrawnClaims = [
+  ['small local models as a first-class target', /first-class target/i],
+];
+// A measured number labeled with the harness it ran in.
+// Prose wraps, so words may be separated by any whitespace.
+const opusLabel = /Claude\s+Code\s+subagents/;
+const notAxocoatl = /not\s+(?:through\s+)?Axocoatl|not\s+Axocoatl\s+results|outside\s+Axocoatl/i;
+const unmeasured = String.raw`(?:not\s+(?:been\s+)?measured|have\s+not\s+measured)`;
+const openRouterUnmeasured = new RegExp(
+  String.raw`OpenRouter[\s\S]{0,400}?${unmeasured}|${unmeasured}[\s\S]{0,400}?OpenRouter`, 'i');
+
+for (const file of publicSurfaces) {
+  const relative = path.relative(repoRoot, file);
+  const source = fs.readFileSync(file, 'utf8');
+  for (const [claim, pattern] of withdrawnClaims) {
+    if (pattern.test(source)) failures.push(`${relative} repeats a withdrawn claim: ${claim}`);
+  }
+  if (/\bOpus\b/.test(source) && !(opusLabel.test(source) && notAxocoatl.test(source))) {
+    failures.push(`${relative} cites Claude Opus results without labeling them Claude Code subagents, not Axocoatl`);
+  }
+  const citesMeasurement = /measured:/.test(source) || /what-we-measured/.test(source);
+  if (/OpenRouter/.test(source) && /\breview/i.test(source) && citesMeasurement
+      && !openRouterUnmeasured.test(source)) {
+    failures.push(`${relative} states measured review results next to OpenRouter without saying OpenRouter reviewers were not measured`);
+  }
+  for (const match of source.matchAll(/(?:<!--|\{\/\*)\s*measured:\s*(.+?)\s*(?:-->|\*\/\})/g)) {
+    if (!claimsLedger.includes(match[1])) {
+      failures.push(`${relative}: measured block "${match[1]}" has no entry in docs/CLAIMS.md`);
+    }
+  }
 }
 
 if (failures.length) {
@@ -149,4 +237,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`Checked ${contentFiles.length} content files, ${routes.length} routes, and ${rootKeys.length} root config keys.`);
+console.log(`Checked ${contentFiles.length} content files, ${routes.length} routes, ${rootKeys.length} root config keys, and claims on ${publicSurfaces.length} public files.`);
