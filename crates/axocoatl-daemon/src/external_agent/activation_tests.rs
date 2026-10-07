@@ -12,8 +12,9 @@
 //!
 //! It builds `localhost/axocoatl-external-agent-test:<digest>` from the
 //! recipe base (Node 24 on Debian, pinned by digest) with a fake `claude`
-//! program, labeled `io.axocoatl.test=external-agent`, and removes its
-//! containers, networks and volumes at the end.
+//! program, labeled `io.axocoatl.test=external-agent`; the Sessions' own
+//! containers, networks and volumes carry the upstream's
+//! `io.axocoatl.test=egress-<pid>-daemon` and are removed at the end.
 use super::*;
 use crate::external_agent::{self, ExternalActivationRequest};
 use crate::session_dispatch::{AutonomousActivationFactory, ExternalSettings};
@@ -516,7 +517,8 @@ async fn external_sandbox_with(
             authority,
             sidecar_network: Some(upstream.network.clone()),
             max_connections: 32,
-            labels: vec![upstream.label.clone(), TEST_LABEL.into()],
+            // The upstream's label: its drop removes the Session's volumes.
+            labels: vec![upstream.label.clone()],
         }),
         workload,
         ..SandboxPolicy::default()
