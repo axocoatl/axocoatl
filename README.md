@@ -135,7 +135,7 @@ public number with its evidence in [`docs/CLAIMS.md`](docs/CLAIMS.md).
 
 ## Quickstart
 
-The execution contracts below describe the 1.1.0 source tree. The installer and
+The execution contracts below describe the 1.3.0 source tree. The installer and
 `cargo install` select published releases; see the [changelog](CHANGELOG.md)
 for versioned changes.
 

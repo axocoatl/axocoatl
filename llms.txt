@@ -1,7 +1,7 @@
 # Axocoatl — a local-first harness for coding agents
-> Axocoatl v1.1: the harness you can trust to run coding agents on your own machine or infrastructure. Isolation built in, a complete record of every step, any model, local or hosted.
+> Axocoatl v1.3: the harness you can trust to run coding agents on your own machine or infrastructure. Isolation built in, a complete record of every step, any model, local or hosted.
 
-Axocoatl v1.1 is an Apache-2.0, local-first harness for coding agents working in
+Axocoatl v1.3 is an Apache-2.0, local-first harness for coding agents working in
 real repositories. One Rust executable runs a daemon that executes the Agents and a
 browser workbench. Open a repository and work in a
 durable, folder-anchored Session: conversation stays at the center while Files,

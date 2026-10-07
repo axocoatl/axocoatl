@@ -32,6 +32,7 @@ pub mod review_adjudication;
 pub mod run_junit;
 pub mod run_outcome;
 pub mod run_record;
+pub mod segment_backup;
 pub mod segment_log;
 pub mod session_attachment;
 pub mod session_history;

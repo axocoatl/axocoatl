@@ -236,3 +236,180 @@ fn a_torn_record_is_dropped_on_reopen() {
     store.append(begin("turn-3", Some(&predecessor))).unwrap();
     assert_eq!(store.record_count(), count + 1);
 }
+
+/// Every directory (`None`) and file (its bytes) below `dir`, by path
+/// relative to it.
+fn tree(dir: &std::path::Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+    fn walk(
+        base: &std::path::Path,
+        dir: &std::path::Path,
+        found: &mut std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>,
+    ) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let relative = path.strip_prefix(base).unwrap().to_path_buf();
+            let kind = std::fs::symlink_metadata(&path).unwrap().file_type();
+            if kind.is_dir() {
+                found.insert(relative, None);
+                walk(base, &path, found);
+            } else {
+                assert!(kind.is_file(), "{}", path.display());
+                found.insert(relative, Some(std::fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut found = std::collections::BTreeMap::new();
+    walk(dir, dir, &mut found);
+    found
+}
+
+/// Leave `owner()`'s Session as Axocoatl 1.2 wrote it: the canonical
+/// journal's three closed turns in one file, beside a component directory
+/// with files of its own. Returns the records.
+fn legacy_session(guard: &Arc<UpgradedFormatOwnership>) -> Vec<TurnContractEnvelope> {
+    let store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
+    let team = store
+        .component_namespace(ExecutionComponent::SessionTeam)
+        .unwrap();
+    team.atomic_write("session-team.v1.json", br#"{"written_by":"1.2"}"#)
+        .unwrap();
+    team.child("evidence")
+        .unwrap()
+        .atomic_write("record.json", b"{}")
+        .unwrap();
+    drop(team);
+    let dir = store.dir.clone();
+    let head = store.head.clone();
+    drop(store);
+    let mut records = vec![];
+    let mut predecessor: Option<ClosedTurnRef> = None;
+    for n in 0..3 {
+        let turn = format!("turn-{n}");
+        let mut fold = TurnContract::default();
+        let first = begin(&turn, predecessor.as_ref());
+        let second = close(&turn);
+        fold.apply(&first).unwrap();
+        fold.apply(&second).unwrap();
+        predecessor = Some(fold.closed_reference().unwrap());
+        records.push(first);
+        records.push(second);
+    }
+    let legacy = Journal {
+        records: records.clone(),
+        requests: Vec::new(),
+        segments: None,
+        ..head
+    };
+    SegmentLog::remove(&dir, &SPEC).unwrap();
+    dir.atomic_write(FILE, &serde_json::to_vec(&legacy).unwrap())
+        .unwrap();
+    records
+}
+
+/// Before the first conversion the whole Session directory is copied to
+/// `backups/before-segments/<key>/session`, byte for byte, and no later open
+/// replaces that copy. Restoring it the documented way, with the daemon
+/// stopped, gives back exactly the files Axocoatl 1.2 wrote.
+#[test]
+fn a_session_is_backed_up_once_before_its_first_conversion_and_restores_byte_for_byte() {
+    use crate::segment_backup::{session_key, SegmentBackupManifest};
+    let root = tempfile::tempdir().unwrap();
+    let guard = ownership(&root);
+    let records = legacy_session(&guard);
+    let key = session_key("session-a");
+    let live = root.path().join("execution-v2").join(&key);
+    let backup = root.path().join("backups/before-segments").join(&key);
+    let before = tree(&live);
+    assert!(before.contains_key(std::path::Path::new(FILE)));
+    assert!(!root.path().join("backups").exists());
+
+    let mut store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
+    assert_eq!(store.records().unwrap(), records);
+    assert_ne!(tree(&live), before, "the Session was converted");
+    assert_eq!(tree(&backup.join("session")), before);
+    let manifest_bytes = std::fs::read(backup.join("backup.json")).unwrap();
+    // The Upgrade page finds a backup with this exact text.
+    assert!(String::from_utf8_lossy(&manifest_bytes).contains(r#""session_id": "session-a""#));
+    let manifest: SegmentBackupManifest = serde_json::from_slice(&manifest_bytes).unwrap();
+    assert_eq!(manifest.format, "axocoatl-session-backup");
+    assert_eq!(manifest.reason, "before-segments");
+    assert_eq!(manifest.session_id, "session-a");
+    assert_eq!(manifest.workspace_id, "workspace");
+    assert_eq!(manifest.source, format!("execution-v2/{key}"));
+    assert_eq!(manifest.axocoatl_version, env!("CARGO_PKG_VERSION"));
+    let files: Vec<_> = before.values().flatten().collect();
+    assert_eq!(manifest.files, files.len() as u64);
+    assert_eq!(
+        manifest.bytes,
+        files.iter().map(|bytes| bytes.len() as u64).sum::<u64>()
+    );
+
+    // Work recorded after the conversion is not in the backup, and opening
+    // the Session again leaves the backup as it was.
+    let predecessor = store
+        .turn(&LogicalTurnId::new("turn-2").unwrap())
+        .unwrap()
+        .unwrap()
+        .closed_reference()
+        .unwrap();
+    store.append(begin("turn-3", Some(&predecessor))).unwrap();
+    store.append(close("turn-3")).unwrap();
+    drop(store);
+    let kept = tree(&backup);
+    drop(SessionExecutionStore::open(guard.clone(), owner()).unwrap());
+    assert_eq!(tree(&backup), kept);
+
+    // The documented restore, with the daemon stopped (no ownership held):
+    // move the converted Session aside and copy the backup in its place.
+    drop(guard);
+    std::fs::rename(&live, backup.join("converted")).unwrap();
+    let copied = std::process::Command::new("cp")
+        .arg("-a")
+        .arg(backup.join("session"))
+        .arg(&live)
+        .status()
+        .unwrap();
+    assert!(copied.success());
+    assert_eq!(tree(&live), before);
+    // This release opens the restored Session and converts it again; the
+    // turn recorded after the first conversion is gone and the backup stays.
+    let guard = Arc::new(UpgradedFormatOwnership::open(root.path()).unwrap());
+    let store = SessionExecutionStore::open(guard, owner()).unwrap();
+    assert_eq!(store.records().unwrap(), records);
+    assert_eq!(tree(&backup.join("session")), before);
+}
+
+/// A Session created by this release needs no backup. A backup that cannot
+/// be made stops the conversion and leaves the Session as it was, and a copy
+/// cut short by a crash (no `backup.json`) is taken again.
+#[test]
+fn a_backup_that_cannot_be_made_stops_the_conversion_and_a_partial_one_is_taken_again() {
+    use crate::segment_backup::session_key;
+    let root = tempfile::tempdir().unwrap();
+    let guard = ownership(&root);
+    let fresh = ExecutionStoreOwner {
+        workspace_id: "workspace".into(),
+        session_id: SessionId::new("session-b").unwrap(),
+    };
+    drop(SessionExecutionStore::open(guard.clone(), fresh).unwrap());
+    let records = legacy_session(&guard);
+    assert!(!root.path().join("backups").exists());
+    let key = session_key("session-a");
+    let live = root.path().join("execution-v2").join(&key);
+    let backups = root.path().join("backups/before-segments");
+    let before = tree(&live);
+
+    std::fs::create_dir_all(&backups).unwrap();
+    std::fs::write(backups.join(&key), b"not a directory").unwrap();
+    assert!(SessionExecutionStore::open(guard.clone(), owner()).is_err());
+    assert_eq!(tree(&live), before, "nothing was converted");
+
+    std::fs::remove_file(backups.join(&key)).unwrap();
+    std::fs::create_dir_all(backups.join(&key).join("session")).unwrap();
+    std::fs::write(backups.join(&key).join("session/partial"), b"cut short").unwrap();
+    let store = SessionExecutionStore::open(guard, owner()).unwrap();
+    assert_eq!(store.records().unwrap(), records);
+    assert_eq!(tree(&backups.join(&key).join("session")), before);
+    assert!(backups.join(&key).join("backup.json").is_file());
+    assert_eq!(std::fs::read_dir(&backups).unwrap().count(), 1);
+}

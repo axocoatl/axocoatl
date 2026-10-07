@@ -167,7 +167,11 @@ file carries a `segments` marker that an older daemon's strict parser refuses, s
 Session cannot be opened by a release that would misread it. A single-file journal written
 before segmentation is validated with its old bounds and converted on first open: its records
 are appended to a fresh log and the head replaces the file last, so a crash during conversion
-leaves the old file, and the next open converts it again.
+leaves the old file, and the next open converts it again. The canonical journal is the first
+of a Session's journals to open, so before converting it `segment_backup` copies the whole
+Session directory to `backups/before-segments/<key>/session` under the data root and writes
+`backup.json` last; a complete copy is never replaced, a partial one is taken again, and a
+copy that cannot be made stops the conversion.
 
 `execution_namespace` provisions typed component roots under the canonical Session writer.
 Each component and its descendants retain the format guard, Session lock, and component lock.

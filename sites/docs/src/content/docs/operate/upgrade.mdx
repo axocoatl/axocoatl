@@ -133,4 +133,51 @@ Future-version Session ledger or attachment schemas are rejected rather than
 silently interpreted. That protects against accidental corruption, but it is
 not an automatic migration path.
 
+## Sessions written by 1.2 and earlier
+
+Axocoatl 1.3 keeps each Session journal in segment files. The first time it opens a
+Session that 1.2 or earlier wrote, it converts that Session's journals, and 1.2 and
+earlier then refuse the Session. Before the first conversion, Axocoatl copies the
+Session's whole directory, `execution-v2/<key>` in the data root, to
+`backups/before-segments/<key>/session`, and writes
+`backups/before-segments/<key>/backup.json` last, once the copy is complete. `<key>` is
+the SHA-256 of the Session id; `backup.json` names the Session, its Workspace, the time
+and the version that made the copy. Each Session is copied once and the copy is never
+replaced, so work done in the Session after the conversion is not in it. If the copy
+cannot be made, for example because the disk is full, the Session is not converted and
+does not open; free the space and open it again.
+
+The copies stay until you remove them. They cover Session journals only: to return a
+whole data root to 1.2, restore the cold backup you made before upgrading.
+
+To put a Session back as 1.2 left it:
+
+<Steps>
+
+1. Stop Axocoatl: `axocoatl service stop` for the service, or **Ctrl-C** in a
+   foreground terminal.
+2. In the data root, find the Session's backup. The directory that holds the
+   `backup.json` this prints is the Session's `<key>`:
+
+   ```sh
+   cd /absolute/path/to/data
+   grep -l '"session_id": "SESSION_ID"' backups/before-segments/*/backup.json
+   ```
+
+3. Move the converted Session aside and copy the backup in its place, keeping its
+   permissions:
+
+   ```sh
+   key=KEY
+   mv "execution-v2/$key" "backups/before-segments/$key/converted"
+   cp -a "backups/before-segments/$key/session" "execution-v2/$key"
+   ```
+
+4. Start the release you want. The restored directory holds exactly the files 1.2
+   wrote. Axocoatl 1.3 converts it again and keeps the existing backup. Delete
+   `backups/before-segments/<key>/converted` once you no longer need the converted
+   Session.
+
+</Steps>
+
 Next: [Security →](/operate/security/)
