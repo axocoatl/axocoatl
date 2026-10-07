@@ -309,11 +309,11 @@ mod tests {
 ```json
 [
   {"id": "B1", "title": "Total ignores the coupon", "area": "checkout", "severity": "High",
-   "expected": "10% off", "actual": "full price", "repro": ".axocoatl/qa/b1.spec.ts",
+   "expected": "10% off", "actual": "full price", "repro": "axocoatl-qa/b1.spec.ts",
    "steps": ["ignored extra field"]},
   {"id": "B2", "title": "Search is case sensitive", "expected": "matches", "actual": "no results",
    "repro": null},
-  {"id": "B1", "title": "Duplicate id", "expected": "a", "actual": "b", "repro": ".axocoatl/qa/b1b.spec.ts"},
+  {"id": "B1", "title": "Duplicate id", "expected": "a", "actual": "b", "repro": "axocoatl-qa/b1b.spec.ts"},
   {"title": "No id", "expected": "a", "actual": "b"}
 ]
 ```
@@ -340,7 +340,7 @@ mod tests {
         assert_eq!(first.title, "Total ignores the coupon");
         assert_eq!(first.area.as_deref(), Some("checkout"));
         assert_eq!(first.severity, Some(Severity::High));
-        assert_eq!(first.repro.as_deref(), Some(".axocoatl/qa/b1.spec.ts"));
+        assert_eq!(first.repro.as_deref(), Some("axocoatl-qa/b1.spec.ts"));
         assert_eq!(report.findings[1].repro, None);
         let statuses: Vec<_> = report
             .coverage

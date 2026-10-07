@@ -2,8 +2,14 @@
 # One browser explorer; no scouts, no merge, no verifier. Every finding needs
 # an executable reproduction (a Playwright test under repro_dir). With a
 # reference build, a finding is confirmed only when its reproduction fails on
-# the build under test and passes on the reference. Areas the explorer did not
-# reach or was blocked on are listed as not covered, never a silent pass.
+# the build under test and passes on the reference; one that also fails on the
+# reference is listed as "fails on clean build", never confirmed. Areas the
+# explorer did not reach or was blocked on are listed as not covered, never a
+# silent pass.
+#
+# repro_dir is a visible directory: browser_check reads only repository paths
+# whose segments start with a letter, a digit, '_', '@' or '+', so a hidden
+# directory such as .axocoatl/ could not be re-run.
 schema: axocoatl.loadout/1
 id: qa
 version: 1
@@ -30,23 +36,37 @@ agents:
     role: explorer
     model: { param: explorer_model }
     tools: [read_file, list_dir, grep, glob, write_file, browser, browser_check]
-    writes: [".axocoatl/qa/**"]
+    writes: ["axocoatl-qa/**"]
     instructions: >-
-      Explore the app area by area. For every bug you report, write a
-      Playwright test under .axocoatl/qa/ that fails because of the bug and
-      confirm it with browser_check. End with a FINDINGS JSON block and a
-      COVERAGE JSON block listing every area as covered, not_reached or
-      blocked with the reason.
+      You test a running web app in a browser and report its bugs. Work area
+      by area (pages, flows, forms, error states) and keep a list of the areas
+      you know of. Use browser to explore. For every bug you report, write one
+      Playwright test file under axocoatl-qa/, such as
+      axocoatl-qa/b1-coupon-total.spec.ts, that imports test and expect from
+      @playwright/test, opens pages relative to the base URL
+      (page.goto('/cart')), and fails because of the bug, not because of a
+      typo or a timeout. Run it with browser_check, passing the build under
+      test as base_url, and report the bug only when the test fails for that
+      reason. Change no other file. End your answer with two fenced JSON
+      blocks. First a line FINDINGS, then a JSON array with one object per
+      bug: {"id": "B1", "title": "...", "area": "...", "severity":
+      "low|medium|high|critical", "expected": "...", "actual": "...",
+      "repro": "axocoatl-qa/b1-....spec.ts"}, or [] when you found none. Then
+      a line COVERAGE, then a JSON array with one object per area: {"area":
+      "...", "status": "covered|not_reached|blocked", "reason": "..."}. List
+      every area you know of, the ones you did not reach or could not test
+      included, with the reason. An area you leave out counts as not covered.
 qa:
   target_url: { param: target_url }
   reference_url: { param: reference_url }
-  repro_dir: .axocoatl/qa
+  repro_dir: axocoatl-qa
   fail_on_findings: true
 budgets:
   agent: { activations: 2, invocations: 600, tokens: 6000000, cost_usd: 15 }
   wall_clock: 90m
 prompt: |
-  Explore the app at {target_url} and report its bugs.
+  Explore the app at {target_url} and report its bugs. Pass {target_url} as
+  base_url to browser_check.
   {task}
 sandbox:
   network: egress
