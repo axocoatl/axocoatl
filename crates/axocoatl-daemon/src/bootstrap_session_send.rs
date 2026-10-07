@@ -39,6 +39,7 @@ impl AxocoatlDaemon {
         let request = match prepared {
             Ok(request) => request,
             Err(error) => {
+                self.warn_turn_not_started(&source, &error).await;
                 self.reject_native_send(&source, &error);
                 return Err(error);
             }
@@ -46,6 +47,7 @@ impl AxocoatlDaemon {
         let start = match self.prepare_native_turn(request).await {
             Ok(start) => start,
             Err(error) => {
+                self.warn_turn_not_started(&source, &error).await;
                 self.reject_native_send(&source, &error);
                 return Err(error);
             }
@@ -168,6 +170,26 @@ impl AxocoatlDaemon {
                 native_outcome(turn, usage)
             }
         }
+    }
+
+    /// A turn that could not start has no record of its own: its error
+    /// reaches only the caller (a run's Outcome, the app's rejection frame).
+    /// Say so in the daemon's log too, with the loadout run that sent it.
+    async fn warn_turn_not_started(&self, source: &NativeSessionSend, error: &DaemonError) {
+        let run = self
+            .session_store
+            .lock()
+            .await
+            .get(&source.session_id)
+            .and_then(|session| session.loadout)
+            .map(|binding| binding.run_id);
+        tracing::warn!(
+            session = %source.session_id,
+            turn = %source.turn_id,
+            run = run.as_deref().unwrap_or("-"),
+            %error,
+            "the Session turn could not start"
+        );
     }
 
     fn reject_native_send(&self, source: &NativeSessionSend, error: &DaemonError) {

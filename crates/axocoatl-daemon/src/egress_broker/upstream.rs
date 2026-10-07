@@ -59,6 +59,10 @@ pub struct UpstreamConnector {
     local: LocalCheck,
     connect_timeout: Duration,
     configs: Mutex<HashMap<Option<[u8; 32]>, Arc<ClientConfig>>>,
+    /// Tests: the port every route upstream is reached on, whatever port
+    /// the container asked for (a local fake upstream listens on its own).
+    #[cfg(test)]
+    port: Option<u16>,
 }
 
 impl std::fmt::Debug for UpstreamConnector {
@@ -92,6 +96,8 @@ impl UpstreamConnector {
             local,
             connect_timeout: CONNECT_TIMEOUT,
             configs: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            port: None,
         }
     }
 
@@ -102,6 +108,13 @@ impl UpstreamConnector {
             verification: Verification::Fixed(verifier),
             ..Self::with_local_check(local)
         }
+    }
+
+    /// This connector, reaching every route upstream on `port` (tests).
+    #[cfg(test)]
+    pub(crate) fn on_port(mut self, port: u16) -> Self {
+        self.port = Some(port);
+        self
     }
 
     fn client_config(&self, route: &Route) -> Result<Arc<ClientConfig>, UpstreamError> {
@@ -185,6 +198,8 @@ impl UpstreamConnector {
         addrs: &[IpAddr],
         port: u16,
     ) -> Result<SendRequest<UpstreamBody>, UpstreamError> {
+        #[cfg(test)]
+        let port = self.port.unwrap_or(port);
         let config = self.client_config(route)?;
         let server_name = ServerName::try_from(route.host.clone())
             .map_err(|error| UpstreamError(format!("{}: {error}", route.host)))?;

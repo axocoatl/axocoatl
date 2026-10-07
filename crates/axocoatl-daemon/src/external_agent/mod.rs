@@ -22,7 +22,9 @@
 //!   write scope from those captures, exactly as for a native writer.
 //! - Its activation is admitted, granted and captured like a native one.
 //!   The tool loop makes one model call; that call is the program run. It
-//!   reserves everything the grant still allows (tokens and cost), runs the
+//!   reserves what the grant still allows (all its tokens; all its cost, or
+//!   for a program that never reports cost an equal share per activation
+//!   left, see [`cost_reservation`]), runs the
 //!   program through the in-sandbox supervisor as the writer user, with the
 //!   egress credential of that activation (proxy, route placeholders and the
 //!   Session's trust files), and settles with the usage the program
@@ -159,6 +161,27 @@ pub fn runtime_provider(runtime: AgentRuntime) -> Option<&'static str> {
     }
 }
 
+/// Whether `runtime`'s program reports what its run cost. Claude Code
+/// does (`total_cost_usd`); Codex reports tokens only, so the cost its run
+/// reserves stays charged.
+pub fn reports_cost(runtime: AgentRuntime) -> bool {
+    matches!(runtime, AgentRuntime::ClaudeCode)
+}
+
+/// What one activation of `runtime` reserves of the `cost_microunits` its
+/// grant still allows, with `activations_left` activations left, this one
+/// included. A program that reports its cost reserves all of it and settles
+/// to its report. One that does not keeps its reservation charged, so it
+/// reserves an equal share: whole-grant reservations would leave nothing
+/// for the grant's later activations, such as the revision a review asks
+/// for.
+pub fn cost_reservation(runtime: AgentRuntime, cost_microunits: u64, activations_left: u32) -> u64 {
+    if reports_cost(runtime) || cost_microunits == 0 {
+        return cost_microunits;
+    }
+    (cost_microunits / u64::from(activations_left.max(1))).max(1)
+}
+
 /// The external runtime a definition's `provider` names, if any.
 pub fn runtime_for_provider(provider: &str) -> Option<AgentRuntime> {
     match provider {
@@ -290,7 +313,9 @@ impl ExternalRuntimeProfile {
 /// the pinned programs were seen to call against a recording fake API
 /// (Claude Code 2.1.292 with an OAuth token: `POST /v1/messages?beta=true`;
 /// Codex 0.160.1 through its HTTP provider: `POST /v1/responses`); anything
-/// else is refused and recorded with a hint.
+/// else is refused and recorded with a hint. Claude Code 2.1.292 also asks
+/// for `GET /api/claude_code/policy_limits` and `/api/claude_code/settings`
+/// and goes on without them when they are refused.
 pub fn routes_for(runtime: AgentRuntime) -> Result<Vec<EgressRouteYaml>, ExternalAgentError> {
     let (host, credential, placeholder, path) = match runtime {
         AgentRuntime::Native => return Ok(Vec::new()),

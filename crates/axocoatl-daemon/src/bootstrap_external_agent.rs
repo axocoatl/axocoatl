@@ -127,3 +127,7 @@ impl AxocoatlDaemon {
             || image.is_some_and(|image| self.trusted_recipe_image(image))
     }
 }
+
+#[cfg(test)]
+#[path = "bootstrap_external_turn_tests.rs"]
+mod turn_tests;
