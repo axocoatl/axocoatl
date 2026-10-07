@@ -1085,6 +1085,7 @@ async fn open_pr_pushes_without_force_and_gives_gh_the_body_file() {
         kept.pushed_to.as_deref(),
         Some("origin/axocoatl/fix-0f8c1a2b")
     );
+    assert_eq!(kept.base.as_deref(), Some("main"));
     assert_eq!(
         sh(
             &fixture.remote,

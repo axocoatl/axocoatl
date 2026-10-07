@@ -84,6 +84,9 @@ pub struct KeepPrResponse {
     pub pushed_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request_url: Option<String>,
+    /// The branch the pull request merges into: the remote's default branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
     /// Paths that differ from `HEAD` in the working tree but that no Agent of
     /// the run is recorded changing; not committed (bounded list).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2120,6 +2123,7 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
                 } else {
                     None
                 },
+                base: None,
                 not_committed: Vec::new(),
                 warnings: vec![format!(
                     "An earlier Keep of this run already created {}; nothing new was created.",
@@ -2174,6 +2178,7 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
         paths,
         pushed_to: None,
         pull_request_url: None,
+        base: None,
         not_committed,
         warnings,
     };
@@ -2217,6 +2222,7 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
         }
     }
     response.pushed_to = Some(format!("{}/{branch}", remote.name));
+    response.base = Some(remote.default_branch.clone());
 
     let body = pr_body(job.outcome).map_err(|error| after_branch(message_of(error)))?;
     let body_file = protected
