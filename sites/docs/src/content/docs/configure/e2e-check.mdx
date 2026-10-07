@@ -1,0 +1,102 @@
+---
+title: The e2e check
+description: Run tester-army/e2e as a loadout's required check inside the Session container, with its model key added by a route, telemetry off, its cache read-only, and its JUnit or report.json results in the run's Outcome.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+tester-army/e2e, the npm package `e2e` (Apache-2.0), is an end-to-end testing tool whose
+agent uses a model to drive Chromium. Axocoatl can run it as a
+[required check](/configure/agents/#required-checks) of a loadout: inside the Session
+container, on the exact final files, with its test results in the run's Outcome and
+JUnit file.
+
+Axocoatl pins `e2e@0.18.0`, which needs Node 22.22.3 or later (or 24.8 or later).
+
+## Set up
+
+<Steps>
+
+1. Build the e2e image:
+
+   ```sh
+   axocoatl recipe build e2e
+   ```
+
+   The image holds Node, Chromium and `e2e@0.18.0`, installed globally and pinned by
+   version and integrity. Combine it with an external agent when the loadout has one, as
+   in `axocoatl recipe build claude-code e2e`. See
+   [Build the image](/configure/external-agents/#build-the-image).
+
+2. Store the key for e2e's model, read from standard input:
+
+   ```sh
+   axocoatl secret set e2e-openrouter
+   ```
+
+3. Add the check, the route its model calls go through, and the recipe to the loadout:
+
+   ```yaml
+   checks:
+     - name: e2e
+       run:
+         e2e:
+           args: [run]
+           model_route: openrouter.ai
+           model: { param: e2e_model }
+       timeout: 15m
+   routes:
+     - host: openrouter.ai
+       credential: e2e-openrouter
+       inject: { header: Authorization, format: "Bearer {}" }
+       rules:
+         - { methods: [POST], path: "/api/v1/chat/completions" }
+   params:
+     e2e_model: { kind: text, required: true, description: a model with tool calls and image input }
+   environment:
+     recipes: [e2e]
+   ```
+
+</Steps>
+
+`model_route` names a host under the loadout's `routes`. `args` are the arguments after
+`e2e`. `timeout` is at most 30 minutes.
+
+## What the check does
+
+The check runs `e2e <args>` through a small wrapper, as `sh -c`, inside the Session
+container. The wrapper:
+
+- forces `E2E_TELEMETRY_DISABLED=1`, whatever the repository sets;
+- sets e2e's model and its base URL and key variables for the route; the key variable
+  holds a placeholder, and the daemon adds the real key on your computer to each request
+  the route's rules allow, so the key never enters the container;
+- writes e2e's JUnit and `report.json` under `/tmp/axocoatl-check-reports/<check name>/`;
+- prints `AXOCOATL-CHECK-REPORT sha256=<hex>`, the SHA-256 of the report, as its last
+  line of output, and exits with e2e's own status.
+
+The repository's `.e2e/cache` is mounted read-only for a loadout with an e2e check, so a
+run cannot change the cache your other e2e runs use; the rest of the Workspace stays
+writable. Every model call e2e makes is a request on the route and is in the Session's
+network record.
+
+## Models
+
+e2e's agent needs a model that calls tools and reads images. For an OpenRouter model,
+admission checks OpenRouter's catalog for tool calling and image input and refuses the
+run otherwise (exit code 3). For other providers Axocoatl cannot check, and the run
+warns that the capability is not verified.
+
+## Results in the Outcome
+
+After the run's last turn, Axocoatl reads each check's report from the Session container
+(at most 4 MiB) and accepts it only when its SHA-256 matches the marker that check
+printed in its final recorded run, so a report left over from an earlier run, or written
+by something else, is not used. The report is parsed into the check's result in the
+Outcome: its format, its digest, each test case with its suite, name, status, message and
+duration, and the counts passed, failed, skipped and errors.
+
+The check passes or fails on e2e's exit status, as any check does. A missing report, or
+one whose digest does not match, leaves the check without a report and says why. In the
+[JUnit file](/reference/run/#junit), each report adds a suite `check:<name>` with its
+test cases.

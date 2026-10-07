@@ -57,6 +57,25 @@ After its reviewed environment is Ready, Conversation, Files, Terminal, Preview,
 and Source Control remain available for direct iteration. Native execution
 requires a reviewed **Team & budget** configuration with explicit allowances.
 
+## Loadouts and runs
+
+A **loadout** is a versioned YAML file that declares a whole run: Agents and models,
+required checks, a required reviewer, network, budgets and prompt. A **run** is one
+headless execution of a loadout through [`axocoatl run`](/reference/run/): it creates an
+ordinary Session under network `egress` with the `hardened` workload, drives its turns,
+and ends with an **Outcome** and an exit code. Settings displays loadouts; it does not
+run them.
+
+| Term | Meaning |
+| --- | --- |
+| Loadout | A versioned file that declares a run. Three are built in: `fix`, `qa` and `audit` (opt-in). |
+| Run | One execution of a loadout; its Session, record and Outcome. |
+| Adjudication | The writer's answer to one review finding: accept or reject, with a reason. A finding left unanswered makes the run need attention. |
+| Not covered | An area, helper, slot or check that ended without a result, with the reason. It is never counted as a pass. |
+| Fails on clean build | A QA finding whose reproduction also fails on the reference build; listed, never confirmed. |
+
+See [Loadouts](/configure/loadouts/) and [Fix, QA and audit runs](/workbench/fix-qa-audit/).
+
 ## State owners are intentionally distinct
 
 | State | Authority | Important boundary |

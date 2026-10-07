@@ -1,0 +1,207 @@
+---
+title: Fix, QA and audit runs
+description: What the built-in fix, qa and audit loadouts run, what each needs from you, how their results are decided, and what was measured behind their design.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Axocoatl has three built-in [loadouts](/configure/loadouts/). Each runs as one Session
+with network egress and the `hardened` workload, through [`axocoatl run`](/reference/run/),
+and ends with an Outcome and an exit code. This page says what each one does and why it
+is shaped that way.
+
+## Fix
+
+```sh
+axocoatl run fix --task "…" \
+  --model writer=ollama:qwen3-coder:30b \
+  --model reviewer=ollama:gpt-oss:120b
+```
+
+One turn with one writer, one required check and a required review:
+
+1. The **writer** (`writer_model`) makes the change with the repository tools.
+2. The required check `tests` runs the Session's detected check command, or `--check`
+   when the repository has none, on the exact final files, with a 3-minute timeout. A run
+   with neither is a usage error.
+3. The **reviewer** (`reviewer_model`) reads the result in a fresh conversation with
+   `read_file`, `list_dir`, `grep` and `glob` only, numbers each finding `F1`, `F2`, …
+   and ends with `VERDICT: APPROVE` or `VERDICT: CHANGES`.
+4. On `CHANGES` with rounds left, the host sends the findings back to the writer. The
+   writer must answer every finding in an `ADJUDICATIONS` block, a fenced JSON array of
+   `{"id": "F1", "decision": "accept" | "reject", "reason": "…"}`, and fix each one it
+   accepts. The checks and the review run again on the new result, for up to 3 rounds.
+
+Each answer is an **adjudication**, recorded with its round, finding, decision and
+reason. A finding the writer did not answer is recorded as `missing`, and an answer
+without a readable block makes every finding of that round `missing` with the reason
+"unreadable adjudications block". A rejection with a reason is an answer: a reviewer can
+be wrong, and the writer is expected to check each finding against the task before
+changing code. A missing answer makes the run need attention (exit code 2).
+
+Adjudications appear in the run summary, the JUnit `adjudications` suite, the Run
+outcome panel, the [pull request body](/workbench/keep-as-pr/) and the record.
+
+The run passes (exit code 0) when the check passes on the final result, the reviewer
+approves that result, and every finding the host sent back was answered.
+
+### Use a different model to review
+
+When `reviewer_model` is the writer's model, Axocoatl warns, and the warning appears in
+validation, Settings, Team and budget, the API, the run output and the record. It does
+not refuse the run.
+
+{/* measured: axocoatl-1.1.0 2026-10-01 */}
+
+In our pre-registered benchmark (6 Python maintenance tasks, 25 withheld tests, writer
+qwen3-coder 30B running locally, one run per task at temperature 0), another look by the
+same model added nothing: self-review, a fresh reviewer on the same model and a panel of
+three same-model critics each stayed at 17 / 25 withheld tests, at 2.3× to 4.7× the
+tokens of one pass, in a plain agent loop. Through Axocoatl 1.1.0, a required review by
+a stronger local model, gpt-oss 120B, raised the writer's 17 / 25 to 19 / 25 at 2.6× the
+tokens.
+
+{/* /measured */}
+
+That reviewer was a local model on the same machine. A hosted reviewer through
+OpenRouter works the same way in Axocoatl but was not measured. See
+[What we measured](/understand/what-we-measured/).
+
+## QA
+
+```sh
+axocoatl run qa --task "Check the checkout and account pages" \
+  --model explorer=openrouter:<model> \
+  --param target_url=http://localhost:3000 \
+  --param reference_url=http://localhost:3001
+```
+
+One turn with one Agent, the **explorer**, which has the [browser tools](/configure/browser/)
+`browser` and `browser_check` and may write only under `axocoatl-qa/`. There are no
+scouts, no merge step, no reviewer and no verifier.
+
+The explorer drives the app at `target_url` area by area. For every bug it reports it
+writes a Playwright test under `axocoatl-qa/` that fails because of the bug, and it ends
+its answer with two fenced JSON blocks:
+
+- `FINDINGS`: each finding's `id`, `title`, `area`, `severity`, `expected`, `actual` and
+  `repro`, the path of its test;
+- `COVERAGE`: each area as `covered`, `not_reached` or `blocked`, with a reason.
+
+The host then runs each reproduction itself, with `browser_check`, one worker and no
+retries, against `target_url` and, when you give one, `reference_url`, a clean build of
+the same app:
+
+| Fails on the build under test | Passes on the reference | Classification |
+| --- | --- | --- |
+| yes | yes | **confirmed** |
+| yes | no, it fails there too | **fails on clean build**: listed, never confirmed |
+| yes | no reference given | **reproduced** |
+| no | — | **not reproduced** |
+| the test could not run | | **repro error** |
+| no test, or the file is missing | | **missing** |
+
+A finding is confirmed only when its reproduction fails on the build under test and
+passes on the reference. Confirmed and reproduced findings make the run need attention
+(exit code 2), because the loadout's `fail_on_findings` is on.
+
+Both URLs must be reachable from the browser container: an exposed port of the Session,
+`http://localhost:<port>`, or a host under [`browser.allow`](/configure/browser/#declared-hosts).
+A URL it cannot reach refuses the run before it starts (exit code 3). To compare against
+a clean build, run it on a second exposed port, or list its host.
+
+### Not covered is never a pass
+
+Everything the explorer did not cover is listed under **not covered**, with a reason:
+
+- each area it reported as `not_reached` or `blocked`;
+- when the explorer itself failed, every area it did not report as covered, plus "remaining
+  app", with the class: `provider_refusal` (the provider refused or a safety classifier
+  stopped the stream), `provider_failure`, `budget` or `runtime_limit`;
+- when its answer has no `COVERAGE` block, "whole app (no coverage report)".
+
+Each entry makes the run need attention and is a failure in the JUnit file.
+
+### Why one explorer
+
+{/* measured: claude-code-subagents qa 2026-10-04..06 */}
+
+These QA studies ran Claude Opus as Claude Code subagents, not through Axocoatl, so they
+are not Axocoatl results. They shaped this loadout.
+
+- On a web app with 16 planted bugs (5 runs per setup; exploratory, not pre-registered),
+  one explorer found 97.5% of the bugs at 98.8% precision. Adding a verifier gave 100%
+  and 100%, but the verifier removed nothing: the reports it checked were already at 100%
+  and 100% before it ran. A lead with two scouts found 98.8% at 95.7% precision with 2.1×
+  the tokens.
+- On a larger app with 66 planted bugs (pre-registered), a lead with three scouts found
+  2.3 points more than one explorer, which was not significant (p = 0.77), and used 31%
+  more tokens.
+
+In every setup each finding had to come with an executable reproduction.
+
+{/* /measured */}
+
+The extra Agents mostly added tokens, so the built-in loadout has one explorer, and the
+host re-runs each reproduction itself instead of asking another model to judge it.
+
+## Audit
+
+```sh
+axocoatl run audit --task "Security-relevant defects in the request parsing code" \
+  --model planner=openrouter:<model> \
+  --model worker=openrouter:<model> \
+  --model integrator=openrouter:<model>
+```
+
+`audit` is opt-in: it is listed with the others but runs only when you name it. It runs
+three turns in one Session, each with its own Team and budget:
+
+1. **Plan.** The planner, alone and read-only, splits the scope into 2 to 8 areas in one
+   `AREAS` JSON block: each area's name and the paths it covers. An invalid plan gets one
+   more turn with the error; a second invalid plan ends the run needing attention, with
+   "whole scope" not covered.
+2. **Areas.** One worker per area, made from the `worker` Agent: read-only (`writes: []`,
+   its `bash` under Landlock with no repository writes and no TCP), each in a fresh
+   conversation, with no dependencies between them, so the controller starts them
+   together. Each reports `FINDINGS` and what it did `NOT_REACHED`. A failed worker makes
+   its area not covered, with its failure class.
+3. **Integrate.** The integrator gets every accepted worker report (each up to 24 KiB,
+   with a note when cut) and the list of areas not covered, and answers with one merged
+   `FINDINGS` block.
+
+Audit turns have no required checks and no review. Findings do not fail the run by
+default (`fail_on_findings: false`); anything not covered does. Each worker gets
+`budgets.agent`, and the wall clock bounds all three turns.
+
+Workers start together, but they share one Session container and one checkout, so their
+commands queue, and a local model server may answer one request at a time.
+
+### The measured trade-off
+
+{/* measured: claude-code-subagents single-vs-multi 2026-10-06 */}
+
+These numbers come from a pre-registered study that ran Claude Opus as Claude Code
+subagents, not through Axocoatl. A planning agent, parallel workers (six on the audit)
+and an integrating agent were compared with one agent on the same model.
+
+- **On an audit larger than one context** (5.2 to 5.7 million characters of source per
+  instance, 150 planted defects over 5 instances): recall was 11 points higher (99% against
+  87%; interval +4 to +19 points), precision 8 points lower, at about 3× the tokens and
+  the same wall-clock time. This is a sensitivity analysis, not a pre-registered result:
+  the study's pre-registered exclusion rule excluded 9 of the 10 attempts, and these
+  figures put them back.
+- **On work that fits in one context** (research questions, independent modules, a
+  coupled feature change): both setups scored 100%. The multi-agent setup took 1.6× to
+  4.9× as long and used 4× to 5.5× the tokens.
+
+{/* /measured */}
+
+Use `audit` when the scope is larger than one model context and finding more matters more
+than the extra tokens and the extra false reports. For anything one Agent can hold, run
+one Agent.
+
+<Aside>
+Findings, adjudications and not-covered entries are evidence about one run with the models
+you chose. They do not prove the absence of other defects.
+</Aside>

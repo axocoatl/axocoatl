@@ -87,6 +87,8 @@ export default defineConfig({
             { label: 'Explore several Ways', slug: 'workbench/ways' },
             { label: 'Review Git and Last turn', slug: 'workbench/git' },
             { label: 'Context, History, and Stop', slug: 'workbench/history' },
+            { label: 'Fix, QA and audit runs', slug: 'workbench/fix-qa-audit' },
+            { label: 'Keep as PR', slug: 'workbench/keep-as-pr' },
           ],
         },
         {
@@ -96,6 +98,9 @@ export default defineConfig({
             { label: 'Providers', slug: 'configure/providers' },
             { label: 'Agents and budgets', slug: 'configure/agents' },
             { label: 'Cross-model review', slug: 'configure/cross-model-review' },
+            { label: 'Loadouts', slug: 'configure/loadouts' },
+            { label: 'External agents', slug: 'configure/external-agents' },
+            { label: 'The e2e check', slug: 'configure/e2e-check' },
             { label: 'Sandboxes', slug: 'configure/sandboxes' },
             { label: 'Browser', slug: 'configure/browser' },
             { label: 'Web research', slug: 'configure/web' },
@@ -131,6 +136,7 @@ export default defineConfig({
           label: 'Reference',
           items: [
             { label: 'CLI', slug: 'reference/cli' },
+            { label: 'axocoatl run', slug: 'reference/run' },
             { label: 'Configuration', slug: 'reference/config' },
             { label: 'HTTP API', slug: 'reference/http-api' },
             { label: 'WebSocket', slug: 'reference/websocket' },

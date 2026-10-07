@@ -1,0 +1,207 @@
+---
+title: axocoatl run
+description: Run a loadout headless against the running daemon. Flags, how it finds the daemon, its output, exit codes, the JUnit file and the record bundle.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`axocoatl run` runs one [loadout](/configure/loadouts/) against a repository through the
+running daemon, prints progress and a summary, writes JUnit and a record bundle when asked,
+and exits with a code that says how the run ended.
+
+```text
+axocoatl run <LOADOUT> (--task <TEXT> | --task-file <FILE|->)
+             [--repo <DIR>] [--junit <FILE>] [--record <FILE>]
+             [--model <ROLE>=<PROVIDER:MODEL>]... [--param <NAME>=<VALUE>]...
+             [--check <CMD>] [--setup <CMD>] [--keep none|branch|pr]
+             [--json] [--url <DAEMON URL>] [-c, --config <CONFIG>]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `<LOADOUT>` | A loadout id: `fix`, `qa`, `audit` or one of yours. `audit` is opt-in and runs only when named, as here. |
+| `--task <TEXT>` | The request, as you would type it in a Session. |
+| `--task-file <FILE>` | Read the request from a file; `-` reads standard input. |
+| `--repo <DIR>` | The repository; default the current directory. The daemon resolves it to a canonical path and uses the Workspace for it, creating one if needed. |
+| `--junit <FILE>` | Write the [JUnit file](#junit) of checks and findings. |
+| `--record <FILE>` | Write the [record bundle](#record-bundle). |
+| `--model <ROLE>=<PROVIDER:MODEL>` | Sets the parameter `<ROLE>_model`, such as `--model writer=ollama:qwen3-coder:30b`. Repeatable. |
+| `--param <NAME>=<VALUE>` | Sets a loadout parameter. Repeatable. An unknown name is a usage error. |
+| `--check <CMD>` | The command a `detected: true` check runs when the repository has no detected check command. |
+| `--setup <CMD>` | The exact setup command this run approves, in place of the loadout's `environment.setup`. |
+| `--keep none\|branch\|pr` | What to do with a passing run's changes; default `none`. See [Keep as PR](/workbench/keep-as-pr/). |
+| `--json` | Print the Outcome as JSON on standard output instead of the summary. |
+| `--url <URL>` | The daemon's address. |
+| `-c, --config <CONFIG>` | The configuration file used to find the daemon's address and data root; default the user configuration. |
+
+## How it finds the daemon
+
+`axocoatl run` talks to a daemon that is already running (`axocoatl dev`, `axocoatl
+serve` or the [service](/operate/service/)) over its HTTP API. It never starts one.
+
+- **Address:** `--url`, else `AXOCOATL_URL`, else `http://<server.host>:<server.port>`
+  from the configuration file.
+- **Credential:** `AXOCOATL_TOKEN`, else the daemon's
+  [local API token](/operate/security/#the-local-api-token), read from
+  `local-api-token` in the data root, sent as `Authorization: Bearer`. Pass the same
+  `--config` and `AXOCOATL_DATA_DIR` the daemon uses.
+
+A daemon that cannot be reached, or that refuses the credential, is exit code 4.
+
+## What it prints
+
+1. The run id, the Session id and any warnings, on standard error.
+2. One line per phase, turn start and end, warning, not-covered entry and provider retry,
+   on standard error, while the run proceeds.
+3. When the run finishes, a summary on standard output: the verdict; each check with its
+   state, exit code and report counts; the review verdict and rounds; each adjudication
+   (finding, decision, reason); the findings, with "fails on clean build" shown as such;
+   every not-covered entry with its reason; the warnings, including the same-model
+   warning; usage (marked "known subtotal" when a call's usage is unknown); and the
+   record id. With `--json` it prints the Outcome instead.
+
+`--junit` and `--record` are written even when the run fails, each to a temporary file
+that is then renamed, so a reader never sees half a file.
+
+**Ctrl-C** asks the daemon to stop the run, waits up to 30 seconds for its Outcome,
+writes `--junit` and `--record`, and exits with code 6.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Pass: every required check passed, the review (if any) approved, every review finding was answered, nothing is not covered, and no finding the loadout fails on. |
+| 1 | A required check failed or timed out on the final result. |
+| 2 | Needs attention: the review did not pass, a finding was not answered, something was not covered, a check never ran on the final result, a turn needs attention or was blocked, a budget or the wall clock ran out, findings the loadout fails on (`fail_on_findings`), or Keep failed. |
+| 3 | Usage: a bad flag, an unknown or invalid loadout, a missing or unknown parameter, an opt-in loadout not named, a QA URL the browser cannot reach, or an e2e model that OpenRouter does not list with tool calls and image input. |
+| 4 | The daemon could not be reached, or it refused the credential. |
+| 5 | Infrastructure: the Session environment failed, the Session could not run under egress with the `hardened` workload, a provider is not configured, or another daemon error. |
+| 6 | You interrupted the run. |
+
+When several apply, the code is the first of 5, 6, 1, 2 in that order, and 0 only when
+none does. Codes 3 and 4 happen before a run starts. Nothing is a pass by default: a
+check that did not run, a review finding nobody answered and an area nobody reached each
+make the run need attention.
+
+The reasons are listed under `attention` in the Outcome, in words.
+
+```sh
+axocoatl run fix --task-file task.md \
+  --model writer=ollama:qwen3-coder:30b --model reviewer=ollama:gpt-oss:120b \
+  --junit axocoatl-junit.xml --record run.axorecord.jsonl
+case $? in
+  0) echo "passed" ;;
+  1) echo "checks failed" ;;
+  2) echo "needs a person" ;;
+  *) echo "could not run" ;;
+esac
+```
+
+## JUnit
+
+The JUnit file has one `testsuite` per kind of result, and a last one for the verdict:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="axocoatl" tests="7" failures="2" errors="0" skipped="1" time="512.3">
+  <properties>
+    <property name="axocoatl.run_id" value="run-…"/>
+    <property name="axocoatl.session_id" value="…"/>
+    <property name="axocoatl.loadout" value="fix@1 sha256:…"/>
+    <property name="axocoatl.verdict" value="needs_attention"/>
+    <property name="axocoatl.exit_code" value="2"/>
+    <property name="axocoatl.warning.same_model_reviewer" value="…"/>
+  </properties>
+  <testsuite name="checks" tests="1" failures="0">
+    <testcase classname="axocoatl.check" name="tests" time="41.2"/>
+  </testsuite>
+  <testsuite name="check:e2e" tests="2" failures="1">
+    <testcase classname="e2e.checkout" name="pays with a saved card">
+      <failure message="expected …">…</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="review" tests="1" failures="0">
+    <testcase classname="axocoatl.review" name="required-review"/>
+  </testsuite>
+  <testsuite name="adjudications" tests="2" failures="1">
+    <testcase classname="axocoatl.adjudication" name="round 1 F1"><system-out>accept: …</system-out></testcase>
+    <testcase classname="axocoatl.adjudication" name="round 1 F2"><failure type="missing" message="the writer did not answer F2"/></testcase>
+  </testsuite>
+  <testsuite name="findings" tests="2" failures="1" skipped="1">
+    <testcase classname="axocoatl.finding.checkout" name="B1 total ignores coupon"><failure type="confirmed" message="…"/></testcase>
+    <testcase classname="axocoatl.finding.search" name="B2 …"><skipped message="fails on clean build"/></testcase>
+  </testsuite>
+  <testsuite name="coverage" tests="1" failures="1">
+    <testcase classname="axocoatl.coverage" name="gift cards"><failure type="not_covered" message="provider_refusal: classifier stop"/></testcase>
+  </testsuite>
+  <testsuite name="run" tests="1" failures="1">
+    <testcase classname="axocoatl.run" name="verdict"><failure type="needs_attention" message="…the reasons…"/></testcase>
+  </testsuite>
+</testsuites>
+```
+
+| Result | In the JUnit file |
+| --- | --- |
+| A check that failed or timed out | `<failure>` |
+| A check that did not run, or whose record cannot be read | `<error>` |
+| A check that wrote a report ([e2e](/configure/e2e-check/), JUnit) | one more suite, `check:<name>`, with its test cases |
+| A review that did not pass | `<failure>` |
+| An adjudication the writer did not give | `<failure type="missing">` |
+| A rejected finding | a passing case with the reason in `<system-out>` |
+| A confirmed or reproduced finding | `<failure>` when the loadout fails on findings, otherwise `<system-out>` |
+| A finding that fails on the clean build, or did not reproduce | `<skipped>` |
+| A reproduction that could not run, or is missing | `<error>` |
+| Anything not covered | `<failure type="not_covered">`, never skipped |
+| A warning, such as the same-model reviewer | a property `axocoatl.warning.<code>` |
+| The run's verdict | suite `run`, case `verdict`: a `<failure>` with the reasons whenever the run did not pass, so a CI job that reads only JUnit still sees it |
+
+Text is XML-escaped and control characters other than tab and newline are removed. Each
+message is at most 4 KiB and the file at most 8 MiB; cases beyond that are summarized in
+one `truncated` case.
+
+## Record bundle
+
+`--record` writes the run's whole record as one JSON Lines file
+(`application/vnd.axocoatl.record+jsonl`; a name such as
+`run-….axorecord.jsonl`). The same file is
+[`GET /api/runs/{run_id}/record`](/reference/http-api/#loadouts-and-runs) and
+**Download record** in the Run outcome panel.
+
+```text
+{"schema":"axocoatl.record-bundle/1","run_id":"run-…","session_id":"ses-…","created_at_ms":…,"axocoatl_version":"1.3.0"}
+{"section":"manifest","data":{…}}        the run's manifest: loadout, parameters, task, repository HEAD, dirty paths
+{"section":"loadout","data":{"text":"…exact YAML…","digest":"…"}}
+{"section":"outcome","data":{…}}         the Outcome
+{"section":"session","data":{…}}         the Session record
+{"section":"team","data":{…}}            the applied Team and budget
+{"section":"turn","data":{…}}            one per turn: its control-plane record
+{"section":"history","data":{…}}         the Session export
+{"section":"network","data":{…}}         one per network-record event, all of them
+{"section":"run_event","data":{"seq":1,"event":{…}}}   one per run event
+{"section":"end","lines":N,"sha256":"…"}
+```
+
+Sections appear in that order. The last line counts the section lines between the
+header and itself and holds the SHA-256 of every byte before it. Check a bundle:
+
+```sh
+axocoatl record verify run.axorecord.jsonl
+```
+
+It prints the run id, the sections and their line counts, and exits 0, or 2 when the
+order, the count or the digest does not match. The digest shows that the file was not
+changed after it was written; it is not a signature. The bundle holds only recorded
+evidence: routes never record a credential's value, so none is in the file.
+
+## Where runs are kept
+
+Each run is kept under `loadout-runs/<run id>/` in the data root: `manifest.json`,
+written once when the run is admitted; `events.jsonl`, appended as the run proceeds; and
+`outcome.json`, written once when it ends. Deleting the Session does not delete them.
+If the daemon restarts during a run, the run ends as failed with the reason "the daemon
+restarted during the run"; it is not resumed.
+
+<Aside>
+A run is an ordinary Session. Open it in the workbench to read its turns, the Agent graph,
+the network record and Git while it runs or after it ends.
+</Aside>

@@ -54,7 +54,20 @@ reads the result in a fresh conversation. The turn completes only when they pass
 Existing legacy roots keep compatibility execution until an explicit offline
 [upgrade](/operate/upgrade/). Its actor/checkpoint path is described below.
 
-### Reliability for small local models
+## A loadout run
+
+[`axocoatl run`](/reference/run/) asks the daemon to admit a run of a
+[loadout](/configure/loadouts/): the daemon resolves its parameters, finds or creates the
+Workspace, creates a native Session bound to the loadout (network `egress`, the `hardened`
+workload), prepares its environment with exactly the setup the run approves, and writes
+the run's manifest. A task in the daemon then builds the Team and budget edit from the
+loadout, applies it through the same review and apply path as the workbench, sends the
+turn (three turns for an audit), and observes it: each node and generation, the check
+results, the review rounds and the usage. From those it builds the Outcome, decides the
+verdict and exit code, and writes them once to the run record. Each kind of loadout has
+its own driver; see [Fix, QA and audit runs](/workbench/fix-qa-audit/).
+
+### Early stream ends and short context windows
 
 - An Ollama stream that ends early, including one ended by an error record such as
   an unparseable tool call, is retried once. The retry is charged to the same grant.

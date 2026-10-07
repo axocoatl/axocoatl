@@ -42,7 +42,8 @@ turn completes, are opt-in.
   <Card title="Any model, per Agent" icon="random">
     Each Agent has its own provider and model: local models through Ollama, hosted models
     through OpenRouter, with Anthropic, OpenAI, Gemini and Mistral adapters on the
-    compatibility path. A local writer can be reviewed by a stronger model.
+    compatibility path. A local writer can be reviewed by a stronger model. The
+    reviewer we measured ran locally; reviewers through OpenRouter have not been measured.
     [Cross-model review →](/configure/cross-model-review/)
   </Card>
 </CardGrid>
@@ -50,6 +51,11 @@ turn completes, are opt-in.
 Claims about results come only from measurements, stated once with their setup and
 limits in [What we measured](/understand/what-we-measured/). One Agent remains the
 cheaper choice for small tasks.
+
+To run agents from a script or a CI job, run a [loadout](/configure/loadouts/) headless
+with [`axocoatl run`](/reference/run/): the built-in `fix`, `qa` and `audit` loadouts,
+or your own, in a Session under network egress, ending with an exit code, a JUnit file
+and a record of the whole run.
 
 The Session keeps conversation, context, files, terminal, Preview, history, and Git
 review together. Explore several Ways only when the task warrants comparison.

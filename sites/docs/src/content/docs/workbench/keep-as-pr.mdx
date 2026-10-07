@@ -1,0 +1,77 @@
+---
+title: Keep as PR
+description: Commit a passing run's changes to a new branch without touching your checkout, and, if you ask, push that branch and open a pull request with your own git and gh. Never a force-push, never the default branch.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A run leaves its changes in your working tree as ordinary uncommitted changes. **Keep as
+PR** turns a passing run's changes into a commit on a new branch, and, if you ask, pushes
+that branch and opens a pull request. It never changes your current branch, your index or
+your working tree.
+
+Three ways to ask for it:
+
+- `axocoatl run <loadout> … --keep branch` or `--keep pr`; it acts only when the run
+  passes, and prints the branch, the commit and the pull request URL;
+- **Keep as PR** in the Session's Run outcome panel;
+- [`POST /api/sessions/{id}/keep-pr`](/reference/http-api/#loadouts-and-runs) with
+  `{"run_id": "run-…", "open_pr": true}`.
+
+## When it is allowed
+
+- The run is finished and its verdict is `pass`. Otherwise Keep is refused (`409`) with
+  the reason.
+- None of the run's changed paths had uncommitted changes before the run began. The run's
+  manifest lists those paths; when one of them is among the run's changes, Keep is
+  refused rather than mixing your edits into the commit.
+- The branch does not exist yet. The default name is `axocoatl/<loadout>-<run id prefix>`.
+
+The run's changed paths are the Session's changes attributed to the run's turns, the same
+attribution as [Last turn](/workbench/git/).
+
+## The commit
+
+Axocoatl uses the host's `git` with a temporary index, so nothing you have open changes:
+
+1. a temporary `GIT_INDEX_FILE` is filled from `HEAD`;
+2. exactly the run's paths are added or removed in it from the working tree;
+3. `git write-tree` and `git commit-tree -p HEAD` make the commit, with the title and the
+   run id in its message;
+4. `git branch <name> <commit>` creates the branch.
+
+`HEAD`, the real index, the current branch and the working tree are the same afterwards.
+The changes stay in your working tree too; switch to the branch, or discard them, when
+you choose.
+
+## The pull request
+
+With `--keep pr`, **Open a PR**, or `"open_pr": true`:
+
+- Keep refuses a branch name equal to the remote's default branch, or one under which the
+  current branch is pushed;
+- it pushes with `git push <remote> <branch>:refs/heads/<branch>`, never with `--force`,
+  and refuses when that remote branch already exists; the remote defaults to `origin`;
+- it opens the pull request with `gh pr create --head <branch> --base <default branch>`,
+  with the title and a body file.
+
+The body holds the run's verdict, a table of check results, the review verdict and
+rounds, a table of adjudications, the findings, everything not covered, the warnings, and
+the run id with the command to verify its [record bundle](/reference/run/#record-bundle).
+
+`git` and `gh` run on your computer with your own credentials and configuration. Nothing
+runs in a container for this, and Axocoatl reads no credential.
+
+## What is recorded
+
+Keep is recorded as a `keep` phase in the run's events, and its branch, commit, pull
+request URL or error appear as `keep` in the run's status. The Outcome itself is written
+once, when the run ends, and does not change.
+
+A failed Keep after a passing run makes `axocoatl run` print the reason and exit with
+code 2.
+
+<Aside>
+Keep commits only the run's attributed paths. If you edited one of those paths during the
+run, Keep refuses rather than merging your edit; commit it yourself.
+</Aside>

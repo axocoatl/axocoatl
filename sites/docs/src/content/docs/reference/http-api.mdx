@@ -145,8 +145,8 @@ not permission to choose another activation or team.
 
 | Method | Path | Request / behavior |
 | --- | --- | --- |
-| GET | `/api/sessions/{id}/team` | Current team revision, selected templates, explicit limits, and expiry. `required_checks` lists the applied team's checks; `suggested_check` is the Session's detected check command as an argument array, offered only and never run unless an Apply includes it. `required_review` is the applied team's review setting, when it has one, and `reviewers` lists the templates that may review: read-only Workers |
-| POST | `/api/sessions/{id}/team/preview` | Typed whole-team edit; resolves and reviews future-turn definitions and authority. A slot's `writes` is the whole list of paths that Agent may change: `null` allows any file and `[]` is read-only. Leaving it out keeps the scope of the template or current definition the slot starts from, so omitting it never widens what the Agent may change; the app always sends it. The edit's optional `required_checks` is an array of argument arrays, such as `[["sh", "-c", "npm test"]]`, that the host runs after every turn's required Agents finish; it is refused when no required Agent has `bash`. The optional `required_review` is `{"template_id", "max_rounds", "limits", "max_output_tokens"}`: a read-only Worker template the host runs after every turn's required Agents and checks, 1 to 3 rounds (2 when omitted), the reviewer's limits for all rounds of one turn, and its output bound per request (the template's when omitted). An edit whose limits cannot pay for what it names (a missing or zero limit, a missing or past expiry, a helper over its lead's limits, review rounds outside 1 to 3, or a check payer, reviewer or lead budget too small for its rounds) is refused with `422` and the reason alone; a stale configuration revision is `409` |
+| GET | `/api/sessions/{id}/team` | Current team revision, selected templates, explicit limits, and expiry. `required_checks` lists the applied team's checks; `suggested_check` is the Session's detected check command as an argument array, offered only and never run unless an Apply includes it. `required_review` is the applied team's review setting, when it has one, and `reviewers` lists the templates that may review: read-only Workers. `warnings` lists warnings about the applied team, such as `{"code": "same_model_reviewer", "message": …}` when the required reviewer runs a writer's provider and model |
+| POST | `/api/sessions/{id}/team/preview` | Typed whole-team edit; resolves and reviews future-turn definitions and authority. A slot's `writes` is the whole list of paths that Agent may change: `null` allows any file and `[]` is read-only. Leaving it out keeps the scope of the template or current definition the slot starts from, so omitting it never widens what the Agent may change; the app always sends it. The edit's optional `required_checks` is an array of argument arrays, such as `[["sh", "-c", "npm test"]]`, that the host runs after every turn's required Agents finish; it is refused when no required Agent has `bash`. The optional `check_options` is aligned by index with `required_checks`, one `{name?, timeout_ms?, report?}` per check or none at all: `timeout_ms` is 1,000 to 1,800,000 (180,000 when omitted), and `report` is `{format, path}`, with `format` `junit` or `e2e_report_json` and `path` under `/tmp/axocoatl-check-reports/`; a check that writes its report there and prints its digest has it parsed into the turn's check result (see [The e2e check](/configure/e2e-check/)). The optional `required_review` is `{"template_id", "max_rounds", "limits", "max_output_tokens"}`: a read-only Worker template the host runs after every turn's required Agents and checks, 1 to 3 rounds (2 when omitted), the reviewer's limits for all rounds of one turn, and its output bound per request (the template's when omitted). An edit whose limits cannot pay for what it names (a missing or zero limit, a missing or past expiry, a helper over its lead's limits, review rounds outside 1 to 3, or a check payer, reviewer or lead budget too small for its rounds) is refused with `422` and the reason alone; a stale configuration revision is `409` |
 | POST | `/api/sessions/{id}/team/apply` | `{edit, review_digest}`; exact reviewed future-turn edit |
 | POST | `/api/sessions/{id}/team/cancel` | Cancel the referenced team draft without changing current authority |
 | POST | `/api/sessions/{id}/turns/{turn_id}/control-commands` | Typed human action with exact command/activation/revision identities; returns the canonical receipt |
@@ -160,6 +160,44 @@ not permission to choose another activation or team.
 | POST | `/api/sessions/{id}/ways-history/configuration` | `{limits: {version, field_bytes, record_bytes, aggregate_bytes, records, candidates, items_per_field}}`; every numerical limit is explicit |
 | GET | `/api/sessions/{id}/ways-history/{decision}` | Export the retained record and protected patch bodies |
 | DELETE | `/api/sessions/{id}/ways-history/{decision}` | Explicit deletion after runtime cleanup; retains a tombstone |
+
+## Loadouts and runs
+
+[Loadouts](/configure/loadouts/) and the runs [`axocoatl run`](/reference/run/) starts.
+Errors are `{"error": "…"}`: `422` for a usage error (an unknown or invalid loadout, a
+missing or unknown parameter, an opt-in loadout not named), `409` for a conflict, `501`
+for a part this build does not implement, `400` otherwise.
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/loadouts` | Every built-in and user loadout: `[{id, version, name, description, kind, builtin, opt_in, digest, params, warnings, error?, path?}]`. `params` lists each parameter's `name`, `kind`, `required`, `default` and `description`. A user file that cannot be used has its `path` and `error` and empty `version`, `kind` and `digest` |
+| GET | `/api/loadouts/{id}` | `{summary, file, text, graph}`: the summary row, the parsed file, its exact text and a display graph of `nodes` (`{id, kind, label, detail}`, `kind` one of `agent`, `check`, `review`, `area_workers`) and `edges` (`{from, to}`). The graph is for display only |
+| POST | `/api/loadouts/validate` | `{text}`, at most 128 KiB. Returns `{valid, error?, warnings, summary?}` without saving anything |
+| POST | `/api/runs` | Start a run: `{loadout, task, repo, params?, keep?, check_command?, setup_command?, request_id}`. `repo` is canonicalized and found or created as a Workspace; `keep` is `none` (the default), `branch` or `pr`; a repeat with the same `request_id` returns the same run. Answers `202` with `{run_id, session_id, workspace_id, warnings}` |
+| GET | `/api/runs` | Every run, newest first: `[{run_id, session_id, loadout, state, phase, started_at_ms, outcome?}]`; `state` is `preparing`, `running`, `finished` or `failed` |
+| GET | `/api/runs/{run_id}` | One run, with its Outcome once finished, and `keep` after Keep as PR |
+| GET | `/api/runs/{run_id}/events?after=<seq>&limit=<1-1000>` | `{events, next_after, finished}`; each event is `[seq, {kind, at_ms, …}]` with `kind` `phase`, `turn_started`, `turn_ended`, `warning`, `adjudication`, `finding`, `not_covered`, `provider_retry` or `ended` |
+| POST | `/api/runs/{run_id}/stop` | Stop the run's turn; answers `202`. The run ends `interrupted` |
+| GET | `/api/runs/{run_id}/junit` | The run's [JUnit file](/reference/run/#junit), `application/xml` |
+| GET | `/api/runs/{run_id}/record` | The run's [record bundle](/reference/run/#record-bundle), streamed as `application/vnd.axocoatl.record+jsonl` |
+| POST | `/api/sessions/{id}/keep-pr` | [Keep as PR](/workbench/keep-as-pr/): `{run_id, branch?, open_pr?, remote?, title?}`. Returns `{branch, commit, paths, pushed_to?, pull_request_url?}`; `409` with the reason when the run did not pass, a run path was dirty before the run, the branch exists, the branch is the remote's default branch, or the remote branch exists |
+
+The Outcome (`schema` `axocoatl.run-outcome/1`) holds `run_id`, `session_id`,
+`workspace_id`, `loadout` (`{id, version, kind, digest, builtin}`), `task`,
+`started_at_ms`, `finished_at_ms`, `verdict` (`pass`, `checks_failed`,
+`needs_attention`, `interrupted` or `error`), `exit_code`, `attention` (the reasons, in
+words), `turns`, `checks` (each with `name`, `argv`, `state`, `timeout_ms`, `exit_code`,
+output tails, `candidate_sha256`, `report` and `reason`), `review` (the reviewer and every
+round's verdict and numbered findings), `adjudications` (`round`, `finding_id`, `finding`,
+`decision` `accept`, `reject` or `missing`, `reason`), `findings` (with `repro` and its
+`classification`: `confirmed`, `fails_on_clean_build`, `reproduced`, `not_reproduced`,
+`repro_error` or `missing`), `not_covered` (`area`, `class`, `detail`), `warnings`,
+`usage` (with `complete` and `retries`), `network` (event, connection and route request
+counts), `keep` and `error`.
+
+A Session that a run created carries `loadout`:
+`{run_id, loadout: {id, version, kind, digest, builtin}, network, workload}`. Every other
+Session has `"loadout": null`, and its behavior is unchanged.
 
 ## MCP, configured Skills, and event projections
 

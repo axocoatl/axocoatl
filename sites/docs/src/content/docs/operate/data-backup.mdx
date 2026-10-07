@@ -66,6 +66,8 @@ can include:
 | `memory/semantic/v1/agent_<agent-key>_semantic.json` | Current semantic records and vectors |
 | `models/` | Downloaded local embedding-model cache |
 | `local-api-token` | Per-daemon local API token (`0600`); a restore reuses it, deleting it issues a new one at the next start |
+| `loadout-runs/<run id>/` | Each [loadout run](/reference/run/#where-runs-are-kept): `manifest.json`, `events.jsonl` and `outcome.json`; kept when its Session is deleted |
+| `secrets/<name>` | Route credentials stored with `axocoatl secret set` (`0600`, not encrypted) |
 | `searxng/` | A managed SearXNG's settings and secret (`0600`), with `web_search.provider: searxng` |
 | `automation/runs-v1/<automation-key>/<run-key>.json` | Current Automation run and node checkpoint records |
 | `automations.json` | Canonical Automation definitions |

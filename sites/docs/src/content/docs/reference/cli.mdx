@@ -188,6 +188,34 @@ Agents can edit it; check it and restart the daemon instead. The same reload is
 [`POST /api/network/reload`](/reference/http-api/#reload-the-network-allowlists). See
 [Network egress](/configure/sandboxes/#network-egress).
 
+## Loadout runs
+
+These commands talk to the running daemon over its HTTP API. They find it at `--url`,
+else `AXOCOATL_URL`, else the configured server address, and authenticate with
+`AXOCOATL_TOKEN`, else the data root's `local-api-token`. They never start a daemon.
+
+| Command | Purpose |
+| --- | --- |
+| `axocoatl run <LOADOUT> (--task <TEXT> \| --task-file <FILE\|->) [--repo DIR] [--junit FILE] [--record FILE] [--model ROLE=PROVIDER:MODEL]... [--param NAME=VALUE]... [--check CMD] [--setup CMD] [--keep none\|branch\|pr] [--json] [--url URL] [-c, --config CONFIG]` | Run a [loadout](/configure/loadouts/) headless and exit with its code: 0 pass, 1 checks failed, 2 needs attention, 3 usage, 4 daemon unavailable, 5 infrastructure, 6 interrupted. See [`axocoatl run`](/reference/run/) |
+| `axocoatl loadouts list [--url URL]` | List the built-in loadouts and yours, with kind, version, opt-in, warnings, and the error and path of a file that cannot be used |
+| `axocoatl loadouts show <ID> [--url URL]` | Print one loadout's exact text, parameters and graph |
+| `axocoatl loadouts validate <FILE>` | Parse and validate a loadout file without the daemon; prints warnings such as `same_model_reviewer` |
+| `axocoatl record verify <FILE>` | Check a [record bundle](/reference/run/#record-bundle)'s header, section order, line count and SHA-256; exits 0, or 2 on a mismatch |
+
+## Secrets and recipes
+
+| Command | Purpose |
+| --- | --- |
+| `axocoatl secret set <NAME>` | Read one value from standard input, never from an argument, and store it as `secrets/<NAME>` in the data root (`0600`, replaced atomically). It is never printed. A route's `credential` can name it. See [Store the credential](/configure/external-agents/#store-the-credential) |
+| `axocoatl secret list` | Print the stored secret names, never values |
+| `axocoatl secret remove <NAME>` | Delete one stored secret |
+| `axocoatl recipe build <RECIPE>...` | Build one Session image with Podman from Axocoatl's pinned recipes `claude-code`, `codex` and `e2e`, combined in that order, and record its image id; Sessions trust it by that id |
+| `axocoatl recipe list` | List the recipes and the images built from them |
+
+`recipe build` downloads its base image and the pinned programs; that is network access
+you start, on your computer. See [External agents](/configure/external-agents/) and
+[The e2e check](/configure/e2e-check/).
+
 ## Global help and version
 
 ```sh
@@ -197,6 +225,7 @@ axocoatl session --help
 axocoatl session new --help
 ```
 
-The docs content check reads the Clap enums in `axocoatl-cli/src/main.rs` and
-fails when a top-level or nested command disappears from this reference. Flags
+The docs content check reads the Clap enums in `axocoatl-cli/src/main.rs`,
+`run_cmd.rs`, `secret_cmd.rs` and `recipe_cmd.rs` and fails when a top-level or
+nested command disappears from this reference. Flags
 and behavior still require source review and binary help when changed.

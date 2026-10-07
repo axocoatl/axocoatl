@@ -395,6 +395,30 @@ passes compressed responses or `Set-Cookie`, and when a route's host is also all
 `env` or `file`, `inject.format` or `inject.basic.username`, where a pasted token may
 be.
 
+### sandbox.egress.host_ollama
+
+```yaml
+sandbox:
+  network: egress
+  egress:
+    host_ollama:
+      port: 11434          # a loopback TCP port on this computer
+      for: [agent]         # agent, terminal, setup; default [agent]
+```
+
+An explicit, opt-in route from Session containers to an Ollama server on this
+computer's loopback interface. Off when absent. Under `network: egress`, the processes
+`for` names get `OLLAMA_HOST=https://ollama.host.axocoatl.internal`. That name never
+resolves in DNS: the egress decision point recognizes it, the daemon ends TLS with the
+Session's certificate authority and forwards each request over plain HTTP to
+`127.0.0.1:<port>`, and every request and response is written to the Session's network
+record like any route's. Only loopback is reached; no other host port is. Under `bridge`
+and `none` the setting does nothing and validation warns. Without it, the name is
+refused like any unlisted host.
+
+This route is for programs inside the Session, such as a test suite that calls a local
+model. Agents' own model calls are made by the daemon and do not need it.
+
 ### sandbox.workload
 
 ```yaml
@@ -427,7 +451,10 @@ credentials:
 ```
 
 Each entry is exactly one of `env`, an uppercase variable name, or `file`, an
-absolute or `~/` path. Names are 1-64 letters, digits, `_`, `.` or `-`, and are
+absolute or `~/` path. A [loadout](/configure/loadouts/)'s route may also name a
+secret stored with [`axocoatl secret set`](/configure/external-agents/#store-the-credential):
+its `credential` resolves to the entry here first, then to `secrets/<name>` in the data
+root (`0600`) when that file exists. Names are 1-64 letters, digits, `_`, `.` or `-`, and are
 recorded with each request that used them. Values are never in the configuration:
 a plain value is refused without being repeated, and `${...}` is refused before
 substitution. The daemon reads a value each time a request needs it; a file must
