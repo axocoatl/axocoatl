@@ -42,6 +42,8 @@ pub const KEEP_PHASE: &str = "keep";
 /// The remote Keep pushes to when the request names none.
 pub const DEFAULT_REMOTE: &str = "origin";
 
+/// Reading the working tree against a fresh index of `HEAD`.
+const KEEP_STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 const MAX_TITLE_CHARS: usize = 200;
 const MAX_BRANCH_BYTES: usize = 200;
 const MAX_LISTED_PATHS: usize = 200;
@@ -1415,6 +1417,7 @@ struct RepoFacts {
     current_branch: Option<String>,
     settings: Vec<(String, String)>,
     exclude: Option<Vec<u8>>,
+    person: Option<Vec<String>>,
 }
 
 impl RepoFacts {
@@ -1534,6 +1537,16 @@ impl RepoFacts {
                 settings.push((key.to_string(), first_line(&value)));
             }
         }
+        let listing = local(
+            repository_git(tools, &root, &["config", "--list", "--show-scope", "-z"]),
+            "git config",
+        )
+        .await?;
+        let person = listing
+            .status
+            .success()
+            .then(|| git_host::person_settings(&listing.stdout))
+            .flatten();
         let exclude_path = common_dir.join("info/exclude");
         let exclude = match std::fs::symlink_metadata(&exclude_path) {
             Ok(metadata) if metadata.is_file() && metadata.len() <= MAX_EXCLUDE_BYTES => {
@@ -1552,6 +1565,7 @@ impl RepoFacts {
             current_branch,
             settings,
             exclude,
+            person,
         })
     }
 
@@ -1638,6 +1652,7 @@ impl RepoFacts {
                 object_format: &self.object_format,
                 settings: &self.settings,
                 exclude: self.exclude.clone(),
+                person: self.person.clone(),
             },
         )
         .map_err(KeepPrError::Git)
@@ -1692,16 +1707,27 @@ impl RemoteTarget {
         if !named.status.success() {
             return Err(git_failure("naming the remote", &named));
         }
+        // Every URL the push would go to, after the person's own rewrites.
         let effective = local(
-            protected.command(tools, &["remote", "get-url", "--push", name]),
+            protected.command(tools, &["remote", "get-url", "--push", "--all", name]),
             "git remote get-url",
         )
         .await?;
         if !effective.status.success() {
             return Err(git_failure("resolving the push URL", &effective));
         }
-        git_host::check_push_url(&first_line(&effective), &repo.root)
-            .map_err(KeepPrError::Refused)?;
+        let urls: Vec<String> = String::from_utf8_lossy(&effective.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect();
+        if urls.is_empty() {
+            return Err(refused(format!("remote {name} has no push URL")));
+        }
+        for url in &urls {
+            git_host::check_push_url(url, &repo.root).map_err(KeepPrError::Refused)?;
+        }
         let reference = format!("refs/heads/{branch}");
         let listed = run_bounded(
             protected.command(tools, &["ls-remote", "--symref", name, "HEAD", &reference]),
@@ -1816,7 +1842,8 @@ async fn build_commit(
     if !read.status.success() {
         return Err(git_failure("reading HEAD into a temporary index", &read));
     }
-    let status = local(
+    // A fresh index has no stat cache, so this hashes the working tree.
+    let status = run_bounded(
         protected.command(
             tools,
             &[
@@ -1828,9 +1855,11 @@ async fn build_commit(
                 "--no-renames",
             ],
         ),
+        KEEP_STATUS_TIMEOUT,
         "git status",
     )
-    .await?;
+    .await
+    .map_err(KeepPrError::Git)?;
     if !status.status.success() {
         return Err(git_failure("reading the working tree", &status));
     }

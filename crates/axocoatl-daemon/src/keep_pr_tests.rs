@@ -864,11 +864,23 @@ impl Fixture {
         );
         let head = sh(&repo, "git rev-parse HEAD");
         let global = root.join("gitconfig");
+        // The URL rewrite comes from a conditional include, as a per-folder
+        // credential or SSH key setup would: Keep must resolve it in the
+        // repository's context even though its own Git directory is elsewhere.
+        let work = root.join("work.gitconfig");
+        write(
+            &work,
+            &format!(
+                "[url \"{}\"]\n\tinsteadOf = https://github.com/acme/widgets.git\n",
+                remote.display()
+            ),
+        );
         write(
             &global,
             &format!(
-                "[user]\n\tname = Person\n\temail = person@example.invalid\n[url \"{}\"]\n\tinsteadOf = https://github.com/acme/widgets.git\n",
-                remote.display()
+                "[user]\n\tname = Person\n\temail = person@example.invalid\n[includeIf \"gitdir:{}/\"]\n\tpath = {}\n",
+                repo.display(),
+                work.display()
             ),
         );
         let real_git = sh(&root, "command -v git");
@@ -1282,6 +1294,28 @@ async fn keep_refuses_what_it_must_not_commit_or_push() {
             .await,
         "already exists on remote origin",
     );
+    // A push URL the person's own settings add beside the checked one.
+    let global = fixture.dir.path().join("gitconfig");
+    let original = std::fs::read_to_string(&global).unwrap();
+    std::fs::write(
+        &global,
+        format!(
+            "{original}[remote \"origin\"]\n\tpushurl = {}\n\tpushurl = https://github.com/acme/widgets.git\n",
+            fixture.repo.join("planted.git").display()
+        ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(fixture.repo.join("planted.git")).unwrap();
+    let mut extra = request();
+    extra.open_pr = true;
+    refused(
+        fixture
+            .keep(&extra, &manifest, &outcome(), &attribution, None)
+            .await,
+        "inside the Session's folder",
+    );
+    std::fs::write(&global, &original).unwrap();
+    std::fs::remove_dir_all(fixture.repo.join("planted.git")).unwrap();
     // A remote that does not exist, or that gh cannot open a PR on.
     let mut missing = request();
     missing.open_pr = true;
@@ -1522,6 +1556,30 @@ async fn a_later_keep_continues_from_the_branch_an_earlier_keep_created() {
             .await,
         Err(KeepPrError::Refused(message)) if message.contains("already exists")
     ));
+}
+
+#[test]
+fn the_persons_settings_are_passed_on_without_the_repositorys() {
+    let listing = b"global\0user.name\nPerson\0global\0includeif.gitdir:/w/.path\n/w.cfg\0global\0core.sshcommand\nssh -i ~/.ssh/work\0global\0credential.helper\nosxkeychain\0global\0credential.helper\n\0system\0http.sslverify\0local\0core.fsmonitor\n/evil\0command\0core.hookspath\n/dev/null\0";
+    assert_eq!(
+        git_host::person_settings(listing).unwrap(),
+        vec![
+            "user.name=Person",
+            "core.sshcommand=ssh -i ~/.ssh/work",
+            "credential.helper=osxkeychain",
+            "credential.helper=",
+            "http.sslverify",
+        ]
+    );
+    assert_eq!(
+        git_host::person_settings(b"global\0url.a=b.insteadof\nx\0"),
+        None
+    );
+    assert_eq!(
+        git_host::person_settings(b"global\0user.name\n\xff\0"),
+        None
+    );
+    assert_eq!(git_host::person_settings(b""), Some(Vec::new()));
 }
 
 #[test]

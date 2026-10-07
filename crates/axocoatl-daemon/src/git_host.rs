@@ -716,6 +716,54 @@ pub(crate) struct ProtectedGitSpec<'a> {
     pub settings: &'a [(String, String)],
     /// The repository's own exclude patterns, copied as data.
     pub exclude: Option<Vec<u8>>,
+    /// The person's own global and system settings as `key=value`, resolved
+    /// in the repository's context (so conditional includes apply), given
+    /// instead of reading those files again. `None` reads them normally.
+    pub person: Option<Vec<String>>,
+}
+
+/// The person's global and system settings from `git config --list
+/// --show-scope -z` run in their repository, as `key=value` for `-c`:
+/// conditional includes resolved, repository-local and command-line entries
+/// left out, include directives themselves dropped. `None` when the listing
+/// cannot be passed on exactly (too large, not UTF-8, a key with `=`).
+pub(crate) fn person_settings(listing: &[u8]) -> Option<Vec<String>> {
+    const MAX_ENTRIES: usize = 4096;
+    const MAX_BYTES: usize = 128 * 1024;
+    let mut fields = listing.split(|byte| *byte == 0);
+    let mut settings = Vec::new();
+    let mut bytes = 0;
+    while let Some(scope) = fields.next() {
+        if scope.is_empty() {
+            continue;
+        }
+        let entry = fields.next()?;
+        if !matches!(scope, b"global" | b"system") {
+            continue;
+        }
+        let entry = std::str::from_utf8(entry).ok()?;
+        let (key, value) = match entry.split_once('\n') {
+            Some((key, value)) => (key, Some(value)),
+            None => (entry, None),
+        };
+        let lower = key.to_ascii_lowercase();
+        if lower.starts_with("include.") || lower.starts_with("includeif.") {
+            continue;
+        }
+        if key.is_empty() || key.contains('=') {
+            return None;
+        }
+        let setting = match value {
+            Some(value) => format!("{key}={value}"),
+            None => key.to_string(),
+        };
+        bytes += setting.len();
+        settings.push(setting);
+        if settings.len() > MAX_ENTRIES || bytes > MAX_BYTES {
+            return None;
+        }
+    }
+    Some(settings)
 }
 
 /// A Git directory of Axocoatl's own beside a repository: the repository's
@@ -730,6 +778,7 @@ pub(crate) struct ProtectedGit {
     work_tree: PathBuf,
     objects: PathBuf,
     shallow: Option<PathBuf>,
+    person: Option<Vec<String>>,
 }
 
 impl ProtectedGit {
@@ -760,6 +809,7 @@ impl ProtectedGit {
             work_tree: spec.work_tree.to_path_buf(),
             objects: spec.objects.to_path_buf(),
             shallow: spec.shallow.map(Path::to_path_buf),
+            person: spec.person.clone(),
         };
         created.git_dir.child("objects").map_err(protect)?;
         created.git_dir.child("refs/heads").map_err(protect)?;
@@ -816,6 +866,16 @@ impl ProtectedGit {
             command.env("GIT_SHALLOW_FILE", shallow);
         }
         command.arg("--no-optional-locks");
+        if let Some(person) = &self.person {
+            // Exactly the person's settings as their own git would see them
+            // in this repository; the overrides below still win.
+            command
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1");
+            for setting in person {
+                command.args(["-c", setting]);
+            }
+        }
         for setting in KEEP_GIT_OVERRIDES {
             command.args(["-c", setting]);
         }
