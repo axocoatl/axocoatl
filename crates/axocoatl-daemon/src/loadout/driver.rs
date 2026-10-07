@@ -95,6 +95,10 @@ pub async fn run_turn(
     request: &str,
     purpose: &str,
 ) -> Result<TurnObservation, RunError> {
+    // A person who stopped the run gets no further turn.
+    if host.stop_requested(&run.run_id).await {
+        return Err(RunError::Stopped);
+    }
     let turn_id = host.send_turn(&run.session_id, request).await?;
     record(
         host,
@@ -793,6 +797,53 @@ prompt: "{task}"
             .any(|reason| reason.contains("wall clock")));
         assert_eq!(outcome.not_covered.len(), 1);
         assert_eq!(outcome.not_covered[0].class, FailureClass::Budget);
+    }
+
+    #[tokio::test]
+    async fn a_stop_before_the_turn_is_an_interruption() {
+        struct Stopping(FakeHost);
+        #[async_trait]
+        impl RunHost for Stopping {
+            async fn apply_team(&self, s: &str, edit: SessionTeamEdit) -> Result<(), RunError> {
+                self.0.apply_team(s, edit).await
+            }
+            async fn send_turn(&self, _: &str, _: &str) -> Result<String, RunError> {
+                panic!("no turn after a stop")
+            }
+            async fn wait_turn(
+                &self,
+                s: &str,
+                t: &str,
+                d: Instant,
+            ) -> Result<TurnObservation, RunError> {
+                self.0.wait_turn(s, t, d).await
+            }
+            async fn stop_turn(&self, s: &str, t: &str) -> Result<(), RunError> {
+                self.0.stop_turn(s, t).await
+            }
+            async fn run_repro(&self, s: &str, r: &ReproRequest) -> Result<ReproRun, RunError> {
+                self.0.run_repro(s, r).await
+            }
+            async fn read_sandbox_file(
+                &self,
+                s: &str,
+                p: &str,
+                m: usize,
+            ) -> Result<Option<Vec<u8>>, RunError> {
+                self.0.read_sandbox_file(s, p, m).await
+            }
+            async fn record(&self, r: &str, e: RunEvent) -> Result<(), RunError> {
+                self.0.record(r, e).await
+            }
+            async fn stop_requested(&self, _: &str) -> bool {
+                true
+            }
+        }
+        let run = context(&[], later());
+        let host = Stopping(host(vec![]));
+        let outcome = run_to_outcome(&host, &run).await.unwrap();
+        assert_eq!(outcome.exit_code, exit_code::INTERRUPTED);
+        assert_eq!(outcome.verdict, RunVerdict::Interrupted);
     }
 
     struct Unfinished;
