@@ -38,6 +38,20 @@ fn run_external(f: &mut Fixture, runtime: AgentRuntime, writes: Option<&[&str]>)
 }
 
 fn run_with_config(f: &mut Fixture, config: AgentConfig, request: &str) -> Run {
+    run_with_limits(
+        f,
+        config,
+        request,
+        GrantLimits {
+            activations: 2,
+            invocations: 12,
+            tokens: 100_000,
+            cost_microunits: 1_000_000,
+        },
+    )
+}
+
+fn run_with_limits(f: &mut Fixture, config: AgentConfig, request: &str, limits: GrantLimits) -> Run {
     let canonical = f._canonical.take().unwrap();
     let session_id = canonical.owner().session_id.clone();
     let registry = SessionDispatchRegistry::default();
@@ -123,12 +137,6 @@ fn run_with_config(f: &mut Fixture, config: AgentConfig, request: &str) -> Run {
             text: "Fixture host permits the external program run".into(),
         })
         .unwrap();
-    let limits = GrantLimits {
-        activations: 2,
-        invocations: 12,
-        tokens: 100_000,
-        cost_microunits: 1_000_000,
-    };
     let policy = AuthorityGrant {
         id: "external-grant".into(),
         revision: 1,
@@ -396,15 +404,19 @@ if (prompt.includes("WRITE-OUTSIDE")) fs.writeFileSync("outside.txt", "outside t
 (async () => {
   out({ type: "system", subtype: "init", model: facts.model, tools: ["Bash"] });
   let answer;
-  try {
-    const response = await fetch(`https://api.anthropic.com:${port}/v1/messages?beta=true`, {
-      method: "POST",
-      headers: { authorization: "Bearer " + process.env.CLAUDE_CODE_OAUTH_TOKEN, "content-type": "application/json", "anthropic-beta": "oauth-2025-04-20" },
-      body: JSON.stringify({ model: facts.model, max_tokens: 16, messages: [{ role: "user", content: "hi" }] }),
-    });
-    answer = `FAKE-ANSWER ${response.status} ${(await response.text()).trim()}`;
-  } catch (error) {
-    answer = `FAKE-FETCH-FAILED ${error.cause ? error.cause.code || error.cause.message : error.message}`;
+  const calls = Number((prompt.match(/FAKE-CALLS=(\d+)/) || [])[1] || 1);
+  for (let call = 0; call < calls; call++) {
+    if (call > 0) await new Promise((resolve) => setTimeout(resolve, 150));
+    try {
+      const response = await fetch(`https://api.anthropic.com:${port}/v1/messages?beta=true`, {
+        method: "POST",
+        headers: { authorization: "Bearer " + process.env.CLAUDE_CODE_OAUTH_TOKEN, "content-type": "application/json", "anthropic-beta": "oauth-2025-04-20" },
+        body: JSON.stringify({ model: facts.model, max_tokens: 16, messages: [{ role: "user", content: "hi" }] }),
+      });
+      answer = `FAKE-ANSWER ${response.status} ${(await response.text()).trim()}`;
+    } catch (error) {
+      answer = `FAKE-FETCH-FAILED ${error.cause ? error.cause.code || error.cause.message : error.message}`;
+    }
   }
   out({ type: "assistant", message: { content: [{ type: "text", text: "Changing src/fixed.txt." }, { type: "tool_use", id: "toolu_fake", name: "Bash", input: { command: "write src/fixed.txt" } }] } });
   out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_fake", content: JSON.stringify(facts), is_error: false }] } });
@@ -639,6 +651,7 @@ async fn actual_external_claude_code_runs_through_the_route_as_the_hardened_writ
             ExternalSettings {
                 source: Some(Arc::new(FakeRecordSource(record.clone()))),
                 meter_interval: Duration::from_millis(100),
+                adjust_argv: None,
             },
         );
         let resources = factory.resources(&input_of(&r)).await.unwrap();
@@ -836,6 +849,430 @@ async fn actual_external_claude_code_runs_through_the_route_as_the_hardened_writ
             let failure = settled.failure.unwrap_or_default();
             assert!(failure.contains("outside.txt"), "{failure}");
         }
+        assert_eq!(egress.live_bindings(), 0);
+    }
+}
+
+
+/// The route requests of an external program count against its grant's
+/// invocations: once it has made more than the grant still allowed when it
+/// started, the host stops it, and the activation fails saying so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the egress-capable embedded helper"]
+async fn actual_external_program_is_stopped_when_its_requests_pass_the_grant() {
+    use crate::egress_broker::UpstreamConnector;
+    use crate::session_egress::route_tests::{loopback_is_public, Upstream};
+    use crate::session_egress::tests::{FakeRecord, FakeResolver};
+    use crate::session_egress::{EgressPolicyConfig, RouteSettings, SessionEgress};
+    use std::os::unix::fs::PermissionsExt;
+    let image = external_test_image();
+    let upstream_network = EgressUpstream::start();
+    let upstream = Upstream::start("api.anthropic.com").await;
+    let port = upstream.addr.port();
+    let store = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(store.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    crate::secret_store::set_secret(store.path(), "claude-code-oauth", b"sk-ant-oat01-limit")
+        .unwrap();
+    let ca_file = store.path().join("upstream-ca.pem");
+    std::fs::write(&ca_file, upstream.ca.pem()).unwrap();
+    std::fs::set_permissions(&ca_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut route = external_agent::routes_for(AgentRuntime::ClaudeCode)
+        .unwrap()
+        .remove(0);
+    route.ports = Some(vec![port]);
+    route.upstream_ca = Some(ca_file.display().to_string());
+    let mut f = fixture().await;
+    let record = Arc::new(FakeRecord::default());
+    let egress = SessionEgress::open_session(
+        f.owner.metadata().session_id.clone(),
+        EgressPolicyConfig {
+            routes: vec![route],
+            credentials: std::collections::BTreeMap::from([(
+                "claude-code-oauth".to_string(),
+                crate::secret_store::credential_source(store.path(), "claude-code-oauth")
+                    .unwrap()
+                    .unwrap(),
+            )]),
+            ..EgressPolicyConfig::default()
+        },
+        record.clone(),
+        FakeResolver::with(&[("api.anthropic.com", &["127.0.0.1"])]),
+        Some(f.owner.inner.data_root.child("egress-env").unwrap()),
+        loopback_is_public,
+        RouteSettings {
+            upstream: Arc::new(UpstreamConnector::with_local_check(Arc::new(|_| false))),
+            ..RouteSettings::default()
+        },
+    )
+    .await
+    .unwrap();
+    let sandbox = external_sandbox(&mut f, &image, &upstream_network, egress.clone()).await;
+    git_init(f._workspace.path());
+    let config = external_agent::external_agent_config(
+        AgentConfig {
+            id: AgentId::new("conversation"),
+            ..Default::default()
+        },
+        AgentRuntime::ClaudeCode,
+        "claude-sonnet-4-5",
+    )
+    .unwrap();
+    let r = run_with_limits(
+        &mut f,
+        config,
+        &format!("FAKE-TASK FAKE-PORT={port} FAKE-CALLS=60"),
+        GrantLimits {
+            activations: 2,
+            invocations: 10,
+            tokens: 100_000,
+            cost_microunits: 1_000_000,
+        },
+    );
+    let factory = r.controller.external_activation_factory(
+        Arc::new(NativeStub(AtomicUsize::new(0))),
+        Arc::new(Counter),
+        ExternalSettings {
+            source: Some(Arc::new(FakeRecordSource(record.clone()))),
+            meter_interval: Duration::from_millis(50),
+            adjust_argv: None,
+        },
+    );
+    let resources = factory.resources(&input_of(&r)).await.unwrap();
+    let settled = tokio::time::timeout(Duration::from_secs(240), async {
+        r.controller
+            .prepare_repository_activation(r.activation.clone(), resources, r.resource.clone())
+            .unwrap()
+            .run()
+            .await
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    assert!(idle.unwrap());
+    assert!(!settled.accepted);
+    let failure = settled.failure.unwrap_or_default();
+    assert!(
+        failure.contains("Axocoatl stopped the program: it made"),
+        "{failure}"
+    );
+    let calls = upstream
+        .seen()
+        .iter()
+        .filter(|request| request.path == "/v1/messages")
+        .count();
+    assert!((1..20).contains(&calls), "{calls}");
+    // No usage report: the whole reservation stays charged.
+    let usage = r.controller.activation_provider_usage(&r.activation).unwrap();
+    assert!(!usage.tokens.complete);
+    assert_eq!(egress.live_bindings(), 0);
+}
+
+// ----------------------------------------------- the pinned programs
+
+/// One request a model API upstream received.
+#[derive(Debug, Clone)]
+struct ApiSeen {
+    method: String,
+    path: String,
+    authorization: Vec<String>,
+}
+
+/// A local HTTPS model API for `host` answering the Messages and Responses
+/// streaming endpoints with one fixed text answer each, as the captures in
+/// `fixtures/` show the pinned programs read them.
+struct ModelApi {
+    addr: std::net::SocketAddr,
+    ca: crate::egress_broker::SessionCa,
+    seen: Arc<Mutex<Vec<ApiSeen>>>,
+}
+
+const ANTHROPIC_SSE: &str = concat!(
+    "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_real\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":120,\"output_tokens\":1,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}\n\n",
+    "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+    "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"PINNED-CLAUDE-OK\"}}\n\n",
+    "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+    "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":7}}\n\n",
+    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+);
+
+const OPENAI_SSE: &str = concat!(
+    "event: response.created\ndata: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_real\",\"object\":\"response\",\"created_at\":1,\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+    "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"sequence_number\":1,\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_real\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}\n\n",
+    "event: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"sequence_number\":2,\"item_id\":\"msg_real\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n",
+    "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"sequence_number\":3,\"item_id\":\"msg_real\",\"output_index\":0,\"content_index\":0,\"delta\":\"PINNED-CODEX-OK\"}\n\n",
+    "event: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"sequence_number\":4,\"item_id\":\"msg_real\",\"output_index\":0,\"content_index\":0,\"text\":\"PINNED-CODEX-OK\"}\n\n",
+    "event: response.content_part.done\ndata: {\"type\":\"response.content_part.done\",\"sequence_number\":5,\"item_id\":\"msg_real\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"PINNED-CODEX-OK\",\"annotations\":[]}}\n\n",
+    "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"sequence_number\":6,\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_real\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"PINNED-CODEX-OK\",\"annotations\":[]}]}}\n\n",
+    "event: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":7,\"response\":{\"id\":\"resp_real\",\"object\":\"response\",\"created_at\":1,\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_real\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"PINNED-CODEX-OK\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":300,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":9,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":309}}}\n\n",
+);
+
+impl ModelApi {
+    async fn start(host: &str) -> Self {
+        use http_body_util::{BodyExt, Full};
+        use hyper::body::Incoming;
+        let ca = crate::egress_broker::SessionCa::new("model-api-test").unwrap();
+        let (cert, key) = ca.leaf(host).unwrap();
+        let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .unwrap();
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_by_server = seen.clone();
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                let seen = seen_by_server.clone();
+                tokio::spawn(async move {
+                    let Ok(tls) = acceptor.accept(tcp).await else {
+                        return;
+                    };
+                    let service = hyper::service::service_fn(move |request: hyper::Request<Incoming>| {
+                        let seen = seen.clone();
+                        async move {
+                            let authorization = request
+                                .headers()
+                                .get_all(hyper::header::AUTHORIZATION)
+                                .iter()
+                                .map(|value| String::from_utf8_lossy(value.as_bytes()).into())
+                                .collect();
+                            let method = request.method().to_string();
+                            let path = request.uri().path().to_string();
+                            seen.lock().unwrap().push(ApiSeen {
+                                method: method.clone(),
+                                path: path.clone(),
+                                authorization,
+                            });
+                            let _ = request.into_body().collect().await;
+                            let body = match (method.as_str(), path.as_str()) {
+                                ("POST", "/v1/messages") => Some(ANTHROPIC_SSE),
+                                ("POST", "/v1/responses") => Some(OPENAI_SSE),
+                                _ => None,
+                            };
+                            let mut response = hyper::Response::new(Full::new(bytes::Bytes::from_static(
+                                body.unwrap_or("{\"error\":\"not found\"}").as_bytes(),
+                            )));
+                            if body.is_some() {
+                                response.headers_mut().insert(
+                                    hyper::header::CONTENT_TYPE,
+                                    hyper::header::HeaderValue::from_static("text/event-stream"),
+                                );
+                            } else {
+                                *response.status_mut() = hyper::StatusCode::NOT_FOUND;
+                            }
+                            Ok::<_, std::convert::Infallible>(response)
+                        }
+                    });
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(hyper_util::rt::TokioIo::new(tls), service)
+                        .await;
+                });
+            }
+        });
+        Self { addr, ca, seen }
+    }
+}
+
+/// The pinned Claude Code 2.1.292 and Codex 0.160.1, from the images
+/// `axocoatl recipe build claude-code` and `axocoatl recipe build codex`
+/// made, run as external writers in a hardened egress Session exactly as
+/// production runs them, but for the model API's port (a local upstream;
+/// Claude Code is pointed at it with `ANTHROPIC_BASE_URL`, Codex through its
+/// provider's base URL): through the proxy and the Session's route, trusting
+/// the Session's authority, with the credential from the secret store, their
+/// output parsed into the activation's answer and settled usage. Needs both
+/// recipe images built on the Podman connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION), the egress-capable embedded helper and the claude-code and codex recipe images"]
+async fn actual_pinned_claude_code_and_codex_run_through_the_route() {
+    use crate::egress_broker::UpstreamConnector;
+    use crate::session_egress::route_tests::loopback_is_public;
+    use crate::session_egress::tests::{FakeRecord, FakeResolver};
+    use crate::session_egress::{EgressPolicyConfig, RouteSettings, SessionEgress};
+    use axocoatl_session::network_record::{Decision as Recorded, NetworkEvent};
+    use std::os::unix::fs::PermissionsExt;
+    let upstream_network = EgressUpstream::start();
+    for (runtime, recipe, host, path, model, answer, usage) in [
+        (
+            AgentRuntime::ClaudeCode,
+            "claude-code",
+            "api.anthropic.com",
+            "/v1/messages",
+            "claude-sonnet-4-5",
+            "PINNED-CLAUDE-OK",
+            (120, 7),
+        ),
+        (
+            AgentRuntime::Codex,
+            "codex",
+            "api.openai.com",
+            "/v1/responses",
+            "gpt-5.5",
+            "PINNED-CODEX-OK",
+            (300, 9),
+        ),
+    ] {
+        let image =
+            axocoatl_isolation::recipes::image_name(&[recipe.to_string()]).unwrap();
+        assert!(
+            std::process::Command::new("podman")
+                .args(["image", "exists", &image])
+                .status()
+                .unwrap()
+                .success(),
+            "build {image} first: axocoatl recipe build {recipe}"
+        );
+        let api = ModelApi::start(host).await;
+        let port = api.addr.port();
+        let store = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(store.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let secret = format!("sk-test-{recipe}-{}", uuid::Uuid::new_v4().simple());
+        let mut route = external_agent::routes_for(runtime).unwrap().remove(0);
+        let credential = route.credential.clone().unwrap();
+        crate::secret_store::set_secret(store.path(), &credential, secret.as_bytes()).unwrap();
+        let ca_file = store.path().join("upstream-ca.pem");
+        std::fs::write(&ca_file, api.ca.pem()).unwrap();
+        std::fs::set_permissions(&ca_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        route.ports = Some(vec![port]);
+        route.upstream_ca = Some(ca_file.display().to_string());
+        let mut f = fixture().await;
+        let record = Arc::new(FakeRecord::default());
+        let egress = SessionEgress::open_session(
+            f.owner.metadata().session_id.clone(),
+            EgressPolicyConfig {
+                routes: vec![route],
+                credentials: std::collections::BTreeMap::from([(
+                    credential.clone(),
+                    crate::secret_store::credential_source(store.path(), &credential)
+                        .unwrap()
+                        .unwrap(),
+                )]),
+                ..EgressPolicyConfig::default()
+            },
+            record.clone(),
+            FakeResolver::with(&[(host, &["127.0.0.1"])]),
+            Some(f.owner.inner.data_root.child("egress-env").unwrap()),
+            loopback_is_public,
+            RouteSettings {
+                upstream: Arc::new(UpstreamConnector::with_local_check(Arc::new(|_| false))),
+                ..RouteSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+        let sandbox = external_sandbox(&mut f, &image, &upstream_network, egress.clone()).await;
+        git_init(f._workspace.path());
+        let config = external_agent::external_agent_config(
+            AgentConfig {
+                id: AgentId::new("conversation"),
+                ..Default::default()
+            },
+            runtime,
+            model,
+        )
+        .unwrap();
+        let r = run_with_config(&mut f, config, "Reply with one word.");
+        let adjust: Arc<dyn Fn(Vec<String>) -> Vec<String> + Send + Sync> = match runtime {
+            AgentRuntime::ClaudeCode => Arc::new(move |mut argv: Vec<String>| {
+                let at = argv.iter().position(|arg| arg == "env").unwrap() + 1;
+                argv.insert(at, format!("ANTHROPIC_BASE_URL=https://api.anthropic.com:{port}"));
+                argv
+            }),
+            _ => Arc::new(move |argv: Vec<String>| {
+                argv.into_iter()
+                    .map(|arg| {
+                        arg.replace(
+                            "https://api.openai.com/v1",
+                            &format!("https://api.openai.com:{port}/v1"),
+                        )
+                    })
+                    .collect()
+            }),
+        };
+        let factory = r.controller.external_activation_factory(
+            Arc::new(NativeStub(AtomicUsize::new(0))),
+            Arc::new(Counter),
+            ExternalSettings {
+                source: Some(Arc::new(FakeRecordSource(record.clone()))),
+                meter_interval: Duration::from_millis(200),
+                adjust_argv: Some(adjust),
+            },
+        );
+        let resources = factory.resources(&input_of(&r)).await.unwrap();
+        let settled = tokio::time::timeout(Duration::from_secs(300), async {
+            r.controller
+                .prepare_repository_activation(r.activation.clone(), resources, r.resource.clone())
+                .unwrap()
+                .run()
+                .await
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let idle = f.owner.execution_is_idle();
+        sandbox.stop_checked().await.unwrap();
+        let settled = settled.unwrap().unwrap();
+        assert!(idle.unwrap());
+        let log = r.controller.activation_stream_for_test(&r.activation).join("");
+        let events = record.events();
+        assert!(
+            settled.accepted,
+            "{recipe}: {:?}\n{log}\n{events:#?}",
+            settled.failure
+        );
+        assert_eq!(settled.output.content().output.text, answer, "{log}");
+        let seen = api.seen.lock().unwrap().clone();
+        let calls: Vec<_> = seen.iter().filter(|request| request.path == path).collect();
+        assert!(!calls.is_empty(), "{recipe}: {seen:?}");
+        for call in &calls {
+            assert_eq!(call.method, "POST");
+            assert_eq!(call.authorization, [format!("Bearer {secret}")], "{recipe}");
+        }
+        // Nothing else was asked of the model API.
+        assert_eq!(calls.len(), seen.len(), "{recipe}: {seen:?}");
+        for event in &events {
+            assert!(!serde_json::to_string(event).unwrap().contains(&secret));
+        }
+        assert!(events.iter().any(|event| matches!(event,
+            NetworkEvent::Request { method, path: request_path, decision: Recorded::Allow, credential: Some(name), .. }
+                if method == "POST" && request_path == path && *name == credential)),
+            "{recipe}: {events:#?}");
+        // Every connection the program opened was the route's, or refused
+        // and recorded.
+        let refused: Vec<String> = events
+            .iter()
+            .filter_map(|event| match event {
+                NetworkEvent::Open {
+                    host: opened,
+                    port,
+                    decision: Recorded::Deny,
+                    reason,
+                    ..
+                } => Some(format!("{opened}:{port} {}", reason.as_deref().unwrap_or(""))),
+                _ => None,
+            })
+            .collect();
+        eprintln!("{recipe}: refused connections {refused:?}");
+        for event in &events {
+            if let NetworkEvent::Open { host: opened, decision: Recorded::Allow, .. } = event {
+                assert_eq!(opened, host, "{recipe}: {events:#?}");
+            }
+        }
+        let measured = r.controller.activation_provider_usage(&r.activation).unwrap();
+        assert!(measured.tokens.complete, "{recipe}: {log}");
+        assert!(
+            measured.tokens.usage.input_tokens >= usage.0
+                && measured.tokens.usage.output_tokens >= usage.1,
+            "{recipe}: {measured:?}"
+        );
         assert_eq!(egress.live_bindings(), 0);
     }
 }

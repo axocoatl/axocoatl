@@ -141,6 +141,9 @@ pub(crate) struct ExternalSettings {
     /// Where route requests are counted; `None` reads the Session's record.
     pub(crate) source: Option<Arc<dyn RouteRequestSource>>,
     pub(crate) meter_interval: Duration,
+    /// Tests point the pinned programs at a local upstream's port.
+    #[cfg(test)]
+    pub(crate) adjust_argv: Option<Arc<dyn Fn(Vec<String>) -> Vec<String> + Send + Sync>>,
 }
 
 impl Default for ExternalSettings {
@@ -148,6 +151,8 @@ impl Default for ExternalSettings {
         Self {
             source: None,
             meter_interval: DEFAULT_METER_INTERVAL,
+            #[cfg(test)]
+            adjust_argv: None,
         }
     }
 }
@@ -628,6 +633,10 @@ impl SessionDispatchController {
         if runtime == AgentRuntime::ClaudeCode && reserved.cost_microunits > 0 {
             // The program's own spending stop, at what the grant still allows.
             argv.extend(external::claude_code::budget_args(reserved.cost_microunits));
+        }
+        #[cfg(test)]
+        if let Some(adjust) = &settings.adjust_argv {
+            argv = adjust(argv);
         }
         let run = self
             .run_external_program(
