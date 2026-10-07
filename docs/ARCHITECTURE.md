@@ -628,6 +628,127 @@ unresolved Attempt set. Native decision records retain validated shared Plan/mod
 usage once, separately from candidate usage; legacy planning accounting retains its existing
 checkpoint-backed Agent total.
 
+## Loadouts and headless runs
+
+A loadout (`axocoatl.loadout/1`, parsed and validated in `axocoatl-config::loadout`) is a
+versioned YAML file that declares one run: Agents with roles (`writer`, `explorer`,
+`planner`, `worker`, `integrator`), models or model parameters and runtimes (`native`,
+`claude-code`, `codex`), required checks (`argv`, `shell`, `detected` or `e2e`, each with
+a timeout of at most 30 minutes, 3 by default), an optional required review (1 to 3
+rounds, read-only tools, adjudication on by default), `egress` and `routes`, budgets with a
+wall clock, the prompt (`{task}` required), an environment (image or recipes, and the one
+setup command a run approves) and the `qa` or `audit` settings of those kinds. Unknown
+fields are refused, a file is at most 64 KiB, and the kind's shape is validated (`fix`:
+one writer, a review, at least one check; `qa`: one explorer whose only write scope is its
+reproduction directory; `audit`: one planner, one worker template and one integrator, all
+read-only). A reviewer on a writer's model is a `same_model_reviewer` warning, never a
+refusal.
+
+Built-in loadouts (`fix`, `qa`, `audit`) are compiled in with `include_str!`. User
+loadouts are read on each listing and each admission from `loadouts/` beside the
+configuration file the daemon started with: at most 128 regular files of at most 64 KiB,
+no symbolic links, a reused built-in id listed with its error. Each loadout's digest is the
+SHA-256 of its bytes. The lattice in Settings displays a loadout's graph read-only; it has
+no execution path for loadouts.
+
+**Admission.** `POST /api/runs` (from `axocoatl run`) resolves parameters (unknown names
+refused, missing required ones a usage error), canonicalizes the repository and finds or
+creates its Workspace, creates a native Session with `Session.loadout =
+SessionLoadoutBinding {run_id, loadout, network, workload}`, prepares its environment with
+exactly the loadout's setup or `--setup` approved, and writes the run manifest with the
+repository HEAD and the paths that were dirty. It is idempotent on `request_id`.
+
+**Per-Session sandbox.** Every place the daemon reads the network mode or the workload plan
+for a Session goes through `session_sandbox_policy`: an unbound Session gets the global
+values unchanged; a bound one gets `egress` (or `none`), `WorkloadPlan::Hardened {required:
+true}` and the daemon's egress lists plus the loadout's `egress`, `routes` and the routes
+its external Agents and e2e checks need. A host that cannot provide that (rootful Podman,
+no egress, E2B) refuses the run with an infrastructure error; nothing falls back.
+
+**Driving.** The server spawns the run's driver with a `RunHost` over the daemon, so each
+kind's driver (`FixDriver`, `QaDriver`, `AuditDriver`, `SingleTurnDriver` for `custom`) is
+testable with a fake host. `team_plan::team_edit` turns the resolved loadout into an
+ordinary `SessionTeamEdit`: one slot per Agent with `reset_history`, limits from the
+budgets (`cost_microunits = cost_usd × 10⁶`) and an expiry at the wall clock, inline Agent
+definitions retained as the slot's definition evidence, `required_checks` with
+index-aligned `check_options` (name, timeout, report), the required review synthesized as
+a read-only Worker, and dependencies. It goes through the existing preview and apply path,
+so every 1.2 grant, write-scope and readiness rule applies. The driver sends the turn,
+waits for a terminal state or the deadline (then stops it and records the budget), and
+observes nodes, generations, check views and review proofs. An audit runs three turns in
+one Session: plan, parallel read-only area workers with fresh contexts, integrate.
+
+**Outcome.** `RunOutcome` (`axocoatl.run-outcome/1`) adds to a turn's view: check results
+with parsed reports, the review rounds with findings split by id, adjudications, findings
+with their reproduction classification, not-covered entries with a failure class
+(`provider_refusal`, `provider_failure`, `provider_rejected`, `budget`, `blocked`,
+`not_reached`, `runtime_limit`, `stopped`, `other`), warnings, usage with retry counts, a
+network summary and Keep. `RunOutcome::decide` sets the verdict and exit code with the
+precedence error (5) > interrupted (6) > checks failed (1) > needs attention (2) > pass
+(0); anything not covered, a check that did not run on the final result, an unanswered
+finding, an unpassed review, an exhausted budget or a finding the loadout fails on is
+attention. Nothing is a pass by default.
+
+**Record.** `{data root}/loadout-runs/{run_id}/` holds `manifest.json` (written once, with
+the loadout's exact text), `events.jsonl` (append-only, synced, at most 100,000 events of
+at most 256 KiB) and `outcome.json` (written once), through `SecureDir`. Runs are never
+evicted and outlive their Session. A daemon restart during a run marks it failed; it is not
+resumed. `render_junit` writes the JUnit view (not covered is always a failure, fails on
+clean build is skipped). The record bundle (`axocoatl.record-bundle/1`) streams the
+manifest, loadout, Outcome, Session, team, every turn's control-plane projection, the
+History export, every network-record event and every run event as JSON Lines, ending with
+the line count and the SHA-256 of every preceding byte; `verify_bundle` checks order, count
+and digest. Routes never record credential values, so the bundle holds none.
+
+**Fix.** The host numbers review findings (`F1`, `F2`, …), asks the writer to answer every
+finding in an `ADJUDICATIONS` block when it sends findings back, and
+`review_adjudication::adjudicate` pairs each round sent back with the writer generation
+that answered it; a finding without an answer is `missing`.
+
+**QA.** The explorer reports `FINDINGS` and `COVERAGE` blocks. For each finding the host
+runs its reproduction with `browser_check` against the target and, when configured, the
+reference URL, and `qa_repro::classify` decides `confirmed` (fails on target, passes on
+reference), `fails_on_clean_build`, `reproduced` (no reference), `not_reproduced`,
+`repro_error` or `missing`. Areas reported `not_reached` or `blocked`, every area left when
+the explorer failed, or the whole app without a coverage report are not covered.
+
+**External agents.** For a writer whose retained definition has an external runtime, the
+native activation path hands off to `run_external_activation`: the activation is admitted,
+granted and captured like a native writer, and the program runs through the in-sandbox
+supervisor as the hardened writer user under `--harden`, with the activation's timeout and
+stdout bounded to 16 MiB. Its JSON output becomes the activation's evidence and answer.
+Model traffic goes through routes from `external_agent::routes_for` with credentials from
+`credentials` or the secret store (`{data root}/secrets/<name>`, `0600`, written from stdin
+by `axocoatl secret set`); the container holds placeholders and trusts the Session CA. The
+activation reserves its grant's limits up front, route requests count against its
+invocations, and the program's own usage report settles it; there is no per-call
+reservation, and the program's internal tool calls are evidence, not admitted calls.
+
+**e2e.** An `e2e` check expands to a wrapper that forces `E2E_TELEMETRY_DISABLED=1`, sets
+the model and the route-backed key placeholder, writes JUnit or `report.json` under
+`/tmp/axocoatl-check-reports/<name>/`, prints the report's SHA-256 as its last line and
+exits with e2e's status. The Session container mounts `.e2e/cache` read-only. After the
+final turn, `collect_reports` reads each report (at most 4 MiB) and attaches it only when
+its digest matches the marker of the final recorded check run.
+
+**Keep as PR.** For a passing run, host `git` commits exactly the run's attributed paths
+through a temporary `GIT_INDEX_FILE` seeded from HEAD (`update-index`, `write-tree`,
+`commit-tree -p HEAD`, `branch`), refusing paths that were dirty before the run and an
+existing branch; HEAD, the index, the current branch and the working tree are unchanged.
+Opt-in, it pushes without `--force` to a new remote branch that is not the default branch
+and opens a pull request with `gh`, whose body carries checks, review, adjudications,
+findings, not-covered entries, warnings and the run id.
+
+**Runtime policy.** Native provider calls that fail with 429, 5xx, a timeout or a reset
+connection are retried once (after `Retry-After`, at most 30 s, or 2 s) on the same pinned
+model, as a new call with its own reservation; 400 to 403, refusals and safety stops are
+not retried. A failed helper, slot or area keeps a classifiable failure so the Outcome
+lists it as not covered. `check_options[i].timeout_ms` (1 s to 30 min, 180 s by default)
+reaches the admitted check definition and the condition permission's bound; 1.2 graphs
+still verify. `sandbox.egress.host_ollama` is an opt-in route from Session containers to a
+loopback Ollama port through `ollama.host.axocoatl.internal`, ended with the Session CA
+and recorded like any route.
+
 ## Automations
 
 `AutomationStore` (`{data_dir}/automations.json`) is the single runtime source for
@@ -754,8 +875,9 @@ are labeled as known subtotals rather than exact totals.
 
 ## Reliability for local models
 
-Native activations are built to keep working on small local models with short contexts
-and streams that sometimes end early.
+Native activations use the mechanisms below for short context windows, streams that end
+early and provider failures. They describe what the host does, not a measured quality
+claim about any model.
 
 - **Invocation reserve.** An activation that can run commands in a repository keeps a
   reserve of invocations for the host's observations: its After capture and, on the grant

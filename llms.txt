@@ -58,8 +58,48 @@ reviewer reached 20/25 at 3.3x.
 <!-- /measured -->
 
 Extra tokens helped when they bought a stronger model's judgment, not more looks from
-the same model. Axocoatl does not claim the default team beats a single Agent, and
-one Agent remains the cheaper choice for small tasks.
+the same model. The reviewer measured here ran locally; reviewers through OpenRouter
+have not been measured. Axocoatl does not claim the default team beats a single
+Agent, and one Agent remains the cheaper choice for small tasks.
+
+<!-- measured: claude-code-subagents single-vs-multi 2026-10-06 -->
+One agent or several on the same model (Claude Opus as Claude Code subagents, not
+through Axocoatl): on work that fits in one context both scored 100%, and a planner
+with parallel workers took 1.6x to 4.9x as long and 4x to 5.5x the tokens. On an audit
+larger than one context the multi-agent setup found 11 points more (99% against 87%) at
+8 points lower precision and about 3x the tokens; that is a sensitivity analysis,
+because the study's pre-registered exclusion rule removed 9 of its 10 attempts.
+<!-- /measured -->
+
+Every public number, its evidence, model and harness are listed in docs/CLAIMS.md:
+https://github.com/axocoatl/axocoatl/blob/main/docs/CLAIMS.md
+
+## Loadouts and headless runs
+
+A loadout is a versioned YAML file that declares a whole run: Agents (roles, models),
+required checks with per-check timeouts, a required reviewer, an egress allowlist and
+routes, budgets and the prompt. Three are built in: fix (one writer, the repository's
+checks, a required review by a different model for up to 3 rounds, and the writer's
+accept-or-reject answer with a reason to every finding), qa (one browser explorer;
+each finding carries a Playwright reproduction the host re-runs, and is confirmed only
+when it fails on the build under test and passes on a clean reference build) and audit
+(opt-in: a planner splits the scope into 2 to 8 areas, read-only workers audit them in
+parallel with fresh contexts, an integrator merges the findings). User loadouts live in
+the configuration directory's loadouts/ folder. Settings displays loadouts; it never
+runs one.
+
+`axocoatl run <loadout> --task "..."` runs one against the running daemon. A loadout's
+Session runs under network egress with non-root workload users; global defaults do not
+change. Exit codes: 0 pass, 1 required checks failed, 2 needs attention (review not
+passed, a finding unanswered, anything not covered, budget), 3 usage, 4 daemon
+unavailable, 5 infrastructure, 6 interrupted. `--junit` writes JUnit of checks and
+findings; `--record` writes the whole Session record as one JSON Lines file that
+`axocoatl record verify` checks. `--keep branch|pr` commits a passing run to a new
+branch with host git and, opt-in, opens a pull request with gh; it never force-pushes
+and never pushes to the default branch. The Claude Code CLI or Codex CLI can be a
+loadout's writer inside the Session container, with its credential stored by
+`axocoatl secret set` (stdin only) and added on the host by an egress route, so the
+container sees a placeholder; tester-army/e2e can run as a required check.
 
 ## Several Ways
 
@@ -142,9 +182,12 @@ events, Automations, and sandbox lifecycle.
 - Write scopes: an Agent limited to some paths has file tools that refuse other
   paths, and its changes are checked after it finishes. For an Agent with a shell,
   that check is review evidence, not confinement.
-- Small local models: an Ollama stream that ends early is retried once, older
-  tool output is replaced by a placeholder in later requests, and a request that
-  would overflow the context window is trimmed instead of failing.
+- Provider failures: a native call that fails with 429, a 5xx status, a timeout or
+  a reset connection is retried once on the same model, and 400 to 403 are not; an
+  Ollama stream that ends early is retried once, older tool output is replaced by a
+  placeholder in later requests, and a request that would overflow the context
+  window is trimmed instead of failing. A helper, slot or area that still fails is
+  listed as not covered, never dropped.
 - Events: the event feed carries the events Skills publish to Automation
   triggers, webhooks, and observers; it is not the Session, Agent graph, Ways
   model, or Automation graph.
@@ -182,6 +225,11 @@ axocoatl workflow list | run     Compatibility view/run for Automations
 axocoatl agents list|status|restart
 axocoatl tokens report
 axocoatl mcp servers|tools
+axocoatl run <loadout> --task "..."   Run a loadout headless
+axocoatl loadouts list|show|validate
+axocoatl record verify <file>
+axocoatl secret set|list|remove
+axocoatl recipe build|list
 ```
 
 The browser product has one interactive route at `/`. The HTTP and WebSocket APIs
