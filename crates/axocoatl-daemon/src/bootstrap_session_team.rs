@@ -68,6 +68,116 @@ pub struct SessionTeamSlotEdit {
     pub reset_history: bool,
     pub limits: Option<GrantLimits>,
     pub expires_at_ms: Option<u64>,
+    /// A definition given inline instead of a configured Agent template
+    /// (loadouts): with `template_id: None` the slot's Agent is built from
+    /// this, the slot's name, model, instructions and write scope, and the
+    /// whole edit is retained as the slot's approval evidence. Absent keeps
+    /// the historical serialized shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<InlineAgentDefinition>,
+}
+/// The parts of an Agent definition a Team edit carries inline when no
+/// configured template defines them: a loadout's Agents run from the loadout
+/// file, not from `agents:` in the configuration.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct InlineAgentDefinition {
+    /// Where the definition comes from, such as
+    /// `loadout fix@1 sha256:<digest> agent writer`.
+    pub source: String,
+    /// Tool names, exactly as the loadout lists them.
+    pub tools: Vec<String>,
+    /// `native`, or an external program (`claude-code`, `codex`). An external
+    /// runtime's retained definition names the runtime as its provider and
+    /// the program's model as its model; the program brings its own tools.
+    #[serde(default, skip_serializing_if = "is_native_runtime")]
+    pub runtime: axocoatl_config::loadout::AgentRuntime,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<axocoatl_core::ReasoningEffort>,
+}
+fn is_native_runtime(runtime: &axocoatl_config::loadout::AgentRuntime) -> bool {
+    *runtime == axocoatl_config::loadout::AgentRuntime::Native
+}
+/// The runtime id an external Agent's retained definition carries as its
+/// provider.
+pub(crate) fn external_runtime_provider(
+    runtime: axocoatl_config::loadout::AgentRuntime,
+) -> Option<&'static str> {
+    match runtime {
+        axocoatl_config::loadout::AgentRuntime::Native => None,
+        axocoatl_config::loadout::AgentRuntime::ClaudeCode => Some("claude-code"),
+        axocoatl_config::loadout::AgentRuntime::Codex => Some("codex"),
+    }
+}
+/// A reviewer defined inline (a loadout's `review`), used instead of a
+/// configured Worker template. It runs as a read-only Worker: no write
+/// scope and only the read-only tools it lists.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct InlineReviewer {
+    pub name: String,
+    pub provider: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    pub definition: InlineAgentDefinition,
+}
+/// The configuration of a slot whose definition is inline.
+fn inline_agent_config(
+    proposed: &SessionTeamSlotEdit,
+    definition: &InlineAgentDefinition,
+) -> Result<AgentConfig, DaemonError> {
+    let mut config = AgentConfig {
+        id: AgentId::new(format!("inline-{}", proposed.slot_id)),
+        name: proposed.name.clone(),
+        provider: proposed.provider.clone(),
+        model: proposed.model.clone(),
+        system_prompt: proposed.instructions.clone(),
+        tools: definition.tools.clone(),
+        writes: match &proposed.writes {
+            Some(writes) => writes.clone(),
+            None => {
+                return Err(team_error(format!(
+                    "{} is defined inline and must say which paths it may change",
+                    proposed.name
+                )))
+            }
+        },
+        role: proposed.role.clone(),
+        ..AgentConfig::default()
+    };
+    config.sampling.max_tokens = proposed.max_output_tokens;
+    config.sampling.reasoning_effort = definition.reasoning_effort;
+    if let Some(provider) = external_runtime_provider(definition.runtime) {
+        config.provider = provider.to_string();
+        config.tools = Vec::new();
+    }
+    Ok(config)
+}
+/// The configuration of an inline reviewer: a read-only Worker.
+fn inline_reviewer_config(
+    reviewer: &InlineReviewer,
+    max_output_tokens: Option<usize>,
+) -> Result<AgentConfig, DaemonError> {
+    if reviewer.definition.runtime != axocoatl_config::loadout::AgentRuntime::Native {
+        return Err(team_error(
+            "A reviewer runs in Axocoatl's own tool loop; external programs run only as the writer",
+        ));
+    }
+    let mut config = AgentConfig {
+        id: AgentId::new("inline-reviewer"),
+        name: reviewer.name.clone(),
+        provider: reviewer.provider.clone(),
+        model: reviewer.model.clone(),
+        system_prompt: reviewer.instructions.clone(),
+        tools: reviewer.definition.tools.clone(),
+        writes: Some(Vec::new()),
+        role: AgentRole::Worker,
+        ..AgentConfig::default()
+    };
+    config.sampling.max_tokens = max_output_tokens;
+    config.sampling.reasoning_effort = reviewer.definition.reasoning_effort;
+    Ok(config)
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -159,6 +269,11 @@ pub struct ReviewSetting {
     /// The reviewer's output bound per request; absent keeps the template's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<usize>,
+    /// A reviewer defined inline (a loadout's `review`) instead of the
+    /// configured template `template_id` names. Absent keeps the historical
+    /// serialized shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline: Option<InlineReviewer>,
 }
 /// The reviewer an Apply approved: its setting and the exact definition the
 /// host runs.
@@ -527,10 +642,22 @@ fn check_required_checks(edit: &SessionTeamEdit, conditions: usize) -> Result<()
              4096 bytes and without NUL characters",
         )
     })?;
-    if !edit.check_options.is_empty() {
-        // Workstream `runtime` carries the options to the admitted
-        // definitions; until then they are refused rather than ignored.
-        return Err(DaemonError::NotImplemented("required check options"));
+    axocoatl_session::check_options::validate_check_options(
+        &edit.required_checks,
+        &edit.check_options,
+    )
+    .map_err(limit_error)?;
+    // Names label the checks in a run's Outcome. A timeout other than the
+    // default, or a report, has to reach the admitted check definitions
+    // (workstream `runtime`); until it does such options are refused rather
+    // than ignored.
+    if edit.check_options.iter().any(|options| {
+        options.report.is_some()
+            || options.timeout_ms() != axocoatl_session::check_options::DEFAULT_CHECK_TIMEOUT_MS
+    }) {
+        return Err(DaemonError::NotImplemented(
+            "required check options with a timeout other than three minutes or a report",
+        ));
     }
     Ok(())
 }
@@ -626,7 +753,51 @@ fn slot_edit(
         reset_history: false,
         limits: Some(limits.clone()),
         expires_at_ms,
+        definition: None,
     })
+}
+/// The exact model of the reviewer the Apply that approved `slot` retained.
+fn approved_reviewer_identity(
+    content: &ExecutionContentStore,
+    slot: &SessionTeamSlot,
+) -> Result<Option<axocoatl_session::run_outcome::ModelIdentity>, DaemonError> {
+    let Some(review) = approved_review(content, slot)? else {
+        return Ok(None);
+    };
+    let ActivationEvidenceContent::Definition { configuration, .. } = &content
+        .resolve_activation_evidence(&review.definition.snapshot)
+        .map_err(team_error)?
+    else {
+        return Err(team_error("The approved reviewer definition is missing"));
+    };
+    let config: AgentConfig = serde_json::from_str(configuration).map_err(team_error)?;
+    Ok(Some(axocoatl_session::run_outcome::ModelIdentity {
+        provider: config.provider,
+        model: config.model,
+        runtime: "native".into(),
+    }))
+}
+/// Warnings about a team: a required reviewer on the model of an Agent that
+/// may change files (`same_model_reviewer`).
+pub(crate) fn team_warnings(
+    slots: &[SessionTeamSlotEdit],
+    reviewer: Option<&axocoatl_session::run_outcome::ModelIdentity>,
+) -> Vec<axocoatl_session::run_outcome::RunWarning> {
+    let Some(reviewer) = reviewer else {
+        return Vec::new();
+    };
+    let writers: Vec<axocoatl_session::run_outcome::ModelIdentity> = slots
+        .iter()
+        .filter(|slot| !matches!(&slot.writes, Some(Some(paths)) if paths.is_empty()))
+        .map(|slot| axocoatl_session::run_outcome::ModelIdentity {
+            provider: slot.provider.clone(),
+            model: slot.model.clone(),
+            runtime: "native".into(),
+        })
+        .collect();
+    axocoatl_session::run_outcome::same_model_warning(&writers, reviewer)
+        .into_iter()
+        .collect()
 }
 fn connections(revision: &SessionTeamRevision) -> Vec<SessionTeamConnection> {
     revision
@@ -705,6 +876,7 @@ impl AxocoatlDaemon {
                     reset_history: true,
                     limits: None,
                     expires_at_ms: None,
+                    definition: None,
                 }
             })
             .collect();
@@ -750,15 +922,21 @@ impl AxocoatlDaemon {
                             web_slots.push(slot.slot_id.as_str().to_string());
                         }
                     }
+                    let slots: Vec<SessionTeamSlotEdit> = current
+                        .graph
+                        .slots
+                        .iter()
+                        .map(|slot| slot_edit(slot, content))
+                        .collect::<Result<_, _>>()?;
+                    let reviewer = match current.graph.slots.first() {
+                        Some(slot) => approved_reviewer_identity(content, slot)?,
+                        None => None,
+                    };
+                    let warnings = team_warnings(&slots, reviewer.as_ref());
                     return Ok(SessionTeamView {
                         history_version: "execution_v2",
                         configuration_revision: current.configuration_revision,
-                        slots: current
-                            .graph
-                            .slots
-                            .iter()
-                            .map(|slot| slot_edit(slot, content))
-                            .collect::<Result<_, _>>()?,
+                        slots,
                         dependencies: connections(current),
                         layout: current.layout.clone(),
                         templates,
@@ -770,7 +948,7 @@ impl AxocoatlDaemon {
                         proposed_delegation: None,
                         web_templates: web_templates.clone(),
                         web_slots,
-                        warnings: vec![],
+                        warnings,
                     });
                 }
                 let selected: Vec<String> = match &session.mode {
@@ -882,6 +1060,8 @@ impl AxocoatlDaemon {
                     .find(|agent| &agent.id == id)
                     .ok_or_else(|| team_error("Coordinator template is missing"))?
                     .to_core()
+            } else if let Some(definition) = &slot.definition {
+                inline_agent_config(slot, definition)?
             } else {
                 let prior =
                     prior.ok_or_else(|| team_error("New Agent needs an explicit template"))?;
@@ -1085,18 +1265,21 @@ impl AxocoatlDaemon {
         let Some(review) = &edit.required_review else {
             return Ok(None);
         };
-        let mut config = self
-            .config
-            .agents
-            .iter()
-            .find(|agent| agent.id == review.template_id)
-            .ok_or_else(|| {
-                team_error(format!(
-                    "The reviewer template {} no longer exists",
-                    review.template_id
-                ))
-            })?
-            .to_core();
+        let mut config = match &review.inline {
+            Some(inline) => inline_reviewer_config(inline, review.max_output_tokens)?,
+            None => self
+                .config
+                .agents
+                .iter()
+                .find(|agent| agent.id == review.template_id)
+                .ok_or_else(|| {
+                    team_error(format!(
+                        "The reviewer template {} no longer exists",
+                        review.template_id
+                    ))
+                })?
+                .to_core(),
+        };
         if let Some(refusal) = review_refusal(&review.template_id, &config) {
             return Err(team_error(refusal));
         }
@@ -1377,15 +1560,18 @@ impl AxocoatlDaemon {
                     )
                 })
                 .transpose()?;
-            let mut config = match &proposed.template_id {
-                Some(id) => self
+            let mut config = match (&proposed.template_id, &proposed.definition) {
+                (Some(id), _) => self
                     .config
                     .agents
                     .iter()
                     .find(|agent| &agent.id == id)
                     .ok_or_else(|| team_error("Selected Agent template no longer exists"))?
                     .to_core(),
-                None => old_config
+                // A loadout's Agent: the definition the edit carries, never a
+                // configured template.
+                (None, Some(definition)) => inline_agent_config(proposed, definition)?,
+                (None, None) => old_config
                     .clone()
                     .ok_or_else(|| team_error("Choose an Agent template for each new slot"))?,
             };
@@ -1395,6 +1581,13 @@ impl AxocoatlDaemon {
             config.system_prompt = proposed.instructions.clone();
             config.sampling.max_tokens = proposed.max_output_tokens;
             config.writes = checked_writes(proposed, config.writes.as_deref())?;
+            if let Some(provider) = proposed
+                .definition
+                .as_ref()
+                .and_then(|definition| external_runtime_provider(definition.runtime))
+            {
+                config.provider = provider.to_string();
+            }
             if let Some(old) = &old_config {
                 config.id = old.id.clone();
             }

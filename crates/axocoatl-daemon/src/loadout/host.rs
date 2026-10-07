@@ -6,7 +6,7 @@
 use std::time::Instant;
 
 use async_trait::async_trait;
-use axocoatl_session::run_outcome::{ReproRun, TurnObservation};
+use axocoatl_session::run_outcome::{NetworkSummary, ReproRun, RunOutcome, TurnObservation};
 use axocoatl_session::run_record::RunEvent;
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +26,10 @@ pub struct ReproRequest {
 
 #[async_trait]
 pub trait RunHost: Send + Sync {
-    /// Preview and apply a Team and budget edit for future turns.
+    /// Preview and apply a Team and budget edit for future turns. The run
+    /// owns its Session, so the host applies the edit on the Session's
+    /// current configuration revision whatever
+    /// `edit.expected_configuration_revision` says.
     /// Daemon: `preview_session_team` + `apply_session_team` (core).
     async fn apply_team(&self, session_id: &str, edit: SessionTeamEdit) -> Result<(), RunError>;
 
@@ -66,4 +69,28 @@ pub trait RunHost: Send + Sync {
 
     /// Append one event to the run record. Daemon: `RunRecordStore` (core).
     async fn record(&self, run_id: &str, event: RunEvent) -> Result<(), RunError>;
+
+    /// The events recorded for the run so far (to count provider retries).
+    /// Daemon: `RunRecordStore` (core). A host without a record has none.
+    async fn recorded_events(&self, _run_id: &str) -> Result<Vec<RunEvent>, RunError> {
+        Ok(Vec::new())
+    }
+
+    /// What the Session's network record holds. Daemon: the Session's
+    /// network record (core). A host without one reports nothing.
+    async fn network_summary(&self, _session_id: &str) -> Result<NetworkSummary, RunError> {
+        Ok(NetworkSummary::default())
+    }
+
+    /// Whether a person asked to stop the run (`POST /api/runs/{id}/stop`,
+    /// Ctrl-C in `axocoatl run`). Daemon: the server's run registry (core).
+    async fn stop_requested(&self, _run_id: &str) -> bool {
+        false
+    }
+
+    /// Write the run's Outcome once. Daemon: `RunRecordStore::finish`
+    /// (core). The run driver records the `Ended` event after it.
+    async fn finish(&self, _run_id: &str, _outcome: &RunOutcome) -> Result<(), RunError> {
+        Ok(())
+    }
 }

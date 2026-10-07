@@ -42,7 +42,9 @@ pub mod workflow;
 
 pub use automation_runtime::*;
 pub use bootstrap::session_team::{
-    SessionTeamApply, SessionTeamCancel, SessionTeamEdit, SessionTeamPreview, SessionTeamView,
+    InlineAgentDefinition, InlineReviewer, ReviewSetting, SessionTeamApply, SessionTeamCancel,
+    SessionTeamConnection, SessionTeamEdit, SessionTeamPreview, SessionTeamSlotEdit,
+    SessionTeamView,
 };
 pub use bootstrap::*;
 pub use error::*;
