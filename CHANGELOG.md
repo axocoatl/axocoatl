@@ -5,9 +5,114 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - Unreleased
 
 ### Added
+- **Loadouts.** A loadout is a versioned YAML file (`axocoatl.loadout/1`) that declares
+  a whole run: Agents with roles (`writer`, `explorer`, `planner`, `worker`,
+  `integrator`) and models or model parameters, required checks with a timeout each, an
+  optional required reviewer, an egress allowlist and routes, budgets with a wall clock,
+  and the prompt. Unknown fields are refused and each kind's shape is validated. Three
+  are built in: `fix`, `qa` and the opt-in `audit`. Your own loadouts are `*.yaml` or
+  `*.yml` files in `loadouts/` beside the configuration file the daemon started with, read
+  on each listing and each run (at most 128 regular files of at most 64 KiB; the built-in
+  ids are reserved; a file that cannot be used is listed with its error). Each has a
+  SHA-256 digest, and a run keeps the exact text it ran. `GET /api/loadouts`,
+  `GET /api/loadouts/{id}` and `POST /api/loadouts/validate` list, show and validate them,
+  as do `axocoatl loadouts list|show|validate`. **Settings → Loadouts** shows each one's
+  YAML, parameters, warnings and graph in a read-only lattice, and the command that runs
+  it; nothing in the workbench runs a loadout.
+- **Loadout Sessions run under network egress with the `hardened` workload.** A Session a
+  run creates runs under `network: egress` (or `none`, when the loadout says so), with
+  Agents' commands, setup and required checks as the non-root writer user, read-only
+  Agents as the non-root helper user, and tool calls and checks under the supervisor's
+  `--harden`, whatever `sandbox.network` says. Its egress lists are the daemon's plus the
+  loadout's, for that Session only. Global defaults do not change. A loadout cannot ask
+  for `bridge` or the `image` workload, and a host that cannot provide egress and the
+  `hardened` workload (rootful Podman, E2B) fails the run with exit code 5 instead of
+  falling back. Session records carry the binding as `loadout` (`null` for every other
+  Session).
+- **`axocoatl run`.** `axocoatl run <loadout> --task "…"` runs a loadout headless against
+  the running daemon, found from `--url`, `AXOCOATL_URL` or the configuration and
+  authenticated with `AXOCOATL_TOKEN` or the local API token; it never starts one.
+  `--model role=provider:model` and `--param name=value` set parameters; `--check` and
+  `--setup` give the check and setup commands. It prints progress to standard error and
+  a summary (or the Outcome as JSON with `--json`), and exits 0 when the run passes, 1
+  when a required check failed, 2 when it needs attention (review not passed, a finding
+  unanswered, anything not covered, a check that did not run, a budget or the wall clock
+  exhausted, findings the loadout fails on, Keep failed), 3 for usage errors, 4 when the
+  daemon is unreachable or refuses the token, 5 for infrastructure errors and 6 when
+  interrupted. `--junit` writes JUnit of checks, check reports, review, adjudications,
+  findings and coverage, with anything not covered as a failure. `--record` writes the
+  run's whole record (manifest, loadout text, Outcome, Session, team, turns, History,
+  every network-record event and every run event) as one JSON Lines bundle ending with
+  its line count and SHA-256, which `axocoatl record verify` checks. Both are written even
+  when the run fails. Ctrl-C stops the run and exits 6. The API is `POST /api/runs`,
+  `GET /api/runs`, `GET /api/runs/{run_id}`, `/events`, `/stop`, `/junit` and `/record`;
+  runs are kept under `loadout-runs/` in the data root and outlive their Session.
+- **Built-in `fix` loadout.** One writer, the repository's check command as a required
+  check, and a required review by `reviewer_model` for up to 3 rounds. The reviewer
+  numbers its findings, and when the host sends them back the writer must answer every
+  one in an `ADJUDICATIONS` block with accept or reject and a reason. Each answer is
+  recorded and shown in the run output, JUnit, the Run outcome panel, the pull request
+  body and the record; a finding left unanswered makes the run need attention. When the
+  reviewer runs the writer's model, Axocoatl warns (`same_model_reviewer`) in loadout
+  validation, the API, Settings, Team and budget, the run output and the record.
+- **Built-in `qa` loadout.** One browser explorer with `browser` and `browser_check`,
+  writing only under `axocoatl-qa/`; no scouts, merge, reviewer or verifier. Each finding
+  names a Playwright reproduction that the host re-runs on the build under test and, when
+  `reference_url` is given, on a clean reference build: confirmed only when it fails on
+  the first and passes on the second, "fails on clean build" when it fails on both,
+  reproduced without a reference. Areas the explorer did not reach or was blocked on, and
+  everything left when it stopped on a provider refusal or classifier stop, a provider
+  failure or its budget, are listed as not covered, and the run needs attention.
+- **Built-in `audit` loadout (opt-in).** Runs only when named. A planner splits the
+  scope into 2 to 8 areas in a structured block, one read-only worker per area runs in
+  parallel with a fresh context, and an integrator merges their findings; a failed area
+  is not covered. Its documentation states the trade-off measured with Claude Code
+  subagents, not through Axocoatl: more recall at lower precision and about three times
+  the tokens on an audit larger than one context, as a sensitivity analysis.
+- **External agents.** A loadout's writer can be the Claude Code CLI
+  (`runtime: claude-code`) or the Codex CLI (`runtime: codex`), run inside the Session
+  container as the non-root writer user under `--harden`, admitted, granted and captured
+  like a native writer. Its model traffic goes through a route whose credential the
+  daemon adds on the host, so the container holds only a placeholder; the Session's
+  certificate authority is trusted through `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE`.
+  Every model call is in the network record, and the program's JSON output is parsed into
+  the activation's evidence and answer. Spend is bounded by an up-front reservation, the
+  route's request count and the program's own usage report, not per call.
+- **`axocoatl secret set|list|remove`.** Stores a route credential, such as the output
+  of `claude setup-token`, read from standard input only, as an owner-only file under
+  `secrets/` in the data root. It is never printed, logged or recorded. A loadout route's
+  `credential` resolves to a `credentials` entry first, then to a stored secret.
+- **`axocoatl recipe build|list`.** Builds a Session image from Axocoatl's pinned recipes
+  (`claude-code`, `codex`, `e2e`, combinable) with Podman and trusts it by its recorded
+  image id.
+- **The e2e check.** A loadout check can run tester-army/e2e (`e2e@0.18.0`, Apache-2.0)
+  inside the Session container from the `e2e` recipe (Node 22.22.3 or later, Chromium).
+  The check forces `E2E_TELEMETRY_DISABLED=1`, mounts `.e2e/cache` read-only, sends e2e's
+  model calls through a route with the key added on the host, and parses its JUnit or
+  `report.json`, bound to the run by a digest marker, into the check's result in the
+  Outcome. An OpenRouter model without tool calls and image input is refused.
+- **Keep as PR.** `axocoatl run --keep branch|pr`, **Keep as PR** in the Run outcome
+  panel and `POST /api/sessions/{id}/keep-pr` commit a passing run's changed paths to a
+  new branch with host `git` through a temporary index, leaving HEAD, the index, the
+  current branch and the working tree unchanged, and refuse paths that were dirty before
+  the run. Opt-in, they push the branch without `--force`, never to the remote's default
+  branch, and open a pull request with `gh` whose body lists the check results, the review
+  verdict and adjudications, findings, everything not covered, warnings and the run id.
+- **Per-check timeouts.** A Team and budget edit's `check_options`, aligned with
+  `required_checks`, gives each required check a name, a timeout from 1 second to 30
+  minutes (3 minutes by default, as before) and a report to parse. Teams applied before
+  this release keep working unchanged.
+- **`sandbox.egress.host_ollama`.** An opt-in route from Session containers to an Ollama
+  server on a loopback port of this computer, as `https://ollama.host.axocoatl.internal`
+  under `network: egress`, with every request and response in the network record. Off by
+  default; it does nothing under `bridge` and `none`.
+- `GET /api/sessions/{id}/team` returns `warnings`, such as the same-model reviewer
+  warning, and the Team and budget review shows them.
+- `docs/CLAIMS.md`, a ledger of every public performance or quality claim with its
+  evidence, model, harness, sample size and status, and the claims withdrawn.
 - **Reasoning models in native OpenRouter Sessions.** A model whose OpenRouter catalog
   entry describes reasoning, such as `anthropic/claude-sonnet-5.5` (reasoning mandatory)
   or `openai/gpt-5.6-sol` (reasoning on by default), now runs in a native Session
@@ -22,12 +127,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answer. Reasoning tokens are output in usage, grants and cost. The reasoning blocks of
   a tool-calling response are kept on its first tool call and sent back unmodified with
   the tool results, as OpenRouter documents, and reasoning text streams to the Session.
+
 ### Changed
+- **Transient provider errors are retried once.** A native provider call that fails with
+  429, a 5xx status, a timeout or a reset connection is retried once, after its
+  `Retry-After` (at most 30 seconds) or 2 seconds, on the same pinned model and endpoint,
+  as a new call with its own reservation; the failed call keeps its accounting. 400, 401,
+  402 and 403, refusals and safety stops are not retried. Each retry is recorded on the
+  activation's evidence and, in a run, as a `provider_retry` event.
+- **What fails is listed as not covered.** A helper, slot or area that ends without a
+  result keeps a failure class (`provider_refusal`, `provider_failure`,
+  `provider_rejected`, `budget`, `blocked`, `not_reached`, `runtime_limit`, `stopped`,
+  `other`), and a run's Outcome lists it as not covered with the reason. The lead still
+  receives a failed helper's error as before.
+- **Public claims withdrawn or labeled.** "Small local models are a first-class target"
+  is withdrawn from the README, the product document, `llms.txt` and the docs: nothing
+  measured it; the mechanisms it named are still described. Pages that cite the measured
+  cross-model review now say that its reviewer was a local gpt-oss 120B and that
+  reviewers through OpenRouter have not been measured. Results measured with Claude Opus
+  are labeled everywhere as Claude Code subagents, not Axocoatl.
 - **Session data is converted to segment files when a Session is first opened.** Each
   journal's single file is checked against the bounds it was written under, its records
   are copied into segments, and a small head file replaces it last, so a crash during
   the conversion leaves the old file to convert again. Once converted, a Session cannot
   be opened by 1.2.0 or earlier, which refuses the new head file rather than misread it.
+  Before a Session's first conversion, its whole directory is copied, once, to
+  `backups/before-segments/<key>/session` in the data root, with a `backup.json` naming
+  the Session written last; `<key>` is the SHA-256 of the Session id. With the daemon
+  stopped, copying that directory back over `execution-v2/<key>` restores the files
+  1.2.0 wrote (see Upgrade in the docs). If the copy cannot be made, the Session is not
+  converted and does not open. The backups stay until you remove them.
 - `sandbox.egress.record_max_events` is ignored: a Session's network record keeps every
   event. It is still accepted, and `axocoatl validate`, `axocoatl doctor` and daemon start
   warn that it can be removed. `GET /api/sessions/{id}/network` returns `record` as
@@ -128,6 +257,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again with nothing left to continue. Work that never started and depends on restarted
   work now waits for it in the new epoch and runs once it is accepted; work that also
   depends on failed work left unselected stays blocked until that is continued too.
+
+### Security
+- The docs site's build dependencies are updated: `http-cache-semantics` 4.3.0 fixes
+  GHSA-ch52-4w7c-c8xp, so its reviewed exception is removed; `sharp` 0.35.5, with
+  libvips 1.3.4, fixes GHSA-wq5f-xc86-pv6w; `source-map-js` 1.2.2 fixes
+  GHSA-68fv-2mgg-jv7q; and `smol-toml` 1.9.0 fixes GHSA-r4xh-jqrq-34v2. None of them is
+  part of the shipped binary.
 
 ## [1.2.0] - 2026-10-03
 
