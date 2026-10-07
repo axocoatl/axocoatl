@@ -9,8 +9,8 @@
 //! usage, 4 daemon unreachable or token refused, 5 infrastructure, 6
 //! interrupted.
 
-use std::collections::BTreeMap;
-use std::io::Write as _;
+use std::collections::{BTreeMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -18,7 +18,7 @@ use axocoatl_daemon::loadout::api::{
     LoadoutSummary, LoadoutView, RunAccepted, RunEventsPage, RunStatusView,
 };
 use axocoatl_session::run_outcome::{
-    exit_code, AdjudicationDecision, CheckState, ReproClassification, RunOutcome,
+    exit_code, AdjudicationDecision, CheckState, ReproClassification, RunOutcome, RunWarning,
 };
 use axocoatl_session::run_record::RunEvent;
 use clap::{Args, Subcommand};
@@ -441,7 +441,62 @@ async fn download_record(daemon: &Daemon, run_id: &str, path: &Path) -> Result<(
     })
 }
 
-/// One line of progress for a recorded event, when it is worth one.
+/// Where `axocoatl run` writes: the summary (or the Outcome JSON) on `out`,
+/// progress, warnings and errors on `err`.
+pub struct Console {
+    out: Box<dyn Write + Send>,
+    err: Box<dyn Write + Send>,
+}
+
+impl Console {
+    /// Standard output and standard error.
+    pub fn stdio() -> Self {
+        Self {
+            out: Box::new(std::io::stdout()),
+            err: Box::new(std::io::stderr()),
+        }
+    }
+
+    /// `text` on standard output, as given.
+    fn print(&mut self, text: &str) {
+        let _ = self.out.write_all(text.as_bytes());
+        let _ = self.out.flush();
+    }
+
+    /// One line on standard output.
+    fn say(&mut self, line: &str) {
+        self.print(&format!("{line}\n"));
+    }
+
+    /// One line of progress on standard error.
+    fn note(&mut self, line: &str) {
+        let _ = writeln!(self.err, "{line}");
+        let _ = self.err.flush();
+    }
+}
+
+/// The warnings already printed. Admission returns the run's warnings and
+/// also records each one as a `Warning` run event, so without this every
+/// admission warning would print twice.
+#[derive(Default)]
+struct ShownWarnings(HashSet<(String, String)>);
+
+impl ShownWarnings {
+    /// The line for `warning`, unless the same warning was printed already.
+    fn line(&mut self, warning: &RunWarning) -> Option<String> {
+        self.0
+            .insert((warning.code.clone(), warning.message.clone()))
+            .then(|| warning_line(warning))
+    }
+}
+
+fn warning_line(warning: &RunWarning) -> String {
+    format!("! warning {}: {}", warning.code, warning.message)
+}
+
+/// One line of progress for a recorded event, when it is worth one. Classes
+/// and states are written as the Outcome JSON and the JUnit file write them
+/// (`not_reached`, `needs_attention`).
 pub fn progress_line(event: &RunEvent) -> Option<String> {
     match event {
         RunEvent::Phase { phase, detail, .. } => Some(if detail.is_empty() {
@@ -453,11 +508,9 @@ pub fn progress_line(event: &RunEvent) -> Option<String> {
             turn_id, purpose, ..
         } => Some(format!("· turn {turn_id} started ({purpose})")),
         RunEvent::TurnEnded { turn_id, state, .. } => {
-            Some(format!("· turn {turn_id} ended: {state:?}"))
+            Some(format!("· turn {turn_id} ended: {}", class_name(state)))
         }
-        RunEvent::Warning { warning, .. } => {
-            Some(format!("! warning {}: {}", warning.code, warning.message))
-        }
+        RunEvent::Warning { warning, .. } => Some(warning_line(warning)),
         RunEvent::NotCovered { entry, .. } => {
             Some(format!("! not covered: {}: {}", entry.area, entry.reason()))
         }
@@ -587,7 +640,27 @@ pub fn summary(outcome: &RunOutcome) -> String {
                 .as_deref()
                 .map(|area| format!(" [{area}]"))
                 .unwrap_or_default();
-            let _ = writeln!(out, "  {} {}{area}: {label}", finding.id, finding.title);
+            let mut facts = Vec::new();
+            if let Some(severity) = &finding.severity {
+                facts.push(format!("{} severity", class_name(severity)));
+            }
+            if let Some(location) = finding
+                .location
+                .as_deref()
+                .filter(|location| !location.trim().is_empty())
+            {
+                facts.push(location.to_string());
+            }
+            let facts = if facts.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", facts.join(", "))
+            };
+            let _ = writeln!(
+                out,
+                "  {} {}{area}{facts}: {label}",
+                finding.id, finding.title
+            );
         }
     }
     if !outcome.not_covered.is_empty() {
@@ -636,18 +709,26 @@ pub fn summary(outcome: &RunOutcome) -> String {
     out
 }
 
+/// How long admission may take before `axocoatl run` says it is waiting.
+const ADMISSION_NOTE_AFTER: Duration = Duration::from_secs(3);
+
 /// Run `axocoatl run`; returns the process exit code.
 pub async fn cmd_run(args: RunArgs) -> i32 {
-    match run(args).await {
+    run_on(args, &mut Console::stdio(), ADMISSION_NOTE_AFTER).await
+}
+
+/// `axocoatl run` writing to `console`; returns the process exit code.
+async fn run_on(args: RunArgs, console: &mut Console, note_after: Duration) -> i32 {
+    match run(args, console, note_after).await {
         Ok(code) => code,
         Err(failure) => {
-            eprintln!("axocoatl run: {}", failure.message);
+            console.note(&format!("axocoatl run: {}", failure.message));
             failure.code
         }
     }
 }
 
-async fn run(args: RunArgs) -> Result<i32, Failure> {
+async fn run(args: RunArgs, console: &mut Console, note_after: Duration) -> Result<i32, Failure> {
     let task_from_file = match &args.task_file {
         Some(path) => Some(read_task_file(path)?),
         None => None,
@@ -664,22 +745,27 @@ async fn run(args: RunArgs) -> Result<i32, Failure> {
         "setup_command": plan.setup_command,
         "request_id": format!("cli-{}", uuid::Uuid::new_v4()),
     });
-    eprintln!(
-        "· starting loadout {} in {} (preparing the Session's environment)",
+    let accepted = admit(&daemon, &request, console, note_after).await?;
+    // Only an admitted run starts: a refused one prints its reason and
+    // nothing that says otherwise.
+    console.note(&format!(
+        "· starting loadout {} in {}",
         plan.loadout,
         plan.repo.display()
-    );
-    let accepted: RunAccepted = daemon.post_json("/api/runs", &request).await?;
-    eprintln!(
+    ));
+    console.note(&format!(
         "· run {} in Session {}",
         accepted.run_id, accepted.session_id
-    );
+    ));
+    let mut shown = ShownWarnings::default();
     for warning in &accepted.warnings {
-        eprintln!("! warning {}: {}", warning.code, warning.message);
+        if let Some(line) = shown.line(warning) {
+            console.note(&line);
+        }
     }
-    let interrupted = follow(&daemon, &accepted.run_id).await?;
+    let interrupted = follow(&daemon, &accepted.run_id, console, &mut shown).await?;
     let status = if interrupted {
-        eprintln!("· stopping the run (Ctrl-C)");
+        console.note("· stopping the run (Ctrl-C)");
         let _ = daemon
             .send(daemon.request(
                 reqwest::Method::POST,
@@ -698,13 +784,23 @@ async fn run(args: RunArgs) -> Result<i32, Failure> {
         .and_then(|status| status.outcome.clone());
     match &outcome {
         Some(outcome) if args.json => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(outcome).unwrap_or_default()
-            );
+            console.say(&serde_json::to_string_pretty(outcome).unwrap_or_default());
         }
-        Some(outcome) => print!("{}", summary(outcome)),
-        None => eprintln!("· the run has not finished; its record is incomplete"),
+        Some(outcome) => console.print(&summary(outcome)),
+        None => console.note("· the run has not finished; its record is incomplete"),
+    }
+    // Keep runs before the files are written: it records a `keep` event,
+    // and `--record` must be the same bundle `GET /api/runs/{id}/record`
+    // returns once the command has ended.
+    let mut keep_failed = false;
+    if let (Some(outcome), false) = (&outcome, interrupted) {
+        if plan.keep != Keep::None {
+            if outcome.exit_code == exit_code::PASS {
+                keep_failed = !keep_changes(&daemon, outcome, plan.keep, args.json, console).await;
+            } else {
+                console.note("· nothing kept: the run did not pass");
+            }
+        }
     }
     // The files are written whatever the verdict, also after a failure.
     let mut file_failure = None;
@@ -725,18 +821,18 @@ async fn run(args: RunArgs) -> Result<i32, Failure> {
         }
         .await;
         match written {
-            Ok(()) => eprintln!("· JUnit written to {}", path.display()),
+            Ok(()) => console.note(&format!("· JUnit written to {}", path.display())),
             Err(failure) => {
-                eprintln!("axocoatl run: JUnit: {}", failure.message);
+                console.note(&format!("axocoatl run: JUnit: {}", failure.message));
                 file_failure = Some(failure);
             }
         }
     }
     if let Some(path) = &args.record {
         match download_record(&daemon, &accepted.run_id, path).await {
-            Ok(()) => eprintln!("· record written to {}", path.display()),
+            Ok(()) => console.note(&format!("· record written to {}", path.display())),
             Err(failure) => {
-                eprintln!("axocoatl run: record: {}", failure.message);
+                console.note(&format!("axocoatl run: record: {}", failure.message));
                 file_failure = Some(failure);
             }
         }
@@ -752,33 +848,8 @@ async fn run(args: RunArgs) -> Result<i32, Failure> {
                 .unwrap_or_else(|| Failure::infrastructure("the run ended without an Outcome")))
         }
     };
-    if outcome.exit_code == exit_code::PASS && plan.keep != Keep::None {
-        let body = serde_json::json!({
-            "run_id": outcome.run_id,
-            "open_pr": plan.keep == Keep::Pr,
-        });
-        match daemon
-            .post_json::<serde_json::Value>(
-                &format!("/api/sessions/{}/keep-pr", outcome.session_id),
-                &body,
-            )
-            .await
-        {
-            Ok(kept) => {
-                println!(
-                    "Kept: branch {} at {}",
-                    kept["branch"].as_str().unwrap_or("?"),
-                    kept["commit"].as_str().unwrap_or("?")
-                );
-                if let Some(url) = kept["pull_request_url"].as_str() {
-                    println!("Pull request: {url}");
-                }
-            }
-            Err(failure) => {
-                println!("Keep failed: {}", failure.message);
-                return Ok(exit_code::NEEDS_ATTENTION);
-            }
-        }
+    if keep_failed {
+        return Ok(exit_code::NEEDS_ATTENTION);
     }
     if outcome.exit_code == exit_code::PASS {
         if let Some(failure) = file_failure {
@@ -788,9 +859,94 @@ async fn run(args: RunArgs) -> Result<i32, Failure> {
     Ok(outcome.exit_code)
 }
 
+/// `POST /api/runs`. The daemon prepares the Session's environment before
+/// it answers, which can take minutes (an image pull, the setup command);
+/// when it takes longer than `note_after`, say that the command is waiting,
+/// without saying that the run started.
+async fn admit(
+    daemon: &Daemon,
+    request: &serde_json::Value,
+    console: &mut Console,
+    note_after: Duration,
+) -> Result<RunAccepted, Failure> {
+    let admission = daemon.post_json::<RunAccepted>("/api/runs", request);
+    tokio::pin!(admission);
+    tokio::select! {
+        accepted = &mut admission => return accepted,
+        () = tokio::time::sleep(note_after) => {}
+    }
+    console.note(
+        "· waiting for the daemon to admit the run (it prepares the Session's environment first)",
+    );
+    admission.await
+}
+
+/// Keep a passing run's changes (`POST /api/sessions/{id}/keep-pr`) and
+/// say what was kept: on standard output after the summary, or on standard
+/// error with `--json`, so standard output stays one JSON document. Returns
+/// whether Keep succeeded.
+async fn keep_changes(
+    daemon: &Daemon,
+    outcome: &RunOutcome,
+    keep: Keep,
+    json: bool,
+    console: &mut Console,
+) -> bool {
+    let report = |console: &mut Console, line: &str| {
+        if json {
+            console.note(line)
+        } else {
+            console.say(line)
+        }
+    };
+    let body = serde_json::json!({
+        "run_id": outcome.run_id,
+        "open_pr": keep == Keep::Pr,
+    });
+    match daemon
+        .post_json::<serde_json::Value>(
+            &format!("/api/sessions/{}/keep-pr", outcome.session_id),
+            &body,
+        )
+        .await
+    {
+        Ok(kept) => {
+            report(
+                console,
+                &format!(
+                    "Kept: branch {} at {}",
+                    kept["branch"].as_str().unwrap_or("?"),
+                    kept["commit"].as_str().unwrap_or("?")
+                ),
+            );
+            if let Some(url) = kept["pull_request_url"].as_str() {
+                report(console, &format!("Pull request: {url}"));
+            }
+            for warning in kept["warnings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|warning| warning.as_str())
+            {
+                console.note(&format!("! keep: {warning}"));
+            }
+            true
+        }
+        Err(failure) => {
+            report(console, &format!("Keep failed: {}", failure.message));
+            false
+        }
+    }
+}
+
 /// Print the run's progress until it finishes. Returns whether the person
 /// pressed Ctrl-C.
-async fn follow(daemon: &Daemon, run_id: &str) -> Result<bool, Failure> {
+async fn follow(
+    daemon: &Daemon,
+    run_id: &str,
+    console: &mut Console,
+    shown: &mut ShownWarnings,
+) -> Result<bool, Failure> {
     let mut after: Option<u64> = None;
     let mut failures = 0u32;
     let interrupt = tokio::signal::ctrl_c();
@@ -817,8 +973,12 @@ async fn follow(daemon: &Daemon, run_id: &str) -> Result<bool, Failure> {
             Err(failure) => return Err(failure),
         };
         for (_, event) in &page.events {
-            if let Some(line) = progress_line(event) {
-                eprintln!("{line}");
+            let line = match event {
+                RunEvent::Warning { warning, .. } => shown.line(warning),
+                event => progress_line(event),
+            };
+            if let Some(line) = line {
+                console.note(&line);
             }
         }
         after = page.next_after.or(after);
@@ -1071,6 +1231,8 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         let repo = tempfile::tempdir().unwrap();
+        // A config path of its own, so no person's local API token is read.
+        let config = repo.path().join("axocoatl.yaml");
         let parsed = args(&[
             "--task",
             "t",
@@ -1078,6 +1240,8 @@ mod tests {
             repo.path().to_str().unwrap(),
             "--url",
             &format!("http://127.0.0.1:{port}"),
+            "-c",
+            config.to_str().unwrap(),
         ]);
         assert_eq!(cmd_run(parsed).await, exit_code::DAEMON_UNAVAILABLE);
     }
@@ -1210,5 +1374,551 @@ mod tests {
             progress_line(&event).as_deref(),
             Some("! not covered: checkout: not_reached: ran out of steps")
         );
+    }
+
+    /// Bytes written to a `Console` stream, kept for the assertions.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Captured {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    fn captured_console() -> (Console, Captured, Captured) {
+        let out = Captured::default();
+        let err = Captured::default();
+        let console = Console {
+            out: Box::new(out.clone()),
+            err: Box::new(err.clone()),
+        };
+        (console, out, err)
+    }
+
+    const RUN: &str = "run-0c1d0000-0000-4000-8000-000000000001";
+    const SESSION: &str = "ses-0c1d0000-0000-4000-8000-000000000002";
+
+    fn same_model() -> RunWarning {
+        RunWarning {
+            code: "same_model_reviewer".into(),
+            message: "the reviewer runs the same model as the writer".into(),
+        }
+    }
+
+    fn outcome(verdict: &str, extra: serde_json::Value) -> RunOutcome {
+        let mut value = serde_json::json!({
+            "schema": "axocoatl.run-outcome/1",
+            "run_id": RUN,
+            "session_id": SESSION,
+            "workspace_id": "wsp-1",
+            "loadout": {"id": "fix", "version": 1, "kind": "fix",
+                "digest": "0".repeat(64), "builtin": true},
+            "task": "fix the pagination bug",
+            "started_at_ms": 1,
+            "finished_at_ms": 2,
+            "verdict": verdict,
+            "exit_code": match verdict {
+                "pass" => exit_code::PASS,
+                "checks_failed" => exit_code::CHECKS_FAILED,
+                _ => exit_code::NEEDS_ATTENTION,
+            },
+            "warnings": [same_model()],
+        });
+        for (key, field) in extra.as_object().unwrap() {
+            value[key] = field.clone();
+        }
+        serde_json::from_value(value).unwrap()
+    }
+
+    /// A record bundle as the daemon writes it: the Outcome, then one
+    /// `run_event` section per recorded event.
+    fn bundle(outcome: &RunOutcome, events: &[RunEvent]) -> Vec<u8> {
+        use axocoatl_session::record_bundle::{BundleHeader, BundleWriter, RECORD_BUNDLE_SCHEMA};
+        let header = BundleHeader {
+            schema: RECORD_BUNDLE_SCHEMA.into(),
+            run_id: RUN.into(),
+            session_id: SESSION.into(),
+            created_at_ms: 3,
+            axocoatl_version: "1.3.0".into(),
+        };
+        let mut writer = BundleWriter::new(Vec::new(), &header).unwrap();
+        writer
+            .section("manifest", &serde_json::json!({"run_id": RUN}))
+            .unwrap();
+        writer
+            .section("outcome", &serde_json::to_value(outcome).unwrap())
+            .unwrap();
+        for (index, event) in events.iter().enumerate() {
+            writer
+                .section(
+                    "run_event",
+                    &serde_json::json!({"seq": index + 1, "event": event}),
+                )
+                .unwrap();
+        }
+        writer.finish().unwrap()
+    }
+
+    /// `GET /api/runs/{id}/record` as the daemon serves it: Keep appends a
+    /// `keep` event to the run record, so the bundle holds it once Keep ran.
+    struct RecordResponder {
+        kept: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        before_keep: Vec<u8>,
+        after_keep: Vec<u8>,
+    }
+
+    impl wiremock::Respond for RecordResponder {
+        fn respond(&self, _: &wiremock::Request) -> wiremock::ResponseTemplate {
+            let kept = self.kept.load(std::sync::atomic::Ordering::SeqCst);
+            wiremock::ResponseTemplate::new(200).set_body_raw(
+                if kept {
+                    self.after_keep.clone()
+                } else {
+                    self.before_keep.clone()
+                },
+                axocoatl_session::record_bundle::RECORD_BUNDLE_MEDIA_TYPE,
+            )
+        }
+    }
+
+    /// `POST /api/sessions/{id}/keep-pr`: records the keep event (also when
+    /// it fails, as the daemon does) and answers `status`.
+    struct KeepResponder {
+        kept: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        status: u16,
+    }
+
+    impl wiremock::Respond for KeepResponder {
+        fn respond(&self, _: &wiremock::Request) -> wiremock::ResponseTemplate {
+            self.kept.store(true, std::sync::atomic::Ordering::SeqCst);
+            if self.status == 200 {
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "branch": "axocoatl/fix-0c1d0000",
+                    "commit": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+                    "paths": ["src/paginate.js"],
+                    "warnings": ["1 changed path no Agent of the run changed was not committed"],
+                }))
+            } else {
+                wiremock::ResponseTemplate::new(self.status)
+                    .set_body_json(serde_json::json!({"error": "the run path src/paginate.js changed after the run ended"}))
+            }
+        }
+    }
+
+    struct FakeRun {
+        server: wiremock::MockServer,
+        /// The bundle `GET /api/runs/{id}/record` serves after Keep.
+        after_keep: Vec<u8>,
+    }
+
+    /// The daemon's run API for one finished run: admission returns
+    /// `same_model()` and also records it as the first run event, as
+    /// `admit_loadout_run` does.
+    async fn fake_daemon(
+        outcome: RunOutcome,
+        mut events: Vec<RunEvent>,
+        keep_status: u16,
+    ) -> FakeRun {
+        use wiremock::matchers::{method, path, query_param, query_param_is_missing};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        events.insert(
+            0,
+            RunEvent::Warning {
+                at_ms: 1,
+                warning: same_model(),
+            },
+        );
+        let keep_event = RunEvent::Phase {
+            at_ms: 4,
+            phase: "keep".into(),
+            detail: r#"{"branch":"axocoatl/fix-0c1d0000","commit":"4b825dc642cb6eb9a060e54bf8d69288fbee4904"}"#.into(),
+        };
+        let before_keep = bundle(&outcome, &events);
+        let after_keep = bundle(&outcome, &[events.clone(), vec![keep_event]].concat());
+        Mock::given(method("POST"))
+            .and(path("/api/runs"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(RunAccepted {
+                run_id: RUN.into(),
+                session_id: SESSION.into(),
+                workspace_id: "wsp-1".into(),
+                warnings: vec![same_model()],
+            }))
+            .mount(&server)
+            .await;
+        let events_path = format!("/api/runs/{RUN}/events");
+        let count = events.len() as u64;
+        Mock::given(method("GET"))
+            .and(path(events_path.clone()))
+            .and(query_param_is_missing("after"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(RunEventsPage {
+                events: (1..).zip(events).collect(),
+                next_after: Some(count),
+                finished: true,
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(events_path))
+            .and(query_param("after", count.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(RunEventsPage {
+                events: Vec::new(),
+                next_after: Some(count),
+                finished: true,
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/api/runs/{RUN}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(RunStatusView {
+                run_id: RUN.into(),
+                session_id: SESSION.into(),
+                loadout: "fix".into(),
+                state: "finished".into(),
+                phase: "finishing".into(),
+                started_at_ms: 1,
+                outcome: Some(outcome),
+                keep: None,
+            }))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/api/runs/{RUN}/junit")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw("<testsuites/>\n", "application/xml"),
+            )
+            .mount(&server)
+            .await;
+        let kept = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        Mock::given(method("GET"))
+            .and(path(format!("/api/runs/{RUN}/record")))
+            .respond_with(RecordResponder {
+                kept: kept.clone(),
+                before_keep,
+                after_keep: after_keep.clone(),
+            })
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/api/sessions/{SESSION}/keep-pr")))
+            .respond_with(KeepResponder {
+                kept,
+                status: keep_status,
+            })
+            .mount(&server)
+            .await;
+        FakeRun { server, after_keep }
+    }
+
+    /// `axocoatl run fix` against `server` with its own config path (so no
+    /// person's local API token is read) and a repository in `dir`.
+    fn run_args(server: &str, dir: &Path, extra: &[&str]) -> RunArgs {
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let config = dir.join("axocoatl.yaml");
+        let mut argv = vec![
+            "--task",
+            "fix the pagination bug",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--url",
+            server,
+            "-c",
+            config.to_str().unwrap(),
+        ];
+        argv.extend_from_slice(extra);
+        args(&argv)
+    }
+
+    fn paths_requested(requests: &[wiremock::Request]) -> Vec<String> {
+        requests
+            .iter()
+            .map(|request| format!("{} {}", request.method, request.url.path()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_kept_run_writes_the_bundle_the_api_serves_after_keep_and_each_warning_once() {
+        let run = fake_daemon(outcome("pass", serde_json::json!({})), Vec::new(), 200).await;
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join("run.axorecord.jsonl");
+        let junit = dir.path().join("junit.xml");
+        let (mut console, out, err) = captured_console();
+        let code = run_on(
+            run_args(
+                &run.server.uri(),
+                dir.path(),
+                &[
+                    "--keep",
+                    "branch",
+                    "--record",
+                    record.to_str().unwrap(),
+                    "--junit",
+                    junit.to_str().unwrap(),
+                ],
+            ),
+            &mut console,
+            ADMISSION_NOTE_AFTER,
+        )
+        .await;
+        let (out, err) = (out.text(), err.text());
+        assert_eq!(code, exit_code::PASS, "{out}\n{err}");
+        // The file is the bundle the API serves once the command ended,
+        // with the keep event.
+        assert_eq!(std::fs::read(&record).unwrap(), run.after_keep);
+        assert!(String::from_utf8_lossy(&run.after_keep).contains(r#""phase":"keep""#));
+        assert_eq!(verify(&record), 0);
+        assert_eq!(std::fs::read_to_string(&junit).unwrap(), "<testsuites/>\n");
+        let requests = paths_requested(&run.server.received_requests().await.unwrap());
+        let at = |wanted: &str| {
+            requests
+                .iter()
+                .position(|request| request == wanted)
+                .unwrap_or_else(|| panic!("no {wanted} in {requests:?}"))
+        };
+        let keep = at(&format!("POST /api/sessions/{SESSION}/keep-pr"));
+        assert!(
+            keep < at(&format!("GET /api/runs/{RUN}/record")),
+            "{requests:?}"
+        );
+        assert!(
+            keep < at(&format!("GET /api/runs/{RUN}/junit")),
+            "{requests:?}"
+        );
+        // Admission returned the warning and recorded it as an event: it is
+        // printed once.
+        assert_eq!(
+            err.matches("! warning same_model_reviewer: ").count(),
+            1,
+            "{err}"
+        );
+        assert!(err.contains("· starting loadout fix in "), "{err}");
+        assert!(
+            err.contains(&format!("· run {RUN} in Session {SESSION}")),
+            "{err}"
+        );
+        assert!(err.contains("! keep: 1 changed path"), "{err}");
+        assert!(out.starts_with("Verdict: pass (exit 0)\n"), "{out}");
+        assert!(
+            out.contains("  same_model_reviewer: the reviewer runs"),
+            "{out}"
+        );
+        assert!(
+            out.ends_with(
+                "Kept: branch axocoatl/fix-0c1d0000 at 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"
+            ),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn with_json_standard_output_is_one_outcome_document_also_when_kept() {
+        let run = fake_daemon(outcome("pass", serde_json::json!({})), Vec::new(), 200).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut console, out, err) = captured_console();
+        let code = run_on(
+            run_args(&run.server.uri(), dir.path(), &["--keep", "pr", "--json"]),
+            &mut console,
+            ADMISSION_NOTE_AFTER,
+        )
+        .await;
+        let (out, err) = (out.text(), err.text());
+        assert_eq!(code, exit_code::PASS, "{out}\n{err}");
+        let printed: RunOutcome = serde_json::from_str(&out).unwrap();
+        assert_eq!(printed.run_id, RUN);
+        assert!(
+            err.contains("Kept: branch axocoatl/fix-0c1d0000 at "),
+            "{err}"
+        );
+        let requests = run.server.received_requests().await.unwrap();
+        let keep = requests
+            .iter()
+            .find(|request| request.url.path().ends_with("/keep-pr"))
+            .unwrap();
+        let body: serde_json::Value = keep.body_json().unwrap();
+        assert_eq!(body, serde_json::json!({"run_id": RUN, "open_pr": true}));
+    }
+
+    #[tokio::test]
+    async fn a_failed_keep_exits_two_after_writing_the_bundle_with_its_event() {
+        let run = fake_daemon(outcome("pass", serde_json::json!({})), Vec::new(), 409).await;
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join("run.axorecord.jsonl");
+        let (mut console, out, err) = captured_console();
+        let code = run_on(
+            run_args(
+                &run.server.uri(),
+                dir.path(),
+                &["--keep", "branch", "--record", record.to_str().unwrap()],
+            ),
+            &mut console,
+            ADMISSION_NOTE_AFTER,
+        )
+        .await;
+        let (out, err) = (out.text(), err.text());
+        assert_eq!(code, exit_code::NEEDS_ATTENTION, "{out}\n{err}");
+        assert!(
+            out.ends_with(
+                "Keep failed: 409 Conflict: the run path src/paginate.js changed after the run ended\n"
+            ),
+            "{out}"
+        );
+        assert_eq!(std::fs::read(&record).unwrap(), run.after_keep);
+    }
+
+    #[tokio::test]
+    async fn a_run_that_needs_attention_is_not_kept_and_prints_classes_as_documented() {
+        use axocoatl_session::run_outcome::{FailureClass, NotCovered, TurnState};
+        let not_covered = NotCovered {
+            area: "checkout".into(),
+            class: FailureClass::NotReached,
+            detail: "ran out of steps".into(),
+            node_id: None,
+            turn_id: None,
+        };
+        let events = vec![
+            RunEvent::TurnStarted {
+                at_ms: 2,
+                turn_id: "turn-1".into(),
+                purpose: "run".into(),
+            },
+            RunEvent::TurnEnded {
+                at_ms: 3,
+                turn_id: "turn-1".into(),
+                state: TurnState::NeedsAttention,
+            },
+            RunEvent::NotCovered {
+                at_ms: 3,
+                entry: Box::new(not_covered.clone()),
+            },
+        ];
+        let run = fake_daemon(
+            outcome(
+                "needs_attention",
+                serde_json::json!({"not_covered": [not_covered]}),
+            ),
+            events,
+            200,
+        )
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut console, out, err) = captured_console();
+        let code = run_on(
+            run_args(&run.server.uri(), dir.path(), &["--keep", "branch"]),
+            &mut console,
+            ADMISSION_NOTE_AFTER,
+        )
+        .await;
+        let (out, err) = (out.text(), err.text());
+        assert_eq!(code, exit_code::NEEDS_ATTENTION, "{out}\n{err}");
+        assert!(
+            err.contains("· turn turn-1 ended: needs_attention\n"),
+            "{err}"
+        );
+        assert!(
+            err.contains("! not covered: checkout: not_reached: ran out of steps\n"),
+            "{err}"
+        );
+        assert!(
+            !err.contains("NotReached") && !err.contains("NeedsAttention"),
+            "{err}"
+        );
+        assert!(
+            err.contains("· nothing kept: the run did not pass"),
+            "{err}"
+        );
+        assert!(
+            out.contains("  checkout: not_reached: ran out of steps\n"),
+            "{out}"
+        );
+        let requests = run.server.received_requests().await.unwrap();
+        assert!(
+            !requests
+                .iter()
+                .any(|request| request.url.path().ends_with("/keep-pr")),
+            "{:?}",
+            paths_requested(&requests)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_run_never_says_it_started() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/runs"))
+            .respond_with(
+                ResponseTemplate::new(422)
+                    .set_body_json(serde_json::json!({"error": "integrator_model: required"}))
+                    .set_delay(Duration::from_millis(300)),
+            )
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut console, out, err) = captured_console();
+        // A slow refusal: the command says it is waiting, never that the run
+        // started.
+        let code = run_on(
+            run_args(&server.uri(), dir.path(), &[]),
+            &mut console,
+            Duration::from_millis(20),
+        )
+        .await;
+        let (out, err) = (out.text(), err.text());
+        assert_eq!(code, exit_code::USAGE, "{err}");
+        assert_eq!(out, "");
+        assert_eq!(
+            err,
+            "· waiting for the daemon to admit the run (it prepares the Session's environment first)\n\
+             axocoatl run: integrator_model: required\n"
+        );
+        // A quick one prints only its reason.
+        let (mut console, _, err) = captured_console();
+        let code = run_on(
+            run_args(&server.uri(), dir.path(), &[]),
+            &mut console,
+            ADMISSION_NOTE_AFTER,
+        )
+        .await;
+        assert_eq!(code, exit_code::USAGE);
+        assert_eq!(err.text(), "axocoatl run: integrator_model: required\n");
+    }
+
+    #[test]
+    fn summary_findings_show_severity_and_location() {
+        let outcome = outcome(
+            "pass",
+            serde_json::json!({"findings": [
+                {"id": "auth-F1", "source": "audit_worker", "title": "Timing-unsafe HMAC compare",
+                 "severity": "high", "area": "auth", "location": "auth/hmac.go:31"},
+                {"id": "notify-F1", "source": "audit_worker", "title": "Hard-coded token",
+                 "severity": "critical"},
+                {"id": "ingest-F1", "source": "audit_worker", "title": "Unchecked unmarshal",
+                 "area": "ingest", "location": "ingest/read.go:12"},
+                {"id": "B4", "source": "explorer", "title": "Coupon fails", "area": "cart",
+                 "repro": {"path": "axocoatl-qa/b4.spec.ts", "classification": "fails_on_clean_build"}},
+            ]}),
+        );
+        let text = summary(&outcome);
+        for line in [
+            "  auth-F1 Timing-unsafe HMAC compare [auth] (high severity, auth/hmac.go:31): audit_worker\n",
+            "  notify-F1 Hard-coded token (critical severity): audit_worker\n",
+            "  ingest-F1 Unchecked unmarshal [ingest] (ingest/read.go:12): audit_worker\n",
+            "  B4 Coupon fails [cart]: fails on clean build\n",
+        ] {
+            assert!(text.contains(line), "{line:?} in\n{text}");
+        }
     }
 }
