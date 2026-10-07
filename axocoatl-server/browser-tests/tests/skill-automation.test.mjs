@@ -144,11 +144,36 @@ test('a Session-authorized Skill triggers a UI-created Automation whose result s
     await openSettingsSection(page, 'Automations Work that starts itself');
     const automations = page.locator('ax-automation-settings');
     await automations.locator('.shell:not(.loading)').waitFor({ state: 'visible' });
+    // Hold the page's animation frames while the dialog opens, so its
+    // first-frame focus runs only after a field was chosen. It once moved
+    // focus to Name in the middle of filling Description, and the
+    // description text was typed into Name.
+    await page.evaluate(() => {
+      window.__axoHeldFrames = [];
+      window.__axoRealFrame = window.requestAnimationFrame;
+      window.requestAnimationFrame = (callback) => window.__axoHeldFrames.push(callback);
+    });
     await automations.getByRole('button', { name: '+ Automation' }).first().click();
     const createDialog = automations.getByRole('dialog', { name: 'New Automation' });
     const nameField = createDialog.getByPlaceholder('Review release readiness');
     const idField = createDialog.getByPlaceholder('review-release-readiness');
     const descriptionField = createDialog.getByPlaceholder('Optional: what this Automation does.');
+    await descriptionField.focus();
+    const heldFrames = await page.evaluate(async () => {
+      const held = window.__axoHeldFrames;
+      window.requestAnimationFrame = window.__axoRealFrame;
+      delete window.__axoHeldFrames;
+      delete window.__axoRealFrame;
+      for (const callback of held) callback(performance.now());
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return held.length;
+    });
+    assert.ok(heldFrames > 0, 'the dialog asked for a frame to set its first focus');
+    assert.equal(
+      await descriptionField.evaluate((element) => element.getRootNode().activeElement === element),
+      true,
+      'the first frame leaves focus on the field already chosen',
+    );
     await nameField.fill('Launch proof recorder');
     await idField.fill('launch-proof-recorder');
     await descriptionField.fill('Records the Session-authorized launch Skill signal.');

@@ -1349,7 +1349,11 @@ function createController(host, root) {
         event.stopPropagation();
         cleanup(null);
       });
-      requestAnimationFrame(() => name.focus());
+      // The first frame focuses Name only if nothing in the dialog has focus
+      // yet; a field chosen before that frame keeps it and its typing.
+      requestAnimationFrame(() => {
+        if (!parts.modal.matches(':focus-within')) name.focus();
+      });
     });
   }
 
@@ -1580,7 +1584,9 @@ function createController(host, root) {
         event.stopPropagation();
         cleanup(null);
       });
-      requestAnimationFrame(() => modalFocusables(parts.modal)[0]?.focus());
+      requestAnimationFrame(() => {
+        if (!parts.modal.matches(':focus-within')) modalFocusables(parts.modal)[0]?.focus();
+      });
     });
   }
 
