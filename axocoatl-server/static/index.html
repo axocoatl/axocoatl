@@ -2640,6 +2640,7 @@ function openCockpit(s) {
   if (previousSessionId === s.id && $('#session-cockpit')?.style.display === 'flex') {
     S.session.status = s.status || 'active';
     S.session.environment = s.environment || { state: 'unprepared' };
+    S.session.loadout = s.loadout || null;
     renderSessionEnvironment(S.session);
     syncSessionComposerState();
     bindSessionComponents(s);
@@ -2658,6 +2659,8 @@ function openCockpit(s) {
     status: s.status || 'active',
     mode: s.mode || null,
     environment: s.environment || { state: 'unprepared' },
+    // The loadout run that created this Session, when one did.
+    loadout: s.loadout || null,
     streamEl: null, streamBuf: '', toolCards: {}, liveStreams: new Map(),
     controlPlaneTurns: new Map(), controlPlaneLatestTurnId: '',
     coordinationGraphTurnId: '', graphAgents: [],

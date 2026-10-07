@@ -13,6 +13,7 @@ const MODEL = 'browser-test-model:latest';
 const DIGEST = 'a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72';
 let runtime, modelServer, browser;
 const chats = [], workspaces = [];
+let finishedRun = null;
 
 const SMOKE = `schema: axocoatl.loadout/1
 id: smoke
@@ -181,6 +182,7 @@ test('a custom loadout runs headless in a hardened Session: 202, events, JUnit a
   assert.equal(lines.at(-1).section, 'end');
   assert.ok(lines.some((line) => line.section === 'turn'));
   assert.ok(chats.length > 0, 'the writer called the stub provider');
+  finishedRun = accepted;
 
   // axocoatl run against the same daemon writes --junit and --record, and
   // axocoatl record verify accepts the bundle.
@@ -262,6 +264,31 @@ test('Settings → Loadouts lists loadouts, shows invalid files and keeps the gr
     await lattice.focus(); await page.keyboard.press('Delete');
     assert.equal(await snapshot(), before);
     assert.deepEqual(await page.evaluate(() => window.loadoutEdits), []);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('a loadout Session shows its loadout badge and the run outcome panel in the workbench', async (t) => {
+  if (!finishedRun) { t.skip('the headless run did not finish'); return; }
+  const context = await newAuthorizedContext(browser, { viewport: { width: 1280, height: 800 } }), page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.route('**/api/llm-health', (route) => route.fulfill({ json: { ollama: { base_url: 'http://127.0.0.1:9', reachable: true, configured: true, missing_models: [] } } }));
+  try {
+    await page.goto(`${runtime.baseUrl}/?session=${encodeURIComponent(finishedRun.session_id)}`, { waitUntil: 'domcontentloaded' });
+    const badge = page.locator('#session-active .sa-chip.loadout');
+    await badge.waitFor({ timeout: 30_000 });
+    // The team view loads after the Session opens and renders the row again.
+    await page.locator('#session-active .sa-chip:not(.loadout)').first().waitFor();
+    assert.equal((await badge.textContent()).trim(), 'Loadout smoke@1');
+    await badge.click();
+    const panel = page.locator('#session-run-outcome');
+    assert.equal(await panel.evaluate((node) => node.open), true);
+    const outcome = page.locator('ax-run-outcome');
+    assert.equal(await outcome.getAttribute('run-id'), finishedRun.run_id);
+    await outcome.locator('.verdict[data-verdict="pass"]').waitFor();
+    assert.match(await outcome.locator('details[data-check="readme"]').textContent(), /passed/);
+    assert.equal(await outcome.locator('a.download').getAttribute('href'), `/api/runs/${finishedRun.run_id}/record`);
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });

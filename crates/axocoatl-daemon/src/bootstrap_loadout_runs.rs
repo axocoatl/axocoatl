@@ -700,6 +700,79 @@ async fn repository_state(repo: &std::path::Path) -> (Option<String>, Vec<String
     (head, dirty)
 }
 
+/// The URL a `ParamOr` names, with parameters (defaults applied) resolved.
+fn param_url(
+    value: &ParamOr<String>,
+    params: &axocoatl_config::loadout::ParamValues,
+) -> Option<String> {
+    match value {
+        ParamOr::Value(url) => Some(url.clone()),
+        ParamOr::Param { param } => params.get(param).cloned(),
+    }
+}
+
+/// Whether `host` is one of the browser's declared hosts.
+fn browser_allows(config: &AxocoatlConfig, host: &str) -> bool {
+    let Some(browser) = &config.browser else {
+        return false;
+    };
+    browser.allow.iter().any(|entry| match entry {
+        axocoatl_config::EgressAllowYaml::Host(allowed) => {
+            let allowed = allowed.host.to_ascii_lowercase();
+            match allowed.strip_prefix("*.") {
+                Some(suffix) => host.ends_with(&format!(".{suffix}")),
+                None => allowed == host,
+            }
+        }
+        _ => false,
+    })
+}
+
+/// The Session ports a qa run's browser reaches the build under test (and
+/// the reference build) through. A URL must be a port of the Session
+/// (`http://localhost:<port>`) or a host under `browser.allow`; anything else
+/// is a usage error, never a run whose browser cannot reach its target.
+fn qa_exposed_ports(
+    config: &AxocoatlConfig,
+    file: &LoadoutFile,
+    params: &axocoatl_config::loadout::ParamValues,
+) -> Result<Vec<u16>, DaemonError> {
+    let Some(qa) = &file.qa else {
+        return Ok(Vec::new());
+    };
+    let mut urls = vec![("qa.target_url", param_url(&qa.target_url, params))];
+    if let Some(reference) = &qa.reference_url {
+        urls.push(("qa.reference_url", param_url(reference, params)));
+    }
+    let mut ports = Vec::new();
+    for (field, url) in urls {
+        let Some(url) = url else {
+            if field == "qa.target_url" {
+                return Err(DaemonError::InvalidRequest(
+                    "qa.target_url has no value".into(),
+                ));
+            }
+            continue;
+        };
+        let parsed = reqwest::Url::parse(&url)
+            .map_err(|error| DaemonError::InvalidRequest(format!("{field} {url:?}: {error}")))?;
+        let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+        let local = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]" | "::1");
+        if local {
+            let port = parsed.port_or_known_default().unwrap_or(80);
+            if !ports.contains(&port) {
+                ports.push(port);
+            }
+        } else if !browser_allows(config, &host) {
+            return Err(DaemonError::InvalidRequest(format!(
+                "{field} {url} is neither a port of the Session (http://localhost:<port>) nor a \
+                 host under browser.allow, so the browser cannot reach it"
+            )));
+        }
+    }
+    Ok(ports)
+}
+
 fn valid_request_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
@@ -929,6 +1002,7 @@ impl AxocoatlDaemon {
         }
         .map(|command| command.trim().to_string())
         .filter(|command| !command.is_empty());
+        let exposed_ports = qa_exposed_ports(&self.config, &loadout.file, &resolved.params)?;
         let workspace = self.create_workspace(&repo_text, None).await?;
         let run_id = format!("run-{}", uuid::Uuid::new_v4());
         let loadout_ref = LoadoutRef {
@@ -955,7 +1029,15 @@ impl AxocoatlDaemon {
         let name = format!("{} · {}", loadout.file.id, task_line.trim());
         let started_at_ms = now_ms();
         let session = self
-            .create_loadout_session(&workspace.id, &name, image, setup, binding, overlay)
+            .create_loadout_session(
+                &workspace.id,
+                &name,
+                image,
+                setup,
+                exposed_ports,
+                binding,
+                overlay,
+            )
             .await?;
         let (repo_head, dirty_paths) = repository_state(&repo).await;
         let options = RunOptions {
@@ -1141,12 +1223,14 @@ impl AxocoatlDaemon {
     /// environment with exactly `setup` approved (no detected command is
     /// ever approved by a run). Returns the Session as prepared: Ready, or
     /// Failed with the setup's output.
+    #[allow(clippy::too_many_arguments)]
     async fn create_loadout_session(
         &self,
         workspace_id: &str,
         name: &str,
         image: Option<String>,
         setup: Option<String>,
+        exposed_ports: Vec<u16>,
         binding: SessionLoadoutBinding,
         overlay: crate::loadout::egress::LoadoutEgressOverlay,
     ) -> Result<Session, DaemonError> {
@@ -1187,7 +1271,7 @@ impl AxocoatlDaemon {
                     &workspace.canonical_path,
                     mode,
                     Vec::new(),
-                    Vec::new(),
+                    exposed_ports,
                     image,
                     setup,
                     setup_approved,
@@ -1217,6 +1301,27 @@ impl AxocoatlDaemon {
                 }
             }
         }
+    }
+
+    /// Whether the loadout that created `session` has an e2e check, so its
+    /// container mounts `.e2e/cache` read-only (workstream e2e passes this to
+    /// the Session container's policy).
+    pub fn session_has_e2e_check(&self, session: &Session) -> bool {
+        let Some(binding) = &session.loadout else {
+            return false;
+        };
+        self.loadout_runs
+            .store()
+            .ok()
+            .and_then(|store| store.manifest(&binding.run_id).ok())
+            .and_then(|manifest| parse_loadout(&manifest.loadout_text, LoadoutSource::Builtin).ok())
+            .is_some_and(|loadout| {
+                loadout
+                    .file
+                    .checks
+                    .iter()
+                    .any(|check| check.run.e2e.is_some())
+            })
     }
 
     /// Whether this call is the first to start a driver for `run_id`. A run
@@ -1904,6 +2009,35 @@ mod tests {
     }
 
     #[test]
+    fn qa_targets_are_session_ports_or_declared_browser_hosts() {
+        let qa = builtin("qa");
+        let mut params = axocoatl_config::loadout::ParamValues::new();
+        params.insert("target_url".into(), "http://localhost:3000".into());
+        params.insert("reference_url".into(), "http://127.0.0.1:3001/app".into());
+        let config = AxocoatlConfig::default();
+        assert_eq!(
+            qa_exposed_ports(&config, &qa.file, &params).unwrap(),
+            vec![3000, 3001]
+        );
+        params.insert("reference_url".into(), "https://staging.example.com".into());
+        assert!(matches!(
+            qa_exposed_ports(&config, &qa.file, &params),
+            Err(DaemonError::InvalidRequest(_))
+        ));
+        let config = AxocoatlConfig {
+            browser: Some(serde_yaml::from_str("allow:\n  - host: \"*.example.com\"\n").unwrap()),
+            ..Default::default()
+        };
+        assert_eq!(
+            qa_exposed_ports(&config, &qa.file, &params).unwrap(),
+            vec![3000]
+        );
+        assert!(qa_exposed_ports(&config, &builtin("fix").file, &params)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
     fn request_ids_are_bounded() {
         assert!(valid_request_id("req-1:2.3_x"));
         assert!(!valid_request_id(""));
@@ -1911,3 +2045,7 @@ mod tests {
         assert!(!valid_request_id(&"x".repeat(129)));
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_loadout_runs_tests.rs"]
+mod daemon_tests;

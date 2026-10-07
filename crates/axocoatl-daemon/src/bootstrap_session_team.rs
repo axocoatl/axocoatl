@@ -360,6 +360,14 @@ fn slot_tools(
     let config: AgentConfig = serde_json::from_str(configuration).map_err(team_error)?;
     Ok(config.tools)
 }
+/// [`slot_tools`] for the loadout tests.
+#[cfg(test)]
+pub(crate) fn slot_tools_for_tests(
+    slot: &SessionTeamSlot,
+    content: &ExecutionContentStore,
+) -> Result<Vec<String>, DaemonError> {
+    slot_tools(slot, content)
+}
 /// Graph bounds offered with helpers: the lead and up to five helper runs in
 /// one turn. Helpers add no connection, so five leave room for a chain of six
 /// Agents the person builds later.
