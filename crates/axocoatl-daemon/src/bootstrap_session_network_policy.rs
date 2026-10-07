@@ -121,6 +121,20 @@ pub(crate) struct SessionEgressPoints {
     /// hosts and routes), applied whenever its decision point opens or the
     /// lists reload. Other Sessions never see these entries.
     overlays: StdMutex<HashMap<String, crate::loadout::egress::LoadoutEgressOverlay>>,
+    /// Tests: what decision points opened from now on resolve and connect
+    /// with, so a route can reach a local fake upstream.
+    #[cfg(test)]
+    test_upstreams: StdMutex<Option<TestUpstreams>>,
+}
+
+/// A test's resolver, address classes and route upstream connector, in
+/// place of this computer's (see [`SessionEgressPoints::use_test_upstreams`]).
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TestUpstreams {
+    pub(crate) resolver: Arc<dyn crate::session_egress::EgressResolver>,
+    pub(crate) classify: fn(std::net::IpAddr) -> axocoatl_core::netaddr::AddrClass,
+    pub(crate) upstream: Arc<crate::egress_broker::UpstreamConnector>,
 }
 
 impl SessionEgressPoints {
@@ -144,7 +158,18 @@ impl SessionEgressPoints {
             upstream: Arc::new(crate::egress_broker::UpstreamConnector::new()),
             workspaces,
             overlays: StdMutex::new(HashMap::new()),
+            #[cfg(test)]
+            test_upstreams: StdMutex::new(None),
         }
+    }
+
+    /// Open every later decision point with `upstreams` (tests).
+    #[cfg(test)]
+    pub(crate) fn use_test_upstreams(&self, upstreams: TestUpstreams) {
+        *self
+            .test_upstreams
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(upstreams);
     }
 
     /// Remember what a loadout Session adds to the lists in force. Set
@@ -215,6 +240,37 @@ impl SessionEgressPoints {
         let env_dir = self.data_root.child(EGRESS_ENV_DIR).map_err(|error| {
             DaemonError::Session(format!("preparing egress credential storage: {error}"))
         })?;
+        #[cfg(test)]
+        let test_upstreams = self
+            .test_upstreams
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone();
+        #[cfg(test)]
+        if let Some(test) = test_upstreams {
+            let egress = SessionEgress::open_session(
+                session_id,
+                self.policy_for(session_id, &self.policy.current()),
+                Arc::new(crate::session_egress::SessionRecordSink::new(
+                    self.records.clone(),
+                    session_id,
+                )),
+                test.resolver,
+                Some(env_dir),
+                test.classify,
+                crate::session_egress::RouteSettings {
+                    upstream: test.upstream,
+                    workspaces: self.workspaces.roots(),
+                    timeouts: Default::default(),
+                },
+            )
+            .await
+            .map_err(|error| {
+                DaemonError::Session(format!("opening the Session's egress policy: {error}"))
+            })?;
+            decision_points.insert(session_id.to_string(), egress.clone());
+            return Ok(egress);
+        }
         // Read under the decision points' lock, which a reload holds while it
         // replaces the policy: a decision point opened now either compiles
         // the new lists or is in the reload's list.
