@@ -458,10 +458,9 @@ pub fn progress_line(event: &RunEvent) -> Option<String> {
         RunEvent::Warning { warning, .. } => {
             Some(format!("! warning {}: {}", warning.code, warning.message))
         }
-        RunEvent::NotCovered { entry, .. } => Some(format!(
-            "! not covered: {} ({:?}): {}",
-            entry.area, entry.class, entry.detail
-        )),
+        RunEvent::NotCovered { entry, .. } => {
+            Some(format!("! not covered: {}: {}", entry.area, entry.reason()))
+        }
         RunEvent::ProviderRetry {
             node_id,
             status,
@@ -594,13 +593,7 @@ pub fn summary(outcome: &RunOutcome) -> String {
     if !outcome.not_covered.is_empty() {
         let _ = writeln!(out, "Not covered:");
         for entry in &outcome.not_covered {
-            let _ = writeln!(
-                out,
-                "  {}: {}: {}",
-                entry.area,
-                class_name(&entry.class),
-                entry.detail
-            );
+            let _ = writeln!(out, "  {}: {}", entry.area, entry.reason());
         }
     }
     if !outcome.warnings.is_empty() {
@@ -1178,5 +1171,44 @@ mod tests {
             .unwrap();
         std::fs::write(&file, fix.text.replace("id: fix", "id: my-fix")).unwrap();
         assert_eq!(validate(&file).unwrap(), 0);
+    }
+
+    /// The qa smoke test printed "checkout: not_reached: not_reached: ran out
+    /// of steps" and "(NotReached)": the summary and the progress line now
+    /// share the Outcome's one rendering.
+    #[test]
+    fn not_covered_lines_name_their_class_once() {
+        let outcome: RunOutcome = serde_json::from_value(serde_json::json!({
+            "schema": "axocoatl.run-outcome/1",
+            "run_id": "run-1",
+            "session_id": "ses-1",
+            "workspace_id": "wsp-1",
+            "loadout": {"id": "qa", "version": 1, "kind": "qa", "digest": "0", "builtin": true},
+            "task": "t",
+            "started_at_ms": 1,
+            "finished_at_ms": 2,
+            "verdict": "needs_attention",
+            "exit_code": 2,
+            "not_covered": [
+                {"area": "checkout", "class": "not_reached", "detail": "not_reached: ran out of steps"},
+                {"area": "writer", "class": "other", "detail": ""}
+            ]
+        }))
+        .unwrap();
+        let text = summary(&outcome);
+        assert!(
+            text.contains(
+                "Not covered:\n  checkout: not_reached: ran out of steps\n  writer: other\n"
+            ),
+            "{text}"
+        );
+        let event = RunEvent::NotCovered {
+            at_ms: 1,
+            entry: Box::new(outcome.not_covered[0].clone()),
+        };
+        assert_eq!(
+            progress_line(&event).as_deref(),
+            Some("! not covered: checkout: not_reached: ran out of steps")
+        );
     }
 }

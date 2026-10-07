@@ -1,0 +1,52 @@
+{
+  "findings": [
+    {
+      "id": "auth-F1",
+      "title": "Use of constant-time comparison for HMAC validation",
+      "detail": "The code uses regular string comparison (signature != expected) which is vulnerable to timing attacks. An attacker could potentially determine the correct signature by measuring response times. The code should use hmac.compare_digest() for constant-time comparison.",
+      "severity": "medium",
+      "location": "auth/tokens.py:15",
+      "area": "auth"
+    },
+    {
+      "id": "billing-F1",
+      "title": "Potential Integer Overflow in page_count function",
+      "detail": "In the page_count function, the expression (total_items + page_size - 1) // page_size could potentially cause integer overflow if total_items and page_size are large positive integers. While Python handles big integers well, this formula can still lead to unexpected behavior or performance issues with very large numbers. The formula is trying to implement ceiling division but the approach is not optimal for very large integers.",
+      "severity": "medium",
+      "location": "billing/pagination.py:8",
+      "area": "billing"
+    },
+    {
+      "id": "ingest-F1",
+      "title": "Missing error handling for JSON unmarshaling",
+      "detail": "In the LoadFeed function in ingest/feed.go, line 29, json.Unmarshal is called without checking its error return value. If the JSON data is malformed or doesn't match the expected structure, the error will be silently ignored, potentially leading to unexpected behavior or security vulnerabilities. The function should check the error from json.Unmarshal and return it to the caller.",
+      "severity": "medium",
+      "location": "ingest/feed.go:29",
+      "area": "ingest"
+    },
+    {
+      "id": "notify-F1",
+      "title": "Hardcoded Webhook Token",
+      "detail": "The webhook token is hardcoded in notify/webhook.py at line 7. The token 'sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef' appears to be a fake example token but is still hardcoded in the source code, which is a security risk. This could lead to unauthorized webhook access if the token is ever leaked or if the fake token is mistaken for a real one in production.",
+      "severity": "high",
+      "location": "notify/webhook.py:7",
+      "area": "notify"
+    },
+    {
+      "id": "notify-F2",
+      "title": "Hardcoded Webhook URL",
+      "detail": "The webhook URL is hardcoded in notify/webhook.py at line 5. The URL 'https://hooks.example.invalid/orders' is a placeholder URL that should be replaced with a real endpoint. While it's a valid URL, it's not functional and is likely a placeholder for a real URL that should be configured externally.",
+      "severity": "medium",
+      "location": "notify/webhook.py:5",
+      "area": "notify"
+    },
+    {
+      "id": "notify-F3",
+      "title": "Insecure HTTP Usage",
+      "detail": "The code uses urllib.request.urlopen() which can make insecure HTTP connections if not properly configured. While the URL is https://, the code doesn't explicitly verify SSL certificates, which could lead to man-in-the-middle attacks if the environment doesn't enforce strict SSL verification.",
+      "severity": "medium",
+      "location": "notify/webhook.py:19",
+      "area": "notify"
+    }
+  ]
+}
