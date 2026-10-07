@@ -52,8 +52,8 @@ use axocoatl_session::network_record::{
 
 use crate::egress_broker::terminate::BrokerTimeouts;
 use crate::egress_broker::{
-    BrokerRecordSink, RelayContext, Route, RouteTable, SessionBroker, SessionCa, TrustMaterial,
-    UpstreamConnector, WorkspaceRoots,
+    BrokerRecordSink, RelayContext, Route, RouteOrigin, RouteTable, SessionBroker, SessionCa,
+    TrustMaterial, UpstreamConnector, WorkspaceRoots,
 };
 use crate::session_egress_policy::{
     validate_session_host, CompiledPolicy, RoutePolicyEntry, SessionRule,
@@ -211,8 +211,12 @@ pub struct EgressPolicyConfig {
     /// `browser.allow` and `browser.private_destinations`; `None` when the
     /// browser tools are not configured.
     pub browser: Option<(Vec<EgressAllowYaml>, Vec<String>)>,
-    /// `sandbox.egress.routes`, part of the Session scope.
+    /// `sandbox.egress.routes`, part of the Session scope, then a loadout
+    /// Session's own routes.
     pub routes: Vec<EgressRouteYaml>,
+    /// Where each of `routes` comes from, by position, so a refusal names
+    /// what to change; a route past its end is configured.
+    pub route_origins: Vec<RouteOrigin>,
     /// `credentials`, where the routes' credentials are read. Never values.
     pub credentials: BTreeMap<String, CredentialSourceYaml>,
     /// `sandbox.egress.host_ollama`, part of the Session scope: the route to
@@ -240,6 +244,7 @@ impl EgressPolicyConfig {
                 .as_ref()
                 .map(|browser| (browser.allow.clone(), browser.private_destinations.clone())),
             routes: egress.routes,
+            route_origins: Vec::new(),
             credentials: config.credentials.clone(),
             host_ollama: egress.host_ollama,
         }
@@ -894,7 +899,8 @@ impl SessionEgress {
                     &config.credentials,
                     workspaces,
                     config.host_ollama.as_ref(),
-                )?;
+                )?
+                .with_origins(&config.route_origins);
                 let entries = routes
                     .routes()
                     .iter()
@@ -1916,7 +1922,14 @@ impl SessionEgress {
                         return refuse("tls_required");
                     }
                     if !kind.is_some_and(|kind| route.allows_binding(kind)) {
-                        return refuse("route_not_for_binding");
+                        // Where to add the kind depends on whose route it is.
+                        let mut verdict = refuse("route_not_for_binding");
+                        verdict.decision = Decision::deny(
+                            403,
+                            "route_not_for_binding",
+                            route.not_for_binding_hint(open.port),
+                        );
+                        return verdict;
                     }
                     route.label()
                 }

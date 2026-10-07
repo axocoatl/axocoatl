@@ -675,24 +675,7 @@ pub fn summary(outcome: &RunOutcome) -> String {
             let _ = writeln!(out, "  {}: {}", warning.code, warning.message);
         }
     }
-    let usage = &outcome.usage;
-    let _ = writeln!(
-        out,
-        "Usage: {} input + {} output tokens, ${:.4}{}{}",
-        usage.input_tokens,
-        usage.output_tokens,
-        usage.cost_microunits as f64 / 1_000_000.0,
-        if usage.retries > 0 {
-            format!(", {} provider retries", usage.retries)
-        } else {
-            String::new()
-        },
-        if usage.complete {
-            ""
-        } else {
-            " (known subtotal: some usage was not reported)"
-        }
-    );
+    let _ = writeln!(out, "Usage: {}", outcome.usage.text());
     let network = &outcome.network;
     let _ = writeln!(
         out,
@@ -1894,6 +1877,31 @@ mod tests {
         .await;
         assert_eq!(code, exit_code::USAGE);
         assert_eq!(err.text(), "axocoatl run: integrator_model: required\n");
+    }
+
+    /// A Codex writer reports tokens but no cost; what its calls reserved
+    /// is not shown as the run's cost.
+    #[test]
+    fn summary_says_when_the_cost_is_not_known() {
+        let unknown = outcome(
+            "pass",
+            serde_json::json!({"usage": {"input_tokens": 600, "output_tokens": 18,
+                "cost_microunits": 333_333, "complete": true, "cost_known": false}}),
+        );
+        let text = summary(&unknown);
+        assert!(
+            text.contains(
+                "\nUsage: 600 input + 18 output tokens, cost unknown (reserved up to $0.3333)\n"
+            ),
+            "{text}"
+        );
+        let known = outcome(
+            "pass",
+            serde_json::json!({"usage": {"input_tokens": 240, "output_tokens": 14,
+                "cost_microunits": 310, "complete": true, "cost_known": true, "retries": 1}}),
+        );
+        assert!(summary(&known)
+            .contains("\nUsage: 240 input + 14 output tokens, $0.0003, 1 provider retries\n"));
     }
 
     #[test]

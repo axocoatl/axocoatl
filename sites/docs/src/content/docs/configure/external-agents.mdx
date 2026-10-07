@@ -120,6 +120,8 @@ axocoatl run fix-claude-code --task "…" \
 For Claude Code the model is `{provider: anthropic, model: …}`, for Codex
 `{provider: openai, model: …}`: the model name the program itself takes. An external
 program brings its own tools, so `tools` is ignored, and only a `writer` may be external.
+The same-model reviewer check compares that provider and model with the reviewer's, both
+from the loadout and from the finished turn.
 
 ## The routes Axocoatl adds
 
@@ -133,7 +135,17 @@ You do not list these routes; the run adds them to its Session's egress policy.
 Each route refuses every other request. Claude Code 2.1.292 also asks the route for its
 account's policy limits and remote settings (`GET /api/claude_code/policy_limits` and
 `GET /api/claude_code/settings`); the route refuses both, the network record shows the
-refusals, and Claude Code goes on without them. Claude Code also runs with
+refusals, and Claude Code goes on without them: a run with the pinned version passes
+with both refused.
+
+The route stays this small on purpose. The daemon adds your credential to every request
+a route's rules allow, so each rule is one more endpoint that receives it; these routes
+allow only the model calls a run needs, which is what the pinned versions were seen to
+send. A refused request is answered with 403 and a hint that names this route as the
+one Axocoatl adds for the writer, not a `sandbox.egress.routes` entry. A loadout that
+needs more can list its own route for the same host in its `routes`, which then
+replaces this one: give it the same credential, injection and placeholder variable,
+and the rules you choose. Claude Code also runs with
 `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`,
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `DISABLE_AUTOUPDATER=1`. The Session's
 certificate authority, which signs the route's TLS on your computer, is trusted through
@@ -160,7 +172,7 @@ certificate authority, which signs the route's TLS on your computer, is trusted 
 | What it can reach | Enforced: only the route to its model API and the hosts the loadout and your configuration allow. |
 | Its credential | Enforced: added on your computer; the container holds a placeholder. A token the API returns in a response body would reach the container, as on any route. |
 | Its time | Enforced: the activation's wall-clock timeout, and the run's wall clock. |
-| Its spend | Bounded, not per call. The activation reserves what its grant still allows before the program starts: all of its tokens and, for Claude Code, all of its cost. Each request on the route counts against the grant's invocations, and the host stops the program when they run out. Claude Code also gets its own spending stop, `--max-budget-usd`, at what the grant still allows. The program's own usage report settles the reservation; without one, usage is marked incomplete and the reservation stays charged. Codex reports tokens but no cost, so its cost reservation stays charged: each Codex activation reserves an equal share of the cost left, divided by the activations left with its own, so a later activation, such as the revision a review asks for, can still run. |
+| Its spend | Bounded, not per call. The activation reserves what its grant still allows before the program starts: all of its tokens and, for Claude Code, all of its cost. Each request on the route counts against the grant's invocations, and the host stops the program when they run out. Claude Code also gets its own spending stop, `--max-budget-usd`, at what the grant still allows. The program's own usage report settles the reservation; without one, usage is marked incomplete and the reservation stays charged. Codex reports tokens but no cost, so its cost reservation stays charged: each Codex activation reserves an equal share of the cost left, divided by the activations left with its own, so a later activation, such as the revision a review asks for, can still run. The run's Outcome then says its cost is not known (`usage.cost_known: false`): the summary, the JUnit file's `axocoatl.usage` property, the Run outcome panel and the pull request body show "cost unknown (reserved up to $X)", where $X is what the run's grants were charged, never as a price. |
 | Its tool calls | Recorded, not admitted. The program's own tool calls are evidence in the record; Axocoatl does not approve or refuse them one by one. They run as the writer user inside the container, like a writer's `bash`. |
 
 <Aside type="caution">

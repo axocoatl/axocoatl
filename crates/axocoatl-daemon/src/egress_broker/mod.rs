@@ -56,7 +56,7 @@ pub mod upstream;
 mod x509;
 
 pub use ca::SessionCa;
-pub use rules::{CredentialSource, Route, RouteTable, RuleDecision};
+pub use rules::{CredentialSource, Route, RouteOrigin, RouteTable, RuleDecision};
 pub use terminate::{serve, BrokerOutcome, RelayContext, SessionBroker, WorkspaceRoots};
 pub use trust::TrustMaterial;
 pub use upstream::UpstreamConnector;

@@ -96,6 +96,34 @@ test('the run outcome panel shows every part of an Outcome, missing adjudication
   } finally { await context.close(); }
 });
 
+test('the panel shows a cost the run does not know as what was reserved, never as a price', async () => {
+  const context = await newAuthorizedContext(browser), page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const codexRun = 'run-00000000-0000-4000-8000-0000000000cc';
+  const codex = {
+    ...outcome, run_id: codexRun, verdict: 'pass', exit_code: 0, attention: [], not_covered: [], warnings: [],
+    usage: { input_tokens: 600, output_tokens: 18, cost_microunits: 333333, complete: true, cost_known: false, retries: 0 },
+  };
+  await page.route('**/run-outcome-fixture', (route) => route.fulfill({ contentType: 'text/html', body:
+    `<!doctype html><html><head><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-run-outcome run-id="${codexRun}"></ax-run-outcome><ax-run-outcome run-id="${RUN}"></ax-run-outcome><script type="module" src="/ui/run-outcome.js"></script></body></html>` }));
+  await page.route(`**/api/runs/${codexRun}`, (route) => route.fulfill({ json: {
+    run_id: codexRun, session_id: 'ses-1', loadout: 'fix@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome: codex } }));
+  await page.route(`**/api/runs/${RUN}`, (route) => route.fulfill({ json: {
+    run_id: RUN, session_id: 'ses-1', loadout: 'qa@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome } }));
+  try {
+    await page.goto(`${runtime.baseUrl}/run-outcome-fixture`);
+    const unknown = page.locator('ax-run-outcome').first().locator('p.usage');
+    await unknown.waitFor();
+    assert.equal(await unknown.textContent(), '600 input + 18 output tokens, cost unknown (reserved up to $0.3333)');
+    // An Outcome without the field, and one whose cost is known, show the price.
+    const known = page.locator('ax-run-outcome').nth(1).locator('p.usage');
+    await known.waitFor();
+    assert.match(await known.textContent(), /^1200 input \+ 300 output tokens, \$0\.0123, 1 provider retry \(known subtotal/);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
 test('the panel says when the run cannot be read and while it is still running', async () => {
   const context = await newAuthorizedContext(browser), page = await context.newPage();
   await page.route('**/run-outcome-fixture', (route) => route.fulfill({ contentType: 'text/html', body:

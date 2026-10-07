@@ -143,6 +143,7 @@ fn outcome() -> RunOutcome {
             output_tokens: 300,
             cost_microunits: 12_345,
             complete: false,
+            cost_known: true,
             retries: 1,
         },
         network: NetworkSummary::default(),
@@ -350,6 +351,19 @@ fn the_body_carries_checks_review_adjudications_not_covered_and_the_record() {
     assert!(body.contains("…and 400 more adjudications in the run record."));
     assert!(body.contains("**missing**"));
     assert!(body.contains(RUN));
+
+    // A cost the run does not know (a Codex writer's) is what was
+    // reserved, never a price.
+    assert!(pr_body(&outcome())
+        .unwrap()
+        .contains("output tokens, $0.0123"));
+    let mut codex = outcome();
+    codex.usage.cost_known = false;
+    let body = pr_body(&codex).unwrap();
+    assert!(
+        body.contains("300 output tokens, cost unknown (reserved up to $0.0123)"),
+        "{body}"
+    );
 
     let mut other = outcome();
     other.schema = "axocoatl.run-outcome/9".into();

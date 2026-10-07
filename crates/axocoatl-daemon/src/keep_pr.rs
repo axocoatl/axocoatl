@@ -749,10 +749,10 @@ pub fn pr_body(outcome: &RunOutcome) -> Result<String, KeepPrError> {
     body.push_str("\n### Usage\n\n");
     let usage = &outcome.usage;
     body.push_str(&format!(
-        "{} input and {} output tokens, ${:.4}{}. Provider retries: {}.\n",
+        "{} input and {} output tokens, {}{}. Provider retries: {}.\n",
         usage.input_tokens,
         usage.output_tokens,
-        usage.cost_microunits as f64 / 1_000_000.0,
+        usage.cost_text(),
         if usage.complete {
             ""
         } else {

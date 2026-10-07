@@ -37,7 +37,9 @@ axocoatl run fix --task "Paging skips the last item when the total is a multiple
 `openrouter:anthropic/claude-sonnet-5.5` both work. The provider must be one your
 configuration defines and that native Sessions accept; see
 [Providers](/configure/providers/). Every flag, the exit codes, the JUnit file and the
-record bundle are in the [`axocoatl run` reference](/reference/run/).
+record bundle are in the [`axocoatl run` reference](/reference/run/). A data root an
+earlier Axocoatl used needs `axocoatl session upgrade --confirm` before its first run;
+see [Before the first run](/reference/run/#before-the-first-run).
 
 ## Where loadouts live
 
@@ -73,7 +75,11 @@ path. That Session always runs:
   lists are the daemon's own `sandbox.egress` lists plus the loadout's `egress` and
   `routes`, and the routes its external Agents and e2e checks need, for this Session
   only. A loadout cannot replace a route your configuration already has for a host: the
-  two must be the same, or the run is refused;
+  two must be the same, or the run is refused. A request that one of the loadout's
+  routes refuses gets a 403 whose hint says to change the loadout's route, or, for the
+  route Axocoatl adds for an [external writer](/configure/external-agents/), says whose
+  route it is; it never points at a `sandbox.egress.routes` entry your configuration does
+  not have;
 - with the `hardened` workload: Agents' commands, setup commands and required checks
   run as the non-root `writer_user`, read-only Agents as the non-root `helper_user`, and
   tool calls and checks under the supervisor's seccomp filter in a Landlock domain of

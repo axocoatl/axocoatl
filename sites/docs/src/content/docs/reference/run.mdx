@@ -48,6 +48,30 @@ serve` or the [service](/operate/service/)) over its HTTP API. It never starts o
 
 A daemon that cannot be reached, or that refuses the credential, is exit code 4.
 
+## Before the first run
+
+Loadout runs need native Session history. A data root the daemon creates itself, on its
+first start, has it. A data root that holds Sessions from an earlier Axocoatl, or that an
+earlier daemon used, does not until it is upgraded: the daemon refuses every run on it,
+saying that loadout runs need native Session history. Stop the daemon, make a
+[cold backup](/operate/data-backup/) of the data root, run
+`axocoatl session upgrade --confirm` with the same `--config` and `AXOCOATL_DATA_DIR` the
+daemon uses, and start the daemon again. See [Upgrade](/operate/upgrade/).
+
+## One run per Workspace
+
+A run needs its repository's Workspace to itself. When another Session holds that
+Workspace, because one of its turns is running or needs attention, the run is refused at
+once, before a Session or a run is created, and the message names what holds it, such
+as the Session, its run and its turn: the Workspace is busy; retry later. Let that turn
+finish, or stop it or close its Session, then run again. A run never waits for the
+Workspace.
+
+A run does not hold it once it ends. When a run has everything its Outcome needs, it
+stops each of its own turns that did not complete, such as one that needs attention, as
+a person's Stop would (a `closing_turn` phase line on standard error), so the next run
+on the repository is admitted. The Outcome keeps each turn as it was observed.
+
 ## What it prints
 
 1. Once the daemon has admitted the run: the run id, the Session id and any warnings, on
@@ -61,8 +85,12 @@ A daemon that cannot be reached, or that refuses the credential, is exit code 4.
    (finding, decision, reason); the findings, each with its area, severity and location
    when known, and "fails on clean build" shown as such; every not-covered entry with its
    reason; the warnings, including the same-model warning; usage (marked "known subtotal"
-   when a call's usage is unknown); and the record id. With `--json` it prints the
-   Outcome instead, and what Keep did goes to standard error.
+   when a call's usage is unknown, and with the cost as "cost unknown (reserved up to
+   $X)" when a call's cost is not known, such as a Codex writer's, which reports none);
+   and the record id. With `--json`, standard output holds only the Outcome, one JSON
+   document, and everything else goes to standard error, `Kept:` and `Pull request:`
+   from Keep included. That Outcome is the one the run ended with; what Keep did is in
+   the record's `keep` event and in `GET /api/runs/{run_id}`.
 
 `--junit` and `--record` are written even when the run fails, each to a temporary file
 that is then renamed, so a reader never sees half a file. With `--keep`, Keep runs first,
@@ -119,6 +147,7 @@ The JUnit file has one `testsuite` per kind of result, and a last one for the ve
     <property name="axocoatl.loadout" value="fix@1 sha256:…"/>
     <property name="axocoatl.verdict" value="needs_attention"/>
     <property name="axocoatl.exit_code" value="2"/>
+    <property name="axocoatl.usage" value="1200 input + 300 output tokens, $0.0123"/>
     <property name="axocoatl.warning.same_model_reviewer" value="…"/>
   </properties>
   <testsuite name="checks" tests="1" failures="0">
@@ -162,6 +191,7 @@ The JUnit file has one `testsuite` per kind of result, and a last one for the ve
 | A reproduction that could not run, or is missing | `<error>` |
 | Anything not covered | `<failure type="not_covered">`, never skipped |
 | A warning, such as the same-model reviewer | a property `axocoatl.warning.<code>` |
+| Usage | a property `axocoatl.usage`, worded as in the summary: a cost the run does not know is "cost unknown (reserved up to $X)", never a price |
 | The run's verdict | suite `run`, case `verdict`: a `<failure>` with the reasons when checks failed or the run needs attention, an `<error>` when it was interrupted or could not run, so a CI job that reads only JUnit still sees a run that did not pass |
 
 Text is XML-escaped and control characters other than tab and newline are removed. Each
@@ -172,9 +202,14 @@ one `truncated` case.
 
 `--record` writes the run's whole record as one JSON Lines file
 (`application/vnd.axocoatl.record+jsonl`; a name such as
-`run-….axorecord.jsonl`). The same file is
+`run-….axorecord.jsonl`). The same file, byte for byte, is
 [`GET /api/runs/{run_id}/record`](/reference/http-api/#loadouts-and-runs) and
-**Download record** in the Run outcome panel.
+**Download record** in the Run outcome panel: the header's `created_at_ms` is when the
+run finished (the Outcome's `finished_at_ms`), not when the file was downloaded, so
+every download of a finished run is the same file while nothing is added to its record
+and its Session does not change. Keep adds a `keep` event, and closing the Session
+changes its `session` section. The bundle of a run that has not finished is a snapshot
+of a record still growing and carries the time it was read.
 
 ```text
 {"schema":"axocoatl.record-bundle/1","run_id":"run-…","session_id":"ses-…","created_at_ms":…,"axocoatl_version":"1.3.0"}
@@ -184,14 +219,19 @@ one `truncated` case.
 {"section":"session","data":{…}}         the Session record
 {"section":"team","data":{…}}            the applied Team and budget
 {"section":"turn","data":{…}}            one per turn: its control-plane record
-{"section":"history","data":{…}}         the Session export
+{"section":"history","data":[…]}         the Session's History, versioned
 {"section":"network","data":{…}}         one per network-record event, all of them
 {"section":"run_event","data":{"seq":1,"event":{…}}}   one per run event
 {"section":"end","lines":N,"sha256":"…"}
 ```
 
-Sections appear in that order. The last line counts the section lines between the
-header and itself and holds the SHA-256 of every byte before it. Check a bundle:
+Sections appear in that order. `team` is the Team as the run applied it: each slot with
+`reset_history` (whether Apply started its Agent from a fresh conversation, as a run
+always does), `tools` (the tools its retained definition lists) and, for a loadout's
+Agent, the inline `definition` it was given. `history` is the Session's History in its
+versioned form, one `{"history_version": "execution_v2", "turn": {…}}` entry per turn
+with its activations and their streams. The last line counts the section lines between
+the header and itself and holds the SHA-256 of every byte before it. Check a bundle:
 
 ```sh
 axocoatl record verify run.axorecord.jsonl

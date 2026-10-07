@@ -10,6 +10,27 @@ with network egress and the `hardened` workload, through [`axocoatl run`](/refer
 and ends with an Outcome and an exit code. This page says what each one does and why it
 is shaped that way.
 
+## How answers are read
+
+Each loadout asks its Agents to end their answers with named JSON blocks:
+`ADJUDICATIONS` (fix), `FINDINGS` and `COVERAGE` (qa), and `AREAS`, `FINDINGS` and
+`NOT_REACHED` (audit). The prompts ask for a heading and a fenced block, but models do
+not always write one, so the host reads each block in any of these forms:
+
+- **After a heading**, in any case and with or without Markdown marks: `FINDINGS`,
+  `## Findings`, `**findings:**` and `- Not reached` all count, with words joined by a
+  space, `-` or `_`. The JSON may follow on the heading's line after a colon, on the next
+  line, or after a line of text, fenced or not. When the heading appears more than once,
+  the last one followed by JSON or a fenced block wins.
+- **With no heading**, an answer that is only the JSON: the array of adjudications; for
+  qa, an object with `findings` and `coverage` keys; for audit, an object `{"areas":
+  [...]}` or `{"findings": [...]}` (a worker's may also hold `not_reached`), or the
+  array alone, or the last fenced block that is such an object.
+
+A block that is there but is not the JSON it should be is reported as unreadable, with
+the parser's error, never guessed at; what the block would have said is then missing or
+not covered.
+
 ## Fix
 
 ```sh
@@ -80,6 +101,13 @@ axocoatl run qa --task "Check the checkout and account pages" \
 One turn with one Agent, the **explorer**, which has the [browser tools](/configure/browser/)
 `browser` and `browser_check` and may write only under `axocoatl-qa/`. There are no
 scouts, no merge step, no reviewer and no verifier.
+
+The explorer's `write_file` does not create directories, so when the repository has no
+`axocoatl-qa/` the run creates it before the explorer's turn, owner-only, and says so
+(`preparing: created axocoatl-qa/ in the repository for the explorer's reproductions`).
+Every part of that path is opened without following links: when `axocoatl-qa`, or a
+directory on the way to it, is a symbolic link or is not a directory, the run is
+refused (exit code 3), so nothing is created or written through a link.
 
 The explorer drives the app at `target_url` area by area. For every bug it reports it
 writes a Playwright test under `axocoatl-qa/` that fails because of the bug, and it ends

@@ -181,7 +181,7 @@ cannot reach), `409` for a conflict, `501` for a part this build does not implem
 | GET | `/api/runs/{run_id}/events?after=<seq>&limit=<1-1000>&wait_ms=<0-5000>` | `{events, next_after, finished}`; each event is `[seq, {kind, at_ms, …}]` with `kind` `phase`, `turn_started`, `turn_ended`, `warning`, `adjudication`, `finding`, `not_covered`, `provider_retry` or `ended`. `limit` is 200 when omitted. With nothing new and the run unfinished, the request waits up to `wait_ms` (1,000 when omitted) for an event. Keep results arrive after `ended` as `phase` events named `keep` |
 | POST | `/api/runs/{run_id}/stop` | Stop the run's turn; answers `202`. The run ends `interrupted` |
 | GET | `/api/runs/{run_id}/junit` | The run's [JUnit file](/reference/run/#junit), `application/xml` |
-| GET | `/api/runs/{run_id}/record` | The run's [record bundle](/reference/run/#record-bundle), streamed as `application/vnd.axocoatl.record+jsonl` |
+| GET | `/api/runs/{run_id}/record` | The run's [record bundle](/reference/run/#record-bundle), streamed as `application/vnd.axocoatl.record+jsonl`. Its header carries the time the run finished, so every download of a finished run is the same bytes while its record and Session do not change |
 | POST | `/api/sessions/{id}/keep-pr` | [Keep as PR](/workbench/keep-as-pr/): `{run_id, branch?, open_pr?, remote?, title?}`. Returns `{branch, commit, paths, pushed_to?, pull_request_url?, base?, not_committed?, warnings?}`; `422` for a malformed request such as an invalid branch name; `409` with the reason when Keep refuses, for example when the run did not pass, a run path was dirty before the run or changed after it ended, `HEAD` moved, the branch exists, the branch is the remote's default branch, or the remote branch exists |
 
 The Outcome (`schema` `axocoatl.run-outcome/1`) holds `run_id`, `session_id`,
@@ -194,8 +194,10 @@ round's verdict and numbered findings), `adjudications` (`round`, `finding_id`, 
 `decision` `accept`, `reject` or `missing`, `reason`), `findings` (with `repro` and its
 `classification`: `confirmed`, `fails_on_clean_build`, `reproduced`, `not_reproduced`,
 `repro_error` or `missing`), `not_covered` (`area`, `class`, `detail`), `warnings`,
-`usage` (with `complete` and `retries`), `network` (event, connection and route request
-counts), `keep` and `error`.
+`usage` (`input_tokens`, `output_tokens`, `cost_microunits`, `complete`, `cost_known`
+and `retries`; `cost_known` is false when a call's cost is not known, such as a Codex
+writer's, and `cost_microunits` then counts what those calls reserved), `network` (event,
+connection and route request counts), `keep` and `error`.
 
 A Session that a run created carries `loadout`:
 `{run_id, loadout: {id, version, kind, digest, builtin}, network, workload}`. Every other
