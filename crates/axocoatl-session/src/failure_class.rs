@@ -69,7 +69,7 @@ fn recorded(class: &str) -> Option<FailureClass> {
 
 /// Whether a provider error message names a refusal or a safety stop, as
 /// the host words them (`Content filtered by …`).
-fn names_refusal(message: &str) -> bool {
+pub fn names_refusal(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("content filtered by")
         || lower.contains("content_filter")
@@ -126,14 +126,11 @@ pub fn facts_from_failure_text(text: &str) -> FailureFacts<'_> {
             ..FailureFacts::default()
         };
     };
-    let provider = first
-        .strip_prefix("Activation failed: ")
-        .and_then(|line| line.strip_prefix("LLM provider error: "));
     FailureFacts {
         message: text,
-        http_status: provider.and_then(provider_status),
+        http_status: view.http_status,
         recorded_class: Some(view.class),
-        refusal: provider.is_some_and(names_refusal),
+        refusal: view.refusal,
     }
 }
 
@@ -307,6 +304,11 @@ mod tests {
         assert_eq!(facts.http_status, Some(429));
         assert_eq!(facts.recorded_class, Some("provider_error"));
         assert!(!facts.refusal);
+        let facts = facts_from_failure_text(
+            "Activation failed: LLM provider error: Content filtered by openrouter: stopped",
+        );
+        assert_eq!(facts.recorded_class, Some("provider_refusal"));
+        assert!(facts.refusal);
     }
 
     #[test]

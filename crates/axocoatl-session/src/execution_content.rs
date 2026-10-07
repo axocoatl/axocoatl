@@ -839,12 +839,20 @@ pub struct ExecutionActivationView {
 /// The step is a suggestion for a person; nothing runs by itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ActivationFailureView {
-    /// provider_incomplete | provider_error | budget_limited | round_limit |
-    /// context_limit | scope_violation | capture_unavailable | admission | other
+    /// provider_incomplete | provider_error | provider_refusal |
+    /// budget_limited | round_limit | context_limit | scope_violation |
+    /// capture_unavailable | admission | other
     pub class: &'static str,
     pub explanation: String,
     /// continue | finish_partial | review_then_finish | inspect
     pub next_step: &'static str,
+    /// The provider's HTTP status, when the host line names one
+    /// (`… API error: 503 - …`). Absent from views written before 1.3.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
+    /// The provider refused or a safety classifier stopped the response.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub refusal: bool,
 }
 
 /// Classify the host's `Activation failed: ...` line. Only that host-written
@@ -854,6 +862,24 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
     // Match the host's own error prefixes in precedence order; text a tool or
     // model supplied can appear later in the line and must not decide.
     let provider = line.strip_prefix("LLM provider error: ");
+    let http_status = provider.and_then(crate::failure_class::provider_status);
+    let refusal = provider.is_some_and(crate::failure_class::names_refusal);
+    let view = |class, explanation: String, next_step| ActivationFailureView {
+        class,
+        explanation,
+        next_step,
+        http_status,
+        refusal,
+    };
+    if refusal {
+        return Some(view(
+            "provider_refusal",
+            "The model provider refused the request, or a safety classifier stopped its \
+             response. Nothing from that response ran."
+                .into(),
+            "inspect",
+        ));
+    }
     let (class, explanation, next_step) = if line.starts_with("LLM provider stream ended early")
         || provider.is_some_and(|rest| {
             rest.contains("EOF before native terminal")
@@ -910,14 +936,14 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
                     .all(|byte| byte.is_ascii_digit() || byte == b',')
         })
     {
-        return Some(ActivationFailureView {
-            class: "round_limit",
-            explanation: format!(
+        return Some(view(
+            "round_limit",
+            format!(
                 "The Agent used all {rounds} tool rounds one activation may run and still asked \
                  for more; those calls did not run. Its budget was not used up."
             ),
-            next_step: "continue",
-        });
+            "continue",
+        ));
     } else if line.starts_with("Current request needs") {
         (
             "context_limit",
@@ -959,11 +985,7 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
     } else {
         ("other", "The activation stopped with an error.", "inspect")
     };
-    Some(ActivationFailureView {
-        class,
-        explanation: explanation.to_owned(),
-        next_step,
-    })
+    Some(view(class, explanation.to_owned(), next_step))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

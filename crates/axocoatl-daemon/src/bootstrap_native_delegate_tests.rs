@@ -391,6 +391,9 @@ struct Scenario {
     /// The helper's response is refused after the provider reported its
     /// complete usage, as a malformed tool call is.
     helper_refused_after_usage: bool,
+    /// The helper's provider stops its response with a content filter, as
+    /// a refusal or a safety classifier does.
+    helper_refuses: bool,
     lead_fails_first_generation: bool,
     hold_helper: Option<Arc<tokio::sync::Semaphore>>,
     hold_first_helper_setup: Option<Arc<HelperSetupGate>>,
@@ -409,6 +412,7 @@ impl Scenario {
             helper_fails: false,
             helper_calls_undeclared_tool_first: false,
             helper_refused_after_usage: false,
+            helper_refuses: false,
             lead_fails_first_generation: false,
             hold_helper: None,
             hold_first_helper_setup: None,
@@ -583,6 +587,9 @@ impl LlmProvider for HelperProvider {
         }
         if self.scenario.helper_fails {
             return Ok(provider_failure("helper provider failed"));
+        }
+        if self.scenario.helper_refuses {
+            return Ok(finished(vec![], FinishReason::ContentFilter));
         }
         if self.scenario.helper_calls_undeclared_tool_first && call == 0 {
             return Ok(finished(
@@ -1024,6 +1031,56 @@ async fn failed_helper_returns_a_tool_error_and_the_lead_completes() {
     let accepted = outcome.snapshot.contract().current_accepted_activations();
     assert_eq!(accepted.len(), 1);
     assert_eq!(accepted[0].activation.node_id, lead);
+}
+
+/// A helper the provider refuses fails with a recorded failure that says
+/// so: the lead still gets its tool error and finishes, and the helper's
+/// node stays in the control-plane projection, failed, with a failure that
+/// classifies as a provider refusal, so the Outcome can list it as not
+/// covered.
+#[tokio::test]
+async fn a_refused_helper_is_kept_in_the_projection_with_a_classifiable_failure() {
+    use axocoatl_session::failure_class::{classify_failure, facts_from_failure_text};
+    use axocoatl_session::run_outcome::FailureClass;
+    let fixture = lead_fixture(100000).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let mut scenario = Scenario::new("never produced");
+    scenario.helper_refuses = true;
+    let scenario = Arc::new(scenario);
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "{:?}",
+        outcome.snapshot.contract()
+    );
+    let error = scenario.last_delegate_result();
+    assert!(
+        error.contains("The helper 'scout' did not finish"),
+        "{error}"
+    );
+    let node = helper_node(&outcome.snapshot, &lead).unwrap();
+    let plane = run.controller.control_plane().unwrap();
+    let helper = plane
+        .nodes
+        .iter()
+        .find(|item| item.node_id == node.as_str())
+        .expect("the failed helper stays in the projection");
+    let activation = helper.activations.last().unwrap();
+    assert_eq!(activation.state, "failed");
+    let crate::session_control_plane::EvidenceValue::Available { value: reason } =
+        &activation.reason
+    else {
+        panic!("a recorded failure: {:?}", activation.reason)
+    };
+    let facts = facts_from_failure_text(reason);
+    assert!(facts.refusal, "{reason}");
+    assert_eq!(facts.recorded_class, Some("provider_refusal"));
+    assert_eq!(
+        classify_failure(&facts).unwrap(),
+        FailureClass::ProviderRefusal
+    );
 }
 
 /// A helper's answer next to a call to a tool nobody declared is not lost:
