@@ -2,6 +2,9 @@
 //! against the build under test and the reference; coverage as not covered.
 //! Owner: review-qa.
 //!
+//! Before the explorer's one turn the host creates the loadout's `repro_dir`
+//! in the checkout when it is missing (the explorer's write_file creates no
+//! directory), refusing one that exists as a link or a file.
 //! After the explorer's one turn the host reads its `FINDINGS` and
 //! `COVERAGE` blocks. Each finding's reproduction must be a file under the
 //! loadout's `repro_dir` in the checkout; the host runs it once with
@@ -165,7 +168,7 @@ fn wrong_type(
 }
 
 /// [`prepare_repro_dir`] off the async runtime.
-async fn repro_dir_ready(
+pub(crate) async fn repro_dir_ready(
     repo: &std::path::Path,
     repro_dir: &str,
     create: bool,
