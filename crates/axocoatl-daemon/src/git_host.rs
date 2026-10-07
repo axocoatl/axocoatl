@@ -659,10 +659,28 @@ pub(crate) async fn run_bounded(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    let program = command
+        .as_std()
+        .get_program()
+        .to_string_lossy()
+        .into_owned();
     tokio::time::timeout(timeout, command.output())
         .await
         .map_err(|_| format!("{what} timed out after {} seconds", timeout.as_secs()))?
-        .map_err(|error| format!("could not run {what}: {error}"))
+        .map_err(|error| spawn_failure(&program, what, &error))
+}
+
+/// Why a host program could not start; a missing one names the PATH the
+/// daemon searched, which for a service is the one recorded at install.
+fn spawn_failure(program: &str, what: &str, error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        format!(
+            "{program} was not found on the daemon's PATH ({}); install it or add its directory to the daemon's PATH",
+            std::env::var("PATH").unwrap_or_default()
+        )
+    } else {
+        format!("could not run {what}: {error}")
+    }
 }
 
 /// Like [`run_bounded`], writing `input` to the process's stdin first.
@@ -678,9 +696,14 @@ pub(crate) async fn run_bounded_with_input(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let run = async {
+        let program = command
+            .as_std()
+            .get_program()
+            .to_string_lossy()
+            .into_owned();
         let mut child = command
             .spawn()
-            .map_err(|error| format!("could not run {what}: {error}"))?;
+            .map_err(|error| spawn_failure(&program, what, &error))?;
         let mut stdin = child
             .stdin
             .take()

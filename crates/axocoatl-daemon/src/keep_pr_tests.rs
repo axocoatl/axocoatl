@@ -1635,3 +1635,49 @@ fn push_urls_are_checked_after_the_persons_rewrites() {
         None
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_missing_gh_is_named_and_the_pushed_branch_stays() {
+    let fixture = Fixture::new();
+    let attribution = fixture.run_changes();
+    let only_git = fixture.dir.path().join("only-git");
+    std::fs::create_dir_all(&only_git).unwrap();
+    let real_git = sh(fixture.dir.path(), "command -v git");
+    std::os::unix::fs::symlink(real_git, only_git.join("git")).unwrap();
+    let mut tools = fixture.tools.clone();
+    tools.path = Some(format!("{}:/usr/bin:/bin", only_git.display()).into());
+    let mut open = request();
+    open.open_pr = true;
+    let manifest = fixture.manifest();
+    let run_outcome = outcome();
+    let failed = keep(KeepJob {
+        session_root: &fixture.repo,
+        control_root: &fixture.data,
+        request: &open,
+        manifest: &manifest,
+        outcome: &run_outcome,
+        attribution: &attribution,
+        previous: None,
+        tools: &tools,
+    })
+    .await
+    .unwrap_err();
+    let KeepPrError::AfterBranch {
+        commit, message, ..
+    } = &failed
+    else {
+        panic!("{failed:?}");
+    };
+    assert!(
+        message.contains("gh was not found on the daemon's PATH"),
+        "{message}"
+    );
+    assert_eq!(
+        sh(
+            &fixture.remote,
+            "git rev-parse refs/heads/axocoatl/fix-0f8c1a2b"
+        ),
+        *commit
+    );
+}
