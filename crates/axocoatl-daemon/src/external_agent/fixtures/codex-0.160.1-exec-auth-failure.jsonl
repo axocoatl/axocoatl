@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"01a114a8-ef1a-7d93-bd5a-f1f35b437750"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5 (unexpected status 401 Unauthorized: Incorrect API key provided, url: http://fakeapi:8080/v1/responses)"}
+{"type":"error","message":"Reconnecting... 2/5 (unexpected status 401 Unauthorized: Incorrect API key provided, url: http://fakeapi:8080/v1/responses)"}
+{"type":"error","message":"Reconnecting... 3/5 (unexpected status 401 Unauthorized: Incorrect API key provided, url: http://fakeapi:8080/v1/responses)"}
+{"type":"error","message":"Reconnecting... 4/5 (unexpected status 401 Unauthorized: Incorrect API key provided, url: http://fakeapi:8080/v1/responses)"}
+{"type":"error","message":"Reconnecting... 5/5 (unexpected status 401 Unauthorized: Incorrect API key provided, url: http://fakeapi:8080/v1/responses)"}
+{"type":"error","message":"unexpected status 401 Unauthorized: Incorrect API key provided, url: http://fakeapi:8080/v1/responses"}
+{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized: Incorrect API key provided, url: http://fakeapi:8080/v1/responses"}}

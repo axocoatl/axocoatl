@@ -1,0 +1,779 @@
+{
+  "pin": {
+    "observed_date": "2026-09-16",
+    "version": "0.153.4",
+    "binary_sha256": "b973d440acac501fd2594a43e7ca9ce41e0a65b9dfb28d0d7a7837c99e1261e3",
+    "schema_sha256": "03cd0961387d55845ca2ac1cb7127a9a9724d31ec53897b5a2993b4541168a7b",
+    "schema_files": 304,
+    "official_asset_url": "https://github.com/openai/codex/releases/download/rust-v0.153.4/codex-aarch64-apple-darwin.tar.gz",
+    "archive_sha256": "8cf911ea676523bfb2121ec561848d2aba564890ad536db4d8a3353f2b9850b1",
+    "previous_pin_retained": true
+  },
+  "started_at": "2026-09-16T18:18:34.743128+00:00",
+  "automatic_replay": false,
+  "thread_id": "01a0ab71-6183-7242-a5e3-54940dafc494",
+  "reported_model": "gpt-6-astra",
+  "reported_provider": "openai",
+  "persistent": true,
+  "normal_turn_id": "01a0ab71-61f1-7b93-8c04-d3404966fd9d",
+  "normal_status": "completed",
+  "live_history": {
+    "thread": {
+      "id": "01a0ab71-6183-7242-a5e3-54940dafc494",
+      "extra": null,
+      "sessionId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "Reply with exactly AXOCOATL_RETAINED_PROTOCOL_OK and nothing else.",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-6-astra",
+      "reasoningEffort": "low",
+      "createdAt": 1789582729,
+      "updatedAt": 1789582735,
+      "recencyAt": 1789582729,
+      "status": {
+        "type": "idle"
+      },
+      "path": "<fixture-owned retained rollout>",
+      "cwd": "<disposable fixture workspace>",
+      "cliVersion": "0.153.4",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "turns": [
+        {
+          "id": "01a0ab71-61f1-7b93-8c04-d3404966fd9d",
+          "items": [
+            {
+              "type": "userMessage",
+              "id": "01a0ab71-6c13-71f1-a4ef-f98f9b6ff2fc",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Reply with exactly AXOCOATL_RETAINED_PROTOCOL_OK and nothing else.",
+                  "text_elements": []
+                }
+              ]
+            },
+            {
+              "type": "agentMessage",
+              "id": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+              "text": "AXOCOATL_RETAINED_PROTOCOL_OK",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            }
+          ],
+          "itemsView": "full",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1789582729,
+          "completedAt": 1789582735,
+          "durationMs": 5881
+        }
+      ]
+    }
+  },
+  "interrupt_turn_id": "01a0ab71-78f1-7fd0-80f9-c0a949c182a1",
+  "interrupt_response": {},
+  "interrupt_status": "interrupted",
+  "loss_turn_id": "01a0ab71-7902-7b00-b2eb-d64832385879",
+  "loss_first_delta": "1",
+  "abrupt_exit": -9,
+  "retained_prefix_sha256": "38d6997100ec4ad240ff9eb77de71c72ce8690f6f99fa5d5ad8a65c1c221f53d",
+  "reloaded_history": {
+    "thread": {
+      "id": "01a0ab71-6183-7242-a5e3-54940dafc494",
+      "extra": null,
+      "sessionId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "Reply with exactly AXOCOATL_RETAINED_PROTOCOL_OK and nothing else.",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-6-astra",
+      "reasoningEffort": "low",
+      "createdAt": 1789582729,
+      "updatedAt": 1789582735,
+      "recencyAt": 1789582735,
+      "status": {
+        "type": "notLoaded"
+      },
+      "path": "<fixture-owned retained rollout>",
+      "cwd": "<disposable fixture workspace>",
+      "cliVersion": "0.153.4",
+      "source": "vscode",
+      "canAcceptDirectInput": null,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "turns": [
+        {
+          "id": "01a0ab71-61f1-7b93-8c04-d3404966fd9d",
+          "items": [
+            {
+              "type": "userMessage",
+              "id": "01a0ab71-6c13-71f1-a4ef-f98f9b6ff2fc",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Reply with exactly AXOCOATL_RETAINED_PROTOCOL_OK and nothing else.",
+                  "text_elements": []
+                }
+              ]
+            },
+            {
+              "type": "agentMessage",
+              "id": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+              "text": "AXOCOATL_RETAINED_PROTOCOL_OK",
+              "phase": "final_answer",
+              "memoryCitation": null,
+              "delivery": null,
+              "questions": null
+            }
+          ],
+          "itemsView": "full",
+          "status": "completed",
+          "error": null,
+          "startedAt": 1789582729,
+          "completedAt": 1789582735,
+          "durationMs": 5881
+        },
+        {
+          "id": "01a0ab71-78f1-7fd0-80f9-c0a949c182a1",
+          "items": [
+            {
+              "type": "userMessage",
+              "id": "01a0ab71-78fd-7b71-b14d-002663fe175c",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Write the numbers from 1 through 2000, one per line. Do not use tools.",
+                  "text_elements": []
+                }
+              ]
+            }
+          ],
+          "itemsView": "full",
+          "status": "interrupted",
+          "error": null,
+          "startedAt": 1789582735,
+          "completedAt": 1789582735,
+          "durationMs": 8
+        },
+        {
+          "id": "01a0ab71-7902-7b00-b2eb-d64832385879",
+          "items": [
+            {
+              "type": "userMessage",
+              "id": "01a0ab71-7922-70b3-861f-773788d72d3e",
+              "clientId": null,
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Write every number from 1 through 2000, one per line. Do not use tools.",
+                  "text_elements": []
+                }
+              ]
+            }
+          ],
+          "itemsView": "full",
+          "status": "interrupted",
+          "error": null,
+          "startedAt": 1789582735,
+          "completedAt": null,
+          "durationMs": null
+        }
+      ]
+    }
+  },
+  "retained_prefix_unchanged": true,
+  "reloaded_turns": [
+    {
+      "id": "01a0ab71-61f1-7b93-8c04-d3404966fd9d",
+      "status": "completed",
+      "items": 2
+    },
+    {
+      "id": "01a0ab71-78f1-7fd0-80f9-c0a949c182a1",
+      "status": "interrupted",
+      "items": 1
+    },
+    {
+      "id": "01a0ab71-7902-7b00-b2eb-d64832385879",
+      "status": "interrupted",
+      "items": 1
+    }
+  ],
+  "lost_turn_present": true,
+  "lost_turn_reported_status": "interrupted",
+  "recovery_disposition": "Read-only reconciliation; local uncertain invocation remains unknown. No resume/start/replay sent after process loss.",
+  "tool_item_count": 0,
+  "result": "passed",
+  "processes": {
+    "before-loss": {
+      "exit": -9,
+      "stderr_lines": 4
+    },
+    "after-loss": {
+      "exit": 0,
+      "stderr_lines": 0
+    }
+  },
+  "finished_at": "2026-09-16T18:18:57.916087+00:00",
+  "events": [
+    {
+      "emittedAtMs": 1789582729720,
+      "method": "turn/started",
+      "params": {
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turn": {
+          "completedAt": null,
+          "durationMs": null,
+          "error": null,
+          "id": "01a0ab71-61f1-7b93-8c04-d3404966fd9d",
+          "items": [],
+          "itemsView": "notLoaded",
+          "startedAt": 1789582729,
+          "status": "inProgress"
+        }
+      }
+    },
+    {
+      "emittedAtMs": 1789582732307,
+      "method": "item/started",
+      "params": {
+        "item": {
+          "clientId": null,
+          "content": [
+            {
+              "text": "Reply with exactly AXOCOATL_RETAINED_PROTOCOL_OK and nothing else.",
+              "text_elements": [],
+              "type": "text"
+            }
+          ],
+          "id": "01a0ab71-6c13-71f1-a4ef-f98f9b6ff2fc",
+          "type": "userMessage"
+        },
+        "startedAtMs": 1789582732307,
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582732308,
+      "method": "item/completed",
+      "params": {
+        "completedAtMs": 1789582732307,
+        "item": {
+          "clientId": null,
+          "content": [
+            {
+              "text": "Reply with exactly AXOCOATL_RETAINED_PROTOCOL_OK and nothing else.",
+              "text_elements": [],
+              "type": "text"
+            }
+          ],
+          "id": "01a0ab71-6c13-71f1-a4ef-f98f9b6ff2fc",
+          "type": "userMessage"
+        },
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735157,
+      "method": "item/started",
+      "params": {
+        "item": {
+          "delivery": null,
+          "id": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+          "memoryCitation": null,
+          "phase": "final_answer",
+          "questions": null,
+          "text": "",
+          "type": "agentMessage"
+        },
+        "startedAtMs": 1789582735157,
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735184,
+      "method": "item/agentMessage/delta",
+      "params": {
+        "delta": "AX",
+        "itemId": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735214,
+      "method": "item/agentMessage/delta",
+      "params": {
+        "delta": "O",
+        "itemId": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735247,
+      "method": "item/agentMessage/delta",
+      "params": {
+        "delta": "CO",
+        "itemId": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735279,
+      "method": "item/agentMessage/delta",
+      "params": {
+        "delta": "ATL",
+        "itemId": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735309,
+      "method": "item/agentMessage/delta",
+      "params": {
+        "delta": "_RE",
+        "itemId": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735347,
+      "method": "item/agentMessage/delta",
+      "params": {
+        "delta": "TAIN",
+        "itemId": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735374,
+      "method": "item/agentMessage/delta",
+      "params": {
+        "delta": "ED",
+        "itemId": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735381,
+      "method": "item/agentMessage/delta",
+      "params": {
+        "delta": "_PROTOCOL",
+        "itemId": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735414,
+      "method": "item/agentMessage/delta",
+      "params": {
+        "delta": "_OK",
+        "itemId": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735574,
+      "method": "item/completed",
+      "params": {
+        "completedAtMs": 1789582735573,
+        "item": {
+          "delivery": null,
+          "id": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+          "memoryCitation": null,
+          "phase": "final_answer",
+          "questions": null,
+          "text": "AXOCOATL_RETAINED_PROTOCOL_OK",
+          "type": "agentMessage"
+        },
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735593,
+      "method": "thread/tokenUsage/updated",
+      "params": {
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "tokenUsage": {
+          "last": {
+            "cacheWriteInputTokens": 0,
+            "cachedInputTokens": 7936,
+            "inputTokens": 12803,
+            "outputTokens": 13,
+            "reasoningOutputTokens": 0,
+            "totalTokens": 12816
+          },
+          "modelContextWindow": 258400,
+          "total": {
+            "cacheWriteInputTokens": 0,
+            "cachedInputTokens": 7936,
+            "inputTokens": 12803,
+            "outputTokens": 13,
+            "reasoningOutputTokens": 0,
+            "totalTokens": 12816
+          }
+        },
+        "turnId": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735598,
+      "method": "turn/completed",
+      "params": {
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turn": {
+          "completedAt": 1789582735,
+          "durationMs": 5881,
+          "error": null,
+          "id": "01a0ab71-61f1-7b93-8c04-d3404966fd9d",
+          "items": [
+            {
+              "delivery": null,
+              "id": "msg_00d18c4c21ee1986016aaadd8f288c87d0b8acd61772ddcc5c",
+              "memoryCitation": null,
+              "phase": "final_answer",
+              "questions": null,
+              "text": "AXOCOATL_RETAINED_PROTOCOL_OK",
+              "type": "agentMessage"
+            }
+          ],
+          "itemsView": "summary",
+          "startedAt": 1789582729,
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "emittedAtMs": 1789582735610,
+      "method": "turn/started",
+      "params": {
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turn": {
+          "completedAt": null,
+          "durationMs": null,
+          "error": null,
+          "id": "01a0ab71-78f1-7fd0-80f9-c0a949c182a1",
+          "items": [],
+          "itemsView": "notLoaded",
+          "startedAt": 1789582735,
+          "status": "inProgress"
+        }
+      }
+    },
+    {
+      "emittedAtMs": 1789582735613,
+      "method": "item/started",
+      "params": {
+        "item": {
+          "clientId": null,
+          "content": [
+            {
+              "text": "Write the numbers from 1 through 2000, one per line. Do not use tools.",
+              "text_elements": [],
+              "type": "text"
+            }
+          ],
+          "id": "01a0ab71-78fd-7b71-b14d-002663fe175c",
+          "type": "userMessage"
+        },
+        "startedAtMs": 1789582735613,
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-78f1-7fd0-80f9-c0a949c182a1"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735614,
+      "method": "item/completed",
+      "params": {
+        "completedAtMs": 1789582735613,
+        "item": {
+          "clientId": null,
+          "content": [
+            {
+              "text": "Write the numbers from 1 through 2000, one per line. Do not use tools.",
+              "text_elements": [],
+              "type": "text"
+            }
+          ],
+          "id": "01a0ab71-78fd-7b71-b14d-002663fe175c",
+          "type": "userMessage"
+        },
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-78f1-7fd0-80f9-c0a949c182a1"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735617,
+      "method": "turn/completed",
+      "params": {
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turn": {
+          "completedAt": 1789582735,
+          "durationMs": 8,
+          "error": null,
+          "id": "01a0ab71-78f1-7fd0-80f9-c0a949c182a1",
+          "items": [],
+          "itemsView": "notLoaded",
+          "startedAt": 1789582735,
+          "status": "interrupted"
+        }
+      }
+    },
+    {
+      "emittedAtMs": 1789582735622,
+      "method": "turn/started",
+      "params": {
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turn": {
+          "completedAt": null,
+          "durationMs": null,
+          "error": null,
+          "id": "01a0ab71-7902-7b00-b2eb-d64832385879",
+          "items": [],
+          "itemsView": "notLoaded",
+          "startedAt": 1789582735,
+          "status": "inProgress"
+        }
+      }
+    },
+    {
+      "emittedAtMs": 1789582735650,
+      "method": "item/started",
+      "params": {
+        "item": {
+          "clientId": null,
+          "content": [
+            {
+              "text": "Write every number from 1 through 2000, one per line. Do not use tools.",
+              "text_elements": [],
+              "type": "text"
+            }
+          ],
+          "id": "01a0ab71-7922-70b3-861f-773788d72d3e",
+          "type": "userMessage"
+        },
+        "startedAtMs": 1789582735650,
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-7902-7b00-b2eb-d64832385879"
+      }
+    },
+    {
+      "emittedAtMs": 1789582735651,
+      "method": "item/completed",
+      "params": {
+        "completedAtMs": 1789582735650,
+        "item": {
+          "clientId": null,
+          "content": [
+            {
+              "text": "Write every number from 1 through 2000, one per line. Do not use tools.",
+              "text_elements": [],
+              "type": "text"
+            }
+          ],
+          "id": "01a0ab71-7922-70b3-861f-773788d72d3e",
+          "type": "userMessage"
+        },
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-7902-7b00-b2eb-d64832385879"
+      }
+    },
+    {
+      "emittedAtMs": 1789582737774,
+      "method": "item/started",
+      "params": {
+        "item": {
+          "delivery": null,
+          "id": "msg_00d18c4c21ee1986016aaadd91c5b087d0887f9cdd3e595ec0",
+          "memoryCitation": null,
+          "phase": "final_answer",
+          "questions": null,
+          "text": "",
+          "type": "agentMessage"
+        },
+        "startedAtMs": 1789582737774,
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-7902-7b00-b2eb-d64832385879"
+      }
+    },
+    {
+      "emittedAtMs": 1789582737801,
+      "method": "item/agentMessage/delta",
+      "params": {
+        "delta": "1",
+        "itemId": "msg_00d18c4c21ee1986016aaadd91c5b087d0887f9cdd3e595ec0",
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494",
+        "turnId": "01a0ab71-7902-7b00-b2eb-d64832385879"
+      }
+    }
+  ],
+  "after_loss_requests": [
+    {
+      "id": 1,
+      "method": "initialize",
+      "params": {
+        "capabilities": {
+          "experimentalApi": false
+        },
+        "clientInfo": {
+          "name": "axocoatl_retained_harness_fixture",
+          "version": "0.0.2"
+        }
+      }
+    },
+    {
+      "method": "initialized"
+    },
+    {
+      "id": 2,
+      "method": "thread/read",
+      "params": {
+        "includeTurns": true,
+        "threadId": "01a0ab71-6183-7242-a5e3-54940dafc494"
+      }
+    }
+  ],
+  "local_journal": [
+    {
+      "at": "2026-09-16T18:18:49.713538+00:00",
+      "automatic_replay": false,
+      "invocation": "normal",
+      "kind": "dispatch_intent",
+      "prompt_sha256": "47b4f2d45d7531fe24c62f1eb74b89ad0833b40bd149259fdcb606d0b4065867",
+      "request_id": 3,
+      "sequence": 1,
+      "thread_id": "01a0ab71-6183-7242-a5e3-54940dafc494"
+    },
+    {
+      "at": "2026-09-16T18:18:49.716123+00:00",
+      "invocation": "normal",
+      "kind": "dispatch_accepted",
+      "sequence": 2,
+      "thread_id": "01a0ab71-6183-7242-a5e3-54940dafc494",
+      "turn_id": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+    },
+    {
+      "at": "2026-09-16T18:18:55.598318+00:00",
+      "invocation": "normal",
+      "kind": "observed_terminal",
+      "sequence": 3,
+      "status": "completed",
+      "thread_id": "01a0ab71-6183-7242-a5e3-54940dafc494",
+      "turn_id": "01a0ab71-61f1-7b93-8c04-d3404966fd9d"
+    },
+    {
+      "at": "2026-09-16T18:18:55.600764+00:00",
+      "automatic_replay": false,
+      "invocation": "interrupt",
+      "kind": "dispatch_intent",
+      "prompt_sha256": "4dcda962e0cb627a94cf0831d27063a1793bc506b8ff0b4567c12661605277b8",
+      "request_id": 5,
+      "sequence": 4,
+      "thread_id": "01a0ab71-6183-7242-a5e3-54940dafc494"
+    },
+    {
+      "at": "2026-09-16T18:18:55.609562+00:00",
+      "invocation": "interrupt",
+      "kind": "dispatch_accepted",
+      "sequence": 5,
+      "thread_id": "01a0ab71-6183-7242-a5e3-54940dafc494",
+      "turn_id": "01a0ab71-78f1-7fd0-80f9-c0a949c182a1"
+    },
+    {
+      "at": "2026-09-16T18:18:55.618287+00:00",
+      "invocation": "interrupt",
+      "kind": "observed_terminal",
+      "sequence": 6,
+      "status": "interrupted",
+      "thread_id": "01a0ab71-6183-7242-a5e3-54940dafc494",
+      "turn_id": "01a0ab71-78f1-7fd0-80f9-c0a949c182a1"
+    },
+    {
+      "at": "2026-09-16T18:18:55.618359+00:00",
+      "automatic_replay": false,
+      "invocation": "loss",
+      "kind": "dispatch_intent",
+      "prompt_sha256": "6ec2522114aaa08c9763e5192c4a8e70e2a3d6f86a454c70decf3d06c76b7da3",
+      "request_id": 7,
+      "sequence": 7,
+      "thread_id": "01a0ab71-6183-7242-a5e3-54940dafc494"
+    },
+    {
+      "at": "2026-09-16T18:18:55.621933+00:00",
+      "invocation": "loss",
+      "kind": "dispatch_accepted",
+      "sequence": 8,
+      "thread_id": "01a0ab71-6183-7242-a5e3-54940dafc494",
+      "turn_id": "01a0ab71-7902-7b00-b2eb-d64832385879"
+    },
+    {
+      "at": "2026-09-16T18:18:57.801294+00:00",
+      "invocation": "loss",
+      "kind": "transport_loss_intent",
+      "method": "SIGKILL owned child after actual streamed text",
+      "sequence": 9,
+      "thread_id": "01a0ab71-6183-7242-a5e3-54940dafc494",
+      "turn_id": "01a0ab71-7902-7b00-b2eb-d64832385879"
+    },
+    {
+      "at": "2026-09-16T18:18:57.839097+00:00",
+      "automatic_replay": false,
+      "invocation": "loss",
+      "kind": "transport_lost",
+      "outcome": "unknown",
+      "process_exit": -9,
+      "sequence": 10,
+      "thread_id": "01a0ab71-6183-7242-a5e3-54940dafc494",
+      "turn_id": "01a0ab71-7902-7b00-b2eb-d64832385879",
+      "usage": "unknown"
+    },
+    {
+      "at": "2026-09-16T18:18:57.877117+00:00",
+      "automatic_replay": false,
+      "canonical_local_outcome": "unknown",
+      "invocation": "loss",
+      "kind": "history_observed_after_loss",
+      "reported_status": "interrupted",
+      "sequence": 11,
+      "thread_id": "01a0ab71-6183-7242-a5e3-54940dafc494",
+      "turn_id": "01a0ab71-7902-7b00-b2eb-d64832385879"
+    }
+  ]
+}
