@@ -91,6 +91,19 @@ fn checked_output(output: &BoundedCommandOutput, operation: &str) -> Result<(), 
     Ok(())
 }
 
+/// `podman pull` for an image `podman image exists` just reported absent.
+///
+/// No `--policy`: Podman before 5.0 has none (Ubuntu 24.04 ships 4.9), and
+/// the existence check already makes this "pull only if missing". A name
+/// pinned by digest pulls exactly that manifest. Whatever the pull leaves
+/// under the name is never trusted by it: the bounded inspection after it
+/// names the immutable image id, the container is created from that id with
+/// `--pull=never`, and [`SupervisorImage::verify_container`] requires the
+/// created container to run exactly it.
+fn pull_args(image: &str) -> [&str; 3] {
+    ["pull", "--", image]
+}
+
 impl SupervisorImage {
     pub(crate) fn id(&self) -> &str {
         &self.id
@@ -135,7 +148,7 @@ impl SupervisorImage {
             Some(0) => (),
             Some(1) => {
                 let mut pull = Command::new("podman");
-                pull.args(["pull", "--policy=missing", "--", image]);
+                pull.args(pull_args(image));
                 let pulled = SessionSandbox::run_bounded_command(pull, PULL_TIMEOUT).await?;
                 // Pull progress may legitimately exceed retained diagnostics;
                 // the later bounded inspection is the source of identity.
@@ -263,6 +276,70 @@ mod tests {
         ] {
             assert!(SupervisorImage::parse(&image(&malformed, "linux", "amd64")).is_err());
         }
+    }
+
+    /// The pull of an absent image runs on every Podman Axocoatl supports:
+    /// Podman 4.9 (Ubuntu 24.04, the Linux CI runner) has no `pull --policy`
+    /// and refused every hardened Session start with "unknown flag". The
+    /// argv is the subcommand, the end of options and the name, nothing else.
+    #[test]
+    fn the_pull_of_an_absent_image_uses_no_flag_older_podman_lacks() {
+        for image in [
+            "docker.io/library/alpine:3.20",
+            "localhost/axocoatl-recipe-e2e:fba88c485c0f",
+            "docker.io/library/alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "-looks-like-a-flag",
+        ] {
+            assert_eq!(pull_args(image), ["pull", "--", image]);
+        }
+    }
+
+    /// The real resolution on this computer's Podman: an absent image is
+    /// pulled once and resolved to its immutable id and architecture; a
+    /// present one resolves without a pull. Removes only an image it pulled.
+    /// Needs Podman (`CONTAINER_CONNECTION`) and network access to Docker Hub.
+    #[tokio::test]
+    #[ignore = "requires Podman (CONTAINER_CONNECTION) and network access to docker.io"]
+    async fn actual_absent_image_is_pulled_and_resolved_to_its_identity() {
+        const IMAGE: &str = "docker.io/library/busybox:1.37.0-musl";
+        let exists = || {
+            std::process::Command::new("podman")
+                .args(["image", "exists", "--", IMAGE])
+                .status()
+                .unwrap()
+                .success()
+        };
+        let pulled_here = !exists();
+        struct Remove(bool);
+        impl Drop for Remove {
+            fn drop(&mut self) {
+                if self.0 {
+                    let _ = std::process::Command::new("podman")
+                        .args(["rmi", "--", IMAGE])
+                        .output();
+                }
+            }
+        }
+        let _remove = Remove(pulled_here);
+        let first = SupervisorImage::resolve(IMAGE).await.unwrap();
+        assert!(exists(), "the absent image was pulled");
+        let host_arch = match std::env::consts::ARCH {
+            "x86_64" => "x86_64",
+            "aarch64" => "aarch64",
+            other => panic!("unexpected test architecture {other}"),
+        };
+        // A Podman machine runs the host's architecture.
+        assert_eq!(first.architecture(), host_arch);
+        let inspected = std::process::Command::new("podman")
+            .args(["image", "inspect", "--format", "{{.ID}}", "--", IMAGE])
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&inspected.stdout).trim(),
+            first.id()
+        );
+        // Present now: resolved again, to the same identity.
+        assert_eq!(SupervisorImage::resolve(IMAGE).await.unwrap(), first);
     }
 
     #[test]
