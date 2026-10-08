@@ -1,0 +1,9 @@
+<function=read_file>
+<parameter=path>
+auth/tokens.py
+</parameter>
+<parameter=offset>
+0
+</parameter>
+</function>
+</tool_call>

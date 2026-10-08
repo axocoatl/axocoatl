@@ -1176,4 +1176,28 @@ FINDINGS
         let cut = normalize_area_name(&format!("{} {}", "a".repeat(31), "b")).unwrap();
         assert_eq!(cut, "a".repeat(31));
     }
+
+    /// The 1.3.0 resmoke8's two unreadable answers, exactly as recorded:
+    /// out1's integrator wrote a tool call as text, and out4's ingest
+    /// worker described its finding in prose with only a `NOT_REACHED`
+    /// block. Neither has a FINDINGS block, which the audit driver now
+    /// re-asks for.
+    #[test]
+    fn resmoke8_answers_without_a_findings_block_are_refused() {
+        let integrator =
+            include_str!("../tests/fixtures/answers/audit-resmoke8-out1-integrator.txt");
+        let error = parse_integrated(integrator).unwrap_err().to_string();
+        assert!(
+            error.starts_with("the answer has no FINDINGS block"),
+            "{error}"
+        );
+        let ingest =
+            include_str!("../tests/fixtures/answers/audit-resmoke8-out4-worker-ingest.txt");
+        let error = parse_area_report(ingest, "ingest").unwrap_err().to_string();
+        assert!(
+            error.starts_with("the answer has no FINDINGS block"),
+            "{error}"
+        );
+        assert!(ingest.contains("json.Unmarshal error is not checked"));
+    }
 }

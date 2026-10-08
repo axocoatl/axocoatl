@@ -965,6 +965,7 @@ fn ended_outcome(manifest: &RunManifest, error: String, warnings: Vec<RunWarning
         adjudications: Vec::new(),
         findings: Vec::new(),
         not_covered: Vec::new(),
+        unreadable_findings: Vec::new(),
         notes: Vec::new(),
         warnings,
         usage: RunUsage::default(),

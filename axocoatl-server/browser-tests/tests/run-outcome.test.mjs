@@ -49,6 +49,10 @@ const outcome = {
     { area: 'checkout', class: 'not_reached', detail: 'Not reached: ran out of steps' },
     { area: 'writer', class: 'stopped', detail: '' },
   ],
+  unreadable_findings: [
+    { area: 'ingest', detail: 'the area worker\'s FINDINGS block could not be read (the answer has no FINDINGS block), nor after 2 re-asks',
+      answers: ['I found a defect in feed.go.', 'Still prose.'] },
+  ],
   notes: ['worker-ingest listed as not reached: ingest/legacy.py; a note: the host decides coverage from the files its workers read'],
   warnings: [{ code: 'same_model_reviewer', message: 'The reviewer runs the writer’s model (openrouter:qwen/qwen3-coder).' }],
   usage: { input_tokens: 1200, output_tokens: 300, cost_microunits: 12345, complete: false, retries: 1 },
@@ -90,6 +94,11 @@ test('the run outcome panel shows every part of an Outcome, missing adjudication
     assert.equal(await panel.locator('li[data-class="provider_refusal"]').textContent(), 'gift cards: provider_refusal: classifier stop');
     assert.equal(await panel.locator('li[data-class="not_reached"]').textContent(), 'checkout: not_reached: ran out of steps');
     assert.equal(await panel.locator('li[data-class="stopped"]').textContent(), 'writer: stopped');
+    // Findings that could not be read, apart from coverage, with the
+    // worker's answers.
+    const unreadable = panel.locator('section[data-section="findings-unreadable"] details[data-unreadable="ingest"]');
+    assert.equal(await unreadable.locator('summary').textContent(), `ingest: ${outcome.unreadable_findings[0].detail}`);
+    assert.deepEqual(await unreadable.locator('pre').allTextContents(), outcome.unreadable_findings[0].answers);
     // The run's notes, after what was not covered.
     assert.deepEqual(await panel.locator('section[data-section="notes"] li.note').allTextContents(), outcome.notes);
     assert.equal(await panel.locator('.warning[data-code="same_model_reviewer"]').count(), 1);

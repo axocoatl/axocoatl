@@ -43,13 +43,29 @@ enum Scenario {
     /// - each worker reads, in one response, every file its instructions
     ///   name, then reports nothing.
     FiveHundred,
+    /// The 1.3.0 resmoke8's two unreadable answers:
+    /// - the planner plans `billing` and `notify` at once;
+    /// - the billing worker reads `billing/pagination.py`, then describes
+    ///   its finding in prose with only a NOT_REACHED block, as resmoke8's
+    ///   out4 ingest worker did; asked again, it answers in the format;
+    /// - the notify and rest workers read their files and report nothing;
+    /// - the integrator answers, every time, with resmoke8's out1
+    ///   integrator answer exactly: a tool call written as text.
+    Reasks,
 }
+
+/// The 1.3.0 resmoke8's out1 integrator answer, exactly as recorded.
+const RESMOKE8_INTEGRATOR: &str = include_str!(
+    "../../axocoatl-session/tests/fixtures/answers/audit-resmoke8-out1-integrator.txt"
+);
 
 struct ScriptedAudit {
     scenario: Scenario,
     planner_calls: Arc<AtomicUsize>,
     /// Each `read_file` description the daemon offered the model.
     descriptions: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+    /// For each re-ask request, the tools it offered the model.
+    reask_tools: Arc<std::sync::Mutex<Vec<usize>>>,
 }
 
 impl ScriptedAudit {
@@ -118,8 +134,46 @@ impl wiremock::Respond for ScriptedAudit {
                 }
             }
         }
+        if text.contains("Re-ask ") {
+            self.reask_tools
+                .lock()
+                .unwrap()
+                .push(body["tools"].as_array().map_or(0, Vec::len));
+        }
         if text.contains("The area workers of this audit have finished") {
+            if self.scenario == Scenario::Reasks {
+                return Self::answer(model, RESMOKE8_INTEGRATOR);
+            }
             return Self::answer(model, "FINDINGS\n```json\n[]\n```");
+        }
+        if self.scenario == Scenario::Reasks {
+            if text.contains("Re-ask 1 of the audit's areas (billing)") {
+                return Self::answer(
+                    model,
+                    "FINDINGS\n```json\n[{\"id\": \"F1\", \"title\": \"get_page returns one item \
+                     too many\", \"detail\": \"the slice ends one past the page\", \"severity\": \
+                     \"high\", \"location\": \"billing/pagination.py:2\"}]\n```",
+                );
+            }
+            if text.contains("Your area: billing") {
+                if has_results {
+                    return Self::answer(
+                        model,
+                        "I have examined the one file in the billing area as instructed:\n\n\
+                         1. **billing/pagination.py** - get_page slices one item past the end \
+                         of the page, so every page repeats the next page's first item.\n\n\
+                         The files I examined were read completely and I have reported the \
+                         findings in the required format.\n\nNOT_REACHED\n```json\n[]\n```",
+                    );
+                }
+                return Self::calls(model, &[read("billing/pagination.py")]);
+            }
+            if text.contains("Your area: notify") {
+                if has_results {
+                    return Self::report(model, None);
+                }
+                return Self::calls(model, &[read("notify/webhook.py")]);
+            }
         }
         if self.scenario == Scenario::FiveHundred {
             if text.contains("Plan this audit before it starts") {
@@ -160,24 +214,26 @@ impl wiremock::Respond for ScriptedAudit {
         let follow_up = text.contains(": the host checked the read_file calls of your area's");
         if text.contains("Your area: billing") {
             return match (self.scenario, follow_up, has_results) {
-                (Scenario::NeverReads | Scenario::FiveHundred, _, true) => {
+                (Scenario::NeverReads | Scenario::FiveHundred | Scenario::Reasks, _, true) => {
                     Self::report(model, None)
                 }
-                (Scenario::NeverReads | Scenario::FiveHundred, _, false) => Self::calls(
-                    model,
-                    &[
-                        read("billing/pagination.py"),
-                        ("list_dir", serde_json::json!({"path": "billing"})),
-                        (
-                            "grep",
-                            serde_json::json!({"pattern": "get_page", "path": "billing"}),
-                        ),
-                        (
-                            "grep",
-                            serde_json::json!({"pattern": "overflow", "path": "billing"}),
-                        ),
-                    ],
-                ),
+                (Scenario::NeverReads | Scenario::FiveHundred | Scenario::Reasks, _, false) => {
+                    Self::calls(
+                        model,
+                        &[
+                            read("billing/pagination.py"),
+                            ("list_dir", serde_json::json!({"path": "billing"})),
+                            (
+                                "grep",
+                                serde_json::json!({"pattern": "get_page", "path": "billing"}),
+                            ),
+                            (
+                                "grep",
+                                serde_json::json!({"pattern": "overflow", "path": "billing"}),
+                            ),
+                        ],
+                    )
+                }
                 (Scenario::SkipsThenReads, false, false) => Self::calls(
                     model,
                     &[
@@ -213,10 +269,12 @@ impl wiremock::Respond for ScriptedAudit {
         }
         if text.contains("Your area: notify") {
             return match (self.scenario, has_results) {
-                (Scenario::NeverReads | Scenario::FiveHundred, _) => Self::answer(
-                    model,
-                    "{\"FINDINGS\": [], \"NOT_REACHED\": [\"notify/legacy/old_handler.py\"]}",
-                ),
+                (Scenario::NeverReads | Scenario::FiveHundred | Scenario::Reasks, _) => {
+                    Self::answer(
+                        model,
+                        "{\"FINDINGS\": [], \"NOT_REACHED\": [\"notify/legacy/old_handler.py\"]}",
+                    )
+                }
                 (Scenario::SkipsThenReads, false) => {
                     Self::calls(model, &[read("notify/webhook.py")])
                 }
@@ -536,6 +594,8 @@ struct AuditRun {
     junit: String,
     /// Each `read_file` description the daemon offered the model.
     descriptions: Vec<String>,
+    /// How many tools each re-ask request offered the model.
+    reask_tools: Vec<usize>,
 }
 
 impl AuditRun {
@@ -586,12 +646,14 @@ impl AuditRun {
 async fn audit_on_podman(scenario: Scenario, files: &[(&str, &[u8])], task: &str) -> AuditRun {
     let planner_calls = Arc::new(AtomicUsize::new(0));
     let descriptions = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+    let reask_tools = Arc::new(std::sync::Mutex::new(Vec::new()));
     let server = model_server(
         scenario,
         ScriptedAudit {
             scenario,
             planner_calls: planner_calls.clone(),
             descriptions: descriptions.clone(),
+            reask_tools: reask_tools.clone(),
         },
     )
     .await;
@@ -705,6 +767,7 @@ async fn audit_on_podman(scenario: Scenario, files: &[(&str, &[u8])], task: &str
             slots,
             junit,
             descriptions: descriptions.lock().unwrap().iter().cloned().collect(),
+            reask_tools: reask_tools.lock().unwrap().clone(),
         })
     }
     .await;
@@ -1222,6 +1285,129 @@ async fn an_audit_on_podman_judges_workers_by_their_recorded_tool_calls() {
     );
     assert!(
         run.junit.contains("name=\"notify\"") && run.junit.contains("notify/webhook.py: not read"),
+        "{}",
+        run.junit
+    );
+}
+
+/// The 1.3.0 resmoke8's two unreadable answers on real Podman: the billing
+/// worker reads its file and answers in prose; the host re-asks it, in a
+/// fresh read-only activation offered no tools, and it answers in the
+/// format; the integrator answers each of its turns with resmoke8's out1
+/// answer exactly (a tool call written as text), gets two re-asks without
+/// tools, and the host then merges the area findings itself. Every file is
+/// covered, the finding is reported with its area, and the run passes.
+///
+/// ```text
+/// CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-daemon --lib \
+///   an_audit_on_podman_re_asks_unreadable_answers_and_passes -- --ignored
+/// ```
+#[tokio::test]
+#[ignore = "requires rootless Podman, docker.io/library/alpine:3.20 and the egress sidecar image"]
+async fn an_audit_on_podman_re_asks_unreadable_answers_and_passes() {
+    if in_child("an_audit_on_podman_re_asks_unreadable_answers_and_passes").await {
+        return;
+    }
+    let run = audit_on_podman(
+        Scenario::Reasks,
+        &[
+            ("README.md", b"# Audit fixture\n"),
+            (
+                "billing/pagination.py",
+                b"def get_page(items, page, size):\n    return items[page * size:(page + 1) * size + 1]\n",
+            ),
+            (
+                "notify/webhook.py",
+                b"WEBHOOK = 'https://hooks.example.invalid/orders'\n",
+            ),
+        ],
+        "Find correctness defects in billing and notify.",
+    )
+    .await;
+    let outcome = &run.outcome;
+    assert_eq!(
+        outcome.exit_code,
+        exit_code::PASS,
+        "{:?} {:?} {:?} {:?}",
+        outcome.attention,
+        outcome.not_covered,
+        outcome.unreadable_findings,
+        run.events
+    );
+    use crate::loadout::audit::{AREAS_PURPOSE, INTEGRATE_PURPOSE, PLAN_PURPOSE, REASK_PURPOSE};
+    assert_eq!(
+        run.purposes(),
+        [
+            PLAN_PURPOSE,
+            AREAS_PURPOSE,
+            REASK_PURPOSE,
+            INTEGRATE_PURPOSE,
+            REASK_PURPOSE,
+            REASK_PURPOSE
+        ],
+        "{outcome:?}"
+    );
+    assert!(outcome.not_covered.is_empty(), "{:?}", outcome.not_covered);
+    assert!(outcome.unreadable_findings.is_empty());
+    // Coverage is the areas turn's reads; the re-asks were offered no
+    // tools and made no call.
+    assert_eq!(
+        run.phases("coverage"),
+        [
+            "billing: 1 of 1 files examined: 1 read",
+            "notify: 1 of 1 files examined: 1 read",
+            "rest: 1 of 1 files examined: 1 read",
+        ]
+    );
+    assert_eq!(run.reask_tools, [0, 0, 0], "{:?}", run.reask_tools);
+    assert!(run.calls_of(REASK_PURPOSE).is_empty());
+    assert_eq!(
+        run.phases("applying_team")[2],
+        "audit re-ask 1: 1 read-only worker without tools (billing)"
+    );
+    let reasks = run.phases("reask");
+    assert_eq!(
+        reasks[0],
+        "worker-billing answered re-ask 1 with a readable FINDINGS block: 1 finding"
+    );
+    assert!(
+        reasks[1..]
+            .iter()
+            .all(|phase| phase.starts_with("the integrator's FINDINGS block could not be read")),
+        "{reasks:?}"
+    );
+    assert_eq!(reasks.len(), 4, "{reasks:?}");
+    // The billing worker's restated finding, merged by the host.
+    let findings: Vec<(&str, Option<&str>, Option<&str>)> = outcome
+        .findings
+        .iter()
+        .map(|finding| {
+            (
+                finding.id.as_str(),
+                finding.area.as_deref(),
+                finding.location.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        findings,
+        [(
+            "billing-F1",
+            Some("billing"),
+            Some("billing/pagination.py:2")
+        )]
+    );
+    assert!(
+        outcome.notes.iter().any(|note| note.starts_with(
+            "findings merged by the host: the integrator's FINDINGS block could not be read, \
+             nor after 2 re-asks (the answer has no FINDINGS block"
+        ) && note.ends_with("(1 finding, 1 kept)")),
+        "{:?}",
+        outcome.notes
+    );
+    assert!(
+        run.junit
+            .contains("<testsuite name=\"coverage\" tests=\"0\""),
         "{}",
         run.junit
     );

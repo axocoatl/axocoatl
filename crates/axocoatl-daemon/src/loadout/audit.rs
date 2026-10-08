@@ -38,17 +38,41 @@
 //!    reads bytes of its files that no earlier read returned: an area whose
 //!    follow-up read nothing new gets no more. A file still unread then, or
 //!    when the wall clock or a person's stop ends them, is not covered,
-//!    listed by file. A worker without a result, an unreadable report and
-//!    a record of tool calls that cannot be read are listed too. What a
-//!    worker says it did not reach (`NOT_REACHED`) is a note: the host's
-//!    coverage decides. Empty and binary files need no read; a file over
+//!    listed by file. A worker without a result and a record of tool calls
+//!    that cannot be read are listed too. What a worker says it did not
+//!    reach (`NOT_REACHED`) is a note: the host's coverage decides. Empty
+//!    and binary files need no read; a file over
 //!    [`files::MAX_AUDITED_FILE_BYTES`] is a note.
-//! 5. **Integrate**: the `integrator` slot alone receives every worker's
+//! 5. **Re-asks**: a worker whose answer has no readable `FINDINGS` block
+//!    gets up to [`MAX_REASKS`] re-asks after the follow-ups, each a turn
+//!    (purpose [`REASK_PURPOSE`]) with a fresh read-only activation of that
+//!    worker without tools whose instructions quote the answer and ask for
+//!    exactly a `FINDINGS` JSON array in the documented format (`[]` when
+//!    it describes none). Like follow-ups, re-asks are bounded by the
+//!    budget and the wall clock, each is an `applying_team` and a `reask`
+//!    phase in the record, and nothing a re-ask does counts as reading.
+//!    Coverage and findings are separate: an area whose findings stay
+//!    unreadable is not "not covered" (its coverage is what its worker
+//!    read) but an [`UnreadableFindings`] entry, with the answers kept, and
+//!    the run needs attention as "Findings unreadable for <area>"; the
+//!    integrator still receives the answer as text.
+//! 6. **Integrate**: the `integrator` slot alone receives every worker's
 //!    report (each bounded to 24 KiB, truncation noted) and the not-covered
-//!    list, and answers with the merged `FINDINGS`. When integration has no
-//!    readable result, the workers' findings are reported unmerged and
-//!    [`INTEGRATION`] is listed as not covered, which the attention line
-//!    names apart from the areas.
+//!    list, and answers with the merged `FINDINGS`. An integrator without
+//!    an answer gets one retry turn unless the failure would end it the
+//!    same way (the wall clock, a person's stop, a provider refusing the
+//!    request itself); an answer whose `FINDINGS` block cannot be read gets
+//!    up to [`MAX_REASKS`] re-asks, each a fresh activation without tools
+//!    sent the integrate request again with the unreadable answer quoted.
+//!    When the answer is still unreadable, or the integrator still has no
+//!    result for a provider's reason, the host merges the findings itself
+//!    ([`host_merge`]: the union of the area findings, duplicates by file,
+//!    line and normalized title removed, each keeping its area) and notes
+//!    "findings merged by the host"; that needs no attention (in the
+//!    measured runs the merge step never added a finding). Any other
+//!    integration without a result (the wall clock, a person's stop) has
+//!    the workers' findings reported unmerged and [`INTEGRATION`] listed
+//!    as not covered, which the attention line names apart from the areas.
 //!
 //! The run's wall clock bounds every turn: at the deadline the turn is
 //! stopped, what did not finish is not covered (budget), and no further
@@ -73,7 +97,7 @@ use axocoatl_session::audit_plan::{
 use axocoatl_session::failure_class::{classify_failure, FailureFacts};
 use axocoatl_session::run_outcome::{
     FailureClass, Finding, NodeObservation, NodeState, NotCovered, RunTurnRef, TurnObservation,
-    TurnState,
+    TurnState, UnreadableFindings,
 };
 use axocoatl_session::run_record::RunEvent;
 
@@ -114,6 +138,10 @@ pub const PLAN_PURPOSE: &str = "audit_plan";
 pub const AREAS_PURPOSE: &str = "audit_areas";
 pub const FOLLOW_UP_PURPOSE: &str = "audit_follow_up";
 pub const INTEGRATE_PURPOSE: &str = "audit_integrate";
+pub const REASK_PURPOSE: &str = "audit_reask";
+/// Re-asks an area worker, and the integrator, get for an answer whose
+/// `FINDINGS` block the host could not read.
+pub const MAX_REASKS: u32 = 2;
 /// How long a stopped turn may take to settle before it is observed.
 const STOP_GRACE: Duration = Duration::from_secs(30);
 /// Not-covered entries listed in the integrate request; the rest are counted.
@@ -552,6 +580,210 @@ pub fn follow_up_request(prompt: &str, names: &[&str], round: u32) -> String {
     )
 }
 
+/// The `FINDINGS` block a worker's re-ask answers with.
+const REASK_WORKER_SHAPE: &str = "FINDINGS\n```json\n[{\"id\": \"F1\", \"title\": \"...\", \
+     \"detail\": \"what is wrong and the evidence\", \"severity\": \"low|medium|high|critical\", \
+     \"location\": \"path:line\"}]\n```";
+
+/// An answer the host could not read, quoted in a fence longer than any
+/// backtick run in it, cut to `max` bytes (noted).
+fn quoted_answer(answer: &str, max: usize) -> String {
+    let (shown, truncated) = cut(answer, max);
+    let fence = fence_for(shown);
+    let mut text = format!("{fence}text\n{shown}\n{fence}\n");
+    if truncated {
+        let _ = writeln!(
+            text,
+            "(truncated: the answer was {} bytes; the first {} are shown)",
+            answer.len(),
+            shown.len()
+        );
+    }
+    text
+}
+
+/// A worker re-ask's instructions: its area, every answer of its worker
+/// whose `FINDINGS` block could not be read, quoted with why, why its last
+/// re-ask could not be read (when there was one), and the exact block to
+/// answer with, without tools. The loadout's worker instructions are left
+/// out: they ask for reads, and a re-ask reads nothing.
+pub fn reask_instructions(
+    assigned: &AssignedArea,
+    answers: &[(&str, &str)],
+    last: Option<&str>,
+    round: u32,
+) -> String {
+    let mut text = instructions_head(None, assigned);
+    let _ = writeln!(
+        text,
+        "Re-ask {round} of {MAX_REASKS}: the host could not read the FINDINGS block of your area \
+         worker's answer{}, so its findings are not in the audit yet.",
+        if answers.len() == 1 { "" } else { "s" }
+    );
+    let per_answer = (MAX_REPORT_BYTES / answers.len().max(1)).max(2048);
+    for (answer, error) in answers {
+        let _ = writeln!(
+            text,
+            "The host could not read this answer ({error}). It follows as the worker wrote it:"
+        );
+        text.push_str(&quoted_answer(answer, per_answer));
+    }
+    if let Some(error) = last {
+        let _ = writeln!(
+            text,
+            "The answer to the last re-ask could not be read either ({error})."
+        );
+    }
+    let _ = write!(
+        text,
+        "Write the findings {} as one FINDINGS JSON array in exactly this format, with an \
+         empty array ([]) if {} none. Do not call tools and do not read files: answer from \
+         the quoted answer alone, with this block and nothing else:\n{REASK_WORKER_SHAPE}\n",
+        if answers.len() == 1 {
+            "that answer describes"
+        } else {
+            "those answers describe"
+        },
+        if answers.len() == 1 {
+            "it describes"
+        } else {
+            "they describe"
+        }
+    );
+    text
+}
+
+/// A re-ask's slot: a fresh read-only activation of `agent` with no tools,
+/// so it can only answer.
+fn reask_slot(
+    resolved: &ResolvedLoadout,
+    slot_id: String,
+    agent: &LoadoutAgent,
+    instructions: Option<String>,
+) -> Result<SlotPlan, RunError> {
+    let mut slot = read_only_slot(resolved, slot_id, agent, instructions)?;
+    slot.agent.tools.clear();
+    Ok(slot)
+}
+
+/// A worker re-ask turn's team: one fresh read-only worker without tools
+/// per area, each with its instructions ([`reask_instructions`]).
+pub fn reask_slots(
+    resolved: &ResolvedLoadout,
+    due: &[(&AssignedArea, String)],
+) -> Result<Vec<SlotPlan>, RunError> {
+    let worker = agent(resolved, LoadoutRole::Worker)?;
+    due.iter()
+        .map(|(assigned, instructions)| {
+            reask_slot(
+                resolved,
+                worker_slot_id(&assigned.area.name),
+                worker,
+                Some(instructions.clone()),
+            )
+        })
+        .collect()
+}
+
+/// A worker re-ask turn's request.
+pub fn reask_request(prompt: &str, names: &[&str], round: u32) -> String {
+    format!(
+        "{}\n\nRe-ask {round} of the audit's areas ({}): the host could not read the FINDINGS \
+         block of these area workers' answers. Your instructions quote your area worker's \
+         answer: write the findings it describes as one FINDINGS JSON array ([] when it \
+         describes none). Call no tool.",
+        prompt.trim_end(),
+        names.join(", ")
+    )
+}
+
+/// The integrator's re-ask team: the integrator alone, without tools.
+pub fn integrate_reask_slots(resolved: &ResolvedLoadout) -> Result<Vec<SlotPlan>, RunError> {
+    let integrator = agent(resolved, LoadoutRole::Integrator)?;
+    Ok(vec![reask_slot(
+        resolved,
+        INTEGRATOR_SLOT.into(),
+        integrator,
+        None,
+    )?])
+}
+
+/// The integrator's re-ask: the integrate request again (a re-ask starts
+/// from a fresh context), each of its answers the host could not read
+/// quoted with why, and the exact block to answer with, without tools.
+pub fn integrate_reask_request(request: &str, answers: &[(String, String)], round: u32) -> String {
+    let mut text = request.trim_end().to_owned();
+    let _ = writeln!(
+        text,
+        "\n\nRe-ask {round} of {MAX_REASKS}: the host could not read the FINDINGS block of the \
+         integrator's answer{} to this request.",
+        if answers.len() == 1 { "" } else { "s" }
+    );
+    let per_answer = (MAX_REPORT_BYTES / answers.len().max(1)).max(2048);
+    for (answer, error) in answers {
+        let _ = writeln!(text, "The host could not read this answer ({error}):");
+        text.push_str(&quoted_answer(answer, per_answer));
+    }
+    text.push_str(
+        "Answer again with the merged findings of the reports above as one FINDINGS JSON array \
+         in the format above, [] when no area found anything. Do not call tools and do not \
+         read files: answer from the reports above, with the FINDINGS block and nothing else.\n",
+    );
+    text
+}
+
+/// A finding's location as `(file, line)`: the path before the first `:`
+/// followed by a digit, and that number; the whole location and no line
+/// when there is none.
+fn file_and_line(location: &str) -> (String, String) {
+    let location = location.trim();
+    for (at, _) in location.match_indices(':') {
+        let rest = &location[at + 1..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if !digits.is_empty() {
+            let file = location[..at].trim();
+            return (
+                file.strip_prefix("./").unwrap_or(file).to_owned(),
+                digits.trim_start_matches('0').to_owned(),
+            );
+        }
+    }
+    (
+        location.strip_prefix("./").unwrap_or(location).to_owned(),
+        String::new(),
+    )
+}
+
+/// A title as the host compares titles: lowercase words of letters and
+/// digits, one space apart.
+fn normalized_title(title: &str) -> String {
+    title
+        .to_lowercase()
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The host's own merge of the area findings, used when the integrator's
+/// answer cannot be read: their union in area order, each finding keeping
+/// its area, with any finding whose file, line and normalized title an
+/// earlier one has left out. Returns the merged findings and how many
+/// findings the areas reported.
+pub fn host_merge(results: &[AreaResult]) -> (Vec<Finding>, usize) {
+    let all = Audit::unmerged(results);
+    let total = all.len();
+    let mut seen = std::collections::HashSet::new();
+    let merged = all
+        .into_iter()
+        .filter(|finding| {
+            let (file, line) = file_and_line(finding.location.as_deref().unwrap_or_default());
+            seen.insert((file, line, normalized_title(&finding.title)))
+        })
+        .collect();
+    (merged, total)
+}
+
 /// What one area of the plan as executed produced, for the integrator.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AreaResult {
@@ -570,8 +802,9 @@ pub struct AreaResult {
 pub enum AreaBody {
     /// The worker's readable report.
     Report(AreaReport),
-    /// An accepted answer whose blocks could not be read; the integrator
-    /// receives it as text and the area is listed as not covered.
+    /// An accepted answer whose blocks could not be read, even after the
+    /// worker's re-asks; the integrator receives it as text and the area's
+    /// findings are listed as unreadable ([`UnreadableFindings`]).
     Unreadable { answer: String, error: String },
 }
 
@@ -863,11 +1096,20 @@ struct AreaState {
     calls: Vec<ToolCallRecord>,
     /// Each readable report, in order; a follow-up's finding ids say so.
     reports: Vec<AreaReport>,
-    /// Each accepted answer that could not be read, with why.
-    unreadable: Vec<(String, String)>,
-    /// Activations so far: its turn, then each follow-up.
+    /// Each accepted answer of its turn and follow-ups whose `FINDINGS`
+    /// block could not be read and that no re-ask has restated yet.
+    unreadable: Vec<Unreadable>,
+    /// Activations so far: its turn, then each follow-up (re-asks are not
+    /// counted here).
     activations: u32,
     follow_ups: u32,
+    /// Re-asks so far, each answer of them that could not be read either
+    /// (with why), and why the last one has no result, when it has none.
+    reasks: u32,
+    reask_answers: Vec<(String, String)>,
+    reask_failure: Option<(FailureClass, String)>,
+    /// The turn and node of its last re-ask.
+    reask_at: Option<(String, Option<String>)>,
     /// Its worker's turn started.
     started: bool,
     /// Its latest follow-up returned no byte of its files that no earlier
@@ -893,6 +1135,10 @@ impl AreaState {
             unreadable: Vec::new(),
             activations: 0,
             follow_ups: 0,
+            reasks: 0,
+            reask_answers: Vec::new(),
+            reask_failure: None,
+            reask_at: None,
             started: false,
             stalled: false,
             answered: false,
@@ -920,6 +1166,53 @@ impl AreaState {
         Coverage::of(&calls, repo).covered_text(&self.assigned.files)
     }
 
+    /// Whether its findings could still be restated by a re-ask: an answer
+    /// of it is unreadable, it had fewer than [`MAX_REASKS`] re-asks, and
+    /// its last re-ask did not end in a way the next one would too.
+    fn may_reask(&self) -> bool {
+        !self.unreadable.is_empty()
+            && self.reasks < MAX_REASKS
+            && !self
+                .reask_failure
+                .as_ref()
+                .is_some_and(|(class, _)| final_failure(*class))
+    }
+
+    /// Why its findings stayed unreadable, in words.
+    fn unreadable_detail(&self, stopped: bool, deadline_hit: bool) -> String {
+        let first = self
+            .unreadable
+            .first()
+            .map_or("", |unreadable| unreadable.error.as_str());
+        let mut detail = format!("the area worker's FINDINGS block could not be read ({first})");
+        match self.reasks {
+            0 if stopped => detail.push_str("; the run was stopped before a re-ask"),
+            0 if deadline_hit => detail.push_str("; the run's wall clock ran out before a re-ask"),
+            0 => {}
+            reasks => {
+                let _ = write!(
+                    detail,
+                    ", nor after {reasks} re-ask{}",
+                    if reasks == 1 { "" } else { "s" }
+                );
+                if let Some((class, why)) = &self.reask_failure {
+                    let _ = write!(
+                        detail,
+                        " (the last has no result: {}: {})",
+                        class_name(*class),
+                        cut(why, MAX_LISTED_DETAIL_BYTES).0
+                    );
+                } else if let Some((_, error)) = self.reask_answers.last() {
+                    let _ = write!(detail, " (the last: {error})");
+                }
+            }
+        }
+        detail.push_str(
+            "; its files' coverage stands, and the integrator received its answer as text",
+        );
+        detail
+    }
+
     /// Whether another follow-up could read its unread files: its worker
     /// can read, its record of tool calls was read, its last follow-up read
     /// something new, and nothing that would end a follow-up the same way
@@ -934,6 +1227,15 @@ impl AreaState {
                 .as_ref()
                 .is_some_and(|(class, _)| final_failure(*class))
     }
+}
+
+/// An answer whose `FINDINGS` block could not be read.
+struct Unreadable {
+    answer: String,
+    error: String,
+    /// The activation that wrote it: 1 for the worker's turn, `n + 1` for
+    /// follow-up `n`.
+    activation: u32,
 }
 
 /// What the activation of one area worker in a turn did.
@@ -1733,6 +2035,9 @@ impl Audit<'_> {
                 }
             }
         }
+        if !stopped && !deadline_hit {
+            (stopped, deadline_hit) = self.reask_workers(&mut states).await?;
+        }
         let results = self.conclude(&states, reads, stopped, deadline_hit).await?;
         Ok((results, stopped))
     }
@@ -1829,7 +2134,198 @@ impl Audit<'_> {
                     }
                     state.reports.push(report);
                 }
-                Err(error) => state.unreadable.push((answer, error.to_string())),
+                Err(error) => state.unreadable.push(Unreadable {
+                    answer,
+                    error: error.to_string(),
+                    activation: state.activations,
+                }),
+            }
+        }
+        Ok(())
+    }
+
+    /// Up to [`MAX_REASKS`] rounds of re-asks of every worker with an
+    /// answer whose `FINDINGS` block could not be read ([`AreaState::may_reask`]),
+    /// at most [`MAX_WORKERS_PER_TURN`] to a turn. Returns whether a person
+    /// stopped the run and whether the wall clock ran out.
+    async fn reask_workers(&mut self, states: &mut [AreaState]) -> Result<(bool, bool), RunError> {
+        for round in 1..=MAX_REASKS {
+            let due: Vec<usize> = states
+                .iter()
+                .enumerate()
+                .filter(|(_, state)| state.may_reask())
+                .map(|(index, _)| index)
+                .collect();
+            if due.is_empty() {
+                break;
+            }
+            let slots = {
+                let plans: Vec<(&AssignedArea, String)> = due
+                    .iter()
+                    .map(|index| {
+                        let state = &states[*index];
+                        let answers: Vec<(&str, &str)> = state
+                            .unreadable
+                            .iter()
+                            .map(|unreadable| {
+                                (unreadable.answer.as_str(), unreadable.error.as_str())
+                            })
+                            .collect();
+                        let last = state.reask_answers.last().map(|(_, error)| error.as_str());
+                        (
+                            &state.assigned,
+                            reask_instructions(&state.assigned, &answers, last, round),
+                        )
+                    })
+                    .collect();
+                reask_slots(&self.run.resolved, &plans)?
+            };
+            let turns = worker_turns(
+                due.iter()
+                    .copied()
+                    .zip(slots)
+                    .map(|(index, slot)| (index, slot, 0))
+                    .collect(),
+            );
+            let count = turns.len();
+            for (number, turn) in turns.into_iter().enumerate() {
+                let which: Vec<usize> = turn.iter().map(|(index, _)| *index).collect();
+                let names: Vec<String> = which
+                    .iter()
+                    .map(|index| states[*index].name().to_owned())
+                    .collect();
+                let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                let request = reask_request(&self.run.resolved.prompt, &names, round);
+                let what = format!(
+                    "audit re-ask {round}{}: {} read-only worker{} without tools ({})",
+                    if count == 1 {
+                        String::new()
+                    } else {
+                        format!(", turn {} of {count}", number + 1)
+                    },
+                    which.len(),
+                    if which.len() == 1 { "" } else { "s" },
+                    names.join(", ")
+                );
+                let slots = turn.into_iter().map(|(_, slot)| slot).collect();
+                match self
+                    .apply_and_turn(&what, slots, &request, REASK_PURPOSE)
+                    .await
+                {
+                    Err(RunError::Stopped) => return Ok((true, false)),
+                    Err(error) => return Err(error),
+                    Ok(None) => return Ok((false, true)),
+                    Ok(Some(observed)) => {
+                        self.observe_reasks(&observed, states, &which, round)
+                            .await?;
+                        if observed.deadline_hit {
+                            return Ok((false, true));
+                        }
+                    }
+                }
+            }
+        }
+        Ok((false, false))
+    }
+
+    /// Read what each re-asked worker of `which` answered: a readable
+    /// `FINDINGS` block restates its unreadable answers (its findings take
+    /// the ids the first of them would have had); anything else is kept for
+    /// the next re-ask or the record. Its tool calls are not read: a re-ask
+    /// has no tools, and nothing it does counts as reading.
+    async fn observe_reasks(
+        &mut self,
+        observed: &Observed,
+        states: &mut [AreaState],
+        which: &[usize],
+        round: u32,
+    ) -> Result<(), RunError> {
+        let observation = self.observation(observed);
+        let turn_id = observation.turn_id.clone();
+        let seen: Vec<Activation> = which
+            .iter()
+            .map(|index| {
+                let slot = worker_slot_id(states[*index].name());
+                let node = observation.nodes.iter().find(|node| node.slot_id == slot);
+                Activation {
+                    index: *index,
+                    node_id: node.map(|node| node.node_id.clone()),
+                    answer: accepted_answer(node).map(str::to_owned),
+                    generation: None,
+                    failure: failure_of(node, observed.deadline_hit),
+                }
+            })
+            .collect();
+        for Activation {
+            index,
+            node_id,
+            answer,
+            failure,
+            ..
+        } in seen
+        {
+            let state = &mut states[index];
+            state.reasks += 1;
+            state.reask_at = Some((turn_id.clone(), node_id.clone()));
+            let slot = worker_slot_id(state.name());
+            let Some(answer) = answer else {
+                let (class, detail) = failure;
+                if let Some(node_id) = &node_id {
+                    self.report
+                        .accounted
+                        .push((turn_id.clone(), node_id.clone()));
+                }
+                self.phase(
+                    "reask",
+                    format!(
+                        "{slot} has no result in re-ask {round} ({}: {})",
+                        class_name(class),
+                        cut(&detail, MAX_LISTED_DETAIL_BYTES).0
+                    ),
+                )
+                .await?;
+                state.reask_failure = Some((class, detail));
+                continue;
+            };
+            state.reask_failure = None;
+            match parse_area_report(&answer, state.name()) {
+                Ok(mut report) => {
+                    let first = state
+                        .unreadable
+                        .iter()
+                        .map(|unreadable| unreadable.activation)
+                        .min()
+                        .unwrap_or(1);
+                    if first > 1 {
+                        follow_up_ids(&mut report, state.name(), first - 1);
+                    }
+                    // The host asked for findings only; coverage is its own.
+                    report.not_reached.clear();
+                    let count = report.findings.len();
+                    self.phase(
+                        "reask",
+                        format!(
+                            "{slot} answered re-ask {round} with a readable FINDINGS block: {count} \
+                             finding{}",
+                            if count == 1 { "" } else { "s" }
+                        ),
+                    )
+                    .await?;
+                    state.reports.push(report);
+                    state.unreadable.clear();
+                }
+                Err(error) => {
+                    let error = error.to_string();
+                    self.phase(
+                        "reask",
+                        format!(
+                            "{slot}'s answer to re-ask {round} could not be read either ({})",
+                            cut(&error, MAX_LISTED_DETAIL_BYTES).0
+                        ),
+                    )
+                    .await?;
+                    state.reask_answers.push((answer, error));
+                }
             }
         }
         Ok(())
@@ -1874,15 +2370,32 @@ impl Audit<'_> {
                 ))
                 .await?;
             }
-            for (_, error) in &state.unreadable {
-                self.not_covered(entry(
-                    FailureClass::Other,
-                    format!(
-                        "the area worker's report could not be read ({error}); the integrator \
-                         received its answer as text"
-                    ),
-                ))
-                .await?;
+            if !state.unreadable.is_empty() {
+                let detail = state.unreadable_detail(stopped, deadline_hit);
+                self.phase("findings_unreadable", format!("{name}: {detail}"))
+                    .await?;
+                let (turn_id, node_id) = match &state.reask_at {
+                    Some((turn, node)) => (Some(turn.clone()), node.clone()),
+                    None => (state.turn_id.clone(), state.node_id.clone()),
+                };
+                self.report.unreadable_findings.push(UnreadableFindings {
+                    area: name.clone(),
+                    detail,
+                    answers: state
+                        .unreadable
+                        .iter()
+                        .map(|unreadable| unreadable.answer.as_str())
+                        .chain(
+                            state
+                                .reask_answers
+                                .iter()
+                                .map(|(answer, _)| answer.as_str()),
+                        )
+                        .map(|answer| cut(answer, MAX_REPORT_BYTES).0.to_owned())
+                        .collect(),
+                    node_id,
+                    turn_id,
+                });
             }
             let left_out: usize = state.reports.iter().map(|report| report.left_out).sum();
             if left_out > 0 {
@@ -1939,10 +2452,10 @@ impl Audit<'_> {
                     }
                     bodies.push(AreaBody::Report(merged));
                 }
-                for (answer, error) in &state.unreadable {
+                for unreadable in &state.unreadable {
                     bodies.push(AreaBody::Unreadable {
-                        answer: answer.clone(),
-                        error: error.clone(),
+                        answer: unreadable.answer.clone(),
+                        error: unreadable.error.clone(),
                     });
                 }
                 results.push(AreaResult {
@@ -2115,65 +2628,252 @@ impl Audit<'_> {
             results,
             &self.report.not_covered,
         );
-        let started = match self
-            .apply_and_turn(
-                "audit integration: the integrator",
-                integrate_slots(&self.run.resolved)?,
-                &request,
-                INTEGRATE_PURPOSE,
-            )
-            .await
-        {
-            Err(RunError::Stopped) => {
-                self.integration_missing(
-                    results,
-                    FailureClass::Stopped,
-                    "the run was stopped before integration".into(),
-                    None,
+        // The integrator's answers whose FINDINGS block could not be read,
+        // with why; its re-asks so far; whether it had its retry after a
+        // turn without an answer; and why its last turn has no result.
+        let mut unreadable: Vec<(String, String)> = Vec::new();
+        let mut reasks = 0u32;
+        let mut retried = false;
+        let mut failed: Option<(FailureClass, String)> = None;
+        let mut last: Option<usize> = None;
+        loop {
+            let reask = !unreadable.is_empty();
+            let (what, slots, text, purpose) = if reask {
+                (
+                    format!("audit re-ask {}: the integrator, without tools", reasks + 1),
+                    integrate_reask_slots(&self.run.resolved)?,
+                    integrate_reask_request(&request, &unreadable, reasks + 1),
+                    REASK_PURPOSE,
                 )
-                .await?;
-                return Err(RunError::Stopped);
+            } else {
+                (
+                    "audit integration: the integrator".to_owned(),
+                    integrate_slots(&self.run.resolved)?,
+                    request.clone(),
+                    INTEGRATE_PURPOSE,
+                )
+            };
+            let started = match self.apply_and_turn(&what, slots, &text, purpose).await {
+                Err(RunError::Stopped) => {
+                    self.integration_missing(
+                        results,
+                        FailureClass::Stopped,
+                        "the run was stopped before integration".into(),
+                        None,
+                    )
+                    .await?;
+                    return Err(RunError::Stopped);
+                }
+                started => started?,
+            };
+            let Some(observed) = started else {
+                // The wall clock ran out before this turn could start.
+                if unreadable.is_empty() && failed.is_none() {
+                    return self
+                        .integration_missing(
+                            results,
+                            FailureClass::Budget,
+                            "the run's wall clock ran out before integration".into(),
+                            None,
+                        )
+                        .await;
+                }
+                if unreadable.is_empty() {
+                    failed = Some((
+                        FailureClass::Budget,
+                        "the run's wall clock ran out before its retry".into(),
+                    ));
+                }
+                break;
+            };
+            if reask {
+                reasks += 1;
             }
-            started => started?,
-        };
-        let Some(observed) = started else {
-            return self
-                .integration_missing(
-                    results,
-                    FailureClass::Budget,
-                    "the run's wall clock ran out before integration".into(),
-                    None,
-                )
-                .await;
-        };
-        let observation = self.observation(&observed);
-        let node = observation
-            .nodes
-            .iter()
-            .find(|node| node.slot_id == INTEGRATOR_SLOT);
-        let Some(answer) = accepted_answer(node).map(str::to_owned) else {
-            let (class, detail) = failure_of(node, observed.deadline_hit);
-            return self
-                .integration_missing(
-                    results,
-                    class,
-                    format!("the integrator has no result: {detail}"),
-                    Some(&observed),
-                )
-                .await;
-        };
-        match parse_integrated(&answer) {
-            Ok(findings) => self.findings(findings).await,
-            Err(error) => {
-                self.integration_missing(
-                    results,
-                    FailureClass::Other,
-                    format!("the integrator's FINDINGS block could not be read ({error})"),
-                    Some(&observed),
-                )
-                .await
+            last = Some(observed.index);
+            let observation = self.observation(&observed);
+            let turn_id = observation.turn_id.clone();
+            let node = observation
+                .nodes
+                .iter()
+                .find(|node| node.slot_id == INTEGRATOR_SLOT);
+            let node_id = node.map(|node| node.node_id.clone());
+            let answer = accepted_answer(node).map(str::to_owned);
+            let failure = failure_of(node, observed.deadline_hit);
+            let go_on = |class: FailureClass| !observed.deadline_hit && !final_failure(class);
+            match answer {
+                Some(answer) => match parse_integrated(&answer) {
+                    Ok(findings) => {
+                        if reask {
+                            self.phase(
+                                "reask",
+                                format!(
+                                    "the integrator answered re-ask {reasks} with a readable \
+                                     FINDINGS block"
+                                ),
+                            )
+                            .await?;
+                        }
+                        return self.findings(findings).await;
+                    }
+                    Err(error) => {
+                        let error = error.to_string();
+                        let again = reasks < MAX_REASKS
+                            && !observed.deadline_hit
+                            && !self.host.stop_requested(&self.run.run_id).await;
+                        self.phase(
+                            "reask",
+                            format!(
+                                "the integrator's FINDINGS block could not be read ({}){}",
+                                cut(&error, MAX_LISTED_DETAIL_BYTES).0,
+                                if again {
+                                    format!("; it gets re-ask {}", reasks + 1)
+                                } else {
+                                    String::new()
+                                }
+                            ),
+                        )
+                        .await?;
+                        unreadable.push((answer, error));
+                        failed = None;
+                        if !again {
+                            break;
+                        }
+                    }
+                },
+                None => {
+                    let (class, detail) = failure;
+                    let again = go_on(class)
+                        && !self.host.stop_requested(&self.run.run_id).await
+                        && if unreadable.is_empty() {
+                            !retried
+                        } else {
+                            reasks < MAX_REASKS
+                        };
+                    // A turn the audit answers for itself: the next turn,
+                    // the host's merge or the integration's entry.
+                    if let Some(node_id) = &node_id {
+                        self.report
+                            .accounted
+                            .push((turn_id.clone(), node_id.clone()));
+                    }
+                    self.phase(
+                        if unreadable.is_empty() {
+                            "integrate_failed"
+                        } else {
+                            "reask"
+                        },
+                        format!(
+                            "the integrator has no result ({}: {}){}",
+                            class_name(class),
+                            cut(&detail, MAX_LISTED_DETAIL_BYTES).0,
+                            match (again, unreadable.is_empty()) {
+                                (true, true) => "; it gets one more turn".to_owned(),
+                                (true, false) => format!("; it gets re-ask {}", reasks + 1),
+                                (false, _) => String::new(),
+                            }
+                        ),
+                    )
+                    .await?;
+                    if unreadable.is_empty() {
+                        retried = true;
+                    }
+                    failed = Some((class, detail));
+                    if !again {
+                        break;
+                    }
+                }
             }
         }
+        // No readable FINDINGS block: the host merges when the integrator
+        // answered but could not be read, or has no result for a provider's
+        // reason; anything else is an integration not covered.
+        let reason = |(class, detail): &(FailureClass, String)| {
+            format!(
+                "{}: {}",
+                class_name(*class),
+                cut(detail, MAX_LISTED_DETAIL_BYTES).0
+            )
+        };
+        if let Some((_, error)) = unreadable.last() {
+            let error = cut(error, MAX_LISTED_DETAIL_BYTES).0;
+            let why = match (&failed, reasks) {
+                (Some(failure), _) => format!(
+                    "the integrator's FINDINGS block could not be read ({error}), and its \
+                     re-ask {reasks} has no result ({})",
+                    reason(failure)
+                ),
+                (None, 0) => format!(
+                    "the integrator's FINDINGS block could not be read ({error}), and the wall \
+                     clock or a stop left no re-ask"
+                ),
+                (None, 1) => format!(
+                    "the integrator's FINDINGS block could not be read, nor after 1 re-ask \
+                     ({error})"
+                ),
+                (None, reasks) => format!(
+                    "the integrator's FINDINGS block could not be read, nor after {reasks} \
+                     re-asks ({error})"
+                ),
+            };
+            return self.host_merged(results, why).await;
+        }
+        let (class, detail) =
+            failed.unwrap_or((FailureClass::Other, "it has no readable answer".into()));
+        if matches!(
+            class,
+            FailureClass::ProviderFailure
+                | FailureClass::ProviderRefusal
+                | FailureClass::ProviderRejected
+        ) {
+            let why = format!(
+                "the integrator has no result{} ({})",
+                if self.integrator_turns() > 1 {
+                    " after its retry"
+                } else {
+                    ""
+                },
+                reason(&(class, detail))
+            );
+            return self.host_merged(results, why).await;
+        }
+        let at = last.map(|index| Observed {
+            index,
+            deadline_hit: false,
+        });
+        self.integration_missing(
+            results,
+            class,
+            format!("the integrator has no result: {detail}"),
+            at.as_ref(),
+        )
+        .await
+    }
+
+    /// How many integrate turns the run started.
+    fn integrator_turns(&self) -> usize {
+        self.report
+            .turn_refs
+            .iter()
+            .filter(|turn| turn.purpose == INTEGRATE_PURPOSE)
+            .count()
+    }
+
+    /// The host's own merge of the area findings ([`host_merge`]) when the
+    /// integrator's answer could not be read or its turn failed for a
+    /// provider's reason: a note, not a gap. The integrator's last turn is
+    /// accounted for, so it does not make the run need attention.
+    async fn host_merged(&mut self, results: &[AreaResult], why: String) -> Result<(), RunError> {
+        let (merged, total) = host_merge(results);
+        self.note(format!(
+            "findings merged by the host: {why}, so the host took the union of the area \
+             findings and removed duplicates by file, line and title ({total} finding{}, {} \
+             kept)",
+            if total == 1 { "" } else { "s" },
+            merged.len()
+        ))
+        .await?;
+        self.report.last_turn_accounted = true;
+        self.findings(merged).await
     }
 }
 

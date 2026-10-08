@@ -108,7 +108,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whichever provider each runs it: a reviewer on `openrouter:openai/gpt-5.5` runs a Codex
   writer's `openai:gpt-5.5`, and one on `openrouter:anthropic/claude-haiku-4.5` a Claude
   Code writer's `anthropic:claude-haiku-4-5` (case, `.` against `-`, a snapshot date,
-  `-latest` and an OpenRouter `:variant` are ignored). Like
+  `-latest` and an OpenRouter `:variant` are ignored). A Claude model is compared by its
+  family and version, so Claude Code's aliases (`anthropic:haiku` is
+  `claude-haiku-4-5`; `best` and `opusplan` count as the model they run by default), a
+  `[1m]` suffix and the older order of a Claude id (`claude-3-5-haiku`) are the same
+  model as OpenRouter's `anthropic/…` id, either way round. Like
   the qa and audit blocks, `ADJUDICATIONS` is read after a heading in any case and with
   or without Markdown marks, fenced or not, between XML-style tags
   (`<ADJUDICATIONS>` … `</ADJUDICATIONS>`), or as an answer that is only the JSON; a
@@ -158,16 +162,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a result gets one too, unless the wall clock, a person's stop or a 400-403
   refusal ended it. Each file still unread after them, or when the wall clock or a stop
   ends them, is not covered, listed by file with why; so is a worker without a result,
-  an unreadable report, findings beyond a report's 200 left out of it, and an area whose
-  record of tool calls cannot be read. Each area's coverage is a `coverage` progress
-  line. What a worker lists as `NOT_REACHED` is a note: the host's coverage decides. An
+  findings beyond a report's 200 left out of it, and an area whose record of tool calls
+  cannot be read. Each area's coverage is a `coverage` progress line. What a worker
+  lists as `NOT_REACHED` is a note: the host's coverage decides. A worker whose answer
+  has no readable `FINDINGS` block gets up to 2 re-asks after the follow-ups, each a
+  turn (`audit_reask`) with a fresh read-only activation of that worker offered no
+  tools, whose instructions quote its answer and ask for exactly a `FINDINGS` JSON array
+  in the documented format (`[]` when it describes none); like follow-ups they are
+  bounded by the budget and the wall clock and recorded (`applying_team` and `reask`
+  progress lines, the Outcome's turns), and nothing a re-ask does counts as reading.
+  Coverage and findings are separate: an area whose files were all read but whose
+  findings stay unreadable is not "not covered"; it is listed in the Outcome's
+  `unreadable_findings` with every answer the host could not read, and the run needs
+  attention with "Findings unreadable for <area>" (in the summary, a `findings_unreadable`
+  failure of the JUnit `findings` suite, and the Run outcome panel). The integrator
+  still receives such an answer as text. An
   invalid plan, or a planner without an answer (a provider failure, say), gets one
   retry, which quotes the error after an invalid plan; a second attempt without a plan,
   or a repository the host cannot list, leaves the whole scope not covered, and the
-  attention line says "The whole scope was not covered". When integration has no
-  readable result, the workers' findings are reported unmerged and `audit integration`
-  is listed as not covered; the attention line counts only areas and says "The
-  integration was not read; the area findings are reported unmerged". A stopped audit
+  attention line says "The whole scope was not covered". An integrator without an
+  answer gets one retry turn (not after the wall clock, a stop or a 400-403 refusal),
+  and an integrator whose `FINDINGS` block cannot be read gets up to 2 re-asks, each a
+  fresh activation offered no tools that is sent the integrate request again with the
+  unreadable answer quoted. When its answer is still unreadable, or it still has no
+  result for a provider's reason, the host merges the findings itself: the union of the
+  area findings, duplicates by file, line and normalized title removed, each keeping its
+  area, with the note "findings merged by the host: …"; that needs no attention (in the
+  measured runs the merge step never added a finding). When integration has no result
+  for another reason (the wall clock, a stop), the workers' findings are reported
+  unmerged and `audit integration` is listed as not covered; the attention line counts
+  only areas and says "The integration was not read; the area findings are reported
+  unmerged". A stopped audit
   starts no further turn, lists the areas not started, the files no follow-up read and
   the integration not run as not covered (`stopped`), reports the workers' findings
   unmerged, and keeps in its Outcome the turns, not-covered entries, findings and usage

@@ -678,6 +678,12 @@ pub fn summary(outcome: &RunOutcome) -> String {
             let _ = writeln!(out, "  {}: {}", entry.area, entry.reason());
         }
     }
+    if !outcome.unreadable_findings.is_empty() {
+        let _ = writeln!(out, "Findings unreadable:");
+        for entry in &outcome.unreadable_findings {
+            let _ = writeln!(out, "  {}: {}", entry.area, entry.detail);
+        }
+    }
     if !outcome.notes.is_empty() {
         let _ = writeln!(out, "Notes:");
         for note in &outcome.notes {
@@ -1490,6 +1496,38 @@ mod tests {
             "{text}"
         );
         assert!(!summary(&outcome("pass", serde_json::json!({}))).contains("Notes:"));
+    }
+
+    /// An audit area whose worker's findings could not be read is listed
+    /// apart from what was not covered; its answers stay in the record.
+    #[test]
+    fn the_summary_lists_unreadable_findings_apart_from_coverage() {
+        let run = outcome(
+            "needs_attention",
+            serde_json::json!({
+                "attention": ["Findings unreadable for ingest"],
+                "unreadable_findings": [{
+                    "area": "ingest",
+                    "detail": "the area worker's FINDINGS block could not be read (the answer \
+                               has no FINDINGS block), nor after 2 re-asks",
+                    "answers": ["I found a defect in feed.go."]
+                }]
+            }),
+        );
+        let text = summary(&run);
+        assert!(
+            text.contains("Needs attention: Findings unreadable for ingest\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "Findings unreadable:\n  ingest: the area worker's FINDINGS block could not be \
+                 read (the answer has no FINDINGS block), nor after 2 re-asks\n"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("Not covered:"), "{text}");
+        assert!(!text.contains("I found a defect"), "{text}");
     }
 
     /// Bytes written to a `Console` stream, kept for the assertions.

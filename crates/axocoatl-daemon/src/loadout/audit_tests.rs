@@ -701,6 +701,7 @@ fn outcome_of(report: &KindReport) -> RunOutcome {
         adjudications: Vec::new(),
         findings: report.findings.clone(),
         not_covered: report.not_covered.clone(),
+        unreadable_findings: report.unreadable_findings.clone(),
         notes: report.notes.clone(),
         warnings: Vec::new(),
         usage: RunUsage::default(),
@@ -1162,6 +1163,15 @@ async fn failed_workers_get_follow_ups_unless_the_failure_would_repeat() {
                 )),
             )],
         ),
+        // The api worker's two re-asks answer in prose too.
+        turn(
+            TurnState::Completed,
+            vec![("worker-api", Node::Answer("Nothing to add.".into()))],
+        ),
+        turn(
+            TurnState::Completed,
+            vec![("worker-api", Node::Answer("Still nothing.".into()))],
+        ),
         integrated(&[("token compared with ==", "auth")]),
     ]);
     let (run, _repo) = context(later());
@@ -1179,7 +1189,22 @@ async fn failed_workers_get_follow_ups_unless_the_failure_would_repeat() {
             "apply",
             "send:turn-3",
             "apply",
-            "send:turn-4"
+            "send:turn-4",
+            "apply",
+            "send:turn-5",
+            "apply",
+            "send:turn-6"
+        ]
+    );
+    assert_eq!(
+        purposes(&report),
+        [
+            PLAN_PURPOSE,
+            AREAS_PURPOSE,
+            FOLLOW_UP_PURPOSE,
+            REASK_PURPOSE,
+            REASK_PURPOSE,
+            INTEGRATE_PURPOSE
         ]
     );
     let follow_up: Vec<&str> = calls[2]
@@ -1200,15 +1225,36 @@ async fn failed_workers_get_follow_ups_unless_the_failure_would_repeat() {
         report.accounted,
         [("turn-2".to_string(), "turn-2-node-1".to_string())]
     );
+    // The api worker read its file: its findings are unreadable, but the
+    // area is covered.
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    let no_block = "the answer has no FINDINGS block: write a line FINDINGS, then a fenced \
+                    JSON array of findings ([] when there are none)";
     assert_eq!(
-        entries(&report.not_covered),
-        [(
-            "api",
-            FailureClass::Other,
-            "the area worker's report could not be read (the answer has no FINDINGS block: \
-             write a line FINDINGS, then a fenced JSON array of findings ([] when there are \
-             none)); the integrator received its answer as text"
-        )]
+        report.unreadable_findings,
+        [UnreadableFindings {
+            area: "api".into(),
+            detail: format!(
+                "the area worker's FINDINGS block could not be read ({no_block}), nor after 2 \
+                 re-asks (the last: {no_block}); its files' coverage stands, and the integrator \
+                 received its answer as text"
+            ),
+            answers: vec![
+                "I looked around.".into(),
+                "Nothing to add.".into(),
+                "Still nothing.".into()
+            ],
+            node_id: Some("turn-5-node-0".into()),
+            turn_id: Some("turn-5".into()),
+        }]
+    );
+    assert_eq!(
+        host.phases("coverage")[2],
+        "api: 1 of 1 files examined: 1 read"
+    );
+    assert_eq!(
+        outcome_of(&report).attention,
+        ["Findings unreadable for api"]
     );
     assert_eq!(
         report.notes,
@@ -1217,10 +1263,10 @@ async fn failed_workers_get_follow_ups_unless_the_failure_would_repeat() {
           coverage from the files its workers read"
         ]
     );
-    let request = &host.sent()[3];
+    let request = &host.sent()[5];
     assert!(request.contains("REPORT of area db") && request.contains("db-followup1-F1"));
     assert!(request.contains("REPORT of area api") && request.contains("I looked around."));
-    assert!(request.contains("- api (other): the area worker's report could not be read"));
+    assert!(!request.contains("Not covered"), "{request}");
     let outcome = outcome_with(
         &FakeHost::new(vec![
             planned(),
@@ -3807,4 +3853,510 @@ async fn a_large_budget_still_plans_at_most_200_reads_a_worker() {
     );
     assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
     assert_eq!(outcome_of(&report).exit_code, exit_code::PASS);
+}
+
+/// The plan of three areas whose workers read `src/<area>/mod.rs`, with
+/// `ingest` in place of `api`.
+fn ingest_areas() -> (Scripted, tempfile::TempDir) {
+    let repo = repository(&[
+        ("src/auth/mod.rs", "pub fn login() {}\n"),
+        ("src/db/mod.rs", "pub fn query() {}\n"),
+        ("src/ingest/mod.rs", "pub fn load() {}\n"),
+    ]);
+    let plan = turn(
+        TurnState::Completed,
+        vec![(
+            PLANNER_SLOT,
+            Node::Answer(plan_answer(&[
+                ("auth", "login and tokens", &["src/auth/**"]),
+                ("db", "queries and migrations", &["src/db/**"]),
+                ("ingest", "the order feed", &["src/ingest/**"]),
+            ])),
+        )],
+    );
+    (plan, repo)
+}
+
+/// What the re-ask of the out4 ingest worker answers: its finding, in the
+/// format.
+const INGEST_RESTATED: &str = "FINDINGS\n```json\n[{\"id\": \"F1\", \"title\": \"Missing error \
+     check for json.Unmarshal\", \"detail\": \"json.Unmarshal's error is not checked\", \
+     \"severity\": \"high\", \"location\": \"ingest/feed.go:29\"}]\n```";
+
+/// The 1.3.0 resmoke8's run 4 (`out4`): the ingest worker read both its
+/// files but described its finding in prose and wrote only a NOT_REACHED
+/// block, so the area was listed as not covered and the run exited 2. Now
+/// the worker gets a re-ask, a fresh read-only activation without tools
+/// whose instructions quote that exact answer; it answers in the format,
+/// the finding joins the area's report, and the run passes.
+#[tokio::test]
+async fn resmoke8_out4_a_worker_answering_in_prose_is_re_asked_and_the_run_passes() {
+    let out4 = fixture("audit-resmoke8-out4-worker-ingest.txt");
+    let (plan, repo) = ingest_areas();
+    let script = || {
+        vec![
+            plan.clone(),
+            turn_of(
+                TurnState::Completed,
+                vec![
+                    answered("worker-auth", worker_answer(&[], &[])),
+                    answered("worker-db", worker_answer(&[], &[])),
+                    answered("worker-ingest", out4.clone()),
+                ],
+            ),
+            turn(
+                TurnState::Completed,
+                vec![("worker-ingest", Node::Answer(INGEST_RESTATED.into()))],
+            ),
+            integrated(&[("Missing error check for json.Unmarshal", "ingest")]),
+        ]
+    };
+    let run = context_in(later(), repo.path());
+    let host = FakeHost::new(script());
+    let (report, calls) = drive(&host, &run).await;
+    assert_eq!(
+        purposes(&report),
+        [
+            PLAN_PURPOSE,
+            AREAS_PURPOSE,
+            REASK_PURPOSE,
+            INTEGRATE_PURPOSE
+        ]
+    );
+    // The re-ask: the ingest worker alone, read-only, without tools, its
+    // instructions quoting the recorded answer and asking for the block.
+    let reask = &calls[2].0;
+    assert_eq!(reask.len(), 1);
+    assert_eq!(reask[0].slot_id, "worker-ingest");
+    assert!(reask[0].agent.tools.is_empty());
+    assert_eq!(reask[0].agent.writes, Some(Vec::new()));
+    let instructions = reask[0].instructions.as_deref().unwrap();
+    assert!(instructions.starts_with("Your area: ingest\nScope: the order feed\nRe-ask 1 of 2: "));
+    // In a fence longer than the answer's own.
+    assert!(
+        instructions.contains(&format!("````text\n{out4}\n````\n")),
+        "{instructions}"
+    );
+    assert!(instructions.contains(
+        "The host could not read this answer (the answer has no FINDINGS block: write a line \
+         FINDINGS, then a fenced JSON array of findings ([] when there are none))."
+    ));
+    assert!(
+        instructions.contains("with an empty array ([]) if it describes none. Do not call tools")
+    );
+    assert!(!instructions.contains("Read every file"), "{instructions}");
+    assert!(host.sent()[2].contains("Re-ask 1 of the audit's areas (ingest)"));
+    assert_eq!(
+        host.applied.lock().unwrap()[2].slots[0].writes,
+        Some(Some(Vec::new()))
+    );
+    assert_eq!(
+        host.phases("reask"),
+        ["worker-ingest answered re-ask 1 with a readable FINDINGS block: 1 finding"]
+    );
+    assert_eq!(
+        host.phases("applying_team")[2],
+        "audit re-ask 1: 1 read-only worker without tools (ingest)"
+    );
+    // The restated finding reached the integrator as the area's report.
+    let request = &host.sent()[3];
+    assert!(request.contains("REPORT of area ingest"));
+    assert!(request.contains("\"id\":\"ingest-F1\""), "{request}");
+    assert!(!request.contains("could not be read"), "{request}");
+    // Coverage was the worker's reads all along: nothing is not covered.
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    assert!(report.unreadable_findings.is_empty());
+    assert!(host
+        .phases("coverage")
+        .contains(&"ingest: 1 of 1 files examined: 1 read".to_owned()));
+    let outcome = outcome_with(&FakeHost::new(script()), &run).await.unwrap();
+    assert_eq!(
+        outcome.exit_code,
+        exit_code::PASS,
+        "{:?} {:?}",
+        outcome.attention,
+        outcome.unreadable_findings
+    );
+
+    // A re-ask without a result for a provider's reason is followed by the
+    // second; when that one answers in prose too, the area is covered but
+    // its findings are unreadable, with every answer kept.
+    let host = FakeHost::new(vec![
+        plan.clone(),
+        turn_of(
+            TurnState::Completed,
+            vec![
+                answered("worker-auth", worker_answer(&[], &[])),
+                answered("worker-db", worker_answer(&[], &[])),
+                answered("worker-ingest", out4.clone()),
+            ],
+        ),
+        turn(
+            TurnState::NeedsAttention,
+            vec![(
+                "worker-ingest",
+                Node::Fail(FailureClass::ProviderFailure, "connection reset"),
+            )],
+        ),
+        turn(
+            TurnState::Completed,
+            vec![("worker-ingest", Node::Answer("I found one defect.".into()))],
+        ),
+        integrated(&[("Missing error check for json.Unmarshal", "ingest")]),
+    ]);
+    let (report, calls) = drive(&host, &run).await;
+    assert_eq!(
+        purposes(&report),
+        [
+            PLAN_PURPOSE,
+            AREAS_PURPOSE,
+            REASK_PURPOSE,
+            REASK_PURPOSE,
+            INTEGRATE_PURPOSE
+        ]
+    );
+    assert!(calls[3].0[0]
+        .instructions
+        .as_deref()
+        .unwrap()
+        .starts_with("Your area: ingest\nScope: the order feed\nRe-ask 2 of 2: "));
+    // The failed re-ask is the audit's to account for.
+    assert!(report
+        .accounted
+        .contains(&("turn-3".to_string(), "turn-3-node-0".to_string())));
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    let no_block = "the answer has no FINDINGS block: write a line FINDINGS, then a fenced \
+                    JSON array of findings ([] when there are none)";
+    assert_eq!(
+        report.unreadable_findings,
+        [UnreadableFindings {
+            area: "ingest".into(),
+            detail: format!(
+                "the area worker's FINDINGS block could not be read ({no_block}), nor after 2 \
+                 re-asks (the last: {no_block}); its files' coverage stands, and the integrator \
+                 received its answer as text"
+            ),
+            answers: vec![out4.clone(), "I found one defect.".into()],
+            node_id: Some("turn-4-node-0".into()),
+            turn_id: Some("turn-4".into()),
+        }]
+    );
+    assert_eq!(
+        host.phases("reask"),
+        [
+            "worker-ingest has no result in re-ask 1 (provider_failure: connection reset)",
+            &format!("worker-ingest's answer to re-ask 2 could not be read either ({no_block})"),
+        ]
+    );
+    // The integrator still read the answer as text.
+    assert!(host.sent()[4].contains("The worker's report could not be read"));
+    assert!(host.sent()[4].contains("json.Unmarshal error is not checked"));
+    let outcome = outcome_of(&report);
+    assert_eq!(outcome.attention, ["Findings unreadable for ingest"]);
+    assert_eq!(outcome.exit_code, exit_code::NEEDS_ATTENTION);
+}
+
+/// The 1.3.0 resmoke8's run 1 (`out1`): the integrator's answer was a
+/// broken tool call written as text, so the host reported "The
+/// integration was not read" and the run exited 2. Now it gets two
+/// re-asks, each a fresh activation without tools sent the integrate
+/// request again with that exact answer quoted; when both answer the same
+/// way, the host merges the area findings itself (duplicates by file, line
+/// and title removed, each keeping its area), notes it, and the run
+/// passes.
+#[tokio::test]
+async fn resmoke8_out1_an_unreadable_integrator_is_re_asked_then_merged_by_the_host() {
+    let out1 = fixture("audit-resmoke8-out1-integrator.txt");
+    let script = |third: Node| {
+        vec![
+            planned(),
+            turn(
+                TurnState::Completed,
+                vec![
+                    (
+                        "worker-auth",
+                        Node::Answer(worker_answer(
+                            &[("Token compared with ==", "src/auth/mod.rs:1")],
+                            &[],
+                        )),
+                    ),
+                    (
+                        "worker-db",
+                        Node::Answer(worker_answer(
+                            &[
+                                ("SQL built by format!", "src/db/mod.rs:1"),
+                                // The auth defect again, written another way.
+                                ("token compared with  ==!", "./src/auth/mod.rs:1:5"),
+                            ],
+                            &[],
+                        )),
+                    ),
+                    ("worker-api", Node::Answer(worker_answer(&[], &[]))),
+                ],
+            ),
+            turn(
+                TurnState::Completed,
+                vec![(INTEGRATOR_SLOT, Node::Answer(out1.clone()))],
+            ),
+            turn(
+                TurnState::Completed,
+                vec![(INTEGRATOR_SLOT, Node::Answer(out1.clone()))],
+            ),
+            turn(TurnState::Completed, vec![(INTEGRATOR_SLOT, third)]),
+        ]
+    };
+    let (run, _repo) = context(later());
+    let host = FakeHost::new(script(Node::Answer(out1.clone())));
+    let (report, calls) = drive(&host, &run).await;
+    assert_eq!(
+        purposes(&report),
+        [
+            PLAN_PURPOSE,
+            AREAS_PURPOSE,
+            INTEGRATE_PURPOSE,
+            REASK_PURPOSE,
+            REASK_PURPOSE
+        ]
+    );
+    // Each re-ask: the integrator alone without tools, sent the integrate
+    // request again with the recorded answer quoted.
+    let integrate = host.sent()[2].clone();
+    for (index, round) in [(3, 1), (4, 2)] {
+        assert_eq!(calls[index].0.len(), 1);
+        assert_eq!(calls[index].0[0].slot_id, INTEGRATOR_SLOT);
+        assert!(calls[index].0[0].agent.tools.is_empty());
+        let request = &host.sent()[index];
+        assert!(request.starts_with(integrate.trim_end()), "{request}");
+        assert!(request.contains(&format!(
+            "Re-ask {round} of 2: the host could not read the FINDINGS block of the integrator's \
+             answer"
+        )));
+        assert!(
+            request.contains(&format!("```text\n{out1}\n```\n")),
+            "{request}"
+        );
+        assert!(request.contains("Do not call tools and do not read files"));
+    }
+    // Round 2 quotes both answers.
+    assert_eq!(host.sent()[4].matches("<function=read_file>").count(), 2);
+    // The union of the area findings, the duplicate left out, each with
+    // its area and the workers' ids.
+    let merged: Vec<(&str, Option<&str>, FindingSource)> = report
+        .findings
+        .iter()
+        .map(|finding| (finding.id.as_str(), finding.area.as_deref(), finding.source))
+        .collect();
+    assert_eq!(
+        merged,
+        [
+            ("auth-F1", Some("auth"), FindingSource::AuditWorker),
+            ("db-F1", Some("db"), FindingSource::AuditWorker),
+        ]
+    );
+    let no_block = "the answer has no FINDINGS block: write a line FINDINGS, then a fenced \
+                    JSON array of the merged findings ([] when there are none)";
+    assert_eq!(
+        report.notes,
+        [format!(
+            "findings merged by the host: the integrator's FINDINGS block could not be read, \
+             nor after 2 re-asks ({no_block}), so the host took the union of the area findings \
+             and removed duplicates by file, line and title (3 findings, 2 kept)"
+        )]
+    );
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    assert!(report.last_turn_accounted);
+    let outcome = outcome_with(&FakeHost::new(script(Node::Answer(out1.clone()))), &run)
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.exit_code,
+        exit_code::PASS,
+        "{:?} {:?}",
+        outcome.attention,
+        outcome.not_covered
+    );
+    assert_eq!(outcome.findings.len(), 2);
+
+    // A re-ask that answers in the format ends it with the integrator's
+    // own findings.
+    let host = FakeHost::new(script(Node::Answer(integrated_answer(&[(
+        "token compared with ==",
+        "auth",
+    )]))));
+    let (report, _) = drive(&host, &run).await;
+    assert_eq!(report.findings.len(), 1);
+    assert_eq!(report.findings[0].source, FindingSource::Integrator);
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    assert!(!report.last_turn_accounted);
+    assert_eq!(
+        host.phases("reask").last().unwrap(),
+        "the integrator answered re-ask 2 with a readable FINDINGS block"
+    );
+
+    // A last re-ask without a result for a provider's reason: the host
+    // merges too, and the failed turn needs no attention.
+    let failing = script(Node::Fail(FailureClass::ProviderFailure, "HTTP 503"));
+    let host = FakeHost::new(failing.clone());
+    let (report, _) = drive(&host, &run).await;
+    assert_eq!(
+        report.notes[0],
+        format!(
+            "findings merged by the host: the integrator's FINDINGS block could not be read \
+             ({no_block}), and its re-ask 2 has no result (provider_failure: HTTP 503), so the \
+             host took the union of the area findings and removed duplicates by file, line and \
+             title (3 findings, 2 kept)"
+        )
+    );
+    assert!(report
+        .accounted
+        .contains(&("turn-5".to_string(), "turn-5-node-0".to_string())));
+    let mut failing = failing;
+    failing[4].state = TurnState::NeedsAttention;
+    let outcome = outcome_with(&FakeHost::new(failing), &run).await.unwrap();
+    assert_eq!(
+        outcome.exit_code,
+        exit_code::PASS,
+        "{:?} {:?}",
+        outcome.attention,
+        outcome.not_covered
+    );
+}
+
+/// An integrator without a result gets one retry turn; when that fails
+/// for a provider's reason too, the host merges the findings and the run
+/// passes. A provider that refuses the request itself is not retried.
+/// The wall clock still leaves the integration not covered.
+#[tokio::test]
+async fn an_integrator_failing_for_a_provider_s_reason_is_retried_then_merged_by_the_host() {
+    let areas = || {
+        turn(
+            TurnState::Completed,
+            vec![
+                (
+                    "worker-auth",
+                    Node::Answer(worker_answer(
+                        &[("token compared with ==", "src/auth/mod.rs:1")],
+                        &[],
+                    )),
+                ),
+                ("worker-db", Node::Answer(worker_answer(&[], &[]))),
+                ("worker-api", Node::Answer(worker_answer(&[], &[]))),
+            ],
+        )
+    };
+    let failed = |class, message| {
+        turn(
+            TurnState::NeedsAttention,
+            vec![(INTEGRATOR_SLOT, Node::Fail(class, message))],
+        )
+    };
+    let (run, _repo) = context(later());
+    let script = || {
+        vec![
+            planned(),
+            areas(),
+            failed(FailureClass::ProviderFailure, "HTTP 502"),
+            failed(FailureClass::ProviderFailure, "stream ended early"),
+        ]
+    };
+    let host = FakeHost::new(script());
+    let (report, calls) = drive(&host, &run).await;
+    assert_eq!(
+        purposes(&report),
+        [
+            PLAN_PURPOSE,
+            AREAS_PURPOSE,
+            INTEGRATE_PURPOSE,
+            INTEGRATE_PURPOSE
+        ]
+    );
+    // The retry is the integrate turn again, with its tools.
+    assert_eq!(host.sent()[3], host.sent()[2]);
+    assert!(!calls[3].0[0].agent.tools.is_empty());
+    assert_eq!(
+        host.phases("integrate_failed"),
+        [
+            "the integrator has no result (provider_failure: HTTP 502); it gets one more turn",
+            "the integrator has no result (provider_failure: stream ended early)",
+        ]
+    );
+    assert_eq!(
+        report.notes,
+        [
+            "findings merged by the host: the integrator has no result after its retry \
+          (provider_failure: stream ended early), so the host took the union of the area \
+          findings and removed duplicates by file, line and title (1 finding, 1 kept)"
+        ]
+    );
+    assert_eq!(report.findings[0].id, "auth-F1");
+    assert!(report.not_covered.is_empty());
+    let outcome = outcome_with(&FakeHost::new(script()), &run).await.unwrap();
+    assert_eq!(
+        outcome.exit_code,
+        exit_code::PASS,
+        "{:?} {:?}",
+        outcome.attention,
+        outcome.not_covered
+    );
+
+    // Refused by its provider: no retry, merged by the host.
+    let host = FakeHost::new(vec![
+        planned(),
+        areas(),
+        failed(FailureClass::ProviderRejected, "HTTP 401"),
+    ]);
+    let (report, _) = drive(&host, &run).await;
+    assert_eq!(
+        purposes(&report),
+        [PLAN_PURPOSE, AREAS_PURPOSE, INTEGRATE_PURPOSE]
+    );
+    assert_eq!(
+        report.notes,
+        [
+            "findings merged by the host: the integrator has no result (provider_rejected: HTTP \
+          401), so the host took the union of the area findings and removed duplicates by file, \
+          line and title (1 finding, 1 kept)"
+        ]
+    );
+
+    // Another failure after the retry leaves the integration not covered.
+    let host = FakeHost::new(vec![
+        planned(),
+        areas(),
+        failed(FailureClass::RuntimeLimit, "too many steps"),
+        failed(FailureClass::RuntimeLimit, "too many steps"),
+    ]);
+    let (report, _) = drive(&host, &run).await;
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    assert_eq!(
+        entries(&report.not_covered),
+        [(
+            INTEGRATION,
+            FailureClass::RuntimeLimit,
+            "the integrator has no result: too many steps; the area workers' findings are \
+             reported unmerged"
+        )]
+    );
+    assert_eq!(report.not_covered[0].turn_id.as_deref(), Some("turn-4"));
+    assert!(!report.last_turn_accounted);
+}
+
+#[test]
+fn the_host_merge_keys_findings_by_file_line_and_title() {
+    assert_eq!(
+        file_and_line("./billing/pagination.py:15"),
+        ("billing/pagination.py".into(), "15".into())
+    );
+    assert_eq!(
+        file_and_line("ingest/feed.go:29:7"),
+        ("ingest/feed.go".into(), "29".into())
+    );
+    assert_eq!(
+        file_and_line("ingest/feed.go"),
+        ("ingest/feed.go".into(), String::new())
+    );
+    assert_eq!(
+        normalized_title("  Missing error-check for `json.Unmarshal`! "),
+        "missing error check for json unmarshal"
+    );
 }

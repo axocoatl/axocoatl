@@ -30,7 +30,8 @@ pub mod exit_code {
     /// A required check failed (or timed out) on the final candidate.
     pub const CHECKS_FAILED: i32 = 1;
     /// The run needs a person: review not passed, unadjudicated findings,
-    /// not-covered areas, blocked, budget or wall-clock exhausted, or
+    /// not-covered areas, audit findings that could not be read, blocked,
+    /// budget or wall-clock exhausted, or
     /// findings the loadout fails on.
     pub const NEEDS_ATTENTION: i32 = 2;
     /// Bad flags, unknown or invalid loadout, missing parameter.
@@ -446,6 +447,27 @@ impl NotCovered {
     }
 }
 
+/// An audit area whose worker read its files but whose findings the host
+/// could not read, even after re-asking the worker for them: its coverage
+/// stands, and it needs attention as `Findings unreadable for <area>`, not
+/// as an area not covered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnreadableFindings {
+    pub area: String,
+    /// Why the host could not read them: the parse error of the last
+    /// answer, and how many re-asks there were.
+    pub detail: String,
+    /// The worker's answers the host could not read, as the worker wrote
+    /// them (each bounded), re-asks included, in order.
+    #[serde(default)]
+    pub answers: Vec<String>,
+    /// The worker's last activation, when one is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+}
+
 /// Tokens and cost of the run, with completeness.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunUsage {
@@ -569,7 +591,7 @@ pub struct KeepResult {
 pub struct RunTurnRef {
     pub turn_id: String,
     /// What the turn was for: `run`, `audit_plan`, `audit_areas`,
-    /// `audit_follow_up`, `audit_integrate`.
+    /// `audit_follow_up`, `audit_reask`, `audit_integrate`.
     pub purpose: String,
     pub state: TurnState,
 }
@@ -602,6 +624,10 @@ pub struct RunOutcome {
     pub findings: Vec<Finding>,
     #[serde(default)]
     pub not_covered: Vec<NotCovered>,
+    /// Audit areas whose files were read but whose findings could not be
+    /// read; each needs attention. Absent when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unreadable_findings: Vec<UnreadableFindings>,
     /// What the run noticed that is neither a gap nor a warning, in words,
     /// such as an audit worker's not-reached entry naming a path that does
     /// not exist. Notes never change the verdict. Absent when there are
@@ -642,7 +668,8 @@ impl RunOutcome {
     /// pass. A required check that failed or timed out on the final
     /// candidate is a checks failure; a check that never ran on it (or whose
     /// record cannot be read), a review that did not pass, a
-    /// missing adjudication, anything not covered, an unfinished turn, an
+    /// missing adjudication, anything not covered, findings that could not be
+    /// read, an unfinished turn, an
     /// exhausted budget, or (with `fail_on_findings`) a confirmed or
     /// reproduced finding needs attention. Nothing is ever silently a pass.
     pub fn decide(&mut self, inputs: VerdictInputs) -> i32 {
@@ -710,6 +737,15 @@ impl RunOutcome {
             attention.push(
                 "The integration was not read; the area findings are reported unmerged".into(),
             );
+        }
+        if !self.unreadable_findings.is_empty() {
+            let mut areas: Vec<&str> = Vec::new();
+            for entry in &self.unreadable_findings {
+                if !areas.contains(&entry.area.as_str()) {
+                    areas.push(&entry.area);
+                }
+            }
+            attention.push(format!("Findings unreadable for {}", areas.join(", ")));
         }
         if inputs.turn_needs_attention {
             attention.push("A turn ended needing attention".into());
@@ -863,6 +899,7 @@ mod tests {
             adjudications: Vec::new(),
             findings: Vec::new(),
             not_covered: Vec::new(),
+            unreadable_findings: Vec::new(),
             notes: Vec::new(),
             warnings: Vec::new(),
             usage: RunUsage::default(),
@@ -1035,6 +1072,58 @@ mod tests {
         assert_eq!(run.attention, ["1 area was not covered", unmerged]);
     }
 
+    /// The 1.3.0 resmoke8's ingest worker read both its files but described
+    /// its finding in prose: its findings could not be read, which needs
+    /// attention named as such, not as an area not covered.
+    #[test]
+    fn unreadable_findings_need_attention_apart_from_coverage() {
+        let entry = |area: &str| UnreadableFindings {
+            area: area.into(),
+            detail: "the answer has no FINDINGS block, after 2 re-asks".into(),
+            answers: vec!["I found a defect in feed.go.".into()],
+            node_id: Some("node-1".into()),
+            turn_id: Some("turn-4".into()),
+        };
+        let mut run = outcome();
+        run.unreadable_findings.push(entry("ingest"));
+        assert_eq!(
+            run.decide(VerdictInputs::default()),
+            exit_code::NEEDS_ATTENTION
+        );
+        assert_eq!(run.attention, ["Findings unreadable for ingest"]);
+        run.unreadable_findings.push(entry("auth"));
+        run.unreadable_findings.push(entry("ingest"));
+        run.not_covered.push(NotCovered {
+            area: "billing".into(),
+            class: FailureClass::NotReached,
+            detail: "billing/a.py: not read".into(),
+            node_id: None,
+            turn_id: None,
+        });
+        run.decide(VerdictInputs::default());
+        assert_eq!(
+            run.attention,
+            [
+                "1 area was not covered",
+                "Findings unreadable for ingest, auth"
+            ]
+        );
+        let value = serde_json::to_value(&run).unwrap();
+        assert_eq!(
+            value["unreadable_findings"][0]["answers"][0],
+            "I found a defect in feed.go."
+        );
+        let back: RunOutcome = serde_json::from_value(value).unwrap();
+        assert_eq!(back.unreadable_findings, run.unreadable_findings);
+        // An Outcome without the list, or written before it existed, has
+        // none.
+        let mut value = serde_json::to_value(outcome()).unwrap();
+        assert!(value.get("unreadable_findings").is_none());
+        value.as_object_mut().unwrap().remove("unreadable_findings");
+        let old: RunOutcome = serde_json::from_value(value).unwrap();
+        assert!(old.unreadable_findings.is_empty());
+    }
+
     /// Notes are part of the Outcome but never change its verdict; an
     /// Outcome without notes, or written before they existed, has none.
     #[test]
@@ -1205,6 +1294,20 @@ mod tests {
                 "claude-code",
                 "anthropic/claude-haiku-4.5",
             ),
+            // Claude Code's alias of that model (the 1.3.0 re-smoke's pair,
+            // which was not warned about).
+            (
+                "anthropic",
+                "haiku",
+                "claude-code",
+                "anthropic/claude-haiku-4.5",
+            ),
+            (
+                "anthropic",
+                "sonnet[1m]",
+                "claude-code",
+                "anthropic/claude-sonnet-5.5",
+            ),
         ] {
             let writer = ModelIdentity {
                 provider: provider.into(),
@@ -1230,6 +1333,21 @@ mod tests {
                 ..reviewer
             };
             assert!(same_model_warning(std::slice::from_ref(&writer), &other).is_none());
+            // And the other way: a writer on OpenRouter reviewed by Claude
+            // Code's name of its model.
+            let swapped = ModelIdentity {
+                runtime: "native".into(),
+                ..writer.clone()
+            };
+            let on_openrouter = ModelIdentity {
+                provider: "openrouter".into(),
+                model: reviewed.into(),
+                runtime: "native".into(),
+            };
+            assert!(
+                same_model_warning(std::slice::from_ref(&on_openrouter), &swapped).is_some(),
+                "{provider}:{model}"
+            );
         }
     }
 

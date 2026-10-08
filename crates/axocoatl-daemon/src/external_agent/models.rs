@@ -265,55 +265,14 @@ pub const PINNED_MODELS: [PinnedModel; 24] = [
     claude("claude-haiku-4-5", 200_000, 64_000),
 ];
 
-/// One of Claude Code's model aliases: a name `--model` takes that Claude
-/// Code turns into a Claude API model id before it calls the API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ClaudeCodeAlias {
-    pub alias: &'static str,
-    /// The model the alias runs, in [`PINNED_MODELS`].
-    pub model: &'static str,
-    /// How the pinned version resolves the alias, when it is not always
-    /// [`Self::model`]: every model it can run has the same window and
-    /// output limit as [`Self::model`].
-    pub resolves: Option<&'static str>,
-}
-
-const fn alias(alias: &'static str, model: &'static str) -> ClaudeCodeAlias {
-    ClaudeCodeAlias {
-        alias,
-        model,
-        resolves: None,
-    }
-}
-
-/// Claude Code 2.1.292's model aliases and the Claude API model each runs:
-/// the `aliases` of the model catalog bundled in the pinned build, which it
-/// resolves them by for the Claude API when no `ANTHROPIC_DEFAULT_*_MODEL`
-/// variable is set (a run sets none) and the API served it no model list of
-/// its own (its route allows only `POST /v1/messages`). A trailing `[1m]`
-/// (`sonnet[1m]`, `opus[1m]`, `fable[1m]`) asks for the 1M-token window;
-/// [`pinned_model`] reads it only where the model's window already is that.
-/// `default` is not here: what it runs is the account's or organization's
-/// default model, which admission cannot know.
-pub const CLAUDE_CODE_ALIASES: [ClaudeCodeAlias; 6] = [
-    alias("opus", "claude-opus-5-5"),
-    alias("sonnet", "claude-sonnet-5-5"),
-    alias("haiku", "claude-haiku-4-5"),
-    alias("fable", "claude-fable-5-1"),
-    ClaudeCodeAlias {
-        alias: "best",
-        model: "claude-fable-5-1",
-        resolves: Some("claude-fable-5-1, or claude-opus-5-5 for an account without Fable"),
-    },
-    ClaudeCodeAlias {
-        alias: "opusplan",
-        model: "claude-sonnet-5-5",
-        resolves: Some("claude-sonnet-5-5, and claude-opus-5-5 in plan mode"),
-    },
-];
-
-/// The suffix with which Claude Code asks for a model's 1M-token window.
-const ONE_MILLION_SUFFIX: &str = "[1m]";
+/// Claude Code's model aliases ([`axocoatl_core::CLAUDE_CODE_ALIASES`],
+/// read from the pinned build's model catalog), which
+/// [`axocoatl_core::model_key`] also resolves, so the same-model check
+/// knows `anthropic:haiku` is `openrouter:anthropic/claude-haiku-4.5`. A
+/// trailing `[1m]` (`sonnet[1m]`, `opus[1m]`, `fable[1m]`) asks for the
+/// 1M-token window; [`pinned_model`] reads it only where the model's window
+/// already is that.
+pub use axocoatl_core::model_identity::{ClaudeCodeAlias, CLAUDE_CODE_ALIASES};
 
 /// The table's entry for `runtime`'s `model`, and the Claude Code alias it
 /// was named by, if any (see [`pinned_model`]).
@@ -328,30 +287,17 @@ fn resolve(
                 && axocoatl_core::same_model(provider, entry.model, provider, name)
         })
     };
-    if let Some(found) = entry(model) {
-        return Some((found, None));
-    }
     if runtime != AgentRuntime::ClaudeCode {
-        return None;
+        return entry(model).map(|found| (found, None));
     }
-    let model = model.trim();
-    let split = model.len().checked_sub(ONE_MILLION_SUFFIX.len());
-    let (base, one_million) = match split {
-        Some(at)
-            if model.is_char_boundary(at)
-                && model[at..].eq_ignore_ascii_case(ONE_MILLION_SUFFIX) =>
-        {
-            (model[..at].trim(), true)
-        }
-        _ => (model, false),
-    };
-    let named = CLAUDE_CODE_ALIASES
-        .iter()
-        .find(|alias| alias.alias.eq_ignore_ascii_case(base));
+    // An alias and a `[1m]` suffix are read here, not through `same_model`
+    // (whose key resolves both): the admission words name the alias, and
+    // `[1m]` must not ask for more than the model's window.
+    let (base, one_million) = axocoatl_core::model_identity::split_one_million(model);
+    let named = axocoatl_core::model_identity::claude_code_alias(base);
     let found = match named {
         Some(alias) => entry(alias.model)?,
-        None if one_million => entry(base)?,
-        None => return None,
+        None => entry(base)?,
     };
     // `[1m]` on a model whose window is smaller asks for more than the
     // model's documented window: not pinned.

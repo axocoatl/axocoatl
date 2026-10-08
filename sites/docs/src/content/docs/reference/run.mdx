@@ -118,7 +118,7 @@ writes `--junit` and `--record`, and exits with code 6.
 | --- | --- |
 | 0 | Pass: every required check passed, the review (if any) approved, every review finding was answered, nothing is not covered, and no finding the loadout fails on. |
 | 1 | A required check failed or timed out on the final result. |
-| 2 | Needs attention: the review did not pass, a finding was not answered, something was not covered, a check never ran on the final result, a turn needs attention or was blocked, a budget or the wall clock ran out, findings the loadout fails on (`fail_on_findings`), or Keep failed. |
+| 2 | Needs attention: the review did not pass, a finding was not answered, something was not covered, an audit area's findings could not be read, a check never ran on the final result, a turn needs attention or was blocked, a budget or the wall clock ran out, findings the loadout fails on (`fail_on_findings`), or Keep failed. |
 | 3 | Usage: a bad flag; an unknown loadout or one that cannot be used; a missing or unknown parameter; a `detected` check with no detected command and no `--check`; a route credential that is neither configured nor stored, or a route that differs from one your configuration has for the same host; for `qa`, no `browser:` block or a URL the browser cannot reach; an e2e model that OpenRouter does not list with tool calls and image input; or budgets that cannot pay for the run's checks or review. |
 | 4 | The daemon could not be reached, or it refused the credential. |
 | 5 | Infrastructure: the Session environment failed, the Session could not run under egress with the `hardened` workload (rootful Podman, `backend: e2b`), a recipe image was not built, OpenRouter's catalog could not be read for an e2e check, a provider is not configured, or another daemon error. |
@@ -204,6 +204,7 @@ The JUnit file has one `testsuite` per kind of result, and a last one for the ve
 | A finding that fails on the clean build, or did not reproduce | `<skipped>` |
 | A reproduction that could not run, or is missing | `<error>` |
 | Anything not covered | `<failure type="not_covered">`, never skipped |
+| An audit area whose findings could not be read | in `findings`, `<failure type="findings_unreadable">` named `<area> (findings unreadable)`, with the worker's last answer in `<system-out>` |
 | A warning, such as the same-model reviewer | a property `axocoatl.warning.<code>` |
 | The run's notes | the `verdict` case's `<system-out>`, one `note: ` line each, whatever the verdict |
 | Usage | a property `axocoatl.usage`, worded as in the summary: a cost the run does not know is "cost unknown (reserved up to $X)", never a price, and a cost computed from reported tokens says "includes cost computed from reported tokens at list prices" |

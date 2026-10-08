@@ -5,7 +5,8 @@ import { adopt } from './sheets.js';
  * reports it: verdict and exit code, the required checks with their report
  * test cases, the review rounds, the writer's adjudications (missing ones in
  * red), findings with their reproduction classification ("fails on clean
- * build" as its own label), everything not covered and why, the run's notes
+ * build" as its own label), everything not covered and why, audit areas
+ * whose findings could not be read (with the worker's answers), the run's notes
  * (what was neither a gap nor a warning), warnings (the same-model reviewer
  * warning included), usage (a known subtotal when
  * incomplete, and a cost the run does not know as such), the network summary, a link to download the record bundle and
@@ -294,6 +295,16 @@ export class AxRunOutcome extends HTMLElement {
         list.append(li);
       }
       section.append(list);
+    }
+    if (outcome.unreadable_findings?.length) {
+      const section = this.#section('Findings unreadable');
+      for (const entry of outcome.unreadable_findings) {
+        const details = el('details');
+        details.dataset.unreadable = entry.area;
+        details.append(el('summary', '', `${entry.area}: ${entry.detail}`));
+        for (const answer of entry.answers || []) details.append(el('pre', '', answer));
+        section.append(details);
+      }
     }
     if (outcome.notes?.length) {
       const list = el('ul');

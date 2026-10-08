@@ -10,7 +10,7 @@ pub mod types;
 
 pub use agent::*;
 pub use error::*;
-pub use model_identity::{model_key, same_model};
+pub use model_identity::{model_key, same_model, ClaudeCodeAlias, CLAUDE_CODE_ALIASES};
 pub use secure_fs::*;
 pub use skill::*;
 pub use token::*;

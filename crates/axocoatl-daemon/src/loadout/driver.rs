@@ -409,6 +409,7 @@ pub fn empty_outcome(run: &RunContext, started_at_ms: u64) -> RunOutcome {
         adjudications: Vec::new(),
         findings: Vec::new(),
         not_covered: Vec::new(),
+        unreadable_findings: Vec::new(),
         notes: Vec::new(),
         warnings: Vec::new(),
         usage: RunUsage::default(),
@@ -521,6 +522,7 @@ pub async fn run_to_outcome_with(
             outcome.not_covered.push(entry);
         }
     }
+    outcome.unreadable_findings = report.unreadable_findings.clone();
     outcome.notes = report.notes.clone();
     outcome.warnings = warnings(run, &report, &report.turns);
     let events = host.recorded_events(&run.run_id).await.unwrap_or_default();
@@ -532,6 +534,7 @@ pub async fn run_to_outcome_with(
     let final_state = report.turns.last().map(|turn| turn.state);
     let turn_needs_attention = match final_state {
         Some(TurnState::Completed) => false,
+        Some(_) if report.last_turn_accounted => false,
         Some(_) => true,
         // A run whose driver ended without any turn needs a person unless
         // it already failed with an error.

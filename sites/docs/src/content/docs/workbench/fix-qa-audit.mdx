@@ -260,15 +260,38 @@ never from what a worker says:
 
    What stays not covered, each with its reason: every file still unread after the
    follow-ups (or when the wall clock or your stop ended them), listed by file; a worker
-   without a result; a report that could not be read; findings beyond a report's first
-   200; and an area whose worker's tool calls could not be read. A worker's own
+   without a result; findings beyond a report's first 200; and an area whose worker's
+   tool calls could not be read. A worker's own
    `NOT_REACHED` list is a note, never a gap. Each area's coverage is a `coverage`
    progress line: how many of its files were examined, read, empty, binary or too large,
    and which are unread. Notes are in the progress lines, the summary, the Outcome's
    `notes`, the Run outcome panel, the JUnit verdict's `<system-out>` and the record.
-5. **Integrate.** The integrator gets every accepted worker report (each up to 24 KiB,
+5. **Re-asks.** A worker whose answer has no `FINDINGS` block Axocoatl can read (findings
+   described in prose, say) gets up to 2 re-asks after the follow-ups. Each is a turn
+   with a fresh, read-only activation of that worker that is offered no tools; its
+   instructions quote the answer and ask for exactly a `FINDINGS` JSON array in the
+   documented format, `[]` when the answer describes none. Like follow-ups, re-asks are
+   bounded by the budget and the wall clock and recorded (`applying_team` and `reask`
+   progress lines, `audit_reask` turns). Nothing a re-ask does counts as reading.
+   Coverage and findings are separate: an area whose files were all read but whose
+   findings stay unreadable is not "not covered". It is listed under "Findings
+   unreadable" in the summary, the Run outcome panel and the Outcome's
+   `unreadable_findings` (with every answer Axocoatl could not read), as a
+   `findings_unreadable` failure in the JUnit `findings` suite, and the run needs
+   attention: "Findings unreadable for ingest". The integrator still gets that answer as
+   text.
+6. **Integrate.** The integrator gets every accepted worker report (each up to 24 KiB,
    with a note when cut) and the list of what is not covered, and answers with one
-   merged `FINDINGS` block.
+   merged `FINDINGS` block. An integrator without an answer gets one more turn (not
+   after the wall clock, your stop or its provider's refusal of the request). One whose
+   `FINDINGS` block cannot be read gets up to 2 re-asks, each a fresh activation offered
+   no tools that is sent the same reports with its unreadable answer quoted. If the
+   answer is still unreadable, or the integrator still has no result for a provider's
+   reason, Axocoatl merges the findings itself: every area's findings, each keeping its
+   area, without any finding whose file, line and title (in lowercase, punctuation left
+   out) match an earlier one's. The note "findings merged by the host" says so, and
+   the run does not need attention for it: in the runs measured for 1.3.0, the merge
+   step never added a finding.
 
 Audit turns have no required checks and no review. Findings do not fail the run by
 default (`fail_on_findings: false`); anything not covered does. Each worker gets the
@@ -277,11 +300,11 @@ the wall clock bounds every turn. Every file must be read: an area too large for
 worker is split, and a worker that reads less than it was given is followed up while
 it keeps reading new files, so a file stays unread only when its worker's last
 follow-up read nothing new, or the wall clock, your stop or a failure ended the
-follow-ups. When integration gives no readable result, the
-workers' findings are reported unmerged and `audit integration` is listed as not
-covered. The attention line counts only areas and names the
-integration apart: "The integration was not read; the area findings are reported
-unmerged".
+follow-ups. When integration has no result for a reason other than an unreadable answer
+or a provider failure (the wall clock, your stop), the workers' findings are reported
+unmerged and `audit integration` is listed as not covered. The attention line counts
+only areas and names the integration apart: "The integration was not read; the area
+findings are reported unmerged".
 
 When you stop an audit, no further turn starts: areas planned but not started, files no
 follow-up read, and an integration that did not run, are not covered (`stopped`), and

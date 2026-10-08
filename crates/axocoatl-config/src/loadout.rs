@@ -1879,6 +1879,28 @@ mod tests {
             .unwrap()
             .iter()
             .any(|w| w.code == "same_model_reviewer"));
+        // Claude Code's alias of that model is that model too, at resolution
+        // and in validation.
+        values.insert("writer_model".into(), "anthropic:haiku".into());
+        let resolved = resolve_loadout(&loadout, &values, "fix it", "/repo").unwrap();
+        assert!(resolved
+            .warnings
+            .iter()
+            .any(|w| w.code == "same_model_reviewer"));
+        values.insert(
+            "reviewer_model".into(),
+            "openrouter:anthropic/claude-sonnet-4.5".into(),
+        );
+        let resolved = resolve_loadout(&loadout, &values, "fix it", "/repo").unwrap();
+        assert!(resolved
+            .warnings
+            .iter()
+            .all(|w| w.code != "same_model_reviewer"));
+        file.agents[0].model = ParamOr::Value(ModelSpec::parse("anthropic:haiku").unwrap());
+        assert!(validate_loadout(&file)
+            .unwrap()
+            .iter()
+            .any(|w| w.code == "same_model_reviewer"));
 
         // External writers have their own budgets, checked at admission.
         assert!(call_budgets(&file)

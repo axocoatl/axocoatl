@@ -13,7 +13,10 @@
 //! `reject` pass with the reason in `<system-out>`; findings `confirmed` and
 //! `reproduced` are `<failure>`s when the loadout fails on findings (else
 //! `<system-out>`), `fails_on_clean_build` and `not_reproduced` are
-//! `<skipped>`, `repro_error` and `missing` are `<error>`s; every not-covered
+//! `<skipped>`, `repro_error` and `missing` are `<error>`s; an audit area
+//! whose findings could not be read is a `<failure type="findings_unreadable">`
+//! in `findings`, named `<area> (findings unreadable)`, with the worker's last
+//! answer in its `<system-out>`; every not-covered
 //! entry is a `<failure type="not_covered">` whose message is
 //! [`NotCovered::reason`](crate::run_outcome::NotCovered::reason), never
 //! skipped. The run's notes are the `verdict` case's `<system-out>`, one
@@ -599,6 +602,20 @@ pub fn render_junit_with(
     for finding in &outcome.findings {
         findings.cases.push(finding_case(finding, fail_on_findings));
     }
+    for entry in &outcome.unreadable_findings {
+        let case = Case::new(
+            "axocoatl.findings",
+            format!("{} (findings unreadable)", entry.area),
+        )
+        .status(Status::Failure {
+            kind: "findings_unreadable".into(),
+            message: entry.detail.clone(),
+        });
+        findings.cases.push(match entry.answers.last() {
+            Some(answer) => case.out(answer.clone()),
+            None => case,
+        });
+    }
     suites.push(findings);
     let mut coverage = Suite::new("coverage");
     for (index, entry) in outcome.not_covered.iter().enumerate() {
@@ -946,6 +963,7 @@ mod tests {
                 finding("B2", "search", ReproClassification::FailsOnCleanBuild),
                 finding("B3", "search", ReproClassification::ReproError),
             ],
+            unreadable_findings: Vec::new(),
             not_covered: vec![
                 NotCovered {
                     area: "gift cards".into(),
@@ -1280,6 +1298,43 @@ mod tests {
         let verdict = &xml[xml.find("name=\"verdict\"").unwrap()..];
         assert!(verdict.contains("<failure type=\"needs_attention\""));
         assert!(verdict.contains("<system-out>note: worker-billing"));
+    }
+
+    /// An audit area whose findings could not be read fails in `findings`,
+    /// apart from coverage, with the worker's last answer.
+    #[test]
+    fn unreadable_findings_are_failures_of_the_findings_suite() {
+        let mut outcome = fixture();
+        outcome.checks.clear();
+        outcome.review = None;
+        outcome.adjudications.clear();
+        outcome.findings.clear();
+        outcome.not_covered.clear();
+        outcome
+            .unreadable_findings
+            .push(crate::run_outcome::UnreadableFindings {
+                area: "ingest".into(),
+                detail: "the answer has no FINDINGS block, after 2 re-asks".into(),
+                answers: vec!["first".into(), "json.Unmarshal's error <unchecked>".into()],
+                node_id: None,
+                turn_id: None,
+            });
+        assert_eq!(
+            outcome.decide(VerdictInputs::default()),
+            exit_code::NEEDS_ATTENTION
+        );
+        let xml = render_junit(&outcome).unwrap();
+        assert!(
+            xml.contains(
+                "    <testcase classname=\"axocoatl.findings\" name=\"ingest (findings \
+                 unreadable)\">\n      <failure type=\"findings_unreadable\" message=\"the \
+                 answer has no FINDINGS block, after 2 re-asks\"/>\n      <system-out>\
+                 json.Unmarshal's error &lt;unchecked&gt;</system-out>\n"
+            ),
+            "{xml}"
+        );
+        assert!(xml.contains("<testsuite name=\"findings\" tests=\"1\" failures=\"1\""));
+        assert!(xml.contains("<testsuite name=\"coverage\" tests=\"0\""));
     }
 
     #[test]

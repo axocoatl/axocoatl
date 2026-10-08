@@ -549,6 +549,7 @@ mod tests {
             adjudications: Vec::new(),
             findings: Vec::new(),
             not_covered: Vec::new(),
+            unreadable_findings: Vec::new(),
             notes: Vec::new(),
             warnings: Vec::new(),
             usage: RunUsage::default(),

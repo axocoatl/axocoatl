@@ -124,6 +124,8 @@ pub struct KindReport {
     pub findings: Vec<Finding>,
     pub adjudications: Vec<Adjudication>,
     pub not_covered: Vec<NotCovered>,
+    /// Audit areas whose files were read but whose findings could not be.
+    pub unreadable_findings: Vec<axocoatl_session::run_outcome::UnreadableFindings>,
     /// Notes for the Outcome: what is neither a gap nor a warning.
     pub notes: Vec<String>,
     pub warnings: Vec<RunWarning>,
@@ -131,6 +133,10 @@ pub struct KindReport {
     /// accounted for itself, such as a planner it gave another turn: the
     /// Outcome builder does not list them as not covered again.
     pub accounted: Vec<(String, String)>,
+    /// The driver accounted for how its last turn ended, such as an audit
+    /// integrator whose failure the host merged the findings around: the
+    /// Outcome does not count it as a turn that needs attention.
+    pub last_turn_accounted: bool,
     pub fail_on_findings: bool,
     pub budget_exhausted: bool,
     /// A person stopped the run; the report holds what the driver observed

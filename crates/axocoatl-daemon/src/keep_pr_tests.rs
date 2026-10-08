@@ -134,6 +134,7 @@ fn outcome() -> RunOutcome {
             }),
         }],
         not_covered: Vec::new(),
+        unreadable_findings: Vec::new(),
         notes: Vec::new(),
         warnings: vec![RunWarning {
             code: "same_model_reviewer".into(),
