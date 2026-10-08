@@ -1477,15 +1477,15 @@ mod tests {
         let run = outcome(
             "pass",
             serde_json::json!({"notes": [
-                "worker-ingest listed ingest/legacy.py as not reached, and no such path exists \
-                 in the repository; a note, not a gap"
+                "worker-ingest listed as not reached: ingest/legacy.py; a note: the host decides \
+                 coverage from the files its workers read"
             ]}),
         );
         let text = summary(&run);
         assert!(
             text.contains(
-                "Notes:\n  worker-ingest listed ingest/legacy.py as not reached, and no such \
-                 path exists in the repository; a note, not a gap\nWarnings:"
+                "Notes:\n  worker-ingest listed as not reached: ingest/legacy.py; a note: the \
+                 host decides coverage from the files its workers read\nWarnings:"
             ),
             "{text}"
         );

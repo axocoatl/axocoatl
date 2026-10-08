@@ -20,6 +20,7 @@ pub mod host;
 pub mod qa;
 pub mod team_plan;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -108,6 +109,10 @@ pub struct RunContext {
     pub resolved: ResolvedLoadout,
     pub options: RunOptions,
     pub deadline: Instant,
+    /// Each native Agent's model context in tokens as admission observed
+    /// it, by Agent id ([`team_plan::agent_contexts`]); an Agent whose
+    /// context was not observed is missing.
+    pub agent_contexts: BTreeMap<String, u64>,
 }
 
 /// What a kind's driver hands back to the Outcome builder.

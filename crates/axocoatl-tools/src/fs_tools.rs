@@ -40,12 +40,40 @@ const EDIT_OLD_MAX_BYTES: usize = 1024 * 1024;
 /// Maximum text returned in one structured tool field. This bounds the JSON
 /// passed back to the model even when the sandbox command emitted much more.
 const TOOL_TEXT_OUTPUT_MAX_BYTES: usize = 64 * 1024;
-/// The most bytes of a file one `read_file` call reads: the window from its
-/// `offset` (0 by default), or `limit` bytes when smaller. A longer file is
-/// read to its end across calls, each at the previous call's `next_offset`.
-/// The audit's host-checked coverage counts each succeeded call as reading
-/// its window.
+/// The most bytes of a file one `read_file` call reads: the largest `limit`,
+/// and the default window of an Agent whose model context is unknown or has
+/// at least four times as many tokens ([`read_file_window`]). A longer file is read to
+/// its end across calls, each at the previous call's `next_offset`. The
+/// audit's host-checked coverage counts the bytes each succeeded call
+/// returned (`offset` and `returned_bytes` in its result).
 pub const READ_FILE_WINDOW_BYTES: usize = TOOL_TEXT_OUTPUT_MAX_BYTES;
+/// A default window is at most the model's context in tokens divided by
+/// this, as bytes: counted at one token per byte, a read without `limit`
+/// fills at most a quarter of the context.
+pub const READ_FILE_CONTEXT_FRACTION: usize = 4;
+/// The smallest default window, whatever the context.
+pub const READ_FILE_MIN_WINDOW_BYTES: usize = 512;
+
+/// The bytes a `read_file` without `limit` returns for an Agent whose model
+/// has a context of `context_tokens` (0 when unknown): 64 KiB, or a quarter
+/// of the context counted at one token per byte when that is smaller (8 KiB
+/// for a 32,768-token context), and never under 512 bytes.
+pub fn read_file_window(context_tokens: usize) -> usize {
+    if context_tokens == 0 {
+        return READ_FILE_WINDOW_BYTES;
+    }
+    (context_tokens / READ_FILE_CONTEXT_FRACTION)
+        .clamp(READ_FILE_MIN_WINDOW_BYTES, READ_FILE_WINDOW_BYTES)
+}
+
+/// `bytes` as `read_file` states a window: `64 KiB`, or `1500 bytes`.
+fn window_words(bytes: usize) -> String {
+    if bytes.is_multiple_of(1024) {
+        format!("{} KiB", bytes / 1024)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
 /// `bash` has two independently useful streams; split the overall text budget
 /// between them so one result still remains bounded.
 const SHELL_STREAM_OUTPUT_MAX_BYTES: usize = TOOL_TEXT_OUTPUT_MAX_BYTES / 2;
@@ -292,11 +320,16 @@ async fn exec_bounded_stdout(
     ];
     owned.extend(argv.iter().map(|value| (*value).to_string()));
     let borrowed: Vec<&str> = owned.iter().map(String::as_str).collect();
-    let mut result = sandbox
+    let result = sandbox
         .exec(&borrowed, timeout)
         .await
         .map_err(|error| exec_err(tool, error))?;
+    with_reported_status(tool, result)
+}
 
+/// `result` with the exit status the command reported after
+/// [`BOUNDED_STATUS_MARKER`] on standard error, and that report removed.
+fn with_reported_status(tool: &str, mut result: ExecResult) -> Result<ExecResult, ToolError> {
     let marker =
         result
             .stderr
@@ -315,6 +348,69 @@ async fn exec_bounded_stdout(
     result.stderr.truncate(marker);
     result.exit_code = exit_code;
     Ok(result)
+}
+
+/// Ends `read_file`'s hex dump with the dump's own exit status.
+const READ_END_MARKER: &str = "__AXOCOATL_READ_END_5B2E91A7__:";
+/// `read_file`'s window, as hexadecimal bytes so the result is exact even
+/// when the file is not UTF-8: `$1` the path, `$2` the 1-based byte to start
+/// at (empty: the start, read with `head` so nothing is drained), `$3` the
+/// most bytes to dump. The reading command's status follows
+/// [`BOUNDED_STATUS_MARKER`] on standard error; the dump's follows
+/// [`READ_END_MARKER`] on standard output. The drain after `head` lets
+/// `tail` finish normally instead of dying of SIGPIPE.
+const READ_WINDOW_SCRIPT: &str = r#"{
+  if [ -n "$2" ]; then tail -c "+$2" -- "$1"; else head -c "$3" -- "$1"; fi
+  printf '\n__AXOCOATL_TOOL_EXIT_8F431C2D__:%s\n' "$?" >&2
+} | {
+  head -c "$3" | od -An -v -tx1
+  printf '__AXOCOATL_READ_END_5B2E91A7__:%s\n' "$?"
+  cat >/dev/null
+}"#;
+
+/// The bytes of `read_file`'s hex dump ([`READ_WINDOW_SCRIPT`]).
+fn decode_window(stdout: &str) -> Result<Vec<u8>, String> {
+    let (dump, status) = stdout
+        .rsplit_once(READ_END_MARKER)
+        .ok_or("the window's byte dump did not finish")?;
+    match status.trim() {
+        "0" => {}
+        "127" => {
+            return Err(
+                "the sandbox image has no `od`, which read_file needs to read a file".into(),
+            )
+        }
+        other => return Err(format!("the window's byte dump failed (status {other})")),
+    }
+    let mut bytes = Vec::with_capacity(dump.len() / 3);
+    for pair in dump.split_ascii_whitespace() {
+        if pair.len() != 2 {
+            return Err(format!("unexpected byte dump field '{pair}'"));
+        }
+        let byte = u8::from_str_radix(pair, 16)
+            .map_err(|_| format!("unexpected byte dump field '{pair}'"))?;
+        bytes.push(byte);
+    }
+    Ok(bytes)
+}
+
+/// The length of `bytes` without a last character cut short: when the
+/// window ends inside a UTF-8 sequence that was valid so far, the window
+/// ends before it, so the next read shows that character whole. Never 0
+/// for a non-empty window: a window shorter than one character keeps its
+/// bytes.
+fn complete_utf8_prefix(bytes: &[u8]) -> usize {
+    let len = bytes.len();
+    let Some(start) = (len.saturating_sub(3)..len)
+        .rev()
+        .find(|index| bytes[*index] & 0b1100_0000 != 0b1000_0000)
+    else {
+        return len;
+    };
+    match std::str::from_utf8(&bytes[start..]) {
+        Err(error) if error.valid_up_to() == 0 && error.error_len().is_none() && start > 0 => start,
+        _ => len,
+    }
 }
 
 /// Lexically resolve `.` and `..` segments without touching the filesystem.
@@ -367,13 +463,22 @@ fn confine<'a>(root: &Path, path: &'a str, tool: &str) -> Result<&'a str, ToolEr
 }
 
 /// Register the full session toolset (file ops + shell) into `executor`,
-/// each tool bound to `sandbox`.
+/// each tool bound to `sandbox`, with `read_file`'s default window at its
+/// largest ([`READ_FILE_WINDOW_BYTES`]).
 pub fn register_session_tools(executor: &mut ToolExecutor, sandbox: Arc<dyn Sandbox>) {
+    register_session_tools_with_read_window(executor, sandbox, READ_FILE_WINDOW_BYTES);
+}
+
+/// [`register_session_tools`] for an Agent whose `read_file` without `limit`
+/// returns `read_window` bytes ([`read_file_window`] of its model's context).
+pub fn register_session_tools_with_read_window(
+    executor: &mut ToolExecutor,
+    sandbox: Arc<dyn Sandbox>,
+    read_window: usize,
+) {
     executor.register_builtin(
         "read_file",
-        Arc::new(ReadFileTool {
-            sandbox: sandbox.clone(),
-        }),
+        Arc::new(ReadFileTool::new(sandbox.clone(), read_window)),
     );
     executor.register_builtin(
         "write_file",
@@ -445,15 +550,41 @@ pub fn register_session_tools(executor: &mut ToolExecutor, sandbox: Arc<dyn Sand
 
 pub struct ReadFileTool {
     sandbox: Arc<dyn Sandbox>,
+    /// Bytes a read without `limit` returns, and the most any read returns.
+    window: usize,
+    description: String,
+}
+
+impl ReadFileTool {
+    /// A `read_file` whose default window is `window` bytes (1 to
+    /// [`READ_FILE_WINDOW_BYTES`]; [`read_file_window`] of the calling
+    /// Agent's model context).
+    pub fn new(sandbox: Arc<dyn Sandbox>, window: usize) -> Self {
+        let window = window.clamp(1, READ_FILE_WINDOW_BYTES);
+        let description = format!(
+            "Read up to {} of a file in the session directory, from its start or from byte \
+             `offset`, or fewer bytes with `limit`. When more of the file follows, the result \
+             says `truncated: true` and gives `next_offset`: read the rest of a longer file with \
+             further calls at each `next_offset` until `truncated` is false.",
+            window_words(window)
+        );
+        Self {
+            sandbox,
+            window,
+            description,
+        }
+    }
+
+    /// Bytes a read without `limit` returns.
+    pub fn window(&self) -> usize {
+        self.window
+    }
 }
 
 #[async_trait::async_trait]
 impl BuiltinTool for ReadFileTool {
     fn description(&self) -> &str {
-        "Read up to 64 KiB of a file in the session directory, from its start or from byte \
-         `offset`, or fewer bytes with `limit`. When more of the file follows, the result says \
-         `truncated: true` and gives `next_offset`: read the rest of a longer file with further \
-         calls at each `next_offset` until `truncated` is false."
+        &self.description
     }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -461,17 +592,25 @@ impl BuiltinTool for ReadFileTool {
             "properties": {
                 "path": { "type": "string", "description": "File path to read (maximum 4 KiB)" },
                 "offset": { "type": "integer", "minimum": 0, "description": "Byte of the file to start at (default 0); the previous result's next_offset reads on" },
-                "limit": { "type": "integer", "minimum": 1, "maximum": TOOL_TEXT_OUTPUT_MAX_BYTES, "description": "Most bytes to read (default and maximum 65536); a smaller limit keeps a long file's pieces small" }
+                "limit": { "type": "integer", "minimum": 1, "maximum": self.window, "description": format!("Most bytes to read (default and most {})", self.window) }
             },
             "required": ["path"]
         })
     }
+    /// The window from `offset`: at most `limit` bytes (a larger `limit`,
+    /// up to 65,536, reads the default window). The bytes travel as a hex
+    /// dump, so `returned_bytes` and `next_offset` count the file's own
+    /// bytes even when it is not UTF-8; only `content` is decoded, with
+    /// U+FFFD for bytes that are not UTF-8 (`invalid_utf8: true`). A window
+    /// that would end inside a character ends before it.
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let path = bounded_str_arg(&args, "path", "read_file", PATH_ARG_MAX_BYTES)?;
         let offset = read_number(&args, "offset")?.unwrap_or(0);
         let limit = match read_number(&args, "limit")? {
-            None => TOOL_TEXT_OUTPUT_MAX_BYTES,
-            Some(limit) if (1..=READ_FILE_WINDOW_BYTES as u64).contains(&limit) => limit as usize,
+            None => self.window,
+            Some(limit) if (1..=READ_FILE_WINDOW_BYTES as u64).contains(&limit) => {
+                (limit as usize).min(self.window)
+            }
             Some(_) => {
                 return Err(ToolError::InvalidArgs {
                     tool: "read_file".to_string(),
@@ -482,29 +621,45 @@ impl BuiltinTool for ReadFileTool {
             }
         };
         let path = confine(self.sandbox.root(), path, "read_file")?;
-        // Bound the command's stdout before it reaches the sandbox transport.
-        // One extra byte lets the JSON result state truncation honestly.
-        let r = if offset == 0 {
-            let capture_bytes = (limit + 1).to_string();
-            self.sandbox
-                .exec(&["head", "-c", &capture_bytes, "--", path], FS_TIMEOUT)
-                .await
-                .map_err(|e| exec_err("read_file", e))?
+        // `tail -c +N` starts at byte N, counted from 1; a read from the
+        // start uses `head`. One byte past the window says whether more of
+        // the file follows.
+        let start = if offset == 0 {
+            String::new()
         } else {
-            // `tail -c +N` starts at byte N, counted from 1.
-            let start = format!("+{}", offset.saturating_add(1));
-            exec_bounded_stdout(
-                self.sandbox.as_ref(),
-                &["tail", "-c", &start, "--", path],
-                FS_TIMEOUT,
-                "read_file",
-                limit,
-            )
-            .await?
+            offset.saturating_add(1).to_string()
         };
-        let r = require_ok("read_file", r)?;
-        let (content, truncated, captured_bytes) = bounded_text_fields(r.stdout, limit);
-        let returned_bytes = content.len();
+        let capture_bytes = (limit + 1).to_string();
+        let r = self
+            .sandbox
+            .exec(
+                &[
+                    "sh",
+                    "-c",
+                    READ_WINDOW_SCRIPT,
+                    "sh",
+                    path,
+                    &start,
+                    &capture_bytes,
+                ],
+                FS_TIMEOUT,
+            )
+            .await
+            .map_err(|e| exec_err("read_file", e))?;
+        let r = require_ok("read_file", with_reported_status("read_file", r)?)?;
+        let mut bytes = decode_window(&r.stdout).map_err(|reason| ToolError::ExecutionFailed {
+            tool: "read_file".to_string(),
+            reason,
+        })?;
+        let captured_bytes = bytes.len();
+        let truncated = captured_bytes > limit;
+        bytes.truncate(limit);
+        if truncated {
+            bytes.truncate(complete_utf8_prefix(&bytes));
+        }
+        let returned_bytes = bytes.len();
+        let invalid_utf8 = std::str::from_utf8(&bytes).is_err();
+        let content = String::from_utf8_lossy(&bytes).into_owned();
         let mut result = serde_json::json!({
             "content": content,
             "truncated": truncated,
@@ -516,7 +671,10 @@ impl BuiltinTool for ReadFileTool {
             result["offset"] = offset.into();
         }
         if truncated {
-            result["next_offset"] = offset.saturating_add(limit as u64).into();
+            result["next_offset"] = offset.saturating_add(returned_bytes as u64).into();
+        }
+        if invalid_utf8 {
+            result["invalid_utf8"] = true.into();
         }
         Ok(result)
     }
@@ -1502,10 +1660,7 @@ mod tests {
         let sandbox: Arc<dyn Sandbox> =
             Arc::new(StubSandbox::new(std::env::temp_dir(), Vec::new()));
         assert_eq!(
-            ReadFileTool {
-                sandbox: sandbox.clone()
-            }
-            .concurrency_policy(),
+            ReadFileTool::new(sandbox.clone(), super::READ_FILE_WINDOW_BYTES).concurrency_policy(),
             ConcurrencyPolicy::Safe
         );
         assert_eq!(
@@ -1785,35 +1940,139 @@ mod tests {
         }
     }
 
+    /// What `read_file`'s script prints for `bytes`: `od`'s hex dump, its
+    /// status after the end marker, and the reading command's status on
+    /// standard error.
+    fn dumped(bytes: &[u8]) -> ExecResult {
+        let mut stdout = String::new();
+        for line in bytes.chunks(16) {
+            for byte in line {
+                stdout.push_str(&format!(" {byte:02x}"));
+            }
+            stdout.push('\n');
+        }
+        stdout.push_str(&format!("{}0\n", super::READ_END_MARKER));
+        result(stdout, format!("{}0\n", super::BOUNDED_STATUS_MARKER), 0)
+    }
+
+    /// The window travels as a hex dump of at most one byte past it; a
+    /// window that would end inside a character ends before it, and
+    /// `next_offset` counts the file's bytes.
     #[tokio::test]
     async fn read_file_bounds_output_and_requests_only_one_extra_byte() {
+        let euro = "€".repeat(TOOL_TEXT_OUTPUT_MAX_BYTES / 3 + 1);
         let sandbox = Arc::new(StubSandbox::new(
             "/workspace",
-            vec![result("🦀".repeat(TOOL_TEXT_OUTPUT_MAX_BYTES), "", 0)],
+            vec![dumped(&euro.as_bytes()[..TOOL_TEXT_OUTPUT_MAX_BYTES + 1])],
         ));
-        let tool = ReadFileTool {
-            sandbox: sandbox.clone(),
-        };
+        let tool = ReadFileTool::new(sandbox.clone(), super::READ_FILE_WINDOW_BYTES);
 
         let output = tool.execute(json!({"path": "src/lib.rs"})).await.unwrap();
         let content = output["content"].as_str().unwrap();
         assert!(output["truncated"].as_bool().unwrap());
-        assert!(content.len() <= TOOL_TEXT_OUTPUT_MAX_BYTES);
-        assert!(content.is_char_boundary(content.len()));
+        // 65,536 bytes end one byte into a three-byte character: the window
+        // ends before it.
+        assert_eq!(content, "€".repeat(TOOL_TEXT_OUTPUT_MAX_BYTES / 3));
+        assert_eq!(output["returned_bytes"], TOOL_TEXT_OUTPUT_MAX_BYTES - 1);
+        assert_eq!(output["next_offset"], TOOL_TEXT_OUTPUT_MAX_BYTES - 1);
+        assert_eq!(output["captured_bytes"], TOOL_TEXT_OUTPUT_MAX_BYTES + 1);
+        assert!(output.get("invalid_utf8").is_none());
 
         let calls = sandbox.exec_calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0][0], "head");
-        assert_eq!(calls[0][2], (TOOL_TEXT_OUTPUT_MAX_BYTES + 1).to_string());
-        assert_eq!(calls[0].last().unwrap(), "src/lib.rs");
+        assert_eq!(calls[0][..3], ["sh", "-c", super::READ_WINDOW_SCRIPT]);
+        assert_eq!(
+            calls[0][4..],
+            [
+                "src/lib.rs".to_owned(),
+                String::new(),
+                (TOOL_TEXT_OUTPUT_MAX_BYTES + 1).to_string()
+            ]
+        );
+    }
+
+    /// A dump that does not finish, or whose `od` is missing, is a failed
+    /// read, never an empty file.
+    #[tokio::test]
+    async fn read_file_refuses_a_dump_it_cannot_trust() {
+        let missing_od = result(
+            format!("{}127\n", super::READ_END_MARKER),
+            format!("sh: od: not found\n{}0\n", super::BOUNDED_STATUS_MARKER),
+            0,
+        );
+        let unfinished = result(
+            " 61 62\n",
+            format!("{}0\n", super::BOUNDED_STATUS_MARKER),
+            0,
+        );
+        let not_hex = result(
+            format!(" 6g\n{}0\n", super::READ_END_MARKER),
+            format!("{}0\n", super::BOUNDED_STATUS_MARKER),
+            0,
+        );
+        let missing_file = result(
+            format!("{}0\n", super::READ_END_MARKER),
+            format!(
+                "tail: cannot open 'x' for reading: No such file or directory\n{}1\n",
+                super::BOUNDED_STATUS_MARKER
+            ),
+            0,
+        );
+        let sandbox = Arc::new(StubSandbox::new(
+            "/workspace",
+            vec![missing_od, unfinished, not_hex, missing_file],
+        ));
+        let tool = ReadFileTool::new(sandbox, super::READ_FILE_WINDOW_BYTES);
+        let mut reasons = Vec::new();
+        for offset in [0, 0, 0, 5] {
+            match tool
+                .execute(json!({"path": "x", "offset": offset}))
+                .await
+                .unwrap_err()
+            {
+                super::ToolError::ExecutionFailed { reason, .. } => reasons.push(reason),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert!(reasons[0].contains("no `od`"), "{reasons:?}");
+        assert!(reasons[1].contains("did not finish"), "{reasons:?}");
+        assert!(reasons[2].contains("'6g'"), "{reasons:?}");
+        assert!(reasons[3].contains("cannot open 'x'"), "{reasons:?}");
+    }
+
+    #[test]
+    fn complete_utf8_prefix_ends_before_a_cut_character_only() {
+        use super::complete_utf8_prefix as prefix;
+        assert_eq!(prefix(b""), 0);
+        assert_eq!(prefix(b"ab"), 2);
+        assert_eq!(prefix("a€".as_bytes()), 4);
+        assert_eq!(prefix(&"a€".as_bytes()[..3]), 1);
+        assert_eq!(prefix(&"a€".as_bytes()[..2]), 1);
+        assert_eq!(prefix(&"a🦀".as_bytes()[..4]), 1);
+        assert_eq!(prefix("a🦀".as_bytes()), 5);
+        // Bytes that are not UTF-8 are not a cut character.
+        assert_eq!(prefix(b"a\xff"), 2);
+        assert_eq!(prefix(b"a\x80\x80"), 3);
+        // A window shorter than one character keeps its bytes.
+        assert_eq!(prefix(&"€".as_bytes()[..2]), 2);
+    }
+
+    #[test]
+    fn the_default_window_is_a_quarter_of_the_context_at_one_token_per_byte() {
+        use super::{read_file_window, READ_FILE_WINDOW_BYTES};
+        assert_eq!(read_file_window(0), READ_FILE_WINDOW_BYTES);
+        assert_eq!(read_file_window(32_768), 8 * 1024);
+        assert_eq!(read_file_window(65_536), 16 * 1024);
+        assert_eq!(read_file_window(262_144), READ_FILE_WINDOW_BYTES);
+        assert_eq!(read_file_window(1_000_000), READ_FILE_WINDOW_BYTES);
+        assert_eq!(read_file_window(2_048), 512);
+        assert_eq!(read_file_window(1_000), 512);
     }
 
     #[tokio::test]
     async fn oversized_paths_and_writes_are_rejected_before_sandbox_io() {
         let sandbox = Arc::new(StubSandbox::new("/workspace", vec![]));
-        let read = ReadFileTool {
-            sandbox: sandbox.clone(),
-        };
+        let read = ReadFileTool::new(sandbox.clone(), super::READ_FILE_WINDOW_BYTES);
         let write = WriteFileTool {
             sandbox: sandbox.clone(),
         };
@@ -2124,9 +2383,10 @@ mod tests {
             .collect();
         std::fs::write(root.join("long.txt"), &text).unwrap();
         std::fs::write(root.join("short.txt"), "one line\n").unwrap();
-        let tool = ReadFileTool {
-            sandbox: Arc::new(HostDirSandbox { root: root.clone() }),
-        };
+        let tool = ReadFileTool::new(
+            Arc::new(HostDirSandbox { root: root.clone() }),
+            super::READ_FILE_WINDOW_BYTES,
+        );
 
         let first = tool.execute(json!({"path": "long.txt"})).await.unwrap();
         assert_eq!(first["content"].as_str().unwrap(), &text[..window]);
@@ -2198,6 +2458,101 @@ mod tests {
             .execute(json!({"path": "missing.txt", "offset": 10}))
             .await
             .is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The window of a model with a 32,768-token context: a read without
+    /// `limit` returns 8 KiB, a larger `limit` no more, and the description
+    /// and schema say so; the next read starts where the window ended.
+    #[tokio::test]
+    async fn read_file_windows_fit_the_model_context() {
+        let root = tempfile_dir("axocoatl-read-window");
+        let text: String = (0..20_000)
+            .map(|index| char::from(b'a' + (index % 26) as u8))
+            .collect();
+        std::fs::write(root.join("long.txt"), &text).unwrap();
+        let window = super::read_file_window(32_768);
+        let tool = ReadFileTool::new(Arc::new(HostDirSandbox { root: root.clone() }), window);
+        assert_eq!(tool.window(), 8 * 1024);
+        assert!(tool.description().starts_with("Read up to 8 KiB of a file"));
+        assert_eq!(
+            tool.parameters_schema()["properties"]["limit"]["maximum"],
+            8 * 1024
+        );
+
+        let first = tool.execute(json!({"path": "long.txt"})).await.unwrap();
+        assert_eq!(first["content"].as_str().unwrap(), &text[..window]);
+        assert_eq!(first["next_offset"], window as u64);
+        assert_eq!(first["output_limit_bytes"], window);
+        let asked_more = tool
+            .execute(json!({"path": "long.txt", "offset": first["next_offset"], "limit": 65_536}))
+            .await
+            .unwrap();
+        assert_eq!(
+            asked_more["content"].as_str().unwrap(),
+            &text[window..window * 2]
+        );
+        assert_eq!(asked_more["next_offset"], (window * 2) as u64);
+        let last = tool
+            .execute(json!({"path": "long.txt", "offset": asked_more["next_offset"]}))
+            .await
+            .unwrap();
+        assert_eq!(last["content"].as_str().unwrap(), &text[window * 2..]);
+        assert_eq!(last["truncated"], false);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A file that is not UTF-8, read in windows that cut its characters,
+    /// loses no byte: each read starts at the previous `next_offset`, the
+    /// windows' `returned_bytes` add up to the file, a character a window
+    /// would cut starts the next one, and only `content` is decoded (with
+    /// `invalid_utf8` when it held bytes that are not UTF-8).
+    #[tokio::test]
+    async fn read_file_never_loses_bytes_of_a_file_that_is_not_utf8() {
+        let root = tempfile_dir("axocoatl-read-bytes");
+        let mut bytes = Vec::new();
+        for index in 0..400u32 {
+            match index % 6 {
+                0 => bytes.extend_from_slice("é".as_bytes()),
+                1 => bytes.extend_from_slice("€".as_bytes()),
+                2 => bytes.extend_from_slice("🦀".as_bytes()),
+                3 => bytes.extend_from_slice(&[0xff, 0xfe]),
+                4 => bytes.extend_from_slice(&[0x80, b'x', 0xf0, 0x9f]),
+                _ => bytes.extend_from_slice(b"line\n"),
+            }
+        }
+        std::fs::write(root.join("mixed.bin"), &bytes).unwrap();
+        let tool = ReadFileTool::new(
+            Arc::new(HostDirSandbox { root: root.clone() }),
+            super::READ_FILE_WINDOW_BYTES,
+        );
+        let mut offset = 0u64;
+        let mut content = String::new();
+        let mut invalid = 0;
+        loop {
+            let window = tool
+                .execute(json!({"path": "mixed.bin", "offset": offset, "limit": 7}))
+                .await
+                .unwrap();
+            let returned = window["returned_bytes"].as_u64().unwrap();
+            assert!((1..=7).contains(&returned), "{window}");
+            content.push_str(window["content"].as_str().unwrap());
+            invalid += usize::from(window["invalid_utf8"] == true);
+            offset += returned;
+            if window["truncated"] == false {
+                assert!(window.get("next_offset").is_none());
+                break;
+            }
+            assert_eq!(window["next_offset"], offset, "{window}");
+        }
+        assert_eq!(offset, bytes.len() as u64);
+        assert_eq!(content, String::from_utf8_lossy(&bytes));
+        assert!(invalid > 0);
+        // The whole file in one read decodes the same way.
+        let whole = tool.execute(json!({"path": "mixed.bin"})).await.unwrap();
+        assert_eq!(whole["returned_bytes"], bytes.len());
+        assert_eq!(whole["content"].as_str().unwrap(), content);
+        assert_eq!(whole["invalid_utf8"], true);
         std::fs::remove_dir_all(root).unwrap();
     }
 

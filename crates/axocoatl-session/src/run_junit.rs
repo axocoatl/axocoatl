@@ -1246,20 +1246,23 @@ mod tests {
         outcome.findings.clear();
         outcome.not_covered.clear();
         outcome.notes = vec![
-            "worker-billing listed billing/legacy.py as not reached, and no such path exists \
-             in the repository; a note, not a gap"
+            "worker-billing listed as not reached: billing/legacy.py; a note: the host decides \
+             coverage from the files its workers read"
                 .into(),
-            "worker-auth listed other planned areas as not reached (billing) & <more>".into(),
+            "worker-auth listed as not reached: billing & <more>; a note: the host decides \
+             coverage from the files its workers read"
+                .into(),
         ];
         assert_eq!(outcome.decide(VerdictInputs::default()), exit_code::PASS);
         let xml = render_junit(&outcome).unwrap();
         assert!(
             xml.contains(
                 "    <testcase classname=\"axocoatl.run\" name=\"verdict\">\n      \
-                 <system-out>note: worker-billing listed billing/legacy.py as not reached, and \
-                 no such path exists in the repository; a note, not a gap\nnote: worker-auth \
-                 listed other planned areas as not reached (billing) &amp; &lt;more&gt;\
-                 </system-out>\n    </testcase>\n"
+                 <system-out>note: worker-billing listed as not reached: billing/legacy.py; a \
+                 note: the host decides coverage from the files its workers read\nnote: \
+                 worker-auth listed as not reached: billing &amp; &lt;more&gt;; a note: the \
+                 host decides coverage from the files its workers read</system-out>\n    \
+                 </testcase>\n"
             ),
             "{xml}"
         );

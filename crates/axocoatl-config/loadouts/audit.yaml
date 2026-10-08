@@ -8,12 +8,15 @@
 #   2. areas: the host lists the repository's files (git ls-files, or a walk
 #      outside Git) and gives each to the first area whose paths match it,
 #      else to the area sharing its directories, else to a host-made area
-#      "rest"; then it runs one read-only worker per area in parallel, each
-#      told its files, with a fresh context and no dependencies (no checks,
-#      no review);
+#      "rest"; it splits an area whose files need more reads than one worker
+#      makes within its invocations into numbered sub-areas; then it runs one
+#      read-only worker per area in parallel (at most 16 workers and 200
+#      planned reads to a turn, more in further turns), each told its files,
+#      with a fresh context and no dependencies (no checks, no review);
 #   3. follow-ups: a worker that left files of its area unread (judged from
-#      the read_file calls its Session recorded, never from its answer) gets
-#      up to two more activations naming exactly those files;
+#      the bytes the read_file calls its Session recorded returned, never
+#      from its answer) gets another activation naming exactly those files,
+#      again for as long as each one reads something new;
 #   4. integrate: the integrator merges every worker's report. Integration is
 #      its own turn, so the integrator has no depends_on.
 # Each file still unread is listed as not covered, and so is a worker without

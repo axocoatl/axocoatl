@@ -178,6 +178,44 @@ pub fn call_floor(
     }
 }
 
+/// Each native Agent's model context in tokens as admission observed it,
+/// by Agent id: an Ollama model's loaded context, an OpenRouter model's
+/// `context_length` in OpenRouter's catalog. An Agent whose context was not
+/// observed, and an external program's, are left out. The audit sizes its
+/// areas by the worker's (`audit::files::ReadBudget`).
+pub fn agent_contexts(
+    resolved: &ResolvedLoadout,
+    observed: &AdmissionObservations,
+) -> std::collections::BTreeMap<String, u64> {
+    let mut contexts = std::collections::BTreeMap::new();
+    for (budget, model) in resolved_call_budgets(resolved) {
+        let (Some(agent), Some(model)) = (budget.agent.clone(), model) else {
+            continue;
+        };
+        if budget.runtime != AgentRuntime::Native {
+            continue;
+        }
+        let context = match model.provider.as_str() {
+            "ollama" => observed.ollama_contexts.get(&model).copied().flatten(),
+            "openrouter" => observed.openrouter_catalog.as_ref().and_then(|catalog| {
+                let output = usize::try_from(budget.max_output_tokens).ok()?;
+                axocoatl_llm_openai::catalog_call_floor(
+                    catalog,
+                    &model.model,
+                    output,
+                    budget.reasoning_effort,
+                )
+                .map(|floor| floor.context_tokens as u64)
+            }),
+            _ => None,
+        };
+        if let Some(context) = context {
+            contexts.insert(agent, context);
+        }
+    }
+    contexts
+}
+
 /// Refuse, as a usage error, a run whose Agent or reviewer cannot make one
 /// model call within its tokens budget ([`call_floor`]). A native caller
 /// whose floor cannot be known keeps the smallest context a native call

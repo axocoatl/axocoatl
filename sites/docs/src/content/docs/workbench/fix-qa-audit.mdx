@@ -217,29 +217,46 @@ never from what a worker says:
    goes to the area whose paths share the most directories with it (`auth/__init__.py`
    goes to an area named by `auth/tokens.py`), and a file that shares none, such as a
    `README.md` at the root, goes to an area `rest` that Axocoatl makes for them. A
-   planned area that ends up with no files is not run. The progress lines (`assigned`)
-   and the record show the plan as executed and every area's files; the files given to
-   `rest` or by directory are notes.
+   planned area that ends up with no files is not run.
+
+   An area with more files than one worker can read within its budget is split before
+   any worker runs. Axocoatl counts the reads its text files need, one for each default
+   `read_file` window of each file (see step 4), and what one worker activation can
+   read: its `invocations`, less a fifth (at least 4) held back for looking around and
+   its answer, at two invocations a read (the model call that asks for it and the read
+   itself), and at most 200. The built-in budget of 300 invocations comes to about 120
+   reads. An area that needs more becomes numbered sub-areas, such as `src-1`, `src-2`
+   and `src-3`, of consecutive files, each within that budget, each with its own worker;
+   a file is never split. The progress lines (`assigned`) and the record show the plan
+   as executed and every area's files; each split, and the files given to `rest` or by
+   directory, are notes.
 3. **Areas.** One worker per area, made from the `worker` Agent: read-only (`writes: []`,
    its `bash` under Landlock with no repository writes and no TCP, which needs Linux 6.7
    or later; [without it](/configure/agents/#limit-which-files-an-agent-may-change) its
    `bash` does not run), each in a fresh conversation, with no dependencies between them,
    so the controller starts them together. Each worker is told the files of its area
    (past 8 KiB of names, the directories they are in, with counts, and to read all of
-   them) and reports `FINDINGS` and what it did `NOT_REACHED`.
+   them) and reports `FINDINGS` and what it did `NOT_REACHED`. A turn can record only so
+   many tool calls, so one turn runs at most 16 workers whose reads add up to at most
+   200; more workers run in further turns.
 4. **Follow-ups.** From the tool calls each worker's Session recorded, a file counts as
-   read only when a `read_file` of it succeeded: any read for a file of up to 64 KiB, and
-   reads that together cover all of a longer one (`read_file` returns 64 KiB from its
-   `offset`, or fewer bytes with `limit`, and says where the next read starts; a model
-   whose context cannot hold 64 KiB of text reads a long file in smaller pieces). Reading through `grep`, `glob`,
-   `list_dir` or `bash` does not count. Empty files and binary files (a NUL byte in the
-   first 8,000 bytes) need no read; a file over 256 KiB is not read, and is a note. When a
-   worker's turn ends with files of its area unread, Axocoatl runs a follow-up turn with
-   a fresh activation of that worker naming exactly those files: "read these files and
-   report additional findings in the same format". Each worker gets at most two, and a
-   worker without a result gets them too, unless the wall clock, your stop or its
-   provider's refusal of the request (HTTP 400 to 403) ended it. A follow-up's findings
-   join its area's report.
+   read only when the `read_file` calls of it returned every byte of it, whatever its
+   size: each read covers the bytes its result reports, from its `offset` for its
+   `returned_bytes`. Reading part of a file, even a small one, leaves it unread.
+   `read_file` returns, from its `offset` (0 by default), a window that fits the model:
+   64 KiB, or a quarter of the model's context counted at one token per byte when that
+   is smaller (8 KiB for a 32,768-token context). Its description tells the model the
+   size, `limit` asks for less, and the result says where the next read starts. Reading
+   through `grep`, `glob`, `list_dir` or `bash` does not count. Empty files and binary
+   files (a NUL byte in the first 8,000 bytes) need no read; a file over 256 KiB is not
+   read, and is a note. When a worker's turn ends with files of its area unread,
+   Axocoatl runs a follow-up turn with a fresh activation of that worker naming exactly
+   those files: "read these files and report additional findings in the same format".
+   Follow-ups go on for as long as each one reads something of its files that no
+   earlier read returned; a worker whose follow-up read nothing new gets no more. The
+   wall clock bounds them. A worker without a result gets a follow-up too, unless the
+   wall clock, your stop or its provider's refusal of the request (HTTP 400 to 403)
+   ended it. A follow-up's findings join its area's report.
 
    What stays not covered, each with its reason: every file still unread after the
    follow-ups (or when the wall clock or your stop ended them), listed by file; a worker
@@ -256,11 +273,13 @@ never from what a worker says:
 Audit turns have no required checks and no review. Findings do not fail the run by
 default (`fail_on_findings: false`); anything not covered does. Each worker gets the
 `worker` Agent's `budget`, or `budgets.agent` without one, for each turn it is in, and
-the wall clock bounds every turn. Every file must be read, so an area with more files
-than its worker can read within that budget in its turn and two follow-ups ends
-needing attention; plan smaller areas or raise the budget. When integration gives no
-readable result, the workers' findings are reported unmerged and `audit integration`
-is listed as not covered. The attention line counts only areas and names the
+the wall clock bounds every turn. Every file must be read: an area too large for one
+worker is split, and a worker that reads less than it was given is followed up while
+it keeps reading new files, so a file stays unread only when its worker's last
+follow-up read nothing new, or the wall clock, your stop or a failure ended the
+follow-ups. When integration gives no readable result, the
+workers' findings are reported unmerged and `audit integration` is listed as not
+covered. The attention line counts only areas and names the
 integration apart: "The integration was not read; the area findings are reported
 unmerged".
 

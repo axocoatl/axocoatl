@@ -1148,6 +1148,7 @@ impl AxocoatlDaemon {
             .await;
         crate::loadout::team_plan::refuse_budgets_below_one_call(&resolved, &observed)
             .map_err(run_error)?;
+        let agent_contexts = crate::loadout::team_plan::agent_contexts(&resolved, &observed);
         // An external writer whose model the pinned table does not list is
         // not checked, and its cost may not be known: the run says so.
         let unpinned =
@@ -1370,6 +1371,7 @@ impl AxocoatlDaemon {
             resolved,
             options,
             deadline: std::time::Instant::now() + std::time::Duration::from_millis(wall_clock),
+            agent_contexts,
         };
         Ok((
             RunAccepted {

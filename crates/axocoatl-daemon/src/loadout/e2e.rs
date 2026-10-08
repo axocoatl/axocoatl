@@ -1266,6 +1266,7 @@ exit 1
                 setup_command: None,
             },
             deadline: Instant::now(),
+            agent_contexts: Default::default(),
         }
     }
 

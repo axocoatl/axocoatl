@@ -13,21 +13,30 @@
 //! 2. **Assignment**: the host lists the repository's files and assigns
 //!    each to one area ([`files::assign`]): the first area whose paths
 //!    match it, else the area whose paths share the most directories with
-//!    it, else the host-made area `rest`. The plan as executed (the planned
-//!    areas that got files, then `rest`) and the assignment are `assigned`
+//!    it, else the host-made area `rest`. An area whose files need more
+//!    `read_file` calls than one worker activation makes within its
+//!    invocations ([`files::ReadBudget`]) is split into numbered sub-areas
+//!    with their own workers ([`files::split`], a note). The plan as
+//!    executed (the planned areas that got files, then `rest`, each split
+//!    one replaced by its sub-areas) and the assignment are `assigned`
 //!    phase events; a planned area without files is not run (a note).
 //! 3. **Areas**: one `worker-<area>` slot per executed area, instantiated
 //!    from the `worker` Agent: read-only (`writes: []`; its commands run
 //!    under the supervisor's write restriction), a fresh context
 //!    (`reset_history`), no dependencies, required, no checks and no
 //!    review, so the controller starts every one at once. Each worker's
-//!    instructions name its files ([`files::file_list`]).
+//!    instructions name its files ([`files::file_list`]). One turn runs at
+//!    most [`MAX_WORKERS_PER_TURN`] workers whose planned reads add up to at
+//!    most [`files::MAX_TURN_READS`]; more run in further turns
+//!    ([`worker_turns`]).
 //! 4. **Follow-ups**: when a worker's turn ends with text files of its area
-//!    unread ([`files::unread`], judged from the Session's recorded
-//!    `read_file` calls of the worker's activations that answered), the
-//!    host runs up to [`MAX_FOLLOW_UPS`] follow-up turns, each with a fresh
+//!    not read to their end ([`files::unread`], judged from the bytes the
+//!    Session's recorded `read_file` calls of the worker's activations that
+//!    answered returned), the host runs a follow-up turn with a fresh
 //!    activation of every such worker naming exactly its unread files; its
-//!    findings join the area's report. A file still unread after them, or
+//!    findings join the area's report. Follow-ups go on while each one
+//!    reads bytes of its files that no earlier read returned: an area whose
+//!    follow-up read nothing new gets no more. A file still unread then, or
 //!    when the wall clock or a person's stop ends them, is not covered,
 //!    listed by file. A worker without a result, an unreadable report and
 //!    a record of tool calls that cannot be read are listed too. What a
@@ -75,7 +84,9 @@ use crate::SessionTeamEdit;
 #[path = "audit_files.rs"]
 pub mod files;
 
-use files::{AssignedArea, Assignment, FileKind, RepoFile, MAX_FILE_LIST_BYTES};
+use files::{
+    AssignedArea, Assignment, Coverage, FileKind, ReadBudget, RepoFile, MAX_FILE_LIST_BYTES,
+};
 
 /// Slot of the plan turn.
 pub const PLANNER_SLOT: &str = "planner";
@@ -92,9 +103,12 @@ pub const INTEGRATION: &str = axocoatl_session::run_outcome::INTEGRATION;
 /// The not-covered entry of the files the host could not list: past its
 /// listing bound, or with names that are not UTF-8.
 pub const UNLISTED: &str = "unlisted files";
-/// Follow-up activations a worker gets for the files of its area it did
-/// not read.
-pub const MAX_FOLLOW_UPS: u32 = 2;
+/// Most area workers one turn runs; more run in further turns of the same
+/// purpose.
+pub const MAX_WORKERS_PER_TURN: usize = 16;
+/// Most bytes of worker instructions one turn's Team carries, so its edit
+/// stays well within a turn contract's envelope; past it, a further turn.
+const MAX_TURN_INSTRUCTION_BYTES: usize = 128 * 1024;
 /// `RunTurnRef::purpose` of each turn.
 pub const PLAN_PURPOSE: &str = "audit_plan";
 pub const AREAS_PURPOSE: &str = "audit_areas";
@@ -251,25 +265,51 @@ pub fn area_slots(
 /// left unread, each told exactly those files.
 pub fn follow_up_slots(
     resolved: &ResolvedLoadout,
-    due: &[(&AuditArea, Vec<&str>)],
+    due: &[(&AssignedArea, Vec<&str>)],
     round: u32,
 ) -> Result<Vec<SlotPlan>, RunError> {
     let worker = agent(resolved, LoadoutRole::Worker)?;
     due.iter()
-        .map(|(area, unread)| {
+        .map(|(assigned, unread)| {
             read_only_slot(
                 resolved,
-                worker_slot_id(&area.name),
+                worker_slot_id(&assigned.area.name),
                 worker,
                 Some(follow_up_instructions(
                     worker.instructions.as_deref(),
-                    area,
+                    assigned,
                     unread,
                     round,
                 )),
             )
         })
         .collect()
+}
+
+/// `slots`, each with the index of its area and the reads planned for it,
+/// in turns of at most [`MAX_WORKERS_PER_TURN`] workers,
+/// [`files::MAX_TURN_READS`] planned reads and
+/// [`MAX_TURN_INSTRUCTION_BYTES`] of instructions (a worker that alone
+/// needs more has a turn of its own), in order.
+pub fn worker_turns(slots: Vec<(usize, SlotPlan, u64)>) -> Vec<Vec<(usize, SlotPlan)>> {
+    let mut turns: Vec<Vec<(usize, SlotPlan)>> = Vec::new();
+    let (mut bytes, mut reads) = (0, 0);
+    for (index, slot, planned) in slots {
+        let size = slot.instructions.as_deref().map_or(0, str::len);
+        let full = turns.last().is_none_or(|turn| {
+            turn.len() >= MAX_WORKERS_PER_TURN
+                || bytes + size > MAX_TURN_INSTRUCTION_BYTES
+                || reads + planned > files::MAX_TURN_READS
+        });
+        if full {
+            turns.push(Vec::new());
+            (bytes, reads) = (0, 0);
+        }
+        bytes += size;
+        reads += planned;
+        turns.last_mut().expect("a turn").push((index, slot));
+    }
+    turns
 }
 
 /// The integrate turn's team: the integrator alone. Integration is its own
@@ -340,12 +380,12 @@ pub fn plan_retry_request(prompt: &str, min: u32, max: u32, error: &str) -> Stri
 
 /// How a worker reads, as the host checks it.
 const READ_RULES: &str = "The host checks your read_file calls, not your answer: a file \
-     counts as examined only when a read_file of it succeeded. read_file returns at most 64 \
-     KiB from its offset (0 by default), or limit bytes; read a longer file to its end with \
-     more calls at each result's next_offset, with a smaller limit when a whole 64 KiB would \
-     not fit your context. grep, glob, list_dir and bash find and search files, but what they \
-     show does not count as reading. The host names any file of yours you did not read back \
-     to you to read.\n";
+     counts as examined only when read_file returned every byte of it. read_file returns a \
+     window of the file from its offset (0 by default), as large as its description says, or \
+     limit bytes; when the result says truncated, read on with more calls at each result's \
+     next_offset until truncated is false. grep, glob, list_dir and bash find and search \
+     files, but what they show does not count as reading. The host names any file of yours \
+     you did not read to its end back to you to read.\n";
 
 /// The blocks a worker's answer ends with.
 const REPORT_SHAPE: &str = "\nEnd your answer with two blocks:\nFINDINGS\n```json\n[{\"id\": \
@@ -354,13 +394,22 @@ const REPORT_SHAPE: &str = "\nEnd your answer with two blocks:\nFINDINGS\n```jso
      [\"each file of yours you could not examine, and why\"]\n```\nWrite [] for a block with \
      no entries.";
 
-fn instructions_head(base: Option<&str>, area: &AuditArea) -> String {
+fn instructions_head(base: Option<&str>, assigned: &AssignedArea) -> String {
+    let area = &assigned.area;
     let mut text = String::new();
     if let Some(base) = base.map(str::trim).filter(|base| !base.is_empty()) {
         text.push_str(base);
         text.push_str("\n\n");
     }
     let _ = writeln!(text, "Your area: {}\nScope: {}", area.name, area.scope);
+    if let Some(part) = &assigned.part {
+        let _ = writeln!(
+            text,
+            "Part {} of {} of area {}: the host split that area so each worker can read its files \
+             within its budget; other workers read its other parts.",
+            part.number, part.count, part.of
+        );
+    }
     text
 }
 
@@ -369,7 +418,7 @@ fn instructions_head(base: Option<&str>, area: &AuditArea) -> String {
 /// checks its reads and the report it ends with.
 pub fn worker_instructions(base: Option<&str>, assigned: &AssignedArea, others: &[&str]) -> String {
     let area = &assigned.area;
-    let mut text = instructions_head(base, area);
+    let mut text = instructions_head(base, assigned);
     if assigned.host_made {
         text.push_str("The host made this area for the files no planned area's paths name.\n");
     } else if area.paths.is_empty() {
@@ -437,31 +486,30 @@ pub fn worker_instructions(base: Option<&str>, assigned: &AssignedArea, others: 
 }
 
 /// A follow-up activation's instructions: its area and exactly the files of
-/// it the worker did not read.
+/// it the worker did not read to their end.
 pub fn follow_up_instructions(
     base: Option<&str>,
-    area: &AuditArea,
+    assigned: &AssignedArea,
     unread: &[&str],
     round: u32,
 ) -> String {
-    let mut text = instructions_head(base, area);
+    let mut text = instructions_head(base, assigned);
     let (list, grouped) = files::file_list(unread, MAX_FILE_LIST_BYTES);
     if grouped {
         let _ = writeln!(
             text,
-            "Follow-up {round} of at most {MAX_FOLLOW_UPS}: the host checked the read_file calls \
-             of your area's worker, and {} files of your area were not read, too many to name \
-             one by one: every unread file of yours in or below these directories (each count \
-             is of those files). Read these files and report additional findings in the same \
-             format:",
+            "Follow-up {round}: the host checked the read_file calls of your area's worker, and \
+             {} files of your area were not read to their end, too many to name one by one: \
+             every unread file of yours in or below these directories (each count is of those \
+             files). Read these files and report additional findings in the same format:",
             unread.len()
         );
     } else {
         let _ = writeln!(
             text,
-            "Follow-up {round} of at most {MAX_FOLLOW_UPS}: the host checked the read_file calls \
-             of your area's worker, and these files of your area were not read. Read these \
-             files and report additional findings in the same format:"
+            "Follow-up {round}: the host checked the read_file calls of your area's worker, and \
+             these files of your area were not read to their end. Read these files and report \
+             additional findings in the same format:"
         );
     }
     text.push_str(&list);
@@ -471,17 +519,24 @@ pub fn follow_up_instructions(
     text
 }
 
-/// The areas turn's request (each worker's own instructions name its area
-/// and its files).
-pub fn areas_request(prompt: &str, assignment: &Assignment) -> String {
-    let names = assignment.names();
+/// An areas turn's request for the areas `names` of the `all` areas of the
+/// plan as executed (each worker's own instructions name its area and its
+/// files).
+pub fn areas_request(prompt: &str, names: &[&str], all: usize) -> String {
+    let which = if names.len() < all {
+        format!(
+            "{} of the {all} areas of the plan as executed (the others run in other turns)",
+            names.len()
+        )
+    } else {
+        format!("the {} areas of the plan as executed", names.len())
+    };
     format!(
-        "{}\n\nThis turn audits the {} areas of the plan as executed in parallel: {}. The host \
-         listed the repository's files and gave each to one area. Your instructions name your \
-         area and its files: read them, audit only that area, and end with the FINDINGS and \
-         NOT_REACHED blocks your instructions describe.",
+        "{}\n\nThis turn audits {which} in parallel: {}. The host listed the repository's files \
+         and gave each to one area. Your instructions name your area and its files: read them, \
+         audit only that area, and end with the FINDINGS and NOT_REACHED blocks your \
+         instructions describe.",
         prompt.trim_end(),
-        names.len(),
         names.join(", ")
     )
 }
@@ -678,6 +733,15 @@ fn cut(text: &str, max: usize) -> (&str, bool) {
     (&text[..end], true)
 }
 
+/// `bytes` as a size: `8 KiB`, or `1500 bytes`.
+fn window_words(bytes: u64) -> String {
+    if bytes.is_multiple_of(1024) {
+        format!("{} KiB", bytes / 1024)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
 /// `paths` as one line, `a, b, c`, within [`MAX_INLINE_LIST_BYTES`]: past
 /// it, the directories they are in with counts.
 fn inline_list(paths: &[&str]) -> String {
@@ -804,6 +868,11 @@ struct AreaState {
     /// Activations so far: its turn, then each follow-up.
     activations: u32,
     follow_ups: u32,
+    /// Its worker's turn started.
+    started: bool,
+    /// Its latest follow-up returned no byte of its files that no earlier
+    /// read had: it gets no more.
+    stalled: bool,
     /// An activation of it answered.
     answered: bool,
     /// Why its latest activation has no result, when it has none.
@@ -824,6 +893,8 @@ impl AreaState {
             unreadable: Vec::new(),
             activations: 0,
             follow_ups: 0,
+            started: false,
+            stalled: false,
             answered: false,
             failure: None,
             unknown: None,
@@ -836,17 +907,28 @@ impl AreaState {
         &self.assigned.area.name
     }
 
-    /// Its text files no activation that answered read.
+    /// Its text files the activations that answered did not read to their
+    /// end.
     fn unread(&self, repo: &std::path::Path) -> Vec<&RepoFile> {
         let calls: Vec<&ToolCallRecord> = self.calls.iter().collect();
         files::unread(&self.assigned.files, &calls, repo)
     }
 
-    /// Whether another follow-up could read its unread files.
+    /// The bytes of its text files the activations that answered read.
+    fn covered(&self, repo: &std::path::Path) -> u64 {
+        let calls: Vec<&ToolCallRecord> = self.calls.iter().collect();
+        Coverage::of(&calls, repo).covered_text(&self.assigned.files)
+    }
+
+    /// Whether another follow-up could read its unread files: its worker
+    /// can read, its record of tool calls was read, its last follow-up read
+    /// something new, and nothing that would end a follow-up the same way
+    /// ended its last activation.
     fn may_follow_up(&self, reads: bool) -> bool {
         reads
+            && self.started
             && self.unknown.is_none()
-            && self.follow_ups < MAX_FOLLOW_UPS
+            && !self.stalled
             && !self
                 .failure
                 .as_ref()
@@ -897,6 +979,21 @@ impl Audit<'_> {
             return Err(RunError::Stopped);
         }
         self.integrate(&assignment, &results).await
+    }
+
+    /// What one worker activation is expected to read: from the `worker`
+    /// Agent's invocations per activation (its `budget`, else
+    /// `budgets.agent`) and its model's context as admission observed it.
+    fn read_budget(&self) -> Result<ReadBudget, RunError> {
+        let worker = agent(&self.run.resolved, LoadoutRole::Worker)?;
+        let limits = worker
+            .budget
+            .as_ref()
+            .unwrap_or(&self.run.resolved.loadout.file.budgets.agent);
+        Ok(ReadBudget::new(
+            limits.invocations,
+            self.run.agent_contexts.get(&worker.id).copied(),
+        ))
     }
 
     fn observation(&self, observed: &Observed) -> &TurnObservation {
@@ -1236,7 +1333,8 @@ impl Audit<'_> {
                 return Ok(None);
             }
         };
-        let assignment = files::assign(plan, &listing.files);
+        let budget = self.read_budget()?;
+        let assignment = files::split(files::assign(plan, &listing.files), &budget);
         let counts: Vec<String> = assignment
             .areas
             .iter()
@@ -1280,17 +1378,53 @@ impl Audit<'_> {
                 })
                 .collect();
             let shown: Vec<&str> = shown.iter().map(String::as_str).collect();
-            let paths = if assigned.host_made {
+            let mut paths = if assigned.host_made {
                 "host-made for the files no planned area's paths name".to_owned()
             } else if assigned.area.paths.is_empty() {
                 "no paths".to_owned()
             } else {
                 format!("paths {}", assigned.area.paths.join(", "))
             };
+            if let Some(part) = &assigned.part {
+                paths = format!(
+                    "part {} of {} of {}, {paths}",
+                    part.number, part.count, part.of
+                );
+            }
             self.phase(
                 "assigned",
                 format!("{} ({paths}): {}", assigned.area.name, inline_list(&shown)),
             )
+            .await?;
+        }
+        let per_worker = if budget.capped {
+            format!(
+                "{} reads, the most the host plans for one turn",
+                files::MAX_TURN_READS
+            )
+        } else {
+            format!(
+                "about {} reads: {} invocations at {} a read, {} held back for looking around \
+                 and its answer",
+                budget.reads,
+                budget.invocations,
+                files::INVOCATIONS_PER_READ,
+                budget.reserved
+            )
+        };
+        for split in &assignment.split {
+            self.note(format!(
+                "area {} has {} files to read, about {} reads of up to {} (the default read of \
+                 the worker's model), more than one worker makes within its budget \
+                 ({per_worker}), so the host split it into {} sub-areas, each with its own \
+                 worker: {}",
+                split.name,
+                split.to_read,
+                split.reads,
+                window_words(budget.window),
+                split.parts.len(),
+                split.parts.join(", ")
+            ))
             .await?;
         }
         for assigned in &assignment.areas {
@@ -1383,68 +1517,116 @@ impl Audit<'_> {
         Ok(Some(assignment))
     }
 
-    /// Turn 2 and the follow-ups: every area at once, then, up to
-    /// [`MAX_FOLLOW_UPS`] times, a fresh activation of each worker that left
-    /// files of its area unread, naming them. Returns each area's result and
-    /// whether a person stopped the run.
+    /// The areas turns and the follow-ups: every area's worker at once (at
+    /// most [`MAX_WORKERS_PER_TURN`] to a turn, more in further turns),
+    /// then rounds of follow-ups, each with a fresh activation of every
+    /// worker that left files of its area unread, naming them, for as long
+    /// as each one's last follow-up read something new. Returns each area's
+    /// result and whether a person stopped the run.
     async fn areas(
         &mut self,
         assignment: &Assignment,
     ) -> Result<(Vec<AreaResult>, bool), RunError> {
-        let names = assignment.names();
-        let what = format!(
-            "audit areas: {} read-only workers ({})",
-            names.len(),
-            names.join(", ")
-        );
-        let slots = area_slots(&self.run.resolved, assignment)?;
-        let request = areas_request(&self.run.resolved.prompt, assignment);
-        let started = match self
-            .apply_and_turn(&what, slots, &request, AREAS_PURPOSE)
-            .await
-        {
-            Err(RunError::Stopped) => {
-                for assigned in &assignment.areas {
-                    self.not_covered(NotCovered {
-                        area: assigned.area.name.clone(),
-                        class: FailureClass::Stopped,
-                        detail: "the run was stopped before the areas started".into(),
-                        node_id: None,
-                        turn_id: None,
-                    })
-                    .await?;
-                }
-                return Err(RunError::Stopped);
-            }
-            started => started?,
-        };
-        let Some(observed) = started else {
-            for assigned in &assignment.areas {
-                self.not_covered(NotCovered {
-                    area: assigned.area.name.clone(),
-                    class: FailureClass::Budget,
-                    detail: "the run's wall clock ran out before the areas started".into(),
-                    node_id: None,
-                    turn_id: None,
-                })
-                .await?;
-            }
-            return Ok((Vec::new(), false));
-        };
         let reads = agent(&self.run.resolved, LoadoutRole::Worker)?
             .tools
             .iter()
             .any(|tool| tool == "read_file");
         let repo = self.run.options.repo.clone();
         let mut states: Vec<AreaState> = assignment.areas.iter().map(AreaState::new).collect();
-        let every: Vec<usize> = (0..states.len()).collect();
-        self.observe_workers(&observed, &mut states, &every).await?;
-        let mut deadline_hit = observed.deadline_hit;
+        let all = states.len();
+        let budget = self.read_budget()?;
+        let turns = worker_turns(
+            area_slots(&self.run.resolved, assignment)?
+                .into_iter()
+                .enumerate()
+                .map(|(index, slot)| {
+                    let planned = budget.planned(&assignment.areas[index].files);
+                    (index, slot, planned)
+                })
+                .collect(),
+        );
+        let count = turns.len();
+        let mut deadline_hit = false;
         let mut stopped = false;
-        for round in 1..=MAX_FOLLOW_UPS {
-            if deadline_hit {
+        for (number, turn) in turns.into_iter().enumerate() {
+            let which: Vec<usize> = turn.iter().map(|(index, _)| *index).collect();
+            let names: Vec<String> = which
+                .iter()
+                .map(|index| states[*index].name().to_owned())
+                .collect();
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            let what = if count == 1 {
+                format!(
+                    "audit areas: {} read-only workers ({})",
+                    names.len(),
+                    names.join(", ")
+                )
+            } else {
+                format!(
+                    "audit areas, turn {} of {count}: {} read-only workers ({})",
+                    number + 1,
+                    names.len(),
+                    names.join(", ")
+                )
+            };
+            let request = areas_request(&self.run.resolved.prompt, &names, all);
+            let slots = turn.into_iter().map(|(_, slot)| slot).collect();
+            match self
+                .apply_and_turn(&what, slots, &request, AREAS_PURPOSE)
+                .await
+            {
+                Err(RunError::Stopped) => stopped = true,
+                Err(error) => return Err(error),
+                Ok(None) => deadline_hit = true,
+                Ok(Some(observed)) => {
+                    for index in &which {
+                        states[*index].started = true;
+                    }
+                    self.observe_workers(&observed, &mut states, &which).await?;
+                    deadline_hit = observed.deadline_hit;
+                }
+            }
+            if stopped || deadline_hit {
                 break;
             }
+        }
+        let none_started = states.iter().all(|state| !state.started);
+        for state in states.iter().filter(|state| !state.started) {
+            let (class, detail) = match (stopped, none_started) {
+                (true, true) => (
+                    FailureClass::Stopped,
+                    "the run was stopped before the areas started",
+                ),
+                (true, false) => (
+                    FailureClass::Stopped,
+                    "the run was stopped before its worker's turn started",
+                ),
+                (false, true) => (
+                    FailureClass::Budget,
+                    "the run's wall clock ran out before the areas started",
+                ),
+                (false, false) => (
+                    FailureClass::Budget,
+                    "the run's wall clock ran out before its worker's turn started",
+                ),
+            };
+            self.not_covered(NotCovered {
+                area: state.name().to_owned(),
+                class,
+                detail: detail.into(),
+                node_id: None,
+                turn_id: None,
+            })
+            .await?;
+        }
+        if none_started {
+            if stopped {
+                return Err(RunError::Stopped);
+            }
+            return Ok((Vec::new(), false));
+        }
+        let mut round = 0;
+        while !stopped && !deadline_hit {
             let due: Vec<usize> = states
                 .iter()
                 .enumerate()
@@ -1454,13 +1636,14 @@ impl Audit<'_> {
             if due.is_empty() {
                 break;
             }
-            let (slots, names) = {
-                let unread: Vec<(&AuditArea, Vec<&str>)> = due
+            round += 1;
+            let slots = {
+                let unread: Vec<(&AssignedArea, Vec<&str>)> = due
                     .iter()
                     .map(|index| {
                         let state = &states[*index];
                         (
-                            &state.assigned.area,
+                            &state.assigned,
                             state
                                 .unread(&repo)
                                 .into_iter()
@@ -1469,46 +1652,84 @@ impl Audit<'_> {
                         )
                     })
                     .collect();
-                let names: Vec<String> = unread
-                    .iter()
-                    .map(|(area, files)| format!("{} ({} unread)", area.name, files.len()))
-                    .collect();
-                (follow_up_slots(&self.run.resolved, &unread, round)?, names)
+                follow_up_slots(&self.run.resolved, &unread, round)?
             };
-            for index in &due {
-                states[*index].follow_ups += 1;
-            }
-            let area_names: Vec<&str> = due.iter().map(|index| states[*index].name()).collect();
-            let request = follow_up_request(&self.run.resolved.prompt, &area_names, round);
-            let what = format!(
-                "audit follow-up {round}: {} read-only worker{} ({})",
-                due.len(),
-                if due.len() == 1 { "" } else { "s" },
-                names.join(", ")
+            let turns = worker_turns(
+                due.iter()
+                    .copied()
+                    .zip(slots)
+                    .map(|(index, slot)| {
+                        let planned = budget.planned(states[index].unread(&repo));
+                        (index, slot, planned)
+                    })
+                    .collect(),
             );
-            match self
-                .apply_and_turn(&what, slots, &request, FOLLOW_UP_PURPOSE)
-                .await
-            {
-                Err(RunError::Stopped) => {
-                    // The follow-up never started: it is not counted.
-                    for index in &due {
-                        states[*index].follow_ups -= 1;
-                    }
-                    stopped = true;
-                    break;
+            let count = turns.len();
+            for (number, turn) in turns.into_iter().enumerate() {
+                let which: Vec<usize> = turn.iter().map(|(index, _)| *index).collect();
+                let names: Vec<String> = which
+                    .iter()
+                    .map(|index| {
+                        let state = &states[*index];
+                        format!("{} ({} unread)", state.name(), state.unread(&repo).len())
+                    })
+                    .collect();
+                let area_names: Vec<String> = which
+                    .iter()
+                    .map(|index| states[*index].name().to_owned())
+                    .collect();
+                let area_names: Vec<&str> = area_names.iter().map(String::as_str).collect();
+                let request = follow_up_request(&self.run.resolved.prompt, &area_names, round);
+                let what = format!(
+                    "audit follow-up {round}{}: {} read-only worker{} ({})",
+                    if count == 1 {
+                        String::new()
+                    } else {
+                        format!(", turn {} of {count}", number + 1)
+                    },
+                    which.len(),
+                    if which.len() == 1 { "" } else { "s" },
+                    names.join(", ")
+                );
+                let before: Vec<u64> = which
+                    .iter()
+                    .map(|index| states[*index].covered(&repo))
+                    .collect();
+                for index in &which {
+                    states[*index].follow_ups += 1;
                 }
-                Err(error) => return Err(error),
-                Ok(None) => {
-                    for index in &due {
-                        states[*index].follow_ups -= 1;
+                let slots = turn.into_iter().map(|(_, slot)| slot).collect();
+                match self
+                    .apply_and_turn(&what, slots, &request, FOLLOW_UP_PURPOSE)
+                    .await
+                {
+                    Err(RunError::Stopped) => {
+                        // The follow-up never started: it is not counted.
+                        for index in &which {
+                            states[*index].follow_ups -= 1;
+                        }
+                        stopped = true;
                     }
-                    deadline_hit = true;
-                    break;
+                    Err(error) => return Err(error),
+                    Ok(None) => {
+                        for index in &which {
+                            states[*index].follow_ups -= 1;
+                        }
+                        deadline_hit = true;
+                    }
+                    Ok(Some(observed)) => {
+                        self.observe_workers(&observed, &mut states, &which).await?;
+                        for (index, before) in which.iter().zip(before) {
+                            let state = &mut states[*index];
+                            if state.covered(&repo) <= before {
+                                state.stalled = true;
+                            }
+                        }
+                        deadline_hit = observed.deadline_hit;
+                    }
                 }
-                Ok(Some(observed)) => {
-                    self.observe_workers(&observed, &mut states, &due).await?;
-                    deadline_hit = observed.deadline_hit;
+                if stopped || deadline_hit {
+                    break;
                 }
             }
         }
@@ -1625,7 +1846,8 @@ impl Audit<'_> {
     ) -> Result<Vec<AreaResult>, RunError> {
         let repo = self.run.options.repo.clone();
         let mut results = Vec::new();
-        for state in states {
+        // An area whose worker's turn never started is already listed.
+        for state in states.iter().filter(|state| state.started) {
             let name = state.name().to_owned();
             let entry = |class: FailureClass, detail: String| NotCovered {
                 area: name.clone(),
@@ -1999,14 +2221,17 @@ fn unread_reason(
             ),
         );
     }
-    (
-        FailureClass::NotReached,
-        format!(
-            "the area worker did not read it in its turn or its {} follow-up{}",
-            state.follow_ups,
-            if state.follow_ups == 1 { "" } else { "s" }
+    let detail = match state.follow_ups {
+        0 => "the area worker did not read it to its end in its turn".to_owned(),
+        1 => "the area worker did not read it to its end in its turn or its follow-up, which \
+              read nothing new"
+            .to_owned(),
+        follow_ups => format!(
+            "the area worker did not read it to its end in its turn or its {follow_ups} \
+             follow-ups, the last of which read nothing new"
         ),
-    )
+    };
+    (FailureClass::NotReached, detail)
 }
 
 /// A follow-up's finding ids: `<area>-followup<n>-<id>`, so they never

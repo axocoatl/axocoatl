@@ -991,6 +991,7 @@ pub(crate) mod tests {
                 setup_command: None,
             },
             deadline: Instant::now() + Duration::from_secs(600),
+            agent_contexts: Default::default(),
         }
     }
 

@@ -1,0 +1,17 @@
+Looking at the billing/pagination.py file, I can identify a potential issue with the `get_page` function that could lead to incorrect pagination behavior.
+
+FINDINGS
+```json
+[{
+  "id": "F1",
+  "title": "Incorrect page slicing in get_page function",
+  "detail": "The get_page function has a bug in its slicing logic. It calculates 'end = start + page_size - 1' but then uses 'items[start:end]' which would exclude the item at index 'end'. This creates an off-by-one error where the last item of each page is excluded. The correct slicing should be 'items[start:start + page_size]' or 'items[start:end + 1]'. This affects invoice pagination correctness.",
+  "severity": "high",
+  "location": "billing/pagination.py:15"
+}]
+```
+
+NOT_REACHED
+```json
+[]
+```

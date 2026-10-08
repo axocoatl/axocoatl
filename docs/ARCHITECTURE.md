@@ -681,8 +681,11 @@ so every 1.2 grant, write-scope and readiness rule applies. The driver sends the
 waits for a terminal state or the deadline (then stops it and records the budget), and
 observes nodes, generations, check views and review proofs. An audit runs its turns in
 one Session: plan; parallel read-only area workers with fresh contexts, each told the
-files the host listed and assigned to its area; up to two follow-ups naming the files a
-worker did not read, judged from the `read_file` calls its Session recorded; integrate.
+files the host listed and assigned to its area (an area too large for one worker's budget
+split into numbered sub-areas, and at most 200 planned reads to a turn); follow-ups naming
+the files a worker did not read to their end, judged from the bytes the `read_file` calls
+its Session recorded returned, for as long as each follow-up reads something new;
+integrate.
 
 **Outcome.** `RunOutcome` (`axocoatl.run-outcome/1`) adds to a turn's view: check results
 with parsed reports, the review rounds with findings split by id, adjudications, findings

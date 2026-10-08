@@ -196,8 +196,13 @@ impl SessionDispatchController {
             return Err(error(reason));
         }
         let host_definitions = state.host_tool_definitions(&profile, attempt);
+        // `read_file` without `limit` returns what this model's context
+        // holds: the provider's live context (an Ollama model's loaded
+        // context, an OpenRouter endpoint's), 64 KiB when it reports none.
+        let read_window =
+            axocoatl_tools::read_file_window(provider.capabilities().max_context_tokens);
         let tools = match repository.as_ref() {
-            Some(resource) => resource.preview_tools(&profile, host_definitions)?,
+            Some(resource) => resource.preview_tools(&profile, host_definitions, read_window)?,
             None if host_definitions.is_empty() => tools,
             None => Arc::new(tools.extended_with(host_definitions)),
         };
@@ -278,6 +283,7 @@ impl SessionDispatchController {
             // historical journals or older tool-only runs cannot mean zero.
             state.conversation_usage(&manifest.conversation_id)?;
             bound.steering_open = true;
+            bound.read_window = read_window;
             state.bound.insert(activation.activation_id.clone(), bound);
             Ok((checkpoint, output))
         })();

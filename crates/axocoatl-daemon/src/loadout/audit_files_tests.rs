@@ -357,19 +357,41 @@ fn a_file_list_names_files_while_they_fit_then_directories() {
     );
 }
 
-fn read(path: &str, offset: Option<serde_json::Value>, succeeded: bool) -> ToolCallRecord {
+/// A `read_file` of `path` with `offset` (as the call gave it) that
+/// returned `returned` bytes from `from` (the result's `offset`, which the
+/// tool states for a read past the start), or failed.
+fn read(
+    path: &str,
+    offset: Option<serde_json::Value>,
+    returned: Option<(u64, u64)>,
+) -> ToolCallRecord {
     let mut arguments = json!({ "path": path });
     if let Some(offset) = offset {
         arguments["offset"] = offset;
     }
+    let result = match returned {
+        Some((from, returned)) => {
+            let mut result = json!({"content": "…", "returned_bytes": returned});
+            if from > 0 {
+                result["offset"] = json!(from);
+            }
+            result
+        }
+        None => serde_json::Value::Null,
+    };
     ToolCallRecord {
         node_id: "n".into(),
         generation: 1,
         tool: "read_file".into(),
         arguments,
-        succeeded,
-        result: serde_json::Value::Null,
+        succeeded: returned.is_some(),
+        result,
     }
+}
+
+/// A read from the start that returned `returned` bytes.
+fn whole(path: &str, returned: u64) -> ToolCallRecord {
+    read(path, None, Some((0, returned)))
 }
 
 fn other(tool: &str, arguments: serde_json::Value) -> ToolCallRecord {
@@ -383,11 +405,12 @@ fn other(tool: &str, arguments: serde_json::Value) -> ToolCallRecord {
     }
 }
 
-/// A text file is read when a `read_file` of it succeeded: any one when it
-/// fits one read, windows covering every byte when it does not. Nothing
-/// else reads a file, and empty, binary and too-large files need no read.
+/// A text file is read when the windows succeeded `read_file` calls of it
+/// returned cover every byte, whatever its size; nothing else reads a file,
+/// a call whose result was not kept reads nothing, and empty, binary and
+/// too-large files need no read.
 #[test]
-fn a_file_is_read_only_when_read_file_read_all_of_it() {
+fn a_file_is_read_only_when_read_file_returned_all_of_it() {
     let repo = Path::new("/work/repo");
     let unread_of = |files: &[RepoFile], calls: &[ToolCallRecord]| -> Vec<String> {
         let calls: Vec<&ToolCallRecord> = calls.iter().collect();
@@ -396,32 +419,56 @@ fn a_file_is_read_only_when_read_file_read_all_of_it() {
             .map(|file| file.path.clone())
             .collect()
     };
+    // 100 bytes.
     let small = [text("billing/pagination.py")];
+    let not_kept = {
+        let mut call = whole("billing/pagination.py", 100);
+        call.result = serde_json::Value::Null;
+        call
+    };
     for (calls, read_it) in [
-        (vec![read("billing/pagination.py", None, true)], true),
+        (vec![whole("billing/pagination.py", 100)], true),
+        (vec![whole("/work/repo/billing/pagination.py", 100)], true),
+        (vec![whole("./auth/../billing/pagination.py", 100)], true),
+        // A partial read of a small file reads part of it (the 1.3.0 rc7
+        // re-smoke's `limit: 64` read of an 802-byte file).
+        (vec![whole("billing/pagination.py", 64)], false),
         (
-            vec![read("/work/repo/billing/pagination.py", None, true)],
+            vec![
+                whole("billing/pagination.py", 64),
+                read("billing/pagination.py", Some(json!(64)), Some((64, 36))),
+            ],
             true,
         ),
         (
-            vec![read("./auth/../billing/pagination.py", None, true)],
-            true,
-        ),
-        (
-            vec![read("billing/pagination.py", Some(json!(40)), true)],
-            true,
-        ),
-        (vec![read("billing/pagination.py", None, false)], false),
-        (
-            vec![read("billing/pagination.py", Some(json!(100)), true)],
+            vec![read(
+                "billing/pagination.py",
+                Some(json!(40)),
+                Some((40, 60)),
+            )],
             false,
         ),
-        (vec![read("billing/other.py", None, true)], false),
+        // The call's own offset places a window whose result names none.
         (
-            vec![read("/elsewhere/billing/pagination.py", None, true)],
+            vec![
+                read("billing/pagination.py", Some(json!(50)), Some((0, 50))),
+                whole("billing/pagination.py", 50),
+            ],
+            true,
+        ),
+        (
+            vec![read(
+                "billing/pagination.py",
+                Some(json!("50")),
+                Some((0, 50)),
+            )],
             false,
         ),
-        (vec![read("../billing/pagination.py", None, true)], false),
+        (vec![read("billing/pagination.py", None, None)], false),
+        (vec![not_kept], false),
+        (vec![whole("billing/other.py", 100)], false),
+        (vec![whole("/elsewhere/billing/pagination.py", 100)], false),
+        (vec![whole("../billing/pagination.py", 100)], false),
         (
             vec![
                 other(
@@ -439,77 +486,52 @@ fn a_file_is_read_only_when_read_file_read_all_of_it() {
         assert_eq!(unread_of(&small, &calls).is_empty(), read_it, "{calls:?}");
     }
 
-    // A file of 200 KiB takes four windows of 64 KiB.
-    let window = READ_WINDOW_BYTES;
+    // A file of 200 KiB read in 8 KiB windows, and in 64 KiB ones.
     let large = [RepoFile {
         path: "src/big.rs".into(),
         size: 200 * 1024,
         kind: FileKind::Text,
     }];
-    let reads = |offsets: &[serde_json::Value]| -> Vec<ToolCallRecord> {
-        offsets
+    let windows = |size: u64, starts: &[u64]| -> Vec<ToolCallRecord> {
+        starts
             .iter()
-            .map(|offset| read("src/big.rs", Some(offset.clone()), true))
-            .collect()
-    };
-    assert_eq!(unread_of(&large, &reads(&[json!(0)])), ["src/big.rs"]);
-    assert_eq!(
-        unread_of(
-            &large,
-            &reads(&[json!(0), json!(window), json!(2 * window)])
-        ),
-        ["src/big.rs"]
-    );
-    assert!(unread_of(
-        &large,
-        &reads(&[
-            json!(3 * window),
-            json!(0),
-            json!(window.to_string()),
-            json!(2 * window)
-        ])
-    )
-    .is_empty());
-    // Overlapping windows, as from a next_offset short of 64 KiB, count.
-    assert!(unread_of(
-        &large,
-        &reads(&[
-            json!(0),
-            json!(window - 3),
-            json!(2 * window - 6),
-            json!(3 * window - 9)
-        ])
-    )
-    .is_empty());
-    // Smaller windows of `limit` bytes count for what they read.
-    let pieces = |limit: u64, count: u64| -> Vec<ToolCallRecord> {
-        (0..count)
-            .map(|index| {
-                let mut call = read("src/big.rs", Some(json!(index * limit)), true);
-                call.arguments["limit"] = json!(limit);
-                call
+            .map(|start| {
+                let returned = size.min(200 * 1024 - start);
+                read("src/big.rs", Some(json!(start)), Some((*start, returned)))
             })
             .collect()
     };
-    assert!(unread_of(&large, &pieces(32 * 1024, 7)).is_empty());
-    assert_eq!(unread_of(&large, &pieces(32 * 1024, 6)), ["src/big.rs"]);
-    // A limit past the window reads only the window.
-    assert_eq!(unread_of(&large, &pieces(window * 4, 1)), ["src/big.rs"]);
-    // A gap leaves it unread, and so does an offset the tool refused.
+    let every = |size: u64| -> Vec<u64> {
+        (0..(200 * 1024u64).div_ceil(size))
+            .map(|n| n * size)
+            .collect()
+    };
+    assert!(unread_of(&large, &windows(8 * 1024, &every(8 * 1024))).is_empty());
+    assert!(unread_of(&large, &windows(64 * 1024, &every(64 * 1024))).is_empty());
     assert_eq!(
-        unread_of(
-            &large,
-            &reads(&[json!(0), json!(2 * window), json!(3 * window)])
-        ),
+        unread_of(&large, &windows(8 * 1024, &every(8 * 1024)[1..])),
         ["src/big.rs"]
     );
     assert_eq!(
-        unread_of(
-            &large,
-            &reads(&[json!(0), json!(-1), json!(2 * window), json!(3 * window)])
-        ),
+        unread_of(&large, &windows(64 * 1024, &[0, 64 * 1024, 2 * 64 * 1024])),
         ["src/big.rs"]
     );
+    // Windows that overlap, as when a window ends before a cut character,
+    // count once.
+    let mut overlapping = windows(64 * 1024, &[0, 64 * 1024 - 3, 128 * 1024 - 6]);
+    overlapping.extend(windows(64 * 1024, &[192 * 1024 - 9]));
+    assert!(unread_of(&large, &overlapping).is_empty());
+    let coverage = Coverage::of(&overlapping.iter().collect::<Vec<_>>(), repo);
+    assert_eq!(coverage.covered(&large[0]), 200 * 1024);
+    assert_eq!(coverage.covered_text(&large), 200 * 1024);
+    let gap = Coverage::of(
+        &windows(8 * 1024, &[0, 16 * 1024])
+            .iter()
+            .collect::<Vec<_>>(),
+        repo,
+    );
+    assert_eq!(gap.covered(&large[0]), 16 * 1024);
+    assert!(!gap.read_whole(&large[0]));
 
     // Only text files are ever unread.
     let kinds = [
@@ -531,4 +553,172 @@ fn a_file_is_read_only_when_read_file_read_all_of_it() {
         text("a/main.py"),
     ];
     assert_eq!(unread_of(&kinds, &[]), ["a/main.py"]);
+}
+
+/// What one worker reads within its budget: its invocations less a fifth
+/// (at least 4) held back, at two a read, at most a turn's 200, in windows
+/// of its model's default read.
+#[test]
+fn a_read_budget_is_estimated_from_invocations_and_the_context() {
+    let budget = ReadBudget::new(300, Some(32_768));
+    assert_eq!(
+        (
+            budget.window,
+            budget.reads,
+            budget.invocations,
+            budget.reserved,
+            budget.capped
+        ),
+        (8 * 1024, 120, 300, 60, false)
+    );
+    assert_eq!(ReadBudget::new(300, None).window, READ_WINDOW_BYTES);
+    assert_eq!(ReadBudget::new(10, None).reads, 3);
+    // Never more than a turn is planned.
+    let large = ReadBudget::new(2000, None);
+    assert_eq!((large.reads, large.capped), (MAX_TURN_READS, true));
+    assert_eq!(ReadBudget::new(1, None).reads, 1);
+    let file = |size: u64, kind: FileKind| RepoFile {
+        path: "f".into(),
+        size,
+        kind,
+    };
+    assert_eq!(budget.reads_of(&file(100, FileKind::Text)), 1);
+    assert_eq!(budget.reads_of(&file(8 * 1024, FileKind::Text)), 1);
+    assert_eq!(budget.reads_of(&file(8 * 1024 + 1, FileKind::Text)), 2);
+    assert_eq!(budget.reads_of(&file(200 * 1024, FileKind::Text)), 25);
+    for kind in [FileKind::Empty, FileKind::Binary, FileKind::TooLarge] {
+        assert_eq!(budget.reads_of(&file(4096, kind)), 0);
+    }
+}
+
+/// An area whose files need more reads than one worker makes becomes
+/// numbered sub-areas of consecutive files, each within the budget and
+/// about the same size, named apart from the other areas; an area within
+/// the budget, and one with a single file, stay whole.
+#[test]
+fn an_area_too_large_for_one_worker_is_split_into_numbered_sub_areas() {
+    let plan = AuditPlan {
+        areas: vec![
+            AuditArea {
+                name: "big".into(),
+                scope: "everything big".into(),
+                paths: vec!["big/**".into()],
+            },
+            AuditArea {
+                name: "big-2".into(),
+                scope: "a planned area named like a part".into(),
+                paths: vec!["other/**".into()],
+            },
+            AuditArea {
+                name: "huge".into(),
+                scope: "one huge file".into(),
+                paths: vec!["huge/**".into()],
+            },
+        ],
+    };
+    let mut files: Vec<RepoFile> = (0..500)
+        .map(|index| text(&format!("big/m{index:03}.py")))
+        .collect();
+    files.push(RepoFile {
+        path: "big/zz_empty.py".into(),
+        size: 0,
+        kind: FileKind::Empty,
+    });
+    files.push(text("other/a.py"));
+    files.push(RepoFile {
+        path: "huge/data.txt".into(),
+        size: 200 * 1024,
+        kind: FileKind::Text,
+    });
+    let budget = ReadBudget::new(300, Some(32_768));
+    let assignment = split(assign(&plan, &files), &budget);
+    let names = assignment.names();
+    assert_eq!(
+        names,
+        [
+            "big-1",
+            "big-part2",
+            "big-3",
+            "big-4",
+            "big-5",
+            "big-2",
+            "huge"
+        ]
+    );
+    let parts: Vec<&AssignedArea> = assignment.areas.iter().take(5).collect();
+    let sizes: Vec<usize> = parts.iter().map(|part| part.text_files().count()).collect();
+    assert_eq!(sizes, [100, 100, 100, 100, 100]);
+    assert!(sizes.iter().all(|size| *size as u64 <= budget.reads));
+    for (index, part) in parts.iter().enumerate() {
+        assert_eq!(
+            part.part,
+            Some(Part {
+                of: "big".into(),
+                number: index + 1,
+                count: 5
+            })
+        );
+        assert_eq!(part.area.scope, "everything big");
+        assert_eq!(part.area.paths, ["big/**"]);
+    }
+    // Consecutive by path: the first part starts the area, the last holds
+    // its end, the empty file included.
+    assert_eq!(parts[0].files[0].path, "big/m000.py");
+    assert_eq!(parts[1].files[0].path, "big/m100.py");
+    assert_eq!(parts[4].files.last().unwrap().path, "big/zz_empty.py");
+    assert_eq!(
+        parts.iter().map(|part| part.files.len()).sum::<usize>(),
+        501
+    );
+    assert_eq!(
+        assignment.split,
+        [SplitArea {
+            name: "big".into(),
+            to_read: 500,
+            reads: 500,
+            parts: vec![
+                "big-1".into(),
+                "big-part2".into(),
+                "big-3".into(),
+                "big-4".into(),
+                "big-5".into()
+            ],
+        }]
+    );
+    // An area within the budget stays whole: one file of 25 reads.
+    assert!(assignment.areas[6].part.is_none());
+    // A budget of a few reads gives a file that needs more a part of its
+    // own; a file is never split.
+    let tight = ReadBudget::new(10, Some(32_768));
+    let plan = AuditPlan {
+        areas: vec![AuditArea {
+            name: "mixed".into(),
+            scope: "s".into(),
+            paths: vec!["m/**".into()],
+        }],
+    };
+    let files = [
+        text("m/a.py"),
+        RepoFile {
+            path: "m/b.txt".into(),
+            size: 40 * 1024,
+            kind: FileKind::Text,
+        },
+        text("m/c.py"),
+        text("m/d.py"),
+    ];
+    let assignment = split(assign(&plan, &files), &tight);
+    let parts: Vec<Vec<&str>> = assignment
+        .areas
+        .iter()
+        .map(|area| area.files.iter().map(|file| file.path.as_str()).collect())
+        .collect();
+    assert_eq!(
+        parts,
+        [vec!["m/a.py"], vec!["m/b.txt"], vec!["m/c.py", "m/d.py"]]
+    );
+    // Within the budget, nothing changes.
+    let small = split(assign(&plan, &files), &ReadBudget::new(300, None));
+    assert_eq!(small.names(), ["mixed"]);
+    assert!(small.split.is_empty() && small.areas[0].part.is_none());
 }

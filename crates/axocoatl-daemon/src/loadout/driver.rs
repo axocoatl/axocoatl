@@ -677,6 +677,7 @@ prompt: "{task}"
                 setup_command: None,
             },
             deadline,
+            agent_contexts: Default::default(),
         }
     }
 

@@ -61,6 +61,7 @@ fn context_in(deadline: Instant, repo: &Path) -> RunContext {
             setup_command: None,
         },
         deadline,
+        agent_contexts: Default::default(),
     }
 }
 
@@ -154,6 +155,50 @@ struct FakeHost {
     stop_on_wait: std::sync::atomic::AtomicBool,
     /// A person asks to stop the run while this turn runs.
     stop_on_turn: Mutex<Option<String>>,
+    /// The run's repository: a succeeded `read_file` scripted without a
+    /// result returns what the tool would return of the file there.
+    repo: Mutex<Option<std::path::PathBuf>>,
+}
+
+/// A scripted `read_file` result the Session did not keep whole.
+const NOT_KEPT: &str = "__result_not_kept__";
+
+/// What `read_file` returns for `arguments` from the file under `repo`, as
+/// the tool returns it with its largest default window; `null` when there
+/// is no such file.
+fn simulated_read(repo: &Path, arguments: &serde_json::Value) -> serde_json::Value {
+    let number = |key: &str| match arguments.get(key) {
+        Some(serde_json::Value::Number(number)) => number.as_u64(),
+        Some(serde_json::Value::String(text)) => text.trim().parse().ok(),
+        _ => None,
+    };
+    let path = arguments["path"].as_str().unwrap_or_default();
+    let Some(relative) = files::repo_relative(path.trim(), repo) else {
+        return serde_json::Value::Null;
+    };
+    let Ok(bytes) = std::fs::read(repo.join(relative)) else {
+        return serde_json::Value::Null;
+    };
+    let offset = number("offset").unwrap_or(0);
+    let limit = number("limit")
+        .unwrap_or(files::READ_WINDOW_BYTES)
+        .min(files::READ_WINDOW_BYTES);
+    let start = (offset as usize).min(bytes.len());
+    let end = (start + limit as usize).min(bytes.len());
+    let truncated = end < bytes.len();
+    let mut result = serde_json::json!({
+        "content": String::from_utf8_lossy(&bytes[start..end]),
+        "truncated": truncated,
+        "returned_bytes": end - start,
+        "output_limit_bytes": limit,
+    });
+    if offset > 0 {
+        result["offset"] = offset.into();
+    }
+    if truncated {
+        result["next_offset"] = (end as u64).into();
+    }
+    result
 }
 
 impl FakeHost {
@@ -169,8 +214,8 @@ impl FakeHost {
         self
     }
 
-    /// Script the tool calls of `slot`'s next activation, with no results
-    /// kept.
+    /// Script the tool calls of `slot`'s next activation; each succeeded
+    /// `read_file` returns what the tool would ([`simulated_read`]).
     fn calls(self, slot: &str, calls: Vec<Call>) -> Self {
         let calls = calls
             .into_iter()
@@ -434,22 +479,36 @@ impl RunHost for FakeHost {
                             "read_file".to_owned(),
                             serde_json::json!({ "path": path }),
                             true,
-                            serde_json::json!({ "content": "" }),
+                            serde_json::Value::Null,
                         )
                     })
                     .collect(),
                 (None, _) => Vec::new(),
             };
+            let repo = self.repo.lock().unwrap().clone();
             records.extend(
                 calls
                     .into_iter()
-                    .map(|(tool, arguments, succeeded, result)| ToolCallRecord {
-                        node_id: format!("{turn_id}-node-{index}"),
-                        generation: 1,
-                        tool,
-                        arguments,
-                        succeeded,
-                        result,
+                    .map(|(tool, arguments, succeeded, result)| {
+                        let result = match (&result, &repo) {
+                            (serde_json::Value::String(text), _) if text == NOT_KEPT => {
+                                serde_json::Value::Null
+                            }
+                            (serde_json::Value::Null, Some(repo))
+                                if succeeded && tool == "read_file" =>
+                            {
+                                simulated_read(repo, &arguments)
+                            }
+                            _ => result,
+                        };
+                        ToolCallRecord {
+                            node_id: format!("{turn_id}-node-{index}"),
+                            generation: 1,
+                            tool,
+                            arguments,
+                            succeeded,
+                            result,
+                        }
                     }),
             );
         }
@@ -525,6 +584,7 @@ impl Builds {
 }
 
 async fn drive(host: &FakeHost, run: &RunContext) -> (KindReport, Vec<(Vec<SlotPlan>, bool, u64)>) {
+    *host.repo.lock().unwrap() = Some(run.options.repo.clone());
     let builds = Arc::new(Builds::default());
     let recorder = builds.clone();
     let build =
@@ -534,6 +594,12 @@ async fn drive(host: &FakeHost, run: &RunContext) -> (KindReport, Vec<(Vec<SlotP
     let report = drive_audit(host, run, &build).await.unwrap();
     let calls = builds.calls.lock().unwrap().clone();
     (report, calls)
+}
+
+/// The run's Outcome, as the run driver builds it, on `host`.
+async fn outcome_with(host: &FakeHost, run: &RunContext) -> Result<RunOutcome, RunError> {
+    *host.repo.lock().unwrap() = Some(run.options.repo.clone());
+    crate::loadout::driver::run_to_outcome_with(host, run, &AuditDriver).await
 }
 
 fn plan_answer(areas: &[(&str, &str, &[&str])]) -> String {
@@ -907,8 +973,8 @@ async fn a_skipped_file_is_named_in_a_follow_up_whose_read_covers_it() {
     let instructions = calls[2].0[0].instructions.as_deref().unwrap();
     assert!(
         instructions.contains(
-            "Follow-up 1 of at most 2: the host checked the read_file calls of your area's \
-             worker, and these files of your area were not read. Read these files and report \
+            "Follow-up 1: the host checked the read_file calls of your area's worker, and these \
+             files of your area were not read to their end. Read these files and report \
              additional findings in the same format:\n- src/auth/session.rs\nYou are read-only"
         ),
         "{instructions}"
@@ -948,11 +1014,12 @@ async fn a_skipped_file_is_named_in_a_follow_up_whose_read_covers_it() {
     assert_eq!(outcome_of(&report).exit_code, exit_code::PASS);
 }
 
-/// A worker that reads nothing of its area in its turn and both follow-ups
-/// leaves each of its files not covered, listed by file; a follow-up names
-/// only the files still unread.
+/// A worker that reads nothing of its area in its turn gets a follow-up;
+/// one that reads something new gets another, naming only the files still
+/// unread; once a follow-up reads nothing new there is no other, and each
+/// file still unread is not covered, listed by file.
 #[tokio::test]
-async fn files_still_unread_after_two_follow_ups_are_not_covered_by_file() {
+async fn files_unread_when_a_follow_up_reads_nothing_new_are_not_covered_by_file() {
     let repo = repository(&[
         ("src/auth/mod.rs", "pub fn login() {}\n"),
         ("src/auth/session.rs", "pub fn renew() {}\n"),
@@ -1016,13 +1083,13 @@ async fn files_still_unread_after_two_follow_ups_are_not_covered_by_file() {
     );
     let first = calls[2].0[0].instructions.as_deref().unwrap();
     assert!(
-        first.contains("Follow-up 1 of at most 2")
+        first.contains("Follow-up 1:")
             && first.contains("format:\n- src/auth/mod.rs\n- src/auth/session.rs\n"),
         "{first}"
     );
     let second = calls[3].0[0].instructions.as_deref().unwrap();
     assert!(
-        second.contains("Follow-up 2 of at most 2")
+        second.contains("Follow-up 2:")
             && second.contains("format:\n- src/auth/session.rs\nYou are read-only"),
         "{second}"
     );
@@ -1031,8 +1098,8 @@ async fn files_still_unread_after_two_follow_ups_are_not_covered_by_file() {
         [(
             "auth",
             FailureClass::NotReached,
-            "src/auth/session.rs: not read (the area worker did not read it in its turn or its \
-             2 follow-ups)"
+            "src/auth/session.rs: not read (the area worker did not read it to its end in its \
+             turn or its 2 follow-ups, the last of which read nothing new)"
         )]
     );
     // The worker's own account is a note, not the coverage.
@@ -1154,7 +1221,7 @@ async fn failed_workers_get_follow_ups_unless_the_failure_would_repeat() {
     assert!(request.contains("REPORT of area db") && request.contains("db-followup1-F1"));
     assert!(request.contains("REPORT of area api") && request.contains("I looked around."));
     assert!(request.contains("- api (other): the area worker's report could not be read"));
-    let outcome = crate::loadout::driver::run_to_outcome_with(
+    let outcome = outcome_with(
         &FakeHost::new(vec![
             planned(),
             turn(
@@ -1175,7 +1242,6 @@ async fn failed_workers_get_follow_ups_unless_the_failure_would_repeat() {
             integrated(&[]),
         ]),
         &run,
-        &AuditDriver,
     )
     .await
     .unwrap();
@@ -1296,9 +1362,9 @@ async fn empty_binary_too_large_and_long_files() {
         "{auth}"
     );
     let db = calls[1].0[1].instructions.as_deref().unwrap();
-    assert!(
-        db.contains("read a longer file to its end with more calls at each result's next_offset")
-    );
+    assert!(db.contains(
+        "when the result says truncated, read on with more calls at each result's next_offset"
+    ));
     // The long file was half read in the db worker's turn; its follow-up
     // read the rest.
     assert_eq!(
@@ -1823,8 +1889,9 @@ async fn resmoke5_run_6_greps_and_listings_read_nothing_until_a_follow_up_reads(
 /// five reads all failed (it guessed paths), its listing succeeded and its
 /// greps matched nothing; rc4 counted ingest as covered and missed the
 /// defect at `ingest/feed.go:29`. Now its follow-ups name its two files:
-/// the first follow-up reads `feed.go` and reports the defect, the second
-/// still does not read `go.mod`, which is then not covered, by file.
+/// the first follow-up reads `feed.go` and reports the defect, so it gets
+/// another; the second reads nothing new, so `go.mod` is not covered, by
+/// file, and no third follows.
 #[tokio::test]
 async fn resmoke4_run_5_follows_up_a_worker_whose_reads_all_failed() {
     let repo = smoke_repository();
@@ -1923,8 +1990,8 @@ async fn resmoke4_run_5_follows_up_a_worker_whose_reads_all_failed() {
         [(
             "ingest",
             FailureClass::NotReached,
-            "ingest/go.mod: not read (the area worker did not read it in its turn or its 2 \
-             follow-ups)"
+            "ingest/go.mod: not read (the area worker did not read it to its end in its turn or \
+             its 2 follow-ups, the last of which read nothing new)"
         )]
     );
     assert_eq!(
@@ -1962,8 +2029,9 @@ async fn resmoke4_run_5_follows_up_a_worker_whose_reads_all_failed() {
 /// The 1.3.0 re-smoke's run 4 (`resmoke3`), with every answer as recorded:
 /// the billing worker made no tool call and listed six paths that do not
 /// exist, which rc3 took as notes and passed with billing never read. Now
-/// its follow-ups name billing's file; one that never reads it leaves it
-/// not covered, and the invented paths are only its note.
+/// its follow-up names billing's file; a follow-up that reads nothing new
+/// gets no other and leaves it not covered, and the invented paths are only
+/// its note.
 #[tokio::test]
 async fn a_worker_that_makes_no_tool_call_is_followed_up() {
     let answer = |name: &str| fixture(&format!("audit-resmoke3-out4-{name}.txt"));
@@ -1994,14 +2062,12 @@ async fn a_worker_that_makes_no_tool_call_is_followed_up() {
             ],
         ),
         billing(),
-        billing(),
         turn(
             TurnState::Completed,
             vec![(INTEGRATOR_SLOT, Node::Answer(answer("integrator")))],
         ),
     ])
     .calls("worker-auth-module", reads(&["auth/tokens.py"]))
-    .calls("worker-billing-module", Vec::new())
     .calls("worker-billing-module", Vec::new())
     .calls("worker-billing-module", Vec::new())
     .calls(
@@ -2019,8 +2085,8 @@ async fn a_worker_that_makes_no_tool_call_is_followed_up() {
         [(
             "billing-module",
             FailureClass::NotReached,
-            "billing/pagination.py: not read (the area worker did not read it in its turn or \
-             its 2 follow-ups)"
+            "billing/pagination.py: not read (the area worker did not read it to its end in its \
+             turn or its follow-up, which read nothing new)"
         )]
     );
     assert_eq!(
@@ -2032,7 +2098,7 @@ async fn a_worker_that_makes_no_tool_call_is_followed_up() {
                                             billing-module/legacy/old_handler.py; "
             ))
             .count(),
-        3,
+        2,
         "{:#?}",
         report.notes
     );
@@ -2465,9 +2531,7 @@ async fn a_run_whose_planner_retry_planned_passes() {
         integrated(&[]),
     ]);
     let (run, _repo) = context(later());
-    let outcome = crate::loadout::driver::run_to_outcome_with(&host, &run, &AuditDriver)
-        .await
-        .unwrap();
+    let outcome = outcome_with(&host, &run).await.unwrap();
     assert_eq!(
         outcome.exit_code,
         exit_code::PASS,
@@ -2480,9 +2544,7 @@ async fn a_run_whose_planner_retry_planned_passes() {
 
     // Failing twice: the whole scope, and no separate planner entry.
     let host = FakeHost::new(vec![planner_failed(), planner_failed()]);
-    let outcome = crate::loadout::driver::run_to_outcome_with(&host, &run, &AuditDriver)
-        .await
-        .unwrap();
+    let outcome = outcome_with(&host, &run).await.unwrap();
     let areas: Vec<&str> = outcome
         .not_covered
         .iter()
@@ -2643,9 +2705,7 @@ async fn a_stopped_audit_keeps_what_it_observed() {
     let host = FakeHost::new(vec![plan, areas]);
     *host.stop_on_turn.lock().unwrap() = Some("turn-2".into());
     let (run, _repo) = context(later());
-    let outcome = crate::loadout::driver::run_to_outcome_with(&host, &run, &AuditDriver)
-        .await
-        .unwrap();
+    let outcome = outcome_with(&host, &run).await.unwrap();
 
     assert_eq!(outcome.verdict, RunVerdict::Interrupted);
     assert_eq!(outcome.exit_code, exit_code::INTERRUPTED);
@@ -2715,9 +2775,7 @@ async fn a_stopped_audit_keeps_what_it_observed() {
     plan.usage = Some(usage(1_200, 80, true));
     let host = FakeHost::new(vec![plan]);
     *host.stop_on_turn.lock().unwrap() = Some("turn-1".into());
-    let outcome = crate::loadout::driver::run_to_outcome_with(&host, &run, &AuditDriver)
-        .await
-        .unwrap();
+    let outcome = outcome_with(&host, &run).await.unwrap();
     assert_eq!(outcome.exit_code, exit_code::INTERRUPTED);
     assert_eq!(host.sent().len(), 1);
     assert_eq!(outcome.turns.len(), 1);
@@ -2744,9 +2802,7 @@ async fn a_stopped_audit_keeps_what_it_observed() {
     let run = context_in(later(), repo.path());
     let host = FakeHost::new(vec![planned(), workers_answered()]);
     *host.stop_on_turn.lock().unwrap() = Some("turn-2".into());
-    let outcome = crate::loadout::driver::run_to_outcome_with(&host, &run, &AuditDriver)
-        .await
-        .unwrap();
+    let outcome = outcome_with(&host, &run).await.unwrap();
     assert_eq!(outcome.exit_code, exit_code::INTERRUPTED);
     assert_eq!(host.sent().len(), 2);
     assert_eq!(
@@ -2977,7 +3033,7 @@ fn slot_plans_are_pure_and_read_only() {
     assert!(api.contains("- src/api/c.rs\n"));
     let follow_up = follow_up_slots(
         &run.resolved,
-        &[(&assignment.areas[0].area, vec!["src/auth/a.rs"])],
+        &[(&assignment.areas[0], vec!["src/auth/a.rs"])],
         2,
     )
     .unwrap();
@@ -2991,10 +3047,11 @@ fn slot_plans_are_pure_and_read_only() {
         .map(|index| format!("src/api/v{}/h{index}.rs", index % 4))
         .collect();
     let many: Vec<&str> = many.iter().map(String::as_str).collect();
-    let text = follow_up_instructions(None, &assignment.areas[2].area, &many, 1);
+    let text = follow_up_instructions(None, &assignment.areas[2], &many, 1);
     assert!(
-        text.contains("2000 files of your area were not read, too many to name one by one")
-            && text.contains("- src/api/v0/ and below: 500 files\n"),
+        text.contains(
+            "2000 files of your area were not read to their end, too many to name one by one"
+        ) && text.contains("- src/api/v0/ and below: 500 files\n"),
         "{text}"
     );
 }
@@ -3047,4 +3104,707 @@ fn failures_are_classified_from_the_observation() {
         FailureClass::Budget
     );
     assert_eq!(failure_of(None, false).0, FailureClass::Other);
+}
+
+/// The 1.3.0 rc7 re-smoke's run 9 (`resmoke7-audit/out9`), with every
+/// answer and every worker's tool calls as recorded, over that run's own
+/// files: its scripted ingest worker read `ingest/feed.go` (802 bytes) with
+/// `limit: 64` and nothing more, and rc7 counted the file as read because
+/// it fits one read, so the run passed without the Unmarshal defect at
+/// line 29. Now coverage counts the bytes each read returned: `feed.go` is
+/// not read, its follow-up names it, and the follow-up's read of all of it
+/// covers it.
+#[tokio::test]
+async fn resmoke7_run_9_a_partial_read_of_a_small_file_is_followed_up() {
+    let feed = format!(
+        "// Package ingest loads the nightly order feed from disk.\npackag{}",
+        "e ingest // padding to the recorded size\n"
+            .repeat(20)
+            .chars()
+            .take(802 - 64)
+            .collect::<String>()
+    );
+    assert_eq!(feed.len(), 802);
+    let sized = |bytes: usize| "x".repeat(bytes);
+    let repo = repository(&[
+        ("README.md", &sized(253)),
+        ("auth/__init__.py", ""),
+        ("auth/tokens.py", &sized(671)),
+        ("billing/__init__.py", ""),
+        ("billing/pagination.py", &sized(811)),
+        ("ingest/feed.go", &feed),
+        ("ingest/go.mod", &sized(43)),
+        ("notify/__init__.py", ""),
+        ("notify/webhook.py", &sized(710)),
+        ("tests/test_billing.py", &sized(398)),
+    ]);
+    let run = context_in(later(), repo.path());
+    let workers = [
+        "worker-auth",
+        "worker-billing",
+        "worker-ingest",
+        "worker-notify",
+        "worker-rest",
+    ];
+    let host = FakeHost::new(vec![
+        turn(
+            TurnState::Completed,
+            vec![(
+                PLANNER_SLOT,
+                Node::Answer(fixture("audit-resmoke7-out9-planner.txt")),
+            )],
+        ),
+        recorded_areas("audit-resmoke7-out9", &workers),
+        turn(
+            TurnState::Completed,
+            vec![(
+                "worker-ingest",
+                Node::Answer(worker_answer(
+                    &[("Unchecked json.Unmarshal error", "ingest/feed.go:29")],
+                    &[],
+                )),
+            )],
+        ),
+        turn(
+            TurnState::Completed,
+            vec![(
+                INTEGRATOR_SLOT,
+                Node::Answer(fixture("audit-resmoke7-out9-integrator.txt")),
+            )],
+        ),
+    ])
+    .recorded_calls(&fixture("audit-resmoke7-out9-worker-calls.jsonl"))
+    .calls("worker-ingest", reads(&["ingest/feed.go"]));
+    {
+        let calls = host.calls.lock().unwrap();
+        let ingest = &calls["worker-ingest"][0];
+        // As recorded: go.mod whole, and 64 bytes of feed.go.
+        assert_eq!(ingest.len(), 2);
+        assert_eq!(
+            ingest[1].1,
+            serde_json::json!({"limit": 64, "path": "ingest/feed.go"})
+        );
+        assert_eq!(ingest[1].3["returned_bytes"], 64);
+        assert_eq!(ingest[1].3["next_offset"], 64);
+    }
+    let (report, calls) = drive(&host, &run).await;
+
+    assert_eq!(
+        purposes(&report),
+        [
+            PLAN_PURPOSE,
+            AREAS_PURPOSE,
+            FOLLOW_UP_PURPOSE,
+            INTEGRATE_PURPOSE
+        ]
+    );
+    let follow_up = calls[2].0[0].instructions.as_deref().unwrap();
+    assert_eq!(calls[2].0.len(), 1);
+    assert!(
+        follow_up.contains(
+            "not read to their end. Read these files and report additional \
+             findings in the same format:\n- ingest/feed.go\nYou are read-only"
+        ),
+        "{follow_up}"
+    );
+    assert_eq!(
+        host.phases("coverage"),
+        [
+            "auth: 2 of 2 files examined: 1 read; not read: empty: auth/__init__.py",
+            "billing: 2 of 2 files examined: 1 read; not read: empty: billing/__init__.py",
+            "ingest: 2 of 2 files examined: 2 read",
+            "notify: 2 of 2 files examined: 1 read; not read: empty: notify/__init__.py",
+            "rest: 2 of 2 files examined: 2 read",
+        ]
+    );
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    assert!(
+        host.sent()[3].contains("ingest-followup1-F1"),
+        "{}",
+        host.sent()[3]
+    );
+    assert_eq!(outcome_of(&report).exit_code, exit_code::PASS);
+
+    // Without the follow-up's read, the partial read leaves feed.go not
+    // covered, by file: the run needs attention instead of passing.
+    let host = FakeHost::new(vec![
+        turn(
+            TurnState::Completed,
+            vec![(
+                PLANNER_SLOT,
+                Node::Answer(fixture("audit-resmoke7-out9-planner.txt")),
+            )],
+        ),
+        recorded_areas("audit-resmoke7-out9", &workers),
+        turn(
+            TurnState::Completed,
+            vec![("worker-ingest", Node::Answer(worker_answer(&[], &[])))],
+        ),
+        turn(
+            TurnState::Completed,
+            vec![(
+                INTEGRATOR_SLOT,
+                Node::Answer(fixture("audit-resmoke7-out9-integrator.txt")),
+            )],
+        ),
+    ])
+    .recorded_calls(&fixture("audit-resmoke7-out9-worker-calls.jsonl"))
+    .calls(
+        "worker-ingest",
+        vec![(
+            "read_file",
+            serde_json::json!({"path": "ingest/feed.go", "limit": 64}),
+            true,
+        )],
+    );
+    let (report, _) = drive(&host, &run).await;
+    assert_eq!(
+        entries(&report.not_covered),
+        [(
+            "ingest",
+            FailureClass::NotReached,
+            "ingest/feed.go: not read (the area worker did not read it to its end in its turn or \
+             its follow-up, which read nothing new)"
+        )]
+    );
+    assert_eq!(
+        host.phases("coverage")[2],
+        "ingest: 1 of 2 files examined: 1 read; not read, not covered: ingest/feed.go"
+    );
+    assert_eq!(outcome_of(&report).exit_code, exit_code::NEEDS_ATTENTION);
+}
+
+/// One turn of a [`ScriptedModel`]: each slot with its answer, and the tool
+/// calls its workers made.
+type ScriptedTurn = (Vec<(String, String)>, Vec<ToolCallRecord>);
+
+/// A scripted model behind a host, for audits of many files: the planner
+/// answers `plan`; each worker reads, in the order its instructions name
+/// them, the files of its own it has not read yet, at most `reads` of them
+/// per activation (all its budget lets it read), and from activation
+/// `stall_after` on reads only what it already read; the integrator merges
+/// nothing.
+struct ScriptedModel {
+    repo: std::path::PathBuf,
+    plan: String,
+    reads: usize,
+    stall_after: Option<u32>,
+    /// The Team of the last Apply: each slot and its instructions.
+    team: Mutex<Vec<(String, Option<String>)>>,
+    /// The slots of each Apply.
+    applied: Mutex<Vec<Vec<String>>>,
+    sent: Mutex<Vec<String>>,
+    turns: Mutex<HashMap<String, ScriptedTurn>>,
+    /// The files each worker slot read, in order, and its activations.
+    read: Mutex<HashMap<String, Vec<String>>>,
+    activations: Mutex<HashMap<String, u32>>,
+    events: Mutex<Vec<RunEvent>>,
+}
+
+impl ScriptedModel {
+    fn new(repo: &Path, plan: String, reads: usize) -> Self {
+        Self {
+            repo: repo.to_path_buf(),
+            plan,
+            reads,
+            stall_after: None,
+            team: Mutex::default(),
+            applied: Mutex::default(),
+            sent: Mutex::default(),
+            turns: Mutex::default(),
+            read: Mutex::default(),
+            activations: Mutex::default(),
+            events: Mutex::default(),
+        }
+    }
+
+    fn phases(&self, name: &str) -> Vec<String> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                RunEvent::Phase { phase, detail, .. } if phase == name => Some(detail.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The files a worker's instructions name, one by one.
+    fn named(&self, instructions: &str) -> Vec<String> {
+        instructions
+            .lines()
+            .filter_map(|line| line.strip_prefix("- "))
+            .filter(|path| self.repo.join(path).is_file())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// One activation of worker `slot`: its read calls, recorded for node
+    /// `node_id`.
+    fn worker(&self, slot: &str, instructions: &str, node_id: &str) -> Vec<ToolCallRecord> {
+        let activation = {
+            let mut activations = self.activations.lock().unwrap();
+            let count = activations.entry(slot.to_owned()).or_default();
+            *count += 1;
+            *count
+        };
+        let mut read = self.read.lock().unwrap();
+        let done = read.entry(slot.to_owned()).or_default();
+        let paths: Vec<String> = if self.stall_after.is_some_and(|after| activation > after) {
+            done.iter().take(self.reads).cloned().collect()
+        } else {
+            self.named(instructions)
+                .into_iter()
+                .filter(|path| !done.contains(path))
+                .take(self.reads)
+                .collect()
+        };
+        paths
+            .into_iter()
+            .map(|path| {
+                if !done.contains(&path) {
+                    done.push(path.clone());
+                }
+                let arguments = serde_json::json!({ "path": path });
+                ToolCallRecord {
+                    node_id: node_id.to_owned(),
+                    generation: 1,
+                    tool: "read_file".into(),
+                    result: simulated_read(&self.repo, &arguments),
+                    arguments,
+                    succeeded: true,
+                }
+            })
+            .collect()
+    }
+}
+
+#[async_trait]
+impl RunHost for ScriptedModel {
+    async fn apply_team(&self, _session_id: &str, edit: SessionTeamEdit) -> Result<(), RunError> {
+        let team: Vec<(String, Option<String>)> = edit
+            .slots
+            .iter()
+            .map(|slot| (slot.slot_id.clone(), slot.instructions.clone()))
+            .collect();
+        self.applied
+            .lock()
+            .unwrap()
+            .push(team.iter().map(|(slot, _)| slot.clone()).collect());
+        *self.team.lock().unwrap() = team;
+        Ok(())
+    }
+
+    async fn send_turn(&self, _session_id: &str, request: &str) -> Result<String, RunError> {
+        let turn_id = {
+            let mut sent = self.sent.lock().unwrap();
+            sent.push(request.into());
+            format!("turn-{}", sent.len())
+        };
+        let team = self.team.lock().unwrap().clone();
+        let mut nodes = Vec::new();
+        let mut calls = Vec::new();
+        for (index, (slot, instructions)) in team.iter().enumerate() {
+            let node_id = format!("{turn_id}-node-{index}");
+            let answer = if slot == PLANNER_SLOT {
+                self.plan.clone()
+            } else if slot == INTEGRATOR_SLOT {
+                integrated_answer(&[])
+            } else {
+                calls.extend(self.worker(slot, instructions.as_deref().unwrap_or(""), &node_id));
+                worker_answer(&[], &[])
+            };
+            nodes.push((slot.clone(), answer));
+        }
+        self.turns
+            .lock()
+            .unwrap()
+            .insert(turn_id.clone(), (nodes, calls));
+        Ok(turn_id)
+    }
+
+    async fn wait_turn(
+        &self,
+        _session_id: &str,
+        turn_id: &str,
+        _deadline: Instant,
+    ) -> Result<TurnObservation, RunError> {
+        let (nodes, _) = self.turns.lock().unwrap()[turn_id].clone();
+        Ok(TurnObservation {
+            session_id: "ses-1".into(),
+            turn_id: turn_id.into(),
+            state: TurnState::Completed,
+            attention_reason: None,
+            nodes: nodes
+                .into_iter()
+                .enumerate()
+                .map(|(index, (slot, answer))| NodeObservation {
+                    node_id: format!("{turn_id}-node-{index}"),
+                    slot_id: slot,
+                    model: ModelIdentity {
+                        provider: "ollama".into(),
+                        model: "m".into(),
+                        runtime: "native".into(),
+                    },
+                    required: true,
+                    kind: "slot".into(),
+                    generations: vec![GenerationObservation {
+                        generation: 1,
+                        state: NodeState::Accepted,
+                        answer: Some(answer),
+                        failure: None,
+                    }],
+                })
+                .collect(),
+            checks: Vec::new(),
+            review: None,
+            usage: RunUsage::default(),
+        })
+    }
+
+    async fn stop_turn(&self, _session_id: &str, _turn_id: &str) -> Result<(), RunError> {
+        Ok(())
+    }
+
+    async fn run_repro(
+        &self,
+        _session_id: &str,
+        _request: &crate::loadout::host::ReproRequest,
+    ) -> Result<axocoatl_session::run_outcome::ReproRun, RunError> {
+        unreachable!("an audit runs no reproductions")
+    }
+
+    async fn read_sandbox_file(
+        &self,
+        _session_id: &str,
+        _path: &str,
+        _max_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, RunError> {
+        unreachable!("an audit reads no sandbox files")
+    }
+
+    async fn record(&self, _run_id: &str, event: RunEvent) -> Result<(), RunError> {
+        self.events.lock().unwrap().push(event);
+        Ok(())
+    }
+
+    async fn tool_calls(
+        &self,
+        _session_id: &str,
+        turn_id: &str,
+    ) -> Result<Option<Vec<ToolCallRecord>>, RunError> {
+        Ok(Some(self.turns.lock().unwrap()[turn_id].1.clone()))
+    }
+}
+
+/// A repository with `count` small files under `big/` and one under
+/// `small/`, and the plan of those two areas.
+fn many_files(count: usize) -> (tempfile::TempDir, String) {
+    let files: Vec<(String, String)> = (0..count)
+        .map(|index| {
+            (
+                format!("big/m{index:03}.py"),
+                format!("def handler_{index}(request):\n    return request\n"),
+            )
+        })
+        .chain([("small/a.py".to_owned(), "A = 1\n".to_owned())])
+        .collect();
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    let plan = plan_answer(&[
+        ("big", "the request handlers", &["big/**"]),
+        ("small", "the constants", &["small/**"]),
+    ]);
+    (repository(&files), plan)
+}
+
+/// The run of an audit of many files: the worker Agent's invocations per
+/// activation, and its model's context as admission observed it.
+fn scale_run(repo: &Path, invocations: u32) -> RunContext {
+    let mut run = context_in(later(), repo);
+    let worker = run
+        .resolved
+        .loadout
+        .file
+        .agents
+        .iter_mut()
+        .find(|agent| agent.role == LoadoutRole::Worker)
+        .unwrap();
+    let mut limits = run.resolved.loadout.file.budgets.agent.clone();
+    limits.invocations = invocations;
+    worker.budget = Some(limits);
+    run.agent_contexts.insert("worker".into(), 32_768);
+    run
+}
+
+async fn drive_scripted(host: &ScriptedModel, run: &RunContext) -> KindReport {
+    let builds = Arc::new(Builds::default());
+    let build =
+        move |resolved: &ResolvedLoadout, slots: &[SlotPlan], checks: bool, revision: u64| {
+            builds.build(resolved, slots, checks, revision)
+        };
+    drive_audit(host, run, &build).await.unwrap()
+}
+
+/// A 500-file area is more than one worker reads within the built-in
+/// budget (300 invocations: about 120 reads), so before any worker runs
+/// the host splits it into five numbered sub-areas of 100 files, each with
+/// its own worker; the workers run two to a turn (200 planned reads), and a
+/// scripted model that reads 150 files an activation reads every file in
+/// the areas turns, with no follow-up.
+#[tokio::test]
+async fn a_500_file_area_is_split_into_sub_areas_that_each_worker_reads() {
+    let (repo, plan) = many_files(500);
+    let run = scale_run(repo.path(), 300);
+    let host = ScriptedModel::new(repo.path(), plan, 150);
+    let report = drive_scripted(&host, &run).await;
+
+    let parts = ["big-1", "big-2", "big-3", "big-4", "big-5"];
+    {
+        let applied = host.applied.lock().unwrap();
+        assert_eq!(applied[1], ["worker-big-1", "worker-big-2"]);
+        assert_eq!(applied[2], ["worker-big-3", "worker-big-4"]);
+        assert_eq!(applied[3], ["worker-big-5", "worker-small"]);
+    }
+    assert_eq!(
+        purposes(&report),
+        [
+            PLAN_PURPOSE,
+            AREAS_PURPOSE,
+            AREAS_PURPOSE,
+            AREAS_PURPOSE,
+            INTEGRATE_PURPOSE
+        ]
+    );
+    assert_eq!(
+        host.phases("assigned")[0],
+        "501 files listed by a walk of the directory (not a Git work tree) in 6 areas: big-1 \
+         100, big-2 100, big-3 100, big-4 100, big-5 100, small 1"
+    );
+    assert!(host.phases("assigned")[1]
+        .starts_with("big-1 (part 1 of 5 of big, paths big/**): big/m000.py, big/m001.py"));
+    assert_eq!(
+        report.notes,
+        [
+            "area big has 500 files to read, about 500 reads of up to 8 KiB (the default read of \
+          the worker's model), more than one worker makes within its budget (about 120 reads: \
+          300 invocations at 2 a read, 60 held back for looking around and its answer), so the \
+          host split it into 5 sub-areas, each with its own worker: big-1, big-2, big-3, \
+          big-4, big-5"
+        ]
+    );
+    assert_eq!(
+        host.phases("applying_team")[1],
+        "audit areas, turn 1 of 3: 2 read-only workers (big-1, big-2)"
+    );
+    let coverage = host.phases("coverage");
+    for (index, part) in parts.iter().enumerate() {
+        assert_eq!(
+            coverage[index],
+            format!("{part}: 100 of 100 files examined: 100 read")
+        );
+    }
+    let read = host.read.lock().unwrap();
+    for part in parts {
+        assert_eq!(read[&format!("worker-{part}")].len(), 100);
+    }
+    // Each worker's instructions say which part it reads.
+    let first = &host.sent.lock().unwrap()[1];
+    assert!(first.contains(
+        "This turn audits 2 of the 6 areas of the plan as executed (the others run in other \
+         turns) in parallel: big-1, big-2."
+    ));
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    assert_eq!(outcome_of(&report).exit_code, exit_code::PASS);
+}
+
+/// A model that reads only 40 files an activation is followed up for as
+/// long as each follow-up reads files it had not read: three times for 150
+/// files, never a fixed two. A model that stops reading new files gets no
+/// further follow-up, and what it left is not covered, by file.
+#[tokio::test]
+async fn follow_ups_go_on_while_each_reads_new_files() {
+    let (repo, plan) = many_files(150);
+    // 400 invocations plan 160 reads: the 150 files stay one area.
+    let run = scale_run(repo.path(), 400);
+    let host = ScriptedModel::new(repo.path(), plan.clone(), 40);
+    let report = drive_scripted(&host, &run).await;
+    assert_eq!(
+        purposes(&report),
+        [
+            PLAN_PURPOSE,
+            AREAS_PURPOSE,
+            FOLLOW_UP_PURPOSE,
+            FOLLOW_UP_PURPOSE,
+            FOLLOW_UP_PURPOSE,
+            INTEGRATE_PURPOSE
+        ]
+    );
+    assert_eq!(host.applied.lock().unwrap()[2], ["worker-big"]);
+    assert_eq!(host.read.lock().unwrap()["worker-big"].len(), 150);
+    assert!(host.sent.lock().unwrap()[4].contains("Follow-up 3 of the audit's areas (big)"));
+    assert_eq!(
+        host.phases("applying_team")[4],
+        "audit follow-up 3: 1 read-only worker (big (30 unread))"
+    );
+    assert_eq!(
+        host.phases("coverage")[0],
+        "big: 150 of 150 files examined: 150 read"
+    );
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    assert_eq!(outcome_of(&report).exit_code, exit_code::PASS);
+
+    // Its second follow-up rereads what it read: no third.
+    let mut host = ScriptedModel::new(repo.path(), plan, 40);
+    host.stall_after = Some(2);
+    let report = drive_scripted(&host, &run).await;
+    assert_eq!(
+        purposes(&report),
+        [
+            PLAN_PURPOSE,
+            AREAS_PURPOSE,
+            FOLLOW_UP_PURPOSE,
+            FOLLOW_UP_PURPOSE,
+            INTEGRATE_PURPOSE
+        ]
+    );
+    assert_eq!(host.read.lock().unwrap()["worker-big"].len(), 80);
+    let entries = entries(&report.not_covered);
+    assert_eq!(entries.len(), 70);
+    assert_eq!(
+        entries[0],
+        (
+            "big",
+            FailureClass::NotReached,
+            "big/m080.py: not read (the area worker did not read it to its end in its turn or \
+             its 2 follow-ups, the last of which read nothing new)"
+        )
+    );
+    assert_eq!(outcome_of(&report).exit_code, exit_code::NEEDS_ATTENTION);
+}
+
+/// A budget of 60 invocations plans 24 reads an activation, so the
+/// 500-file area becomes 21 sub-areas: with the small area, 22 workers,
+/// which run eight to a turn (192 planned reads), each turn's request
+/// naming its own.
+#[tokio::test]
+async fn many_sub_areas_run_in_turns_of_at_most_200_planned_reads() {
+    let (repo, plan) = many_files(500);
+    let run = scale_run(repo.path(), 60);
+    let host = ScriptedModel::new(repo.path(), plan, 30);
+    let report = drive_scripted(&host, &run).await;
+    assert_eq!(
+        purposes(&report),
+        [
+            PLAN_PURPOSE,
+            AREAS_PURPOSE,
+            AREAS_PURPOSE,
+            AREAS_PURPOSE,
+            INTEGRATE_PURPOSE
+        ]
+    );
+    let applied = host.applied.lock().unwrap();
+    assert_eq!(
+        applied[1..4].iter().map(Vec::len).collect::<Vec<_>>(),
+        [8, 8, 6]
+    );
+    assert_eq!(applied[1][0], "worker-big-1");
+    assert_eq!(applied[3].last().unwrap(), "worker-small");
+    let sent = host.sent.lock().unwrap();
+    assert!(sent[1].contains(
+        "This turn audits 8 of the 22 areas of the plan as executed (the others run in other \
+         turns) in parallel: big-1,"
+    ));
+    assert!(sent[3].contains("This turn audits 6 of the 22 areas"));
+    assert_eq!(host.phases("coverage").len(), 22);
+    assert!(host
+        .read
+        .lock()
+        .unwrap()
+        .values()
+        .all(|read| read.len() <= 24));
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    assert_eq!(outcome_of(&report).exit_code, exit_code::PASS);
+}
+
+/// Workers go to turns in order: at most 16 to a turn, at most 200 planned
+/// reads, at most 128 KiB of instructions; one that alone needs more has a
+/// turn of its own.
+#[test]
+fn worker_turns_bound_workers_reads_and_instructions() {
+    let (run, _repo) = context(later());
+    let slot = |bytes: usize| {
+        let mut slot = plan_slots(&run.resolved).unwrap().remove(0);
+        slot.instructions = Some("x".repeat(bytes));
+        slot
+    };
+    let sizes = |slots: Vec<(usize, SlotPlan, u64)>| -> Vec<Vec<usize>> {
+        worker_turns(slots)
+            .into_iter()
+            .map(|turn| turn.into_iter().map(|(index, _)| index).collect())
+            .collect()
+    };
+    // Twenty light workers: sixteen, then four.
+    let light: Vec<(usize, SlotPlan, u64)> = (0..20).map(|index| (index, slot(100), 1)).collect();
+    assert_eq!(
+        sizes(light).iter().map(Vec::len).collect::<Vec<_>>(),
+        [MAX_WORKERS_PER_TURN, 4]
+    );
+    // Planned reads: 120 + 80 fill a turn, 1 more starts the next; a
+    // worker planned past the bound runs alone.
+    assert_eq!(
+        sizes(vec![
+            (0, slot(100), 120),
+            (1, slot(100), 80),
+            (2, slot(100), 1),
+            (3, slot(100), 500),
+            (4, slot(100), 1),
+        ]),
+        [vec![0, 1], vec![2], vec![3], vec![4]]
+    );
+    // Instructions: three of 50 KiB do not fit 128 KiB.
+    assert_eq!(
+        sizes(vec![
+            (0, slot(50 * 1024), 1),
+            (1, slot(50 * 1024), 1),
+            (2, slot(50 * 1024), 1),
+        ]),
+        [vec![0, 1], vec![2]]
+    );
+    assert!(worker_turns(Vec::new()).is_empty());
+}
+
+/// However large the budget, one worker is planned at most a turn's 200
+/// reads: with 2,000 invocations the 500-file area is still three
+/// sub-areas, each in a turn of its own, and the note says why.
+#[tokio::test]
+async fn a_large_budget_still_plans_at_most_200_reads_a_worker() {
+    let (repo, plan) = many_files(500);
+    let run = scale_run(repo.path(), 2000);
+    let host = ScriptedModel::new(repo.path(), plan, 200);
+    let report = drive_scripted(&host, &run).await;
+    assert_eq!(
+        report.notes,
+        [
+            "area big has 500 files to read, about 500 reads of up to 8 KiB (the default read of \
+          the worker's model), more than one worker makes within its budget (200 reads, the \
+          most the host plans for one turn), so the host split it into 3 sub-areas, each with \
+          its own worker: big-1, big-2, big-3"
+        ]
+    );
+    let applied = host.applied.lock().unwrap();
+    assert_eq!(applied[1], ["worker-big-1"]);
+    assert_eq!(applied[2], ["worker-big-2"]);
+    assert_eq!(applied[3], ["worker-big-3", "worker-small"]);
+    assert_eq!(
+        host.phases("assigned")[0],
+        "501 files listed by a walk of the directory (not a Git work tree) in 4 areas: big-1 \
+         167, big-2 167, big-3 166, small 1"
+    );
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    assert_eq!(outcome_of(&report).exit_code, exit_code::PASS);
 }

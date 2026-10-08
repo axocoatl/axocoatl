@@ -190,21 +190,26 @@ impl RepositoryActivationResource {
         Ok(self.description.clone())
     }
 
+    /// `read_window` is what `read_file` returns without `limit` for this
+    /// activation's model; admission binds the same window
+    /// (`BoundActivation::read_window`).
     pub(super) fn preview_tools(
         &self,
         profile: &ExecutionProfile,
         host_tools: Vec<(&'static str, Arc<dyn BuiltinTool>)>,
+        read_window: usize,
     ) -> Result<Arc<ToolExecutor>> {
         validate_repository_tools(&profile.tools)?;
         // Definitions come from the actual built-ins. This executor cannot run:
         // acknowledged admission replaces it with an exact invocation executor.
         let mut executor = ToolExecutor::new();
-        axocoatl_tools::register_session_tools(
+        axocoatl_tools::register_session_tools_with_read_window(
             &mut executor,
             Arc::new(RepositorySandbox {
                 resource: self.clone(),
                 invocation: None,
             }),
+            read_window,
         );
         // Host tools the profile lists, as descriptions only; admission binds
         // the real tool to the admitted invocation.
@@ -234,9 +239,9 @@ pub(super) fn validate_input_resource(
     }
 }
 
-fn session_tools(sandbox: Arc<dyn Sandbox>) -> Arc<ToolExecutor> {
+fn session_tools(sandbox: Arc<dyn Sandbox>, read_window: usize) -> Arc<ToolExecutor> {
     let mut executor = ToolExecutor::new();
-    axocoatl_tools::register_session_tools(&mut executor, sandbox);
+    axocoatl_tools::register_session_tools_with_read_window(&mut executor, sandbox, read_window);
     Arc::new(executor)
 }
 
@@ -290,10 +295,13 @@ impl RepositoryInvocation {
                 executor: Arc::new(ToolExecutor::new()),
             }));
         }
-        let backend = session_tools(Arc::new(RepositorySandbox {
-            resource: resource.clone(),
-            invocation: Some(scope.clone()),
-        }));
+        let backend = session_tools(
+            Arc::new(RepositorySandbox {
+                resource: resource.clone(),
+                invocation: Some(scope.clone()),
+            }),
+            bound.read_window,
+        );
         let definition = backend
             .as_llm_tools()
             .into_iter()
