@@ -482,6 +482,52 @@ pub(crate) fn exec_user_args(
     }
 }
 
+/// Whether the read-only helper user of a hardened Session container can
+/// enter and list its Workspace directory. The helper reads only what the
+/// file modes let any user read: on a Linux host a Workspace directory that
+/// other users may not enter or list (a `mkdtemp` directory, or one made
+/// under `umask 077`, is `0700`) is closed to it, so every file tool of a
+/// read-only Agent fails there, while a macOS Podman machine's shared
+/// folder reports every file as owned by whoever asks and lets it in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HelperWorkspaceAccess {
+    /// The helper user can enter and list the Workspace directory.
+    Readable,
+    /// It cannot; what the probe printed.
+    Unreadable(String),
+}
+
+/// The exit status of [`HELPER_WORKSPACE_PROBE`] when the helper cannot
+/// enter or list the directory.
+const HELPER_WORKSPACE_DENIED: i32 = 41;
+
+/// Enters and lists the directory given as `$1`. The path is an argument,
+/// never part of the script.
+const HELPER_WORKSPACE_PROBE: &str = "cd -- \"$1\" || exit 41; ls -a >/dev/null || exit 41";
+
+/// `podman` arguments that run [`HELPER_WORKSPACE_PROBE`] on `workspace` as
+/// the helper user of `users` in `container`, from `/`, so the probe does
+/// not depend on the directory it checks.
+fn helper_workspace_probe_args(
+    users: &WorkloadUsers,
+    container: &str,
+    workspace: &Path,
+) -> Vec<String> {
+    let mut args = vec!["exec".to_string()];
+    args.extend(exec_user_args(Some(users), ExecIdentity::Helper));
+    args.extend([
+        "-w".into(),
+        "/".into(),
+        container.into(),
+        "sh".into(),
+        "-c".into(),
+        HELPER_WORKSPACE_PROBE.into(),
+        "sh".into(),
+        workspace.to_string_lossy().into_owned(),
+    ]);
+    args
+}
+
 /// The egress authority as one container's processes see it. A container
 /// that uses another Session's proxy (a Ways attempt) names the attempt in
 /// every credential it mints, so the Session's record says which container
@@ -1949,6 +1995,69 @@ impl SessionSandbox {
     /// The container's non-root users, when it runs hardened.
     pub fn workload_users(&self) -> Option<WorkloadUsers> {
         self.workload
+    }
+
+    /// Whether the helper user can enter and list the Workspace directory,
+    /// probed in this container with a fixed command run as the helper (no
+    /// Agent input, like the readiness probes). `None` without workload
+    /// users: every command then runs as the image's one user, which the
+    /// Workspace was started with.
+    pub async fn helper_workspace_access(
+        &self,
+    ) -> Result<Option<HelperWorkspaceAccess>, IsolationError> {
+        let Some(users) = self.workload.filter(|_| !self.passive_start) else {
+            return Ok(None);
+        };
+        let container = self.container_id.clone().ok_or_else(|| {
+            IsolationError::OciSetupFailed(
+                "probing the helper user's Workspace access requires an owned container \
+                 incarnation"
+                    .into(),
+            )
+        })?;
+        let mut command = Command::new(PODMAN);
+        command.args(helper_workspace_probe_args(
+            &users,
+            &container,
+            &self.working_dir,
+        ));
+        let observed = tokio::spawn(async move {
+            Self::run_bounded_command_with_capture_owned(
+                command,
+                None,
+                Duration::from_secs(60),
+                1024,
+                4096,
+            )
+            .await
+            .map(CapturedCommandOutput::into_observation)
+        })
+        .await
+        .map_err(|failure| {
+            IsolationError::OciContainerFailed(format!(
+                "the helper Workspace probe's supervisor failed: {failure}"
+            ))
+        })??;
+        let printed = String::from_utf8_lossy(&observed.stderr.retained)
+            .trim()
+            .to_string();
+        match observed.exit_code {
+            Some(0) => Ok(Some(HelperWorkspaceAccess::Readable)),
+            Some(HELPER_WORKSPACE_DENIED) => Ok(Some(HelperWorkspaceAccess::Unreadable(printed))),
+            other => Err(IsolationError::OciContainerFailed(format!(
+                "could not probe whether the helper user can read the Workspace (exit {}): {}",
+                other
+                    .or(observed.transport_exit_code)
+                    .map_or_else(|| "unknown".to_string(), |code| code.to_string()),
+                if printed.is_empty() {
+                    observed
+                        .supervision_error
+                        .unwrap_or_else(|| "no output".into())
+                } else {
+                    printed
+                }
+            ))),
+        }
     }
 
     /// Host loopback port assigned to one logical container port.
@@ -4941,6 +5050,15 @@ pub trait Sandbox: Send + Sync {
             .await
     }
 
+    /// Whether the read-only helper user can enter and list the Workspace
+    /// ([`SessionSandbox::helper_workspace_access`]). `None` for a backend
+    /// whose helpers run as the same user as its writers.
+    async fn helper_workspace_access(
+        &self,
+    ) -> Result<Option<HelperWorkspaceAccess>, IsolationError> {
+        Ok(None)
+    }
+
     /// The egress decision point when this runtime runs under
     /// `network: egress`; it mints the credentials writers' processes use.
     fn egress_authority(&self) -> Option<Arc<dyn crate::egress::EgressAuthority>> {
@@ -5057,6 +5175,12 @@ impl Sandbox for SessionSandbox {
         identity: ExecIdentity,
     ) -> Result<crate::supervisor_transport::PreparedSupervisedCommand, IsolationError> {
         SessionSandbox::prepare_supervised_command_as(self, request, stdin, env, identity).await
+    }
+
+    async fn helper_workspace_access(
+        &self,
+    ) -> Result<Option<HelperWorkspaceAccess>, IsolationError> {
+        SessionSandbox::helper_workspace_access(self).await
     }
 
     fn egress_authority(&self) -> Option<Arc<dyn crate::egress::EgressAuthority>> {
@@ -7091,6 +7215,91 @@ mod tests {
         assert!(exec_user_args(None, ExecIdentity::Writer).is_empty());
         assert!(exec_user_args(None, ExecIdentity::Helper).is_empty());
         assert_eq!(exec_user_args(None, ExecIdentity::Root), ["--user", "0"]);
+    }
+
+    #[test]
+    fn the_helper_workspace_probe_runs_as_the_helper_from_the_root_directory() {
+        let users = WorkloadUsers {
+            writer: (1200, 1300),
+            helper: (1400, 1500),
+        };
+        let workspace = Path::new("/work/my repo $(touch x)");
+        let args = helper_workspace_probe_args(&users, "immutable-container-id", workspace);
+        let mut expected = vec!["exec".to_string()];
+        expected.extend(exec_user_args(Some(&users), ExecIdentity::Helper));
+        expected.extend(
+            [
+                "-w",
+                "/",
+                "immutable-container-id",
+                "sh",
+                "-c",
+                HELPER_WORKSPACE_PROBE,
+                "sh",
+                "/work/my repo $(touch x)",
+            ]
+            .map(String::from),
+        );
+        assert_eq!(args, expected);
+        assert_eq!(args[1..3], ["--user", "1400:1500"]);
+        // The path is the script's argument, never part of the script.
+        assert!(!HELPER_WORKSPACE_PROBE.contains("/work"));
+    }
+
+    /// The probe as its user runs it: it can enter and list an ordinary
+    /// directory, and not one it may not list or enter.
+    #[cfg(unix)]
+    #[test]
+    fn the_helper_workspace_probe_fails_where_its_user_cannot_list_the_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("repo $(touch pwned)");
+        std::fs::create_dir(&workspace).unwrap();
+        let probe = |dir: &Path| {
+            std::process::Command::new("sh")
+                .args(["-c", HELPER_WORKSPACE_PROBE, "sh"])
+                .arg(dir)
+                .current_dir(root.path())
+                .output()
+                .unwrap()
+        };
+        std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(probe(&workspace).status.code(), Some(0));
+        // Enter but not list, list but not enter, neither.
+        for mode in [0o311, 0o644, 0o000] {
+            std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(mode)).unwrap();
+            let denied = probe(&workspace);
+            assert_eq!(
+                denied.status.code(),
+                Some(HELPER_WORKSPACE_DENIED),
+                "mode {mode:o}: {denied:?}"
+            );
+            assert!(
+                String::from_utf8_lossy(&denied.stderr).contains("ermission denied"),
+                "mode {mode:o}: {denied:?}"
+            );
+        }
+        std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!root.path().join("pwned").exists());
+        assert_eq!(
+            probe(&root.path().join("missing")).status.code(),
+            Some(HELPER_WORKSPACE_DENIED)
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_hardened_container_with_its_own_incarnation_probes_the_helper() {
+        let root = tempfile::tempdir().unwrap();
+        let mut sandbox = SessionSandbox::attach("axo-ses-s", root.path());
+        // The image's one user runs every command: nothing to probe.
+        assert_eq!(sandbox.helper_workspace_access().await.unwrap(), None);
+        sandbox.workload = Some(test_users());
+        assert!(sandbox.helper_workspace_access().await.is_err());
+        let backend: &dyn Sandbox = &sandbox;
+        assert!(backend.helper_workspace_access().await.is_err());
     }
 
     #[cfg(unix)]

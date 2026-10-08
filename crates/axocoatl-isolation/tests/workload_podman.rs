@@ -47,7 +47,8 @@ use axocoatl_isolation::egress::{
     OpenRequest, PeerIdentity, ProcessEnv, SidecarEvent,
 };
 use axocoatl_isolation::{
-    ExecIdentity, Sandbox, SandboxNetwork, SandboxPolicy, SessionSandbox, WorkloadUsers,
+    ExecIdentity, HelperWorkspaceAccess, Sandbox, SandboxNetwork, SandboxPolicy, SessionSandbox,
+    WorkloadUsers,
 };
 use sha2::{Digest, Sha256};
 
@@ -914,6 +915,32 @@ async fn hardened_writers_and_helpers_are_separate_users_without_capabilities() 
             assert!(public_mtime > 978_307_200);
         }
 
+        // The helper can enter and list this Workspace (0755), so read-only
+        // Agents can read it. Where the file modes separate the users, one
+        // other users may not enter (a mkdtemp directory, 0700) is closed to
+        // it; a macOS shared folder reports the helper as its owner and lets
+        // it in. One that nobody may list is closed to it everywhere.
+        assert_eq!(
+            sandbox.helper_workspace_access().await.unwrap(),
+            Some(HelperWorkspaceAccess::Readable)
+        );
+        let shared_folder = lines[1] == "1001";
+        for (mode, readable) in [(0o700, shared_folder), (0o000, false)] {
+            std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(mode)).unwrap();
+            let access = Sandbox::helper_workspace_access(sandbox.as_ref()).await;
+            std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o755)).unwrap();
+            match access.unwrap() {
+                Some(HelperWorkspaceAccess::Readable) => assert!(readable, "mode {mode:o}"),
+                Some(HelperWorkspaceAccess::Unreadable(printed)) => {
+                    assert!(!readable, "mode {mode:o}: {printed}");
+                    // What the image's shell and `ls` print, e.g. busybox's
+                    // "can't cd to …: Permission denied".
+                    assert!(!printed.is_empty(), "mode {mode:o}");
+                }
+                None => panic!("a hardened container has a helper user to probe"),
+            }
+        }
+
         // The writer reaches an allowed host through PID 1's listener with its
         // own credential.
         let grant = fixture
@@ -1227,6 +1254,9 @@ async fn image_mode_keeps_the_image_user_and_an_attempt_needs_its_sessions_proxy
             "0",
             "image mode runs helpers as the image user"
         );
+        // That user started the container with the Workspace: no helper
+        // user to probe.
+        assert_eq!(sandbox.helper_workspace_access().await.unwrap(), None);
         // Landlock keeps a root helper from writing the Workspace, but not
         // from changing permission bits or timestamps (documented).
         let workspace = sandbox.root().to_path_buf();

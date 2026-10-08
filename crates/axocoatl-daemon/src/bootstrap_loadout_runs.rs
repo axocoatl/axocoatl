@@ -842,6 +842,79 @@ fn refuse_hosts_under_network_none(file: &LoadoutFile) -> Result<(), DaemonError
     Ok(())
 }
 
+/// Tools that read the Workspace.
+const WORKSPACE_READING_TOOLS: [&str; 5] = ["read_file", "list_dir", "grep", "glob", "bash"];
+
+/// Who of a run reads the repository as the read-only helper user of its
+/// hardened Session container, with a tool that reads the Workspace: every
+/// Agent of an audit (each of its turns applies a read-only team), any
+/// other Agent that may write nothing, and the required reviewer.
+fn helper_readers(file: &LoadoutFile) -> Vec<String> {
+    let reads = |tools: &[String]| {
+        tools
+            .iter()
+            .any(|tool| WORKSPACE_READING_TOOLS.contains(&tool.as_str()))
+    };
+    let mut readers: Vec<String> = file
+        .agents
+        .iter()
+        .filter(|agent| {
+            (file.kind == LoadoutKind::Audit || agent.writes.as_ref().is_some_and(Vec::is_empty))
+                && reads(&agent.tools)
+        })
+        .map(|agent| agent.id.clone())
+        .collect();
+    if file
+        .review
+        .as_ref()
+        .is_some_and(|review| reads(&review.tools))
+    {
+        readers.push("reviewer".into());
+    }
+    readers
+}
+
+/// Why a run cannot start: its read-only Agents (`readers`) run as
+/// `helper_user`, which the Session container's probe found cannot enter or
+/// list the repository, so each of their reads would fail. `None` when it
+/// can, when the container has no separate helper user, or when no
+/// read-only Agent reads the repository. `mode` is the repository
+/// directory's permission bits on the host.
+fn helper_access_refusal(
+    readers: &[String],
+    access: Option<&axocoatl_isolation::HelperWorkspaceAccess>,
+    repo: &std::path::Path,
+    helper_user: &str,
+    mode: Option<u32>,
+) -> Option<String> {
+    let Some(axocoatl_isolation::HelperWorkspaceAccess::Unreadable(printed)) = access else {
+        return None;
+    };
+    if readers.is_empty() {
+        return None;
+    }
+    let repo = repo.display();
+    let mut what = Vec::new();
+    if let Some(mode) = mode {
+        what.push(format!("mode {mode:04o}"));
+    }
+    if !printed.is_empty() {
+        what.push(printed.clone());
+    }
+    Some(format!(
+        "the read-only Agents of this run ({}) run as the helper user {helper_user}, which \
+         cannot enter or list the repository {repo}{}. A read-only Agent reads only what the \
+         file modes let any user read: let other users read the repository, for example with \
+         chmod -R o+rX {repo}, and run again",
+        readers.join(", "),
+        if what.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", what.join("; "))
+        }
+    ))
+}
+
 fn valid_request_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
@@ -1224,20 +1297,35 @@ impl AxocoatlDaemon {
                 },
             )
             .map_err(record_error)?;
-        if !ready {
-            // The environment failed (or still needs a person): the run ends
-            // here with what the setup printed.
-            let mut detail = session
-                .environment
-                .error
-                .clone()
-                .unwrap_or_else(|| "the Session's environment is not ready".into());
-            for result in &session.environment.setup_results {
-                detail.push_str(&format!(
-                    "\n$ {} (exit {})\n{}{}",
-                    result.command, result.exit_code, result.stdout, result.stderr
-                ));
-            }
+        // A read-only Agent that cannot read the repository would only
+        // report that it examined nothing, so such a run does not start.
+        let unreadable = if ready {
+            self.loadout_helper_refusal(&session.id, &loadout.file, &repo)
+                .await
+        } else {
+            None
+        };
+        if !ready || unreadable.is_some() {
+            // The environment failed (or still needs a person), or the
+            // run's read-only Agents cannot read the repository: the run
+            // ends here with what the setup printed, or why.
+            let detail = match unreadable {
+                Some(refusal) => refusal,
+                None => {
+                    let mut detail = session
+                        .environment
+                        .error
+                        .clone()
+                        .unwrap_or_else(|| "the Session's environment is not ready".into());
+                    for result in &session.environment.setup_results {
+                        detail.push_str(&format!(
+                            "\n$ {} (exit {})\n{}{}",
+                            result.command, result.exit_code, result.stdout, result.stderr
+                        ));
+                    }
+                    detail
+                }
+            };
             let outcome = ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
             let _ = store.append(
                 &run_id,
@@ -2125,6 +2213,52 @@ impl AxocoatlDaemon {
         Ok(())
     }
 
+    /// Why the run of `file` in the Session `session_id` cannot start: its
+    /// read-only Agents run as the helper user, which the Session's Ready
+    /// container found cannot enter or list `repo` ([`helper_access_refusal`]).
+    /// `None` when they can, or when it could not be found out (logged).
+    async fn loadout_helper_refusal(
+        &self,
+        session_id: &str,
+        file: &LoadoutFile,
+        repo: &std::path::Path,
+    ) -> Option<String> {
+        let readers = helper_readers(file);
+        if readers.is_empty() {
+            return None;
+        }
+        let sandbox = self
+            .session_sandboxes
+            .lock()
+            .await
+            .get(session_id)
+            .cloned()?;
+        let access = match sandbox.helper_workspace_access().await {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::warn!(
+                    session_id,
+                    %error,
+                    "could not find out whether the read-only Agents can read the repository"
+                );
+                return None;
+            }
+        };
+        let helper_user = axocoatl_config::workload::workload_settings(&self.config.sandbox)
+            .map(|settings| settings.helper_user())
+            .unwrap_or_else(|_| "of the Session".into());
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(repo)
+                .ok()
+                .map(|metadata| metadata.permissions().mode() & 0o7777)
+        };
+        #[cfg(not(unix))]
+        let mode = None;
+        helper_access_refusal(&readers, access.as_ref(), repo, &helper_user, mode)
+    }
+
     /// Read a file from the Session's Ready container as the writer user,
     /// at most `max_bytes`; `None` when it does not exist.
     pub async fn loadout_read_sandbox_file(
@@ -2408,6 +2542,69 @@ mod tests {
         let mut fix = builtin("fix").file.clone();
         fix.sandbox.network = "none".into();
         assert!(refuse_hosts_under_network_none(&fix).is_ok());
+    }
+
+    #[test]
+    fn the_read_only_agents_that_read_the_repository_are_named() {
+        // Every audit Agent runs read-only, whatever its `writes` says.
+        let mut audit = builtin("audit").file.clone();
+        assert_eq!(helper_readers(&audit), ["planner", "worker", "integrator"]);
+        for agent in &mut audit.agents {
+            agent.writes = None;
+        }
+        assert_eq!(helper_readers(&audit), ["planner", "worker", "integrator"]);
+        // The fix writer writes; its reviewer reads as the helper.
+        let mut fix = builtin("fix").file.clone();
+        assert_eq!(helper_readers(&fix), ["reviewer"]);
+        fix.review.as_mut().unwrap().tools = vec!["web_search".into()];
+        assert!(helper_readers(&fix).is_empty());
+        // A read-only Agent of another kind counts when it reads the Workspace.
+        let mut qa = builtin("qa").file.clone();
+        assert!(helper_readers(&qa).is_empty());
+        let mut scout = qa.agents[0].clone();
+        scout.id = "scout".into();
+        scout.writes = Some(Vec::new());
+        scout.tools = vec!["browser".into()];
+        qa.agents.push(scout.clone());
+        assert!(helper_readers(&qa).is_empty());
+        scout.tools.push("grep".into());
+        qa.agents.push(scout);
+        assert_eq!(helper_readers(&qa), ["scout"]);
+    }
+
+    #[test]
+    fn a_repository_the_helper_cannot_list_refuses_its_read_only_agents() {
+        use axocoatl_isolation::HelperWorkspaceAccess;
+        let readers = vec!["planner".to_string(), "worker".into(), "integrator".into()];
+        let repo = std::path::Path::new("/tmp/axocoatl-audit-repo-6Gvg5C");
+        let denied = HelperWorkspaceAccess::Unreadable(
+            "sh: cd: line 0: can't cd to /tmp/axocoatl-audit-repo-6Gvg5C: Permission denied".into(),
+        );
+        let refusal =
+            helper_access_refusal(&readers, Some(&denied), repo, "1001:1001", Some(0o700)).unwrap();
+        assert_eq!(
+            refusal,
+            "the read-only Agents of this run (planner, worker, integrator) run as the helper \
+             user 1001:1001, which cannot enter or list the repository \
+             /tmp/axocoatl-audit-repo-6Gvg5C (mode 0700; sh: cd: line 0: can't cd to \
+             /tmp/axocoatl-audit-repo-6Gvg5C: Permission denied). A read-only Agent reads only \
+             what the file modes let any user read: let other users read the repository, for \
+             example with chmod -R o+rX /tmp/axocoatl-audit-repo-6Gvg5C, and run again"
+        );
+        let bare = HelperWorkspaceAccess::Unreadable(String::new());
+        assert!(
+            helper_access_refusal(&readers, Some(&bare), repo, "1001:1001", None)
+                .unwrap()
+                .contains("cannot enter or list the repository /tmp/axocoatl-audit-repo-6Gvg5C. ")
+        );
+        // A helper that can list it, a container without a helper user, and
+        // a run without read-only readers start.
+        let readable = HelperWorkspaceAccess::Readable;
+        assert!(
+            helper_access_refusal(&readers, Some(&readable), repo, "1001:1001", None).is_none()
+        );
+        assert!(helper_access_refusal(&readers, None, repo, "1001:1001", None).is_none());
+        assert!(helper_access_refusal(&[], Some(&denied), repo, "1001:1001", None).is_none());
     }
 
     /// A native turn's projection with one writer node whose single

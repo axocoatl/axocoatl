@@ -357,11 +357,18 @@ What it does not cover:
 - Approved setup commands run as the writer, so they cannot install system packages
   with `apk` or `apt-get`. Choose an image that already has them, or set
   `mode: image`.
-- A helper can read whatever the file modes let any user read. On macOS the Podman
-  machine's shared folder reports every Workspace file as owned by whoever asks, so
-  file modes do not keep a helper from reading an owner-only Workspace file there.
-  A helper's shell still cannot write, create, rename or delete Workspace files; on
-  macOS it can change their permission bits and timestamps.
+- A helper can read whatever the file modes let any user read, and nothing else. On a
+  Linux host a Workspace directory that other users may not enter or list, such as one
+  made by `mktemp -d` or under `umask 077` (mode `0700`), is closed to it: every file
+  tool of a read-only helper fails there with `Permission denied`. Give other users
+  read access, for example with `chmod -R o+rX <repo>`; a repository made by
+  `git clone` with the usual `umask 022` already has it. A [loadout run](/configure/loadouts/)
+  with read-only Agents checks this in its Session container and ends with exit code 5
+  before its first turn when the helper cannot enter and list the repository. On macOS
+  the Podman machine's shared folder reports every Workspace file as owned by whoever
+  asks, so file modes do not keep a helper from reading an owner-only Workspace file
+  there. A helper's shell still cannot write, create, rename or delete Workspace files;
+  on macOS it can change their permission bits and timestamps.
 - It needs rootless Podman. Under rootful Podman, `auto` falls back to `image` and
   `doctor` warns, and `hardened` refuses to start a Session. E2B refuses `hardened`.
 - The first start of an image takes longer while Podman prepares it for the user

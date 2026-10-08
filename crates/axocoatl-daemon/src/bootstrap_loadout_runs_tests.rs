@@ -876,6 +876,15 @@ async fn loadout_session_container_runs_egress_and_hardened() {
             .map_err(|error| DaemonError::Session(error.to_string()))?;
         assert_ne!(id.stdout.trim(), "0", "{id:?}");
         assert!(sandbox.egress_status().is_some(), "an egress sidecar runs");
+        // Its read-only Agents run as the helper user, which can enter and
+        // list this Workspace (0755), so a run's admission lets them start.
+        assert_eq!(
+            sandbox
+                .helper_workspace_access()
+                .await
+                .map_err(|error| DaemonError::Session(error.to_string()))?,
+            Some(axocoatl_isolation::HelperWorkspaceAccess::Readable)
+        );
         // Its container reaches nothing but the sidecar: no bridge network.
         let mode = inspect(
             format!("axo-ses-{}", bound.id),
@@ -902,6 +911,14 @@ async fn loadout_session_container_runs_egress_and_hardened() {
             .cloned()
             .unwrap();
         assert!(plain_sandbox.egress_status().is_none());
+        // Without workload users every command runs as the image's user.
+        assert_eq!(
+            plain_sandbox
+                .helper_workspace_access()
+                .await
+                .map_err(|error| DaemonError::Session(error.to_string()))?,
+            None
+        );
         let plain_mode = inspect(
             format!("axo-ses-{}", plain.id),
             "{{.HostConfig.NetworkMode}}",

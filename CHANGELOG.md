@@ -257,6 +257,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only by `aggregate_bytes`.
 
 ### Fixed
+- **A run whose read-only Agents cannot read the repository says so instead of
+  auditing nothing.** Read-only Agents, every Agent of an audit and the required
+  reviewer among them, run as `helper_user`, which reads only what the file modes let
+  any user read. On a Linux host a repository directory other users may not enter or
+  list (`mktemp -d`, or `umask 077`: mode `0700`) made every read of theirs fail with
+  `Permission denied`, so an audit reported each area as examined by nobody (exit
+  code 2), while a macOS Podman machine's shared folder let them in. A run with such an
+  Agent now asks its Session container whether `helper_user` can enter and list the
+  repository, and when it cannot, the run ends with exit code 5 before its first turn,
+  naming the directory, its mode and the fix (`chmod -R o+rX <repo>`). The helper user
+  keeps its own uid and gid and gains no access.
 - **Native OpenRouter reserves each call's own request, not the context window.** A
   call reserved the endpoint's whole context window plus its output, about 1.06 million
   tokens and $2.08 on a 1M-context model, so a modest grant could never make one. A call
