@@ -49,7 +49,9 @@ pub struct ExecRequest {
 /// Writes are allowed only beneath `writable`; everything else, including the
 /// repository, is read-only. A writable entry equal to, inside, or containing
 /// a `protected` path is dropped, so a scratch or home directory can never
-/// reopen the protected tree. Reads and execution are unaffected.
+/// reopen the protected tree. Reads and execution are unaffected. A
+/// read-only helper's command ([`HelperView`]) gets none of `writable`: only
+/// its own scratch directory and a few devices.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WriteRestriction {
@@ -120,11 +122,16 @@ impl WriteRestriction {
 /// PATH`). The supervisor starts as root and launches the command as the
 /// helper user with `CAP_DAC_READ_SEARCH` as its only capability, in a
 /// Landlock domain that lets it open, list and execute the Workspace whatever
-/// its file modes, and outside it only what any user could read already. Its
-/// seccomp filter also refuses Unix sockets (other than stream socket pairs)
-/// and `inotify` watches, which the capability would otherwise extend. These
-/// are transport arguments, chosen by the host with the container's users,
-/// not part of the request.
+/// its file modes, and outside it only what any user could read already.
+/// Without a write restriction (its file tools) it writes nothing: it may
+/// open only `/dev/null` for writing, and its seccomp filter refuses changing
+/// a file's mode, owner or times. With one (its shell) it writes only
+/// beneath a scratch directory of its own (`HOME`, `TMPDIR`) and to a few
+/// devices, whatever the restriction's `writable` roots name. Its seccomp
+/// filter also refuses Unix sockets (other than stream socket pairs),
+/// `inotify` and `fanotify` watches and extended attribute changes, which
+/// the capability would otherwise extend. These are transport arguments,
+/// chosen by the host with the container's users, not part of the request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HelperView {
     /// The helper's `(uid, gid)`: the command runs as them.

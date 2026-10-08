@@ -347,21 +347,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `helper_user` with `CAP_DAC_READ_SEARCH` as its only capability (in every set and the
   bounding set, ambient so its children keep it, with no-new-privileges and locked
   secure bits), so it reads and lists Workspace files whatever their modes, in a
-  Landlock domain that also handles opening files to read or execute them and listing
-  directories. Beneath the Workspace it may read, list and execute; beneath a temporary
-  directory of its own (its `HOME` and `TMPDIR`, removed when the command ends)
-  anything, though it no longer reads back what it writes to `/tmp` or `/dev/shm`;
-  elsewhere only what any user may read when the command starts, judged entry
+  Landlock domain that also handles opening files to read or execute them, listing
+  directories and every write right. Beneath the Workspace it may read, list and
+  execute; elsewhere only what any user may read when the command starts, judged entry
   by entry in the system directories (`/usr`, `/bin`, `/sbin`, `/lib*`, `/opt`, `/etc`,
   `/proc/sys`, `/sys/devices/system/cpu`), plus a few devices and the kernel's global
-  `/proc` files. It cannot read the writer's home, other users' files in `/tmp`,
-  `/etc/shadow`, root's directories or any process's `/proc` entries (its own
-  included; `ps` and `pgrep` do not work in a helper), and it still cannot read a
-  writer process's environment or signal it, or write the Workspace. Its seccomp
-  filter also refuses `AF_UNIX` sockets (stream socket pairs, which child processes'
-  pipes use, stay allowed) and `inotify` watches, which the capability would otherwise
-  reach through directories it could not enter before; so an app's own Unix socket,
-  abstract or not, and the egress proxy's identity socket are out of its reach. A
+  `/proc` files. It reads nothing in the writer's home, `/home`, `/root`, `/run`,
+  `/tmp`, `/var/tmp` or `/dev/shm`, nor `/etc/shadow` or any process's `/proc` entries
+  (its own included; `ps` and `pgrep` do not work in a helper), and it still cannot read
+  a writer process's environment or signal it. It writes almost nowhere: its file tools
+  (`read_file`, `grep`, `glob`, `list_dir`) may only open `/dev/null` for writing and
+  get no scratch directory, and their seccomp filter also refuses changing a file's
+  mode, owner or times; its shell writes only beneath a temporary directory of its own
+  (its `HOME` and `TMPDIR`, removed when the command ends) and to `/dev/null`,
+  `/dev/zero`, `/dev/tty` and `/dev/urandom`, so a program that writes a fixed path in
+  `/tmp`, `/var/tmp` or `/dev/shm` instead of `$TMPDIR` fails there. Neither can write,
+  truncate, remove or link anything in the Workspace or in a directory any user may
+  change inside another user's private one, which the capability takes it through. Its
+  seccomp filter also refuses `AF_UNIX` sockets (connected socket pairs, stream and
+  sequenced-packet, stay allowed: child processes' pipes and Rust's process spawning,
+  and so `cargo check`, use them), `inotify` and `fanotify` watches and setting or
+  removing extended attributes, which the capability would otherwise reach through
+  directories it could not enter before; so an app's own Unix socket, abstract or not,
+  and the egress proxy's identity socket are out of its reach. The command's standard
+  pipes are its own, so it can write to `/dev/stdout` and `/dev/stderr`. A
   hardened Session container now keeps `CAP_DAC_READ_SEARCH` for root (Podman does not
   grant it by default; root already reads everything through `CAP_DAC_OVERRIDE`). What
   a helper may read outside the Workspace is judged when each command starts, and
@@ -373,8 +382,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filesystem, which a rootless container never has. The run's check before its first
   turn stays, and now launches its probe exactly as the helper's commands are: it ends
   the run with exit code 5 only when that view cannot enter or list the repository (one
-  another user owns) or the container or kernel cannot give it, naming why (Landlock,
-  Linux 5.13 or later; or a hardened Session container started by an earlier build,
+  another user owns) or the container or kernel cannot give it, naming why (Landlock
+  ABI 3, Linux 6.2 or later; or a hardened Session container started by an earlier build,
   which lacks the capability: restart the Session). The walk of the system directories
   takes tens of milliseconds per helper command in common images (about 40 ms for
   Rust's 25,000 entries). Both embedded execution supervisors are rebuilt from this
@@ -516,8 +525,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - Hardened commands' seccomp filter also refuses `open_by_handle_at`, which opens a
   file by its handle without checking the directories above it; a read-only helper's
-  filter also refuses `AF_UNIX` sockets other than stream socket pairs and `inotify`
-  watches (see Fixed).
+  filter also refuses `AF_UNIX` sockets other than connected socket pairs, `inotify`
+  and `fanotify` watches and extended attribute changes, and its file tools' filter
+  also refuses changing a file's mode, owner or times (see Fixed).
+- A read-only helper's file tools in a hardened Session container write nothing
+  (before, only the file modes limited what they could write), and its shell writes
+  only in a temporary directory of its own and to four devices instead of anywhere in
+  `/tmp`, `/var/tmp` and `/dev` (see Fixed).
 - The docs site's build dependencies are updated: `http-cache-semantics` 4.3.0 fixes
   GHSA-ch52-4w7c-c8xp, so its reviewed exception is removed; `sharp` 0.35.5, with
   libvips 1.3.4, fixes GHSA-wq5f-xc86-pv6w; `source-map-js` 1.2.2 fixes

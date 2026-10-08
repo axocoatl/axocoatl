@@ -282,11 +282,13 @@ has `bash` must have `writes: []`, so the same applies to it. It is not offered
 `write_file` or `edit_file`, and the host refuses them if it asks. Its own `bash`
 commands run under a Linux Landlock restriction: no file in the repository, including
 `.git`, can be written, created, renamed or deleted, and only `/tmp`, `/var/tmp` and
-`/dev` are writable. Landlock does not cover a file's permission bits, owner or
+`/dev` are writable; with [workload users](/configure/sandboxes/#workload-users), only a
+temporary directory of the command's own and `/dev/null`, `/dev/zero`, `/dev/tty` and
+`/dev/urandom`. Landlock does not cover a file's permission bits, owner or
 timestamps. A helper that runs as root, as under `sandbox.workload.mode: image` with an
 image whose user is root, can change them; on macOS, where the Podman machine's shared
-folder reports every file as the caller's, any helper can change permission bits and
-timestamps. Each command gets a
+folder reports every file as the caller's, any helper's shell can change permission
+bits and timestamps. Each command gets a
 scratch home directory, removed when it ends, so the helper cannot leave
 configuration in the Session's shared home for later commands. The same restriction
 refuses every TCP connection and every TCP bind, on any address including loopback,
@@ -301,7 +303,9 @@ in. Landlock does not cover Unix sockets. With
 cannot read the environment of a writer's processes or signal them, under a seccomp
 filter that refuses Unix sockets, so an app's own socket in the container, abstract or
 not, is out of its reach. That user reads the repository whatever its file modes,
-through a view that also confines what it reads outside it to what any user may read;
+through a view that also confines what it reads outside it to what any user may read.
+The same view keeps its file tools from writing anything, or changing a file's mode,
+owner or times, and its shell from writing outside a temporary directory of its own;
 see [Sandboxes](/configure/sandboxes/#workload-users). Under
 `sandbox.workload.mode: image` an app in the container that listens on a Unix socket of
 its own is still within a helper's reach, an abstract socket always and a socket file
