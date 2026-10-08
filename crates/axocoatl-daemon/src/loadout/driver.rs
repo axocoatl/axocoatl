@@ -364,6 +364,7 @@ fn usage(turns: &[TurnObservation], events: &[RunEvent]) -> RunUsage {
             .saturating_add(turn.usage.cost_microunits);
         usage.complete &= turn.usage.complete;
         usage.cost_known &= turn.usage.cost_known;
+        usage.cost_computed |= turn.usage.cost_computed;
         usage.retries = usage.retries.saturating_add(turn.usage.retries);
     }
     let unobserved = events.iter().any(|event| {
@@ -753,6 +754,7 @@ prompt: "{task}"
                 cost_microunits: 7,
                 complete: true,
                 cost_known: true,
+                cost_computed: false,
                 retries: 0,
             },
         }

@@ -189,10 +189,22 @@ axocoatl run fix-claude-code --task "…" \
 ```
 
 For Claude Code the model is `{provider: anthropic, model: …}`, for Codex
-`{provider: openai, model: …}`: the model name the program itself takes. An external
-program brings its own tools, so `tools` is ignored, and only a `writer` may be external.
-The same-model reviewer check compares that provider and model with the reviewer's, both
-from the loadout and from the finished turn.
+`{provider: openai, model: …}`: the provider whose API the program calls through the route
+Axocoatl adds for it, and the model name the program itself takes. Any other provider is
+refused: `axocoatl loadouts validate` refuses a literal model such as
+`{provider: openrouter, model: openai/gpt-5.5}` on a Codex writer, and a run refuses
+`--model writer=openrouter:…` (exit code 3), so the model a run records is the one that
+ran. An external program brings its own tools, so `tools` is ignored, and only a `writer`
+may be external.
+
+The same-model reviewer check compares that model with the reviewer's, from the loadout,
+from the finished turn and in Team and budget, through whichever provider each one runs:
+a reviewer on `openrouter:anthropic/claude-haiku-4.5` runs a Claude Code writer's
+`anthropic:claude-haiku-4-5`, and one on `openrouter:openai/gpt-5.5` a Codex writer's
+`openai:gpt-5.5`, so both are warned about (`same_model_reviewer`). The comparison ignores
+case, `.` against `-`, a snapshot date such as `-20251001`, `-latest` and an OpenRouter
+`:variant` suffix. A program alias such as Claude Code's `sonnet` is not resolved, so it
+is not compared.
 
 ## The routes Axocoatl adds
 
@@ -235,6 +247,65 @@ certificate authority, which signs the route's TLS on your computer, is trusted 
 - **The change.** The repository captures before and after the activation, as for any
   writer. A change outside `writes` fails the activation.
 
+## What a run costs
+
+Claude Code reports what its run cost (`total_cost_usd`, its own computation from list
+prices), and the run settles to that.
+
+Codex reports tokens but no cost. Axocoatl computes the cost from the tokens Codex reports,
+each part at its rate: uncached input, input read from the prompt cache, input written to
+the prompt cache, and output, reasoning included. The rate is the configuration's
+[`pricing`](/reference/config/#attempt-pricing) entry for exactly that model name when
+there is one, otherwise the list price Axocoatl pins for the model:
+
+| Codex 0.160.1 model | Input | Cached input | Cache writes | Output |
+| --- | --- | --- | --- | --- |
+| `gpt-6-astra` | $10.00 | $1.00 | $12.50 | $50.00 |
+| `gpt-6.1-sol` | $2.00 | $0.10 | $2.50 | $10.00 |
+| `gpt-6-sol` | $2.00 | $0.20 | $2.50 | $10.00 |
+| `gpt-6-luna` | $0.10 | $0.01 | $0.125 | $0.50 |
+| `gpt-5.6-sol` | $4.00 | $0.40 | $5.00 | $20.00 |
+| `gpt-5.6-terra` | $2.00 | $0.20 | $2.50 | $12.00 |
+| `gpt-5.6-luna` | $0.20 | $0.02 | $0.25 | $1.20 |
+| `gpt-5.5` | $5.00 | $0.50 | $5.00 (billed as input) | $30.00 |
+
+Dollars per million tokens: OpenAI's Standard prices for prompts of at most 272K input
+tokens, as OpenAI's model pages listed them on 2026-10-08, for the models the pinned Codex
+0.160.1 lists for API use. Codex 0.160.1 keeps a 272,000-token context for each of them, so
+no request reaches the long-context price, and `codex exec` asks for no service tier, so a
+run is billed at Standard rates. GPT-5.6 Sol's is OpenAI's promotional price, which OpenAI
+says runs at least through 2026-11-21; when OpenAI changes a price, set it in `pricing`
+until Axocoatl's table follows. A `pricing` entry has one input rate, which then applies to
+every input token, cached or not.
+
+The run settles to that cost, the activation's work log says how it was computed and at
+which price, and the Outcome marks it (`usage.cost_computed: true`): the summary, the
+JUnit file's `axocoatl.usage` property, the Run outcome panel and the pull request body
+show "$X (includes cost computed from reported tokens at list prices)", never as a charge
+a provider reported. A computed cost above what the grant still allowed fails the
+activation, as a reported one does.
+
+A Codex model that neither the table nor `pricing` names has no price. Its cost is not
+known: each such activation reserves an equal share of the cost left, divided by the
+activations left with its own, so a later activation, such as the revision a review asks
+for, can still run, and its reservation stays charged. The Outcome then says the cost is
+not known (`usage.cost_known: false`), and the summary, JUnit, panel and pull request body
+show "cost unknown (reserved up to $X)", where $X is what the run's grants were charged,
+never as a price.
+
+Before a run starts, its writer's `tokens` budget must hold one model call of its model,
+or the run is refused, naming the budget and the minimum (exit code 3). For a model in
+Axocoatl's pinned table, one call can use the context the program keeps plus the model's
+output limit, within the model's window: 400,000 tokens for each Codex model above (a
+272,000-token context plus 128,000 output tokens), 1,000,000 for a Claude model with a
+1M-token window (`claude-fable-5-1`, `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`,
+`claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-5-5`,
+`claude-sonnet-5`, `claude-sonnet-4-6`, `claude-haiku-5-5`) and 200,000 for
+`claude-haiku-4-5`, from Anthropic's model overview. A model the table does not list (a
+newer model, or an alias such as Claude Code's `sonnet`) is not checked, and the run
+carries the warning `external_model_not_pinned`, which also says whether its cost will be
+known.
+
 ## What is enforced, and what is not
 
 | | |
@@ -243,7 +314,7 @@ certificate authority, which signs the route's TLS on your computer, is trusted 
 | What it can reach | Enforced: only the route to its model API and the hosts the loadout and your configuration allow. |
 | Its credential | Enforced: added on your computer; the container holds a placeholder. A token the API returns in a response body would reach the container, as on any route. |
 | Its time | Enforced: the activation's wall-clock timeout, and the run's wall clock. |
-| Its spend | Bounded, not per call. The activation reserves what its grant still allows before the program starts: all of its tokens and, for Claude Code, all of its cost. Each request on the route counts against the grant's invocations, and the host stops the program when they run out. Claude Code also gets its own spending stop, `--max-budget-usd`, at what the grant still allows. The program's own usage report settles the reservation; without one, usage is marked incomplete and the reservation stays charged. Codex reports tokens but no cost, so its cost reservation stays charged: each Codex activation reserves an equal share of the cost left, divided by the activations left with its own, so a later activation, such as the revision a review asks for, can still run. The run's Outcome then says its cost is not known (`usage.cost_known: false`): the summary, the JUnit file's `axocoatl.usage` property, the Run outcome panel and the pull request body show "cost unknown (reserved up to $X)", where $X is what the run's grants were charged, never as a price. |
+| Its spend | Bounded, not per call. The activation reserves what its grant still allows before the program starts: all of its tokens and, when its cost will be known, all of its cost. Each request on the route counts against the grant's invocations, and the host stops the program when they run out. Claude Code also gets its own spending stop, `--max-budget-usd`, at what the grant still allows. The program's own usage report settles the reservation; without one, usage is marked incomplete and the reservation stays charged. How the cost is known is in [What a run costs](#what-a-run-costs). |
 | Its tool calls | Recorded, not admitted. The program's own tool calls are evidence in the record; Axocoatl does not approve or refuse them one by one. They run as the writer user inside the container, like a writer's `bash`. |
 
 <Aside type="caution">

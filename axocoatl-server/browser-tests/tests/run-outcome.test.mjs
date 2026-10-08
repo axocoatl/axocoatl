@@ -144,10 +144,19 @@ test('the panel shows a cost the run does not know as what was reserved, never a
     ...outcome, run_id: codexRun, verdict: 'pass', exit_code: 0, attention: [], not_covered: [], warnings: [],
     usage: { input_tokens: 600, output_tokens: 18, cost_microunits: 333333, complete: true, cost_known: false, retries: 0 },
   };
+  // A Codex writer's cost computed from its reported tokens at its model's
+  // list price is shown as a computation.
+  const computedRun = 'run-00000000-0000-4000-8000-0000000000cd';
+  const computed = {
+    ...codex, run_id: computedRun,
+    usage: { input_tokens: 4107, output_tokens: 60, cost_microunits: 17835, complete: true, cost_known: true, cost_computed: true, retries: 0 },
+  };
   await page.route('**/run-outcome-fixture', (route) => route.fulfill({ contentType: 'text/html', body:
-    `<!doctype html><html><head><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-run-outcome run-id="${codexRun}"></ax-run-outcome><ax-run-outcome run-id="${RUN}"></ax-run-outcome><script type="module" src="/ui/run-outcome.js"></script></body></html>` }));
+    `<!doctype html><html><head><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-run-outcome run-id="${codexRun}"></ax-run-outcome><ax-run-outcome run-id="${RUN}"></ax-run-outcome><ax-run-outcome run-id="${computedRun}"></ax-run-outcome><script type="module" src="/ui/run-outcome.js"></script></body></html>` }));
   await page.route(`**/api/runs/${codexRun}`, (route) => route.fulfill({ json: {
     run_id: codexRun, session_id: 'ses-1', loadout: 'fix@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome: codex } }));
+  await page.route(`**/api/runs/${computedRun}`, (route) => route.fulfill({ json: {
+    run_id: computedRun, session_id: 'ses-1', loadout: 'fix@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome: computed } }));
   await page.route(`**/api/runs/${RUN}`, (route) => route.fulfill({ json: {
     run_id: RUN, session_id: 'ses-1', loadout: 'qa@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome } }));
   try {
@@ -159,6 +168,9 @@ test('the panel shows a cost the run does not know as what was reserved, never a
     const known = page.locator('ax-run-outcome').nth(1).locator('p.usage');
     await known.waitFor();
     assert.match(await known.textContent(), /^1200 input \+ 300 output tokens, \$0\.0123, 1 provider retry \(known subtotal/);
+    const priced = page.locator('ax-run-outcome').nth(2).locator('p.usage');
+    await priced.waitFor();
+    assert.equal(await priced.textContent(), '4107 input + 60 output tokens, $0.0178 (includes cost computed from reported tokens at list prices)');
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });

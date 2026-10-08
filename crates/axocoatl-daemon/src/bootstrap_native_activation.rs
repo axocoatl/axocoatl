@@ -167,10 +167,15 @@ impl AxocoatlDaemon {
             )
             .map_err(native_error)?;
         // External definitions run their program; all others stay native.
+        // A program that reports no cost is priced at the configuration's
+        // `pricing` entry for its model before the pinned list price.
         Ok(controller.external_activation_factory(
             native,
             self.counter.clone(),
-            crate::session_dispatch::ExternalSettings::default(),
+            crate::session_dispatch::ExternalSettings {
+                pricing: Arc::new(self.config.pricing.clone()),
+                ..Default::default()
+            },
         ))
     }
 

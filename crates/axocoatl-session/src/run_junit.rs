@@ -1194,8 +1194,9 @@ mod tests {
         );
     }
 
-    /// A Codex writer reports no cost: its run's JUnit says the cost is not
-    /// known and what was reserved, not a price.
+    /// A call whose cost is not known (a Codex writer on a model without a
+    /// price): its run's JUnit says the cost is not known and what was
+    /// reserved, not a price. A cost computed from reported tokens says so.
     #[test]
     fn an_unknown_cost_is_shown_as_reserved() {
         let mut outcome = fixture();
@@ -1205,6 +1206,7 @@ mod tests {
             cost_microunits: 333_333,
             complete: true,
             cost_known: false,
+            cost_computed: false,
             retries: 0,
         };
         let xml = render_junit(&outcome).unwrap();
@@ -1221,6 +1223,15 @@ mod tests {
         assert!(xml.contains(
             "<property name=\"axocoatl.usage\" value=\"600 input + 18 output tokens, $0.0003\"/>"
         ));
+        outcome.usage.cost_computed = true;
+        let xml = render_junit(&outcome).unwrap();
+        assert!(
+            xml.contains(
+                "<property name=\"axocoatl.usage\" value=\"600 input + 18 output tokens, \
+                 $0.0003 (includes cost computed from reported tokens at list prices)\"/>"
+            ),
+            "{xml}"
+        );
     }
 
     /// The audit re-smoke's notes were only on standard error: a passing

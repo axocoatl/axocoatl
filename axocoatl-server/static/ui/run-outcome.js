@@ -79,14 +79,20 @@ const CHECK = {
 };
 
 /**
- * The cost in words: what the run cost, or, when a call's cost is not known
- * (`cost_known: false`, such as a Codex writer, which reports no cost), what
- * the run's grants reserved for it, never shown as a price.
+ * The cost in words: what the run cost, marked when part of it is computed
+ * from reported tokens at list prices (`cost_computed`, a Codex writer's),
+ * or, when a call's cost is not known (`cost_known: false`, such as a Codex
+ * writer on a model without a price), what the run's grants reserved for
+ * it, never shown as a price.
  */
 export function costText(usage = {}) {
   const cost = Number(usage.cost_microunits) || 0;
   const dollars = `$${(cost / 1e6).toFixed(4)}`;
-  if (usage.cost_known !== false) return dollars;
+  if (usage.cost_known !== false) {
+    return usage.cost_computed === true
+      ? `${dollars} (includes cost computed from reported tokens at list prices)`
+      : dollars;
+  }
   return cost > 0 ? `cost unknown (reserved up to ${dollars})` : 'cost unknown';
 }
 

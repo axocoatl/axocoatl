@@ -199,9 +199,12 @@ round's verdict and numbered findings), `adjudications` (`round`, `finding_id`, 
 `repro_error` or `missing`), `not_covered` (`area`, `class`, `detail`), `notes` (what
 the run noticed that is neither a gap nor a warning, in words; absent when there are
 none), `warnings`,
-`usage` (`input_tokens`, `output_tokens`, `cost_microunits`, `complete`, `cost_known`
-and `retries`; `cost_known` is false when a call's cost is not known, such as a Codex
-writer's, and `cost_microunits` then counts what those calls reserved), `network` (event,
+`usage` (`input_tokens`, `output_tokens`, `cost_microunits`, `complete`, `cost_known`,
+`cost_computed` and `retries`; `cost_known` is false when a call's cost is not known, such
+as a Codex writer's on a model without a price, and `cost_microunits` then counts what
+those calls reserved; `cost_computed` is true, and absent otherwise, when part of the cost
+was computed from a program's reported tokens at its model's price, such as a Codex
+writer's), `network` (event,
 connection and route request counts), `keep` and `error`.
 
 A Session that a run created carries `loadout`:

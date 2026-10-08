@@ -258,65 +258,7 @@ impl NativeOpenRouterObservation {
         &self,
         configured: Option<ReasoningEffort>,
     ) -> Result<Option<NativeOpenRouterReasoningRequest>, ProviderError> {
-        let model = &self.model;
-        let Some(contract) = &self.reasoning else {
-            return match configured {
-                None => Ok(None),
-                Some(effort) => Err(invalid(format!(
-                    "{model} is not a reasoning model in OpenRouter's catalog, so \
-                     sampling.reasoning_effort: {effort} cannot be sent; remove it"
-                ))),
-            };
-        };
-        let Some(effort) = configured else {
-            // The model's own default: off, its default effort, or plain on.
-            if !contract.enabled_by_default {
-                return Ok(None);
-            }
-            return match contract.default_effort.as_deref() {
-                Some("none") => Ok(None),
-                Some(name) => {
-                    let effort = ReasoningEffort::parse(name).ok_or_else(|| {
-                        invalid(format!(
-                            "{model}'s default reasoning effort `{name}` is not one Axocoatl \
-                             knows; set sampling.reasoning_effort for this Agent"
-                        ))
-                    })?;
-                    Ok(Some(NativeOpenRouterReasoningRequest::Effort(effort)))
-                }
-                None => Ok(Some(NativeOpenRouterReasoningRequest::Enabled)),
-            };
-        };
-        if effort == ReasoningEffort::None && contract.mandatory {
-            return Err(invalid(format!(
-                "{model} requires reasoning, so sampling.reasoning_effort: none is refused; \
-                 choose an effort it accepts{}",
-                listed(&contract.efforts)
-            )));
-        }
-        let request = match &contract.efforts {
-            NativeOpenRouterEfforts::Any => NativeOpenRouterReasoningRequest::Effort(effort),
-            NativeOpenRouterEfforts::Listed(efforts)
-                if efforts.iter().any(|name| name == effort.as_str()) =>
-            {
-                NativeOpenRouterReasoningRequest::Effort(effort)
-            }
-            // Off is still a choice where no `none` effort is listed.
-            _ if effort == ReasoningEffort::None => NativeOpenRouterReasoningRequest::Disabled,
-            NativeOpenRouterEfforts::Unavailable => {
-                return Err(invalid(format!(
-                    "{model} does not let a request choose its reasoning effort; remove \
-                     sampling.reasoning_effort: {effort}"
-                )))
-            }
-            NativeOpenRouterEfforts::Listed(_) => {
-                return Err(invalid(format!(
-                    "{model} does not accept reasoning effort {effort}{}",
-                    listed(&contract.efforts)
-                )))
-            }
-        };
-        Ok(Some(request))
+        reasoning_request_for(&self.model, self.reasoning.as_ref(), configured)
     }
 
     /// Whether some Agent setting resolves to `request` for this model.
@@ -567,6 +509,74 @@ fn zero(value: &Value) -> bool {
     price_text(value).and_then(|text| money::decimal_units(&text).ok()) == Some(0)
 }
 
+/// The reasoning setting a native call to `model` sends, from the model's
+/// catalog `contract`: the Agent's `configured` effort, or the model's own
+/// default ([`NativeOpenRouterObservation::reasoning_request`]).
+fn reasoning_request_for(
+    model: &str,
+    contract: Option<&NativeOpenRouterReasoning>,
+    configured: Option<ReasoningEffort>,
+) -> Result<Option<NativeOpenRouterReasoningRequest>, ProviderError> {
+    let Some(contract) = contract else {
+        return match configured {
+            None => Ok(None),
+            Some(effort) => Err(invalid(format!(
+                "{model} is not a reasoning model in OpenRouter's catalog, so \
+                 sampling.reasoning_effort: {effort} cannot be sent; remove it"
+            ))),
+        };
+    };
+    let Some(effort) = configured else {
+        // The model's own default: off, its default effort, or plain on.
+        if !contract.enabled_by_default {
+            return Ok(None);
+        }
+        return match contract.default_effort.as_deref() {
+            Some("none") => Ok(None),
+            Some(name) => {
+                let effort = ReasoningEffort::parse(name).ok_or_else(|| {
+                    invalid(format!(
+                        "{model}'s default reasoning effort `{name}` is not one Axocoatl \
+                         knows; set sampling.reasoning_effort for this Agent"
+                    ))
+                })?;
+                Ok(Some(NativeOpenRouterReasoningRequest::Effort(effort)))
+            }
+            None => Ok(Some(NativeOpenRouterReasoningRequest::Enabled)),
+        };
+    };
+    if effort == ReasoningEffort::None && contract.mandatory {
+        return Err(invalid(format!(
+            "{model} requires reasoning, so sampling.reasoning_effort: none is refused; \
+             choose an effort it accepts{}",
+            listed(&contract.efforts)
+        )));
+    }
+    let request = match &contract.efforts {
+        NativeOpenRouterEfforts::Any => NativeOpenRouterReasoningRequest::Effort(effort),
+        NativeOpenRouterEfforts::Listed(efforts)
+            if efforts.iter().any(|name| name == effort.as_str()) =>
+        {
+            NativeOpenRouterReasoningRequest::Effort(effort)
+        }
+        // Off is still a choice where no `none` effort is listed.
+        _ if effort == ReasoningEffort::None => NativeOpenRouterReasoningRequest::Disabled,
+        NativeOpenRouterEfforts::Unavailable => {
+            return Err(invalid(format!(
+                "{model} does not let a request choose its reasoning effort; remove \
+                 sampling.reasoning_effort: {effort}"
+            )))
+        }
+        NativeOpenRouterEfforts::Listed(_) => {
+            return Err(invalid(format!(
+                "{model} does not accept reasoning effort {effort}{}",
+                listed(&contract.efforts)
+            )))
+        }
+    };
+    Ok(Some(request))
+}
+
 /// The catalog's reasoning object. Absent or null means no reasoning.
 fn reasoning_contract(value: Option<&Value>) -> Result<Option<NativeOpenRouterReasoning>, String> {
     let Some(value) = value.filter(|value| !value.is_null()) else {
@@ -693,6 +703,65 @@ fn endpoint_ceilings(pricing: &serde_json::Map<String, Value>) -> Result<Ceiling
         return Err("missing prompt or completion prices".into());
     }
     Ok(ceilings)
+}
+
+/// The smallest native call to one model, as OpenRouter's public model
+/// catalog (`GET /models`, no key, no charge) shows it before a Session
+/// exists: what Team & budget later checks against the endpoint it selects
+/// ([`NativeOpenRouterObservation::minimum_call_bounds`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CatalogCallFloor {
+    /// The model's context window, `context_length` in the catalog.
+    pub context_tokens: usize,
+    /// The prompt the smallest call reserves: the template allowance, within
+    /// the context. A call reserves its own request, not the context window.
+    pub prompt_tokens: usize,
+    /// The reasoning allowance each call adds to its output limit.
+    pub reasoning_tokens: usize,
+    /// The reasoning setting each call sends.
+    pub reasoning: Option<NativeOpenRouterReasoningRequest>,
+}
+
+impl CatalogCallFloor {
+    /// Tokens of the smallest call with `output` output tokens.
+    pub fn tokens(&self, output: usize) -> usize {
+        self.prompt_tokens
+            .saturating_add(output)
+            .saturating_add(self.reasoning_tokens)
+    }
+}
+
+/// [`CatalogCallFloor`] of `model` in `catalog` (the body of `GET /models`)
+/// for an Agent whose output limit is `output` and whose configured effort
+/// is `effort`. `None` when the catalog cannot say: the model is not listed
+/// exactly once, has no context, or its reasoning contract refuses `effort`.
+/// The model's own observation, when its Session applies the Team, then
+/// refuses it by name.
+pub fn catalog_call_floor(
+    catalog: &Value,
+    model: &str,
+    output: usize,
+    effort: Option<ReasoningEffort>,
+) -> Option<CatalogCallFloor> {
+    let rows = catalog.get("data")?.as_array()?;
+    let mut selected = rows
+        .iter()
+        .filter(|row| row.get("id").and_then(Value::as_str) == Some(model));
+    let row = selected.next()?;
+    if selected.next().is_some() {
+        return None;
+    }
+    let context = integer(&row["context_length"])
+        .or_else(|| integer(&row["top_provider"]["context_length"]))
+        .filter(|context| *context > 0)?;
+    let contract = reasoning_contract(row.get("reasoning")).ok()?;
+    let reasoning = reasoning_request_for(model, contract.as_ref(), effort).ok()?;
+    Some(CatalogCallFloor {
+        context_tokens: context,
+        prompt_tokens: PROMPT_TEMPLATE_ALLOWANCE.min(context),
+        reasoning_tokens: reasoning.map_or(0, |request| request.allowance(output)),
+        reasoning,
+    })
 }
 
 pub async fn observe_native_openrouter_profiles(

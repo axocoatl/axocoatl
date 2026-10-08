@@ -117,6 +117,46 @@ pub enum AgentRuntime {
     Codex,
 }
 
+impl AgentRuntime {
+    /// The runtime's id: `native`, `claude-code` or `codex`.
+    pub fn id(self) -> &'static str {
+        match self {
+            AgentRuntime::Native => "native",
+            AgentRuntime::ClaudeCode => "claude-code",
+            AgentRuntime::Codex => "codex",
+        }
+    }
+
+    /// The provider whose model API an external program calls, through the
+    /// one route Axocoatl adds for it: `anthropic` for Claude Code
+    /// (`api.anthropic.com`), `openai` for Codex (`api.openai.com`). An
+    /// external writer's model names this provider and the program's own
+    /// model name (`anthropic:claude-haiku-4-5`, `openai:gpt-5.5`), and the
+    /// run records that identity. `None` for a native Agent, whose provider
+    /// is its own.
+    pub fn model_provider(self) -> Option<&'static str> {
+        match self {
+            AgentRuntime::Native => None,
+            AgentRuntime::ClaudeCode => Some("anthropic"),
+            AgentRuntime::Codex => Some("openai"),
+        }
+    }
+
+    /// Why `model` cannot be this external program's model: it names
+    /// another provider than the one whose API the program calls.
+    pub fn model_refusal(self, model: &ModelSpec) -> Option<String> {
+        let provider = self.model_provider()?;
+        (model.provider != provider).then(|| {
+            format!(
+                "a {} writer calls {provider}'s model API, so its model is {provider}:<the \
+                 program's model name>; {model} names the provider {}",
+                self.id(),
+                model.provider
+            )
+        })
+    }
+}
+
 /// An exact provider and model.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,6 +179,12 @@ impl ModelSpec {
             provider: provider.to_string(),
             model: model.to_string(),
         })
+    }
+
+    /// Whether `self` and `other` are the same model, through a vendor's own
+    /// API or OpenRouter ([`axocoatl_core::same_model`]).
+    pub fn same_model(&self, other: &ModelSpec) -> bool {
+        axocoatl_core::same_model(&self.provider, &self.model, &other.provider, &other.model)
     }
 }
 
@@ -611,8 +657,9 @@ fn check_limits(field: &str, limits: &LoadoutLimits) -> Result<(), LoadoutError>
     Ok(())
 }
 
-/// One native model caller of a loadout (an Agent or the reviewer), its
-/// tokens budget and its output bound per call ([`call_budgets`]).
+/// One model caller of a loadout (an Agent or the reviewer), its tokens
+/// budget and its output bound per call ([`call_budgets`],
+/// [`external_call_budgets`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallBudget {
     /// The Agent's id; `None` for the reviewer.
@@ -624,72 +671,123 @@ pub struct CallBudget {
     pub tokens_field: String,
     pub tokens: u64,
     /// The field that sets its output bound, such as
-    /// `agents.writer.max_output_tokens`.
+    /// `agents.writer.max_output_tokens`. An external program's output per
+    /// call is its model's own, which this field does not set.
     pub output_field: String,
     pub max_output_tokens: u64,
     pub model: ParamOr<ModelSpec>,
+    /// Where the caller runs: Axocoatl's own tool loop, or an external
+    /// program.
+    pub runtime: AgentRuntime,
+    /// The reasoning effort the caller sends (native OpenRouter), if set.
+    pub reasoning_effort: Option<axocoatl_core::ReasoningEffort>,
+}
+
+/// What one model call of a caller needs at least, as admission learned it
+/// from the model's provider: the Ollama model's loaded context, the native
+/// OpenRouter call's smallest reservation from OpenRouter's catalog, or the
+/// most one call of an external program's pinned model can use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallFloor {
+    /// The fewest tokens one call needs.
+    pub tokens: u64,
+    /// Those tokens in words, such as `the model's 32768-token context plus
+    /// 8192 output tokens (agents.writer.max_output_tokens)`.
+    pub words: String,
+    /// The field that lowers the floor besides raising the budget, if any.
+    pub lower: Option<String>,
 }
 
 impl CallBudget {
-    /// The fewest tokens one call needs: the model's `context` (the model's
-    /// own when known, else [`MIN_CALL_CONTEXT_TOKENS`]) plus the output
-    /// bound.
+    /// The floor of a native call whose model's `context` is known (the
+    /// model's own when known, else [`MIN_CALL_CONTEXT_TOKENS`]): that
+    /// context plus the output bound.
+    pub fn context_floor(&self, context: Option<u64>) -> CallFloor {
+        let words = match context {
+            Some(context) => format!("the model's {context}-token context"),
+            None => format!("a context of at least {MIN_CALL_CONTEXT_TOKENS} tokens"),
+        };
+        CallFloor {
+            tokens: context
+                .unwrap_or(MIN_CALL_CONTEXT_TOKENS)
+                .saturating_add(self.max_output_tokens),
+            words: format!(
+                "{words} plus {} output tokens ({})",
+                self.max_output_tokens, self.output_field
+            ),
+            lower: Some(self.output_field.clone()),
+        }
+    }
+
+    /// The fewest tokens one call needs: the model's `context` (the
+    /// model's own when known, else [`MIN_CALL_CONTEXT_TOKENS`]) plus the
+    /// output bound.
     pub fn minimum(&self, context: Option<u64>) -> u64 {
-        context
-            .unwrap_or(MIN_CALL_CONTEXT_TOKENS)
-            .saturating_add(self.max_output_tokens)
+        self.context_floor(context).tokens
     }
 
     /// Why one call cannot fit, as the error of [`Self::tokens_field`]:
     /// the budget and the minimum in words; `None` when it fits. `model`
     /// names the resolved model when known.
     pub fn refusal(&self, context: Option<u64>, model: Option<&str>) -> Option<LoadoutError> {
-        let minimum = self.minimum(context);
+        self.refusal_with(&self.context_floor(context), model)
+    }
+
+    /// [`Self::refusal`] against a `floor` the model's provider gave.
+    pub fn refusal_with(&self, floor: &CallFloor, model: Option<&str>) -> Option<LoadoutError> {
+        let minimum = floor.tokens;
         if self.tokens >= minimum {
             return None;
         }
         let model = model.map(|model| format!(" ({model})")).unwrap_or_default();
-        let context = match context {
-            Some(context) => format!("the model's {context}-token context"),
-            None => format!("a context of at least {MIN_CALL_CONTEXT_TOKENS} tokens"),
-        };
         Some(invalid(
             self.tokens_field.clone(),
             format!(
-                "{} tokens is less than one model call of {}{model} needs: {context} plus {} \
-                 output tokens ({}), at least {minimum} tokens; raise it to at least {minimum} \
-                 or lower {}",
-                self.tokens, self.who, self.max_output_tokens, self.output_field, self.output_field
+                "{} tokens is less than one model call of {}{model} needs: {}, at least \
+                 {minimum} tokens; raise it to at least {minimum}{}",
+                self.tokens,
+                self.who,
+                floor.words,
+                floor
+                    .lower
+                    .as_ref()
+                    .map(|field| format!(" or lower {field}"))
+                    .unwrap_or_default()
             ),
         ))
+    }
+}
+
+fn agent_budget(file: &LoadoutFile, agent: &LoadoutAgent) -> CallBudget {
+    let (tokens_field, limits) = match &agent.budget {
+        Some(limits) => (format!("agents.{}.budget.tokens", agent.id), limits),
+        None => ("budgets.agent.tokens".to_string(), &file.budgets.agent),
+    };
+    CallBudget {
+        agent: Some(agent.id.clone()),
+        who: format!("Agent {}", agent.id),
+        tokens_field,
+        tokens: limits.tokens,
+        output_field: format!("agents.{}.max_output_tokens", agent.id),
+        max_output_tokens: agent.max_output_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS) as u64,
+        model: agent.model.clone(),
+        runtime: agent.runtime,
+        reasoning_effort: agent.reasoning_effort,
     }
 }
 
 /// Every native model caller of `file`: each Agent that runs in Axocoatl's
 /// own tool loop, with its own `budget` or `budgets.agent`, and the
 /// reviewer with `budgets.reviewer`. External programs (`claude-code`,
-/// `codex`) are left out: their spend is reserved up front, not per call.
+/// `codex`) are [`external_call_budgets`]: their spend is reserved up
+/// front, not per call, and their model's context is known only once the
+/// model is resolved.
 pub fn call_budgets(file: &LoadoutFile) -> Vec<CallBudget> {
     let mut budgets: Vec<CallBudget> = file
         .agents
         .iter()
         .filter(|agent| agent.runtime == AgentRuntime::Native)
-        .map(|agent| {
-            let (tokens_field, limits) = match &agent.budget {
-                Some(limits) => (format!("agents.{}.budget.tokens", agent.id), limits),
-                None => ("budgets.agent.tokens".to_string(), &file.budgets.agent),
-            };
-            CallBudget {
-                agent: Some(agent.id.clone()),
-                who: format!("Agent {}", agent.id),
-                tokens_field,
-                tokens: limits.tokens,
-                output_field: format!("agents.{}.max_output_tokens", agent.id),
-                max_output_tokens: agent.max_output_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
-                    as u64,
-                model: agent.model.clone(),
-            }
-        })
+        .map(|agent| agent_budget(file, agent))
         .collect();
     if let (Some(review), Some(limits)) = (&file.review, &file.budgets.reviewer) {
         budgets.push(CallBudget {
@@ -702,9 +800,22 @@ pub fn call_budgets(file: &LoadoutFile) -> Vec<CallBudget> {
                 .max_output_tokens
                 .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS) as u64,
             model: review.model.clone(),
+            runtime: AgentRuntime::Native,
+            reasoning_effort: None,
         });
     }
     budgets
+}
+
+/// Every external program of `file` (a `claude-code` or `codex` writer)
+/// with its tokens budget. Admission checks it against the most one call
+/// of the program's pinned model can use.
+pub fn external_call_budgets(file: &LoadoutFile) -> Vec<CallBudget> {
+    file.agents
+        .iter()
+        .filter(|agent| agent.runtime != AgentRuntime::Native)
+        .map(|agent| agent_budget(file, agent))
+        .collect()
 }
 
 /// Validate a parsed loadout. Returns warnings; errors name the field.
@@ -779,6 +890,11 @@ pub fn validate_loadout(file: &LoadoutFile) -> Result<Vec<LoadoutWarning>, Loado
                 format!("{field}.runtime"),
                 "an external program (claude-code, codex) runs only as the writer",
             ));
+        }
+        if let ParamOr::Value(model) = &agent.model {
+            if let Some(reason) = agent.runtime.model_refusal(model) {
+                return Err(invalid(format!("{field}.model"), reason));
+            }
         }
         if agent.runtime == AgentRuntime::Native && agent.tools.is_empty() {
             return Err(invalid(
@@ -904,7 +1020,14 @@ pub fn validate_loadout(file: &LoadoutFile) -> Result<Vec<LoadoutWarning>, Loado
             .filter(|agent| agent.role == LoadoutRole::Writer)
             .map(|agent| &agent.model)
             .collect();
-        if writer_models.iter().any(|model| **model == review.model) {
+        // The same parameter, or literal models that are the same model
+        // through any provider (an external writer's `anthropic:` or
+        // `openai:` model on OpenRouter, say).
+        let same = |writer: &ParamOr<ModelSpec>| match (writer, &review.model) {
+            (ParamOr::Value(writer), ParamOr::Value(reviewer)) => writer.same_model(reviewer),
+            (writer, reviewer) => writer == reviewer,
+        };
+        if writer_models.iter().any(|model| same(model)) {
             warnings.push(same_model_warning("review.model"));
         }
     }
@@ -1358,7 +1481,17 @@ pub fn resolve_loadout(
     }
     let mut agent_models = BTreeMap::new();
     for agent in &file.agents {
-        agent_models.insert(agent.id.clone(), resolve_model(file, values, &agent.model)?);
+        let model = resolve_model(file, values, &agent.model)?;
+        if let Some(reason) = agent.runtime.model_refusal(&model) {
+            return Err(match &agent.model {
+                ParamOr::Param { param } => LoadoutError::Param {
+                    param: param.clone(),
+                    reason,
+                },
+                ParamOr::Value(_) => invalid(format!("agents.{}.model", agent.id), reason),
+            });
+        }
+        agent_models.insert(agent.id.clone(), model);
     }
     let reviewer_model = match &file.review {
         Some(review) => Some(resolve_model(file, values, &review.model)?),
@@ -1370,7 +1503,11 @@ pub fn resolve_loadout(
             .agents
             .iter()
             .filter(|agent| agent.role == LoadoutRole::Writer)
-            .any(|agent| agent_models.get(&agent.id) == Some(reviewer));
+            .any(|agent| {
+                agent_models
+                    .get(&agent.id)
+                    .is_some_and(|writer| writer.same_model(reviewer))
+            });
         if same && !warnings.iter().any(|w| w.code == "same_model_reviewer") {
             warnings.push(same_model_warning("review.model"));
         }
@@ -1675,6 +1812,104 @@ mod tests {
         let mut file = builtin("audit").file.clone();
         file.agents[1].runtime = AgentRuntime::Codex;
         assert!(validate_loadout(&file).is_err());
+    }
+
+    /// An external writer's model is the model its program calls through
+    /// the route Axocoatl adds: `anthropic:` for Claude Code, `openai:` for
+    /// Codex. Any other provider is refused, literal or as a parameter, so
+    /// the identity a run records is the one that ran.
+    #[test]
+    fn an_external_writer_names_the_provider_its_program_calls() {
+        let fix = builtin("fix");
+        let mut file = fix.file.clone();
+        file.agents[0].runtime = AgentRuntime::Codex;
+        file.agents[0].model =
+            ParamOr::Value(ModelSpec::parse("openrouter:openai/gpt-5.5").unwrap());
+        assert_eq!(
+            validate_loadout(&file).unwrap_err().to_string(),
+            "loadout field agents.writer.model: a codex writer calls openai's model API, so its \
+             model is openai:<the program's model name>; openrouter:openai/gpt-5.5 names the \
+             provider openrouter"
+        );
+        file.agents[0].model = ParamOr::Value(ModelSpec::parse("openai:gpt-5.5").unwrap());
+        assert!(validate_loadout(&file).is_ok());
+
+        // As a parameter, at resolution.
+        let mut file = fix.file.clone();
+        file.agents[0].runtime = AgentRuntime::ClaudeCode;
+        let loadout = Loadout {
+            file,
+            ..fix.clone()
+        };
+        let mut values = ParamValues::new();
+        values.insert("writer_model".into(), "openai:gpt-5.5".into());
+        values.insert("reviewer_model".into(), "ollama:gpt-oss:120b".into());
+        assert_eq!(
+            resolve_loadout(&loadout, &values, "fix it", "/repo")
+                .unwrap_err()
+                .to_string(),
+            "loadout parameter writer_model: a claude-code writer calls anthropic's model API, \
+             so its model is anthropic:<the program's model name>; openai:gpt-5.5 names the \
+             provider openai"
+        );
+        values.insert("writer_model".into(), "anthropic:claude-haiku-4-5".into());
+        let resolved = resolve_loadout(&loadout, &values, "fix it", "/repo").unwrap();
+        assert!(resolved
+            .warnings
+            .iter()
+            .all(|w| w.code != "same_model_reviewer"));
+
+        // A reviewer on OpenRouter running the external writer's model is the
+        // same model: the warning is given at resolution and in validation.
+        values.insert(
+            "reviewer_model".into(),
+            "openrouter:anthropic/claude-haiku-4.5".into(),
+        );
+        let resolved = resolve_loadout(&loadout, &values, "fix it", "/repo").unwrap();
+        assert!(resolved
+            .warnings
+            .iter()
+            .any(|w| w.code == "same_model_reviewer"));
+        let mut file = loadout.file.clone();
+        file.agents[0].model =
+            ParamOr::Value(ModelSpec::parse("anthropic:claude-haiku-4-5").unwrap());
+        file.review.as_mut().unwrap().model =
+            ParamOr::Value(ModelSpec::parse("openrouter:anthropic/claude-haiku-4.5").unwrap());
+        assert!(validate_loadout(&file)
+            .unwrap()
+            .iter()
+            .any(|w| w.code == "same_model_reviewer"));
+
+        // External writers have their own budgets, checked at admission.
+        assert!(call_budgets(&file)
+            .iter()
+            .all(|budget| budget.runtime == AgentRuntime::Native));
+        let external = external_call_budgets(&file);
+        assert_eq!(external.len(), 1);
+        assert_eq!(external[0].runtime, AgentRuntime::ClaudeCode);
+        assert_eq!(external[0].tokens_field, "budgets.agent.tokens");
+        let floor = CallFloor {
+            tokens: 1_000_000,
+            words: "the model's whole 1000000-token context window".into(),
+            lower: None,
+        };
+        let tight = CallBudget {
+            tokens: 400_000,
+            ..external[0].clone()
+        };
+        assert_eq!(
+            tight
+                .refusal_with(&floor, Some("anthropic:claude-sonnet-5-5"))
+                .unwrap()
+                .to_string(),
+            "loadout field budgets.agent.tokens: 400000 tokens is less than one model call of \
+             Agent writer (anthropic:claude-sonnet-5-5) needs: the model's whole \
+             1000000-token context window, at least 1000000 tokens; raise it to at least 1000000"
+        );
+        assert_eq!(
+            AgentRuntime::Native.model_refusal(&ModelSpec::parse("x:y").unwrap()),
+            None
+        );
     }
 
     #[test]

@@ -109,22 +109,38 @@ pub struct RunWarning {
 /// Warning code: the reviewer runs the writer's model.
 pub const SAME_MODEL_REVIEWER: &str = "same_model_reviewer";
 
-/// The same-model warning when `reviewer` equals any of `writers`.
+/// The same-model warning when `reviewer` runs the model of any of
+/// `writers`, through the same provider or another one
+/// ([`axocoatl_core::same_model`]): an external writer's
+/// `anthropic:claude-haiku-4-5` is the reviewer's
+/// `openrouter:anthropic/claude-haiku-4.5`.
 pub fn same_model_warning(
     writers: &[ModelIdentity],
     reviewer: &ModelIdentity,
 ) -> Option<RunWarning> {
-    writers
-        .iter()
-        .any(|writer| writer.provider == reviewer.provider && writer.model == reviewer.model)
-        .then(|| RunWarning {
-            code: SAME_MODEL_REVIEWER.into(),
-            message: format!(
-                "The reviewer runs the writer's model ({}:{}). A same-model second look \
-                 measured no gain; choose a different reviewer model.",
-                reviewer.provider, reviewer.model
-            ),
-        })
+    let writer = writers.iter().find(|writer| {
+        axocoatl_core::same_model(
+            &writer.provider,
+            &writer.model,
+            &reviewer.provider,
+            &reviewer.model,
+        )
+    })?;
+    let named = if writer.provider == reviewer.provider && writer.model == reviewer.model {
+        format!("({}:{})", reviewer.provider, reviewer.model)
+    } else {
+        format!(
+            "({}:{}, which the reviewer runs as {}:{})",
+            writer.provider, writer.model, reviewer.provider, reviewer.model
+        )
+    };
+    Some(RunWarning {
+        code: SAME_MODEL_REVIEWER.into(),
+        message: format!(
+            "The reviewer runs the writer's model {named}. A same-model second look measured \
+             no gain; choose a different reviewer model."
+        ),
+    })
 }
 
 /// State of one required check on the final candidate.
@@ -448,6 +464,13 @@ pub struct RunUsage {
     /// Records written before this field read as known.
     #[serde(default = "cost_known_default")]
     pub cost_known: bool,
+    /// True when part of the cost is Axocoatl's computation, not a
+    /// provider's report: a program that reports tokens but no cost (Codex),
+    /// whose reported tokens Axocoatl priced at the pinned list prices of its
+    /// model (`external_agent::models`) or at the configuration's `pricing`.
+    /// Absent (false) in records written before it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cost_computed: bool,
     /// Provider calls retried under the transient-error policy.
     #[serde(default)]
     pub retries: u32,
@@ -456,6 +479,10 @@ pub struct RunUsage {
 fn cost_known_default() -> bool {
     true
 }
+
+/// How every rendering marks a cost that is partly Axocoatl's computation
+/// from reported tokens ([`RunUsage::cost_computed`]).
+pub const COMPUTED_COST_NOTE: &str = "includes cost computed from reported tokens at list prices";
 
 impl Default for RunUsage {
     /// Nothing measured and nothing charged: tokens are not known to be
@@ -467,18 +494,24 @@ impl Default for RunUsage {
             cost_microunits: 0,
             complete: false,
             cost_known: true,
+            cost_computed: false,
             retries: 0,
         }
     }
 }
 
 impl RunUsage {
-    /// The cost in words: `$0.0123`, or, when a call's cost is not known,
-    /// `cost unknown (reserved up to $0.3333)`, what the run's grants were
-    /// charged for those calls' reservations and every known cost.
+    /// The cost in words: `$0.0123`; `$0.0123 (includes cost computed from
+    /// reported tokens at list prices)` when part of it is Axocoatl's
+    /// computation ([`Self::cost_computed`]); or, when a call's cost is not
+    /// known, `cost unknown (reserved up to $0.3333)`, what the run's grants
+    /// were charged for those calls' reservations and every known cost.
     pub fn cost_text(&self) -> String {
         let dollars = format!("${:.4}", self.cost_microunits as f64 / 1_000_000.0);
         match (self.cost_known, self.cost_microunits) {
+            (true, _) if self.cost_computed => {
+                format!("{dollars} ({COMPUTED_COST_NOTE})")
+            }
             (true, _) => dollars,
             (false, 0) => "cost unknown".into(),
             (false, _) => format!("cost unknown (reserved up to {dollars})"),
@@ -1081,6 +1114,7 @@ mod tests {
             cost_microunits: 333_333,
             complete: true,
             cost_known: false,
+            cost_computed: false,
             retries: 0,
         };
         assert_eq!(
@@ -1112,6 +1146,34 @@ mod tests {
         })
         .unwrap();
         assert_eq!(value["cost_known"], false);
+        assert!(value.get("cost_computed").is_none());
+        assert!(!old.cost_computed);
+    }
+
+    /// A Codex writer's cost, computed from the tokens it reported at its
+    /// model's list prices, is shown as a computation, never as a charge a
+    /// provider reported; it still yields to a cost that is not known.
+    #[test]
+    fn a_computed_cost_says_so() {
+        let mut usage = RunUsage {
+            input_tokens: 4107,
+            output_tokens: 60,
+            cost_microunits: 15_985,
+            complete: true,
+            cost_known: true,
+            cost_computed: true,
+            retries: 0,
+        };
+        assert_eq!(
+            usage.text(),
+            "4107 input + 60 output tokens, $0.0160 (includes cost computed from reported \
+             tokens at list prices)"
+        );
+        let value = serde_json::to_value(&usage).unwrap();
+        assert_eq!(value["cost_computed"], true);
+        assert_eq!(serde_json::from_value::<RunUsage>(value).unwrap(), usage);
+        usage.cost_known = false;
+        assert_eq!(usage.cost_text(), "cost unknown (reserved up to $0.0160)");
     }
 
     #[test]
@@ -1128,6 +1190,47 @@ mod tests {
         assert!(same_model_warning(std::slice::from_ref(&writer), &other).is_none());
         let warning = same_model_warning(std::slice::from_ref(&writer), &writer).unwrap();
         assert_eq!(warning.code, SAME_MODEL_REVIEWER);
+        assert_eq!(
+            warning.message,
+            "The reviewer runs the writer's model (openrouter:qwen/qwen3-coder). A same-model \
+             second look measured no gain; choose a different reviewer model."
+        );
+        // An external writer's model reviewed on OpenRouter is the same
+        // model, whichever program runs it.
+        for (provider, model, runtime, reviewed) in [
+            ("openai", "gpt-5.5", "codex", "openai/gpt-5.5"),
+            (
+                "anthropic",
+                "claude-haiku-4-5",
+                "claude-code",
+                "anthropic/claude-haiku-4.5",
+            ),
+        ] {
+            let writer = ModelIdentity {
+                provider: provider.into(),
+                model: model.into(),
+                runtime: runtime.into(),
+            };
+            let reviewer = ModelIdentity {
+                provider: "openrouter".into(),
+                model: reviewed.into(),
+                runtime: "native".into(),
+            };
+            let warning = same_model_warning(std::slice::from_ref(&writer), &reviewer).unwrap();
+            assert_eq!(
+                warning.message,
+                format!(
+                    "The reviewer runs the writer's model ({provider}:{model}, which the \
+                     reviewer runs as openrouter:{reviewed}). A same-model second look \
+                     measured no gain; choose a different reviewer model."
+                )
+            );
+            let other = ModelIdentity {
+                model: "qwen/qwen3-coder".into(),
+                ..reviewer
+            };
+            assert!(same_model_warning(std::slice::from_ref(&writer), &other).is_none());
+        }
     }
 
     #[test]

@@ -379,15 +379,26 @@ async fn an_external_run_needs_a_spending_allowance() {
     );
 }
 
-/// A program run reserves the tokens its grant still allows and, for Claude
-/// Code, which reports its cost, all of the cost too. Codex reports no cost,
-/// so its reservation stays charged: it reserves an equal share of the cost
+/// A program run reserves the tokens its grant still allows and, when its
+/// cost will be known, all of the cost too: Claude Code reports its cost,
+/// and a Codex model with a price (pinned, or the configuration's
+/// `pricing`) has its reported tokens priced. A Codex model without one
+/// keeps its reservation charged, so it reserves an equal share of the cost
 /// per activation left, leaving the grant's later activations theirs.
 #[tokio::test]
-async fn a_program_without_a_cost_report_reserves_a_share_per_activation_left() {
+async fn a_program_whose_cost_will_not_be_known_reserves_a_share_per_activation_left() {
+    let configured = Arc::new(std::collections::HashMap::from([(
+        "gpt-7-preview".to_string(),
+        axocoatl_config::ModelPriceYaml {
+            input_per_mtok: 1.0,
+            output_per_mtok: 8.0,
+        },
+    )]));
     for (runtime, model, cost) in [
         (AgentRuntime::ClaudeCode, "claude-sonnet-4-5", 900_000),
-        (AgentRuntime::Codex, "gpt-5.5", 300_000),
+        (AgentRuntime::Codex, "gpt-5.5", 900_000),
+        (AgentRuntime::Codex, "gpt-7-preview", 900_000),
+        (AgentRuntime::Codex, "gpt-7", 300_000),
     ] {
         let mut f = fixture().await;
         let config = external_agent::external_agent_config(
@@ -413,7 +424,10 @@ async fn a_program_without_a_cost_report_reserves_a_share_per_activation_left() 
         let factory = r.controller.external_activation_factory(
             Arc::new(NativeStub(AtomicUsize::new(0))),
             Arc::new(Counter),
-            ExternalSettings::default(),
+            ExternalSettings {
+                pricing: configured.clone(),
+                ..ExternalSettings::default()
+            },
         );
         let resources = factory.resources(&input_of(&r)).await.unwrap();
         let provider = resources.provider.clone();
@@ -427,7 +441,7 @@ async fn a_program_without_a_cost_report_reserves_a_share_per_activation_left() 
         assert_eq!(
             (bounds.token_limit, bounds.cost_microunits),
             (100_000, cost),
-            "{runtime:?}"
+            "{runtime:?} {model}"
         );
     }
 }
@@ -784,6 +798,7 @@ async fn actual_external_claude_code_runs_through_the_route_as_the_hardened_writ
             ExternalSettings {
                 source: Some(Arc::new(FakeRecordSource(record.clone()))),
                 meter_interval: Duration::from_millis(100),
+                pricing: Default::default(),
                 adjust_argv: None,
             },
         );
@@ -1066,6 +1081,7 @@ async fn actual_external_program_is_stopped_when_its_requests_pass_the_grant() {
         ExternalSettings {
             source: Some(Arc::new(FakeRecordSource(record.clone()))),
             meter_interval: Duration::from_millis(50),
+            pricing: Default::default(),
             adjust_argv: None,
         },
     );
@@ -1345,6 +1361,7 @@ async fn actual_pinned_claude_code_and_codex_run_through_the_route() {
             ExternalSettings {
                 source: Some(Arc::new(FakeRecordSource(record.clone()))),
                 meter_interval: Duration::from_millis(200),
+                pricing: Default::default(),
                 adjust_argv: Some(adjust),
             },
         );
@@ -1428,6 +1445,26 @@ async fn actual_pinned_claude_code_and_codex_run_through_the_route() {
                 && measured.tokens.usage.output_tokens >= usage.1,
             "{recipe}: {measured:?}"
         );
+        // Claude Code reports its own cost. Codex reports tokens only: the
+        // call settles to them at gpt-5.5's pinned list price (the fake API
+        // reports no cached input), and the work log says so.
+        assert!(measured.cost_known, "{recipe}: {measured:?}");
+        if runtime == AgentRuntime::Codex {
+            let (price, _) = external_agent::models::computed_price(runtime, model, None).unwrap();
+            let expected = price.cost_microunits(&external_agent::models::ExternalUsage {
+                input_tokens: measured.tokens.usage.input_tokens as u64,
+                output_tokens: measured.tokens.usage.output_tokens as u64,
+                ..Default::default()
+            });
+            assert_eq!(measured.cost_microunits, expected, "{recipe}: {log}");
+            assert!(
+                log.contains("computed from the reported tokens")
+                    && log.contains("gpt-5.5's list price as Axocoatl pinned it on"),
+                "{log}"
+            );
+        } else {
+            assert!(log.contains("as the program reported"), "{log}");
+        }
         assert_eq!(egress.live_bindings(), 0);
     }
 }
@@ -1499,6 +1536,7 @@ async fn actual_external_program_refuses_a_session_without_workload_users() {
         ExternalSettings {
             source: Some(Arc::new(FakeRecordSource(record.clone()))),
             meter_interval: Duration::from_millis(100),
+            pricing: Default::default(),
             adjust_argv: None,
         },
     );

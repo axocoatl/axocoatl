@@ -131,6 +131,11 @@ fn claude_code_stream_json_parses_into_items_answer_and_usage() {
     assert!(result.usage_complete);
     // input 2003 + cache creation 400 + cache read 600; cost $0.008574.
     assert_eq!(result.usage(), Some((3003, 59, Some(8574))));
+    let (usage, _) = result.usage_report().unwrap();
+    assert_eq!(
+        (usage.cached_input_tokens, usage.cache_write_tokens),
+        (600, 400)
+    );
     assert_eq!(
         result.items[..4],
         [
@@ -186,6 +191,19 @@ fn codex_exec_jsonl_parses_into_items_answer_and_usage() {
     );
     assert!(result.usage_complete);
     assert_eq!(result.usage(), Some((4107, 60, None)));
+    // Its cache parts are kept for pricing: 1000 of the input was cached.
+    assert_eq!(
+        result.usage_report(),
+        Some((
+            models::ExternalUsage {
+                input_tokens: 4107,
+                cached_input_tokens: 1000,
+                cache_write_tokens: 0,
+                output_tokens: 60,
+            },
+            None
+        ))
+    );
     assert!(
         matches!(&result.items[0], ExternalItem::ToolCall { name, arguments }
         if name == "command" && arguments.contains("printf 'hello"))
@@ -524,4 +542,38 @@ fn the_output_wrapper_runs_the_program_under_no_new_privileges() {
     }
     assert_eq!(code, Some(3), "{err}");
     assert_eq!(out, "NoNewPrivs:\t1\nprompt\ndone\n");
+}
+
+/// An external writer's identity provider is the one whose API its program
+/// calls: the same provider loadout validation holds its model to, and the
+/// one the Outcome and the Team view name.
+#[test]
+fn an_external_programs_provider_is_the_api_its_route_serves() {
+    assert_eq!(
+        AgentRuntime::ClaudeCode.model_provider(),
+        Some(claude_code::MODEL_PROVIDER)
+    );
+    assert_eq!(
+        AgentRuntime::Codex.model_provider(),
+        Some(codex::MODEL_PROVIDER)
+    );
+    for (runtime, host) in [
+        (AgentRuntime::ClaudeCode, claude_code::API_HOST),
+        (AgentRuntime::Codex, codex::API_HOST),
+    ] {
+        assert_eq!(routes_for(runtime).unwrap()[0].host, host);
+        assert_eq!(
+            host,
+            format!("api.{}.com", model_provider(runtime).unwrap())
+        );
+    }
+    assert_eq!(
+        definition_identity("codex", "gpt-5.5"),
+        axocoatl_session::run_outcome::ModelIdentity {
+            provider: "openai".into(),
+            model: "gpt-5.5".into(),
+            runtime: "codex".into(),
+        }
+    );
+    assert_eq!(definition_identity("ollama", "qwen3:32b").runtime, "native");
 }

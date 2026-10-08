@@ -479,6 +479,64 @@ mod tests {
             RunEvent::Warning { warning, .. } if warning.code == SAME_MODEL_REVIEWER)));
     }
 
+    /// An external writer runs its vendor's model through the vendor's API
+    /// (`openai:gpt-5.5` for Codex, `anthropic:claude-haiku-4-5` for Claude
+    /// Code), and a reviewer on OpenRouter can run that same model under
+    /// another name. The writer's identity is the program's configured
+    /// provider and model, so the warning is given at resolution and from
+    /// the turn the run observed, once.
+    #[tokio::test]
+    async fn an_external_writers_model_reviewed_on_openrouter_is_warned_about() {
+        use axocoatl_config::loadout::{AgentRuntime, ModelSpec};
+        for (runtime, writer, reviewer) in [
+            (AgentRuntime::Codex, "openai:gpt-5.5", "openai/gpt-5.5"),
+            (
+                AgentRuntime::ClaudeCode,
+                "anthropic:claude-haiku-4-5",
+                "anthropic/claude-haiku-4.5",
+            ),
+        ] {
+            let mut run = fix_context(WRITER, &format!("openrouter:{reviewer}"));
+            let model = ModelSpec::parse(writer).unwrap();
+            run.resolved.loadout.file.agents[0].runtime = runtime;
+            run.resolved
+                .agent_models
+                .insert("writer".into(), model.clone());
+            let third = adjudications(&[("F1", "accept", "done")]);
+            let mut turn = reviewed_turn(reviewer, Some(&third));
+            // The writer's node as the run observes an external writer
+            // (`observation_from_control_plane`).
+            turn.nodes[0].model = crate::loadout::team_plan::model_identity(&model, runtime);
+            let report = fix_report(&run, turn);
+            let warnings: Vec<_> = report
+                .warnings
+                .iter()
+                .filter(|warning| warning.code == SAME_MODEL_REVIEWER)
+                .collect();
+            assert_eq!(warnings.len(), 1, "{:?}", report.warnings);
+            assert_eq!(
+                warnings[0].message,
+                format!(
+                    "The reviewer runs the writer's model ({writer}, which the reviewer runs as \
+                     openrouter:{reviewer}). A same-model second look measured no gain; choose \
+                     a different reviewer model."
+                )
+            );
+            // A different reviewer model is not warned about.
+            let run_other = {
+                let mut other = run.clone();
+                other.resolved.reviewer_model = ModelSpec::parse(OTHER);
+                other
+            };
+            let mut turn = reviewed_turn("openai/gpt-oss-120b", Some(&third));
+            turn.nodes[0].model = crate::loadout::team_plan::model_identity(&model, runtime);
+            assert!(fix_report(&run_other, turn)
+                .warnings
+                .iter()
+                .all(|warning| warning.code != SAME_MODEL_REVIEWER));
+        }
+    }
+
     #[test]
     fn adjudicate_false_records_no_adjudications() {
         let mut run = fix_context(WRITER, OTHER);
