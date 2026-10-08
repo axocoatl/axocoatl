@@ -1,0 +1,30 @@
+FINDINGS
+```json
+[
+  {
+    "id": "F1",
+    "title": "Integer Overflow in page_count Function",
+    "detail": "The page_count function in billing/pagination.py uses integer division ((total_items + page_size - 1) // page_size) which can lead to incorrect page calculations when page_size is very large relative to total_items. This is a potential logical error that could cause incorrect pagination behavior.",
+    "severity": "medium",
+    "location": "billing/pagination.py:8"
+  },
+  {
+    "id": "F2",
+    "title": "Potential IndexError in get_page Function",
+    "detail": "The get_page function in billing/pagination.py calculates 'end = start + page_size - 1' and then slices items[start:end]. If page_size is larger than the available items, this could lead to an IndexError when accessing items[start:end]. The function should validate that start and end indices are within bounds.",
+    "severity": "medium",
+    "location": "billing/pagination.py:16"
+  },
+  {
+    "id": "F3",
+    "title": "Missing Input Validation in invoice_total Function",
+    "detail": "The invoice_total function in billing/pagination.py directly accesses 'line[\"quantity\"]' and 'line[\"unit_cents\"]' without validating that these keys exist in each dictionary. This could lead to KeyError exceptions if the input data structure is malformed.",
+    "severity": "medium",
+    "location": "billing/pagination.py:24"
+  }
+]
+```
+NOT_REACHED
+```json
+[]
+```

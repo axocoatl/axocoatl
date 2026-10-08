@@ -1,0 +1,18 @@
+I've analyzed the auth/tokens.py file thoroughly. The code implements token signing and validation logic, but I've identified a security vulnerability related to timing attacks.
+
+FINDINGS
+```json
+[
+  {
+    "id": "F1",
+    "title": "Timing Attack Vulnerability in Token Validation",
+    "detail": "The is_valid function performs signature validation followed by expiration check in a non-constant time manner. This creates a timing attack vulnerability where an attacker can determine if a token is valid by measuring response times. When the signature check fails, the function returns immediately, but when the signature check passes, it proceeds to check expiration. This timing difference can be exploited to distinguish between invalid signatures and valid expired tokens.",
+    "severity": "high",
+    "location": "auth/tokens.py:19"
+  }
+]
+```
+NOT_REACHED
+```json
+[]
+```

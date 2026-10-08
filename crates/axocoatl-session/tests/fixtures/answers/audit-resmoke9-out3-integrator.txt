@@ -1,0 +1,84 @@
+{
+  "findings": [
+    {
+      "id": "auth-F1",
+      "title": "Timing Attack Vulnerability in Token Validation",
+      "detail": "The is_valid function performs a direct string comparison between the provided signature and the expected signature using 'signature != expected'. This comparison is not constant-time, which could allow an attacker to perform a timing attack to determine the expected signature. The comparison should use a constant-time comparison function to prevent leaking information through timing differences.",
+      "severity": "medium",
+      "location": "auth/tokens.py:15",
+      "area": "auth"
+    },
+    {
+      "id": "billing-F1",
+      "title": "Potential Integer Overflow in Invoice Total Calculation",
+      "detail": "The invoice_total function performs multiplication of quantity * unit_cents without any overflow checks. While Python handles arbitrary precision integers well, this could be problematic if the system expects fixed-size integers or if the function is later modified to use fixed-size types. The function also doesn't validate that quantity and unit_cents are positive integers, which could lead to unexpected behavior with negative values or non-numeric data.",
+      "severity": "medium",
+      "location": "billing/pagination.py:20",
+      "area": "billing"
+    },
+    {
+      "id": "ingest-F1",
+      "title": "Missing error handling for JSON unmarshaling",
+      "detail": "In the LoadFeed function in ingest/feed.go, the json.Unmarshal call does not check for errors. If the JSON data is malformed, the function will silently continue and return a potentially invalid Feed object. This could lead to unexpected behavior or crashes downstream when processing the feed data.",
+      "severity": "medium",
+      "location": "ingest/feed.go:29",
+      "area": "ingest"
+    },
+    {
+      "id": "notify-F1",
+      "title": "Hardcoded API Token",
+      "detail": "The webhook module contains a hardcoded API token (WEBHOOK_TOKEN = \"sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef\") that is used for authenticating webhook calls. While this appears to be a fake token for demonstration purposes, it represents a security risk if this code were to be deployed with real credentials. The token is embedded directly in the source code, making it easily discoverable by anyone with access to the repository.",
+      "severity": "high",
+      "location": "notify/webhook.py:7",
+      "area": "notify"
+    },
+    {
+      "id": "notify-F2",
+      "title": "Hardcoded Webhook URL",
+      "detail": "The webhook URL is hardcoded in the notify module (WEBHOOK_URL = \"https://hooks.example.invalid/orders\"). This makes it difficult to configure different endpoints for different environments and could lead to sending events to the wrong endpoint in production.",
+      "severity": "medium",
+      "location": "notify/webhook.py:5",
+      "area": "notify"
+    },
+    {
+      "id": "notify-F3",
+      "title": "Insecure HTTP Client Usage",
+      "detail": "The module uses urllib.request.urlopen() directly without any SSL verification configuration. This could make the application vulnerable to man-in-the-middle attacks if SSL certificates are not properly validated in production environments.",
+      "severity": "medium",
+      "location": "notify/webhook.py:19",
+      "area": "notify"
+    },
+    {
+      "id": "rest-F1",
+      "title": "Hardcoded API token in webhook module",
+      "detail": "The notify/webhook.py file contains a hardcoded webhook token 'sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef' which appears to be a fake token for demonstration purposes. This is a security vulnerability as it could be accidentally committed to version control and used in production environments.",
+      "severity": "high",
+      "location": "notify/webhook.py:7",
+      "area": "rest"
+    },
+    {
+      "id": "rest-F2",
+      "title": "Potential integer overflow in page_count function",
+      "detail": "In billing/pagination.py, the page_count function uses integer arithmetic that could potentially overflow with very large inputs. While Python handles big integers well, the calculation (total_items + page_size - 1) // page_size could be problematic if inputs are extremely large or maliciously crafted.",
+      "severity": "medium",
+      "location": "billing/pagination.py:8",
+      "area": "rest"
+    },
+    {
+      "id": "rest-F3",
+      "title": "Missing input validation in invoice_total function",
+      "detail": "The invoice_total function in billing/pagination.py directly accesses line['quantity'] and line['unit_cents'] without checking if these keys exist. This could lead to KeyError exceptions if the input data is malformed or missing required fields.",
+      "severity": "medium",
+      "location": "billing/pagination.py:24",
+      "area": "rest"
+    },
+    {
+      "id": "rest-F4",
+      "title": "Insecure webhook URL domain",
+      "detail": "The notify/webhook.py file uses 'https://hooks.example.invalid/orders' as the webhook URL. While this appears to be a placeholder, it suggests that the actual production URL might not be properly configured, potentially leading to misconfiguration in production environments.",
+      "severity": "medium",
+      "location": "notify/webhook.py:5",
+      "area": "rest"
+    }
+  ]
+}

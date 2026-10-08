@@ -198,7 +198,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unmerged". A finding's location is `path:line` only when the line is a number: a
   location such as `ingest/feed.go:line_number`, which a re-ask once wrote from prose
   that named no line, keeps the file alone, with the finding's `line` `null` in the
-  Outcome, and the summary and JUnit show the file only. A stopped audit
+  Outcome, and the summary and JUnit show the file only. The host checks every finding
+  it reports against the files it listed, never against what a model says: a finding at
+  a file the repository does not have (looked up after a leading `./` and the
+  repository's place in front of it, an absolute path or its directory's name, are
+  removed) is not reported; it becomes the note "finding at a path that does not exist:
+  <path> (<title>)" (in the re-smoke a planner invented `notify/rotate_keys.py` and the
+  notify worker's finding at it reached the Outcome). A finding whose line is beyond the
+  end of its file, as the host counts the file's lines, keeps its file with `line`
+  `null` and a note. After the integration, and after the host's own merge, findings at
+  the same file and the same or a nearby line (at most 2 lines apart, or both without a
+  line) whose titles share more than half of their words (filler such as "potential" or
+  "function" left out) are reported once, keeping the one with a line, then the longer
+  detail, then a severity, with a note that counts and names the ones removed (in the
+  re-smoke the integrator kept the billing and rest workers' "Integer Overflow in
+  page_count" at `billing/pagination.py:8` twice). A stopped audit
   starts no further turn, lists the areas not started, the files no follow-up read and
   the integration not run as not covered (`stopped`; with no area report to merge the
   integration is skipped and not listed), reports the workers' findings
@@ -383,7 +397,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request says why ("you repeated the same call (bash `python3 -c …`) 8 times without
   new results"), and a model that calls a tool instead of answering ends the activation
   as failed with that reason, which a run's follow-ups and re-asks then handle like any
-  other worker without a result.
+  other worker without a result. A read-only Agent (an empty write scope, as every audit
+  Agent has) is also watched across kinds, since in the re-smoke audit workers made 60
+  to 113 `grep` calls with different arguments over files they had already read: when
+  12 of its last 15 calls of any tool and arguments showed nothing new, its next request
+  asks once for its final answer and still offers tools, and when 8 more calls show
+  nothing new after that, the next request goes without tools like the rule above
+  ("after the host asked for your answer, 8 more of your tool calls showed nothing
+  new"). Replayed over the 78 recorded audit activations of two re-smokes that made tool
+  calls, this would have asked 10 of them for their answer and ended 5 of those, and
+  none of the 10 reported a planted defect whose line it first saw only after that
+  request.
 - **A cut `grep` result says what it left out.** `grep` returns up to 64 KiB of whole
   matching lines; a result it cut now also gives `returned_matches`, `total_matches`,
   `total_bytes`, `omitted_matches` and `omitted_bytes` (the same search counted in the

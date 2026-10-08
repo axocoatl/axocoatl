@@ -1,0 +1,8 @@
+FINDINGS
+```json
+[{"id": "F1", "title": "Integer Underflow in get_page function", "detail": "In the get_page function, the calculation 'end = start + page_size - 1' can lead to integer underflow if page_size is 1 and page is large enough, causing end to become negative. This can result in incorrect slicing behavior or potential security issues. The function should validate that start and end indices are within bounds before slicing.", "severity": "medium", "location": "billing/pagination.py:15"}]
+```
+NOT_REACHED
+```json
+[]
+```

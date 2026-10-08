@@ -1,0 +1,30 @@
+FINDINGS
+```json
+[
+    {
+        "id": "F1",
+        "title": "Potential Integer Overflow in invoice_total function",
+        "detail": "The invoice_total function performs multiplication of line['quantity'] and line['unit_cents'] without overflow checking. If these values are large integers, their product could overflow the int type, leading to incorrect totals. This is a potential security and correctness issue.",
+        "severity": "high",
+        "location": "billing/pagination.py:24"
+    },
+    {
+        "id": "F2",
+        "title": "Potential Integer Overflow in get_page function",
+        "detail": "The get_page function calculates start = (page - 1) * page_size which can overflow if page_size is large and page is large. This could lead to incorrect slicing of the items list or other unexpected behavior.",
+        "severity": "high",
+        "location": "billing/pagination.py:15"
+    },
+    {
+        "id": "F3",
+        "title": "Potential Integer Overflow in page_count function",
+        "detail": "The page_count function calculates (total_items + page_size - 1) // page_size. While this is a common way to compute ceiling division, if total_items and page_size are very large, the intermediate sum could overflow before the division, potentially causing incorrect page counts.",
+        "severity": "high",
+        "location": "billing/pagination.py:8"
+    }
+]
+```
+NOT_REACHED
+```json
+[]
+```

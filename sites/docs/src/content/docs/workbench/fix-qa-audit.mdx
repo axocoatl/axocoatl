@@ -298,6 +298,22 @@ A finding's location is `path:line`. A location whose line is not a number, such
 the file alone: the Outcome's finding has `location: "ingest/feed.go"` and
 `line: null`, and the summary and JUnit show the file only.
 
+Axocoatl checks every finding it reports against the files it listed, not against
+what a model says:
+
+- A finding at a file the repository does not have is not reported. It becomes the note
+  "finding at a path that does not exist: <path> (<title>)". The path is looked up after
+  a leading `./` and the repository's place in front of it (an absolute path, or the
+  repository's directory name) are removed. In a 1.3.0 test run a planner invented
+  `notify/rotate_keys.py`, and a worker's finding at it had reached the Outcome.
+- A finding whose line is beyond the end of its file, as Axocoatl counts the file's
+  lines, keeps its file with `line: null` and a note.
+- After the integration, and after Axocoatl's own merge, findings at the same file and
+  the same or a nearby line (at most 2 lines apart) whose titles share most of their
+  words are reported once. The one with a line, then the longer detail, is kept, and a
+  note names the ones removed. Findings that make different claims about the same line,
+  such as "integer overflow" and "missing input validation", both stay.
+
 Audit turns have no required checks and no review. Findings do not fail the run by
 default (`fail_on_findings: false`); anything not covered does. Each worker gets the
 `worker` Agent's `budget`, or `budgets.agent` without one, for each turn it is in, and

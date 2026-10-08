@@ -728,14 +728,14 @@ async fn a_plan_runs_one_fresh_read_only_worker_per_area_then_integrates() {
                 (
                     "worker-auth",
                     Node::Answer(worker_answer(
-                        &[("token compared with ==", "src/auth.rs:42")],
+                        &[("token compared with ==", "src/auth/mod.rs:1")],
                         &[],
                     )),
                 ),
                 (
                     "worker-db",
                     Node::Answer(worker_answer(
-                        &[("SQL built by format!", "src/db.rs:7")],
+                        &[("SQL built by format!", "src/db/mod.rs:1")],
                         &[],
                     )),
                 ),
@@ -1142,7 +1142,7 @@ async fn failed_workers_get_follow_ups_unless_the_failure_would_repeat() {
                 (
                     "worker-auth",
                     Node::Answer(worker_answer(
-                        &[("token compared with ==", "src/auth.rs:42")],
+                        &[("token compared with ==", "src/auth/mod.rs:1")],
                         &["src/auth/oauth.rs"],
                     )),
                 ),
@@ -1158,7 +1158,7 @@ async fn failed_workers_get_follow_ups_unless_the_failure_would_repeat() {
             vec![(
                 "worker-db",
                 Node::Answer(worker_answer(
-                    &[("SQL built by format!", "src/db.rs:7")],
+                    &[("SQL built by format!", "src/db/mod.rs:1")],
                     &[],
                 )),
             )],
@@ -1539,19 +1539,30 @@ async fn the_plan_as_executed_adds_rest_and_drops_areas_without_files() {
 /// The 1.3.0 re-smoke's fixture repository (`repo1`): four modules, an
 /// empty `__init__.py` in three, and two files no module holds
 /// (`README.md`, `tests/test_billing.py`). Not a Git work tree here, so
-/// the host walks it, skipping `.git`.
+/// the host walks it, skipping `.git`. Each file has the fixture's line
+/// count, which the host checks the findings' lines against.
 fn smoke_repository() -> tempfile::TempDir {
+    let lines = |first: &str, count: usize| {
+        let mut text = format!("{first}\n");
+        for line in 2..=count {
+            text.push_str(&format!("# line {line}\n"));
+        }
+        text
+    };
     let repo = repository(&[
-        ("README.md", "# fixture\n"),
+        ("README.md", &lines("# fixture", 3)),
         ("auth/__init__.py", ""),
-        ("auth/tokens.py", "def is_valid(token): ...\n"),
+        ("auth/tokens.py", &lines("def is_valid(token): ...", 21)),
         ("billing/__init__.py", ""),
-        ("billing/pagination.py", "def get_page(items, page): ...\n"),
-        ("ingest/feed.go", "package ingest\n"),
-        ("ingest/go.mod", "module ingest\n"),
+        (
+            "billing/pagination.py",
+            &lines("def get_page(items, page): ...", 25),
+        ),
+        ("ingest/feed.go", &lines("package ingest", 40)),
+        ("ingest/go.mod", &lines("module ingest", 3)),
         ("notify/__init__.py", ""),
-        ("notify/webhook.py", "TOKEN = 'x'\n"),
-        ("tests/test_billing.py", "def test_page(): ...\n"),
+        ("notify/webhook.py", &lines("TOKEN = 'x'", 20)),
+        ("tests/test_billing.py", &lines("def test_page(): ...", 16)),
     ]);
     std::fs::create_dir_all(repo.path().join(".git/objects")).unwrap();
     std::fs::write(repo.path().join(".git/objects/lib.rs"), "").unwrap();
@@ -1721,6 +1732,132 @@ async fn resmoke5_run_1_passes_with_empty_files_covered_and_the_unassigned_files
         "{:?}",
         outcome.attention
     );
+}
+
+/// A recorded resmoke10 run over the fixture repository: its planner,
+/// area workers and integrator answering as recorded, each worker reading
+/// its files.
+fn resmoke10(run: &str) -> FakeHost {
+    let workers = [
+        "worker-auth",
+        "worker-billing",
+        "worker-ingest",
+        "worker-notify",
+        "worker-rest",
+    ];
+    FakeHost::new(vec![
+        turn(
+            TurnState::Completed,
+            vec![(
+                PLANNER_SLOT,
+                Node::Answer(fixture(&format!("audit-resmoke10-{run}-planner.txt"))),
+            )],
+        ),
+        recorded_areas(&format!("audit-resmoke10-{run}"), &workers),
+        turn(
+            TurnState::Completed,
+            vec![(
+                INTEGRATOR_SLOT,
+                Node::Answer(fixture(&format!("audit-resmoke10-{run}-integrator.txt"))),
+            )],
+        ),
+    ])
+}
+
+/// resmoke10 out4 (`repo2`, which adds `ops/rotate_keys.py`): the planner
+/// gave the notify area a file it invented, `notify/rotate_keys.py`; the
+/// host assigned the real files, and the notify worker reported `F2`
+/// "Missing Webhook Key Rotation" at the invented file, which the
+/// integrator kept. The host's listing has no such file: it is a note, and
+/// the other six findings are reported.
+#[tokio::test]
+async fn resmoke10_out4_a_finding_at_a_file_the_repository_lacks_is_a_note() {
+    let repo = smoke_repository();
+    let ops = (1..=12)
+        .map(|line| format!("# line {line}\n"))
+        .collect::<String>();
+    std::fs::create_dir_all(repo.path().join("ops")).unwrap();
+    std::fs::write(repo.path().join("ops/rotate_keys.py"), ops).unwrap();
+    std::fs::write(repo.path().join("tests/__init__.py"), "").unwrap();
+    let run = context_in(later(), repo.path());
+    let host = resmoke10("out4")
+        .calls("worker-auth", reads(&["auth/tokens.py"]))
+        .calls(
+            "worker-billing",
+            reads(&["billing/pagination.py", "tests/test_billing.py"]),
+        )
+        .calls("worker-ingest", reads(&["ingest/feed.go", "ingest/go.mod"]))
+        .calls("worker-notify", reads(&["notify/webhook.py"]))
+        .calls("worker-rest", reads(&["README.md", "ops/rotate_keys.py"]));
+    let (report, _) = drive(&host, &run).await;
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    let found: Vec<(&str, Option<&str>)> = report
+        .findings
+        .iter()
+        .map(|finding| (finding.id.as_str(), finding.location.as_deref()))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("auth-F1", Some("auth/tokens.py:19")),
+            ("billing-F1", Some("billing/pagination.py:15")),
+            ("ingest-F1", Some("ingest/feed.go:29")),
+            ("notify-F1", Some("notify/webhook.py:7")),
+            ("notify-F3", Some("notify/webhook.py:19")),
+            ("rest-F1", Some("ops/rotate_keys.py:8")),
+        ]
+    );
+    let missing = "finding at a path that does not exist: notify/rotate_keys.py (Missing Webhook \
+                   Key Rotation)";
+    assert_eq!(
+        report.notes.iter().filter(|note| *note == missing).count(),
+        1,
+        "{:?}",
+        report.notes
+    );
+    assert!(host.phases("note").iter().any(|note| note == missing));
+    assert_eq!(outcome_of(&report).exit_code, exit_code::PASS);
+}
+
+/// resmoke10 out3: the integrator kept the billing and rest workers'
+/// findings of `billing/pagination.py` side by side. The same overflow
+/// claim at line 8 (`billing-F3`, `rest-F1`) is reported once; the pairs at
+/// lines 15/16 and 24 make different claims and stay.
+#[tokio::test]
+async fn resmoke10_out3_findings_the_integration_kept_twice_are_reported_once() {
+    let repo = smoke_repository();
+    let run = context_in(later(), repo.path());
+    let host = resmoke10("out3")
+        .calls("worker-auth", reads(&["auth/tokens.py"]))
+        .calls("worker-billing", reads(&["billing/pagination.py"]))
+        .calls("worker-ingest", reads(&["ingest/feed.go", "ingest/go.mod"]))
+        .calls("worker-notify", reads(&["notify/webhook.py"]))
+        .calls(
+            "worker-rest",
+            reads(&["README.md", "tests/test_billing.py"]),
+        );
+    let (report, _) = drive(&host, &run).await;
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    let ids: Vec<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "auth-F1",
+            "billing-F1",
+            "billing-F2",
+            "rest-F1",
+            "ingest-F1",
+            "notify-F1",
+            "rest-F2",
+            "rest-F3"
+        ]
+    );
+    assert!(report.notes.contains(
+        &"the host removed 1 finding that repeats another at the same file and line (at most 2 \
+          lines apart) with a similar title, keeping the more specific: billing-F3 (kept rest-F1)"
+            .to_owned()
+    ));
+    assert_eq!(outcome_of(&report).exit_code, exit_code::PASS);
 }
 
 /// The 1.3.0 rc4 re-smoke's run 1 (`resmoke4-audit/out1`), with every
@@ -2738,7 +2875,7 @@ async fn a_stopped_audit_keeps_what_it_observed() {
             (
                 "worker-auth",
                 Node::Answer(worker_answer(
-                    &[("token compared with ==", "src/auth.rs:42")],
+                    &[("token compared with ==", "src/auth/mod.rs:1")],
                     &[],
                 )),
             ),
@@ -2879,14 +3016,14 @@ async fn a_failed_integration_reports_the_workers_findings_unmerged() {
                 (
                     "worker-auth",
                     Node::Answer(worker_answer(
-                        &[("token compared with ==", "src/auth.rs:42")],
+                        &[("token compared with ==", "src/auth/mod.rs:1")],
                         &[],
                     )),
                 ),
                 (
                     "worker-db",
                     Node::Answer(worker_answer(
-                        &[("SQL built by format!", "src/db.rs:7")],
+                        &[("SQL built by format!", "src/db/mod.rs:1")],
                         &[],
                     )),
                 ),
@@ -2924,7 +3061,7 @@ async fn the_wall_clock_stops_the_areas_turn_and_skips_follow_ups_and_integratio
             (
                 "worker-auth",
                 Node::Answer(worker_answer(
-                    &[("token compared with ==", "src/auth.rs:42")],
+                    &[("token compared with ==", "src/auth/mod.rs:1")],
                     &[],
                 )),
             ),

@@ -1,0 +1,35 @@
+```json
+{
+  "areas": [
+    {
+      "name": "auth",
+      "scope": "Authentication module handling session tokens. Look for security defects in token signing and validation logic, including potential timing attacks, improper error handling, and session expiration issues.",
+      "paths": [
+        "auth/tokens.py"
+      ]
+    },
+    {
+      "name": "billing",
+      "scope": "Billing module handling invoice pagination and totals. Look for correctness defects in pagination calculations, total computations, and potential integer overflow or underflow issues.",
+      "paths": [
+        "billing/pagination.py",
+        "tests/test_billing.py"
+      ]
+    },
+    {
+      "name": "ingest",
+      "scope": "Ingest module loading order feeds. Look for security defects in file I/O operations, JSON parsing, and potential injection vulnerabilities in feed processing.",
+      "paths": [
+        "ingest/feed.go"
+      ]
+    },
+    {
+      "name": "notify",
+      "scope": "Notification module for outbound webhooks. Look for missing files in the directory structure as indicated by the audit scope, and potential security issues in webhook handling.",
+      "paths": [
+        "notify/rotate_keys.py"
+      ]
+    }
+  ]
+}
+```

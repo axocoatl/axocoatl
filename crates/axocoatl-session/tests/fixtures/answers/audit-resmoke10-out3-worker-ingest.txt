@@ -1,0 +1,8 @@
+FINDINGS
+```json
+[{"id": "F1", "title": "Missing error check after JSON unmarshaling", "detail": "In the LoadFeed function, json.Unmarshal is called without checking its error return value. If the JSON data is malformed, this could lead to unexpected behavior or panic when accessing the feed data later. The error from json.Unmarshal should be checked and handled appropriately.", "severity": "medium", "location": "ingest/feed.go:18"}]
+```
+NOT_REACHED
+```json
+[]
+```

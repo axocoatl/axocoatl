@@ -213,6 +213,12 @@ example "you repeated the same call (read_file with the same arguments) 8 times 
 new results"; a model that calls a tool instead of answering ends the activation as
 failed, with that reason.
 
+An Agent that can change no file (an empty write scope, `writes: []`, as every audit
+Agent has) is also watched across tools and arguments: when 12 of its last 15 calls
+showed nothing new, its next request asks once for its final answer and still offers
+tools, and when 8 more calls show nothing new after that, the next request goes without
+tools as above.
+
 ## Limit which files an Agent may change
 
 ```yaml

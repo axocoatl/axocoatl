@@ -1,0 +1,76 @@
+{
+  "findings": [
+    {
+      "id": "auth-F1",
+      "title": "Potential Timing Attack Vulnerability",
+      "detail": "The code uses a simple string comparison 'signature != expected' which is not constant-time. This could be exploited in a timing attack to determine the correct signature, as the comparison will take slightly longer when more characters match. The code should use hmac.compare_digest() for constant-time comparison.",
+      "severity": "medium",
+      "location": "auth/tokens.py:19",
+      "area": "auth"
+    },
+    {
+      "id": "billing-F1",
+      "title": "Potential Integer Overflow in invoice_total function",
+      "detail": "The invoice_total function performs multiplication of line['quantity'] and line['unit_cents'] without overflow checking. If these values are large integers, their product could overflow the int type, leading to incorrect totals. This is a potential security and correctness issue.",
+      "severity": "high",
+      "location": "billing/pagination.py:24",
+      "area": "billing"
+    },
+    {
+      "id": "billing-F2",
+      "title": "Potential Integer Overflow in get_page function",
+      "detail": "The get_page function calculates start = (page - 1) * page_size which can overflow if page_size is large and page is large. This could lead to incorrect slicing of the items list or other unexpected behavior.",
+      "severity": "high",
+      "location": "billing/pagination.py:15",
+      "area": "billing"
+    },
+    {
+      "id": "billing-F3",
+      "title": "Potential Integer Overflow in page_count function",
+      "detail": "The page_count function calculates (total_items + page_size - 1) // page_size. While this is a common way to compute ceiling division, if total_items and page_size are very large, the intermediate sum could overflow before the division, potentially causing incorrect page counts.",
+      "severity": "high",
+      "location": "billing/pagination.py:8",
+      "area": "billing"
+    },
+    {
+      "id": "ingest-F1",
+      "title": "Missing error check after JSON unmarshaling",
+      "detail": "In the LoadFeed function, json.Unmarshal is called without checking its error return value. If the JSON data is malformed, this could lead to unexpected behavior or panic when accessing the feed data later. The error from json.Unmarshal should be checked and handled appropriately.",
+      "severity": "medium",
+      "location": "ingest/feed.go:18",
+      "area": "ingest"
+    },
+    {
+      "id": "notify-F1",
+      "title": "Hardcoded Webhook Token",
+      "detail": "The webhook token 'sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef' is hardcoded in the notify/webhook.py file. This is a security vulnerability as credentials should never be hardcoded in source code. An attacker with access to the source code can easily obtain the token and use it to send malicious webhook events.",
+      "severity": "high",
+      "location": "notify/webhook.py:6",
+      "area": "notify"
+    },
+    {
+      "id": "rest-F1",
+      "title": "Integer Overflow in page_count Function",
+      "detail": "The page_count function in billing/pagination.py uses integer division ((total_items + page_size - 1) // page_size) which can lead to incorrect page calculations when page_size is very large relative to total_items. This is a potential logical error that could cause incorrect pagination behavior.",
+      "severity": "medium",
+      "location": "billing/pagination.py:8",
+      "area": "rest"
+    },
+    {
+      "id": "rest-F2",
+      "title": "Potential IndexError in get_page Function",
+      "detail": "The get_page function in billing/pagination.py calculates 'end = start + page_size - 1' and then slices items[start:end]. If page_size is larger than the available items, this could lead to an IndexError when accessing items[start:end]. The function should validate that start and end indices are within bounds.",
+      "severity": "medium",
+      "location": "billing/pagination.py:16",
+      "area": "rest"
+    },
+    {
+      "id": "rest-F3",
+      "title": "Missing Input Validation in invoice_total Function",
+      "detail": "The invoice_total function in billing/pagination.py directly accesses 'line[\"quantity\"]' and 'line[\"unit_cents\"]' without validating that these keys exist in each dictionary. This could lead to KeyError exceptions if the input data structure is malformed.",
+      "severity": "medium",
+      "location": "billing/pagination.py:24",
+      "area": "rest"
+    }
+  ]
+}

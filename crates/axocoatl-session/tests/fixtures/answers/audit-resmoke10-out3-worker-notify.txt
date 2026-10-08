@@ -1,0 +1,8 @@
+FINDINGS
+```json
+[{"id": "F1", "title": "Hardcoded Webhook Token", "detail": "The webhook token 'sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef' is hardcoded in the notify/webhook.py file. This is a security vulnerability as credentials should never be hardcoded in source code. An attacker with access to the source code can easily obtain the token and use it to send malicious webhook events.", "severity": "high", "location": "notify/webhook.py:6"}]
+```
+NOT_REACHED
+```json
+[]
+```

@@ -1,0 +1,37 @@
+FINDINGS
+```json
+[
+  {
+    "id": "billing-F1",
+    "title": "Incorrect page slicing in get_page function",
+    "detail": "The get_page function has incorrect slicing logic. It calculates 'end = start + page_size - 1' but then uses 'items[start:end]' which excludes the end index. This causes the last item on each page to be missing from the returned results. The correct implementation should be 'items[start:start + page_size]' or 'items[start:end + 1]' to include all items in the page.",
+    "severity": "medium",
+    "location": "billing/pagination.py:15",
+    "area": "billing"
+  },
+  {
+    "id": "ingest-F1",
+    "title": "Missing error handling for JSON unmarshaling",
+    "detail": "In the LoadFeed function, the json.Unmarshal call does not check for errors. If the JSON data is malformed, this will silently fail and return a potentially invalid Feed object. The function should handle the error returned by json.Unmarshal.",
+    "severity": "high",
+    "location": "ingest/feed.go:29",
+    "area": "ingest"
+  },
+  {
+    "id": "notify-F1",
+    "title": "Hardcoded API Token",
+    "detail": "The file contains a hardcoded API token (WEBHOOK_TOKEN = \"sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef\") that is used for webhook authorization. This is a high severity security defect as the token is exposed in the source code and could allow unauthorized access to partner services.",
+    "severity": "high",
+    "location": "notify/webhook.py:7",
+    "area": "notify"
+  },
+  {
+    "id": "rest-F1",
+    "title": "Potential IndexError in get_page function",
+    "detail": "The get_page function in billing/pagination.py may cause an IndexError when the page size is zero or negative, or when the calculated end index exceeds the list bounds. While the function checks for page < 1, it does not validate that page_size is positive before using it in calculations. Additionally, the slicing operation items[start:end] could potentially cause issues if start or end are not properly constrained. The function is called from tests but not directly in the codebase, making this a potential correctness issue.",
+    "severity": "medium",
+    "location": "billing/pagination.py:16",
+    "area": "rest"
+  }
+]
+```

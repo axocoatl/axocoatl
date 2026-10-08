@@ -74,6 +74,12 @@
 //!    integration without a result (the wall clock, a person's stop) has
 //!    the workers' findings reported unmerged and [`INTEGRATION`] listed
 //!    as not covered, which the attention line names apart from the areas.
+//! 7. **Checks**: every finding reported is checked against the host's
+//!    listing ([`checks`]): one at a file the repository does not have is
+//!    a note instead, one at a line beyond its file keeps its file with an
+//!    unknown line (a note), and the integration's or the host's merged
+//!    findings lose their near duplicates (same file, lines at most 2
+//!    apart, similar titles; a note).
 //!
 //! The run's wall clock bounds every turn: at the deadline the turn is
 //! stopped, what did not finish is not covered (budget), and no further
@@ -106,6 +112,8 @@ use super::team_plan::{self, SlotPlan};
 use super::{KindDriver, KindReport, RunContext, RunError, RunHost, ToolCallRecord};
 use crate::SessionTeamEdit;
 
+#[path = "audit_findings.rs"]
+pub mod checks;
 #[path = "audit_files.rs"]
 pub mod files;
 
@@ -188,6 +196,7 @@ pub async fn drive_audit(
         build,
         applies: 0,
         open_turn: None,
+        listed: None,
         report: KindReport {
             fail_on_findings: settings.fail_on_findings,
             ..KindReport::default()
@@ -1283,6 +1292,9 @@ struct Audit<'a> {
     /// A turn that ended needing attention; it holds the Session until it
     /// is stopped.
     open_turn: Option<usize>,
+    /// The repository's files as the host listed them, once it has; the
+    /// reported findings are checked against them ([`checks`]).
+    listed: Option<Vec<RepoFile>>,
     report: KindReport,
 }
 
@@ -1364,6 +1376,37 @@ impl Audit<'_> {
             .await?;
         self.report.not_covered.push(entry);
         Ok(())
+    }
+
+    /// Report findings after the host's checks ([`checks`]): each at a file
+    /// the repository has, at a line within it (else unknown), and, when
+    /// `merged` (the integration's or the host's merge), without near
+    /// duplicates. What the checks left out or changed is a note.
+    async fn checked_findings(
+        &mut self,
+        findings: Vec<Finding>,
+        merged: bool,
+    ) -> Result<(), RunError> {
+        let mut findings = findings;
+        if let Some(files) = &self.listed {
+            let repo = self.run.options.repo.clone();
+            let listed = checks::Listed::new(files, &repo);
+            let (kept, notes) = checks::check_locations(findings, &listed, |path| {
+                checks::host_line_count(&repo, path)
+            });
+            findings = kept;
+            for note in notes {
+                self.note(note).await?;
+            }
+        }
+        if merged {
+            let (kept, note) = checks::remove_near_duplicates(findings);
+            findings = kept;
+            if let Some(note) = note {
+                self.note(note).await?;
+            }
+        }
+        self.findings(findings).await
     }
 
     async fn findings(&mut self, findings: Vec<Finding>) -> Result<(), RunError> {
@@ -1657,6 +1700,7 @@ impl Audit<'_> {
         };
         let budget = self.read_budget()?;
         let assignment = files::split(files::assign(plan, &listing.files), &budget);
+        self.listed = Some(listing.files.clone());
         let counts: Vec<String> = assignment
             .areas
             .iter()
@@ -2610,7 +2654,7 @@ impl Audit<'_> {
             turn_id,
         })
         .await?;
-        self.findings(Self::unmerged(results)).await
+        self.checked_findings(Self::unmerged(results), false).await
     }
 
     /// The last turn: merge every report.
@@ -2733,7 +2777,7 @@ impl Audit<'_> {
                             )
                             .await?;
                         }
-                        return self.findings(findings).await;
+                        return self.checked_findings(findings, true).await;
                     }
                     Err(error) => {
                         let error = error.to_string();
@@ -2893,7 +2937,7 @@ impl Audit<'_> {
         ))
         .await?;
         self.report.last_turn_accounted = true;
-        self.findings(merged).await
+        self.checked_findings(merged, true).await
     }
 }
 

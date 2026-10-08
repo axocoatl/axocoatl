@@ -1,0 +1,34 @@
+```json
+{
+  "areas": [
+    {
+      "name": "auth",
+      "scope": "Authentication module implementing session token validation using HMAC signatures. Look for cryptographic weaknesses in token handling and potential timing attacks.",
+      "paths": [
+        "auth/**"
+      ]
+    },
+    {
+      "name": "billing",
+      "scope": "Billing module handling invoice pagination and totals calculation. Look for arithmetic overflow/underflow, incorrect pagination logic, and potential integer overflow in totals.",
+      "paths": [
+        "billing/**"
+      ]
+    },
+    {
+      "name": "ingest",
+      "scope": "Order feed ingestion module in Go. Look for JSON deserialization vulnerabilities, potential nil pointer dereferences, and file I/O errors in feed loading.",
+      "paths": [
+        "ingest/**"
+      ]
+    },
+    {
+      "name": "notify",
+      "scope": "Notification webhook sending module. Look for credential hardcoding, potential injection vulnerabilities in webhook URLs, and insecure HTTP handling.",
+      "paths": [
+        "notify/**"
+      ]
+    }
+  ]
+}
+```

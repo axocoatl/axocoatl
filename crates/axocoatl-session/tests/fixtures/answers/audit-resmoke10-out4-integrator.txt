@@ -1,0 +1,60 @@
+<FINDINGS>
+[
+  {
+    "id": "auth-F1",
+    "title": "Timing Attack Vulnerability in Token Validation",
+    "detail": "The is_valid function performs signature validation followed by expiration check in a non-constant time manner. This creates a timing attack vulnerability where an attacker can determine if a token is valid by measuring response times. When the signature check fails, the function returns immediately, but when the signature check passes, it proceeds to check expiration. This timing difference can be exploited to distinguish between invalid signatures and valid expired tokens.",
+    "severity": "high",
+    "location": "auth/tokens.py:19",
+    "area": "auth"
+  },
+  {
+    "id": "billing-F1",
+    "title": "Integer Underflow in get_page function",
+    "detail": "In the get_page function, the calculation 'end = start + page_size - 1' can lead to integer underflow if page_size is 1 and page is large enough, causing end to become negative. This can result in incorrect slicing behavior or potential security issues. The function should validate that start and end indices are within bounds before slicing.",
+    "severity": "medium",
+    "location": "billing/pagination.py:15",
+    "area": "billing"
+  },
+  {
+    "id": "ingest-F1",
+    "title": "Missing error check after JSON unmarshaling",
+    "detail": "In the LoadFeed function, the json.Unmarshal call does not check for errors. If the JSON data is malformed, the function will silently continue and return a potentially invalid Feed object. This could lead to unexpected behavior or crashes downstream when processing the feed data.",
+    "severity": "medium",
+    "location": "ingest/feed.go:29",
+    "area": "ingest"
+  },
+  {
+    "id": "notify-F1",
+    "title": "Hardcoded Sensitive Token",
+    "detail": "The webhook module contains a hardcoded secret token 'sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef' in the WEBHOOK_TOKEN constant. This is a security vulnerability as it exposes credentials that should be managed externally.",
+    "severity": "high",
+    "location": "notify/webhook.py:7",
+    "area": "notify"
+  },
+  {
+    "id": "notify-F2",
+    "title": "Missing Webhook Key Rotation",
+    "detail": "The notify directory is missing the 'rotate_keys.py' file which should handle webhook key rotation. This is a critical security issue as it prevents proper credential management and rotation.",
+    "severity": "critical",
+    "location": "notify/rotate_keys.py:1",
+    "area": "notify"
+  },
+  {
+    "id": "notify-F3",
+    "title": "Potential SSL/TLS Verification Issues",
+    "detail": "The webhook module uses urllib.request.urlopen without explicit SSL context verification, which could lead to man-in-the-middle attacks. While the code doesn't explicitly disable verification, it's not using secure defaults.",
+    "severity": "medium",
+    "location": "notify/webhook.py:19",
+    "area": "notify"
+  },
+  {
+    "id": "rest-F1",
+    "title": "Command Injection Vulnerability in rotate_keys.py",
+    "detail": "The rotate function in ops/rotate_keys.py uses shell=True with string concatenation, making it vulnerable to command injection. An attacker could inject malicious commands through the tenant parameter, as demonstrated by the command: 'keyctl archive {tenant} && keyctl issue {tenant}'. This is a critical security flaw.",
+    "severity": "critical",
+    "location": "ops/rotate_keys.py:8",
+    "area": "rest"
+  }
+]
+</FINDINGS>

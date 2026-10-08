@@ -297,8 +297,8 @@ impl SessionDispatchController {
         }));
         // A read-only helper is never offered the file-writing tools. Its
         // stored definition keeps them; authority refuses them regardless.
-        let offered_tools: Vec<String> = if profile.write_scope.as_ref().is_some_and(Vec::is_empty)
-        {
+        let read_only = profile.write_scope.as_ref().is_some_and(Vec::is_empty);
+        let offered_tools: Vec<String> = if read_only {
             config
                 .tools
                 .iter()
@@ -342,6 +342,9 @@ impl SessionDispatchController {
             // A helper's answer stays whole until a request would not fit;
             // many delegations must not overflow a small model's context.
             .with_tool_results_kept_until_tight([super::delegate::NAME.to_string()]);
+        if read_only {
+            behavior = behavior.with_read_only_tool_loop();
+        }
         if let Some(tool) = host_knowledge_tool {
             behavior = behavior.with_host_knowledge_tool(tool);
         }

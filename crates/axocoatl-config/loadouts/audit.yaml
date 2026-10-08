@@ -19,7 +19,11 @@
 #      from its answer) gets another activation naming exactly those files,
 #      again for as long as each one reads something new;
 #   4. integrate: the integrator merges every worker's report. Integration is
-#      its own turn, so the integrator has no depends_on.
+#      its own turn, so the integrator has no depends_on. The host then checks
+#      the findings against its listing: one at a file the repository does not
+#      have is a note, a line beyond its file becomes unknown, and near
+#      duplicates (same file, lines at most 2 apart, similar titles) are
+#      reported once.
 # Each file still unread is listed as not covered, and so is a worker without
 # a result, which makes the run need attention (exit 2). Empty and binary
 # files need no read; a file over 256 KiB is a note. A worker's NOT_REACHED

@@ -12,6 +12,16 @@
 //! the same command pattern). Either way the next request goes without tools
 //! and asks for the answer.
 //!
+//! A read-only Agent (one that can change no file, such as an audit worker)
+//! is also watched across kinds: in the 1.3.0 re-smoke audit workers made
+//! 60 to 113 `grep` calls, each with different arguments, over files they
+//! had already read, so no pattern above caught them. When
+//! [`STALE_CALL_LIMIT`] of its last [`STALE_WINDOW`] calls showed nothing
+//! new, whatever their tools and arguments, the next request asks once for
+//! the final answer and still offers tools ([`ToolLoopRepeats::take_nudge`]);
+//! when [`STALE_AFTER_NUDGE_LIMIT`] more calls show nothing new after that,
+//! the loop ends like the patterns above.
+//!
 //! All are deliberately narrow. Reading different files, or running the same
 //! test again after an edit (an edit or a write, or a `bash` command that
 //! printed nothing, starts the counts of the third pattern again), never
@@ -31,6 +41,14 @@ pub(crate) const IDENTICAL_ROUND_LIMIT: usize = 4;
 pub(crate) const REPEATED_CALL_LIMIT: usize = 8;
 /// How many of the latest calls of one kind [`REPEATED_CALL_LIMIT`] counts in.
 pub(crate) const REPEAT_WINDOW: usize = 10;
+/// Calls of any kind that showed nothing new, among a read-only Agent's
+/// last [`STALE_WINDOW`] calls, that ask it once for its answer.
+pub(crate) const STALE_CALL_LIMIT: usize = 12;
+/// How many of a read-only Agent's latest calls [`STALE_CALL_LIMIT`]
+/// counts in.
+pub(crate) const STALE_WINDOW: usize = 15;
+/// Calls that showed nothing new after that request that end the loop.
+pub(crate) const STALE_AFTER_NUDGE_LIMIT: usize = 8;
 /// A result shows nothing new when at most one of its lines in this many
 /// is new: a line no earlier result of the activation showed and the call's
 /// own arguments do not contain (a script that prints its own text).
@@ -76,9 +94,44 @@ pub(crate) struct ToolLoopRepeats {
     /// For each kind of call, whether each of its latest calls showed
     /// nothing new, oldest first.
     windows: HashMap<CallKind, VecDeque<bool>>,
+    /// Whether the Agent is read-only, so its calls are also counted
+    /// across kinds ([`STALE_CALL_LIMIT`]).
+    read_only: bool,
+    /// Whether each of its latest calls, of any kind, showed nothing new.
+    stale: VecDeque<bool>,
+    /// Whether it was asked for its answer with tools still offered.
+    nudged: bool,
+    /// Why the next request asks for it, until taken.
+    nudge_due: Option<String>,
+    /// Calls that showed nothing new since it was asked.
+    stale_after_nudge: usize,
 }
 
 impl ToolLoopRepeats {
+    /// The guard of an Agent that can change no file: its calls are also
+    /// counted across kinds.
+    pub(crate) fn read_only() -> Self {
+        Self {
+            read_only: true,
+            ..Self::default()
+        }
+    }
+
+    /// The same guard with nothing counted yet (new guidance is new work).
+    pub(crate) fn fresh(&self) -> Self {
+        Self {
+            read_only: self.read_only,
+            ..Self::default()
+        }
+    }
+
+    /// Why the next request should ask for the final answer while still
+    /// offering tools: once, after [`STALE_CALL_LIMIT`] of a read-only
+    /// Agent's last [`STALE_WINDOW`] calls showed nothing new.
+    pub(crate) fn take_nudge(&mut self) -> Option<String> {
+        self.nudge_due.take()
+    }
+
     /// Record one round's calls and results; returns why the loop should end
     /// once its recent rounds show no progress.
     pub(crate) fn observe(&mut self, round: &[ToolCallRecord]) -> Option<String> {
@@ -140,6 +193,8 @@ impl ToolLoopRepeats {
             // An edit or a write, or a command that printed nothing and may
             // have changed files, is progress: every count starts again.
             self.windows.clear();
+            self.stale.clear();
+            self.stale_after_nudge = 0;
             self.seen_lines
                 .extend(lines.iter().map(|line| line_hash(line)));
             return None;
@@ -174,6 +229,9 @@ impl ToolLoopRepeats {
             }
         }
         let mut reason = None;
+        if self.read_only {
+            reason = self.observe_stale(nothing_new);
+        }
         for kind in kinds {
             let window = self.windows.entry(kind.clone()).or_default();
             window.push_back(nothing_new);
@@ -189,6 +247,37 @@ impl ToolLoopRepeats {
             }
         }
         reason
+    }
+
+    /// Count one call of a read-only Agent toward [`STALE_CALL_LIMIT`], or,
+    /// once it was asked for its answer, toward [`STALE_AFTER_NUDGE_LIMIT`];
+    /// returns why the loop should end.
+    fn observe_stale(&mut self, nothing_new: bool) -> Option<String> {
+        if self.nudged {
+            if nothing_new {
+                self.stale_after_nudge += 1;
+            }
+            return (self.stale_after_nudge >= STALE_AFTER_NUDGE_LIMIT).then(|| {
+                format!(
+                    "after the host asked for your answer, {} more of your tool calls showed \
+                     nothing new",
+                    self.stale_after_nudge
+                )
+            });
+        }
+        self.stale.push_back(nothing_new);
+        if self.stale.len() > STALE_WINDOW {
+            self.stale.pop_front();
+        }
+        let stale = self.stale.iter().filter(|nothing| **nothing).count();
+        if stale >= STALE_CALL_LIMIT {
+            self.nudged = true;
+            self.nudge_due = Some(format!(
+                "{stale} of your last {} tool calls showed nothing new",
+                self.stale.len()
+            ));
+        }
+        None
     }
 }
 
@@ -671,6 +760,156 @@ mod tests {
             let stdout = format!("{}\n", (0..index).sum::<usize>() + 1_000_000);
             assert_eq!(repeats.observe(&[printed(&command, &stdout)]), None);
         }
+    }
+
+    /// A recorded activation's tool calls, grouped into its rounds.
+    fn recorded_rounds(name: &str) -> Vec<Vec<ToolCallRecord>> {
+        let path = format!(
+            "{}/../axocoatl-session/tests/fixtures/answers/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
+        let mut rounds: Vec<(u64, Vec<ToolCallRecord>)> = Vec::new();
+        for line in text.lines() {
+            let call: serde_json::Value = serde_json::from_str(line).unwrap();
+            let round = call["round"].as_u64().unwrap();
+            let record = ToolCallRecord {
+                tool_name: call["tool"].as_str().unwrap().to_owned(),
+                arguments: call["arguments"].clone(),
+                result: Some(call["result"].clone()),
+            };
+            match rounds.last_mut() {
+                Some((last, calls)) if *last == round => calls.push(record),
+                _ => rounds.push((round, vec![record])),
+            }
+        }
+        rounds.into_iter().map(|(_, calls)| calls).collect()
+    }
+
+    /// After how many calls something happened, and why.
+    type At = Option<(usize, String)>;
+
+    /// Feed `rounds` to `repeats`; returns after how many calls the nudge
+    /// came and after how many the loop ended, with why.
+    fn replay(repeats: &mut ToolLoopRepeats, rounds: &[Vec<ToolCallRecord>]) -> (At, At) {
+        let (mut calls, mut nudged, mut ended) = (0, None, None);
+        for round in rounds {
+            calls += round.len();
+            if let Some(reason) = repeats.observe(round) {
+                ended.get_or_insert((calls, reason));
+            }
+            if let Some(reason) = repeats.take_nudge() {
+                assert!(nudged.is_none(), "one nudge");
+                nudged = Some((calls, reason));
+            }
+            if ended.is_some() {
+                break;
+            }
+        }
+        (nudged, ended)
+    }
+
+    /// resmoke10 out3's auth worker: one 671-byte file, read at its second
+    /// call, then 113 `grep` calls, each with different arguments. The
+    /// patterns above ended it only at its 127th call; read-only, it is
+    /// asked for its answer after its 22nd and ended after its 31st. Its
+    /// finding (the timing compare) was in the read at call 2.
+    #[test]
+    fn a_read_only_agent_whose_calls_of_any_kind_show_nothing_new_is_asked_then_ended() {
+        let rounds = recorded_rounds("audit-resmoke10-out3-worker-auth-calls.jsonl");
+        assert_eq!(rounds.iter().map(Vec::len).sum::<usize>(), 127);
+        let (nudged, ended) = replay(&mut ToolLoopRepeats::read_only(), &rounds);
+        assert_eq!(
+            nudged,
+            Some((
+                22,
+                "12 of your last 15 tool calls showed nothing new".to_owned()
+            ))
+        );
+        assert_eq!(
+            ended,
+            Some((
+                31,
+                "after the host asked for your answer, 8 more of your tool calls showed nothing \
+                 new"
+                .to_owned()
+            ))
+        );
+        let (nudged, ended) = replay(&mut ToolLoopRepeats::default(), &rounds);
+        assert_eq!(nudged, None, "only a read-only Agent is nudged");
+        assert_eq!(
+            ended,
+            Some((
+                127,
+                "you repeated the same call (read_file with the same arguments) 8 times without \
+                 new results"
+                    .to_owned()
+            ))
+        );
+    }
+
+    /// resmoke10 out4's planner: 50 calls across the repository (listings,
+    /// globs, reads, four of them failing), most of them showing something
+    /// new. It is never asked.
+    #[test]
+    fn a_read_only_agent_exploring_is_never_asked() {
+        let rounds = recorded_rounds("audit-resmoke10-out4-planner-calls.jsonl");
+        assert_eq!(rounds.iter().map(Vec::len).sum::<usize>(), 50);
+        assert_eq!(
+            replay(&mut ToolLoopRepeats::read_only(), &rounds),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn a_change_starts_the_read_only_counts_again() {
+        let grep = |index: usize| {
+            call(
+                "grep",
+                json!({"pattern": format!("p{index}"), "path": "lib"}),
+                json!({"matches": "lib/a.js:1:x"}),
+            )
+        };
+        // Eleven of twelve stale, then a change: the window starts again.
+        let mut repeats = ToolLoopRepeats::read_only();
+        for index in 0..12 {
+            assert_eq!(repeats.observe(&[grep(index)]), None);
+        }
+        assert_eq!(repeats.take_nudge(), None);
+        assert_eq!(
+            repeats.observe(&[printed("sed -i s/x/y/ lib/a.js", "")]),
+            None
+        );
+        let read = call(
+            "read_file",
+            json!({"path": "lib/a.js"}),
+            json!({"content": "y"}),
+        );
+        assert_eq!(repeats.observe(&[read]), None);
+        for index in 0..11 {
+            assert_eq!(repeats.observe(&[grep(index)]), None);
+            assert_eq!(repeats.take_nudge(), None);
+        }
+        assert_eq!(repeats.observe(&[grep(11)]), None);
+        assert_eq!(
+            repeats.take_nudge().as_deref(),
+            Some("12 of your last 13 tool calls showed nothing new")
+        );
+        assert_eq!(repeats.take_nudge(), None, "asked once");
+        // After the request, a call that shows something new does not count.
+        for index in 0..7 {
+            assert_eq!(repeats.observe(&[grep(index)]), None);
+        }
+        let new = call(
+            "read_file",
+            json!({"path": "lib/b.js"}),
+            json!({"content": "something new"}),
+        );
+        assert_eq!(repeats.observe(&[new]), None);
+        assert!(repeats.observe(&[grep(7)]).is_some());
+        // The same guard without counting: what `fresh` keeps.
+        assert!(repeats.fresh().read_only);
+        assert!(!ToolLoopRepeats::default().fresh().read_only);
     }
 
     #[test]

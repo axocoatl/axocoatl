@@ -1,0 +1,16 @@
+FINDINGS
+```json
+[
+  {
+    "id": "F1",
+    "title": "Command Injection Vulnerability in rotate_keys.py",
+    "detail": "The rotate function in ops/rotate_keys.py uses shell=True with string concatenation, making it vulnerable to command injection. An attacker could inject malicious commands through the tenant parameter, as demonstrated by the command: 'keyctl archive {tenant} && keyctl issue {tenant}'. This is a critical security flaw.",
+    "severity": "critical",
+    "location": "ops/rotate_keys.py:8"
+  }
+]
+```
+NOT_REACHED
+```json
+[]
+```

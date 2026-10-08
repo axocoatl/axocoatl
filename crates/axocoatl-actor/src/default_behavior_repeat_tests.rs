@@ -231,3 +231,82 @@ async fn an_agent_repeating_a_kind_of_command_without_new_results_is_asked_for_i
     assert!(note.contains("tools are no longer available"), "{note}");
     assert_eq!(output.tool_calls.len(), 9);
 }
+
+/// A read-only audit worker in the 1.3.0 re-smoke made 113 `grep` calls,
+/// each different, over the one file it had read. Read-only, an Agent whose
+/// calls of any kind keep showing nothing new is asked once for its answer
+/// with tools still offered, then ended if it goes on.
+async fn run_grep_script(read_only: bool, calls: usize) -> (AgentOutput, Vec<ChatRequest>) {
+    let script: Vec<(&'static str, serde_json::Value)> = (0..calls)
+        .map(|index| {
+            (
+                "grep",
+                serde_json::json!({"pattern": format!("signature{index}"), "path": "auth"}),
+            )
+        })
+        .collect();
+    let provider = Arc::new(ScriptedLoopLlm::new(script));
+    let captured = provider.captured.clone();
+    let mut executor = axocoatl_tools::ToolExecutor::new();
+    executor.register_builtin(
+        "grep",
+        Arc::new(FixedResultTool(
+            serde_json::json!({"matches": "auth/tokens.py:19:    if signature != expected:\n"}),
+        )),
+    );
+    let mut behavior = DefaultAgentBehavior::new(provider, simple_counter())
+        .with_tool_round_limit(128)
+        .with_tool_executor(Arc::new(executor));
+    if read_only {
+        behavior = behavior.with_read_only_tool_loop();
+    }
+    behavior.on_start(&AgentConfig::default()).await.unwrap();
+    let output = behavior
+        .execute(AgentInput::text("audit auth"))
+        .await
+        .expect("the loop ends with an answer");
+    let requests = captured.lock().unwrap().clone();
+    (output, requests)
+}
+
+#[tokio::test]
+async fn a_read_only_agent_whose_calls_show_nothing_new_is_asked_once_then_ended() {
+    let (output, requests) = run_grep_script(true, 40).await;
+    assert_eq!(output.content, "final answer");
+    // The first grep shows its line; twelve of the first thirteen calls
+    // show nothing new, so the fourteenth request asks, with tools.
+    let nudged: Vec<usize> = requests
+        .iter()
+        .enumerate()
+        .filter(|(_, request)| host_note(request).is_some() && !request.tools.is_empty())
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(nudged, [13], "asked once");
+    let note = host_note(&requests[13]).unwrap();
+    assert!(
+        note.contains("12 of your last 13 tool calls showed nothing new. If you have what you \
+             need, write your final answer now"),
+        "{note}"
+    );
+    assert!(note.contains("Tools stay available"), "{note}");
+    // Eight more calls without anything new end it.
+    assert_eq!(requests.len(), 22);
+    let last = requests.last().unwrap();
+    assert!(last.tools.is_empty());
+    let note = host_note(last).unwrap();
+    assert!(
+        note.contains(
+            "after the host asked for your answer, 8 more of your tool calls showed nothing new, \
+             so tools are no longer available"
+        ),
+        "{note}"
+    );
+    assert_eq!(output.tool_calls.len(), 21);
+
+    // An Agent that can write is not watched across kinds.
+    let (output, requests) = run_grep_script(false, 40).await;
+    assert_eq!(output.content, "final answer");
+    assert_eq!(requests.len(), 41);
+    assert!(requests.iter().all(|request| host_note(request).is_none()));
+    assert_eq!(output.tool_calls.len(), 40);
+}

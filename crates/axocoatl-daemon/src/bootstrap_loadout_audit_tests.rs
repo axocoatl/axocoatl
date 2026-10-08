@@ -90,8 +90,8 @@ struct ScriptedAudit {
     reask_tools: Arc<std::sync::Mutex<Vec<usize>>>,
     /// Every tool an area worker's request offered the model.
     worker_tools: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
-    /// Each host note a request without tools ended with.
-    host_notes: Arc<std::sync::Mutex<Vec<String>>>,
+    /// Each host note a request ended with, and whether it offered tools.
+    host_notes: Arc<std::sync::Mutex<Vec<(String, bool)>>>,
     /// [`Scenario::Stops`]: the notify worker's request arrived.
     notify_waiting: Arc<std::sync::atomic::AtomicBool>,
     /// [`Scenario::Stops`]: how many of the other workers have reported.
@@ -283,15 +283,16 @@ impl wiremock::Respond for ScriptedAudit {
         if text.contains("Your area: ") {
             self.worker_tools.lock().unwrap().extend(offered.clone());
         }
-        if offered.is_empty() {
-            if let Some(note) = body["messages"]
-                .as_array()
-                .and_then(|messages| messages.last())
-                .and_then(|message| message["content"].as_str())
-                .filter(|content| content.starts_with("[Note from the host:"))
-            {
-                self.host_notes.lock().unwrap().push(note.to_owned());
-            }
+        if let Some(note) = body["messages"]
+            .as_array()
+            .and_then(|messages| messages.last())
+            .and_then(|message| message["content"].as_str())
+            .filter(|content| content.starts_with("[Note from the host:"))
+        {
+            self.host_notes
+                .lock()
+                .unwrap()
+                .push((note.to_owned(), !offered.is_empty()));
         }
         if matches!(self.scenario, Scenario::Loops | Scenario::Stops) {
             if let Some(reply) = self.loops_and_stops(model, &body, &text, &offered) {
@@ -762,8 +763,8 @@ struct AuditRun {
     reask_tools: Vec<usize>,
     /// Every tool an area worker's request offered the model.
     worker_tools: Vec<String>,
-    /// Each host note a request without tools ended with.
-    host_notes: Vec<String>,
+    /// Each host note a request ended with, and whether it offered tools.
+    host_notes: Vec<(String, bool)>,
 }
 
 impl AuditRun {
@@ -1736,7 +1737,9 @@ async fn an_audit_on_podman_ends_a_repeating_worker_and_keeps_placeholders_out()
         )
     );
     // The repeats: the read nine times (the first showed the file), the
-    // listing seven, then the answer without tools.
+    // listing seven, then the answer without tools. The worker is read-only:
+    // after its 19th call, 12 of its last 15 showed nothing new, so the next
+    // request asked for its answer with tools still offered; it went on.
     let count = |tool: &str| {
         recorded
             .iter()
@@ -1751,12 +1754,22 @@ async fn an_audit_on_podman_ends_a_repeating_worker_and_keeps_placeholders_out()
         (9, 7),
         "{recorded:?}"
     );
-    assert_eq!(run.host_notes.len(), 1, "{:?}", run.host_notes);
+    assert_eq!(run.host_notes.len(), 2, "{:?}", run.host_notes);
     assert!(
-        run.host_notes[0].starts_with(
-            "[Note from the host: you repeated the same call (read_file with the same \
-             arguments) 8 times without new results, so tools are no longer available."
-        ),
+        run.host_notes[0].1
+            && run.host_notes[0].0.starts_with(
+                "[Note from the host: 12 of your last 15 tool calls showed nothing new. If you \
+                 have what you need, write your final answer now"
+            ),
+        "{:?}",
+        run.host_notes
+    );
+    assert!(
+        !run.host_notes[1].1
+            && run.host_notes[1].0.starts_with(
+                "[Note from the host: you repeated the same call (read_file with the same \
+                 arguments) 8 times without new results, so tools are no longer available."
+            ),
         "{:?}",
         run.host_notes
     );

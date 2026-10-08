@@ -685,7 +685,9 @@ files the host listed and assigned to its area (an area too large for one worker
 split into numbered sub-areas, and at most 200 planned reads to a turn); follow-ups naming
 the files a worker did not read to their end, judged from the bytes the `read_file` calls
 its Session recorded returned, for as long as each follow-up reads something new;
-integrate.
+integrate. The host then checks every finding against its own listing: one at a file the
+repository does not have becomes a note, a line beyond its file becomes unknown, and the
+merged findings lose near duplicates (same file, lines at most 2 apart, similar titles).
 
 **Outcome.** `RunOutcome` (`axocoatl.run-outcome/1`) adds to a turn's view: check results
 with parsed reports, the review rounds with findings split by id, adjudications, findings
@@ -971,7 +973,15 @@ claim about any model.
   In the 1.3.0 re-smoke two audit workers ran a different `python3 -c` script printing
   "final audit confirmation" lines in each of 80 and 81 rounds, for 39 minutes, which
   neither earlier pattern caught. A model that calls a tool instead of answering then
-  ends its activation as failed, with the reason in the failure.
+  ends its activation as failed, with the reason in the failure. A read-only Agent (an
+  empty write scope, as every audit Agent has) is also watched across kinds: when 12 of
+  its last 15 calls of any tool and arguments showed nothing new, its next request asks
+  once for the final answer while still offering tools ("12 of your last 15 tool calls
+  showed nothing new. If you have what you need, write your final answer now …"), and
+  when 8 more calls show nothing new after that, the next request goes without tools
+  ("after the host asked for your answer, 8 more of your tool calls showed nothing
+  new"). In the 1.3.0 re-smoke audit workers made 60 to 113 `grep` calls, each with
+  different arguments, over files they had already read.
 - **One retry for a broken stream.** A provider stream that ends early (for Ollama also
   one ended by an error record, such as an unparseable tool call) is retried once. Its
   estimated input and the output it had already streamed are charged to the same grant

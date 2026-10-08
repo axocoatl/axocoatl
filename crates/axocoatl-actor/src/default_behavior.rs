@@ -441,6 +441,9 @@ pub struct DefaultAgentBehavior {
     /// repeat without progress (see `tool_loop_repeats`). The remaining
     /// requests go without tools and ask for the final answer.
     loop_wrap_up: Option<String>,
+    /// Whether the Agent can change no file: its tool loop is also watched
+    /// for calls of any kind that show nothing new (see `tool_loop_repeats`).
+    read_only_tool_loop: bool,
 }
 
 /// Share of the context window (1/32) left free for what the local count
@@ -508,6 +511,7 @@ impl DefaultAgentBehavior {
             dropped_rounds: std::sync::atomic::AtomicUsize::new(0),
             prompt_scale_milli: std::sync::atomic::AtomicUsize::new(1_000),
             loop_wrap_up: None,
+            read_only_tool_loop: false,
         }
     }
 
@@ -533,6 +537,15 @@ impl DefaultAgentBehavior {
     /// a misbehaving provider with an unusually large grant.
     pub fn with_tool_round_limit(mut self, limit: u32) -> Self {
         self.tool_round_limit = limit.clamp(1, axocoatl_core::MAX_TOOL_ROUNDS) as usize;
+        self
+    }
+
+    /// The Agent can change no file (an empty write scope). When most of its
+    /// recent tool calls, of any kind, show nothing new, it is asked once
+    /// for its final answer with tools still offered, and its loop ends if
+    /// it goes on without new results (see `tool_loop_repeats`).
+    pub fn with_read_only_tool_loop(mut self) -> Self {
+        self.read_only_tool_loop = true;
         self
     }
 
@@ -1644,10 +1657,13 @@ impl DefaultAgentBehavior {
     /// progress, or the budget cannot pay for another tool round and a final
     /// answer, the request goes without tools and asks for the answer now, so
     /// the activation ends with one instead of looping or failing at the limit.
-    /// Returns why tools were withheld, when they were.
+    /// Returns why tools were withheld, when they were. Otherwise a `nudge`
+    /// (a read-only tool loop whose recent calls showed nothing new) asks
+    /// for the final answer while still offering tools.
     fn prepare_provider_request(
         &self,
         mut request: ChatRequest,
+        nudge: Option<&str>,
     ) -> Result<(ChatRequest, ProviderToolNameMap, Option<String>), AgentError> {
         let mut final_answer_reason = None;
         if !request.tools.is_empty() {
@@ -1672,6 +1688,19 @@ impl DefaultAgentBehavior {
                 )));
                 self.fit_final_answer_output(&mut request);
                 final_answer_reason = Some(reason);
+            } else if let Some(nudge) = nudge {
+                tracing::info!(
+                    agent = %self.agent_id,
+                    reason = %nudge,
+                    "Asking for the final answer with tools still offered"
+                );
+                request.messages.push(ChatMessage::user(format!(
+                    "[Note from the host: {nudge}. If you have what you need, write your final \
+                     answer now: what you found, what you checked, and what is left undone. \
+                     Tools stay available for a call that shows something new; after {} more \
+                     calls that show nothing new they are withdrawn.]",
+                    crate::tool_loop_repeats::STALE_AFTER_NUDGE_LIMIT
+                )));
             }
         }
         let (request, provider_tool_names) = Self::encode_provider_request(request)?;
@@ -3183,7 +3212,7 @@ impl AgentBehavior for DefaultAgentBehavior {
                 let (request, names) = Self::encode_provider_request(request)?;
                 (request, names, None)
             } else {
-                self.prepare_provider_request(request)?
+                self.prepare_provider_request(request, None)?
             };
         if !self.active_run_cancelled {
             self.ensure_request_fits_context(&request)?;
@@ -3302,7 +3331,12 @@ impl AgentBehavior for DefaultAgentBehavior {
 
         // Tool execution loop: if LLM returns tool calls, execute them and continue
         let mut tool_records = Vec::new();
-        let mut repeats = crate::tool_loop_repeats::ToolLoopRepeats::default();
+        let mut repeats = if self.read_only_tool_loop {
+            crate::tool_loop_repeats::ToolLoopRepeats::read_only()
+        } else {
+            crate::tool_loop_repeats::ToolLoopRepeats::default()
+        };
+        let mut loop_nudge: Option<String> = None;
         let mut tool_activity_count = 0_usize;
         let mut tool_error_count = 0_usize;
         let mut unresolved_tool_count = 0_usize;
@@ -3809,6 +3843,7 @@ impl AgentBehavior for DefaultAgentBehavior {
                 }
                 if self.loop_wrap_up.is_none() {
                     self.loop_wrap_up = repeats.observe(&tool_records[round_start..]);
+                    loop_nudge = repeats.take_nudge();
                 }
 
                 // Once dispatch begins, every started tool and post-hook is
@@ -3821,8 +3856,9 @@ impl AgentBehavior for DefaultAgentBehavior {
 
                 if self.consume_safe_boundary_guidance(None)? {
                     // New guidance is new work: repeats before it do not count.
-                    repeats = Default::default();
+                    repeats = repeats.fresh();
                     self.loop_wrap_up = None;
+                    loop_nudge = None;
                 }
                 if self.observe_cancellation() { response.tool_calls.clear(); break; }
 
@@ -3835,7 +3871,7 @@ impl AgentBehavior for DefaultAgentBehavior {
                     0,
                 )?;
                 let (mut followup, provider_tool_names, followup_reason) =
-                    self.prepare_provider_request(followup)?;
+                    self.prepare_provider_request(followup, loop_nudge.take().as_deref())?;
                 final_answer_reason = followup_reason;
                 self.ensure_request_fits_context(&followup)?;
                 let est = self.preflight_provider_spend(&mut followup)?;
@@ -3922,15 +3958,16 @@ impl AgentBehavior for DefaultAgentBehavior {
         // controller. The atomic final empty poll prevents a completion race.
         if self.active_run_cancelled || !response.tool_calls.is_empty()
             || !self.consume_safe_boundary_guidance(Some(&response.content))? { break; }
-        repeats = Default::default();
+        repeats = repeats.fresh();
         self.loop_wrap_up = None;
+        loop_nudge = None;
         if self.observe_cancellation() { break; }
         let followup = self.build_request_from_session(
             input.system_override.as_deref(), input.model_override.clone(),
             turn_start_session_index, 0,
         )?;
         let (mut followup, provider_tool_names, followup_reason) =
-            self.prepare_provider_request(followup)?;
+            self.prepare_provider_request(followup, None)?;
         final_answer_reason = followup_reason;
         self.ensure_request_fits_context(&followup)?;
         let est = self.preflight_provider_spend(&mut followup)?;

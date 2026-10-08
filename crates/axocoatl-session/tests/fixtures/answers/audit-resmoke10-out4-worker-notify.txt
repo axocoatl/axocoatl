@@ -1,0 +1,30 @@
+FINDINGS
+```json
+[
+  {
+    "id": "F1",
+    "title": "Hardcoded Sensitive Token",
+    "detail": "The webhook module contains a hardcoded secret token 'sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef' in the WEBHOOK_TOKEN constant. This is a security vulnerability as it exposes credentials that should be managed externally.",
+    "severity": "high",
+    "location": "notify/webhook.py:7"
+  },
+  {
+    "id": "F2",
+    "title": "Missing Webhook Key Rotation",
+    "detail": "The notify directory is missing the 'rotate_keys.py' file which should handle webhook key rotation. This is a critical security issue as it prevents proper credential management and rotation.",
+    "severity": "critical",
+    "location": "notify/rotate_keys.py:1"
+  },
+  {
+    "id": "F3",
+    "title": "Potential SSL/TLS Verification Issues",
+    "detail": "The webhook module uses urllib.request.urlopen without explicit SSL context verification, which could lead to man-in-the-middle attacks. While the code doesn't explicitly disable verification, it's not using secure defaults.",
+    "severity": "medium",
+    "location": "notify/webhook.py:19"
+  }
+]
+```
+NOT_REACHED
+```json
+["notify/rotate_keys.py"]
+```
