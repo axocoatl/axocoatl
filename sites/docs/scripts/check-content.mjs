@@ -129,10 +129,12 @@ for (const [group, name] of [
   }
 }
 
-// Subcommands defined outside main.rs: loadout runs, records, secrets, recipes.
+// Subcommands defined outside main.rs: loadout runs, records, connections,
+// secrets, recipes.
 for (const [group, file, name] of [
   ['loadouts', 'axocoatl-cli/src/run_cmd.rs', 'LoadoutCommands'],
   ['record', 'axocoatl-cli/src/run_cmd.rs', 'RecordCommands'],
+  ['connect', 'axocoatl-cli/src/connect_cmd/mod.rs', 'ConnectCommands'],
   ['secret', 'axocoatl-cli/src/secret_cmd.rs', 'SecretCommands'],
   ['recipe', 'axocoatl-cli/src/recipe_cmd.rs', 'RecipeCommands'],
 ]) {

@@ -139,8 +139,10 @@
               then integration). What a run did not cover is listed, never passed over.</li>
           <li>The Claude Code and Codex CLIs as a loadout's writer, inside the Session as the
               non-root writer user. Their credential, stored with
-              <code>axocoatl secret set</code> from standard input, is added on your computer
-              by a route; the container holds a placeholder, and every model call is in the
+              <code>axocoatl connect claude-code</code> (it runs <code>claude setup-token</code>
+              and stores the token without ever showing it) or <code>axocoatl secret set</code>
+              from standard input or an environment variable, is added on your computer by a
+              route; the container holds a placeholder, and every model call is in the
               network record.</li>
           <li>tester-army/e2e as a required check, with its report in the run's Outcome and
               its model calls through a route.</li>

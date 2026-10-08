@@ -1207,8 +1207,8 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_reject
         assert!(
             reason.contains(&format!(
                 "the model API rejected the stored credential {credential} (HTTP 401 through \
-                 the Session's route): store it again with `axocoatl secret set {credential}`, \
-                 piping in only the token"
+                 the Session's route): {}",
+                crate::secret_store::store_again_hint(credential)
             )),
             "{reason}"
         );
@@ -1582,8 +1582,8 @@ async fn actual_reviewed_loadout_run_with_the_pinned_codex() {
 
 /// Claude Code from its recipe image against a model API that rejects the
 /// stored credential (`401`), as the 1.3 smoke run's was: the run needs
-/// attention and says to store `claude-code-oauth` again, piping in only
-/// the token (see [`pinned_run_child_body`]).
+/// attention and says to connect again with `axocoatl connect claude-code`
+/// (see [`pinned_run_child_body`]).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the claude-code recipe image"]
 async fn a_rejected_claude_code_credential_is_named_with_how_to_store_it_again() {

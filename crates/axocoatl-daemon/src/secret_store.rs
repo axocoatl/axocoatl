@@ -64,7 +64,8 @@ pub fn normalize_secret_value(value: &[u8]) -> Result<Zeroizing<Vec<u8>>, Secret
         .unwrap_or(value);
     if trimmed.is_empty() {
         return Err(SecretStoreError::Invalid(
-            "the value is empty; pipe it on stdin, for example: claude setup-token | axocoatl secret set claude-code-oauth"
+            "the value is empty; pipe it on stdin (`axocoatl secret set <name> < token-file`) or \
+             name a variable with --from-env (for Claude Code, run `axocoatl connect claude-code`)"
                 .into(),
         ));
     }
@@ -256,26 +257,59 @@ fn claude_code_route_secrets() -> Vec<String> {
 /// The prefix of the OAuth token `claude setup-token` prints.
 pub const CLAUDE_CODE_TOKEN_PREFIX: &str = "sk-ant-oat01-";
 
-/// How to store secret `name` again: piping in only the token. For the
+/// Whether secret `name` is one a Claude Code route sends (an OAuth token
+/// from `claude setup-token`).
+fn is_claude_code_secret(name: &str) -> bool {
+    claude_code_route_secrets()
+        .iter()
+        .any(|secret| secret == name)
+}
+
+/// The `axocoatl connect claude-code` command line that stores `name`.
+fn connect_command(name: &str) -> String {
+    if name == crate::external_agent::claude_code::CLAUDE_CODE_SECRET {
+        "axocoatl connect claude-code".to_string()
+    } else {
+        format!("axocoatl connect claude-code --secret {name}")
+    }
+}
+
+/// How to store secret `name` again. For a Claude Code secret: run
+/// `axocoatl connect claude-code`, which obtains and stores a new token
+/// without anyone seeing it; otherwise pipe in only the token. For the
 /// refusal of a credential a model API rejected and for `secret set`'s
 /// warnings.
 pub fn store_again_hint(name: &str) -> String {
-    let token = if claude_code_route_secrets()
-        .iter()
-        .any(|secret| secret == name)
-    {
-        format!(
-            " (the {CLAUDE_CODE_TOKEN_PREFIX}… token `claude setup-token` prints, with nothing \
-             around it)"
-        )
-    } else if name == crate::external_agent::codex::CODEX_SECRET {
-        " (the OpenAI API key, for example `printenv OPENAI_API_KEY | axocoatl secret set \
-         codex-openai`)"
+    if is_claude_code_secret(name) {
+        return format!(
+            "connect again with `{}`, which runs `claude setup-token` and stores the new \
+             {CLAUDE_CODE_TOKEN_PREFIX}… token without showing it",
+            connect_command(name)
+        );
+    }
+    let token = if name == crate::external_agent::codex::CODEX_SECRET {
+        " (the OpenAI API key, for example `axocoatl secret set codex-openai --from-env \
+         OPENAI_API_KEY`)"
             .to_string()
     } else {
         String::new()
     };
     format!("store it again with `axocoatl secret set {name}`, piping in only the token{token}")
+}
+
+/// How to store secret `name` when a route names it and it is missing.
+pub fn how_to_store(name: &str) -> String {
+    if is_claude_code_secret(name) {
+        format!(
+            "run `{}` (it runs `claude setup-token` and stores the token without showing it)",
+            connect_command(name)
+        )
+    } else {
+        format!(
+            "pipe the value into `axocoatl secret set {name}` (it reads standard input and \
+             refuses a terminal) or name a variable with `--from-env`"
+        )
+    }
 }
 
 /// Why `value`, about to be stored as `name`, may not be the bare token its
@@ -323,11 +357,7 @@ pub fn value_warnings(name: &str, value: &[u8]) -> Vec<String> {
             parts.max(prefixes)
         ));
     }
-    if claude_code_route_secrets()
-        .iter()
-        .any(|secret| secret == name)
-        && !text.starts_with(CLAUDE_CODE_TOKEN_PREFIX)
-    {
+    if is_claude_code_secret(name) && !text.starts_with(CLAUDE_CODE_TOKEN_PREFIX) {
         warnings.push(format!(
             "Claude Code's route sends {name} as an OAuth token, which starts with \
              \"{CLAUDE_CODE_TOKEN_PREFIX}\" (the token `claude setup-token` prints), and this \
@@ -690,17 +720,18 @@ mod tests {
     #[test]
     fn the_store_again_hint_says_to_pipe_only_the_token() {
         let hint = store_again_hint("claude-code-oauth");
-        assert!(
-            hint.starts_with(
-                "store it again with `axocoatl secret set claude-code-oauth`, piping in only the token"
-            ),
-            "{hint}"
+        assert_eq!(
+            hint,
+            "connect again with `axocoatl connect claude-code`, which runs `claude setup-token` \
+             and stores the new sk-ant-oat01-… token without showing it"
         );
-        assert!(hint.contains("sk-ant-oat01-…"), "{hint}");
-        assert!(store_again_hint("codex-openai").contains("OPENAI_API_KEY"));
+        assert!(store_again_hint("codex-openai").contains("--from-env OPENAI_API_KEY"));
         assert_eq!(
             store_again_hint("example-token"),
             "store it again with `axocoatl secret set example-token`, piping in only the token"
         );
+        assert!(how_to_store("claude-code-oauth").starts_with("run `axocoatl connect claude-code`"));
+        assert!(how_to_store("example-token")
+            .starts_with("pipe the value into `axocoatl secret set example-token`"));
     }
 }

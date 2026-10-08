@@ -55,38 +55,82 @@ on the route, to each request the route's rules allow.
 
 ## Store the credential
 
-`axocoatl secret set <name>` reads a value from standard input and stores it in the data
-root as `secrets/<name>`, a file only your user can read (`0600`), replaced atomically.
-It never takes the value as an argument, never prints it, and never writes it to a log or
-a record. Standard input must be a pipe or a file: when it is a terminal, where typing or
-pasting would show the value, the command refuses and prints how to pipe it. Like
-`recipe build`, it uses the data root of `--config` or `AXOCOATL_DATA_DIR`.
+### Claude Code: `axocoatl connect claude-code`
 
 ```sh
-# Claude Code: the long-lived token `claude setup-token` prints
-claude setup-token | axocoatl secret set claude-code-oauth
+axocoatl connect claude-code
+```
 
+This runs `claude setup-token` for you and stores the long-lived OAuth token it creates
+as the secret `claude-code-oauth`. You sign in in the browser as `claude setup-token`
+asks; you never see, copy, paste or type the token:
+
+- `claude setup-token` runs in a pseudo-terminal 1000 columns wide, so the token is
+  printed on one line. Your terminal is in raw mode while it runs (your keystrokes go
+  to it) and is restored when it ends, also on an error or a signal.
+- Everything it prints reaches your terminal through a filter that replaces any
+  `sk-ant-…` token with `[token hidden by axocoatl]`, even when the token arrives in
+  pieces or with color codes inside it. At most the public prefix `sk-ant` shows before
+  the mask.
+- Axocoatl reads the token from that output in memory only: exactly one
+  `sk-ant-oat01-…` token must appear, or nothing is stored and the command says why.
+  The token never goes into a command line, an environment variable, a log, a temporary
+  file or a message.
+- It then checks the token with Anthropic over HTTPS (`GET /v1/models` with the
+  token, which costs nothing; the response is never shown). A token Anthropic rejects
+  (`401` or `403`) is not stored. When Anthropic cannot be reached, nothing is stored
+  either: run the command again, or add `--no-verify` to store the token unchecked.
+- It stores the token exactly as `axocoatl secret set` does (`secrets/claude-code-oauth`
+  in the data root, `0600`, replaced atomically) and prints
+  `Connected Claude Code: stored secret claude-code-oauth (the token was never shown)`
+  with the next step.
+
+It needs an interactive terminal and the `claude` CLI: the first `claude` on `PATH`,
+then `~/.local/bin/claude`, or the path given with `--claude PATH`. `--secret NAME`
+stores the token under another name. Like `recipe build`, it uses the data root of
+`--config` or `AXOCOATL_DATA_DIR`. Exit codes: 0 stored, 1 rejected by Anthropic, 2 no
+single token printed, 3 usage (no terminal, a bad name, no `claude`), 4 not checked
+(network), 5 the data directory or the secret store failed, 6 interrupted by a signal.
+Run it again whenever the token expires or is revoked.
+
+### Other credentials: `axocoatl secret set`
+
+`axocoatl secret set <name>` reads a value from standard input, or with
+`--from-env VAR` from that environment variable of the command, and stores it in the
+data root as `secrets/<name>`, a file only your user can read (`0600`), replaced
+atomically. It never takes the value as an argument, never prints it, and never writes
+it to a log or a record. Standard input must be a pipe or a file: when it is a terminal,
+where typing or pasting would show the value, the command refuses and prints how to
+pipe it. An unset or empty `--from-env` variable is refused.
+
+```sh
 # Codex: an OpenAI API key, from the environment or from a file
-printenv OPENAI_API_KEY | axocoatl secret set codex-openai
+axocoatl secret set codex-openai --from-env OPENAI_API_KEY
 axocoatl secret set codex-openai < openai-key.txt
+
+# Claude Code without a terminal (for example in CI): a token you already have
+axocoatl secret set claude-code-oauth --from-env CLAUDE_CODE_OAUTH_TOKEN
 ```
 
 A value is one line of at most 8 KiB with no control characters; one trailing line break
-is ignored. If the command prints more than the token, put the token alone in a file and
+is ignored. If a command prints more than the token, put the token alone in a file and
 redirect it. A route sends the value exactly as stored, so `secret set` warns on standard
 error, and still stores it, when the value has whitespace inside it, starts with
 `Bearer ` (the route adds that itself), looks like JSON or holds several tokens, and, for
 `claude-code-oauth` (the secret Claude Code's route sends), when it does not start with
 `sk-ant-oat01-`, as the token `claude setup-token` prints does. The warning never shows
 the value. When the model API rejects a stored credential (`401` through the route), the
-run's not-covered reason names the credential and says to store it again with
-`axocoatl secret set <name>`, piping in only the token.
+run's not-covered reason names the credential and says how to store it again: for
+Claude Code, `axocoatl connect claude-code`; for others, `axocoatl secret set <name>`,
+piping in only the token.
 `axocoatl secret list` prints the stored names, never values, and
 `axocoatl secret remove <name>` deletes one. A route's `credential` resolves to a
 `credentials` entry in the configuration first, then to a stored secret of that name; a
 name found in neither refuses the run (exit code 3).
 
-You supply the credential, for your own account. Axocoatl does not obtain or refresh it.
+You supply the credential, for your own account. `axocoatl connect claude-code` obtains
+the Claude Code token through `claude setup-token` when you run it; Axocoatl never
+refreshes a credential by itself.
 
 ## Name the program in a loadout
 

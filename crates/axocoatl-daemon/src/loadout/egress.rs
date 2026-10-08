@@ -165,10 +165,9 @@ pub fn loadout_overlay(
             _ => {
                 return Err(RunError::Usage(format!(
                     "the route to {} names credential {name:?}, which is neither in the \
-                     configuration's credentials nor stored: pipe the value into \
-                     `axocoatl secret set {name}` (it reads standard input and refuses a \
-                     terminal)",
-                    route.host
+                     configuration's credentials nor stored: {}",
+                    route.host,
+                    crate::secret_store::how_to_store(name)
                 )))
             }
         }

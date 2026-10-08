@@ -1195,8 +1195,8 @@ mod tests {
         assert!(
             refused.starts_with(
                 "refused:the model API rejected the stored credential claude-code-oauth (HTTP \
-                 401 through the Session's route): store it again with `axocoatl secret set \
-                 claude-code-oauth`, piping in only the token"
+                 401 through the Session's route): connect again with `axocoatl connect \
+                 claude-code`, which runs `claude setup-token`"
             ),
             "{refused}"
         );

@@ -1,6 +1,8 @@
 //! `axocoatl secret set|list|remove`: the secret store for route
-//! credentials. A value is read from stdin, never from argv, and never
-//! printed. Owner: workstream `agents`.
+//! credentials. A value is read from stdin or, with `--from-env VAR`, from
+//! the named environment variable, never from argv, and never printed.
+//! Owner: workstream `agents`. For Claude Code, `axocoatl connect
+//! claude-code` (`connect_cmd`) obtains and stores the token itself.
 //!
 //! The store is `{data dir}/secrets/<name>` (0600 files in a 0700
 //! directory), where the data dir is resolved exactly as the daemon's:
@@ -12,8 +14,10 @@
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
+use axocoatl_daemon::external_agent::claude_code::CLAUDE_CODE_SECRET;
 use axocoatl_daemon::secret_store;
 use clap::Subcommand;
+use zeroize::Zeroizing;
 
 /// Exit codes: 0 done, 3 usage (bad name or value, a terminal on stdin), 5
 /// the store could not be read or written.
@@ -22,10 +26,13 @@ const FAILURE: i32 = 5;
 
 #[derive(Debug, Subcommand)]
 pub enum SecretCommands {
-    /// Store a secret read from stdin (for example the output of
-    /// `claude setup-token`)
+    /// Store a secret read from stdin or from an environment variable (for
+    /// Claude Code, use `axocoatl connect claude-code`)
     Set {
         name: String,
+        /// Read the value from this environment variable instead of stdin
+        #[arg(long, value_name = "VAR")]
+        from_env: Option<String>,
         /// Path to config file (selects the data directory)
         #[arg(short, long, default_value_os_t = crate::default_config_path_for_clap())]
         config: PathBuf,
@@ -48,20 +55,26 @@ pub enum SecretCommands {
 /// The hint printed when stdin is a terminal: values never come from
 /// argv or from typing them where they would echo.
 fn pipe_hint(name: &str) -> String {
-    let source = match name {
-        "claude-code-oauth" => "claude setup-token",
-        "codex-openai" => "printenv OPENAI_API_KEY",
-        _ => "<command that prints it>",
+    let variable = match name {
+        "codex-openai" => "OPENAI_API_KEY",
+        _ => "VAR",
     };
-    format!(
-        "axocoatl secret set reads the value from stdin, not from the command line or the \
-         keyboard. Pipe it in, for example:\n  {source} | axocoatl secret set {name}\n  \
-         axocoatl secret set {name} < token-file"
-    )
+    let mut hint = format!(
+        "axocoatl secret set reads the value from stdin or an environment variable, not from \
+         the command line or the keyboard. For example:\n  axocoatl secret set {name} \
+         --from-env {variable}\n  axocoatl secret set {name} < token-file"
+    );
+    if name == CLAUDE_CODE_SECRET {
+        hint.push_str(
+            "\nFor Claude Code, run `axocoatl connect claude-code`: it runs `claude setup-token` \
+             and stores the token without showing it.",
+        );
+    }
+    hint
 }
 
 /// The data dir the daemon uses for `config`, created owner-only if absent.
-fn data_dir(config: &Path) -> Result<PathBuf, String> {
+pub(crate) fn data_dir(config: &Path) -> Result<PathBuf, String> {
     let data_dir = crate::configure_data_dir(config)?;
     axocoatl_daemon::AxocoatlDaemon::initialize_data_root(&data_dir)
         .map_err(|error| format!("opening the data directory: {error}"))?;
@@ -90,12 +103,50 @@ pub(crate) fn set_from(
     }
     let value =
         secret_store::read_secret_value(stdin).map_err(|error| (USAGE, error.to_string()))?;
+    store(data_dir, name, &value)
+}
+
+/// `secret set --from-env variable`, with the environment as `lookup`, for
+/// tests. An unset or empty variable is refused; the value is never echoed.
+pub(crate) fn set_from_env(
+    data_dir: &Path,
+    name: &str,
+    variable: &str,
+    lookup: impl FnOnce(&str) -> Option<std::ffi::OsString>,
+) -> Result<Stored, (i32, String)> {
+    use std::os::unix::ffi::OsStringExt;
+    if variable.is_empty() || variable.contains(['=', '\0']) {
+        return Err((
+            USAGE,
+            format!("{variable:?} is not an environment variable name"),
+        ));
+    }
+    let Some(value) = lookup(variable) else {
+        return Err((
+            USAGE,
+            format!("the environment variable {variable} is not set; nothing was stored"),
+        ));
+    };
+    let value = Zeroizing::new(value.into_vec());
+    if value.is_empty() {
+        return Err((
+            USAGE,
+            format!("the environment variable {variable} is empty; nothing was stored"),
+        ));
+    }
+    let value =
+        secret_store::normalize_secret_value(&value).map_err(|error| (USAGE, error.to_string()))?;
+    store(data_dir, name, &value)
+}
+
+/// Store `value` (already normalized) and describe it without its value.
+fn store(data_dir: &Path, name: &str, value: &[u8]) -> Result<Stored, (i32, String)> {
     let bytes = value.len();
-    secret_store::set_secret(data_dir, name, &value).map_err(|error| match error {
+    secret_store::set_secret(data_dir, name, value).map_err(|error| match error {
         secret_store::SecretStoreError::Invalid(_) => (USAGE, error.to_string()),
         _ => (FAILURE, error.to_string()),
     })?;
-    let reasons = secret_store::value_warnings(name, &value);
+    let reasons = secret_store::value_warnings(name, value);
     let mut warnings: Vec<String> = reasons
         .iter()
         .map(|reason| format!("! secret {name}: {reason}."))
@@ -131,10 +182,18 @@ pub async fn cmd_secret(command: SecretCommands) -> i32 {
         }
     };
     match command {
-        SecretCommands::Set { name, .. } => {
-            let stdin = std::io::stdin();
-            let terminal = stdin.is_terminal();
-            match set_from(&data_dir, &name, stdin.lock(), terminal) {
+        SecretCommands::Set { name, from_env, .. } => {
+            let result = match from_env {
+                Some(variable) => set_from_env(&data_dir, &name, &variable, |variable| {
+                    std::env::var_os(variable)
+                }),
+                None => {
+                    let stdin = std::io::stdin();
+                    let terminal = stdin.is_terminal();
+                    set_from(&data_dir, &name, stdin.lock(), terminal)
+                }
+            };
+            match result {
                 Ok(stored) => {
                     println!("✓ {}", stored.message);
                     for warning in &stored.warnings {
@@ -152,7 +211,9 @@ pub async fn cmd_secret(command: SecretCommands) -> i32 {
             Ok(names) => {
                 if names.is_empty() {
                     eprintln!(
-                        "No secrets stored. Add one with: <command that prints it> | axocoatl secret set <name>"
+                        "No secrets stored. Add one with `axocoatl connect claude-code`, \
+                         `axocoatl secret set <name> --from-env VAR`, or \
+                         `<command that prints it> | axocoatl secret set <name>`"
                     );
                 }
                 for name in names {
@@ -212,9 +273,15 @@ mod tests {
         }
         let parsed = Cli::try_parse_from(["x", "set", "name", "-c", "/tmp/a.yaml"]).unwrap();
         assert!(
-            matches!(parsed.command, SecretCommands::Set { name, config }
+            matches!(parsed.command, SecretCommands::Set { name, config, from_env: None }
             if name == "name" && config == Path::new("/tmp/a.yaml"))
         );
+        let parsed = Cli::try_parse_from(["x", "set", "name", "--from-env", "MY_TOKEN"]).unwrap();
+        assert!(
+            matches!(parsed.command, SecretCommands::Set { from_env: Some(variable), .. }
+            if variable == "MY_TOKEN")
+        );
+        assert!(Cli::try_parse_from(["x", "set", "name", "--from-env"]).is_err());
     }
 
     #[test]
@@ -224,7 +291,12 @@ mod tests {
         let (code, message) =
             set_from(root.path(), "claude-code-oauth", &b"sk-typed"[..], true).unwrap_err();
         assert_eq!(code, USAGE);
-        assert!(message.contains("claude setup-token | axocoatl secret set claude-code-oauth"));
+        assert!(message.contains("axocoatl secret set claude-code-oauth --from-env VAR"));
+        assert!(
+            message.contains("run `axocoatl connect claude-code`"),
+            "{message}"
+        );
+        assert!(!message.contains("claude setup-token |"), "{message}");
         assert!(secret_store::list_secrets(root.path()).unwrap().is_empty());
 
         let stored = set_from(
@@ -276,8 +348,8 @@ mod tests {
             .starts_with("! secret claude-code-oauth: it starts with \"Bearer \""));
         assert!(stored.warnings[1].contains("starts with \"sk-ant-oat01-\""));
         assert!(stored.warnings[2].contains(
-            "If it is not the bare token, store it again with `axocoatl secret set \
-             claude-code-oauth`, piping in only the token"
+            "If it is not the bare token, connect again with `axocoatl connect claude-code`, \
+             which runs `claude setup-token`"
         ));
         for line in stored.warnings.iter().chain([&stored.message]) {
             assert!(!line.contains("secretvalue"), "{line}");
@@ -299,5 +371,66 @@ mod tests {
             std::fs::read(secret_store::secret_path(root.path(), "example-token")).unwrap(),
             br#"{"access_token": "abc", "refresh_token": "def"}"#
         );
+    }
+
+    /// `--from-env VAR` reads the value from the named variable, refuses an
+    /// unset or empty one, and never echoes the value.
+    #[test]
+    fn set_from_env_reads_the_named_variable_and_never_prints_it() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let lookup = |wanted: &'static str, value: &'static str| {
+            move |variable: &str| {
+                assert_eq!(variable, wanted);
+                Some(std::ffi::OsString::from(value))
+            }
+        };
+        let stored = set_from_env(
+            root.path(),
+            "codex-openai",
+            "OPENAI_API_KEY",
+            lookup("OPENAI_API_KEY", "sk-proj-envvalue\n"),
+        )
+        .unwrap();
+        assert!(stored.warnings.is_empty(), "{:?}", stored.warnings);
+        assert!(!stored.message.contains("envvalue"), "{}", stored.message);
+        assert!(stored.message.contains("16 bytes"), "{}", stored.message);
+        let path = secret_store::secret_path(root.path(), "codex-openai");
+        assert_eq!(std::fs::read(&path).unwrap(), b"sk-proj-envvalue");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let (code, message) =
+            set_from_env(root.path(), "codex-openai", "UNSET_VAR", |_| None).unwrap_err();
+        assert_eq!(code, USAGE);
+        assert_eq!(
+            message,
+            "the environment variable UNSET_VAR is not set; nothing was stored"
+        );
+        let (code, message) =
+            set_from_env(root.path(), "codex-openai", "EMPTY", lookup("EMPTY", "")).unwrap_err();
+        assert_eq!(code, USAGE);
+        assert!(message.contains("EMPTY is empty"), "{message}");
+        for variable in ["", "A=B"] {
+            let (code, _) =
+                set_from_env(root.path(), "codex-openai", variable, |_| None).unwrap_err();
+            assert_eq!(code, USAGE);
+        }
+        let (code, message) = set_from_env(
+            root.path(),
+            "codex-openai",
+            "TWO_LINES",
+            lookup("TWO_LINES", "first-secret\nsecond-secret"),
+        )
+        .unwrap_err();
+        assert_eq!(code, USAGE);
+        assert!(
+            !message.contains("first-secret") && !message.contains("second-secret"),
+            "{message}"
+        );
+        // The value stored before is untouched by the refusals.
+        assert_eq!(std::fs::read(&path).unwrap(), b"sk-proj-envvalue");
     }
 }

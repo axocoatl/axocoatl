@@ -98,8 +98,9 @@ findings; `--record` writes the whole Session record as one JSON Lines file that
 branch with host git and, opt-in, opens a pull request with gh; it never force-pushes
 and never pushes to the default branch. The Claude Code CLI or Codex CLI can be a
 loadout's writer inside the Session container, with its credential stored by
-`axocoatl secret set` (stdin only) and added on the host by an egress route, so the
-container sees a placeholder; tester-army/e2e can run as a required check.
+`axocoatl connect claude-code` (which runs `claude setup-token` and stores the token
+without showing it) or `axocoatl secret set` (stdin or `--from-env`, never argv) and
+added on the host by an egress route, so the container sees a placeholder; tester-army/e2e can run as a required check.
 
 ## Several Ways
 
@@ -228,6 +229,7 @@ axocoatl mcp servers|tools
 axocoatl run <loadout> --task "..."   Run a loadout headless
 axocoatl loadouts list|show|validate
 axocoatl record verify <file>
+axocoatl connect claude-code
 axocoatl secret set|list|remove
 axocoatl recipe build|list
 ```

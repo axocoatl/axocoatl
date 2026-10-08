@@ -144,12 +144,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hint names the route Axocoatl added for the writer, and one on a loadout's own route
   names the loadout's route, never a `sandbox.egress.routes` entry. When the model API
   answers a program's call through its route with `401`, the not-covered reason says
-  first that the stored credential (such as `claude-code-oauth`) was rejected and to
-  store it again with `axocoatl secret set <name>`, piping in only the token.
-- **`axocoatl secret set|list|remove`.** Stores a route credential, such as the output
-  of `claude setup-token`, read from standard input only (a pipe or a file; a terminal,
-  where the value would show, is refused), as an owner-only file under `secrets/` in the
-  data root. It is never printed, logged or recorded. A loadout route's
+  first that the stored credential (such as `claude-code-oauth`) was rejected and how to
+  store it again: `axocoatl connect claude-code` for Claude Code's, otherwise
+  `axocoatl secret set <name>`, piping in only the token.
+- **`axocoatl connect claude-code`.** Connects Claude Code without anyone seeing, copying
+  or typing its token: it runs `claude setup-token` in a pseudo-terminal 1000 columns
+  wide, with your terminal in raw mode (restored on exit, error, signal or panic) and
+  your keystrokes relayed, and shows its output through a streaming filter that replaces
+  every `sk-ant-…` token with `[token hidden by axocoatl]`, safe across write boundaries
+  and color codes. It captures exactly one `sk-ant-oat01-…` token in memory (refusing
+  none or several), checks it with Anthropic over HTTPS (`GET /v1/models`, free; skipped
+  with `--no-verify`; a `401`/`403` or an unreachable API stores nothing), and stores it
+  as `claude-code-oauth` (or `--secret NAME`) through the secret store. The token never
+  enters an argv, a child's environment, a log, a temporary file or a message. Exit codes
+  0 stored, 1 rejected, 2 no single token, 3 usage, 4 not checked, 5 store failure, 6
+  interrupted.
+- **`axocoatl secret set|list|remove`.** Stores a route credential read from standard
+  input (a pipe or a file; a terminal, where the value would show, is refused) or, with
+  `--from-env VAR`, from an environment variable (unset or empty is refused), as an
+  owner-only file under `secrets/` in the data root. It is never printed, logged or recorded. A loadout route's
   `credential` resolves to a `credentials` entry first, then to a stored secret.
   `secret set` warns on standard error, and still stores the value, when it has
   whitespace inside it, starts with `Bearer `, looks like JSON or holds several tokens,

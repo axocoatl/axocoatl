@@ -421,7 +421,8 @@ axocoatl session upgrade --confirm  Convert stopped legacy Session storage after
 axocoatl run <loadout> --task "…"  Run a loadout headless; --junit, --record, --keep
 axocoatl loadouts list|show|validate
 axocoatl record verify <file>    Check a run's record bundle
-axocoatl secret set <name>       Store a route credential read from stdin
+axocoatl connect claude-code     Sign in Claude Code and store its token, never shown
+axocoatl secret set <name>       Store a route credential from stdin or --from-env VAR
 axocoatl recipe build <recipe>…  Build a Session image (claude-code, codex, e2e)
 axocoatl workflow list | run     Compatibility view/run for manual Automations
 axocoatl agents list|status|restart

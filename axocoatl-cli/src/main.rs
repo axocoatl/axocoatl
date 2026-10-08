@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use axocoatl_core::SecureDir;
 use clap::{Parser, Subcommand};
 
+mod connect_cmd;
 mod ollama_setup;
 mod recipe_cmd;
 mod run_cmd;
@@ -197,7 +198,14 @@ enum Commands {
         command: run_cmd::RecordCommands,
     },
 
-    /// Secrets that egress routes add to requests (values are read from stdin)
+    /// Connect an external agent's account without showing its token
+    Connect {
+        #[command(subcommand)]
+        command: connect_cmd::ConnectCommands,
+    },
+
+    /// Secrets that egress routes add to requests (values are read from stdin
+    /// or an environment variable)
     Secret {
         #[command(subcommand)]
         command: secret_cmd::SecretCommands,
@@ -475,6 +483,9 @@ async fn main() {
         Commands::Run(args) => std::process::exit(run_cmd::cmd_run(*args).await),
         Commands::Loadouts { command } => std::process::exit(run_cmd::cmd_loadouts(command).await),
         Commands::Record { command } => std::process::exit(run_cmd::cmd_record(command).await),
+        Commands::Connect { command } => {
+            std::process::exit(connect_cmd::cmd_connect(command).await)
+        }
         Commands::Secret { command } => std::process::exit(secret_cmd::cmd_secret(command).await),
         Commands::Recipe { command } => std::process::exit(recipe_cmd::cmd_recipe(command).await),
     }
