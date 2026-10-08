@@ -407,7 +407,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new"). Replayed over the 78 recorded audit activations of two re-smokes that made tool
   calls, this would have asked 10 of them for their answer and ended 5 of those, and
   none of the 10 reported a planted defect whose line it first saw only after that
-  request.
+  request. In a later live re-smoke of three audits it asked 3 of their 22 activations,
+  workers after 27 to 38 calls, and each answered without another call.
 - **A cut `grep` result says what it left out.** `grep` returns up to 64 KiB of whole
   matching lines; a result it cut now also gives `returned_matches`, `total_matches`,
   `total_bytes`, `omitted_matches` and `omitted_bytes` (the same search counted in the
