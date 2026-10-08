@@ -1,6 +1,7 @@
 fn usage() -> ! {
     eprintln!(
         "usage: axocoatl-exec-supervisor --serve [--harden] | --version\n\
+         \x20      | --serve --harden --helper UID:GID --writer UID:GID --workspace PATH\n\
          \x20      | --egress-proxy --socket <path> [--identity-socket <path>] [--max-connections N]\n\
          \x20      | --bridge [--max-connections N]\n\
          \x20                 [--tcp-to-unix <ip:port>=<path> [--http-errors] [--peer-identity]]...\n\
@@ -62,17 +63,25 @@ fn main() {
         }
         _ => {}
     }
-    let harden = match arguments.as_slice() {
-        [serve] if serve == "--serve" => false,
-        [serve, harden] if serve == "--serve" && harden == "--harden" => true,
+    let (harden, helper) = match arguments.as_slice() {
+        [serve] if serve == "--serve" => (false, None),
+        [serve, harden] if serve == "--serve" && harden == "--harden" => (true, None),
+        [serve, harden, view @ ..] if serve == "--serve" && harden == "--harden" => {
+            match axocoatl_exec::protocol::HelperView::parse(view) {
+                Ok(view) => (true, Some(view)),
+                Err(_) => usage(),
+            }
+        }
         _ => usage(),
     };
     #[cfg(target_os = "linux")]
-    let result =
-        axocoatl_exec::supervisor::serve_with(axocoatl_exec::supervisor::ServeOptions { harden });
+    let result = axocoatl_exec::supervisor::serve_with(axocoatl_exec::supervisor::ServeOptions {
+        harden,
+        helper,
+    });
     #[cfg(not(target_os = "linux"))]
     let result: Result<(), String> = {
-        let _ = harden;
+        let _ = (harden, helper);
         Err("execution supervision requires Linux".into())
     };
     if let Err(error) = result {

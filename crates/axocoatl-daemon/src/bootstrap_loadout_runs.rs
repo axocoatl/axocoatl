@@ -875,8 +875,10 @@ fn helper_readers(file: &LoadoutFile) -> Vec<String> {
 }
 
 /// Why a run cannot start: its read-only Agents (`readers`) run as
-/// `helper_user`, which the Session container's probe found cannot enter or
-/// list the repository, so each of their reads would fail. `None` when it
+/// `helper_user`, and the Session container's probe, which launches its
+/// command exactly as theirs are, found that their view of the repository
+/// cannot enter or list it, or that this container or kernel cannot give
+/// them that view at all, so each of their reads would fail. `None` when it
 /// can, when the container has no separate helper user, or when no
 /// read-only Agent reads the repository. `mode` is the repository
 /// directory's permission bits on the host.
@@ -887,32 +889,43 @@ fn helper_access_refusal(
     helper_user: &str,
     mode: Option<u32>,
 ) -> Option<String> {
-    let Some(axocoatl_isolation::HelperWorkspaceAccess::Unreadable(printed)) = access else {
-        return None;
-    };
+    use axocoatl_isolation::HelperWorkspaceAccess;
     if readers.is_empty() {
         return None;
     }
+    let agents = format!(
+        "the read-only Agents of this run ({}) run as the helper user {helper_user}",
+        readers.join(", ")
+    );
     let repo = repo.display();
-    let mut what = Vec::new();
-    if let Some(mode) = mode {
-        what.push(format!("mode {mode:04o}"));
-    }
-    if !printed.is_empty() {
-        what.push(printed.clone());
-    }
-    Some(format!(
-        "the read-only Agents of this run ({}) run as the helper user {helper_user}, which \
-         cannot enter or list the repository {repo}{}. A read-only Agent reads only what the \
-         file modes let any user read: let other users read the repository, for example with \
-         chmod -R o+rX {repo}, and run again",
-        readers.join(", "),
-        if what.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", what.join("; "))
+    match access? {
+        HelperWorkspaceAccess::Readable => None,
+        HelperWorkspaceAccess::Unavailable(refusal) => Some(format!(
+            "{agents}, and this Session's container cannot give them their read-only view of \
+             the repository {repo}: {refusal}"
+        )),
+        HelperWorkspaceAccess::Unreadable(printed) => {
+            let mut what = Vec::new();
+            if let Some(mode) = mode {
+                what.push(format!("mode {mode:04o}"));
+            }
+            if !printed.is_empty() {
+                what.push(printed.clone());
+            }
+            Some(format!(
+                "{agents}, which cannot enter or list the repository {repo}{}. A read-only Agent \
+                 reads every file of a repository your user owns, whatever its file modes, and \
+                 of one owned by another user only what any user may read: run it on a \
+                 repository you own, or let other users read this one (chmod -R o+rX {repo}), \
+                 and run again",
+                if what.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", what.join("; "))
+                }
+            ))
         }
-    ))
+    }
 }
 
 fn valid_request_id(id: &str) -> bool {
@@ -2214,8 +2227,9 @@ impl AxocoatlDaemon {
     }
 
     /// Why the run of `file` in the Session `session_id` cannot start: its
-    /// read-only Agents run as the helper user, which the Session's Ready
-    /// container found cannot enter or list `repo` ([`helper_access_refusal`]).
+    /// read-only Agents run as the helper user, whose view of `repo` the
+    /// Session's Ready container found cannot enter or list it, or cannot
+    /// give them at all ([`helper_access_refusal`]).
     /// `None` when they can, or when it could not be found out (logged).
     async fn loadout_helper_refusal(
         &self,
@@ -2577,6 +2591,8 @@ mod tests {
         use axocoatl_isolation::HelperWorkspaceAccess;
         let readers = vec!["planner".to_string(), "worker".into(), "integrator".into()];
         let repo = std::path::Path::new("/tmp/axocoatl-audit-repo-6Gvg5C");
+        // Its view cannot enter it: the repository's owner is not the user
+        // the container maps to the writer.
         let denied = HelperWorkspaceAccess::Unreadable(
             "sh: cd: line 0: can't cd to /tmp/axocoatl-audit-repo-6Gvg5C: Permission denied".into(),
         );
@@ -2587,9 +2603,27 @@ mod tests {
             "the read-only Agents of this run (planner, worker, integrator) run as the helper \
              user 1001:1001, which cannot enter or list the repository \
              /tmp/axocoatl-audit-repo-6Gvg5C (mode 0700; sh: cd: line 0: can't cd to \
-             /tmp/axocoatl-audit-repo-6Gvg5C: Permission denied). A read-only Agent reads only \
-             what the file modes let any user read: let other users read the repository, for \
-             example with chmod -R o+rX /tmp/axocoatl-audit-repo-6Gvg5C, and run again"
+             /tmp/axocoatl-audit-repo-6Gvg5C: Permission denied). A read-only Agent reads every \
+             file of a repository your user owns, whatever its file modes, and of one owned by \
+             another user only what any user may read: run it on a repository you own, or let \
+             other users read this one (chmod -R o+rX /tmp/axocoatl-audit-repo-6Gvg5C), and run \
+             again"
+        );
+        // The container or kernel cannot give them their view at all: the
+        // supervisor's refusal names what is missing.
+        let unavailable = HelperWorkspaceAccess::Unavailable(
+            "helper view unavailable: Landlock is not available: Function not implemented; a \
+             read-only helper's view needs Landlock (Linux 5.13 or later)"
+                .into(),
+        );
+        assert_eq!(
+            helper_access_refusal(&readers, Some(&unavailable), repo, "1001:1001", Some(0o700))
+                .unwrap(),
+            "the read-only Agents of this run (planner, worker, integrator) run as the helper \
+             user 1001:1001, and this Session's container cannot give them their read-only view \
+             of the repository /tmp/axocoatl-audit-repo-6Gvg5C: helper view unavailable: \
+             Landlock is not available: Function not implemented; a read-only helper's view \
+             needs Landlock (Linux 5.13 or later)"
         );
         let bare = HelperWorkspaceAccess::Unreadable(String::new());
         assert!(

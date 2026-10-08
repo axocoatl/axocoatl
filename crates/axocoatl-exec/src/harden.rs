@@ -8,11 +8,21 @@
 //! `kexec_file_load`, `init_module`, `finit_module`, `delete_module`,
 //! `add_key`, `request_key`, `keyctl`, `mount`, `umount2`, `pivot_root`,
 //! `fsopen`, `fsconfig`, `fsmount`, `fspick`, `move_mount`, `open_tree`,
-//! `setns`; `unshare` and `clone` with `CLONE_NEWUSER`; `socket` for
-//! `AF_PACKET`, `AF_VSOCK`, `AF_BLUETOOTH` and `AF_KEY`. `clone3` and the
-//! `io_uring_*` calls fail with `ENOSYS`, so the C library and libuv fall
-//! back to `clone` and ordinary system calls (the flags of `clone3` sit in
-//! memory a filter cannot read). `memfd_create` stays allowed.
+//! `setns`, `open_by_handle_at`; `unshare` and `clone` with `CLONE_NEWUSER`;
+//! `socket` for `AF_PACKET`, `AF_VSOCK`, `AF_BLUETOOTH` and `AF_KEY`.
+//! `clone3` and the `io_uring_*` calls fail with `ENOSYS`, so the C library
+//! and libuv fall back to `clone` and ordinary system calls (the flags of
+//! `clone3` sit in memory a filter cannot read). `memfd_create` stays
+//! allowed.
+//!
+//! A read-only helper's filter ([`Filter::helper`]) also refuses, with
+//! `EPERM`, `socket` for `AF_UNIX`, `socketpair` of any type but
+//! `SOCK_STREAM`, and `inotify_add_watch`. The helper holds
+//! `CAP_DAC_READ_SEARCH`, which lets it pass directories it could not enter
+//! before; Landlock keeps it from opening, listing or executing anything there,
+//! but covers neither connecting to (or sending to) a Unix socket by path nor
+//! watching a path. Without these calls it can do neither, anywhere. Stream
+//! socket pairs, which are connected and have no address, stay allowed.
 //!
 //! A call made under another architecture's numbering (32-bit compatibility
 //! calls) kills the process, and on x86_64 every x32 call fails with `EPERM`,
@@ -63,6 +73,11 @@ pub const ARCH_OFFSET: u32 = 4;
 pub const ARG0_LOW_OFFSET: u32 = 16;
 #[cfg(target_endian = "big")]
 pub const ARG0_LOW_OFFSET: u32 = 20;
+/// The low 32 bits of the second argument.
+#[cfg(target_endian = "little")]
+pub const ARG1_LOW_OFFSET: u32 = 24;
+#[cfg(target_endian = "big")]
+pub const ARG1_LOW_OFFSET: u32 = 28;
 
 pub const X32_SYSCALL_BIT: u32 = 0x4000_0000;
 const SECCOMP_MODE_FILTER: libc::c_ulong = 2;
@@ -107,6 +122,7 @@ pub fn denied_calls() -> Vec<u32> {
         libc::SYS_move_mount,
         libc::SYS_open_tree,
         libc::SYS_setns,
+        libc::SYS_open_by_handle_at,
     ]
     .iter()
     .map(|number| *number as u32)
@@ -134,6 +150,10 @@ pub const DENIED_FAMILIES: [u32; 4] = [
     libc::AF_KEY as u32,
 ];
 
+/// The `type` bits of `socketpair` that are not `SOCK_STREAM` (1): any of
+/// them makes a datagram, sequenced-packet, raw or reliable-datagram pair.
+pub const NON_STREAM_TYPE_BITS: u32 = 0xe;
+
 /// What the filter is built from; [`Filter::native`] uses this target's.
 #[derive(Debug, Clone)]
 pub struct Spec {
@@ -145,6 +165,10 @@ pub struct Spec {
     pub clone: u32,
     pub unshare: u32,
     pub socket: u32,
+    /// Socket families `socket` refuses.
+    pub denied_families: Vec<u32>,
+    /// `socketpair`, refused for every type but `SOCK_STREAM` (a helper's).
+    pub stream_pairs_only: Option<u32>,
 }
 
 impl Spec {
@@ -157,7 +181,19 @@ impl Spec {
             clone: libc::SYS_clone as u32,
             unshare: libc::SYS_unshare as u32,
             socket: libc::SYS_socket as u32,
+            denied_families: DENIED_FAMILIES.to_vec(),
+            stream_pairs_only: None,
         }
+    }
+
+    /// A read-only helper's: also no Unix sockets but stream pairs, and no
+    /// `inotify` watches.
+    pub fn helper() -> Self {
+        let mut spec = Self::native();
+        spec.denied.push(libc::SYS_inotify_add_watch as u32);
+        spec.denied_families.push(libc::AF_UNIX as u32);
+        spec.stream_pairs_only = Some(libc::SYS_socketpair as u32);
+        spec
     }
 }
 
@@ -168,6 +204,7 @@ enum Target {
     Kill,
     NewUser,
     Socket,
+    SocketPair,
 }
 
 struct Builder {
@@ -202,6 +239,9 @@ pub fn build(spec: &Spec) -> Vec<Instruction> {
     body.jump(JUMP_EQUAL, spec.clone, Target::NewUser, Target::Next);
     body.jump(JUMP_EQUAL, spec.unshare, Target::NewUser, Target::Next);
     body.jump(JUMP_EQUAL, spec.socket, Target::Socket, Target::Next);
+    if let Some(socketpair) = spec.stream_pairs_only {
+        body.jump(JUMP_EQUAL, socketpair, Target::SocketPair, Target::Next);
+    }
     body.op(RETURN, RET_ALLOW);
     // NewUser block.
     let new_user = body.code.len();
@@ -216,9 +256,19 @@ pub fn build(spec: &Spec) -> Vec<Instruction> {
     // Socket block.
     let socket = body.code.len();
     body.op(LOAD_WORD, ARG0_LOW_OFFSET);
-    for family in DENIED_FAMILIES {
-        body.jump(JUMP_EQUAL, family, Target::Eperm, Target::Next);
+    for family in &spec.denied_families {
+        body.jump(JUMP_EQUAL, *family, Target::Eperm, Target::Next);
     }
+    body.op(RETURN, RET_ALLOW);
+    // SocketPair block: only `SOCK_STREAM`, whatever its flags.
+    let socket_pair = body.code.len();
+    body.op(LOAD_WORD, ARG1_LOW_OFFSET);
+    body.jump(
+        JUMP_ANY_BIT,
+        NON_STREAM_TYPE_BITS,
+        Target::Eperm,
+        Target::Next,
+    );
     body.op(RETURN, RET_ALLOW);
     let eperm = body.code.len();
     body.op(RETURN, RET_ERRNO | libc::EPERM as u32);
@@ -238,6 +288,7 @@ pub fn build(spec: &Spec) -> Vec<Instruction> {
                     Target::Kill => kill,
                     Target::NewUser => new_user,
                     Target::Socket => socket,
+                    Target::SocketPair => socket_pair,
                 };
                 u8::try_from(to - index - 1).expect("seccomp jump within 255 instructions")
             };
@@ -261,6 +312,13 @@ impl Filter {
     pub fn native() -> Self {
         Self {
             instructions: build(&Spec::native()),
+        }
+    }
+
+    /// A read-only helper's filter ([`Spec::helper`]).
+    pub fn helper() -> Self {
+        Self {
+            instructions: build(&Spec::helper()),
         }
     }
 
@@ -301,10 +359,16 @@ impl Filter {
 
 /// Run a filter over one call, as the kernel would: for tests.
 pub fn evaluate(program: &[Instruction], arch: u32, nr: u32, arg0: u64) -> u32 {
+    evaluate_with(program, arch, nr, [arg0, 0])
+}
+
+/// [`evaluate`] with the first two arguments.
+pub fn evaluate_with(program: &[Instruction], arch: u32, nr: u32, args: [u64; 2]) -> u32 {
     let mut data = [0u8; 64];
     data[0..4].copy_from_slice(&nr.to_ne_bytes());
     data[4..8].copy_from_slice(&arch.to_ne_bytes());
-    data[16..24].copy_from_slice(&arg0.to_ne_bytes());
+    data[16..24].copy_from_slice(&args[0].to_ne_bytes());
+    data[24..32].copy_from_slice(&args[1].to_ne_bytes());
     let mut accumulator = 0u32;
     let mut pc = 0usize;
     loop {
@@ -398,6 +462,59 @@ mod tests {
             evaluate(&program, 0x4000_0003, libc::SYS_read as u32, 0),
             RET_KILL_PROCESS
         );
+    }
+
+    /// A helper's filter refuses what the writer's does, and also Unix
+    /// sockets (but stream pairs) and `inotify` watches; the writer's keeps
+    /// all three.
+    #[test]
+    fn a_helpers_filter_also_refuses_unix_sockets_and_watches() {
+        let writer = build(&Spec::native());
+        let helper = build(&Spec::helper());
+        assert!(helper.len() < 110, "{}", helper.len());
+        let call = |program: &[Instruction], nr: i64, args: [u64; 2]| {
+            evaluate_with(program, AUDIT_ARCH, nr as u32, args)
+        };
+        for nr in Spec::native().denied {
+            assert_eq!(call(&helper, nr.into(), [0, 0]), eperm(), "{nr}");
+        }
+        assert_eq!(call(&writer, libc::SYS_open_by_handle_at, [0, 0]), eperm());
+        let unix = libc::AF_UNIX as u64;
+        let stream = libc::SOCK_STREAM as u64;
+        let flags = (libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK) as u64;
+        for kind in [stream, stream | flags] {
+            assert_eq!(call(&helper, libc::SYS_socket, [unix, kind]), eperm());
+            assert_eq!(call(&writer, libc::SYS_socket, [unix, kind]), RET_ALLOW);
+            assert_eq!(call(&helper, libc::SYS_socketpair, [unix, kind]), RET_ALLOW);
+        }
+        for kind in [
+            libc::SOCK_DGRAM,
+            libc::SOCK_SEQPACKET,
+            libc::SOCK_RAW,
+            libc::SOCK_RDM,
+        ] {
+            let kind = kind as u64;
+            assert_eq!(call(&helper, libc::SYS_socketpair, [unix, kind]), eperm());
+            assert_eq!(
+                call(&helper, libc::SYS_socketpair, [unix, kind | flags]),
+                eperm()
+            );
+            assert_eq!(call(&writer, libc::SYS_socketpair, [unix, kind]), RET_ALLOW);
+        }
+        for family in [libc::AF_INET, libc::AF_INET6, libc::AF_NETLINK] {
+            assert_eq!(
+                call(&helper, libc::SYS_socket, [family as u64, stream]),
+                RET_ALLOW
+            );
+        }
+        assert_eq!(call(&helper, libc::SYS_inotify_add_watch, [0, 0]), eperm());
+        assert_eq!(
+            call(&writer, libc::SYS_inotify_add_watch, [0, 0]),
+            RET_ALLOW
+        );
+        for allowed in [libc::SYS_read, libc::SYS_openat, libc::SYS_execve] {
+            assert_eq!(call(&helper, allowed, [0, 0]), RET_ALLOW, "{allowed}");
+        }
     }
 
     #[test]

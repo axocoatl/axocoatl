@@ -33,6 +33,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use axocoatl_core::SecureDir;
+use axocoatl_exec::protocol::HelperView;
 
 use crate::error::IsolationError;
 use crate::podman;
@@ -447,6 +448,15 @@ pub const HARDENED_EGRESS_IDENTITY_SOCKET: &str = "/run/axocoatl/egress/identity
 /// no-new-privileges keeps them from gaining any.
 const HARDENED_EGRESS_KEPT_CAPS: &[&str] = &["SYS_PTRACE"];
 
+/// Capabilities every hardened Session container keeps that others drop:
+/// root's `DAC_READ_SEARCH`, which the supervisor, started as root, hands to
+/// a read-only helper's command as its only capability, so the helper reads
+/// a Workspace whatever its file modes, through a Landlock view of it (see
+/// `axocoatl_exec::supervisor`). Root already reads everything through
+/// `DAC_OVERRIDE`; the workload users' own `podman exec`s get no
+/// capabilities.
+const HARDENED_KEPT_CAPS: &[&str] = &["DAC_READ_SEARCH"];
+
 /// `podman exec` options that select the user for `identity`. Without
 /// workload users only root is named; the image's user runs the rest.
 pub(crate) fn exec_user_args(
@@ -463,15 +473,16 @@ pub(crate) fn exec_user_args(
             "--env".into(),
             format!("HOME={WRITER_HOME}"),
         ],
-        // The Workspace belongs to the writer. Git refuses a repository
-        // that another user owns unless `safe.directory` allows it, and only
+        // The supervisor starts as root and launches the helper's command
+        // as the helper user through its view of the Workspace
+        // ([`helper_view`]); nothing of the helper's runs as root. The
+        // Workspace belongs to the writer. Git refuses a repository that
+        // another user owns unless `safe.directory` allows it, and only
         // configuration outside the repository may; the helper reads it as
-        // the writer would.
-        (Some(users), ExecIdentity::Helper) => vec![
+        // the writer would. The supervisor gives the command its own `HOME`.
+        (Some(_), ExecIdentity::Helper) => vec![
             "--user".into(),
-            user(users.helper),
-            "--env".into(),
-            "HOME=/tmp".into(),
+            "0".into(),
             "--env".into(),
             "GIT_CONFIG_COUNT=1".into(),
             "--env".into(),
@@ -482,19 +493,36 @@ pub(crate) fn exec_user_args(
     }
 }
 
+/// The supervisor arguments that launch a read-only helper's command in a
+/// hardened container whose users are `users` and whose Workspace is
+/// `workspace` (after `--serve --harden`).
+pub(crate) fn helper_view(users: &WorkloadUsers, workspace: &Path) -> HelperView {
+    HelperView {
+        helper: users.helper,
+        writer: users.writer,
+        workspace: workspace.to_string_lossy().into_owned(),
+    }
+}
+
 /// Whether the read-only helper user of a hardened Session container can
-/// enter and list its Workspace directory. The helper reads only what the
-/// file modes let any user read: on a Linux host a Workspace directory that
-/// other users may not enter or list (a `mkdtemp` directory, or one made
-/// under `umask 077`, is `0700`) is closed to it, so every file tool of a
-/// read-only Agent fails there, while a macOS Podman machine's shared
-/// folder reports every file as owned by whoever asks and lets it in.
+/// enter and list its Workspace directory through its view of it, whatever
+/// the Workspace's file modes (a `mkdtemp` directory, or one made under
+/// `umask 077`, is `0700`): the supervisor launches the helper's commands
+/// with `CAP_DAC_READ_SEARCH` as their only capability, in a Landlock domain
+/// that lets them read the Workspace and, outside it, only what any user
+/// could read already.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HelperWorkspaceAccess {
-    /// The helper user can enter and list the Workspace directory.
+    /// The helper can enter and list the Workspace directory.
     Readable,
-    /// It cannot; what the probe printed.
+    /// Its view launched but cannot enter or list it (for example a
+    /// Workspace whose owner the container does not map); what the probe
+    /// printed.
     Unreadable(String),
+    /// This container or kernel cannot launch the helper's view at all; the
+    /// supervisor's refusal, which names what is missing (root's
+    /// `CAP_DAC_READ_SEARCH` in a container made before 1.3.0, or Landlock).
+    Unavailable(String),
 }
 
 /// The exit status of [`HELPER_WORKSPACE_PROBE`] when the helper cannot
@@ -505,27 +533,47 @@ const HELPER_WORKSPACE_DENIED: i32 = 41;
 /// never part of the script.
 const HELPER_WORKSPACE_PROBE: &str = "cd -- \"$1\" || exit 41; ls -a >/dev/null || exit 41";
 
-/// `podman` arguments that run [`HELPER_WORKSPACE_PROBE`] on `workspace` as
-/// the helper user of `users` in `container`, from `/`, so the probe does
-/// not depend on the directory it checks.
-fn helper_workspace_probe_args(
-    users: &WorkloadUsers,
-    container: &str,
-    workspace: &Path,
-) -> Vec<String> {
-    let mut args = vec!["exec".to_string()];
-    args.extend(exec_user_args(Some(users), ExecIdentity::Helper));
-    args.extend([
-        "-w".into(),
-        "/".into(),
-        container.into(),
-        "sh".into(),
-        "-c".into(),
-        HELPER_WORKSPACE_PROBE.into(),
-        "sh".into(),
-        workspace.to_string_lossy().into_owned(),
-    ]);
-    args
+/// The request that runs [`HELPER_WORKSPACE_PROBE`] on `workspace`.
+fn helper_workspace_probe(workspace: &Path) -> axocoatl_exec::protocol::ExecRequest {
+    axocoatl_exec::protocol::ExecRequest {
+        protocol: axocoatl_exec::protocol::PROTOCOL_VERSION,
+        invocation_id: format!("helper-workspace-probe-{}", uuid::Uuid::new_v4().simple()),
+        argv: ["sh", "-c", HELPER_WORKSPACE_PROBE, "sh"]
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .chain(std::iter::once(workspace.to_string_lossy().into_owned()))
+            .collect(),
+        stdin: None,
+        timeout_ms: 60_000,
+        stdout_bytes: 1024,
+        stderr_bytes: 4096,
+        write_restriction: None,
+    }
+}
+
+/// What the probe's supervised run says about the helper's access.
+fn helper_workspace_outcome(
+    outcome: &axocoatl_exec::protocol::ProcessOutcome,
+    stderr: &str,
+) -> Result<HelperWorkspaceAccess, IsolationError> {
+    use axocoatl_exec::protocol::ProcessOutcome;
+    match outcome {
+        ProcessOutcome::Exited { code: 0 } => Ok(HelperWorkspaceAccess::Readable),
+        ProcessOutcome::Exited {
+            code: HELPER_WORKSPACE_DENIED,
+        } => Ok(HelperWorkspaceAccess::Unreadable(stderr.trim().to_string())),
+        ProcessOutcome::LaunchFailed { message } => {
+            Ok(HelperWorkspaceAccess::Unavailable(message.clone()))
+        }
+        other => Err(IsolationError::OciContainerFailed(format!(
+            "could not probe whether the helper user can read the Workspace ({other:?}): {}",
+            if stderr.trim().is_empty() {
+                "no output"
+            } else {
+                stderr.trim()
+            }
+        ))),
+    }
 }
 
 /// The egress authority as one container's processes see it. A container
@@ -1998,66 +2046,50 @@ impl SessionSandbox {
     }
 
     /// Whether the helper user can enter and list the Workspace directory,
-    /// probed in this container with a fixed command run as the helper (no
-    /// Agent input, like the readiness probes). `None` without workload
-    /// users: every command then runs as the image's one user, which the
-    /// Workspace was started with.
+    /// probed in this container with a fixed command (no Agent input, like
+    /// the readiness probes) launched exactly as a read-only helper's
+    /// commands are: by the supervisor, through the helper's view. `None`
+    /// without workload users: every command then runs as the image's one
+    /// user, which the Workspace was started with.
     pub async fn helper_workspace_access(
         &self,
     ) -> Result<Option<HelperWorkspaceAccess>, IsolationError> {
-        let Some(users) = self.workload.filter(|_| !self.passive_start) else {
+        if self.workload.filter(|_| !self.passive_start).is_none() {
             return Ok(None);
-        };
-        let container = self.container_id.clone().ok_or_else(|| {
-            IsolationError::OciSetupFailed(
+        }
+        if self.container_id.is_none() {
+            return Err(IsolationError::OciSetupFailed(
                 "probing the helper user's Workspace access requires an owned container \
                  incarnation"
                     .into(),
-            )
-        })?;
-        let mut command = Command::new(PODMAN);
-        command.args(helper_workspace_probe_args(
-            &users,
-            &container,
-            &self.working_dir,
-        ));
-        let observed = tokio::spawn(async move {
-            Self::run_bounded_command_with_capture_owned(
-                command,
-                None,
-                Duration::from_secs(60),
-                1024,
-                4096,
-            )
-            .await
-            .map(CapturedCommandOutput::into_observation)
-        })
-        .await
-        .map_err(|failure| {
-            IsolationError::OciContainerFailed(format!(
-                "the helper Workspace probe's supervisor failed: {failure}"
-            ))
-        })??;
-        let printed = String::from_utf8_lossy(&observed.stderr.retained)
-            .trim()
-            .to_string();
-        match observed.exit_code {
-            Some(0) => Ok(Some(HelperWorkspaceAccess::Readable)),
-            Some(HELPER_WORKSPACE_DENIED) => Ok(Some(HelperWorkspaceAccess::Unreadable(printed))),
-            other => Err(IsolationError::OciContainerFailed(format!(
-                "could not probe whether the helper user can read the Workspace (exit {}): {}",
-                other
-                    .or(observed.transport_exit_code)
-                    .map_or_else(|| "unknown".to_string(), |code| code.to_string()),
-                if printed.is_empty() {
-                    observed
-                        .supervision_error
-                        .unwrap_or_else(|| "no output".into())
-                } else {
-                    printed
-                }
-            ))),
+            ));
         }
+        let request = helper_workspace_probe(&self.working_dir);
+        let stderr_bytes = request.stderr_bytes;
+        let execution = self
+            .prepare_supervised_command_as(
+                request,
+                None,
+                crate::egress::ProcessEnv { env_file: None },
+                ExecIdentity::Helper,
+            )
+            .await?
+            .dispatch()?
+            .finish()
+            .await?;
+        let axocoatl_exec::protocol::ServerMessage::Finished {
+            outcome, stderr, ..
+        } = execution.result()
+        else {
+            return Err(IsolationError::OciContainerFailed(
+                "the helper Workspace probe has no terminal result".into(),
+            ));
+        };
+        let printed = stderr
+            .retained_bytes(stderr_bytes)
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
+        helper_workspace_outcome(outcome, &printed).map(Some)
     }
 
     /// Host loopback port assigned to one logical container port.
@@ -3313,20 +3345,20 @@ impl SessionSandbox {
         //     starting cap set.
         //   * drop escape/recon capabilities the container never needs.
         args.push("--security-opt=no-new-privileges".into());
-        for cap in DROPPED_CAPS {
-            if peer_identity && HARDENED_EGRESS_KEPT_CAPS.contains(cap) {
-                continue;
-            }
+        let kept = |cap: &str| {
+            (peer_identity && HARDENED_EGRESS_KEPT_CAPS.contains(&cap))
+                || (workload.is_some() && HARDENED_KEPT_CAPS.contains(&cap))
+        };
+        for cap in DROPPED_CAPS.iter().filter(|cap| !kept(cap)) {
             args.push("--cap-drop".into());
             args.push((*cap).into());
         }
-        if peer_identity {
-            // Not in Podman's default set. Only PID 1 and root's execs
-            // (readiness and provisioning) hold it.
-            for cap in HARDENED_EGRESS_KEPT_CAPS {
-                args.push("--cap-add".into());
-                args.push((*cap).into());
-            }
+        // Not in Podman's default set. Only PID 1 and root's execs (readiness,
+        // provisioning, and the supervisor of a read-only helper before it
+        // launches the helper's command) hold them.
+        for cap in DROPPED_CAPS.iter().filter(|cap| kept(cap)) {
+            args.push("--cap-add".into());
+            args.push((*cap).into());
         }
         // Podman copies the host's proxy variables (`HTTP_PROXY`, ...) into
         // the container by default, and they can carry credentials.
@@ -7017,6 +7049,15 @@ mod tests {
             assert!(args.windows(2).any(|w| w == ["--cap-drop", "SYS_ADMIN"]));
             let ptrace_dropped = args.windows(2).any(|w| w == ["--cap-drop", "SYS_PTRACE"]);
             let ptrace_added = args.windows(2).any(|w| w == ["--cap-add", "SYS_PTRACE"]);
+            // Root keeps DAC_READ_SEARCH for a read-only helper's command.
+            assert!(
+                args.windows(2)
+                    .any(|w| w == ["--cap-add", "DAC_READ_SEARCH"])
+                    && !args
+                        .windows(2)
+                        .any(|w| w == ["--cap-drop", "DAC_READ_SEARCH"]),
+                "{network:?}: {joined}"
+            );
             match network {
                 SandboxNetwork::Egress => {
                     // The proxy's identity socket only, in the root-only
@@ -7040,7 +7081,10 @@ mod tests {
                     );
                     // PID 1 reads the workload users' /proc entries.
                     assert!(ptrace_added && !ptrace_dropped, "{joined}");
-                    for cap in DROPPED_CAPS.iter().filter(|cap| **cap != "SYS_PTRACE") {
+                    for cap in DROPPED_CAPS
+                        .iter()
+                        .filter(|cap| !["SYS_PTRACE", "DAC_READ_SEARCH"].contains(cap))
+                    {
                         assert!(
                             args.windows(2)
                                 .any(|w| w[0] == "--cap-drop" && w[1] == *cap),
@@ -7204,9 +7248,15 @@ mod tests {
             exec_user_args(Some(&users), ExecIdentity::Writer),
             ["--user", "1200:1300", "--env", "HOME=/home/axocoatl"]
         );
+        // A helper's supervisor starts as root and launches its command as
+        // the helper ([`helper_view`]).
         let helper = exec_user_args(Some(&users), ExecIdentity::Helper);
-        assert_eq!(helper[..4], ["--user", "1400:1500", "--env", "HOME=/tmp"]);
+        assert_eq!(helper[..4], ["--user", "0", "--env", "GIT_CONFIG_COUNT=1"]);
         assert!(helper.contains(&"GIT_CONFIG_KEY_0=safe.directory".to_string()));
+        assert!(
+            !helper.iter().any(|arg| arg.starts_with("HOME=")),
+            "{helper:?}"
+        );
         assert_eq!(
             exec_user_args(Some(&users), ExecIdentity::Root),
             ["--user", "0"]
@@ -7218,32 +7268,64 @@ mod tests {
     }
 
     #[test]
-    fn the_helper_workspace_probe_runs_as_the_helper_from_the_root_directory() {
-        let users = WorkloadUsers {
-            writer: (1200, 1300),
-            helper: (1400, 1500),
-        };
+    fn the_helper_workspace_probe_passes_the_workspace_as_an_argument() {
         let workspace = Path::new("/work/my repo $(touch x)");
-        let args = helper_workspace_probe_args(&users, "immutable-container-id", workspace);
-        let mut expected = vec!["exec".to_string()];
-        expected.extend(exec_user_args(Some(&users), ExecIdentity::Helper));
-        expected.extend(
+        let request = helper_workspace_probe(workspace);
+        request.validate().unwrap();
+        assert_eq!(
+            request.argv,
             [
-                "-w",
-                "/",
-                "immutable-container-id",
                 "sh",
                 "-c",
                 HELPER_WORKSPACE_PROBE,
                 "sh",
-                "/work/my repo $(touch x)",
+                "/work/my repo $(touch x)"
             ]
-            .map(String::from),
         );
-        assert_eq!(args, expected);
-        assert_eq!(args[1..3], ["--user", "1400:1500"]);
+        assert!(request.write_restriction.is_none());
         // The path is the script's argument, never part of the script.
         assert!(!HELPER_WORKSPACE_PROBE.contains("/work"));
+    }
+
+    /// The probe's run says whether the helper reads the Workspace, cannot,
+    /// or cannot be launched at all, in the supervisor's words.
+    #[test]
+    fn the_helper_workspace_probe_tells_unreadable_from_unavailable() {
+        use axocoatl_exec::protocol::ProcessOutcome;
+        assert_eq!(
+            helper_workspace_outcome(&ProcessOutcome::Exited { code: 0 }, "").unwrap(),
+            HelperWorkspaceAccess::Readable
+        );
+        assert_eq!(
+            helper_workspace_outcome(
+                &ProcessOutcome::Exited {
+                    code: HELPER_WORKSPACE_DENIED
+                },
+                "sh: cd: can't cd to /w\n"
+            )
+            .unwrap(),
+            HelperWorkspaceAccess::Unreadable("sh: cd: can't cd to /w".into())
+        );
+        let refused = "helper view unavailable: the container gives root no CAP_DAC_READ_SEARCH";
+        assert_eq!(
+            helper_workspace_outcome(
+                &ProcessOutcome::LaunchFailed {
+                    message: refused.into()
+                },
+                ""
+            )
+            .unwrap(),
+            HelperWorkspaceAccess::Unavailable(refused.into())
+        );
+        for other in [
+            ProcessOutcome::Exited { code: 2 },
+            ProcessOutcome::TimedOut,
+            ProcessOutcome::Failed {
+                message: "lost".into(),
+            },
+        ] {
+            assert!(helper_workspace_outcome(&other, "").is_err(), "{other:?}");
+        }
     }
 
     /// The probe as its user runs it: it can enter and list an ordinary
@@ -7332,21 +7414,37 @@ mod tests {
                 "HOME=/home/axocoatl"
             ]
         );
+        // A helper's supervisor starts as root and launches the command as
+        // the helper, through its view of the Workspace.
         let helper = argv(ExecIdentity::Helper);
         assert_eq!(
             helper[..6],
-            ["exec", "-i", "--user", "1001:1001", "--env", "HOME=/tmp"]
+            ["exec", "-i", "--user", "0", "--env", "GIT_CONFIG_COUNT=1"]
         );
+        let workspace = root.path().to_string_lossy().into_owned();
+        assert!(helper.ends_with(
+            &[
+                "immutable-container-id",
+                "/axocoatl-exec-supervisor",
+                "--serve",
+                "--harden",
+                "--helper",
+                "1001:1001",
+                "--writer",
+                "1000:1000",
+                "--workspace",
+                &workspace,
+            ]
+            .map(String::from)
+        ));
         // Both run under the supervisor's seccomp filter and a Landlock
         // domain of their own.
-        for argv in [&writer, &helper] {
-            assert!(argv.ends_with(&[
-                "immutable-container-id".to_string(),
-                "/axocoatl-exec-supervisor".to_string(),
-                "--serve".to_string(),
-                "--harden".to_string()
-            ]));
-        }
+        assert!(writer.ends_with(&[
+            "immutable-container-id".to_string(),
+            "/axocoatl-exec-supervisor".to_string(),
+            "--serve".to_string(),
+            "--harden".to_string()
+        ]));
         assert_eq!(sandbox.workload_users(), Some(test_users()));
         // Without workload users nothing is hardened.
         sandbox.workload = None;

@@ -2,7 +2,7 @@
 //! status or pipe EOF substitutes for the kernel's final `ECHILD` observation.
 
 use crate::protocol::{
-    bounded_message, CapturedOutput, Control, ExecRequest, OutputCapture, PrimaryExit,
+    bounded_message, CapturedOutput, Control, ExecRequest, HelperView, OutputCapture, PrimaryExit,
     ProcessOutcome, ServerMessage, CLEANUP_TIMEOUT_MS, MAX_CONTROL_BYTES, MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES,
 };
@@ -26,7 +26,7 @@ extern "C" fn cancellation_signal(_: libc::c_int) {
 }
 
 /// How `--serve` launches its command.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServeOptions {
     /// `--harden`: the command and its descendants run in a Landlock domain
     /// (the write restriction's, or one that only refuses creating block
@@ -34,6 +34,10 @@ pub struct ServeOptions {
     /// start, and get `PR_SET_NO_NEW_PRIVS` and the seccomp denylist of
     /// [`crate::harden`] before `execve`. Without Landlock nothing launches.
     pub harden: bool,
+    /// With `harden`: launch the command as a read-only helper through its
+    /// view of the Workspace ([`HelperView`], see [`helper_view`]). The
+    /// supervisor must start as root; the command never runs as root.
+    pub helper: Option<HelperView>,
 }
 
 /// Run exactly one request. This must be called by the dedicated helper binary,
@@ -104,7 +108,7 @@ pub fn serve_with(options: ServeOptions) -> Result<(), String> {
     let terminal = if dispatch {
         execute(
             &request,
-            options,
+            &options,
             payload.as_deref(),
             &mut input,
             deadline,
@@ -212,7 +216,7 @@ struct Terminal {
 
 fn execute(
     request: &ExecRequest,
-    options: ServeOptions,
+    options: &ServeOptions,
     payload: Option<&[u8]>,
     input: &mut Input,
     deadline: Instant,
@@ -237,18 +241,25 @@ fn execute(
     // fork and exec, so the supervisor itself is never restricted. A hardened
     // command always gets one, because its Landlock domain is what keeps it
     // out of processes it did not start (ptrace access, which also guards
-    // /proc/<pid>/mem, environ, maps and fd).
-    let prepared = match (request.write_restriction.as_ref(), options.harden) {
-        (Some(restriction), _) => landlock::prepare(restriction)
-            .map(Some)
+    // /proc/<pid>/mem, environ, maps and fd). A helper's also confines what
+    // it reads (see [`helper_view`]).
+    let prepared = match (
+        options.helper.as_ref().filter(|_| options.harden),
+        request.write_restriction.as_ref(),
+        options.harden,
+    ) {
+        (Some(view), restriction, _) => helper_view::prepare(view, restriction)
+            .map(|(ruleset, launch)| (Some(ruleset), Some(launch))),
+        (None, Some(restriction), _) => landlock::prepare(restriction)
+            .map(|ruleset| (Some(ruleset), None))
             .map_err(|message| format!("write restriction unavailable: {message}")),
-        (None, true) => landlock::prepare_domain()
-            .map(Some)
+        (None, None, true) => landlock::prepare_domain()
+            .map(|ruleset| (Some(ruleset), None))
             .map_err(|message| format!("hardening unavailable: {message}")),
-        (None, false) => Ok(None),
+        (None, None, false) => Ok((None, None)),
     };
-    let restriction = match prepared {
-        Ok(ruleset) => ruleset,
+    let (restriction, helper) = match prepared {
+        Ok(prepared) => prepared,
         Err(message) => {
             return Terminal {
                 outcome: ProcessOutcome::LaunchFailed {
@@ -263,15 +274,29 @@ fn execute(
         }
     };
     // Also built before fork: the child only installs it.
-    let filter = options.harden.then(crate::harden::Filter::native);
+    let filter = options.harden.then(|| match helper {
+        Some(_) => crate::harden::Filter::helper(),
+        None => crate::harden::Filter::native(),
+    });
     let mut command = Command::new(&request.argv[0]);
+    if let Some(launch) = &helper {
+        // Its own home and temporary directory: nothing it writes there
+        // reaches another process, and nothing of another's is in it.
+        command
+            .env("HOME", launch.scratch.path())
+            .env("TMPDIR", launch.scratch.path());
+    }
     if restriction.is_some() || filter.is_some() {
         let fd = restriction.as_ref().map(landlock::Ruleset::fd);
+        let identity = helper.as_ref().map(|launch| launch.identity);
         // SAFETY: the closure only makes async-signal-safe system calls on an
-        // already open descriptor (which outlives the spawn below) and on the
-        // filter it owns, and allocates nothing.
+        // already open descriptor (which outlives the spawn below), on plain
+        // values and on the filter it owns, and allocates nothing.
         unsafe {
             std::os::unix::process::CommandExt::pre_exec(&mut command, move || {
+                if let Some(identity) = identity {
+                    identity.assume()?;
+                }
                 if let Some(fd) = fd {
                     landlock::restrict_self(fd)?;
                 }
@@ -840,19 +865,749 @@ fn bounded_error(message: String) -> String {
     bounded_message(message)
 }
 
+/// A read-only helper's launch (`--helper`): the supervisor starts as root
+/// and launches the command as the helper user, with `CAP_DAC_READ_SEARCH`
+/// as its only capability (ambient, so its descendants keep it; every other
+/// capability leaves its bounding set), in a Landlock domain that also
+/// handles opening files to read or execute them and listing directories.
+///
+/// The capability lets the helper read the Workspace whatever its file modes
+/// (a `mkdtemp` repository is `0700`, its files `0600`), which the writer
+/// owns. Landlock grants reading, listing and executing beneath the
+/// Workspace; beneath its own scratch directory (its `HOME` and `TMPDIR`,
+/// removed when the command ends) everything the ruleset handles; and
+/// elsewhere only what any user may read when the command starts, in the
+/// system directories ([`SYSTEM_ROOTS`], walked at each launch; see `Walk`)
+/// and a few single files (devices, the kernel's global `/proc` files). So
+/// the helper reads nothing outside the Workspace that it could not read
+/// before: not the writer's home, its files in `/tmp`, `/etc/shadow`, root's
+/// directories, or any process's `/proc/<pid>` (its own included).
+///
+/// Landlock covers neither passing through a directory nor connecting to a
+/// Unix socket or watching a path, which the capability would extend to
+/// directories the helper could not enter before; the helper's seccomp
+/// filter refuses Unix sockets and `inotify` watches ([`crate::harden`]).
+/// What remains is the metadata (`stat`, `readlink`, extended attributes) of
+/// a path the helper names in such a directory. Reading another process's
+/// environment or memory still needs ptrace access, which neither its user
+/// nor its domain has.
+mod helper_view {
+    use super::landlock::{self, Fd, Handled, Ruleset, EXECUTE, READ, READ_DIR, READ_FILE};
+    use crate::protocol::{HelperView, WriteRestriction};
+    use std::ffi::{CStr, CString, OsStr};
+    use std::io;
+    use std::os::fd::RawFd;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::{Path, PathBuf};
+
+    const CAP_DAC_READ_SEARCH: libc::c_ulong = 2;
+    const CAP_SETGID: u32 = 6;
+    const CAP_SETUID: u32 = 7;
+    const CAP_SETPCAP: u32 = 8;
+    const CAPABILITY_VERSION_3: u32 = 0x2008_0522;
+    /// `SECBIT_NOROOT`, `SECBIT_NO_SETUID_FIXUP` and both their locks.
+    const SECURE_BITS: libc::c_ulong = 0b1111;
+
+    /// System directories a helper may read where any user may.
+    pub(super) const SYSTEM_ROOTS: &[&str] = &[
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/lib",
+        "/lib32",
+        "/lib64",
+        "/libx32",
+        "/opt",
+        "/etc",
+        "/proc/sys",
+        "/sys/devices/system/cpu",
+    ];
+
+    /// Single files a helper may read where any user may: devices, and the
+    /// kernel's global `/proc` files (no process's own).
+    pub(super) const SYSTEM_FILES: &[&str] = &[
+        "/dev/null",
+        "/dev/zero",
+        "/dev/full",
+        "/dev/random",
+        "/dev/urandom",
+        "/dev/tty",
+        "/proc/cpuinfo",
+        "/proc/meminfo",
+        "/proc/stat",
+        "/proc/loadavg",
+        "/proc/uptime",
+        "/proc/version",
+        "/proc/filesystems",
+    ];
+
+    /// How many entries of the system directories are inspected at most.
+    const WALK_LIMIT: usize = 1_000_000;
+    /// How deep beneath a system directory the walk goes; anything deeper
+    /// gets no rule.
+    const DEPTH_LIMIT: usize = 48;
+
+    /// What a helper's launch keeps until the command ends.
+    pub(super) struct Launch {
+        pub(super) scratch: Scratch,
+        pub(super) identity: Identity,
+    }
+
+    fn unavailable(message: impl std::fmt::Display) -> String {
+        format!("helper view unavailable: {message}")
+    }
+
+    /// Check that this supervisor can launch the helper, make its scratch
+    /// directory and build its ruleset. A refusal names what is missing.
+    /// Without a write restriction (the file tools) the ruleset handles
+    /// reading and creating block devices; with one (the shell) also every
+    /// write right and, when it denies the network, TCP.
+    pub(super) fn prepare(
+        view: &HelperView,
+        restriction: Option<&WriteRestriction>,
+    ) -> Result<(Ruleset, Launch), String> {
+        view.validate().map_err(unavailable)?;
+        let identity = Identity::check(view.helper)?;
+        let abi = landlock::abi().map_err(|message| {
+            unavailable(format!(
+                "{message}; a read-only helper's view needs Landlock (Linux 5.13 or later)"
+            ))
+        })?;
+        let writes = match restriction {
+            Some(restriction) => restriction
+                .validate()
+                .and_then(|()| landlock::handled_access(abi, restriction.deny_network))
+                .map_err(|message| format!("write restriction unavailable: {message}"))?,
+            None => landlock::DOMAIN_ONLY,
+        };
+        let handled = Handled {
+            fs: writes.fs | READ,
+            net: writes.net,
+        };
+        let scratch = Scratch::create(view.helper).map_err(|error| {
+            unavailable(format!("creating its scratch directory in /tmp: {error}"))
+        })?;
+        let ruleset = landlock::create(handled).map_err(unavailable)?;
+        if !landlock::allow_path(&ruleset, &view.workspace, READ, EXECUTE | READ_FILE)
+            .map_err(unavailable)?
+        {
+            return Err(unavailable(format!(
+                "the Workspace {} does not exist",
+                view.workspace
+            )));
+        }
+        let scratch_path = scratch.path_str();
+        landlock::allow_path(&ruleset, scratch_path, handled.fs, 0).map_err(unavailable)?;
+        if let Some(restriction) = restriction {
+            // Writes only: the helper reads none of what others put there.
+            landlock::allow_writes(&ruleset, restriction, Some(scratch_path), writes.fs)
+                .map_err(|message| format!("write restriction unavailable: {message}"))?;
+        }
+        let mut walk = Walk {
+            ruleset: &ruleset,
+            writer: view.writer.0,
+            seen: 0,
+        };
+        for file in SYSTEM_FILES {
+            walk.root(file).map_err(unavailable)?;
+        }
+        for root in SYSTEM_ROOTS {
+            walk.root(root).map_err(unavailable)?;
+        }
+        Ok((ruleset, Launch { scratch, identity }))
+    }
+
+    /// Whether any user may read this file now.
+    pub(super) fn readable_file(stat: &libc::stat) -> bool {
+        stat.st_mode & libc::S_IROTH != 0
+    }
+
+    /// Whether any user may pass through this directory now.
+    pub(super) fn passable(stat: &libc::stat) -> bool {
+        landlock::kind(stat) == libc::S_IFDIR && stat.st_mode & libc::S_IXOTH != 0
+    }
+
+    /// Whether any user may list this directory now.
+    pub(super) fn listable(stat: &libc::stat) -> bool {
+        passable(stat) && stat.st_mode & libc::S_IROTH != 0
+    }
+
+    /// Whether nobody but its owner, which is not `writer`, may add, remove
+    /// or rename its entries: what appears in it later is its owner's
+    /// (root's, as a rule), never the writer's.
+    pub(super) fn sealed(stat: &libc::stat, writer: u32) -> bool {
+        stat.st_uid != writer && stat.st_mode & (libc::S_IWGRP | libc::S_IWOTH) == 0
+    }
+
+    /// The rights a rule on an entry of this kind grants.
+    fn rights(stat: &libc::stat) -> u64 {
+        match landlock::kind(stat) {
+            libc::S_IFLNK => 0,
+            libc::S_IFDIR => READ,
+            _ => EXECUTE | READ_FILE,
+        }
+    }
+
+    /// How much of an entry the helper may read.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Reach {
+        /// All of it, now and later: one rule on it covers it.
+        Whole,
+        /// Parts of it, whose rules are already added.
+        Part,
+        /// None of it.
+        Nothing,
+    }
+
+    /// What the walk found beneath an entry.
+    #[derive(Debug, Clone, Copy)]
+    struct Seen {
+        reach: Reach,
+        /// Some directory in it (itself included) is one other users may not
+        /// list or pass through.
+        private: bool,
+    }
+
+    impl Seen {
+        fn leaf(reach: Reach) -> Self {
+            Self {
+                reach,
+                private: false,
+            }
+        }
+
+        /// `stat` when the entry may be read whole.
+        fn then_whole(self, stat: libc::stat) -> Option<libc::stat> {
+            (self.reach == Reach::Whole).then_some(stat)
+        }
+    }
+
+    /// Adds the rules for what any user may read in the system directories.
+    ///
+    /// A directory any user may list, in which nobody but root (or another
+    /// owner that is not the writer) can add entries, and everything beneath
+    /// which any user may read, gets one rule for all of it. Otherwise each
+    /// such entry in it does, every file any user may read gets one of its
+    /// own, and the directory itself, when no directory beneath it is private
+    /// to its owner, gets one that only lists it: what the writer (or anyone)
+    /// adds there later is listed but never opened. What gets a rule is
+    /// judged when the command starts; a file whose owner later makes it
+    /// private keeps its rule while the command runs.
+    struct Walk<'a> {
+        ruleset: &'a Ruleset,
+        writer: u32,
+        seen: usize,
+    }
+
+    impl Walk<'_> {
+        /// Add the rules for `path`, when it exists and every directory
+        /// above it is one any user may pass through.
+        fn root(&mut self, path: &str) -> Result<(), String> {
+            let mut above = PathBuf::from("/");
+            let parent = Path::new(path).parent().unwrap_or(Path::new("/"));
+            for part in parent.components().skip(1) {
+                above.push(part);
+                match stat_path(&above) {
+                    Ok(stat) if passable(&stat) => {}
+                    _ => return Ok(()),
+                }
+            }
+            let name = CString::new(path).map_err(|_| format!("invalid path {path}"))?;
+            // SAFETY: name is NUL-terminated; O_PATH opens without access.
+            let fd = unsafe {
+                libc::open(
+                    name.as_ptr(),
+                    libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                return Ok(());
+            }
+            let fd = Fd(fd);
+            let stat = landlock::fstat(fd.0).map_err(|error| format!("{path}: {error}"))?;
+            if self.entry(&fd, &stat, 0)?.reach == Reach::Whole {
+                landlock::add_rule(self.ruleset, fd.0, rights(&stat))
+                    .map_err(|error| format!("allowing reads beneath {path}: {error}"))?;
+            }
+            Ok(())
+        }
+
+        fn entry(&mut self, fd: &Fd, stat: &libc::stat, depth: usize) -> Result<Seen, String> {
+            if landlock::kind(stat) == libc::S_IFDIR {
+                self.count()?;
+                return self.directory(fd, stat, depth);
+            }
+            self.leaf(stat)
+        }
+
+        /// Anything but a directory.
+        fn leaf(&mut self, stat: &libc::stat) -> Result<Seen, String> {
+            self.count()?;
+            Ok(Seen::leaf(match landlock::kind(stat) {
+                // A link opens nothing itself; its target is checked when
+                // opened.
+                libc::S_IFLNK => Reach::Whole,
+                _ if readable_file(stat) => Reach::Whole,
+                _ => Reach::Nothing,
+            }))
+        }
+
+        fn count(&mut self) -> Result<(), String> {
+            self.seen += 1;
+            if self.seen > WALK_LIMIT {
+                return Err(format!(
+                    "the system directories hold more than {WALK_LIMIT} entries"
+                ));
+            }
+            Ok(())
+        }
+
+        fn directory(&mut self, fd: &Fd, stat: &libc::stat, depth: usize) -> Result<Seen, String> {
+            let private = Seen {
+                reach: Reach::Nothing,
+                private: true,
+            };
+            if !passable(stat) || depth >= DEPTH_LIMIT {
+                return Ok(private);
+            }
+            // SAFETY: "." is NUL-terminated and fd an O_PATH directory.
+            let listed = unsafe {
+                libc::openat(
+                    fd.0,
+                    c".".as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+                )
+            };
+            if listed < 0 {
+                return Ok(private);
+            }
+            let listed = Fd(listed);
+            let names = entry_names(listed.0)?;
+            let mut whole = Vec::new();
+            let mut all = true;
+            let mut private_below = !listable(stat);
+            for name in names {
+                // Only a directory is opened to be walked; anything else is
+                // judged by its status, and opened again (and checked to be
+                // the same) only if it gets a rule of its own.
+                let seen = match stat_at(listed.0, &name) {
+                    Ok(child_stat) if landlock::kind(&child_stat) == libc::S_IFDIR => {
+                        match landlock::open_entry(listed.0, &name) {
+                            Ok((child, child_stat)) => {
+                                let seen = self.entry(&child, &child_stat, depth + 1)?;
+                                Some((seen, child_stat))
+                            }
+                            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => continue,
+                            Err(_) => None,
+                        }
+                    }
+                    Ok(child_stat) => Some((self.leaf(&child_stat)?, child_stat)),
+                    Err(error) if error.raw_os_error() == Some(libc::ENOENT) => continue,
+                    Err(_) => None,
+                };
+                let Some((seen, child_stat)) = seen else {
+                    all = false;
+                    private_below = true;
+                    continue;
+                };
+                private_below |= seen.private;
+                match seen.then_whole(child_stat) {
+                    Some(child_stat) => whole.push((name, child_stat.st_dev, child_stat.st_ino)),
+                    None => all = false,
+                }
+            }
+            if all && listable(stat) && sealed(stat, self.writer) {
+                return Ok(Seen {
+                    reach: Reach::Whole,
+                    private: false,
+                });
+            }
+            // Only parts: a rule on each entry that may be read whole, if
+            // it is still the entry that was inspected.
+            for (name, device, inode) in whole {
+                let Ok((child, child_stat)) = landlock::open_entry(listed.0, &name) else {
+                    continue;
+                };
+                if child_stat.st_dev != device
+                    || child_stat.st_ino != inode
+                    || (landlock::kind(&child_stat) != libc::S_IFDIR
+                        && landlock::kind(&child_stat) != libc::S_IFLNK
+                        && !readable_file(&child_stat))
+                {
+                    continue;
+                }
+                landlock::add_rule(self.ruleset, child.0, rights(&child_stat)).map_err(
+                    |error| {
+                        format!(
+                            "allowing reads of {}: {error}",
+                            String::from_utf8_lossy(name.to_bytes())
+                        )
+                    },
+                )?;
+            }
+            // Listing it, and the directories beneath, which any user may
+            // list now, opens nothing in it.
+            if !private_below {
+                landlock::add_rule(self.ruleset, fd.0, READ_DIR).map_err(|error| {
+                    format!("allowing a system directory to be listed: {error}")
+                })?;
+            }
+            Ok(Seen {
+                reach: Reach::Part,
+                private: private_below,
+            })
+        }
+    }
+
+    /// The status of `name` in the directory open at `dir`, without
+    /// following a final link.
+    fn stat_at(dir: RawFd, name: &CStr) -> io::Result<libc::stat> {
+        // SAFETY: stat is fully initialised by a successful fstatat; name is
+        // NUL-terminated and dir an open directory.
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatat(dir, name.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(stat)
+    }
+
+    fn stat_path(path: &Path) -> io::Result<libc::stat> {
+        let name = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        // SAFETY: stat is fully initialised by a successful lstat.
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::lstat(name.as_ptr(), &mut stat) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(stat)
+    }
+
+    /// The names in the directory open at `fd`, without `.` and `..`.
+    fn entry_names(fd: RawFd) -> Result<Vec<CString>, String> {
+        let mut names = Vec::new();
+        let mut buffer = vec![0u8; 32 * 1024];
+        loop {
+            // SAFETY: buffer is writable for its length; fd is a directory.
+            let read = unsafe {
+                libc::syscall(libc::SYS_getdents64, fd, buffer.as_mut_ptr(), buffer.len())
+            };
+            if read < 0 {
+                return Err(format!(
+                    "listing a system directory: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+            if read == 0 {
+                return Ok(names);
+            }
+            let mut offset = 0usize;
+            while offset < read as usize {
+                // struct linux_dirent64: d_ino u64, d_off i64, d_reclen u16,
+                // d_type u8, d_name (NUL-terminated).
+                let record = &buffer[offset..read as usize];
+                if record.len() < 19 {
+                    return Err("malformed directory entry".into());
+                }
+                let length = u16::from_ne_bytes([record[16], record[17]]) as usize;
+                if length < 19 || length > record.len() {
+                    return Err("malformed directory entry".into());
+                }
+                let name = CStr::from_bytes_until_nul(&record[19..length])
+                    .map_err(|_| "malformed directory entry name".to_string())?;
+                if name.to_bytes() != b"." && name.to_bytes() != b".." {
+                    names.push(name.to_owned());
+                }
+                offset += length;
+            }
+        }
+    }
+
+    /// The helper's own home and temporary directory, `0700` and the
+    /// helper's, removed (without following links) when it is dropped.
+    pub(super) struct Scratch {
+        path: PathBuf,
+        text: String,
+    }
+
+    impl Scratch {
+        fn create(owner: (u32, u32)) -> io::Result<Self> {
+            let mut template = *b"/tmp/axocoatl-helper.XXXXXX\0";
+            // SAFETY: template is a writable NUL-terminated mkdtemp pattern.
+            if unsafe { libc::mkdtemp(template.as_mut_ptr().cast()) }.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let bytes = &template[..template.len() - 1];
+            let scratch = Self {
+                path: PathBuf::from(OsStr::from_bytes(bytes)),
+                text: String::from_utf8_lossy(bytes).into_owned(),
+            };
+            let name = CString::new(bytes).map_err(|_| io::ErrorKind::InvalidInput)?;
+            // SAFETY: name is NUL-terminated; the directory is opened, not
+            // followed through a link, and changed by descriptor.
+            let fd = unsafe {
+                libc::open(
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let fd = Fd(fd);
+            // SAFETY: fd is the directory just made.
+            if unsafe { libc::fchown(fd.0, owner.0, owner.1) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(scratch)
+        }
+
+        pub(super) fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn path_str(&self) -> &str {
+            &self.text
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// The user and group the helper's command assumes.
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct Identity {
+        uid: u32,
+        gid: u32,
+    }
+
+    impl Identity {
+        /// Whether this supervisor (root) can launch the command as
+        /// `helper` with only `CAP_DAC_READ_SEARCH`.
+        fn check(helper: (u32, u32)) -> Result<Self, String> {
+            // SAFETY: geteuid has no arguments.
+            if unsafe { libc::geteuid() } != 0 {
+                return Err(unavailable(
+                    "the supervisor must start as root to launch a read-only helper",
+                ));
+            }
+            let permitted = permitted_capabilities()
+                .map_err(|error| unavailable(format!("reading its capabilities: {error}")))?;
+            for (cap, name) in [
+                (CAP_SETUID, "CAP_SETUID"),
+                (CAP_SETGID, "CAP_SETGID"),
+                (CAP_SETPCAP, "CAP_SETPCAP"),
+                (CAP_DAC_READ_SEARCH as u32, "CAP_DAC_READ_SEARCH"),
+            ] {
+                if permitted & (1 << cap) == 0 {
+                    return Err(unavailable(format!(
+                        "the container gives root no {name}; a hardened Session container \
+                         made before Axocoatl 1.3.0 lacks CAP_DAC_READ_SEARCH: restart the \
+                         Session"
+                    )));
+                }
+            }
+            Ok(Self {
+                uid: helper.0,
+                gid: helper.1,
+            })
+        }
+
+        /// Become the helper, between fork and exec: no supplementary
+        /// groups, its group and user, and `CAP_DAC_READ_SEARCH` as the only
+        /// capability in every set, ambient included, so the command and its
+        /// descendants keep it and can never gain another. Its locked
+        /// secure bits keep a set-user-ID-root program from granting any
+        /// (`SECBIT_NOROOT`, besides no-new-privileges), and keep the kernel
+        /// from setting aside the capability when the command asks whether
+        /// it may read a path (`access`, as Git does for a repository's
+        /// directories; `SECBIT_NO_SETUID_FIXUP`), so the answer is what an
+        /// `open` would get. Raw system calls only: they act on this one
+        /// thread, allocate nothing and are async-signal-safe.
+        pub(super) fn assume(self) -> io::Result<()> {
+            let fail = || Err(io::Error::last_os_error());
+            // SAFETY: plain system calls with scalar arguments, or pointers
+            // to complete local structures, in the single-threaded child.
+            unsafe {
+                for cap in 0..64 as libc::c_ulong {
+                    if cap != CAP_DAC_READ_SEARCH
+                        && libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0) != 0
+                        && io::Error::last_os_error().raw_os_error() != Some(libc::EINVAL)
+                    {
+                        return fail();
+                    }
+                }
+                // With no set-user-ID fixup the change of user below keeps
+                // the capabilities, which the capset after it reduces.
+                if libc::prctl(libc::PR_SET_SECUREBITS, SECURE_BITS, 0, 0, 0) != 0
+                    || libc::syscall(libc::SYS_setgroups, 0, std::ptr::null::<libc::gid_t>()) != 0
+                    || libc::syscall(libc::SYS_setresgid, self.gid, self.gid, self.gid) != 0
+                    || libc::syscall(libc::SYS_setresuid, self.uid, self.uid, self.uid) != 0
+                {
+                    return fail();
+                }
+                let header = CapHeader {
+                    version: CAPABILITY_VERSION_3,
+                    pid: 0,
+                };
+                let only = 1u32 << CAP_DAC_READ_SEARCH;
+                let data = [
+                    CapData {
+                        effective: only,
+                        permitted: only,
+                        inheritable: only,
+                    },
+                    CapData {
+                        effective: 0,
+                        permitted: 0,
+                        inheritable: 0,
+                    },
+                ];
+                if libc::syscall(libc::SYS_capset, &header, data.as_ptr()) != 0
+                    || libc::prctl(
+                        libc::PR_CAP_AMBIENT,
+                        libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong,
+                        CAP_DAC_READ_SEARCH,
+                        0,
+                        0,
+                    ) != 0
+                {
+                    return fail();
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[repr(C)]
+    struct CapHeader {
+        version: u32,
+        pid: libc::c_int,
+    }
+
+    #[repr(C)]
+    struct CapData {
+        effective: u32,
+        permitted: u32,
+        inheritable: u32,
+    }
+
+    /// This process's permitted capabilities.
+    fn permitted_capabilities() -> io::Result<u64> {
+        let mut header = CapHeader {
+            version: CAPABILITY_VERSION_3,
+            pid: 0,
+        };
+        let mut data = [
+            CapData {
+                effective: 0,
+                permitted: 0,
+                inheritable: 0,
+            },
+            CapData {
+                effective: 0,
+                permitted: 0,
+                inheritable: 0,
+            },
+        ];
+        // SAFETY: header and data are complete version 3 structures.
+        if unsafe { libc::syscall(libc::SYS_capget, &mut header, data.as_mut_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(u64::from(data[0].permitted) | (u64::from(data[1].permitted) << 32))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn stat(kind: libc::mode_t, mode: libc::mode_t, uid: u32) -> libc::stat {
+            // SAFETY: an all-zero stat is a valid value.
+            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+            stat.st_mode = kind | mode;
+            stat.st_uid = uid;
+            stat
+        }
+
+        /// A rule outside the Workspace covers what any user may read when
+        /// the command starts; one rule covers a directory only when nobody
+        /// but root (or another user that is not the writer) can add to it.
+        #[test]
+        fn only_what_any_user_may_read_is_opened_and_only_sealed_directories_whole() {
+            let writer = 1000;
+            assert!(readable_file(&stat(libc::S_IFREG, 0o644, 0)));
+            assert!(readable_file(&stat(libc::S_IFREG, 0o604, writer)));
+            assert!(!readable_file(&stat(libc::S_IFREG, 0o640, 0)));
+            assert!(!readable_file(&stat(libc::S_IFREG, 0o600, 0)));
+            for mode in [0o755, 0o555, 0o751] {
+                assert!(passable(&stat(libc::S_IFDIR, mode, 0)), "{mode:o}");
+            }
+            assert!(passable(&stat(libc::S_IFDIR, 0o711, 0)));
+            assert!(!listable(&stat(libc::S_IFDIR, 0o711, 0)));
+            assert!(!passable(&stat(libc::S_IFDIR, 0o700, 0)));
+            assert!(!passable(&stat(libc::S_IFDIR, 0o754, 0)));
+            assert!(!passable(&stat(libc::S_IFREG, 0o755, 0)));
+            assert!(listable(&stat(libc::S_IFDIR, 0o755, writer)));
+            assert!(listable(&stat(libc::S_IFDIR, 0o1777, 0)));
+            assert!(sealed(&stat(libc::S_IFDIR, 0o755, 0), writer));
+            assert!(sealed(&stat(libc::S_IFDIR, 0o755, 503), writer));
+            for mode in [0o775, 0o757, 0o777, 0o1777, 0o2775] {
+                assert!(!sealed(&stat(libc::S_IFDIR, mode, 0), writer), "{mode:o}");
+            }
+            assert!(!sealed(&stat(libc::S_IFDIR, 0o755, writer), writer));
+            assert_eq!(rights(&stat(libc::S_IFDIR, 0o755, 0)), READ);
+            assert_eq!(rights(&stat(libc::S_IFREG, 0o755, 0)), EXECUTE | READ_FILE);
+            assert_eq!(rights(&stat(libc::S_IFLNK, 0o777, 0)), 0);
+        }
+
+        /// No process's own `/proc/<pid>`, `/proc/self` included, is among
+        /// what a helper may read outside the Workspace, and neither is any
+        /// home, `/tmp`, `/run` or `/root`.
+        #[test]
+        fn the_system_paths_hold_no_process_home_or_shared_directory() {
+            for path in SYSTEM_ROOTS.iter().chain(SYSTEM_FILES) {
+                assert!(path.starts_with('/'), "{path}");
+                for refused in [
+                    "/proc/self",
+                    "/home",
+                    "/root",
+                    "/tmp",
+                    "/var",
+                    "/run",
+                    "/dev/shm",
+                ] {
+                    assert!(!path.starts_with(refused), "{path}");
+                }
+                if let Some(rest) = path.strip_prefix("/proc/") {
+                    assert!(!rest.starts_with(|c: char| c.is_ascii_digit()), "{path}");
+                    assert!(!rest.contains('/') || rest.starts_with("sys"), "{path}");
+                }
+            }
+        }
+    }
+}
+
 /// Kernel write restriction for a launched command tree (Landlock). Writes
 /// are refused everywhere except beneath the allowed roots and, when the
 /// restriction denies the network, so is every TCP bind and connect; reading
-/// and execution stay unrestricted. Inherited by every descendant.
+/// and execution stay unrestricted, except for a read-only helper's command
+/// ([`super::helper_view`]). Inherited by every descendant.
 mod landlock {
     use crate::protocol::WriteRestriction;
-    use std::ffi::CString;
+    use std::ffi::{CStr, CString};
     use std::io;
     use std::os::fd::RawFd;
 
     const CREATE_RULESET_VERSION: u32 = 1;
     const RULE_PATH_BENEATH: libc::c_int = 1;
+    pub(super) const EXECUTE: u64 = 1 << 0;
     const WRITE_FILE: u64 = 1 << 1;
+    pub(super) const READ_FILE: u64 = 1 << 2;
+    pub(super) const READ_DIR: u64 = 1 << 3;
+    /// Opening a file to read it, listing a directory, executing a file.
+    pub(super) const READ: u64 = EXECUTE | READ_FILE | READ_DIR;
     const REMOVE_DIR: u64 = 1 << 4;
     const REMOVE_FILE: u64 = 1 << 5;
     const MAKE_CHAR: u64 = 1 << 6;
@@ -908,8 +1663,8 @@ mod landlock {
     /// The rights a ruleset handles, each refused unless a rule allows it.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(super) struct Handled {
-        fs: u64,
-        net: u64,
+        pub(super) fs: u64,
+        pub(super) net: u64,
     }
 
     /// The rights a ruleset handles on a kernel offering Landlock `abi`.
@@ -967,7 +1722,7 @@ mod landlock {
 
     /// The kernel's Landlock ABI. Fails when the kernel or the container's
     /// seccomp policy does not offer Landlock.
-    fn abi() -> Result<i64, String> {
+    pub(super) fn abi() -> Result<i64, String> {
         // SAFETY: querying the ABI takes no attribute pointer.
         let abi = unsafe {
             libc::syscall(
@@ -984,7 +1739,7 @@ mod landlock {
     }
 
     /// A ruleset that handles `handled` and allows nothing yet.
-    fn create(handled: Handled) -> Result<Ruleset, String> {
+    pub(super) fn create(handled: Handled) -> Result<Ruleset, String> {
         let attr = RulesetAttr {
             handled_access_fs: handled.fs,
             handled_access_net: handled.net,
@@ -1021,50 +1776,117 @@ mod landlock {
         let handled = handled_access(abi()?, restriction.deny_network)?;
         let ruleset = create(handled)?;
         let home = std::env::var("HOME").ok();
-        for root in restriction.effective_writable(home.as_deref()) {
-            let path =
-                CString::new(root.as_str()).map_err(|_| "invalid writable path".to_owned())?;
-            // SAFETY: path is NUL-terminated; O_PATH opens without access.
-            let parent = unsafe { libc::open(path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
-            if parent < 0 {
-                if io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
-                    continue;
-                }
-                return Err(last_error(&format!("opening {root}")));
-            }
-            // SAFETY: parent is an open descriptor; stat is fully initialised by fstat.
-            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-            let is_dir = unsafe { libc::fstat(parent, &mut stat) } == 0
-                && (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR;
+        allow_writes(&ruleset, restriction, home.as_deref(), handled.fs)?;
+        Ok(ruleset)
+    }
+
+    /// Allow `rights` (the handled write rights) beneath each of the
+    /// restriction's writable roots that exists, `$HOME` being `home`.
+    pub(super) fn allow_writes(
+        ruleset: &Ruleset,
+        restriction: &WriteRestriction,
+        home: Option<&str>,
+        rights: u64,
+    ) -> Result<(), String> {
+        for root in restriction.effective_writable(home) {
             // A file accepts only file rights; a directory accepts all.
-            let allowed = if is_dir {
-                handled.fs
-            } else {
-                handled.fs & (WRITE_FILE | TRUNCATE)
-            };
-            let rule = PathBeneathAttr {
-                allowed_access: allowed,
-                parent_fd: parent,
-            };
-            // SAFETY: rule is a valid path-beneath attribute for this ruleset.
-            let added = unsafe {
-                libc::syscall(
-                    SYS_ADD_RULE,
-                    ruleset.fd(),
-                    RULE_PATH_BENEATH,
-                    &rule as *const PathBeneathAttr,
-                    0u32,
-                )
-            };
-            // SAFETY: parent was opened above and is no longer needed.
-            unsafe {
-                libc::close(parent);
+            allow_path(ruleset, &root, rights, rights & (WRITE_FILE | TRUNCATE))?;
+        }
+        Ok(())
+    }
+
+    /// Allow `dir_rights` beneath `path` when it is a directory, or
+    /// `file_rights` on it otherwise. `false` when it does not exist.
+    pub(super) fn allow_path(
+        ruleset: &Ruleset,
+        path: &str,
+        dir_rights: u64,
+        file_rights: u64,
+    ) -> Result<bool, String> {
+        let name = CString::new(path).map_err(|_| "invalid path".to_owned())?;
+        // SAFETY: name is NUL-terminated; O_PATH opens without access.
+        let fd = unsafe { libc::open(name.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+        if fd < 0 {
+            if io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
+                return Ok(false);
             }
-            if added != 0 {
-                return Err(last_error(&format!("allowing writes beneath {root}")));
+            return Err(last_error(&format!("opening {path}")));
+        }
+        let fd = Fd(fd);
+        let is_dir = fstat(fd.0).is_ok_and(|stat| kind(&stat) == libc::S_IFDIR);
+        add_rule(ruleset, fd.0, if is_dir { dir_rights } else { file_rights })
+            .map_err(|error| format!("allowing access beneath {path}: {error}"))?;
+        Ok(true)
+    }
+
+    /// Add one path-beneath rule on the open descriptor `fd`. Nothing to do
+    /// for no rights.
+    pub(super) fn add_rule(ruleset: &Ruleset, fd: RawFd, rights: u64) -> io::Result<()> {
+        if rights == 0 {
+            return Ok(());
+        }
+        let rule = PathBeneathAttr {
+            allowed_access: rights,
+            parent_fd: fd,
+        };
+        // SAFETY: rule is a valid path-beneath attribute for this ruleset.
+        let added = unsafe {
+            libc::syscall(
+                SYS_ADD_RULE,
+                ruleset.fd(),
+                RULE_PATH_BENEATH,
+                &rule as *const PathBeneathAttr,
+                0u32,
+            )
+        };
+        if added != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// An owned descriptor, closed on drop.
+    pub(super) struct Fd(pub(super) RawFd);
+
+    impl Drop for Fd {
+        fn drop(&mut self) {
+            // SAFETY: the descriptor is owned here and closed once.
+            unsafe {
+                libc::close(self.0);
             }
         }
-        Ok(ruleset)
+    }
+
+    pub(super) fn fstat(fd: RawFd) -> io::Result<libc::stat> {
+        // SAFETY: stat is fully initialised by a successful fstat.
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstat(fd, &mut stat) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(stat)
+    }
+
+    pub(super) fn kind(stat: &libc::stat) -> libc::mode_t {
+        stat.st_mode & libc::S_IFMT
+    }
+
+    /// Open `name` beneath the directory `dir` without following a final
+    /// symbolic link and without any access (`O_PATH`), and inspect it.
+    pub(super) fn open_entry(dir: RawFd, name: &CStr) -> io::Result<(Fd, libc::stat)> {
+        // SAFETY: name is NUL-terminated and dir is an open directory.
+        let fd = unsafe {
+            libc::openat(
+                dir,
+                name.as_ptr(),
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let fd = Fd(fd);
+        let stat = fstat(fd.0)?;
+        Ok((fd, stat))
     }
 
     /// Enforce the prepared ruleset on the calling (child) process.

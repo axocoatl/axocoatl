@@ -787,9 +787,10 @@ async fn actual_sandbox_with(
 }
 
 /// In a hardened Session container a writer's tools run as the writer user
-/// and every process of a read-only helper as the helper user, both without
-/// capabilities; the host's captures of the helper's work still run as the
-/// writer, so the helper's answer is accepted.
+/// without capabilities and every process of a read-only helper as the
+/// helper user, through its view of the Workspace (which keeps it out of its
+/// own /proc entries too); the host's captures of the helper's work still
+/// run as the writer, so the helper's answer is accepted.
 #[tokio::test]
 #[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
 async fn actual_hardened_activations_run_as_their_workload_users() {
@@ -797,11 +798,21 @@ async fn actual_hardened_activations_run_as_their_workload_users() {
         writer: (1000, 1000),
         helper: (1001, 1001),
     };
-    let command =
-        "echo uid=$(id -u); echo home=$HOME; echo cap=$(grep '^CapEff:' /proc/self/status | cut -f2)";
-    for (writes, uid, home) in [
-        (None, "uid=1000", "home=/home/axocoatl"),
-        (Some(&[][..]), "uid=1001", "home=/tmp/axocoatl-home."),
+    let command = "echo uid=$(id -u); echo home=$HOME; \
+         echo cap=$(grep '^CapEff:' /proc/self/status 2>/dev/null | cut -f2)end";
+    for (writes, uid, home, cap) in [
+        (
+            None,
+            "uid=1000",
+            "home=/home/axocoatl",
+            "cap=0000000000000000end",
+        ),
+        (
+            Some(&[][..]),
+            "uid=1001",
+            "home=/tmp/axocoatl-helper.",
+            "cap=end",
+        ),
     ] {
         let mut f = fixture().await;
         let sandbox = actual_sandbox_with(&mut f, Some(users)).await;
@@ -835,12 +846,94 @@ async fn actual_hardened_activations_run_as_their_workload_users() {
             .collect();
         assert!(provider.saw(1, uid), "{writes:?}: {seen:?}");
         assert!(provider.saw(1, home), "{writes:?}: {seen:?}");
-        assert!(
-            provider.saw(1, "cap=0000000000000000"),
-            "{writes:?}: {seen:?}"
-        );
+        assert!(provider.saw(1, cap), "{writes:?}: {seen:?}");
         assert!(settled.accepted, "{writes:?}: {:?}", settled.failure);
     }
+}
+
+/// A read-only helper's file tools and shell read a repository only its
+/// owner may enter (`mkdtemp`, `umask 077`: directories `0700`, files
+/// `0600`) through their view of it, and change nothing; the run is
+/// accepted.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_read_only_helper_tools_read_a_private_repository() {
+    use std::os::unix::fs::PermissionsExt;
+    let users = axocoatl_isolation::WorkloadUsers {
+        writer: (1000, 1000),
+        helper: (1001, 1001),
+    };
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox_with(&mut f, Some(users)).await;
+    let root = f._workspace.path().to_path_buf();
+    git_init(&root);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("README.md"), "workspace-readme\n").unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn workspace_source() {}\n").unwrap();
+    for (path, mode) in [
+        ("README.md", 0o600),
+        ("src/lib.rs", 0o600),
+        ("src", 0o700),
+        (".git", 0o700),
+        ("", 0o700),
+    ] {
+        std::fs::set_permissions(root.join(path), std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    assert_eq!(
+        sandbox.helper_workspace_access().await.unwrap(),
+        Some(axocoatl_isolation::HelperWorkspaceAccess::Readable)
+    );
+    let r = run_scoped(&mut f, &["read_file", "grep", "list_dir", "bash"], &[]);
+    let provider = Provider::new(vec![
+        ("read_file", serde_json::json!({"path": "src/lib.rs"})),
+        (
+            "grep",
+            serde_json::json!({"pattern": "workspace_source", "path": "src"}),
+        ),
+        ("list_dir", serde_json::json!({"path": "src"})),
+        (
+            "bash",
+            serde_json::json!({"command": "cat README.md; id -u; echo x >> README.md || echo append-refused"}),
+        ),
+    ]);
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    assert!(idle.unwrap());
+    let seen = |index: usize| -> Vec<String> {
+        provider.requests.lock().unwrap()[index]
+            .iter()
+            .filter_map(ChatMessage::text_content)
+            .map(str::to_string)
+            .collect()
+    };
+    assert!(
+        provider.saw(1, "pub fn workspace_source()"),
+        "{:?}",
+        seen(1)
+    );
+    assert!(provider.saw(2, "src/lib.rs"), "{:?}", seen(2));
+    assert!(provider.saw(3, "lib.rs"), "{:?}", seen(3));
+    assert!(provider.saw(4, "workspace-readme"), "{:?}", seen(4));
+    assert!(provider.saw(4, "1001"), "{:?}", seen(4));
+    assert!(provider.saw(4, "append-refused"), "{:?}", seen(4));
+    assert_eq!(
+        std::fs::read_to_string(root.join("README.md")).unwrap(),
+        "workspace-readme\n"
+    );
+    assert!(settled.accepted, "{:?}", settled.failure);
 }
 
 #[tokio::test]

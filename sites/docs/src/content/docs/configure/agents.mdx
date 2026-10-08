@@ -247,7 +247,9 @@ In a native Session:
   bits or timestamps, so a helper that runs as root, or any helper on macOS, can still
   change those. Listing `browser` lets it drive the Session's apps through the browser
   container; `browser_check`, which runs test code it writes, makes an Agent count as
-  one that can change files. Each command gets a fresh home directory instead of the Session's. Landlock
+  one that can change files. Each command gets a fresh home directory instead of the Session's. With
+  [workload users](/configure/sandboxes/#workload-users) its file tools and shell read the
+  repository whatever its file modes, and outside it only what any user may. Landlock
   does not cover UDP, so name lookups and other UDP traffic still follow the sandbox's
   `network` setting; see [Security](/operate/security/) for what else it leaves open. Where the runtime cannot apply the whole
   restriction, such as on Linux before 6.7, its `bash` commands do not run and the
