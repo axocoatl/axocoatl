@@ -65,21 +65,37 @@ This runs `claude setup-token` for you and stores the long-lived OAuth token it 
 as the secret `claude-code-oauth`. You sign in in the browser as `claude setup-token`
 asks; you never see, copy, paste or type the token:
 
-- `claude setup-token` runs in a pseudo-terminal 1000 columns wide, so the token is
-  printed on one line. Your terminal is in raw mode while it runs (your keystrokes go
-  to it) and is restored when it ends, also on an error or a signal.
-- Everything it prints reaches your terminal through a filter that replaces any
-  `sk-ant-…` token with `[token hidden by axocoatl]`, even when the token arrives in
-  pieces or with color codes inside it. At most the public prefix `sk-ant` shows before
-  the mask.
+- `claude setup-token` runs in a pseudo-terminal the size of your terminal, and is
+  resized with it when you resize the window, so its screen looks as it does when you
+  run it yourself. In a terminal smaller than 40 columns by 24 rows it gets 40 by 24
+  instead (in a smaller one Claude Code may not draw the whole token), and its screen
+  may then look broken, but the token is still read whole and hidden. Your terminal is
+  in raw mode while it runs (your keystrokes go to it) and is restored when it ends,
+  also on an error or a signal. Keystrokes stop going to it the moment it exits: what
+  you type while the token is checked stays for your shell.
+- Everything it prints reaches your terminal through a filter that keeps a model of the
+  terminal, so it sees each character in the cell it lands in, as you would. Claude Code
+  draws the token in rows wrapped at the width of its box and placed by cursor movement;
+  the filter reads the token from those cells, at any width, with color codes,
+  hyperlinks or other escape sequences anywhere inside it, a border or padding around
+  it, or in pieces written at different times. Each cell of the token shows the next
+  character of `[token hidden by axocoatl]` (then a blank), so the rest of the screen
+  stays where Claude Code put it. At most the public prefix `sk-ant` shows before the
+  mask. Writes to your clipboard (OSC 52, and the kitty, iTerm2, tmux and screen forms
+  of it) are dropped, and so is any other escape sequence holding a token.
 - Axocoatl reads the token from that output in memory only: exactly one
   `sk-ant-oat01-…` token must appear, or nothing is stored and the command says why.
-  The token never goes into a command line, an environment variable, a log, a temporary
-  file or a message.
+  The token ends where it does on screen: the next line Claude Code prints is not
+  stored with it, nor is text after a blank on its last row. The token never goes into
+  a command line, an environment variable, a log, a temporary file or a message, and
+  the buffers that held it are overwritten when they are freed.
 - It then checks the token with Anthropic over HTTPS (`GET /v1/models` with the
   token, which costs nothing; the response is never shown). A token Anthropic rejects
   (`401` or `403`) is not stored. When Anthropic cannot be reached, nothing is stored
   either: run the command again, or add `--no-verify` to store the token unchecked.
+  The `Authorization` header is built in a buffer that is overwritten when the request
+  ends; the copies the HTTP and TLS libraries make while sending it are freed then,
+  and the connection is not kept open.
 - It stores the token exactly as `axocoatl secret set` does (`secrets/claude-code-oauth`
   in the data root, `0600`, replaced atomically) and prints
   `Connected Claude Code: stored secret claude-code-oauth (the token was never shown)`

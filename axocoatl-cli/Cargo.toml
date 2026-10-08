@@ -40,10 +40,13 @@ uuid = { workspace = true }
 reqwest = { workspace = true }
 dialoguer = "0.11"
 # `axocoatl connect claude-code`: the pseudo-terminal `claude setup-token`
-# runs in, the user's terminal in raw mode, and a zeroizing token buffer.
+# runs in, the user's terminal in raw mode, character widths for its model of
+# the terminal, zeroizing token buffers, and a header value that owns one.
 portable-pty = "0.9.0"
 rustix = { version = "1.1.4", features = ["termios", "event"] }
+unicode-width = "0.2"
 zeroize = "1"
+bytes = "1.9"
 
 [dev-dependencies]
 tempfile = "3.27"

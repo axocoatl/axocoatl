@@ -1,7 +1,9 @@
 //! `axocoatl connect claude-code` end to end with a fake `claude` (the
-//! script `tests/fixtures/fake-claude.sh`) on a pseudo-terminal standing in
-//! for the user's terminal, and a local fake HTTPS endpoint standing in for
-//! Anthropic (its base URL and root certificate are injected here only).
+//! script `tests/fixtures/fake-claude.sh`, which can replay what Claude
+//! Code's renderer writes, from [`super::ink_model`]) on a pseudo-terminal
+//! standing in for the user's terminal, and a local fake HTTPS endpoint
+//! standing in for Anthropic (its base URL and root certificate are injected
+//! here only).
 
 use std::io::Write;
 use std::net::SocketAddr;
@@ -14,6 +16,7 @@ use std::time::{Duration, Instant, SystemTime};
 use rustix::termios::{self, LocalModes};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
+use super::ink_model::{self, Shape};
 use super::redact::tests::leaked_positions;
 use super::redact::MASK;
 use super::*;
@@ -32,6 +35,36 @@ fn fresh_token() -> String {
 struct UserTerminal {
     master: OwnedFd,
     slave: OwnedFd,
+}
+
+impl UserTerminal {
+    fn set_size(&self, size: (u16, u16)) {
+        set_size(&self.slave, size);
+    }
+
+    /// What is waiting to be read on the user's side (typed and not read by
+    /// anyone), within `timeout`.
+    fn pending_input(&self, timeout: Duration) -> Vec<u8> {
+        use rustix::event::{poll, PollFd, PollFlags, Timespec};
+        let mut input = Vec::new();
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            let mut fds = [PollFd::new(&self.slave, PollFlags::IN)];
+            let wait = Timespec {
+                tv_sec: 0,
+                tv_nsec: 50_000_000,
+            };
+            if poll(&mut fds, Some(&wait)).unwrap_or(0) == 0 {
+                continue;
+            }
+            let mut buffer = [0u8; 256];
+            match rustix::io::read(&self.slave, &mut buffer) {
+                Ok(read) if read > 0 => input.extend_from_slice(&buffer[..read]),
+                _ => break,
+            }
+        }
+        input
+    }
 }
 
 fn user_terminal() -> UserTerminal {
@@ -133,14 +166,26 @@ impl Fixture {
         self.root.join("data")
     }
 
-    fn request(&self, verifier: Option<Verifier>, cols: u16) -> Connect {
+    fn request(&self, verifier: Option<Verifier>) -> Connect {
         Connect {
             claude: self.claude(),
             secret: CLAUDE_CODE_SECRET.into(),
             data_dir: self.data(),
             verifier,
-            cols,
         }
+    }
+
+    /// For mode `replay`: what Claude Code writes in a terminal of `size`.
+    fn replay(&self, (cols, rows): (u16, u16), shape: Shape) {
+        let (before, after) =
+            ink_model::session(&self.token, usize::from(cols), usize::from(rows), shape);
+        self.write_replay((cols, rows), &before, &after);
+    }
+
+    fn write_replay(&self, (cols, rows): (u16, u16), before: &[u8], after: &[u8]) {
+        let bin = self.root.join("bin");
+        std::fs::write(bin.join(format!("before-{cols}x{rows}")), before).unwrap();
+        std::fs::write(bin.join(format!("after-{cols}x{rows}")), after).unwrap();
     }
 
     fn stored(&self) -> Option<Vec<u8>> {
@@ -198,6 +243,13 @@ fn assert_written_nowhere_else(fixture: &Fixture, since: SystemTime) {
     let mut hits = Vec::new();
     files_containing(&fixture.root, needle, 8, None, &[], &mut hits);
     hits.sort();
+    // The replay files the tests wrote for the fake hold it when it is on
+    // one row.
+    hits.retain(|path| {
+        !path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("after-"))
+    });
     let mut expected = vec![fixture.root.join("bin/token")];
     if fixture.stored().is_some() {
         expected.push(secret_store::secret_path(
@@ -219,11 +271,21 @@ fn assert_written_nowhere_else(fixture: &Fixture, since: SystemTime) {
     assert!(elsewhere.is_empty(), "{elsewhere:?}");
 }
 
-/// Types Enter on the user's terminal once the fake asks for it, after
-/// checking that the terminal is raw then; or raises `interrupt` instead.
+/// The text the fake shows when it waits for Enter.
+fn prompt(fixture: &Fixture) -> &'static str {
+    match std::fs::read_to_string(fixture.root.join("bin/mode")).as_deref() {
+        Ok("replay") => ink_model::PROMPT,
+        _ => "Press Enter to continue",
+    }
+}
+
+/// Types Enter on the user's terminal once the fake asks for it (shows
+/// `prompt`), after checking that the terminal is raw then; or raises
+/// `interrupt` instead.
 fn typist(
     terminal: &UserTerminal,
     screen: &Screen,
+    prompt: &'static str,
     interrupt: Option<Interrupt>,
 ) -> std::thread::JoinHandle<bool> {
     let master = terminal.master.try_clone().unwrap();
@@ -231,7 +293,7 @@ fn typist(
     let screen = screen.clone();
     std::thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(30);
-        while !screen.contains("Press Enter to continue") {
+        while !screen.contains(prompt) {
             assert!(Instant::now() < deadline, "the fake never asked for a key");
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -246,15 +308,36 @@ fn typist(
     })
 }
 
-/// Run `connect` on a fresh user terminal; returns its result, what it
-/// showed, and whether the terminal was raw while the fake waited.
+/// `connect`'s result; if it has not finished within 60 seconds, `claude`
+/// is stopped (so no test is left waiting on it) and the test fails.
+async fn finish_within<F>(connecting: F, interrupt: &Interrupt) -> Result<String, Failure>
+where
+    F: std::future::Future<Output = Result<String, Failure>>,
+{
+    tokio::pin!(connecting);
+    tokio::select! {
+        result = &mut connecting => result,
+        () = tokio::time::sleep(Duration::from_secs(60)) => {
+            interrupt.raise();
+            let _ = connecting.await;
+            panic!("connect did not finish within 60 seconds");
+        }
+    }
+}
+
+/// The user's terminal size most tests use.
+const SIZE: (u16, u16) = (100, 30);
+
+/// Run `connect` on a fresh user terminal of `size`; returns its result,
+/// what it showed, and whether the terminal was raw while the fake waited.
 async fn run_connect(
     fixture: &Fixture,
     verifier: Option<Verifier>,
-    cols: u16,
+    size: (u16, u16),
     interrupt_at_prompt: bool,
 ) -> (Result<String, Failure>, Screen, bool) {
     let terminal = user_terminal();
+    terminal.set_size(size);
     let before = modes(&terminal.slave);
     assert!(!is_raw(&terminal.slave));
     let screen = Screen::default();
@@ -262,19 +345,20 @@ async fn run_connect(
     let typing = typist(
         &terminal,
         &screen,
+        prompt(fixture),
         interrupt_at_prompt.then(|| interrupt.clone()),
     );
-    let result = tokio::time::timeout(
-        Duration::from_secs(60),
+    let result = finish_within(
         connect(
-            fixture.request(verifier, cols),
+            fixture.request(verifier),
             terminal.slave.try_clone().unwrap(),
             Box::new(screen.clone()),
             &interrupt,
+            &Resized::default(),
         ),
+        &interrupt,
     )
-    .await
-    .expect("connect finished");
+    .await;
     let raw_while_waiting = typing.join().unwrap();
     // Raw mode is restored exactly.
     assert_eq!(modes(&terminal.slave), before);
@@ -316,6 +400,11 @@ impl FakeAnthropic {
     /// `401` unless the request carries `Bearer <token>` and the OAuth
     /// headers. Its body holds a marker that must never be shown.
     async fn start(token: &str, status: u16) -> Self {
+        Self::start_slow(token, status, Duration::ZERO).await
+    }
+
+    /// [`Self::start`], answering each request after `delay`.
+    async fn start_slow(token: &str, status: u16, delay: Duration) -> Self {
         let authority = axocoatl_daemon::egress_broker::SessionCa::new("connect-test").unwrap();
         let (certificate, key) = authority.leaf("localhost").unwrap();
         let config = rustls::ServerConfig::builder_with_provider(Arc::new(
@@ -382,6 +471,7 @@ impl FakeAnthropic {
                         status
                     };
                     seen.lock().unwrap().push(seen_request);
+                    tokio::time::sleep(delay).await;
                     let body =
                         r#"{"data":[{"id":"fake-model"}],"marker":"BODY-MARKER-NEVER-SHOWN"}"#;
                     let response = format!(
@@ -420,13 +510,8 @@ async fn the_colored_token_is_captured_checked_and_stored_and_never_shown() {
     let started = SystemTime::now();
     let fixture = Fixture::new("colored");
     let anthropic = FakeAnthropic::start(&fixture.token, 200).await;
-    let (result, screen, raw) = run_connect(
-        &fixture,
-        Some(anthropic.verifier()),
-        relay::WIDE_COLUMNS,
-        false,
-    )
-    .await;
+    let (result, screen, raw) =
+        run_connect(&fixture, Some(anthropic.verifier()), SIZE, false).await;
     let message = result.unwrap();
     assert!(raw, "the user's terminal was raw while claude ran");
     assert!(message.starts_with(
@@ -473,25 +558,25 @@ async fn the_colored_token_is_captured_checked_and_stored_and_never_shown() {
 async fn a_token_split_across_writes_with_pauses_is_captured_exactly() {
     let started = SystemTime::now();
     let fixture = Fixture::new("split");
-    let (result, screen, raw) = run_connect(&fixture, None, relay::WIDE_COLUMNS, false).await;
+    let (result, screen, raw) = run_connect(&fixture, None, SIZE, false).await;
     result.unwrap();
     assert!(raw);
     assert_eq!(fixture.stored().unwrap(), fixture.token.as_bytes());
     assert_not_shown(&screen, &fixture.token);
-    let text = String::from_utf8_lossy(&screen.bytes()).replace(MASK, "");
+    let text = String::from_utf8_lossy(&screen.bytes()).into_owned();
     assert!(!text.contains("sk-ant-"), "{text}");
     assert!(!text.contains("Checking the token"));
     assert_written_nowhere_else(&fixture, started);
 }
 
-/// At the width `connect` uses, the fake prints the token on one line; in a
-/// narrow terminal it wraps it at the last column, and the token is still
-/// hidden and captured whole.
+/// `claude` runs in a terminal as wide as the user's: in a wide one the
+/// fake prints the token on one line, in a narrow one it breaks it at the
+/// last column, and the token is still hidden and captured whole.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_token_wrapped_by_a_narrow_terminal_is_hidden_and_captured() {
-    for cols in [relay::WIDE_COLUMNS, 40, 57] {
+    for cols in [250, 40, 57] {
         let fixture = Fixture::new("wrapped");
-        let (result, screen, _) = run_connect(&fixture, None, cols, false).await;
+        let (result, screen, _) = run_connect(&fixture, None, (cols, 30), false).await;
         result.unwrap_or_else(|failure| panic!("{cols} columns: {}", failure.message));
         assert_eq!(
             fixture.stored().unwrap(),
@@ -506,7 +591,7 @@ async fn a_token_wrapped_by_a_narrow_terminal_is_hidden_and_captured() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_same_token_printed_twice_is_stored_once() {
     let fixture = Fixture::new("twice");
-    let (result, screen, _) = run_connect(&fixture, None, relay::WIDE_COLUMNS, false).await;
+    let (result, screen, _) = run_connect(&fixture, None, SIZE, false).await;
     result.unwrap();
     assert_eq!(fixture.stored().unwrap(), fixture.token.as_bytes());
     assert_not_shown(&screen, &fixture.token);
@@ -522,7 +607,7 @@ async fn the_same_token_printed_twice_is_stored_once() {
 async fn no_token_or_two_tokens_store_nothing() {
     let started = SystemTime::now();
     let fixture = Fixture::new("none");
-    let (result, screen, _) = run_connect(&fixture, None, relay::WIDE_COLUMNS, false).await;
+    let (result, screen, _) = run_connect(&fixture, None, SIZE, false).await;
     let failure = result.unwrap_err();
     assert_eq!(failure.code, exit::NO_TOKEN);
     assert!(
@@ -537,7 +622,7 @@ async fn no_token_or_two_tokens_store_nothing() {
     assert_written_nowhere_else(&fixture, started);
 
     let fixture = Fixture::new("two");
-    let (result, screen, _) = run_connect(&fixture, None, relay::WIDE_COLUMNS, false).await;
+    let (result, screen, _) = run_connect(&fixture, None, SIZE, false).await;
     let failure = result.unwrap_err();
     assert_eq!(failure.code, exit::NO_TOKEN);
     assert!(
@@ -555,13 +640,8 @@ async fn a_rejected_token_is_not_stored() {
     for status in [401, 403] {
         let fixture = Fixture::new("colored");
         let anthropic = FakeAnthropic::start(&fixture.token, status).await;
-        let (result, screen, _) = run_connect(
-            &fixture,
-            Some(anthropic.verifier()),
-            relay::WIDE_COLUMNS,
-            false,
-        )
-        .await;
+        let (result, screen, _) =
+            run_connect(&fixture, Some(anthropic.verifier()), SIZE, false).await;
         let failure = result.unwrap_err();
         assert_eq!(failure.code, exit::REJECTED);
         assert!(
@@ -591,8 +671,7 @@ async fn an_unreachable_api_stores_nothing_and_says_how_to_retry() {
         reqwest::Certificate::from_der(authority.der().as_ref()).unwrap(),
         Some(("localhost", address)),
     );
-    let (result, screen, _) =
-        run_connect(&fixture, Some(verifier), relay::WIDE_COLUMNS, false).await;
+    let (result, screen, _) = run_connect(&fixture, Some(verifier), SIZE, false).await;
     let failure = result.unwrap_err();
     assert_eq!(failure.code, exit::UNVERIFIED);
     assert!(
@@ -613,11 +692,216 @@ async fn an_unreachable_api_stores_nothing_and_says_how_to_retry() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_interrupt_stops_claude_and_stores_nothing() {
     let fixture = Fixture::new("colored");
-    let (result, _, raw) = run_connect(&fixture, None, relay::WIDE_COLUMNS, true).await;
+    let (result, _, raw) = run_connect(&fixture, None, SIZE, true).await;
     assert!(raw);
     let failure = result.unwrap_err();
     assert_eq!(failure.code, exit::INTERRUPTED);
     assert!(fixture.stored().is_none());
+}
+
+/// Wait until `screen` shows `text`.
+fn wait_for(screen: &Screen, text: &str) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !screen.contains(text) {
+        assert!(Instant::now() < deadline, "never shown: {text}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn set_size(fd: impl AsFd, (cols, rows): (u16, u16)) {
+    termios::tcsetwinsize(
+        fd,
+        termios::Winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .unwrap();
+}
+
+/// What Claude Code 2.1.271 writes for `claude setup-token`, replayed by the
+/// fake in a terminal as large as the user's, from narrow to wide (and with
+/// the tall banner from 30 rows): the token, which Ink wraps into rows
+/// placed by cursor movement, is stored exactly and never shown, and the
+/// screen around it is Claude Code's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_codes_rendering_is_stored_and_never_shown_at_any_width() {
+    for size in [
+        (40, 24),
+        (57, 24),
+        (80, 24),
+        (107, 30),
+        (108, 30),
+        (109, 30),
+        (120, 40),
+        (200, 50),
+        (300, 60),
+    ] {
+        let started = SystemTime::now();
+        let fixture = Fixture::new("replay");
+        fixture.replay(size, Shape::Claude);
+        let (result, screen, raw) = run_connect(&fixture, None, size, false).await;
+        result.unwrap_or_else(|failure| panic!("{size:?}: {}", failure.message));
+        assert!(raw, "{size:?}");
+        assert_eq!(
+            fixture.stored().unwrap(),
+            fixture.token.as_bytes(),
+            "{size:?}"
+        );
+        assert_not_shown(&screen, &fixture.token);
+        let display = super::redact::tests::rendered(&screen.bytes(), size.0, size.1).join("\n");
+        assert!(display.contains(MASK), "{size:?}:\n{display}");
+        assert!(display.contains("Your OAuth token (valid for 1 year):"));
+        assert!(display.contains("Store this token securely."));
+        assert_written_nowhere_else(&fixture, started);
+    }
+}
+
+/// A terminal smaller than the smallest `claude` runs in: `claude` gets a
+/// 40-by-24 terminal, so Claude Code draws the whole token, which is stored
+/// and never shown.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_small_terminal_gives_claude_the_smallest_size_it_draws_the_token_in() {
+    assert_eq!(relay::program_size((30, 12)), (40, 24));
+    assert_eq!(relay::program_size((30, 50)), (40, 50));
+    assert_eq!(relay::program_size((120, 40)), (120, 40));
+    let fixture = Fixture::new("replay");
+    fixture.replay(relay::MIN_SIZE, Shape::Claude);
+    let (result, screen, _) = run_connect(&fixture, None, (30, 12), false).await;
+    result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert_eq!(fixture.stored().unwrap(), fixture.token.as_bytes());
+    assert_not_shown(&screen, &fixture.token);
+}
+
+/// The token's frame written in pieces with pauses (so the relay shows what
+/// it held back), cut inside the prefix, inside the token's first row, in
+/// the cursor movement to its next row and inside that row; then a write to
+/// the clipboard, which is dropped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_codes_rendering_cut_inside_the_token_is_stored_and_never_shown() {
+    let size = (60, 24);
+    let fixture = Fixture::new("replay");
+    let (before, after) = ink_model::session(&fixture.token, 60, 24, Shape::Claude);
+    let at = after
+        .windows(7)
+        .position(|window| window == b"sk-ant-")
+        .unwrap();
+    let cuts = [at + 2, at + 5, at + 40, at + 62, at + 75]
+        .map(|cut| cut.to_string())
+        .join(" ");
+    std::fs::write(fixture.root.join("bin/cuts"), cuts).unwrap();
+    // A write to the clipboard, as Claude Code makes when asked to copy
+    // the sign-in URL.
+    let mut after = after;
+    after.extend_from_slice(b"\x1b]52;c;aHR0cHM6Ly9jbGF1ZGUuYWkvb2F1dGg=\x07");
+    fixture.write_replay(size, &before, &after);
+    let (result, screen, _) = run_connect(&fixture, None, size, false).await;
+    result.unwrap();
+    assert_eq!(fixture.stored().unwrap(), fixture.token.as_bytes());
+    assert_not_shown(&screen, &fixture.token);
+    let text = String::from_utf8_lossy(&screen.bytes()).into_owned();
+    assert!(!text.contains("sk-ant-"));
+    assert!(!text.contains("]52;"));
+}
+
+/// The user's terminal is resized while Claude Code waits for the sign-in:
+/// `claude`'s terminal is resized with it (it gets `SIGWINCH` and sees the
+/// new size), Claude Code redraws for it, and the token, wrapped for the new
+/// width, is stored exactly and never shown.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resize_while_signing_in_resizes_claudes_terminal() {
+    let (old, new) = ((100u16, 30u16), (60u16, 30u16));
+    let fixture = Fixture::new("replay");
+    fixture.replay(old, Shape::Claude);
+    let after = ink_model::resized_session(&fixture.token, (100, 30), (60, 30));
+    std::fs::write(
+        fixture.root.join(format!("bin/after-{}x{}", new.0, new.1)),
+        &after,
+    )
+    .unwrap();
+    let terminal = user_terminal();
+    terminal.set_size(old);
+    let screen = Screen::default();
+    let interrupt = Interrupt::default();
+    let resized = Resized::default();
+    let typing = {
+        let master = terminal.master.try_clone().unwrap();
+        let slave = terminal.slave.try_clone().unwrap();
+        let screen = screen.clone();
+        let resized = resized.clone();
+        std::thread::spawn(move || {
+            wait_for(&screen, ink_model::PROMPT);
+            // What the terminal does on a resize, and the SIGWINCH the
+            // command then gets.
+            set_size(&slave, new);
+            resized.raise();
+            wait_for(&screen, "[size 30 60]");
+            rustix::io::write(&master, b"\r").unwrap();
+        })
+    };
+    let result = finish_within(
+        connect(
+            fixture.request(None),
+            terminal.slave.try_clone().unwrap(),
+            Box::new(screen.clone()),
+            &interrupt,
+            &resized,
+        ),
+        &interrupt,
+    )
+    .await;
+    typing.join().unwrap();
+    result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert!(screen.contains("[SIGWINCH]"));
+    assert_eq!(fixture.stored().unwrap(), fixture.token.as_bytes());
+    assert_not_shown(&screen, &fixture.token);
+}
+
+/// What the user types once `claude` has exited, while a process it left
+/// keeps its output open and while the token is checked, is not read away:
+/// it stays in the terminal for the shell.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keystrokes_typed_after_claude_exits_stay_in_the_terminal() {
+    let fixture = Fixture::new("linger");
+    let anthropic =
+        FakeAnthropic::start_slow(&fixture.token, 200, Duration::from_millis(1500)).await;
+    let terminal = user_terminal();
+    terminal.set_size(SIZE);
+    let screen = Screen::default();
+    let interrupt = Interrupt::default();
+    let typing = typist(&terminal, &screen, "Press Enter to continue", None);
+    let late = {
+        let master = terminal.master.try_clone().unwrap();
+        let screen = screen.clone();
+        std::thread::spawn(move || {
+            wait_for(&screen, "You will not be able to see it again.");
+            std::thread::sleep(Duration::from_millis(300));
+            rustix::io::write(&master, b"abc").unwrap();
+            wait_for(&screen, "Checking the token");
+            rustix::io::write(&master, b"def\r").unwrap();
+        })
+    };
+    let result = finish_within(
+        connect(
+            fixture.request(Some(anthropic.verifier())),
+            terminal.slave.try_clone().unwrap(),
+            Box::new(screen.clone()),
+            &interrupt,
+            &Resized::default(),
+        ),
+        &interrupt,
+    )
+    .await;
+    typing.join().unwrap();
+    late.join().unwrap();
+    result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert_eq!(fixture.stored().unwrap(), fixture.token.as_bytes());
+    let pending = terminal.pending_input(Duration::from_secs(2));
+    let text = String::from_utf8_lossy(&pending);
+    assert!(text.contains("abc"), "{text:?}");
+    assert!(text.contains("def"), "{text:?}");
 }
 
 /// The panic hook puts a raw terminal back even when no destructor runs

@@ -1,112 +1,218 @@
 //! The streaming filter between `claude setup-token` and the user's
-//! terminal: every `sk-ant-…` token in the program's output is replaced by
-//! [`MASK`] before it is shown, and the tokens it replaced are kept, in
-//! memory only, for [`select_token`].
+//! terminal: every `sk-ant-…` token the program writes is shown masked, cell
+//! for cell, and the tokens it masked are kept, in memory only, for
+//! [`select_token`].
 //!
-//! The filter works on raw bytes as they arrive, in chunks of any size:
+//! Claude Code (2.1.271, read from its bundle) draws its sign-in screen with
+//! its own Ink renderer: a frame is a grid of cells, and each update writes
+//! only the cells that changed, moving the cursor between them (`CR` then
+//! `CSI n C` and `CSI n B` to another row, `CSI n G` within one). The token
+//! is an Ink `Text` in the `warning` color in a box with one column of left
+//! padding, hard-wrapped at the box's width, each wrapped row placed by
+//! cursor movement rather than by a line break or spaces. So the filter does
+//! not read the token from the byte stream: it runs every byte through a
+//! model of the terminal ([`Screen`], the program's size) and reads the
+//! token from the cells its characters land in.
 //!
-//! - A run of bytes that could still become the start of a token
-//!   (`s`, `sk`, … `sk-ant`) is held back until the next byte decides it.
-//!   [`TokenFilter::flush_idle`] may show a held run when the program goes
-//!   quiet, but keeps matching, so at most `sk-ant` (public, and shorter than
-//!   any secret part) is ever shown before the mask.
-//! - CSI escape sequences (`ESC [ … final`, colors) and character-set
-//!   designations (`ESC ( B`) are transparent: one inside a token or its
-//!   prefix neither ends it nor becomes part of it. Any other escape (an OSC
-//!   introducer, the string terminator `ESC \`) ends a token; the text of
-//!   an OSC string, such as a hyperlink's target, is filtered like output. Escapes inside a token are still shown after the
-//!   mask, so colors stay balanced; escapes inside the held prefix are
-//!   dropped.
-//! - A token that reaches the last column of the program's terminal and
-//!   continues after a line break (how a narrow terminal wraps it) is one
-//!   token: the continuation is hidden too, and joined.
+//! - **Runs.** A run starts at an `s` and grows by each token character
+//!   (`A-Z a-z 0-9 - _`) written in the cell right after the run's last one
+//!   (or reached from it by autowrap), or as a wrapped continuation (below).
+//!   Escapes of any kind between two characters (colors, hyperlinks and
+//!   other OSC strings, DCS strings, cursor movement that lands on the next
+//!   cell, synchronized-update marks) do not matter, only where the
+//!   characters land. While a run is still the prefix `sk-ant-`, everything
+//!   the program writes is held back; when the prefix completes, its
+//!   characters are shown as the first cells of [`MASK`], and each later
+//!   character of the token as the next cell of the mask (then a blank), so
+//!   the screen keeps the program's layout exactly.
+//!   [`TokenFilter::flush_idle`] may show a held prefix when the program
+//!   goes quiet, but at most `sk-ant` (public) is ever shown.
+//! - **Wrapped continuations.** A token character on the row below the
+//!   run's last cell continues it when every cell right of that last cell is
+//!   blank or a frame character (box drawing, block elements, `|`), every
+//!   cell left of it on its row is blank or a frame character (indentation,
+//!   padding, a left border), it has the SGR rendition of the run's last
+//!   character, and either the run reached the right edge (at most
+//!   [`FRAME_MARGIN`] columns of padding and border before the last column)
+//!   and the new row starts no further right than the token did, or the new
+//!   row starts in the same column as the run's current row (a box narrower
+//!   than the terminal). In the second case an unstyled run (Claude Code
+//!   styles its token) is masked but not stored: the row may as well be
+//!   the next line of plain output. Cells a renderer skipped because they
+//!   already held the same character (a token moved by a layout change) are
+//!   taken from the model when they are marked as a token's.
+//! - **Resizes.** From a resize until the program next moves the cursor to
+//!   an absolute position, erases the screen or goes quiet, it may still
+//!   draw for the old size: a token character on a run's row or the next
+//!   one in the run's rendition continues it, and a token read then counts
+//!   only when no other token was read.
+//! - **Strings.** OSC, DCS, APC, PM and SOS strings are held until they end.
+//!   Clipboard writes (OSC 52, kitty's OSC 5522, iTerm2's `Copy`,
+//!   `CopyToClipboard` and `EndCopy`, and a tmux or screen DCS passthrough
+//!   of any of them) are never shown, nor is a string holding `sk-ant-`; a
+//!   token inside one is still captured.
+//! - **Ending a token.** A token ends at the first character that does not
+//!   continue it. What it holds is cut where `sk-ant-` starts again (two
+//!   tokens printed together are two). A wrapped continuation followed on
+//!   its row, after a blank, by more text is the program's next line rather
+//!   than the token's tail: it is dropped from what is stored when what is
+//!   left is still a whole token. A stored token is the OAuth prefix and
+//!   then [`MIN_SECRET_CHARS`] to [`MAX_TOKEN_CHARS`] base64url characters:
+//!   Claude Code's bundle does not fix the length (its own secret scanner
+//!   matches `sk-ant-(oat|ort)NN-` and at least 20 of them).
 //!
-//! Nothing here formats a token into a string, an error or a `Debug` value.
+//! Nothing here formats a token into a string, an error or a `Debug` value,
+//! and every buffer that may hold one is zeroized when it is emptied.
 
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
-/// What the user sees in place of a token.
+use super::screen::{Cell, Print, Rendition, Screen, Step, StringKind};
+
+/// What the user sees in place of a token: its first cells, then blank
+/// cells for the rest of the token.
 pub(crate) const MASK: &str = "[token hidden by axocoatl]";
 /// Every Anthropic credential starts with this; all of them are hidden.
 const PREFIX: &[u8] = b"sk-ant-";
 /// The prefix of the long-lived OAuth token `claude setup-token` prints.
 pub(crate) const OAUTH_PREFIX: &str = "sk-ant-oat01-";
-/// The fewest characters after [`OAUTH_PREFIX`] a token is taken to have.
+/// The fewest characters after [`OAUTH_PREFIX`] a token is taken to have
+/// (Claude Code's own scanner wants at least 20; its tokens have about 95).
 const MIN_SECRET_CHARS: usize = 32;
 /// The longest token kept; a longer run is still hidden, but not captured.
-const MAX_TOKEN_CHARS: usize = 512;
-/// At most this many spaces of indentation before a wrapped continuation.
-const MAX_WRAP_INDENT: usize = 8;
+pub(crate) const MAX_TOKEN_CHARS: usize = 512;
+/// How many columns of right padding and border a wrapped row may leave.
+const FRAME_MARGIN: usize = 6;
+/// The longest control string held; a longer one is dropped whole.
+const MAX_STRING: usize = 16 * 1024;
 
-fn is_token_char(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'
+fn is_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Escape {
-    None,
-    /// Right after `ESC`.
-    Start,
-    /// After `ESC` and intermediate bytes (`ESC (`).
-    Intermediate,
-    /// Inside `ESC [`.
-    Csi,
+/// Box drawing, block elements and `|`: what frames a wrapped token.
+fn is_frame(ch: char) -> bool {
+    matches!(ch, '|' | '\u{2500}'..='\u{259f}')
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Mode {
-    /// Plain output; `matched` bytes of [`PREFIX`] seen so far.
-    Normal,
-    /// Inside a token: nothing visible is shown.
-    Token,
-    /// A token ended at the last column with a line break: a token character
-    /// next continues it.
-    WrapGap,
+fn blank_or_frame(cell: Cell) -> bool {
+    cell.is_blank() || (!cell.tail && is_frame(cell.ch))
+}
+
+fn blank_or_frame_char(ch: char) -> bool {
+    matches!(ch, ' ' | '\u{a0}') || is_frame(ch)
+}
+
+/// Overwrite what `buffer` holds and empty it, keeping its allocation. Its
+/// spare capacity holds nothing to overwrite: every byte it ever held was
+/// overwritten this way when it was emptied.
+fn wipe(buffer: &mut Vec<u8>) {
+    buffer.as_mut_slice().zeroize();
+    buffer.clear();
+}
+
+/// The byte shown in the `index`-th cell of a token.
+fn mask_byte(index: usize) -> u8 {
+    MASK.as_bytes().get(index).copied().unwrap_or(b' ')
 }
 
 /// One `sk-ant-` token the filter hid.
 pub(crate) struct Found {
     value: Zeroizing<String>,
     overlong: bool,
+    /// Read while the terminal was being resized, when the program may still
+    /// have drawn for the old size.
+    suspect: bool,
+}
+
+/// Where a run's characters on one row begin.
+struct Segment {
+    start_x: usize,
+    /// Its first character's index in the run's value.
+    start: usize,
+}
+
+/// A run of token characters in progress: the prefix being matched, or a
+/// token.
+struct Run {
+    token: bool,
+    value: Zeroizing<String>,
+    overlong: bool,
+    /// The column the run started at.
+    first_x: usize,
+    last: (usize, u64),
+    rendition: Rendition,
+    segments: Vec<Segment>,
+    /// Characters so far, the cells taken from the model included.
+    index: usize,
+    /// Prefix characters an idle flush showed as they are.
+    shown_raw: usize,
+    prefix_cells: Vec<(usize, u64)>,
+    /// The held prefix characters: their offset in `held` and index.
+    held_chars: Vec<(usize, usize)>,
+    /// Where in `value` continuations that are masked but not stored
+    /// begin (see [`TokenFilter::continues`]).
+    detached_from: Option<usize>,
+    suspect: bool,
+}
+
+impl Run {
+    fn push(&mut self, ch: char) {
+        if self.value.len() < MAX_TOKEN_CHARS {
+            self.value.push(ch);
+        } else {
+            self.overlong = true;
+        }
+        self.index += 1;
+    }
+}
+
+/// What a written character does to the run in progress.
+enum Decision {
+    /// It continues the run from this column on its row; `false` when the
+    /// continuation is masked but not stored.
+    Extend(usize, bool),
+    Pause,
+    Close(Close),
+    Afresh,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Close {
+    /// More text after a blank on the run's last row.
+    TextAfterOnRow,
+    Other,
 }
 
 /// The streaming redaction filter. See the module documentation.
 pub(crate) struct TokenFilter {
-    cols: usize,
-    col: usize,
-    escape: Escape,
-    mode: Mode,
-    /// Bytes held back: a possible prefix (Normal) or a line break and
-    /// indentation (WrapGap). Never a token character after the prefix.
-    pending: Zeroizing<Vec<u8>>,
-    matched: usize,
-    /// The held prefix was already shown by [`Self::flush_idle`].
-    prefix_shown: bool,
-    token: Zeroizing<String>,
-    overlong: bool,
-    token_end_col: usize,
-    gap_breaks: usize,
-    gap_indent: usize,
+    screen: Screen,
+    /// The bytes of the escape sequence or character in progress.
+    unit: Zeroizing<Vec<u8>>,
+    string: Zeroizing<Vec<u8>>,
+    string_kind: StringKind,
+    string_discard: bool,
+    /// Everything written while a prefix is being matched.
+    held: Zeroizing<Vec<u8>>,
+    run: Option<Run>,
     found: Vec<Found>,
+    /// The terminal was resized and the program may still draw for the old
+    /// size.
+    resizing: bool,
 }
 
 impl TokenFilter {
-    /// A filter for a program whose terminal is `cols` columns wide.
-    pub(crate) fn new(cols: u16) -> Self {
+    /// A filter for a program whose terminal is `cols` by `rows`.
+    pub(crate) fn new(cols: u16, rows: u16) -> Self {
         Self {
-            cols: usize::from(cols.max(1)),
-            col: 0,
-            escape: Escape::None,
-            mode: Mode::Normal,
-            pending: Zeroizing::new(Vec::with_capacity(64)),
-            matched: 0,
-            prefix_shown: false,
-            token: Zeroizing::new(String::with_capacity(MAX_TOKEN_CHARS)),
-            overlong: false,
-            token_end_col: 0,
-            gap_breaks: 0,
-            gap_indent: 0,
+            screen: Screen::new(cols, rows),
+            unit: Zeroizing::new(Vec::with_capacity(128)),
+            string: Zeroizing::new(Vec::with_capacity(MAX_STRING)),
+            string_kind: StringKind::Other,
+            string_discard: false,
+            held: Zeroizing::new(Vec::with_capacity(8192)),
+            run: None,
             found: Vec::new(),
+            resizing: false,
         }
     }
 
@@ -117,46 +223,49 @@ impl TokenFilter {
         }
     }
 
+    /// The program's terminal changed size. Until the program next moves
+    /// to an absolute position, erases the screen or is quiet, it may still
+    /// draw for the old size (see the module documentation).
+    pub(crate) fn resize(&mut self, cols: u16, rows: u16) {
+        self.screen.resize(cols, rows);
+        // A run in progress goes on: rows keep their numbers.
+        self.screen.take_disrupted();
+        self.resizing = true;
+    }
+
     /// The program has been quiet: show what is held back without giving up
     /// a match in progress (a held prefix is public text).
     pub(crate) fn flush_idle(&mut self, shown: &mut Vec<u8>) {
-        match self.mode {
-            Mode::Normal if self.matched > 0 && !self.prefix_shown => {
-                shown.extend_from_slice(&self.pending);
-                self.pending.clear();
-                self.prefix_shown = true;
+        self.resizing = false;
+        if let Some(run) = self.run.as_mut() {
+            if !run.token && !self.held.is_empty() {
+                shown.extend_from_slice(&self.held);
+                wipe(&mut self.held);
+                run.shown_raw = run.index;
+                run.held_chars.clear();
             }
-            Mode::WrapGap => {
-                shown.extend_from_slice(&self.pending);
-                self.pending.clear();
-            }
-            _ => {}
         }
     }
 
-    /// The output ended: show what is held back and close a token.
+    /// The output ended: show what is held back and close a token. An
+    /// unfinished escape sequence or string is dropped, so it cannot swallow
+    /// what is written to the terminal next.
     pub(crate) fn finish(&mut self, shown: &mut Vec<u8>) {
-        match self.mode {
-            Mode::Normal => {
-                if self.matched > 0 && !self.prefix_shown {
-                    shown.extend_from_slice(&self.pending);
-                }
-            }
-            Mode::Token => self.end_token(),
-            Mode::WrapGap => {
-                self.end_token();
-                shown.extend_from_slice(&self.pending);
-            }
-        }
-        self.pending.clear();
-        self.matched = 0;
-        self.prefix_shown = false;
-        self.mode = Mode::Normal;
+        self.close(Close::Other, shown);
+        wipe(&mut self.unit);
+        wipe(&mut self.string);
+        self.string_discard = false;
+    }
+
+    /// The bytes that put the user's terminal back from modes the program
+    /// left set; empty when it left none.
+    pub(crate) fn reset_sequence(&self) -> Vec<u8> {
+        self.screen.reset_sequence()
     }
 
     /// The tokens hidden, after [`Self::finish`].
-    pub(crate) fn into_found(self) -> Vec<Found> {
-        self.found
+    pub(crate) fn into_found(mut self) -> Vec<Found> {
+        std::mem::take(&mut self.found)
     }
 
     /// The tokens hidden so far (complete ones only; call
@@ -166,230 +275,529 @@ impl TokenFilter {
         &self.found
     }
 
-    /// Where an escape byte goes: held with a held prefix or line break,
-    /// otherwise shown.
-    fn escape_sink<'a>(&'a mut self, shown: &'a mut Vec<u8>) -> &'a mut Vec<u8> {
-        let held = match self.mode {
-            Mode::Normal => self.matched > 0 && !self.prefix_shown,
-            Mode::WrapGap => true,
-            Mode::Token => false,
-        };
-        if held {
-            &mut self.pending
-        } else {
-            shown
-        }
-    }
-
-    fn advance_column(&mut self, byte: u8) {
-        match byte {
-            b'\r' | b'\n' => self.col = 0,
-            0x08 => self.col = self.col.saturating_sub(1),
-            b'\t' => self.col = ((self.col / 8 + 1) * 8).min(self.cols),
-            0x00..=0x1f | 0x7f => {}
-            // UTF-8 continuation bytes do not move the cursor.
-            0x80..=0xbf => {}
-            _ => {
-                if self.col >= self.cols {
-                    self.col = 0;
-                }
-                self.col += 1;
-            }
-        }
-    }
-
     fn byte(&mut self, byte: u8, shown: &mut Vec<u8>) {
-        match self.escape {
-            Escape::Start | Escape::Intermediate => {
-                let introduced = self.escape == Escape::Start;
-                match byte {
-                    b'[' if introduced => self.escape = Escape::Csi,
-                    // Intermediate bytes (`ESC ( B`): the sequence goes on.
-                    0x20..=0x2f => self.escape = Escape::Intermediate,
-                    0x30..=0x7e => {
-                        self.escape = Escape::None;
-                        self.escape_sink(shown).push(byte);
-                        // A character-set designation (`ESC ( B`) is
-                        // transparent like CSI. Any other escape, such as
-                        // the string terminator `ESC \` or an OSC
-                        // introducer, ends a token or a prefix in progress;
-                        // the text of an OSC string is filtered like any
-                        // other output.
-                        if introduced {
-                            self.opaque_escape(shown);
-                        }
-                        return;
-                    }
-                    // Anything else aborts the sequence and is read afresh.
-                    _ => {
-                        self.escape = Escape::None;
-                        return self.byte(byte, shown);
-                    }
-                }
-                self.escape_sink(shown).push(byte);
+        let fed = self.screen.feed(byte);
+        if fed.string_broken {
+            // The `ESC` held as the start of a terminator begins the next
+            // sequence: the string ended before it.
+            self.string.pop();
+            self.end_string(shown);
+            self.unit.push(0x1b);
+        }
+        match fed.step {
+            Step::StringStart(kind) => {
+                self.string_begin(kind, byte);
                 return;
             }
-            Escape::Csi => {
-                match byte {
-                    0x20..=0x3f => {}
-                    0x40..=0x7e => self.escape = Escape::None,
-                    _ => {
-                        self.escape = Escape::None;
-                        return self.byte(byte, shown);
-                    }
-                }
-                self.escape_sink(shown).push(byte);
+            Step::StringByte => {
+                self.string_push(byte);
                 return;
             }
-            Escape::None => {}
-        }
-        if byte == 0x1b {
-            self.escape = Escape::Start;
-            self.escape_sink(shown).push(byte);
-            return;
-        }
-        match self.mode {
-            Mode::Normal => self.normal(byte, shown),
-            Mode::Token => self.in_token(byte, shown),
-            Mode::WrapGap => self.wrap_gap(byte, shown),
-        }
-    }
-
-    /// An escape that is not transparent ended: it closes a token, a held
-    /// line break or a prefix in progress (the escape itself was already
-    /// shown or held).
-    fn opaque_escape(&mut self, shown: &mut Vec<u8>) {
-        match self.mode {
-            Mode::Token => self.end_token(),
-            Mode::WrapGap => {
-                self.end_token();
-                shown.extend_from_slice(&self.pending);
+            Step::StringEnd => {
+                self.string_push(byte);
+                self.end_string(shown);
+                return;
             }
-            Mode::Normal => {
-                if self.matched > 0 && !self.prefix_shown {
-                    shown.extend_from_slice(&self.pending);
+            _ => {}
+        }
+        self.unit.push(byte);
+        if self.screen.take_disrupted() {
+            self.close(Close::Other, shown);
+        }
+        if self.screen.take_repositioned() {
+            // The program moved to an absolute position or erased the
+            // screen: it draws for the size it has now.
+            self.resizing = false;
+        }
+        match fed.step {
+            Step::Print(print) => {
+                let unit = std::mem::take(&mut *self.unit);
+                self.on_char(print, &unit, shown);
+                *self.unit = unit;
+                wipe(&mut self.unit);
+            }
+            Step::Repeat(count) => {
+                // The repetition is written out, so that each character
+                // goes through the filter.
+                wipe(&mut self.unit);
+                for _ in 0..count {
+                    let Some(print) = self.screen.repeat_last() else {
+                        break;
+                    };
+                    let mut encoded = [0u8; 4];
+                    let bytes =
+                        Zeroizing::new(print.ch.encode_utf8(&mut encoded).as_bytes().to_vec());
+                    encoded.zeroize();
+                    if self.screen.take_disrupted() {
+                        self.close(Close::Other, shown);
+                    }
+                    self.on_char(print, &bytes, shown);
+                }
+            }
+            _ => {
+                if !self.screen.in_sequence() {
+                    let unit = std::mem::take(&mut *self.unit);
+                    self.emit(&unit, shown);
+                    *self.unit = unit;
+                    wipe(&mut self.unit);
                 }
             }
         }
-        self.pending.clear();
-        self.matched = 0;
-        self.prefix_shown = false;
-        self.mode = Mode::Normal;
     }
 
-    fn normal(&mut self, byte: u8, shown: &mut Vec<u8>) {
-        if byte == PREFIX[self.matched] {
-            self.advance_column(byte);
-            self.matched += 1;
-            if self.prefix_shown {
-                // The prefix's last `-` is never shown: the mask follows.
-                if self.matched < PREFIX.len() {
-                    shown.push(byte);
+    /// Show `bytes`, or hold them while a prefix is being matched.
+    fn emit(&mut self, bytes: &[u8], shown: &mut Vec<u8>) {
+        match &self.run {
+            Some(run) if !run.token => self.held.extend_from_slice(bytes),
+            _ => shown.extend_from_slice(bytes),
+        }
+    }
+
+    fn on_char(&mut self, print: Print, bytes: &[u8], shown: &mut Vec<u8>) {
+        let decision = match &self.run {
+            None => Decision::Afresh,
+            Some(run) => {
+                let (_, last_row) = run.last;
+                if is_token_char(print.ch) {
+                    match self.continues(run, &print) {
+                        Some((from, attached)) => Decision::Extend(from, attached),
+                        None => Decision::Close(self.close_reason(&print)),
+                    }
+                } else if blank_or_frame_char(print.ch)
+                    && (print.row == last_row || print.row == last_row + 1)
+                {
+                    // Padding or a border beside the run, or on the row a
+                    // continuation would start on.
+                    Decision::Pause
+                } else {
+                    Decision::Close(self.close_reason(&print))
                 }
-            } else {
-                self.pending.push(byte);
             }
-            if self.matched == PREFIX.len() {
-                self.start_token(shown);
-            }
-            return;
-        }
-        if self.matched > 0 {
-            // No proper suffix of a partial prefix starts the prefix again
-            // (`s` occurs only first), so the held bytes are plain output and
-            // this byte is read afresh.
-            if !self.prefix_shown {
-                shown.extend_from_slice(&self.pending);
-            }
-            self.pending.clear();
-            self.matched = 0;
-            self.prefix_shown = false;
-            return self.normal(byte, shown);
-        }
-        self.advance_column(byte);
-        shown.push(byte);
-    }
-
-    fn start_token(&mut self, shown: &mut Vec<u8>) {
-        shown.extend_from_slice(MASK.as_bytes());
-        // Escapes held inside the prefix are dropped with it.
-        self.pending.clear();
-        self.matched = 0;
-        self.prefix_shown = false;
-        self.token.clear();
-        self.token.push_str("sk-ant-");
-        self.overlong = false;
-        self.token_end_col = self.col;
-        self.mode = Mode::Token;
-    }
-
-    fn in_token(&mut self, byte: u8, shown: &mut Vec<u8>) {
-        if is_token_char(byte) {
-            self.advance_column(byte);
-            self.token_end_col = self.col;
-            if self.token.len() < MAX_TOKEN_CHARS {
-                self.token.push(char::from(byte));
-            } else {
-                self.overlong = true;
-            }
-            return;
-        }
-        if matches!(byte, b'\r' | b'\n') && self.token_end_col >= self.cols {
-            self.mode = Mode::WrapGap;
-            self.gap_breaks = 1;
-            self.gap_indent = 0;
-            self.advance_column(byte);
-            self.pending.push(byte);
-            return;
-        }
-        self.end_token();
-        self.mode = Mode::Normal;
-        self.normal(byte, shown);
-    }
-
-    fn wrap_gap(&mut self, byte: u8, shown: &mut Vec<u8>) {
-        let continues = match byte {
-            b'\r' | b'\n' if self.gap_breaks < 2 && self.gap_indent == 0 => {
-                self.gap_breaks += 1;
-                None
-            }
-            b' ' if self.gap_indent < MAX_WRAP_INDENT => {
-                self.gap_indent += 1;
-                None
-            }
-            _ => Some(is_token_char(byte)),
         };
-        match continues {
-            None => {
-                self.advance_column(byte);
-                self.pending.push(byte);
+        match decision {
+            Decision::Extend(from, attached) => {
+                if self.extend(from, attached, print, bytes, shown) {
+                    return;
+                }
+                // The prefix broke off; the character is read afresh.
             }
-            Some(true) => {
-                shown.extend_from_slice(&self.pending);
-                self.pending.clear();
-                self.mode = Mode::Token;
-                self.in_token(byte, shown);
+            Decision::Pause => {
+                self.emit(bytes, shown);
+                return;
             }
-            Some(false) => {
-                self.end_token();
-                shown.extend_from_slice(&self.pending);
-                self.pending.clear();
-                self.mode = Mode::Normal;
-                self.normal(byte, shown);
+            Decision::Close(reason) => self.close(reason, shown),
+            Decision::Afresh => {}
+        }
+        if print.ch == char::from(PREFIX[0]) {
+            self.start(print, bytes);
+            return;
+        }
+        self.emit(bytes, shown);
+    }
+
+    /// Where, on `print`'s row, the run's continuation begins, when `print`
+    /// continues the run, and whether the continuation is stored with it.
+    /// A continuation found only because the new row starts at the same
+    /// column as the run's (a box narrower than the terminal) is stored when
+    /// the run is styled, as Claude Code styles its token; unstyled, it is
+    /// masked but not stored, since it may as well be the next line of plain
+    /// output.
+    fn continues(&self, run: &Run, print: &Print) -> Option<(usize, bool)> {
+        let (last_x, last_row) = run.last;
+        if print.wrapped_from == Some(run.last) {
+            return Some((print.x, true));
+        }
+        if print.row == last_row && print.x == last_x + 1 {
+            return Some((print.x, true));
+        }
+        if self.resizing
+            && (print.row == last_row || print.row == last_row + 1)
+            && self.screen.rendition() == run.rendition
+        {
+            // The program may still draw for the old size, where the
+            // terminal's geometry no longer says where its next cell is.
+            return Some((print.x, true));
+        }
+        if print.row == last_row {
+            // A renderer skips cells that did not change: cells already
+            // shown as part of a token in between are taken as they are.
+            let skipped = (last_x + 1..print.x).all(|x| {
+                self.screen
+                    .cell(x, last_row)
+                    .is_some_and(|cell| cell.secret && is_token_char(cell.ch))
+            });
+            return (run.token && print.x > last_x + 1 && skipped).then_some((last_x + 1, true));
+        }
+        if print.row != last_row + 1 || self.screen.rendition() != run.rendition {
+            return None;
+        }
+        // Cells at the end of the run's row that a renderer skipped are the
+        // run's.
+        let last_x = last_x + self.trailing_secret(last_x, last_row);
+        let mut start = print.x;
+        if run.token {
+            while start > 0
+                && self
+                    .screen
+                    .cell(start - 1, print.row)
+                    .is_some_and(|cell| cell.secret && is_token_char(cell.ch))
+            {
+                start -= 1;
+            }
+        }
+        let left_clear =
+            (0..start).all(|x| self.screen.cell(x, print.row).is_none_or(blank_or_frame));
+        if !left_clear {
+            return None;
+        }
+        if self.resizing {
+            return Some((start, true));
+        }
+        let cols = self.screen.cols();
+        let right_clear =
+            (last_x + 1..cols).all(|x| self.screen.cell(x, last_row).is_none_or(blank_or_frame));
+        if !right_clear {
+            return None;
+        }
+        let at_edge = last_x + 1 + FRAME_MARGIN >= cols && start <= run.first_x;
+        if at_edge {
+            return Some((start, true));
+        }
+        let aligned = run
+            .segments
+            .last()
+            .is_some_and(|segment| segment.start_x == start);
+        let styled = run.rendition != Rendition::default();
+        aligned.then_some((start, styled || !run.token))
+    }
+
+    /// How many cells right of `x` on `row` are a token's, in a row (cells a
+    /// renderer skipped because they did not change).
+    fn trailing_secret(&self, x: usize, row: u64) -> usize {
+        (x + 1..self.screen.cols())
+            .take_while(|column| {
+                self.screen
+                    .cell(*column, row)
+                    .is_some_and(|cell| cell.secret && is_token_char(cell.ch))
+            })
+            .count()
+    }
+
+    /// Append to the run the cells right of its last one that a renderer
+    /// skipped.
+    fn take_trailing(&mut self) {
+        let Some((last_x, last_row)) = self
+            .run
+            .as_ref()
+            .filter(|run| run.token)
+            .map(|run| run.last)
+        else {
+            return;
+        };
+        let count = self.trailing_secret(last_x, last_row);
+        let Some(run) = self.run.as_mut() else {
+            return;
+        };
+        for x in last_x + 1..=last_x + count {
+            if let Some(cell) = self.screen.cell(x, last_row) {
+                run.push(cell.ch);
+                run.last = (x, last_row);
             }
         }
     }
 
-    fn end_token(&mut self) {
-        let value = std::mem::replace(
-            &mut self.token,
-            Zeroizing::new(String::with_capacity(MAX_TOKEN_CHARS)),
-        );
-        self.found.push(Found {
-            value,
-            overlong: self.overlong,
+    /// Add `print` (and the cells from `from` before it) to the run. `false`
+    /// when it does not match the prefix: the run was closed.
+    fn extend(
+        &mut self,
+        from: usize,
+        attached: bool,
+        print: Print,
+        bytes: &[u8],
+        shown: &mut Vec<u8>,
+    ) -> bool {
+        let mismatch = self.run.as_ref().is_some_and(|run| {
+            !run.token && PREFIX.get(run.index).map(|byte| char::from(*byte)) != Some(print.ch)
         });
-        self.overlong = false;
+        if mismatch {
+            self.close(Close::Other, shown);
+            return false;
+        }
+        let rendition = self.screen.rendition();
+        if self.run.as_ref().is_some_and(|run| print.row != run.last.1) {
+            self.take_trailing();
+        }
+        let suspect = self.resizing;
+        let Some(run) = self.run.as_mut() else {
+            return false;
+        };
+        run.suspect |= suspect;
+        if print.row != run.last.1 {
+            run.segments.push(Segment {
+                start_x: from,
+                start: run.value.len(),
+            });
+        }
+        if !attached && run.detached_from.is_none() {
+            run.detached_from = Some(run.value.len());
+        }
+        for x in from..print.x {
+            let ch = self
+                .screen
+                .cell(x, print.row)
+                .map(|cell| cell.ch)
+                .unwrap_or('\0');
+            run.push(ch);
+        }
+        run.last = (print.x, print.row);
+        run.rendition = rendition;
+        if run.token {
+            run.push(print.ch);
+            let index = run.index - 1;
+            let mask = mask_byte(index.saturating_sub(run.shown_raw));
+            self.screen.mark_secret(print.x, print.row);
+            shown.push(mask);
+            return true;
+        }
+        run.held_chars.push((self.held.len(), run.index));
+        run.prefix_cells.push((print.x, print.row));
+        run.push(print.ch);
+        let complete = run.index == PREFIX.len();
+        self.held.extend_from_slice(bytes);
+        if complete {
+            self.complete_prefix(shown);
+        }
+        true
+    }
+
+    fn start(&mut self, print: Print, bytes: &[u8]) {
+        let mut value = Zeroizing::new(String::with_capacity(MAX_TOKEN_CHARS));
+        value.push(print.ch);
+        wipe(&mut self.held);
+        self.held.extend_from_slice(bytes);
+        self.run = Some(Run {
+            token: false,
+            value,
+            overlong: false,
+            first_x: print.x,
+            last: (print.x, print.row),
+            rendition: self.screen.rendition(),
+            segments: vec![Segment {
+                start_x: print.x,
+                start: 0,
+            }],
+            index: 1,
+            shown_raw: 0,
+            prefix_cells: vec![(print.x, print.row)],
+            held_chars: vec![(0, 0)],
+            detached_from: None,
+            suspect: self.resizing,
+        });
+    }
+
+    /// `sk-ant-` is complete: what was held is shown, the prefix as the
+    /// first cells of the mask.
+    fn complete_prefix(&mut self, shown: &mut Vec<u8>) {
+        let Some(run) = self.run.as_mut() else {
+            return;
+        };
+        run.token = true;
+        for (offset, index) in run.held_chars.drain(..) {
+            if let Some(byte) = self.held.get_mut(offset) {
+                *byte = mask_byte(index.saturating_sub(run.shown_raw));
+            }
+        }
+        shown.extend_from_slice(&self.held);
+        wipe(&mut self.held);
+        for (x, row) in run.prefix_cells.drain(..) {
+            self.screen.mark_secret(x, row);
+        }
+        run.suspect |= self.resizing;
+    }
+
+    fn close_reason(&self, print: &Print) -> Close {
+        let Some(run) = &self.run else {
+            return Close::Other;
+        };
+        let (last_x, last_row) = run.last;
+        let after_blank = print.row == last_row
+            && print.x > last_x + 1
+            && (last_x + 1..print.x).all(|x| {
+                self.screen
+                    .cell(x, last_row)
+                    .is_none_or(|cell| cell.is_blank())
+            });
+        if after_blank {
+            Close::TextAfterOnRow
+        } else {
+            Close::Other
+        }
+    }
+
+    fn close(&mut self, reason: Close, shown: &mut Vec<u8>) {
+        self.take_trailing();
+        let Some(run) = self.run.take() else {
+            return;
+        };
+        if !run.token {
+            // Not a token after all: what was held is shown as it is.
+            shown.extend_from_slice(&self.held);
+            wipe(&mut self.held);
+            return;
+        }
+        self.finalize(run, reason);
+    }
+
+    /// Keep the token(s) a closed run holds.
+    fn finalize(&mut self, run: Run, reason: Close) {
+        let suspect = run.suspect || self.resizing;
+        if run.overlong {
+            self.found.push(Found {
+                value: run.value,
+                overlong: true,
+                suspect,
+            });
+            return;
+        }
+        let detached = run.detached_from.unwrap_or(run.value.len());
+        let mut end = detached;
+        if reason == Close::TextAfterOnRow && run.segments.len() > 1 && end == run.value.len() {
+            if let Some(last) = run.segments.last() {
+                if last.start >= OAUTH_PREFIX.len() + MIN_SECRET_CHARS {
+                    end = last.start;
+                }
+            }
+        }
+        self.keep_pieces(&run.value[..end], true, suspect);
+        // Of what was masked but not stored, only a token of its own (one
+        // that starts with the prefix) is kept.
+        self.keep_pieces(&run.value[detached..], false, suspect);
+    }
+
+    /// Keep `value` cut where a token starts again inside it; with
+    /// `whole_first`, its first piece too even if it is not a prefix.
+    fn keep_pieces(&mut self, value: &str, whole_first: bool, suspect: bool) {
+        if value.is_empty() {
+            return;
+        }
+        let mut starts: Vec<usize> = vec![0];
+        starts.extend(
+            (1..value.len()).filter(|index| value.as_bytes()[*index..].starts_with(PREFIX)),
+        );
+        for (number, start) in starts.iter().enumerate() {
+            let piece_text = &value[*start..starts.get(number + 1).copied().unwrap_or(value.len())];
+            if number == 0 && !whole_first && !piece_text.as_bytes().starts_with(PREFIX) {
+                continue;
+            }
+            let mut piece = Zeroizing::new(String::with_capacity(piece_text.len()));
+            piece.push_str(piece_text);
+            self.found.push(Found {
+                value: piece,
+                overlong: false,
+                suspect,
+            });
+        }
+    }
+
+    fn string_begin(&mut self, kind: StringKind, byte: u8) {
+        wipe(&mut self.string);
+        self.string_discard = false;
+        self.string_kind = kind;
+        let unit = std::mem::take(&mut *self.unit);
+        self.string.extend_from_slice(&unit);
+        *self.unit = unit;
+        wipe(&mut self.unit);
+        self.string_push(byte);
+    }
+
+    fn string_push(&mut self, byte: u8) {
+        if self.string_discard {
+            return;
+        }
+        if self.string.len() >= MAX_STRING {
+            self.string_discard = true;
+            wipe(&mut self.string);
+            return;
+        }
+        self.string.push(byte);
+    }
+
+    /// A control string ended: it is shown unless it writes the clipboard
+    /// or holds a token (which is captured).
+    fn end_string(&mut self, shown: &mut Vec<u8>) {
+        let mut string = std::mem::take(&mut *self.string);
+        let discard = std::mem::take(&mut self.string_discard);
+        if !discard && !string.is_empty() {
+            let has_token = self.capture_in_string(&string);
+            if !has_token && !is_clipboard(self.string_kind, &string) {
+                self.emit(&string, shown);
+            }
+        }
+        wipe(&mut string);
+        *self.string = string;
+    }
+
+    /// Capture every token in a control string; whether there was one.
+    fn capture_in_string(&mut self, string: &[u8]) -> bool {
+        let mut any = false;
+        let mut index = 0;
+        while let Some(offset) = string[index..]
+            .windows(PREFIX.len())
+            .position(|window| window == PREFIX)
+        {
+            any = true;
+            let start = index + offset;
+            let length = string[start..]
+                .iter()
+                .take_while(|byte| is_token_char(char::from(**byte)))
+                .count();
+            let overlong = length > MAX_TOKEN_CHARS;
+            let mut value = Zeroizing::new(String::with_capacity(MAX_TOKEN_CHARS));
+            for byte in &string[start..start + length.min(MAX_TOKEN_CHARS)] {
+                value.push(char::from(*byte));
+            }
+            self.found.push(Found {
+                value,
+                overlong,
+                suspect: false,
+            });
+            index = start + length.max(PREFIX.len());
+        }
+        any
+    }
+}
+
+/// Whether a control string writes the clipboard: OSC 52, kitty's OSC 5522,
+/// iTerm2's `Copy`, `CopyToClipboard` and `EndCopy`, or a DCS passthrough
+/// (tmux, screen) of one of them.
+fn is_clipboard(kind: StringKind, string: &[u8]) -> bool {
+    let payload = string.get(2..).unwrap_or_default();
+    let payload = payload
+        .strip_suffix(b"\x1b\\")
+        .or_else(|| payload.strip_suffix(b"\x07"))
+        .unwrap_or(payload);
+    let contains = |needle: &[u8]| payload.windows(needle.len()).any(|window| window == needle);
+    match kind {
+        StringKind::Osc => {
+            let command = payload
+                .split(|byte| *byte == b';')
+                .next()
+                .unwrap_or_default();
+            match command {
+                b"52" | b"5522" => true,
+                b"1337" => {
+                    let rest = payload.get(5..).unwrap_or_default();
+                    [&b"Copy="[..], b"CopyToClipboard", b"EndCopy"]
+                        .iter()
+                        .any(|start| rest.starts_with(start))
+                }
+                _ => false,
+            }
+        }
+        StringKind::Dcs => [&b"]52;"[..], b"]5522;", b"]1337;Copy", b"]1337;EndCopy"]
+            .iter()
+            .any(|needle| contains(needle)),
+        StringKind::Other => false,
     }
 }
 
@@ -404,26 +812,20 @@ pub(crate) enum Selection {
     Several(usize),
 }
 
-/// Whether `value` looks like a whole `claude setup-token` token: the OAuth
-/// prefix, then at least [`MIN_SECRET_CHARS`] token characters.
+/// Whether `found` has the form of a whole `claude setup-token` token: the
+/// OAuth prefix, then at least [`MIN_SECRET_CHARS`] base64url characters.
 fn plausible(found: &Found) -> bool {
     let value = found.value.as_str();
     !found.overlong
         && value.len() >= OAUTH_PREFIX.len() + MIN_SECRET_CHARS
         && value.len() <= MAX_TOKEN_CHARS
         && value.starts_with(OAUTH_PREFIX)
-        && value.bytes().all(is_token_char)
+        && value.chars().all(is_token_char)
 }
 
-/// The one token to store, from everything [`TokenFilter`] hid.
-pub(crate) fn select_token(found: &[Found]) -> Selection {
+fn distinct<'a>(candidates: impl Iterator<Item = &'a Found>) -> Vec<&'a Found> {
     let mut distinct: Vec<&Found> = Vec::new();
-    let mut other = 0;
-    for candidate in found {
-        if !plausible(candidate) {
-            other += 1;
-            continue;
-        }
+    for candidate in candidates {
         if !distinct
             .iter()
             .any(|seen| seen.value.as_str() == candidate.value.as_str())
@@ -431,7 +833,28 @@ pub(crate) fn select_token(found: &[Found]) -> Selection {
             distinct.push(candidate);
         }
     }
-    match distinct.as_slice() {
+    distinct
+}
+
+/// The one token to store, from everything [`TokenFilter`] hid. Tokens read
+/// while the terminal was being resized (the program may have drawn them
+/// for the old size) count only when no other token was read, and then the
+/// last one does (the program's redraw for the new size).
+pub(crate) fn select_token(found: &[Found]) -> Selection {
+    let plausible_ones: Vec<&Found> = found.iter().filter(|found| plausible(found)).collect();
+    let other = found.len() - plausible_ones.len();
+    let settled = distinct(
+        plausible_ones
+            .iter()
+            .copied()
+            .filter(|found| !found.suspect),
+    );
+    let chosen = if settled.is_empty() {
+        plausible_ones.last().copied().into_iter().collect()
+    } else {
+        settled
+    };
+    match chosen.as_slice() {
         [] => Selection::None { other },
         [one] => Selection::One(Zeroizing::new(one.value.as_str().to_owned())),
         several => Selection::Several(several.len()),
@@ -439,280 +862,4 @@ pub(crate) fn select_token(found: &[Found]) -> Selection {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
-
-    /// A token shaped like the real one: the OAuth prefix and 95 more
-    /// characters of the token alphabet.
-    pub(crate) const TOKEN: &str = "sk-ant-oat01-Xq7_vR2mZ9kLp4Tn8Wc1Yb6Hs3Df0Gj5Ae-Ui2Ko7Nl4Mx9Pz1Qw8Er3Ty6Bv0Cs5Dh2Fg7Jk4La9Zx1Vn6Mb3Rt8AA";
-
-    /// Every substring of `token` of at least 12 bytes that `shown`
-    /// contains, as positions (never the text itself, so a failure does not
-    /// print it).
-    pub(crate) fn leaked_positions(shown: &[u8], token: &str) -> Vec<(usize, usize)> {
-        let token = token.as_bytes();
-        let mut leaks = Vec::new();
-        for start in 0..token.len().saturating_sub(11) {
-            let window = &token[start..start + 12];
-            if shown.windows(12).any(|candidate| candidate == window) {
-                leaks.push((start, start + 12));
-            }
-        }
-        leaks
-    }
-
-    /// The plain sequence the fake `claude setup-token` prints, with the
-    /// token colored and a color change inside it.
-    fn stream(token: &str) -> Vec<u8> {
-        let (head, tail) = token.split_at(40);
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"\x1b[2J\x1b[H Welcome to Claude Code\r\n");
-        bytes.extend_from_slice(b"Browser didn't open? Use the url below to sign in.\r\n");
-        bytes.extend_from_slice(b"Paste code here if prompted > \r\n\r\n");
-        bytes.extend_from_slice(
-            b"\xe2\x9c\x93 Long-lived authentication token created successfully!\r\n\r\n",
-        );
-        bytes.extend_from_slice(b"Your OAuth token (valid for 1 year):\r\n\r\n");
-        bytes.extend_from_slice(b"\x1b[1m\x1b[38;5;214m");
-        bytes.extend_from_slice(head.as_bytes());
-        bytes.extend_from_slice(b"\x1b[0m\x1b[38;2;10;200;30m");
-        bytes.extend_from_slice(tail.as_bytes());
-        bytes.extend_from_slice(b"\x1b[0m\r\n\r\n");
-        bytes.extend_from_slice(
-            b"Store this token securely. Use it with export CLAUDE_CODE_OAUTH_TOKEN=<token>\r\n",
-        );
-        bytes.extend_from_slice(b"skip asks sk sk- sk-an ok\r\n");
-        bytes
-    }
-
-    fn run(chunks: &[&[u8]], cols: u16, idle_between: bool) -> (Vec<u8>, TokenFilter) {
-        let mut filter = TokenFilter::new(cols);
-        let mut shown = Vec::new();
-        for (index, chunk) in chunks.iter().enumerate() {
-            filter.push(chunk, &mut shown);
-            if idle_between && index + 1 < chunks.len() {
-                filter.flush_idle(&mut shown);
-            }
-        }
-        filter.finish(&mut shown);
-        (shown, filter)
-    }
-
-    fn only_token(filter: &TokenFilter) -> String {
-        match select_token(filter.found()) {
-            Selection::One(token) => token.as_str().to_owned(),
-            Selection::None { other } => panic!("no token captured ({other} other)"),
-            Selection::Several(count) => panic!("{count} tokens captured"),
-        }
-    }
-
-    fn strip_mask(shown: &[u8]) -> String {
-        String::from_utf8_lossy(shown).replace(MASK, "")
-    }
-
-    #[test]
-    fn the_token_is_hidden_and_captured_with_escapes_around_and_inside() {
-        let input = stream(TOKEN);
-        let (shown, filter) = run(&[&input], 1000, false);
-        assert_eq!(only_token(&filter), TOKEN);
-        assert!(leaked_positions(&shown, TOKEN).is_empty());
-        let text = String::from_utf8(shown.clone()).unwrap();
-        assert_eq!(text.matches(MASK).count(), 1, "{}", strip_mask(&shown));
-        // Everything else comes through unchanged, including the escapes
-        // inside the token (after the mask) and look-alikes of the prefix.
-        assert!(text.contains("Your OAuth token (valid for 1 year):\r\n\r\n\x1b[1m\x1b[38;5;214m[token hidden by axocoatl]\x1b[0m\x1b[38;2;10;200;30m\x1b[0m\r\n"));
-        assert!(text.contains("skip asks sk sk- sk-an ok\r\n"));
-        assert!(text.contains("\u{2713} Long-lived"));
-    }
-
-    /// Every way of cutting the output in two, three and single bytes gives
-    /// the same display and the same token.
-    #[test]
-    fn every_chunk_split_point_gives_the_same_result() {
-        let input = stream(TOKEN);
-        let (whole, _) = run(&[&input], 1000, false);
-        let token_at = input
-            .windows(7)
-            .position(|window| window == b"sk-ant-")
-            .unwrap();
-        for split in 0..=input.len() {
-            let (a, b) = input.split_at(split);
-            let (shown, filter) = run(&[a, b], 1000, false);
-            assert_eq!(shown, whole, "split at {split}");
-            assert_eq!(only_token(&filter), TOKEN, "split at {split}");
-        }
-        // Three chunks, both cuts around the token.
-        for first in token_at.saturating_sub(30)..(token_at + TOKEN.len() + 40).min(input.len()) {
-            for second in first..(token_at + TOKEN.len() + 40).min(input.len()) {
-                let (shown, filter) = run(
-                    &[&input[..first], &input[first..second], &input[second..]],
-                    1000,
-                    false,
-                );
-                assert_eq!(shown, whole, "split at {first}, {second}");
-                assert_eq!(only_token(&filter), TOKEN);
-            }
-        }
-        let bytes: Vec<&[u8]> = input.chunks(1).collect();
-        let (shown, filter) = run(&bytes, 1000, false);
-        assert_eq!(shown, whole);
-        assert_eq!(only_token(&filter), TOKEN);
-    }
-
-    /// A quiet program at any split point: what is held back is shown, but
-    /// never more than `sk-ant` of the token, and the token is still
-    /// captured whole.
-    #[test]
-    fn an_idle_flush_at_every_split_point_never_shows_the_secret() {
-        let input = stream(TOKEN);
-        for split in 0..=input.len() {
-            let (a, b) = input.split_at(split);
-            let (shown, filter) = run(&[a, b], 1000, true);
-            assert!(
-                leaked_positions(&shown, TOKEN).is_empty(),
-                "split at {split}: {:?}",
-                leaked_positions(&shown, TOKEN)
-            );
-            assert_eq!(only_token(&filter), TOKEN, "split at {split}");
-            assert!(!strip_mask(&shown).contains("sk-ant-"), "split at {split}");
-        }
-        let bytes: Vec<&[u8]> = input.chunks(1).collect();
-        let (shown, filter) = run(&bytes, 1000, true);
-        assert!(leaked_positions(&shown, TOKEN).is_empty());
-        assert_eq!(only_token(&filter), TOKEN);
-    }
-
-    /// Escapes between every pair of characters of the prefix and of the
-    /// token, at every split point.
-    #[test]
-    fn escapes_between_every_character_are_transparent() {
-        let mut input = b"token: \x1b[32m".to_vec();
-        for (index, byte) in TOKEN.bytes().enumerate() {
-            input.push(byte);
-            if index % 3 == 0 {
-                input.extend_from_slice(b"\x1b[0;1;38;5;200m");
-            } else if index % 3 == 1 {
-                input.extend_from_slice(b"\x1b(B");
-            }
-        }
-        input.extend_from_slice(b"\x1b[0m done\r\n");
-        let (whole, filter) = run(&[&input], 1000, false);
-        assert_eq!(only_token(&filter), TOKEN);
-        assert!(leaked_positions(&whole, TOKEN).is_empty());
-        assert!(String::from_utf8_lossy(&whole).ends_with("\x1b[0m done\r\n"));
-        for split in 0..=input.len() {
-            let (a, b) = input.split_at(split);
-            let (shown, filter) = run(&[a, b], 1000, false);
-            assert_eq!(shown, whole, "split at {split}");
-            assert_eq!(only_token(&filter), TOKEN);
-            let (shown, filter) = run(&[a, b], 1000, true);
-            assert!(
-                leaked_positions(&shown, TOKEN).is_empty(),
-                "split at {split}"
-            );
-            assert_eq!(only_token(&filter), TOKEN);
-        }
-    }
-
-    /// In a terminal narrower than the token, the program wraps it at the
-    /// last column: the continuation lines are hidden and joined.
-    #[test]
-    fn a_token_wrapped_at_the_last_column_is_hidden_and_joined() {
-        for cols in [20u16, 33, 40, 64, 80] {
-            let width = usize::from(cols);
-            let mut input = b"Your OAuth token:\r\n\x1b[33m".to_vec();
-            for (index, line) in TOKEN.as_bytes().chunks(width).enumerate() {
-                if index > 0 {
-                    input.extend_from_slice(b"\r\n");
-                }
-                input.extend_from_slice(line);
-            }
-            input.extend_from_slice(b"\x1b[0m\r\n\r\nStore this token securely.\r\n");
-            for split in 0..=input.len() {
-                let (a, b) = input.split_at(split);
-                for idle in [false, true] {
-                    let (shown, filter) = run(&[a, b], cols, idle);
-                    assert!(
-                        leaked_positions(&shown, TOKEN).is_empty(),
-                        "cols {cols} split {split}"
-                    );
-                    assert_eq!(only_token(&filter), TOKEN, "cols {cols} split {split}");
-                    assert!(strip_mask(&shown).contains("Store this token securely."));
-                }
-            }
-        }
-        // A token that ends before the last column is not joined with the
-        // next line.
-        let mut filter = TokenFilter::new(200);
-        let mut shown = Vec::new();
-        filter.push(TOKEN.as_bytes(), &mut shown);
-        filter.push(b"\r\nNext\r\n", &mut shown);
-        filter.finish(&mut shown);
-        assert_eq!(only_token(&filter), TOKEN);
-        assert!(strip_mask(&shown).contains("\r\nNext\r\n"));
-    }
-
-    #[test]
-    fn other_anthropic_keys_are_hidden_but_not_captured() {
-        let api_key = "sk-ant-api03-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        let input = format!("key {api_key} and ssk-ant-zz and sk-ant- and sk-ant-oat01-short\r\n");
-        let (shown, filter) = run(&[input.as_bytes()], 1000, false);
-        assert!(leaked_positions(&shown, api_key).is_empty());
-        let text = String::from_utf8(shown).unwrap();
-        assert_eq!(text.matches(MASK).count(), 4, "{text}");
-        assert!(text.starts_with("key [token hidden by axocoatl] and s[token hidden"));
-        assert!(matches!(
-            select_token(filter.found()),
-            Selection::None { other: 4 }
-        ));
-    }
-
-    #[test]
-    fn a_token_inside_a_hyperlink_escape_is_hidden() {
-        let input = format!("\x1b]8;;https://example.test/?t={TOKEN}\x1b\\link\x1b]8;;\x1b\\\r\n");
-        let (shown, filter) = run(&[input.as_bytes()], 1000, false);
-        assert!(leaked_positions(&shown, TOKEN).is_empty());
-        assert_eq!(only_token(&filter), TOKEN);
-        assert!(String::from_utf8_lossy(&shown).contains("link"));
-    }
-
-    #[test]
-    fn the_same_token_twice_is_one_and_two_tokens_are_refused() {
-        let input = format!("{TOKEN}\r\nexport CLAUDE_CODE_OAUTH_TOKEN={TOKEN}\r\n");
-        let (shown, filter) = run(&[input.as_bytes()], 1000, false);
-        assert!(leaked_positions(&shown, TOKEN).is_empty());
-        assert_eq!(only_token(&filter), TOKEN);
-
-        let other = TOKEN.replace("Xq7", "Yy8");
-        let input = format!("{TOKEN}\r\n{other}\r\n");
-        let (shown, filter) = run(&[input.as_bytes()], 1000, false);
-        assert!(leaked_positions(&shown, TOKEN).is_empty());
-        assert!(leaked_positions(&shown, &other).is_empty());
-        assert!(matches!(
-            select_token(filter.found()),
-            Selection::Several(2)
-        ));
-    }
-
-    #[test]
-    fn an_overlong_run_is_hidden_and_not_captured() {
-        let long = format!("{TOKEN}{}", "a".repeat(MAX_TOKEN_CHARS));
-        let (shown, filter) = run(&[long.as_bytes(), b" end"], 1000, false);
-        assert_eq!(String::from_utf8(shown).unwrap(), format!("{MASK} end"));
-        assert!(matches!(
-            select_token(filter.found()),
-            Selection::None { other: 1 }
-        ));
-    }
-
-    #[test]
-    fn output_without_a_token_passes_through_unchanged_and_ends_flushed() {
-        let input = b"\x1b[31mskill\x1b[0m sk-an\x1b[1mt done s".to_vec();
-        for split in 0..=input.len() {
-            let (a, b) = input.split_at(split);
-            let (shown, filter) = run(&[a, b], 1000, false);
-            assert_eq!(shown, input, "split {split}");
-            assert!(filter.found().is_empty());
-        }
-    }
-}
+pub(crate) mod tests;

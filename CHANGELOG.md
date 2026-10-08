@@ -148,20 +148,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   store it again: `axocoatl connect claude-code` for Claude Code's, otherwise
   `axocoatl secret set <name>`, piping in only the token.
 - **`axocoatl connect claude-code`.** Connects Claude Code without anyone seeing, copying
-  or typing its token: it runs `claude setup-token` in a pseudo-terminal 1000 columns
-  wide, with your terminal in raw mode (restored on exit, error, signal or panic) and
-  your keystrokes relayed, and shows its output through a streaming filter that replaces
-  every `sk-ant-…` token with `[token hidden by axocoatl]`, safe across write boundaries
-  and color codes. It captures exactly one `sk-ant-oat01-…` token in memory (refusing
-  none or several), checks it with Anthropic over HTTPS (`GET /v1/models`, free; skipped
-  with `--no-verify`; a `401`/`403` or an unreachable API stores nothing), and stores it
-  as `claude-code-oauth` (or `--secret NAME`) through the secret store. It checks before
-  the sign-in that the store can take the token (a link or a directory where the secret
-  goes, or a store already holding 64 secrets, is refused before `claude setup-token`
-  runs, so no token is made and then lost). The token never
-  enters an argv, a child's environment, a log, a temporary file or a message. Exit codes
-  0 stored, 1 rejected, 2 no single token, 3 usage, 4 not checked, 5 store failure, 6
-  interrupted.
+  or typing its token: it runs `claude setup-token` in a pseudo-terminal the size of your
+  terminal, resized with it on `SIGWINCH` (and at least 40 columns by 24 rows, the
+  smallest in which Claude Code draws the whole token), with your terminal in raw mode
+  (restored on exit, error, signal or panic) and your keystrokes relayed until it exits,
+  so what you type while the token is checked stays for your shell. Its output reaches
+  your terminal through a filter that keeps a model of the terminal and shows every cell
+  of every `sk-ant-…` token as the next character of `[token hidden by axocoatl]` (then a
+  blank), so the screen keeps Claude Code's layout. Claude Code's Ink renderer wraps the
+  token at its box's width and places each row by cursor movement, rewriting only the
+  cells that change; the filter reads the token from the cells at any width, through any
+  escape sequence (colors, hyperlinks, cursor movement, an OSC or DCS string splitting
+  `sk-ant-`), a border or padding, and writes split anywhere. Clipboard writes (OSC 52,
+  and its kitty, iTerm2, tmux and screen forms) and any escape sequence holding a token
+  are dropped. It captures exactly one `sk-ant-oat01-…` token in memory (refusing none or
+  several; the next line printed after the token, or text after a blank on its last row,
+  is not part of it), checks it with Anthropic over HTTPS (`GET /v1/models`, free;
+  skipped with `--no-verify`; a `401`/`403` or an unreachable API stores nothing), and
+  stores it as `claude-code-oauth` (or `--secret NAME`) through the secret store. It
+  checks before the sign-in that the store can take the token (a link or a directory
+  where the secret goes, or a store already holding 64 secrets, is refused before
+  `claude setup-token` runs, so no token is made and then lost). The token never enters
+  an argv, a child's environment, a log, a temporary file or a message; every buffer
+  that held it, the `Authorization` header's included, is overwritten when freed, and
+  the HTTP client keeps no connection open after the check (its own copies of the
+  header are freed with the request). Exit codes 0 stored, 1 rejected, 2 no single
+  token, 3 usage, 4 not checked, 5 store failure, 6 interrupted.
 - **`axocoatl secret set|list|remove`.** Stores a route credential read from standard
   input (a pipe or a file; a terminal, where the value would show, is refused) or, with
   `--from-env VAR`, from an environment variable (unset or empty is refused), as an

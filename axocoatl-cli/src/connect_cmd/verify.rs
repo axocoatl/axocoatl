@@ -2,9 +2,19 @@
 //! costs nothing (`GET /v1/models?limit=1`), sent the way Claude Code sends
 //! its OAuth token (`Authorization: Bearer`, with the OAuth beta header).
 //! The response body is never read or shown.
+//!
+//! The `Authorization` value is built once, in a buffer sized for it (so it
+//! never moves), and handed to the HTTP client without a copy: the header
+//! holds that buffer, which is zeroized when the request's headers are
+//! dropped, right after the response arrives. The client's own copies on
+//! the way out (hyper's HTTP/1 write buffer or the HTTP/2 encoder's, and
+//! rustls's plaintext buffer) are not Axocoatl's to overwrite: they are
+//! freed, not zeroized, when the request completes, and the client keeps no
+//! idle connection, so none outlives the check.
 
 use std::time::Duration;
 
+use bytes::Bytes;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use zeroize::Zeroizing;
 
@@ -16,6 +26,7 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// The beta flag that lets the Messages API take a Claude Code OAuth token.
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 const TIMEOUT: Duration = Duration::from_secs(20);
+const BEARER: &str = "Bearer ";
 
 /// What Anthropic said about a token.
 #[derive(Debug, PartialEq, Eq)]
@@ -45,6 +56,9 @@ impl Verifier {
         reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
+            // The connection, and the buffers the request went through,
+            // close with the request.
+            .pool_max_idle_per_host(0)
             .timeout(TIMEOUT)
             .user_agent(concat!("axocoatl/", env!("CARGO_PKG_VERSION")))
     }
@@ -87,8 +101,12 @@ impl Verifier {
     }
 
     pub(crate) async fn check(&self, token: &str) -> Verdict {
-        let bearer = Zeroizing::new(format!("Bearer {token}"));
-        let mut authorization = match HeaderValue::from_str(&bearer) {
+        let mut bearer = Zeroizing::new(Vec::with_capacity(BEARER.len() + token.len()));
+        bearer.extend_from_slice(BEARER.as_bytes());
+        bearer.extend_from_slice(token.as_bytes());
+        // The header holds `bearer` itself; it is zeroized when the last
+        // reference to it (the request's header map) is dropped.
+        let mut authorization = match HeaderValue::from_maybe_shared(Bytes::from_owner(bearer)) {
             Ok(value) => value,
             Err(_) => {
                 return Verdict::Unverified("the token is not a valid header value".into());
