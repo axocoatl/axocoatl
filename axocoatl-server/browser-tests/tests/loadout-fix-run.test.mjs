@@ -95,8 +95,12 @@ test('the built-in fix loadout runs under egress, passes, warns about the same m
   const repo = await realpath(projects);
   await writeFile(path.join(repo, 'README.md'), '# fixture\n');
   await git(repo, 'init', '-q', '-b', 'main');
+  // Keep commits as the repository's git identity. Set one here so the test does not
+  // depend on the host's: a CI runner has none, and git then refuses to commit.
+  await git(repo, 'config', 'user.name', 'Fixture');
+  await git(repo, 'config', 'user.email', 'fixture@example.invalid');
   await git(repo, 'add', 'README.md');
-  await git(repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Add a README');
+  await git(repo, 'commit', '-qm', 'Add a README');
   const head = await git(repo, 'rev-parse', 'HEAD');
   const out = await mkdtemp(path.join(runtime.runRoot, 'out-'));
   const junitPath = path.join(out, 'junit.xml'), recordPath = path.join(out, 'run.axorecord.jsonl');
@@ -129,6 +133,8 @@ test('the built-in fix loadout runs under egress, passes, warns about the same m
   assert.equal(await git(repo, 'show', `${branch}:NOTES.md`), 'kept by the fix run');
   assert.equal(await git(repo, 'diff', '--name-only', head, branch), 'NOTES.md');
   assert.equal(await git(repo, 'rev-parse', `${branch}^`), head);
+  assert.equal(await git(repo, 'log', '-1', '--format=%an <%ae> / %cn <%ce>', branch),
+    'Fixture <fixture@example.invalid> / Fixture <fixture@example.invalid>', 'Keep commits as the repository\'s identity');
   const status = await (await fetch(`${runtime.baseUrl}/api/runs/${outcome.run_id}`, { headers: { authorization: `Bearer ${runtime.token}` } })).json();
   assert.equal(status.keep?.branch, branch, JSON.stringify({ ...status, outcome: undefined }));
   // JUnit and the record bundle are written, and the bundle verifies.
