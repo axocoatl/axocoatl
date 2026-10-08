@@ -203,8 +203,8 @@ a reviewer on `openrouter:anthropic/claude-haiku-4.5` runs a Claude Code writer'
 `anthropic:claude-haiku-4-5`, and one on `openrouter:openai/gpt-5.5` a Codex writer's
 `openai:gpt-5.5`, so both are warned about (`same_model_reviewer`). The comparison ignores
 case, `.` against `-`, a snapshot date such as `-20251001`, `-latest` and an OpenRouter
-`:variant` suffix. A program alias such as Claude Code's `sonnet` is not resolved, so it
-is not compared.
+`:variant` suffix. This comparison does not resolve a program alias such as Claude Code's
+`sonnet`, so an alias is not compared.
 
 ## The routes Axocoatl adds
 
@@ -298,13 +298,32 @@ or the run is refused, naming the budget and the minimum (exit code 3). For a mo
 Axocoatl's pinned table, one call can use the context the program keeps plus the model's
 output limit, within the model's window: 400,000 tokens for each Codex model above (a
 272,000-token context plus 128,000 output tokens), 1,000,000 for a Claude model with a
-1M-token window (`claude-fable-5-1`, `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`,
-`claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-5-5`,
-`claude-sonnet-5`, `claude-sonnet-4-6`, `claude-haiku-5-5`) and 200,000 for
-`claude-haiku-4-5`, from Anthropic's model overview. A model the table does not list (a
-newer model, or an alias such as Claude Code's `sonnet`) is not checked, and the run
-carries the warning `external_model_not_pinned`, which also says whether its cost will be
-known.
+1M-token window (`claude-fable-5-1`, `claude-mythos-5-1`, `claude-fable-5`,
+`claude-mythos-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`,
+`claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-5-5`, `claude-sonnet-5`,
+`claude-sonnet-4-6`, `claude-haiku-5-5`) and 200,000 for a 200K-token one
+(`claude-opus-4-5`, `claude-sonnet-4-5`, `claude-haiku-4-5`), from Anthropic's model
+overview and model pages. A dated snapshot such as `claude-haiku-4-5-20251001` counts
+as its model.
+
+Claude Code's aliases are checked as the model each one runs in Claude Code 2.1.292: the
+aliases in the model catalog bundled in that build, which it goes by since its route
+serves it no model list of its own. The refusal names that model:
+
+| Alias | Model | One call |
+| --- | --- | --- |
+| `opus` | `claude-opus-5-5` | 1,000,000 |
+| `sonnet` | `claude-sonnet-5-5` | 1,000,000 |
+| `haiku` | `claude-haiku-4-5` | 200,000 |
+| `fable` | `claude-fable-5-1` | 1,000,000 |
+| `best` | `claude-fable-5-1`, or `claude-opus-5-5` for an account without Fable | 1,000,000 |
+| `opusplan` | `claude-sonnet-5-5`, and `claude-opus-5-5` in plan mode | 1,000,000 |
+
+`[1m]` after a model or alias (`sonnet[1m]`, `opus[1m]`, `fable[1m]`) is the same call
+when the model's window is already 1M tokens. A model the table does not list (a newer
+or retired model, `default`, whose model is your account's or organization's, or `[1m]`
+on a 200K-token model such as `haiku[1m]`) is not checked, and the run carries the
+warning `external_model_not_pinned`, which also says whether its cost will be known.
 
 ## What is enforced, and what is not
 

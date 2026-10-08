@@ -54,6 +54,10 @@ const COMMAND_REAP_TIMEOUT: Duration = Duration::from_secs(2);
 /// deciding that cleanup failed or retrying it.
 const NAMED_REMOVE_RECONCILE_TIMEOUT: Duration = Duration::from_secs(5);
 const NAMED_REMOVE_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// One `podman volume create` of a Session's Node dependency volume.
+const DEPENDENCY_VOLUME_CREATE_TIMEOUT: Duration = Duration::from_secs(30);
+/// The `io.axocoatl.role` of a Node dependency volume.
+const DEPENDENCY_VOLUME_ROLE: &str = "node-dependencies";
 const NAMED_REMOVE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SANDBOX_READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 const SANDBOX_PROVISION_TIMEOUT: Duration = Duration::from_secs(300);
@@ -988,6 +992,25 @@ impl SessionSandbox {
         format!("{}-node-modules", Self::container_name(sandbox_id))
     }
 
+    /// `podman volume create` for a dependency volume of the daemon whose
+    /// runtime authority is `runtime_authority` (pure): labelled with it and
+    /// its role, and left as it is when it exists already.
+    pub fn dependency_volume_create_args(volume: &str, runtime_authority: &str) -> Vec<String> {
+        vec![
+            "volume".into(),
+            "create".into(),
+            "--ignore".into(),
+            "--label".into(),
+            format!("{RUNTIME_AUTHORITY_LABEL}={runtime_authority}"),
+            "--label".into(),
+            format!(
+                "{}={DEPENDENCY_VOLUME_ROLE}",
+                crate::egress_image::ROLE_LABEL
+            ),
+            volume.into(),
+        ]
+    }
+
     /// Resolve and validate the exact image that a local Session may start.
     ///
     /// This is deliberately pure so callers can reject an untrusted or
@@ -1527,6 +1550,31 @@ impl SessionSandbox {
         let node_dependency_volume = (!policy.passive_start)
             .then(|| Self::node_dependency_volume(session_id, &working_dir_path))
             .flatten();
+        // A daemon's dependency volume carries its runtime authority, so its
+        // next start can tell its own left-behind one from another daemon's
+        // (`runtime_volumes`). One that exists already is left as it is.
+        if let (Some(volume), Some(authority)) = (
+            node_dependency_volume.as_deref(),
+            policy.runtime_authority.as_deref(),
+        ) {
+            let mut create = Command::new(PODMAN);
+            create.args(Self::dependency_volume_create_args(volume, authority));
+            let output =
+                Self::run_bounded_command(create, DEPENDENCY_VOLUME_CREATE_TIMEOUT).await?;
+            if output.timed_out || !output.status.success() {
+                return Err(IsolationError::OciSetupFailed(format!(
+                    "creating the Node dependency volume {volume}: {}",
+                    if output.timed_out {
+                        format!(
+                            "timed out after {} s",
+                            DEPENDENCY_VOLUME_CREATE_TIMEOUT.as_secs()
+                        )
+                    } else {
+                        String::from_utf8_lossy(&output.stderr).trim().to_string()
+                    }
+                )));
+            }
+        }
 
         // Under egress the sidecar must be answering before the Session
         // container exists, so its bridge never starts without a proxy. The
@@ -6295,6 +6343,30 @@ mod tests {
         assert_ne!(
             SessionSandbox::dependency_volume_name("primary"),
             SessionSandbox::dependency_volume_name("primary-way-1")
+        );
+    }
+
+    /// A daemon's dependency volume carries its runtime authority (and its
+    /// role), so the daemon's start can tell its own leaked one from another
+    /// daemon's; an existing one is left as it is.
+    #[test]
+    fn dependency_volumes_carry_the_daemons_runtime_authority() {
+        let authority = "a".repeat(64);
+        assert_eq!(
+            SessionSandbox::dependency_volume_create_args(
+                &SessionSandbox::dependency_volume_name("ses-1"),
+                &authority
+            ),
+            [
+                "volume".to_string(),
+                "create".into(),
+                "--ignore".into(),
+                "--label".into(),
+                format!("io.axocoatl.runtime-authority={authority}"),
+                "--label".into(),
+                "io.axocoatl.role=node-dependencies".into(),
+                "axo-ses-ses-1-node-modules".into(),
+            ]
         );
     }
 

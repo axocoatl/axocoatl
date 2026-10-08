@@ -1111,10 +1111,12 @@ async fn lifecycle_actions_never_wait_for_another_operation() {
 }
 
 /// The phase a child of [`leaked_runtime_volumes_are_reaped_by_their_own_daemon_only`]
+/// or [`leaked_dependency_volumes_are_reaped_by_their_own_daemon_only`]
 /// runs, and the directory its phases share their Session ids through.
 const PHASE: &str = "AXOCOATL_LIFECYCLE_TEST_PHASE";
 const SHARED: &str = "AXOCOATL_LIFECYCLE_TEST_SHARED";
 const REAP_TEST: &str = "bootstrap::session_native_lifecycle::lifecycle_tests::leaked_runtime_volumes_are_reaped_by_their_own_daemon_only";
+const DEPENDENCY_REAP_TEST: &str = "bootstrap::session_native_lifecycle::lifecycle_tests::leaked_dependency_volumes_are_reaped_by_their_own_daemon_only";
 
 /// Make `data` a data root no daemon has used yet (owner-only), with the
 /// embedding model from AXOCOATL_E2E_MODEL_CACHE when it is set.
@@ -1134,9 +1136,10 @@ fn fresh_data_root(data: &std::path::Path) {
     }
 }
 
-/// Run `phase` of the reap test in a child whose data root is `data`, in
-/// `cwd`, sharing Session ids through `shared`.
+/// Run `phase` of the reap test `test` in a child whose data root is
+/// `data`, in `cwd`, sharing Session ids through `shared`.
 async fn run_reap_phase(
+    test: &str,
     phase: &str,
     data: &std::path::Path,
     cwd: &std::path::Path,
@@ -1144,7 +1147,7 @@ async fn run_reap_phase(
 ) {
     let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
     command
-        .args(["--exact", REAP_TEST, "--nocapture", "--include-ignored"])
+        .args(["--exact", test, "--nocapture", "--include-ignored"])
         .env(CHILD, "1")
         .env(PHASE, phase)
         .env(SHARED, shared)
@@ -1342,17 +1345,243 @@ async fn leaked_runtime_volumes_are_reaped_by_their_own_daemon_only() {
     };
 
     fresh_data_root(&data_a);
-    run_reap_phase("wiped", &data_a, &a, &shared).await;
+    run_reap_phase(REAP_TEST, "wiped", &data_a, &a, &shared).await;
     remember("wiped");
     std::fs::remove_dir_all(&data_a).unwrap();
     fresh_data_root(&data_a);
-    run_reap_phase("a1", &data_a, &a, &shared).await;
+    run_reap_phase(REAP_TEST, "a1", &data_a, &a, &shared).await;
     remember("open");
     remember("closed");
     fresh_data_root(&data_b);
-    run_reap_phase("b1", &data_b, &b, &shared).await;
+    run_reap_phase(REAP_TEST, "b1", &data_b, &b, &shared).await;
     remember("other");
-    run_reap_phase("a2", &data_a, &a, &shared).await;
-    run_reap_phase("b2", &data_b, &b, &shared).await;
+    run_reap_phase(REAP_TEST, "a2", &data_a, &a, &shared).await;
+    run_reap_phase(REAP_TEST, "b2", &data_b, &b, &shared).await;
+    drop(cleanup);
+}
+
+/// The runtime authority label Podman lists for `volume`, if it has one.
+async fn volume_authority(volume: &str) -> Option<String> {
+    let output = tokio::process::Command::new("podman")
+        .args([
+            "volume",
+            "inspect",
+            "--format",
+            "{{index .Labels \"io.axocoatl.runtime-authority\"}}",
+            volume,
+        ])
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success(), "podman volume inspect {volume}");
+    let label = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!label.is_empty() && label != "<no value>").then_some(label)
+}
+
+/// Make `volume` again without a label, as a daemon before 1.3.0 made a
+/// dependency volume, so it stands for one such a daemon's Delete left.
+async fn unlabelled_volume(volume: &str) {
+    let status = tokio::process::Command::new("podman")
+        .args(["volume", "create", volume])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .await
+        .unwrap();
+    assert!(status.success(), "podman volume create {volume}");
+    assert_eq!(volume_authority(volume).await, None);
+}
+
+/// A run on the Node project `repo`: its Session has a dependency volume
+/// labelled with this daemon's runtime authority.
+async fn node_run(daemon: &Arc<AxocoatlDaemon>, repo: &std::path::Path, id: &str) -> String {
+    let session = completed_run(daemon, repo, id).await;
+    let dependencies = SessionSandbox::dependency_volume_name(&session);
+    assert!(volume_exists(&dependencies).await, "{dependencies}");
+    assert_eq!(
+        volume_authority(&dependencies).await.as_deref(),
+        Some(daemon.local_runtime_authority.as_str()),
+        "{dependencies}"
+    );
+    session
+}
+
+async fn dependency_reap_phase(phase: &str) {
+    let server = model_server().await;
+    let config_dir = tempfile::tempdir().unwrap();
+    let config = load_config(config_dir.path(), &server.uri()).await;
+    let daemon = Arc::new(AxocoatlDaemon::bootstrap_headless(config).await.unwrap());
+    daemon.set_config_path(&config_dir.path().join("axocoatl.yaml"));
+    let repo = std::path::PathBuf::from(read_shared("repo"));
+    let report = reap_report(&daemon);
+    eprintln!("phase {phase}: the daemon's start check: {report:?}");
+    let dependencies = |name: &str| SessionSandbox::dependency_volume_name(&read_shared(name));
+    match phase {
+        // Daemon A's first data root at this path: a run's Session, whose
+        // dependency volume stays when the data root is then removed.
+        "wiped" => {
+            assert!(report.failed.is_empty(), "{report:?}");
+            let session = node_run(&daemon, &repo, "dep-wiped").await;
+            write_shared("wiped", &session);
+        }
+        // Daemon A again, on a new data root at the same path: the removed
+        // root's Session is unknown to it and the volume carries its
+        // authority, so it goes.
+        "a1" => {
+            let wiped = dependencies("wiped");
+            assert!(report.removed.contains(&wiped), "{wiped}: {report:?}");
+            assert!(!volume_exists(&wiped).await, "{wiped}");
+            assert!(report.failed.is_empty(), "{report:?}");
+            // One Session stays open, one is closed (Close keeps its
+            // dependency volume) and one is deleted, its dependency volume
+            // then made again without a label, as one a daemon before 1.3.0
+            // left behind.
+            let open = node_run(&daemon, &repo, "dep-open").await;
+            let closed = node_run(&daemon, &repo, "dep-closed").await;
+            daemon.close_session(&closed).await.unwrap();
+            assert!(
+                volume_exists(&SessionSandbox::dependency_volume_name(&closed)).await,
+                "Close removed the dependency volume"
+            );
+            let deleted = node_run(&daemon, &repo, "dep-deleted").await;
+            daemon.delete_session(&deleted).await.unwrap();
+            let deleted_volume = SessionSandbox::dependency_volume_name(&deleted);
+            assert!(!volume_exists(&deleted_volume).await, "{deleted_volume}");
+            unlabelled_volume(&deleted_volume).await;
+            write_shared("open", &open);
+            write_shared("closed", &closed);
+            write_shared("deleted", &deleted);
+        }
+        // Daemon B, another data root on the same Podman machine: the same
+        // three, under its own authority.
+        "b1" => {
+            let open = node_run(&daemon, &repo, "dep-other-open").await;
+            let closed = node_run(&daemon, &repo, "dep-other-closed").await;
+            daemon.close_session(&closed).await.unwrap();
+            let deleted = node_run(&daemon, &repo, "dep-other-deleted").await;
+            daemon.delete_session(&deleted).await.unwrap();
+            unlabelled_volume(&SessionSandbox::dependency_volume_name(&deleted)).await;
+            write_shared("other-open", &open);
+            write_shared("other-closed", &closed);
+            write_shared("other-deleted", &deleted);
+        }
+        // Daemon A restarts: it removes the unlabelled volume of the Session
+        // it deleted, keeps its open and closed Sessions', and leaves daemon
+        // B's alone: B's labelled ones, the unlabelled one of the Session B
+        // deleted, and one no data root shows it made.
+        "a2" => {
+            assert!(report.failed.is_empty(), "{report:?}");
+            let deleted = dependencies("deleted");
+            assert!(report.removed.contains(&deleted), "{deleted}: {report:?}");
+            assert!(!volume_exists(&deleted).await, "{deleted}");
+            for kept in [
+                "open",
+                "closed",
+                "other-open",
+                "other-closed",
+                "other-deleted",
+                "unknown",
+            ] {
+                let volume = dependencies(kept);
+                assert!(!report.removed.contains(&volume), "{volume}: {report:?}");
+                assert!(volume_exists(&volume).await, "{volume}");
+            }
+            assert!(report.kept_dependencies >= 2, "{report:?}");
+            assert!(report.other_daemons >= 2, "{report:?}");
+            assert!(report.unlabelled_kept >= 2, "{report:?}");
+            // Delete removes the rest of its own.
+            for session in [read_shared("open"), read_shared("closed")] {
+                daemon.delete_session(&session).await.unwrap();
+                let volume = SessionSandbox::dependency_volume_name(&session);
+                assert!(!volume_exists(&volume).await, "{volume}");
+            }
+        }
+        // Daemon B restarts: it removes the unlabelled volume of the Session
+        // it deleted and keeps its open and closed Sessions'.
+        "b2" => {
+            assert!(report.failed.is_empty(), "{report:?}");
+            let deleted = dependencies("other-deleted");
+            assert!(report.removed.contains(&deleted), "{deleted}: {report:?}");
+            assert!(!volume_exists(&deleted).await, "{deleted}");
+            for kept in ["other-open", "other-closed", "unknown"] {
+                let volume = dependencies(kept);
+                assert!(!report.removed.contains(&volume), "{volume}: {report:?}");
+                assert!(volume_exists(&volume).await, "{volume}");
+            }
+            for session in [read_shared("other-open"), read_shared("other-closed")] {
+                daemon.delete_session(&session).await.unwrap();
+                let volume = SessionSandbox::dependency_volume_name(&session);
+                assert!(!volume_exists(&volume).await, "{volume}");
+            }
+        }
+        other => panic!("unknown phase {other}"),
+    }
+    daemon.shutdown_session_runtimes_checked().await.unwrap();
+}
+
+/// Two daemons, each with its own data root, on one Podman machine, with
+/// runs on a Node project, whose Sessions have dependency volumes
+/// (`axo-ses-<id>-node-modules`) that Close keeps. When it starts, each
+/// removes the dependency volumes that carry its own runtime authority and
+/// whose Session is unknown to its data root (the data root was removed)
+/// and the unlabelled ones (as a daemon before 1.3.0 made them) of a
+/// Session its data root created and deleted; it keeps its open and closed
+/// Sessions' and never touches the other daemon's, labelled or not, or one
+/// no data root shows it made.
+///
+/// ```text
+/// CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-daemon --lib \
+///   leaked_dependency_volumes_are_reaped_by_their_own_daemon_only -- --ignored
+/// ```
+#[tokio::test]
+#[ignore = "requires rootless Podman, docker.io/library/alpine:3.20 and the egress sidecar image"]
+async fn leaked_dependency_volumes_are_reaped_by_their_own_daemon_only() {
+    if let Some(phase) = std::env::var_os(PHASE) {
+        dependency_reap_phase(&phase.to_string_lossy()).await;
+        return;
+    }
+    let root = tempfile::Builder::new()
+        .prefix("axocoatl-reap-deps-")
+        .tempdir_in(std::env::temp_dir())
+        .unwrap();
+    let shared = root.path().join("shared");
+    let repo = root.path().join("repo");
+    let (a, b) = (root.path().join("a"), root.path().join("b"));
+    for dir in [&shared, &repo, &a, &b] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(repo.join("README.md"), "# Reap\n").unwrap();
+    std::fs::write(repo.join("package.json"), "{}\n").unwrap();
+    std::fs::write(shared.join("repo"), repo.display().to_string()).unwrap();
+    let (data_a, data_b) = (a.join("data"), b.join("data"));
+    // Removes, whatever an assertion did, every volume and container the
+    // phases' Sessions have, by exact name.
+    let cleanup = Cleanup(std::sync::Mutex::new(Vec::new()));
+    let remember = |name: &str| {
+        if let Ok(id) = std::fs::read_to_string(shared.join(name)) {
+            cleanup.0.lock().unwrap().push(id);
+        }
+    };
+    // A dependency volume without a label that no data root shows it made.
+    let unknown = format!("ses-{}", uuid::Uuid::new_v4());
+    std::fs::write(shared.join("unknown"), &unknown).unwrap();
+    remember("unknown");
+    unlabelled_volume(&SessionSandbox::dependency_volume_name(&unknown)).await;
+
+    fresh_data_root(&data_a);
+    run_reap_phase(DEPENDENCY_REAP_TEST, "wiped", &data_a, &a, &shared).await;
+    remember("wiped");
+    std::fs::remove_dir_all(&data_a).unwrap();
+    fresh_data_root(&data_a);
+    run_reap_phase(DEPENDENCY_REAP_TEST, "a1", &data_a, &a, &shared).await;
+    for name in ["open", "closed", "deleted"] {
+        remember(name);
+    }
+    fresh_data_root(&data_b);
+    run_reap_phase(DEPENDENCY_REAP_TEST, "b1", &data_b, &b, &shared).await;
+    for name in ["other-open", "other-closed", "other-deleted"] {
+        remember(name);
+    }
+    run_reap_phase(DEPENDENCY_REAP_TEST, "a2", &data_a, &a, &shared).await;
+    run_reap_phase(DEPENDENCY_REAP_TEST, "b2", &data_b, &b, &shared).await;
     drop(cleanup);
 }

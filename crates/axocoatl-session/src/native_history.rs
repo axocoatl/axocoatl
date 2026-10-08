@@ -257,6 +257,56 @@ mod tests {
         assert!(foreign_sessions.list().is_empty());
     }
 
+    /// A data root holds native History for each Session it created, and
+    /// still does once the Session is deleted; for any other id it holds
+    /// none, so the daemon's start can tell a Session it deleted from one
+    /// another data root made.
+    #[test]
+    fn a_created_session_keeps_its_history_after_deletion() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let data = SecureDir::open(root.path()).unwrap();
+        let mut sessions = SessionStore::new_in_secure(&data, "sessions").unwrap();
+        let ownership = Arc::new(
+            LegacyFormatOwnership::acquire(root.path())
+                .unwrap()
+                .upgrade()
+                .unwrap(),
+        );
+        let (session, receipt) = sessions
+            .create_native_with_environment(
+                &ownership,
+                "Native",
+                "workspace",
+                workspace.path(),
+                SessionMode::SingleAgent {
+                    agent_id: "agent".into(),
+                },
+                vec![],
+                vec![],
+                None,
+                None,
+                false,
+                true,
+            )
+            .unwrap();
+        let canonical =
+            SessionExecutionStore::open(ownership.clone(), receipt.owner().clone()).unwrap();
+        drop(canonical);
+        assert!(ownership.holds_session_history(&session.id));
+        sessions.remove(&session.id).unwrap();
+        assert!(sessions.get(&session.id).is_none());
+        assert!(ownership.holds_session_history(&session.id));
+        for other in [
+            "ses-00000000-0000-4000-8000-000000000000",
+            "",
+            "../sessions",
+            "attempt-abc-def-0",
+        ] {
+            assert!(!ownership.holds_session_history(other), "{other:?}");
+        }
+    }
+
     #[test]
     fn changed_new_session_bytes_refuse_origin_before_any_native_work() {
         let root = tempfile::tempdir().unwrap();

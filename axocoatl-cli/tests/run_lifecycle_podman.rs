@@ -656,10 +656,12 @@ async fn a_busy_workspace_exits_seven_and_close_refuses_at_once_then_removes_run
 }
 
 /// A daemon whose data root was removed (as the browser test harness
-/// removes its fixture daemon's) left its run Session's runtime volumes on
-/// Podman. A new daemon on a data root at the same path has the same runtime
-/// authority: when it starts it removes those volumes, its log counts them,
-/// and `axocoatl doctor` says how many it removed.
+/// removes its fixture daemon's) left its run Session's runtime volumes and,
+/// for a Node project, its dependency volume (labelled with the daemon's
+/// runtime authority) on Podman. A new daemon on a data root at the same
+/// path has the same runtime authority: when it starts it removes those
+/// volumes, its log counts them, and `axocoatl doctor` says how many it
+/// removed.
 ///
 /// ```text
 /// CONTAINER_CONNECTION=<machine> cargo test -p axocoatl-cli \
@@ -673,6 +675,8 @@ async fn a_daemon_removes_the_leaked_runtime_volumes_of_its_data_root_and_doctor
     let repo = root.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     std::fs::write(repo.join("README.md"), "# Volumes\n").unwrap();
+    // A Node project: its Session gets a dependency volume.
+    std::fs::write(repo.join("package.json"), "{}\n").unwrap();
     let model = model_server().await;
     let port = free_port();
     let config = write_config(&root, port, &model.uri());
@@ -709,12 +713,26 @@ async fn a_daemon_removes_the_leaked_runtime_volumes_of_its_data_root_and_doctor
         .filter(|volume| podman_exists("volume", volume))
         .collect();
     assert!(leaked.contains(&format!("axo-egr-{session}")), "{leaked:?}");
+    // The dependency volume outlives the daemon too, with its label.
+    let dependencies = format!("axo-ses-{session}-node-modules");
+    let label = Command::new("podman")
+        .args([
+            "volume",
+            "inspect",
+            "--format",
+            "{{index .Labels \"io.axocoatl.runtime-authority\"}}",
+            &dependencies,
+        ])
+        .output()
+        .unwrap();
+    let label = String::from_utf8_lossy(&label.stdout).trim().to_string();
+    assert_eq!(label.len(), 64, "{dependencies}: {label:?}");
 
     // Its data root goes; a new one at the same path starts.
     std::fs::remove_dir_all(&data).unwrap();
     fresh_data();
     let mut daemon = Daemon::start(&root, &config, port, 1).await;
-    for volume in &leaked {
+    for volume in leaked.iter().chain([&dependencies]) {
         assert!(
             !podman_exists("volume", volume),
             "{volume} survived the start"
@@ -736,12 +754,13 @@ async fn a_daemon_removes_the_leaked_runtime_volumes_of_its_data_root_and_doctor
     }
     let line = plain
         .lines()
-        .find(|line| line.contains("checked leaked Session runtime volumes"))
+        .find(|line| line.contains("checked leaked Session volumes"))
         .unwrap_or_else(|| panic!("no count in the log:\n{plain}"));
     assert!(
-        line.contains(&format!("removed={}", leaked.len())),
+        line.contains(&format!("removed={}", leaked.len() + 1)),
         "{line}"
     );
+    assert!(line.contains("removed_dependencies=1"), "{line}");
     assert!(line.contains("failed=0"), "{line}");
     eprintln!("daemon log: {}", line.trim());
 
@@ -753,14 +772,16 @@ async fn a_daemon_removes_the_leaked_runtime_volumes_of_its_data_root_and_doctor
         .unwrap();
     let report = String::from_utf8_lossy(&doctor.stdout);
     let expected = format!(
-        "[ OK ] Runtime volumes: the daemon removed {} leaked Session runtime volumes of \
-         closed, deleted or unknown Sessions when it started; kept 0 of open Sessions; left ",
+        "[ OK ] Session volumes: the daemon removed {} leaked runtime volumes of closed, deleted \
+         or unknown Sessions and 1 Node dependency volume of deleted or unknown Sessions when it \
+         started; kept 0 runtime volumes of open Sessions and 0 dependency volumes of open or \
+         closed Sessions; left ",
         leaked.len()
     );
     assert!(report.contains(&expected), "{report}");
     for line in report
         .lines()
-        .filter(|line| line.contains("Runtime volumes"))
+        .filter(|line| line.contains("Session volumes"))
     {
         eprintln!("doctor: {line}");
     }
