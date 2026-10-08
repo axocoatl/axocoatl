@@ -98,8 +98,8 @@ pub(crate) const DEPENDENT_CONTAINER_PREFIXES: [&str; 4] =
 /// product infrastructure, not a project's language toolchain: Source Control,
 /// Ways snapshots, file tools, and cleanup all depend on them being present.
 pub const REQUIRED_REPOSITORY_COMMANDS: &[&str] = &[
-    "sh", "git", "env", "grep", "tee", "rm", "mkdir", "mv", "cp", "cat", "head", "wc", "find",
-    "realpath", "ls", "rmdir", "test",
+    "sh", "git", "env", "grep", "tee", "rm", "mkdir", "mv", "cp", "cat", "head", "tail", "od",
+    "wc", "find", "realpath", "ls", "rmdir", "test",
 ];
 
 pub(crate) struct BoundedCommandOutput {

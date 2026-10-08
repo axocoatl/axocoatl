@@ -191,8 +191,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that window. The window travels as a hex dump, so `returned_bytes` and `next_offset`
   count the file's own bytes even when it is not UTF-8: only `content` is decoded,
   with U+FFFD for bytes that are not UTF-8 and `invalid_utf8: true`, and a window that
-  would end inside a character ends before it. `read_file` now needs `od` in the
-  Session image, as Debian, Ubuntu, Alpine and macOS have.
+  would end inside a character ends before it. `read_file` now needs `od` and `tail`
+  in the Session image, as Debian, Ubuntu, Alpine and macOS have; a Session's readiness
+  check now requires both and installs them with Axocoatl's other repository commands.
 - **External agents.** A loadout's writer can be the Claude Code CLI
   (`runtime: claude-code`) or the Codex CLI (`runtime: codex`), run inside the Session
   container as the non-root writer user under `--harden`, admitted, granted and captured

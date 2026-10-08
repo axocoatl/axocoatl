@@ -806,7 +806,9 @@ fn a_helper_shell_writes_only_its_scratch_directory_and_a_few_devices() {
     }
     let fixture = Fixture::new();
     let tag = format!("shell-{}", std::process::id());
-    let writes = forbidden_writes(&fixture, &tag, false);
+    let mut writes = forbidden_writes(&fixture, &tag, false);
+    // No pseudo-terminal either: opening the multiplexer is a write.
+    writes.push("device:/dev/ptmx".into());
     let mut args: Vec<&str> = vec![WRITES];
     args.extend(writes.iter().map(String::as_str));
     let ran = helper(

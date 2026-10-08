@@ -341,7 +341,8 @@ In a hardened container:
   `CARGO_HOME` under `$TMPDIR`. A program that writes to a fixed
   path in `/tmp` or `/dev/shm` instead of `$TMPDIR` fails; Python's `multiprocessing`
   locks (POSIX semaphores in `/dev/shm`), for example, do not work in a helper, and
-  neither does a program that needs System V IPC or POSIX message queues. It
+  neither does a program that needs System V IPC or POSIX message queues, or one that
+  opens a pseudo-terminal (`/dev/ptmx`), such as `script` or `expect`. It
   cannot run a file only its owner may execute; run such a script with its
   interpreter (`sh script.sh`).
 - A helper cannot read the environment of a writer's processes under `/proc`, so it
