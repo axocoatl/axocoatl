@@ -132,7 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scope into 2 to 8 areas in a structured block, one read-only worker per area runs in
   parallel with a fresh context, and an integrator merges their findings. No Agent of
   the audit has a shell: its workers, planner and integrator have `read_file`,
-  `list_dir`, `grep` and `glob` (in the last re-smoke two workers with `bash` spent 39
+  `list_dir`, `grep` and `glob` (in the last pre-release test two workers with `bash` spent 39
   minutes on 80 and 81 calls printing "final audit confirmation" scripts). Coverage is
   the host's, never the workers' word. After the plan the host lists the repository's
   files (`git ls-files --cached --others --exclude-standard` in a Git work tree, else a
@@ -190,7 +190,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unreadable answer quoted. When its answer is still unreadable, or it still has no
   result for a provider's reason, the host merges the findings itself: the union of the
   area findings, duplicates by file, line and normalized title removed, each keeping its
-  area, with the note "findings merged by the host: …"; that needs no attention (in the
+  area, with the note "findings merged by the host: …"; that needs no attention (in
   measured runs the merge step never added a finding). When integration has no result
   for another reason (the wall clock, a stop), the workers' findings are reported
   unmerged and `audit integration` is listed as not covered; the attention line counts
@@ -203,15 +203,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a file the repository does not have (looked up after a leading `./` and the
   repository's place in front of it, an absolute path or its directory's name, are
   removed) is not reported; it becomes the note "finding at a path that does not exist:
-  <path> (<title>)" (in the re-smoke a planner invented `notify/rotate_keys.py` and the
+  <path> (<title>)" (in pre-release testing a planner invented `notify/rotate_keys.py` and the
   notify worker's finding at it reached the Outcome). A finding whose line is beyond the
   end of its file, as the host counts the file's lines, keeps its file with `line`
   `null` and a note. After the integration, and after the host's own merge, findings at
   the same file and the same or a nearby line (at most 2 lines apart, or both without a
   line) whose titles share more than half of their words (filler such as "potential" or
   "function" left out) are reported once, keeping the one with a line, then the longer
-  detail, then a severity, with a note that counts and names the ones removed (in the
-  re-smoke the integrator kept the billing and rest workers' "Integer Overflow in
+  detail, then a severity, with a note that counts and names the ones removed (in
+  pre-release testing the integrator kept the billing and rest workers' "Integer Overflow in
   page_count" at `billing/pagination.py:8` twice). A stopped audit
   starts no further turn, lists the areas not started, the files no follow-up read and
   the integration not run as not covered (`stopped`; with no area report to merge the
@@ -398,16 +398,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new results"), and a model that calls a tool instead of answering ends the activation
   as failed with that reason, which a run's follow-ups and re-asks then handle like any
   other worker without a result. A read-only Agent (an empty write scope, as every audit
-  Agent has) is also watched across kinds, since in the re-smoke audit workers made 60
+  Agent has) is also watched across kinds, since in pre-release testing audit workers made 60
   to 113 `grep` calls with different arguments over files they had already read: when
   12 of its last 15 calls of any tool and arguments showed nothing new, its next request
   asks once for its final answer and still offers tools, and when 8 more calls show
   nothing new after that, the next request goes without tools like the rule above
   ("after the host asked for your answer, 8 more of your tool calls showed nothing
-  new"). Replayed over the 78 recorded audit activations of two re-smokes that made tool
+  new"). Replayed over the 78 recorded audit activations of two pre-release test rounds that made tool
   calls, this would have asked 10 of them for their answer and ended 5 of those, and
   none of the 10 reported a planted defect whose line it first saw only after that
-  request. In a later live re-smoke of three audits it asked 3 of their 22 activations,
+  request. In a later live test of three audits it asked 3 of their 22 activations,
   workers after 27 to 38 calls, and each answered without another call.
 - **A cut `grep` result says what it left out.** `grep` returns up to 64 KiB of whole
   matching lines; a result it cut now also gives `returned_matches`, `total_matches`,

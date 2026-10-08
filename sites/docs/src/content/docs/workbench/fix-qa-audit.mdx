@@ -231,7 +231,7 @@ never from what a worker says:
    as executed and every area's files; each split, and the files given to `rest` or by
    directory, are notes.
 3. **Areas.** One worker per area, made from the `worker` Agent: read-only (`writes: []`)
-   with `read_file`, `list_dir`, `grep` and `glob` and no shell (in the 1.3.0 re-smoke
+   with `read_file`, `list_dir`, `grep` and `glob` and no shell (in 1.3.0 pre-release testing
    workers with `bash` spent most of their budget on scripts that printed what they had
    already found), each in a fresh conversation, with no dependencies between them,
    so the controller starts them together. Each worker is told the files of its area
