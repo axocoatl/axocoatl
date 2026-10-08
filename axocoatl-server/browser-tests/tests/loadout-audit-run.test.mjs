@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
@@ -11,7 +11,8 @@ import { REPOSITORY_ROOT, launchTestDaemon } from '../support/daemon.mjs';
 // Ollama server: the planner splits the scope into two areas, one read-only
 // worker per area reads its area's file and reports its findings in one
 // turn, and the integrator merges them in a third turn; each turn has its
-// own Team Apply.
+// own Team Apply. Read-only Agents run as the hardened container's helper
+// user, which reads only what the file modes let any user read.
 const MODEL = 'browser-test-model:latest';
 const DIGEST = 'a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72';
 let runtime, modelServer;
@@ -103,16 +104,70 @@ async function git(repo, ...args) {
   return result.stdout.trim();
 }
 
-test('the audit loadout plans two areas, runs a read-only worker per area and integrates their findings', { timeout: 900_000 }, async () => {
-  const projects = await mkdtemp(path.join(tmpdir(), 'axocoatl-audit-repo-'));
+/**
+ * A committed fixture repository whose directory has `mode`; its files are
+ * readable to other users, whatever the umask.
+ */
+async function fixtureRepo(prefix, mode) {
+  const projects = await mkdtemp(path.join(tmpdir(), prefix));
   workspaces.push(projects);
   const repo = await realpath(projects);
-  await mkdir(path.join(repo, 'src'));
-  await writeFile(path.join(repo, 'README.md'), '# fixture\n');
-  await writeFile(path.join(repo, 'src', 'lib.rs'), 'pub fn one() -> u32 { 1 }\n');
+  await mkdir(path.join(repo, 'src'), { mode: 0o755 });
+  await writeFile(path.join(repo, 'README.md'), '# fixture\n', { mode: 0o644 });
+  await writeFile(path.join(repo, 'src', 'lib.rs'), 'pub fn one() -> u32 { 1 }\n', { mode: 0o644 });
+  for (const [entry, entryMode] of [['src', 0o755], ['README.md', 0o644], ['src/lib.rs', 0o644]]) {
+    await chmod(path.join(repo, entry), entryMode);
+  }
   await git(repo, 'init', '-q', '-b', 'main');
   await git(repo, 'add', '.');
   await git(repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Add a fixture');
+  await chmod(repo, mode);
+  return repo;
+}
+
+const cut = (text, max = 2000) => (text.length > max ? `${text.slice(0, max)}… (${text.length} bytes)` : text);
+
+/**
+ * Each area worker's tool calls as its Session recorded them, with their
+ * outcomes, and the tool results the stub model received, so a failed run
+ * can be judged from the test's log alone.
+ */
+async function workerCalls(outcome) {
+  const lines = [];
+  for (const turn of (outcome?.turns || []).filter((item) => item.purpose === 'audit_areas')) {
+    try {
+      const response = await fetch(`${runtime.baseUrl}/api/sessions/${outcome.session_id}/turns/${turn.turn_id}/control-plane`);
+      const view = await response.json();
+      const labels = new Map((view.nodes || []).map((node) => [node.node_id, node.label]));
+      lines.push(`recorded tool calls of turn ${turn.turn_id} (HTTP ${response.status}, ${view.invocations?.status}):`);
+      for (const call of view.invocations?.value || []) {
+        const final = call.final_evidence;
+        const node = call.activation?.node_id;
+        lines.push(`  ${labels.get(node) || node}: ${call.intent?.tool_name} ${cut(call.intent?.redacted_preview || '')} -> ${final?.outcome || final?.kind || call.disposition}: ${cut(final?.redacted_preview || '')}`);
+      }
+    } catch (error) {
+      lines.push(`recorded tool calls of turn ${turn.turn_id}: ${error.message}`);
+    }
+  }
+  lines.push('tool calls and results the model sent and received:');
+  for (const body of chats) {
+    const area = JSON.stringify(body).match(/Your area: ([a-z0-9-]+)/)?.[1];
+    for (const message of area ? body.messages || [] : []) {
+      for (const call of message.role === 'assistant' ? message.tool_calls || [] : []) {
+        lines.push(`  worker-${area} called ${call.function?.name} ${JSON.stringify(call.function?.arguments)}`);
+      }
+      if (message.role === 'tool') {
+        lines.push(`  worker-${area} got: ${cut(typeof message.content === 'string' ? message.content : JSON.stringify(message.content))}`);
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
+test('the audit loadout plans two areas, runs a read-only worker per area and integrates their findings', { timeout: 900_000 }, async () => {
+  // mkdtemp makes the directory 0700; other users, the helper among them,
+  // may read a repository that git clone made (0755).
+  const repo = await fixtureRepo('axocoatl-audit-repo-', 0o755);
   const model = `ollama:${MODEL}`;
   const out = await mkdtemp(path.join(runtime.runRoot, 'out-'));
   const junitPath = path.join(out, 'junit.xml');
@@ -120,13 +175,16 @@ test('the audit loadout plans two areas, runs a read-only worker per area and in
     '--model', `planner=${model}`, '--model', `worker=${model}`, '--model', `integrator=${model}`,
     '--junit', junitPath, '--json', '--url', runtime.baseUrl], { AXOCOATL_TOKEN: runtime.token });
   const outcome = JSON.parse(result.stdout.slice(0, result.stdout.lastIndexOf('}') + 1));
-  assert.equal(outcome.exit_code, 0, `${JSON.stringify(outcome, null, 2)}\n${result.stderr}`);
+  const failed = outcome.exit_code !== 0 || outcome.not_covered?.length > 0
+    ? `${JSON.stringify(outcome, null, 2)}\n${result.stderr}\n${await workerCalls(outcome)}`
+    : '';
+  assert.equal(outcome.exit_code, 0, failed);
   assert.equal(result.code, 0);
   assert.deepEqual(outcome.turns.map((turn) => [turn.purpose, turn.state]),
     [['audit_plan', 'completed'], ['audit_areas', 'completed'], ['audit_integrate', 'completed']]);
   // The code worker's answer was read; neither the other area nor the
   // missing path is a gap, and both are notes in the run's progress.
-  assert.deepEqual(outcome.not_covered, []);
+  assert.deepEqual(outcome.not_covered, [], failed);
   assert.match(result.stderr, /note: worker-code listed other planned areas as not reached \(docs\)/);
   assert.match(result.stderr, /note: worker-code listed src\/main\.rs as not reached, and no such path exists/);
   // The notes are in the Outcome and the JUnit verdict too, not only in
@@ -146,4 +204,31 @@ test('the audit loadout plans two areas, runs a read-only worker per area and in
   assert.equal(workers.filter((body) => body.messages.some((message) => message.role === 'tool')).length, 2);
   assert.equal(await git(repo, 'status', '--porcelain'), '');
   assert.match(await readFile(junitPath, 'utf8'), /<testsuite name="findings"/);
+});
+
+// On a Linux host the helper user is one of the other users, so a
+// repository they may not enter is closed to every read-only Agent: the run
+// does not start, and says why, instead of reporting areas that nobody
+// could examine. A macOS Podman machine's shared folder reports the helper
+// as the owner of every file and lets it in.
+test('an audit of a repository other users may not enter is refused before its first turn on a Linux host', {
+  timeout: 900_000,
+  skip: process.platform === 'linux' ? false : 'only a Linux host keeps the helper user out of a 0700 repository',
+}, async () => {
+  const repo = await fixtureRepo('axocoatl-audit-private-', 0o700);
+  const model = `ollama:${MODEL}`;
+  const asked = chats.length;
+  const result = await run(binary(), ['run', 'audit', '--task', 'Find defects.', '--repo', repo,
+    '--model', `planner=${model}`, '--model', `worker=${model}`, '--model', `integrator=${model}`,
+    '--json', '--url', runtime.baseUrl], { AXOCOATL_TOKEN: runtime.token });
+  const outcome = JSON.parse(result.stdout.slice(0, result.stdout.lastIndexOf('}') + 1));
+  const shown = `${JSON.stringify(outcome, null, 2)}\n${result.stderr}`;
+  assert.equal(outcome.exit_code, 5, shown);
+  assert.equal(result.code, 5, shown);
+  assert.equal(outcome.verdict, 'error', shown);
+  assert.deepEqual(outcome.turns, [], shown);
+  assert.match(outcome.error, /^the read-only Agents of this run \(planner, worker, integrator\) run as the helper user 1001:1001, which cannot enter or list the repository /, shown);
+  assert.ok(outcome.error.includes(`${repo} (mode 0700`), shown);
+  assert.ok(outcome.error.includes(`chmod -R o+rX ${repo}`), shown);
+  assert.equal(chats.length, asked, 'no model was asked');
 });
