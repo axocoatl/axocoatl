@@ -1,0 +1,68 @@
+<FINDINGS>
+[
+  {
+    "id": "auth-F1",
+    "title": "Potential Timing Attack Vulnerability",
+    "detail": "The `is_valid` function performs a direct string comparison between the provided signature and the expected signature using '!=' operator. This comparison is not constant-time, which could allow timing attacks to potentially extract the expected signature. The function should use a constant-time comparison function like `hmac.compare_digest()` to prevent timing side-channel attacks.",
+    "severity": "high",
+    "location": "auth/tokens.py:15",
+    "area": "auth"
+  },
+  {
+    "id": "billing-F1",
+    "title": "Integer Overflow in invoice_total function",
+    "detail": "The invoice_total function performs multiplication of line items without overflow checking. If quantity and unit_cents are large integers, their product could exceed the maximum value for an int, causing integer overflow. The function doesn't validate that the multiplication result fits within the integer range.",
+    "severity": "high",
+    "location": "billing/pagination.py:20",
+    "area": "billing"
+  },
+  {
+    "id": "billing-F2",
+    "title": "Potential Integer Overflow in page_count function",
+    "detail": "The page_count function uses integer arithmetic that could overflow if total_items and page_size are very large. While the calculation (total_items + page_size - 1) // page_size is mathematically correct for positive integers, Python's int type can overflow in some contexts, and the function doesn't validate input ranges.",
+    "severity": "medium",
+    "location": "billing/pagination.py:4",
+    "area": "billing"
+  },
+  {
+    "id": "billing-F3",
+    "title": "Missing Input Validation in get_page function",
+    "detail": "The get_page function doesn't validate that the page parameter is within reasonable bounds. It could potentially cause issues if page is extremely large, leading to very large start indices that might cause memory issues or unexpected behavior.",
+    "severity": "medium",
+    "location": "billing/pagination.py:11",
+    "area": "billing"
+  },
+  {
+    "id": "ingest-F1",
+    "title": "Missing Error Check for JSON Unmarshal",
+    "detail": "In ingest/feed.go, line 29, json.Unmarshal is called without checking its error return value. This can lead to silent failures where malformed JSON is parsed into a zero-value struct instead of properly failing. The function should check the error from json.Unmarshal and return it to the caller.",
+    "severity": "medium",
+    "location": "ingest/feed.go:29",
+    "area": "ingest"
+  },
+  {
+    "id": "ingest-F2",
+    "title": "Potential Denial-of-Service via Large Files",
+    "detail": "In ingest/feed.go, line 24, os.ReadFile is used to read the entire file into memory without any size limits. This creates a potential denial-of-service vulnerability where a maliciously large feed file could cause memory exhaustion. The function should implement size limits on input files.",
+    "severity": "high",
+    "location": "ingest/feed.go:24",
+    "area": "ingest"
+  },
+  {
+    "id": "notify-F1",
+    "title": "Hardcoded API Token",
+    "detail": "The webhook module contains a hardcoded API token (WEBHOOK_TOKEN = \"sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef\") which appears to be a fake Stripe token. This is a security vulnerability as it could be used to authenticate webhook requests if discovered by an attacker.",
+    "severity": "high",
+    "location": "notify/webhook.py:7",
+    "area": "notify"
+  },
+  {
+    "id": "notify-F2",
+    "title": "Hardcoded Webhook URL",
+    "detail": "The webhook module contains a hardcoded webhook URL (WEBHOOK_URL = \"https://hooks.example.invalid/orders\") that uses an invalid domain. This is a configuration issue that would prevent actual webhook delivery in production.",
+    "severity": "medium",
+    "location": "notify/webhook.py:5",
+    "area": "notify"
+  }
+]
+</FINDINGS>

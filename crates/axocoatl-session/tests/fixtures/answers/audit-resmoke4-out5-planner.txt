@@ -1,0 +1,34 @@
+```json
+{
+  "areas": [
+    {
+      "name": "auth",
+      "scope": "Authentication module that validates session tokens using HMAC signatures and time-based expiration. Look for issues in token validation logic, time handling, and session expiration checks.",
+      "paths": [
+        "auth/**/*"
+      ]
+    },
+    {
+      "name": "billing",
+      "scope": "Billing module that handles invoice pagination and totals calculation. Look for issues in pagination logic, integer overflow, and calculation correctness.",
+      "paths": [
+        "billing/**/*"
+      ]
+    },
+    {
+      "name": "ingest",
+      "scope": "Ingest module that loads and processes order feed data from disk. Look for issues in JSON parsing, error handling, and data validation.",
+      "paths": [
+        "ingest/**/*"
+      ]
+    },
+    {
+      "name": "notify",
+      "scope": "Notification module that sends webhook events. Look for issues in credential handling, hardcoded secrets, and network request security.",
+      "paths": [
+        "notify/**/*"
+      ]
+    }
+  ]
+}
+```

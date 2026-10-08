@@ -128,6 +128,9 @@ pub struct KindReport {
     pub accounted: Vec<(String, String)>,
     pub fail_on_findings: bool,
     pub budget_exhausted: bool,
+    /// A person stopped the run; the report holds what the driver observed
+    /// until then, and the Outcome is `interrupted`.
+    pub stopped: bool,
 }
 
 /// One kind of loadout run.

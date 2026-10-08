@@ -58,9 +58,9 @@ impl CheckLabel {
 }
 
 /// One tool call of a turn as the Session recorded it: which node and
-/// generation made it, the tool, its arguments as the Agent gave them, and
-/// whether it succeeded (the audit judges from these whether an area worker
-/// examined its area).
+/// generation made it, the tool, its arguments as the Agent gave them,
+/// whether it succeeded and what it returned (the audit judges from these
+/// whether an area worker examined its area).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCallRecord {
     pub node_id: String,
@@ -70,6 +70,11 @@ pub struct ToolCallRecord {
     pub arguments: serde_json::Value,
     /// The call has an outcome and it succeeded.
     pub succeeded: bool,
+    /// The value the tool returned, when the call succeeded and the Session
+    /// kept its whole result; `null` otherwise (a result cut to its
+    /// reserved bytes is never read as a whole one).
+    #[serde(default)]
+    pub result: serde_json::Value,
 }
 
 #[async_trait]
@@ -125,7 +130,7 @@ pub trait RunHost: Send + Sync {
     }
 
     /// Every tool call the Session recorded for `turn_id`, from its
-    /// invocation audit, with the arguments; `None` when this host keeps no
+    /// invocation audit, with the arguments and results; `None` when this host keeps no
     /// such record. Daemon: `loadout_turn_tool_calls` (audit).
     async fn tool_calls(
         &self,

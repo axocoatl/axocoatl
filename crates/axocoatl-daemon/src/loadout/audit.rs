@@ -14,8 +14,10 @@
 //!    dependencies, required, no checks and no review, so the controller
 //!    starts every one at once. A worker without a result, an unreadable
 //!    report, a worker that examined nothing of its area ([`examined`],
-//!    judged from the Session's recorded tool calls) and every
-//!    `NOT_REACHED` entry of its own area are listed as not covered. An
+//!    judged from the Session's recorded tool calls: it examined its area
+//!    only when a `read_file` of a file inside it succeeded or a `grep`
+//!    matched a file inside it; `list_dir` and `glob` only find files) and
+//!    every `NOT_REACHED` entry of its own area are listed as not covered. An
 //!    entry that names another planned area is dropped (that area's own
 //!    worker audits it), and one that names a repository path that does
 //!    not exist is a note, not a gap, when the worker examined its area
@@ -23,13 +25,17 @@
 //! 3. **Integrate**: the `integrator` slot alone receives every worker's
 //!    report (each bounded to 24 KiB, truncation noted) and the not-covered
 //!    list, and answers with the merged `FINDINGS`. When integration has no
-//!    result, the workers' findings are reported unmerged and integration is
-//!    listed as not covered.
+//!    readable result, the workers' findings are reported unmerged and
+//!    [`INTEGRATION`] is listed as not covered, which the attention line
+//!    names apart from the areas.
 //!
 //! The run's wall clock bounds all three turns: at the deadline the turn is
 //! stopped, what did not finish is not covered (budget), and no further turn
-//! starts. Findings change the exit code only with `fail_on_findings`
-//! (default false); anything not covered always needs attention.
+//! starts. A person's stop starts no further turn either: areas planned but
+//! not started, and an integration not run, are not covered (`stopped`),
+//! and the report keeps everything observed until the stop. Findings change
+//! the exit code only with `fail_on_findings` (default false); anything not
+//! covered always needs attention.
 //!
 //! Owner: audit.
 
@@ -65,11 +71,13 @@ pub const WORKER_SLOT_PREFIX: &str = "worker-";
 pub const MAX_REPORT_BYTES: usize = 24 * 1024;
 /// The not-covered entry of a run whose plan never became usable.
 pub const WHOLE_SCOPE: &str = axocoatl_session::run_outcome::WHOLE_SCOPE;
-/// Tools whose calls inside an area's paths show its worker examined it.
-pub const EXAMINING_TOOLS: [&str; 4] = ["read_file", "grep", "glob", "list_dir"];
-/// Tools that read what files hold: a worker with neither examines nothing,
-/// whatever it lists.
-pub const READING_TOOLS: [&str; 2] = ["read_file", "grep"];
+/// The not-covered entry of an integration without a readable result.
+pub const INTEGRATION: &str = axocoatl_session::run_outcome::INTEGRATION;
+/// Tools whose calls can show a worker examined its area: a `read_file`
+/// that read a file inside it, or a `grep` that matched a file inside it.
+/// `list_dir` and `glob` only find files, so a worker with neither of these
+/// examines nothing, whatever it lists.
+pub const EXAMINING_TOOLS: [&str; 2] = ["read_file", "grep"];
 /// `RunTurnRef::purpose` of each turn.
 pub const PLAN_PURPOSE: &str = "audit_plan";
 pub const AREAS_PURPOSE: &str = "audit_areas";
@@ -116,9 +124,12 @@ pub async fn drive_audit(
             ..KindReport::default()
         },
     };
-    if let Some(plan) = audit.plan(&settings).await? {
-        let results = audit.areas(&plan).await?;
-        audit.integrate(&plan, &results).await?;
+    // A person's stop ends the drive, but what it observed until then (its
+    // turns, not-covered entries, findings and notes) stays in the report.
+    match audit.run(&settings).await {
+        Ok(()) => {}
+        Err(RunError::Stopped) => audit.report.stopped = true,
+        Err(error) => return Err(error),
     }
     Ok(audit.report)
 }
@@ -295,8 +306,10 @@ pub fn worker_instructions(base: Option<&str>, area: &AuditArea, plan: &AuditPla
     );
     text.push_str(
         "Read your area's files with read_file and grep (glob and list_dir find them). The host \
-         checks your tool calls: when none of your read_file, grep, glob or list_dir calls \
-         succeeds inside your area's paths, your area is not covered, whatever you answer.\n",
+         checks your tool calls: your area counts as examined only when you read at least one \
+         file inside your area's paths with read_file, or ran a grep that matched at least one \
+         file inside them. list_dir and glob only find files, and a grep that matches nothing \
+         reads nothing. Otherwise your area is not covered, whatever you answer.\n",
     );
     text.push_str(
         "\nEnd your answer with two blocks:\nFINDINGS\n```json\n[{\"id\": \"F1\", \"title\": \
@@ -518,8 +531,8 @@ fn path_exists(repo: &Path, path: &str) -> Option<bool> {
 /// Session recorded for the generation that answered ([`examined`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Examined {
-    /// A succeeded `read_file`, `grep`, `glob` or `list_dir` call reached
-    /// inside the area's paths.
+    /// A `read_file` of a file inside the area's paths succeeded, or a
+    /// `grep` matched a file inside them.
     Yes,
     /// It read nothing of its area; why, in words.
     Nothing(String),
@@ -529,14 +542,14 @@ pub enum Examined {
 
 /// Judge whether a worker with `tools` examined `area`, from `calls` (its
 /// own recorded calls; `Err` when they could not be read). It examined its
-/// area when it has a tool that reads files (`read_file` or `grep`) and at
-/// least one `read_file`, `grep`, `glob` or `list_dir` call of it succeeded
-/// with a target inside the area's paths: a file or directory under them,
-/// or the directory a wildcard path starts from (`billing` for
-/// `billing/*.py`). A call's target is its `path` (`.` when `list_dir` or
-/// `grep` has none) or the `glob` pattern, relative to `repo`, the run's
-/// repository, which the Session container mounts at the same path. An
-/// area without paths is examined by any such call.
+/// area only when a `read_file` call of it succeeded on a file inside the
+/// area's paths, or a `grep` call of it succeeded and matched at least one
+/// file inside them (read from the matches it returned). `list_dir` and
+/// `glob` only find files, and a `grep` that matched nothing read nothing,
+/// so neither counts; nor does a worker with neither `read_file` nor
+/// `grep`. Paths are relative to `repo`, the run's repository, which the
+/// Session container mounts at the same path. An area without paths is
+/// examined by such a read or match of any file.
 pub fn examined(
     area: &AuditArea,
     tools: &[String],
@@ -545,7 +558,7 @@ pub fn examined(
 ) -> Examined {
     if !tools
         .iter()
-        .any(|tool| READING_TOOLS.contains(&tool.as_str()))
+        .any(|tool| EXAMINING_TOOLS.contains(&tool.as_str()))
     {
         return Examined::Nothing(format!(
             "it has neither read_file nor grep, the tools whose reads the host checks (its \
@@ -566,10 +579,13 @@ pub fn examined(
         .copied()
         .filter(|call| EXAMINING_TOOLS.contains(&call.tool.as_str()))
         .collect();
-    if examining.iter().any(|call| {
-        call.succeeded
-            && call_target(call, repo).is_some_and(|target| target_in_area(call, &target, area))
-    }) {
+    let inside = |file: &String| {
+        area.paths.is_empty() || area.paths.iter().any(|pattern| area_holds(pattern, file))
+    };
+    if examining
+        .iter()
+        .any(|call| call.succeeded && files_examined(call, repo).iter().any(inside))
+    {
         return Examined::Yes;
     }
     let paths = if area.paths.is_empty() {
@@ -580,20 +596,81 @@ pub fn examined(
     Examined::Nothing(match (calls.len(), examining.len()) {
         (0, _) => "it made no tool call".to_owned(),
         (_, 0) => format!(
-            "it made {} tool call{} and none was read_file, grep, glob or list_dir",
+            "it made {} tool call{} and none was read_file or grep (list_dir and glob only find \
+             files)",
             calls.len(),
             if calls.len() == 1 { "" } else { "s" }
         ),
         (_, examining) => format!(
-            "none of its {examining} read_file, grep, glob or list_dir call{} succeeded inside \
+            "none of its {examining} read_file or grep call{} read or matched a file inside \
              {paths}",
             if examining == 1 { "" } else { "s" }
         ),
     })
 }
 
+/// The repository-relative files a succeeded examining call read: the file
+/// a `read_file` read, or every file a `grep` matched, from the `matches`
+/// it returned (`path:line:text`, or `line:text` when it searched one
+/// file). Empty for any other call, or when the result was not kept.
+fn files_examined(call: &ToolCallRecord, repo: &Path) -> Vec<String> {
+    let Some(target) = call_target(call, repo) else {
+        return Vec::new();
+    };
+    match call.tool.as_str() {
+        "read_file" if !target.is_empty() => vec![target],
+        "grep" => {
+            let Some(matches) = call.result.get("matches").and_then(|value| value.as_str()) else {
+                return Vec::new();
+            };
+            let mut files: Vec<String> = Vec::new();
+            for line in matches.lines() {
+                let file = match matched_file(line) {
+                    Some(MatchedFile::Searched) if !target.is_empty() => Some(target.clone()),
+                    Some(MatchedFile::Path(path)) => repo_relative(path, repo),
+                    _ => None,
+                };
+                if let Some(file) = file.filter(|file| !file.is_empty()) {
+                    if !files.contains(&file) {
+                        files.push(file);
+                    }
+                }
+            }
+            files
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Which file one line of `grep -n` output names.
+enum MatchedFile<'a> {
+    /// `line:text`: the one file the call searched.
+    Searched,
+    /// `path:line:text`.
+    Path(&'a str),
+}
+
+fn matched_file(line: &str) -> Option<MatchedFile<'_>> {
+    let digits = |text: &str| text.bytes().take_while(u8::is_ascii_digit).count();
+    let lead = digits(line);
+    if lead > 0 && line[lead..].starts_with(':') {
+        return Some(MatchedFile::Searched);
+    }
+    let mut from = 0;
+    while let Some(colon) = line[from..].find(':').map(|at| from + at) {
+        let rest = &line[colon + 1..];
+        let count = digits(rest);
+        if colon > 0 && count > 0 && rest[count..].starts_with(':') {
+            return Some(MatchedFile::Path(&line[..colon]));
+        }
+        from = colon + 1;
+    }
+    None
+}
+
 /// The repository-relative target of an examining call, `""` for the
-/// repository's root; `None` when it has none or it leaves the repository.
+/// repository's root: the `path` of `read_file`, or of `grep` (`.` when it
+/// has none). `None` when it has none or it leaves the repository.
 fn call_target(call: &ToolCallRecord, repo: &Path) -> Option<String> {
     let argument = |key: &str| {
         call.arguments
@@ -603,14 +680,20 @@ fn call_target(call: &ToolCallRecord, repo: &Path) -> Option<String> {
     };
     let raw = match call.tool.as_str() {
         "read_file" => argument("path")?,
-        "glob" => argument("pattern")?,
-        "list_dir" | "grep" => match argument("path") {
+        "grep" => match argument("path") {
             Some(path) if !path.is_empty() => path,
             _ if call.arguments.is_object() => ".",
             _ => return None,
         },
         _ => return None,
     };
+    repo_relative(raw, repo)
+}
+
+/// `raw`, a path relative to the repository or absolute inside it, as a
+/// normalized repository-relative path (`""` for its root); `None` when it
+/// is empty or leaves the repository.
+fn repo_relative(raw: &str, repo: &Path) -> Option<String> {
     if raw.is_empty() {
         return None;
     }
@@ -648,48 +731,6 @@ fn area_holds(pattern: &str, path: &str) -> bool {
             || path
                 .strip_prefix(literal)
                 .is_some_and(|rest| rest.starts_with('/')))
-}
-
-/// The literal directory a wildcard pattern starts from: `billing` for
-/// `billing/*.py` and `billing/**`, the root (`""`) for `*.py`. `None` for
-/// a pattern without wildcards.
-fn wildcard_base(pattern: &str) -> Option<String> {
-    let pattern = pattern.trim_start_matches("./");
-    if !pattern.contains(['*', '?']) {
-        return None;
-    }
-    Some(
-        pattern
-            .split('/')
-            .take_while(|segment| !segment.contains(['*', '?']))
-            .collect::<Vec<_>>()
-            .join("/"),
-    )
-}
-
-/// Whether an examining call's `target` reaches inside `area`.
-fn target_in_area(call: &ToolCallRecord, target: &str, area: &AuditArea) -> bool {
-    if area.paths.is_empty() {
-        return true;
-    }
-    let directory = |directory: &str| {
-        area.paths.iter().any(|pattern| {
-            area_holds(pattern, directory)
-                || wildcard_base(pattern).is_some_and(|base| base == directory)
-        })
-    };
-    match call.tool.as_str() {
-        "read_file" => area.paths.iter().any(|pattern| area_holds(pattern, target)),
-        // A directory searched or listed, or a file.
-        "list_dir" | "grep" => directory(target),
-        // A pattern: inside the area as written, or listing from a
-        // directory of it.
-        "glob" => {
-            area.paths.iter().any(|pattern| area_holds(pattern, target))
-                || wildcard_base(target).is_some_and(|base| directory(&base))
-        }
-        _ => false,
-    }
 }
 
 /// The areas turn's request (each worker's own instructions name its area).
@@ -979,6 +1020,15 @@ struct Audit<'a> {
 }
 
 impl Audit<'_> {
+    /// The three turns, in order.
+    async fn run(&mut self, settings: &AuditSettings) -> Result<(), RunError> {
+        if let Some(plan) = self.plan(settings).await? {
+            let results = self.areas(&plan).await?;
+            self.integrate(&plan, &results).await?;
+        }
+        Ok(())
+    }
+
     fn observation(&self, observed: &Observed) -> &TurnObservation {
         &self.report.turns[observed.index]
     }
@@ -1064,6 +1114,10 @@ impl Audit<'_> {
 
     async fn apply(&mut self, what: &str, slots: Vec<SlotPlan>) -> Result<(), RunError> {
         self.close_open_turn().await?;
+        // A person who stopped the run gets no further Apply.
+        if self.host.stop_requested(&self.run.run_id).await {
+            return Err(RunError::Stopped);
+        }
         self.phase("applying_team", what.into()).await?;
         let edit = (self.build)(&self.run.resolved, &slots, false, self.applies)?;
         self.host
@@ -1071,6 +1125,18 @@ impl Audit<'_> {
             .await?;
         self.applies += 1;
         Ok(())
+    }
+
+    /// Apply `slots`, then send `request` as one turn ([`Self::turn`]).
+    async fn apply_and_turn(
+        &mut self,
+        what: &str,
+        slots: Vec<SlotPlan>,
+        request: &str,
+        purpose: &str,
+    ) -> Result<Option<Observed>, RunError> {
+        self.apply(what, slots).await?;
+        self.turn(request, purpose).await
     }
 
     /// Send one turn and wait for it within the run's wall clock. `None`
@@ -1289,17 +1355,33 @@ impl Audit<'_> {
     /// Turn 2: every area at once.
     async fn areas(&mut self, plan: &AuditPlan) -> Result<Vec<AreaResult>, RunError> {
         let names: Vec<&str> = plan.areas.iter().map(|area| area.name.as_str()).collect();
-        self.apply(
-            &format!(
-                "audit areas: {} read-only workers ({})",
-                names.len(),
-                names.join(", ")
-            ),
-            area_slots(&self.run.resolved, plan)?,
-        )
-        .await?;
+        let what = format!(
+            "audit areas: {} read-only workers ({})",
+            names.len(),
+            names.join(", ")
+        );
+        let slots = area_slots(&self.run.resolved, plan)?;
         let request = areas_request(&self.run.resolved.prompt, plan);
-        let Some(observed) = self.turn(&request, AREAS_PURPOSE).await? else {
+        let started = match self
+            .apply_and_turn(&what, slots, &request, AREAS_PURPOSE)
+            .await
+        {
+            Err(RunError::Stopped) => {
+                for area in &plan.areas {
+                    self.not_covered(NotCovered {
+                        area: area.name.clone(),
+                        class: FailureClass::Stopped,
+                        detail: "the run was stopped before the areas started".into(),
+                        node_id: None,
+                        turn_id: None,
+                    })
+                    .await?;
+                }
+                return Err(RunError::Stopped);
+            }
+            started => started?,
+        };
+        let Some(observed) = started else {
             for area in &plan.areas {
                 self.not_covered(NotCovered {
                     area: area.name.clone(),
@@ -1543,7 +1625,7 @@ impl Audit<'_> {
             None => (None, None),
         };
         self.not_covered(NotCovered {
-            area: INTEGRATOR_SLOT.into(),
+            area: INTEGRATION.into(),
             class,
             detail: format!("{detail}; the area workers' findings are reported unmerged"),
             node_id,
@@ -1582,18 +1664,34 @@ impl Audit<'_> {
             format!("one integrator merges {} area reports", results.len()),
         )
         .await?;
-        self.apply(
-            "audit integration: the integrator",
-            integrate_slots(&self.run.resolved)?,
-        )
-        .await?;
         let request = integrate_request(
             &self.run.resolved.prompt,
             plan,
             results,
             &self.report.not_covered,
         );
-        let Some(observed) = self.turn(&request, INTEGRATE_PURPOSE).await? else {
+        let started = match self
+            .apply_and_turn(
+                "audit integration: the integrator",
+                integrate_slots(&self.run.resolved)?,
+                &request,
+                INTEGRATE_PURPOSE,
+            )
+            .await
+        {
+            Err(RunError::Stopped) => {
+                self.integration_missing(
+                    results,
+                    FailureClass::Stopped,
+                    "the run was stopped before integration".into(),
+                    None,
+                )
+                .await?;
+                return Err(RunError::Stopped);
+            }
+            started => started?,
+        };
+        let Some(observed) = started else {
             return self
                 .integration_missing(
                     results,

@@ -447,6 +447,21 @@ mod tests {
         assert_eq!(report.coverage[4].area, "Account page");
     }
 
+    /// The explorer's blocks are read between XML-style tags too.
+    #[test]
+    fn blocks_between_tags_are_read() {
+        let report = parse_explorer_report(
+            "Explored.\n<FINDINGS>\n[{\"id\": \"B1\", \"title\": \"t\", \"expected\": \"e\", \
+             \"actual\": \"a\", \"repro\": \"axocoatl-qa/b1.spec.ts\"}]\n</FINDINGS>\n\
+             <coverage>[{\"area\": \"cart\", \"status\": \"covered\"}]</coverage>",
+        )
+        .unwrap();
+        assert!(report.findings_block && report.coverage_block);
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(report.findings[0].id, "B1");
+        assert_eq!(report.coverage[0].area, "cart");
+    }
+
     #[test]
     fn inline_blocks_and_a_whole_json_answer_are_read() {
         let report = parse_explorer_report(

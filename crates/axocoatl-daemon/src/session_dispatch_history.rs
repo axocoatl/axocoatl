@@ -122,12 +122,13 @@ impl SessionDispatchController {
 impl SessionDispatchController {
     /// Every tool call an Agent of `turn_id` made, from the invocation
     /// audit, with the arguments it gave (from the protected content store;
-    /// `null` when they cannot be read) and whether it succeeded, for a
+    /// `null` when they cannot be read), whether it succeeded and what it
+    /// returned (when the store kept the whole result), for a
     /// loadout run's driver. The host's own repository captures around each
     /// activation are not the Agent's calls and are left out. `None` when
     /// the turn is not one of this Session's canonical turns. It changes
-    /// nothing and conveys no authority; the arguments go to the run driver
-    /// only, never to a projection.
+    /// nothing and conveys no authority; the arguments and results go to the
+    /// run driver only, never to a projection.
     pub(crate) fn turn_tool_calls(
         &self,
         turn_id: &str,
@@ -161,26 +162,41 @@ impl SessionDispatchController {
             if captures[&activation].contains(&intent.invocation_id) {
                 continue;
             }
-            let arguments = state
+            let receipt = state
                 .content
                 .tool_arguments(&snapshot, &intent.activation, &intent.invocation_id)
                 .ok()
-                .flatten()
-                .and_then(|receipt| state.content.read_tool_arguments(&receipt).ok())
+                .flatten();
+            let arguments = receipt
+                .as_ref()
+                .and_then(|receipt| state.content.read_tool_arguments(receipt).ok())
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or(serde_json::Value::Null);
+            let succeeded = matches!(
+                &audited.final_evidence,
+                Some(InvocationFinalEvidence::Outcome {
+                    outcome: InvocationOutcome::Succeeded,
+                    ..
+                })
+            );
+            // The returned value of a succeeded call, read only when the
+            // store kept the whole result: a prefix is never parsed.
+            let result = receipt
+                .as_ref()
+                .filter(|_| succeeded)
+                .and_then(|receipt| state.content.tool_result(receipt).ok().flatten())
+                .filter(|result| result.original_byte_len() == result.protected_result().byte_len)
+                .and_then(|result| state.content.read_tool_result(&result).ok())
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .and_then(|mut returned| returned.get_mut("Ok").map(serde_json::Value::take))
                 .unwrap_or(serde_json::Value::Null);
             calls.push(crate::loadout::ToolCallRecord {
                 node_id: intent.activation.node_id.as_str().to_owned(),
                 generation: intent.activation.generation,
                 tool: intent.tool_name.clone(),
                 arguments,
-                succeeded: matches!(
-                    &audited.final_evidence,
-                    Some(InvocationFinalEvidence::Outcome {
-                        outcome: InvocationOutcome::Succeeded,
-                        ..
-                    })
-                ),
+                succeeded,
+                result,
             });
         }
         Ok(Some(calls))

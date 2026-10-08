@@ -87,7 +87,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reviewer runs the writer's model, Axocoatl warns (`same_model_reviewer`) in loadout
   validation, the API, Settings, Team and budget, the run output and the record. Like
   the qa and audit blocks, `ADJUDICATIONS` is read after a heading in any case and with
-  or without Markdown marks, fenced or not, or as an answer that is only the JSON; a
+  or without Markdown marks, fenced or not, between XML-style tags
+  (`<ADJUDICATIONS>` … `</ADJUDICATIONS>`), or as an answer that is only the JSON; a
   block that is not valid JSON is reported, never guessed at.
 - **Built-in `qa` loadout.** One browser explorer with `browser` and `browser_check`,
   writing only under `axocoatl-qa/`, which the run creates before the explorer's turn
@@ -104,14 +105,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scope into 2 to 8 areas in a structured block, one read-only worker per area runs in
   parallel with a fresh context, and an integrator merges their findings; a failed area
   is not covered. So is the area of a worker that examined nothing of it, judged from
-  the tool calls its Session recorded: none of its `read_file`, `grep`, `glob` or
-  `list_dir` calls succeeded inside the area's paths, or it has neither `read_file` nor
-  `grep`. An invalid plan, or a planner without an answer (a provider failure, say),
+  the tool calls its Session recorded: a worker examined its area only if it
+  successfully read at least one file inside the area's paths with `read_file`, or ran
+  a `grep` that matched at least one file inside them; `list_dir` and `glob` only find
+  files, and a `grep` that matches nothing does not count, nor does a worker with
+  neither `read_file` nor `grep`. An invalid plan, or a planner without an answer (a provider failure, say),
   gets one retry, which quotes the error after an invalid plan; a second attempt without
   a plan leaves the whole scope not covered, and the attention line says "The whole
-  scope was not covered". When integration has no result, the
-  workers' findings are reported unmerged and integration is listed as not covered. A
-  worker's `FINDINGS` and `NOT_REACHED` keys are read in any case. A not-reached entry
+  scope was not covered". When integration has no readable result, the
+  workers' findings are reported unmerged and `audit integration` is listed as not
+  covered; the attention line counts only areas and says "The integration was not
+  read; the area findings are reported unmerged". A stopped audit starts no further
+  turn, lists the planned areas not started and the integration not run as not covered
+  (`stopped`), reports the workers' findings unmerged, and keeps in its Outcome the
+  turns, not-covered entries, findings and usage observed until the stop, with usage
+  marked incomplete when it is. A worker's `FINDINGS` and `NOT_REACHED` keys are read
+  in any case, and every block (`AREAS`, `FINDINGS`, `NOT_REACHED`, `ADJUDICATIONS`,
+  `COVERAGE`) is also read between XML-style tags, such as `<FINDINGS>` … `</FINDINGS>`. A not-reached entry
   that names another planned area is left to that area's worker, and, from a worker
   that examined its area, one that names a repository path that does not exist is a
   note; neither is a gap. Notes are in the run's progress, the record, the Outcome's

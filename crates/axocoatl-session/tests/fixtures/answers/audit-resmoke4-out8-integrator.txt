@@ -1,0 +1,68 @@
+<FINDINGS>
+[
+  {
+    "id": "auth-F1",
+    "title": "Timing Attack Vulnerability in Token Validation",
+    "detail": "The is_valid function performs a direct string comparison between the provided signature and the expected signature using 'signature != expected'. This constant-time comparison is vulnerable to timing attacks where an attacker could potentially determine the correct signature by measuring response times. The function should use hmac.compare_digest() for constant-time comparison to prevent this vulnerability.",
+    "severity": "high",
+    "location": "auth/tokens.py:16",
+    "area": "auth"
+  },
+  {
+    "id": "billing-F1",
+    "title": "Incorrect slice indexing in get_page function",
+    "detail": "In the get_page function, the end index calculation is incorrect. It uses 'start + page_size - 1' which would include one extra element. The correct slicing should be 'start + page_size'. This could cause incorrect page content or potentially include elements from the next page.",
+    "severity": "high",
+    "location": "billing/pagination.py:14",
+    "area": "billing"
+  },
+  {
+    "id": "ingest-F1",
+    "title": "Missing error handling for json.Unmarshal",
+    "detail": "In the LoadFeed function in ingest/feed.go, line 29, json.Unmarshal is called without checking its error return value. While os.ReadFile error is properly handled, the json.Unmarshal error is ignored, which could lead to silent data corruption or unexpected behavior if the JSON is malformed.",
+    "severity": "high",
+    "location": "ingest/feed.go:29",
+    "area": "ingest"
+  },
+  {
+    "id": "notify-F1",
+    "title": "Hardcoded webhook URL",
+    "detail": "The WEBHOOK_URL is hardcoded to 'https://hooks.example.invalid/orders' which is a fake URL for testing purposes. This will not work in production and could cause failures when deployed.",
+    "severity": "high",
+    "location": "notify/webhook.py:6",
+    "area": "notify"
+  },
+  {
+    "id": "notify-F2",
+    "title": "Hardcoded API token",
+    "detail": "The WEBHOOK_TOKEN is hardcoded with a fake token 'sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef'. While this is a fake token, the presence of hardcoded credentials in source code is a security risk and violates security best practices.",
+    "severity": "high",
+    "location": "notify/webhook.py:8",
+    "area": "notify"
+  },
+  {
+    "id": "notify-F3",
+    "title": "No error handling for webhook sending",
+    "detail": "The send function does not handle potential exceptions from urllib.request.urlopen. If the webhook endpoint is unreachable or returns an error, the function will raise an exception instead of handling it gracefully.",
+    "severity": "medium",
+    "location": "notify/webhook.py:18",
+    "area": "notify"
+  },
+  {
+    "id": "notify-F4",
+    "title": "No input validation for event data",
+    "detail": "The build_request and send functions accept arbitrary event dictionaries without any validation. This could lead to injection attacks or malformed data being sent to the webhook endpoint.",
+    "severity": "medium",
+    "location": "notify/webhook.py:10",
+    "area": "notify"
+  },
+  {
+    "id": "tests-F1",
+    "title": "Incomplete Test Coverage",
+    "detail": "The billing module tests only cover basic functionality but lack comprehensive test cases. The test_page_count method only tests two scenarios (10 items with 5 per page = 2 pages, 11 items with 5 per page = 3 pages) but doesn't test edge cases like zero items, items that divide evenly, or negative numbers. The test_total method only tests one invoice item but doesn't test empty invoices, multiple items, or invalid data.",
+    "severity": "medium",
+    "location": "tests/test_billing.py:8",
+    "area": "tests"
+  }
+]
+</FINDDINGS>

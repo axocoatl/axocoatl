@@ -1,0 +1,60 @@
+<FINDINGS>
+[
+  {
+    "id": "auth-F1",
+    "title": "Potential timing attack vulnerability in token validation",
+    "detail": "The token validation function performs a direct string comparison between the provided signature and the expected signature using 'signature != expected'. This constant-time comparison is not implemented, which could allow timing attacks to potentially extract the expected signature. The code should use hmac.compare_digest() for constant-time comparison.",
+    "severity": "medium",
+    "location": "auth/tokens.py:19",
+    "area": "auth"
+  },
+  {
+    "id": "billing-F1",
+    "title": "Incorrect pagination end index calculation",
+    "detail": "In get_page function, the end index is calculated as start + page_size - 1, which is incorrect. It should be start + page_size. This causes the last item on each page to be excluded when page_size is exactly the number of items on that page. For example, with items [1,2,3,4,5,6,7,8,9,10], page_size=5, page=1, start=0, end should be 5 but is calculated as 4, so items [1,2,3,4] are returned instead of [1,2,3,4,5].",
+    "severity": "high",
+    "location": "billing/pagination.py:16",
+    "area": "billing"
+  },
+  {
+    "id": "billing-F2",
+    "title": "Missing error handling for invalid invoice line items",
+    "detail": "The invoice_total function does not validate that line items have the required keys ('quantity' and 'unit_cents') before accessing them. This can lead to KeyError exceptions when processing malformed invoice data, which could crash the billing system.",
+    "severity": "medium",
+    "location": "billing/pagination.py:24",
+    "area": "billing"
+  },
+  {
+    "id": "ingest-F1",
+    "title": "Missing error handling for JSON unmarshaling",
+    "detail": "In the LoadFeed function in ingest/feed.go, json.Unmarshal is called without checking its error return value. If the JSON data is malformed or doesn't match the expected structure, the function will silently continue and return a potentially invalid Feed object. This can lead to runtime panics or incorrect processing of the feed data. The error from json.Unmarshal should be checked and returned if it occurs.",
+    "severity": "high",
+    "location": "ingest/feed.go:29",
+    "area": "ingest"
+  },
+  {
+    "id": "notify-F1",
+    "title": "Hardcoded Webhook Token",
+    "detail": "The webhook token is hardcoded in the source code as 'sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef'. This is a critical security defect as it exposes the authentication token directly in the codebase, making it vulnerable to unauthorized access if the code is leaked or accessed by unauthorized parties.",
+    "severity": "critical",
+    "location": "notify/webhook.py:7",
+    "area": "notify"
+  },
+  {
+    "id": "notify-F2",
+    "title": "Hardcoded Webhook URL",
+    "detail": "The webhook URL is hardcoded as 'https://hooks.example.invalid/orders'. While this may be a placeholder, it's still a security concern as it creates a fixed endpoint that could be misused if the code is deployed inappropriately or if the placeholder is not properly replaced in production environments.",
+    "severity": "high",
+    "location": "notify/webhook.py:5",
+    "area": "notify"
+  },
+  {
+    "id": "notify-F3",
+    "title": "Insecure Webhook URL",
+    "detail": "The webhook URL uses 'https://hooks.example.invalid/orders' which is a fake domain. This could indicate that the system is not properly configured for production use, and if this were to be deployed with a real URL, it could be a security vulnerability if not properly validated.",
+    "severity": "medium",
+    "location": "notify/webhook.py:5",
+    "area": "notify"
+  }
+]
+</FINDINGS>

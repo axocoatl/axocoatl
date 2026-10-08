@@ -10,7 +10,8 @@
 //! Models do not always fence what they are asked to fence, so a block is
 //! read (here and for the QA explorer's and the audit's blocks) as a fenced
 //! block after its heading, a JSON value under the heading without a fence,
-//! or, with no heading at all, an answer that is exactly the expected JSON.
+//! the JSON between XML-style tags (`<FINDINGS>` ... `</FINDINGS>`), or,
+//! with no heading at all, an answer that is exactly the expected JSON.
 //!
 //! Owner: workstream `review-qa`.
 
@@ -188,36 +189,100 @@ fn closes_fence(line: &str, mark: char, count: usize) -> bool {
     trimmed.len() >= count && trimmed.chars().all(|c| c == mark)
 }
 
+/// What a heading line is ([`heading_line`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Heading {
+    /// It opens the block of heading `name`; `inline` is where on the line
+    /// the block starts, when it starts on that line.
+    Open { name: String, inline: Option<usize> },
+    /// A closing tag (`</FINDINGS>`): it ends the block before it and opens
+    /// none.
+    Close,
+}
+
 /// Whether `line` is one of `headings`, and where on the line its block
 /// starts. A heading is the word (any case; `_`, `-` or a space between
 /// words) with optional Markdown heading, list or quote marks, emphasis, code
 /// marks and a colon. Text after the colon starts its block
 /// (`FINDINGS: []`); without such text the block starts on the next line.
-fn heading_line(line: &str, headings: &[&str]) -> Option<(String, Option<usize>)> {
+/// An XML-style tag of the word is a heading too: `<FINDINGS>` opens the
+/// block (text after the tag on its line starts it) and `</FINDINGS>`
+/// closes it.
+fn heading_line(line: &str, headings: &[&str]) -> Option<Heading> {
     let text = line.trim_start_matches(|c: char| {
         matches!(c, '#' | '*' | '_' | '>' | '-' | '`') || c.is_whitespace()
     });
     let lead = line.len() - text.len();
+    if text.starts_with('<') {
+        return tag_line(line, lead, headings);
+    }
     let (head, inline) = match text.find(':') {
         Some(index) => (&text[..index], Some(lead + index + 1)),
         None => (text, None),
     };
     let head =
         head.trim_end_matches(|c: char| matches!(c, '*' | '_' | '#' | '`') || c.is_whitespace());
+    let name = heading_name(head, headings)?;
+    Some(Heading::Open {
+        name,
+        inline: inline.and_then(|at| block_start(line, at)),
+    })
+}
+
+/// The heading of `headings` that `head` names, normalized.
+fn heading_name(head: &str, headings: &[&str]) -> Option<String> {
     if head.is_empty() || head.len() > 32 {
         return None;
     }
     let name = head.to_ascii_uppercase().replace([' ', '-'], "_");
-    let name = headings.iter().find(|heading| **heading == name)?;
-    let inline = inline.and_then(|at| {
-        let rest = &line[at..];
-        let start = at + rest.len()
-            - rest
-                .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '*' | '_'))
-                .len();
-        (start < line.len()).then_some(start)
-    });
-    Some(((*name).to_owned(), inline))
+    headings
+        .iter()
+        .find(|heading| **heading == name)
+        .map(|heading| (*heading).to_owned())
+}
+
+/// Where a block that starts at byte `at` of `line` begins, past spaces and
+/// emphasis; `None` when nothing follows on the line.
+fn block_start(line: &str, at: usize) -> Option<usize> {
+    let rest = &line[at..];
+    let start = at + rest.len()
+        - rest
+            .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '*' | '_'))
+            .len();
+    (start < line.len()).then_some(start)
+}
+
+/// A line whose text, from byte `lead`, is an XML-style tag of one of
+/// `headings`: `<FINDINGS>` or `</FINDINGS>`, the name as a heading's.
+fn tag_line(line: &str, lead: usize, headings: &[&str]) -> Option<Heading> {
+    let tag = &line[lead + 1..];
+    let (closing, tag) = match tag.strip_prefix('/') {
+        Some(rest) => (true, rest),
+        None => (false, tag),
+    };
+    let end = tag.find('>')?;
+    let name = heading_name(tag[..end].trim(), headings)?;
+    if closing {
+        return Some(Heading::Close);
+    }
+    let after = line.len() - (tag.len() - end - 1);
+    Some(Heading::Open {
+        name,
+        inline: block_start(line, after),
+    })
+}
+
+/// Whether `text` is one XML-style closing tag, `</NAME>`, of any name.
+fn closing_tag(text: &str) -> bool {
+    text.strip_prefix("</")
+        .and_then(|rest| rest.strip_suffix('>'))
+        .is_some_and(|name| {
+            !name.is_empty()
+                && name.len() <= 32
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ' '))
+        })
 }
 
 /// One heading line or fenced block of an answer.
@@ -233,6 +298,8 @@ enum PieceKind {
         name: String,
         after: usize,
     },
+    /// A closing tag: the block before it ends here.
+    Close,
     Fence(String),
 }
 
@@ -268,12 +335,15 @@ fn pieces(answer: &str, headings: &[&str]) -> Vec<Piece> {
                 start,
                 kind: PieceKind::Fence(body.join("\n")),
             });
-        } else if let Some((name, inline)) = heading_line(line, headings) {
+        } else if let Some(heading) = heading_line(line, headings) {
             pieces.push(Piece {
                 start,
-                kind: PieceKind::Heading {
-                    name,
-                    after: inline.map_or(next, |at| start + at),
+                kind: match heading {
+                    Heading::Open { name, inline } => PieceKind::Heading {
+                        name,
+                        after: inline.map_or(next, |at| start + at),
+                    },
+                    Heading::Close => PieceKind::Close,
                 },
             });
         }
@@ -282,9 +352,10 @@ fn pieces(answer: &str, headings: &[&str]) -> Vec<Piece> {
 }
 
 /// The JSON object or array `text` starts with, as the text it spans, when
-/// nothing but whitespace follows it on its last line (so `[1] I accept F1`
-/// is text, not the array `[1]`); later lines are ignored. `None` when `text`
-/// does not start with a valid one.
+/// nothing but whitespace, or one closing tag (`</FINDINGS>`), follows it
+/// on its last line (so `[1] I accept F1` is text, not the array `[1]`);
+/// later lines are ignored. `None` when `text` does not start with a valid
+/// one.
 fn leading_json(text: &str) -> Option<&str> {
     if !text.starts_with(['[', '{']) {
         return None;
@@ -292,8 +363,8 @@ fn leading_json(text: &str) -> Option<&str> {
     let mut values = serde_json::Deserializer::from_str(text).into_iter::<serde::de::IgnoredAny>();
     values.next()?.ok()?;
     let end = values.byte_offset();
-    let line_rest = text[end..].split('\n').next().unwrap_or_default();
-    line_rest.trim().is_empty().then(|| &text[..end])
+    let line_rest = text[end..].split('\n').next().unwrap_or_default().trim();
+    (line_rest.is_empty() || closing_tag(line_rest)).then(|| &text[..end])
 }
 
 /// The first JSON object or array ([`leading_json`]) that starts a line of
@@ -327,7 +398,7 @@ pub(crate) fn fenced_blocks(answer: &str) -> Vec<String> {
         .into_iter()
         .filter_map(|piece| match piece.kind {
             PieceKind::Fence(body) => Some(body),
-            PieceKind::Heading { .. } => None,
+            PieceKind::Heading { .. } | PieceKind::Close => None,
         })
         .collect()
 }
@@ -346,7 +417,8 @@ pub(crate) enum HeadedBlock {
 /// The block of `heading` in `answer`. `headings` are the headings the
 /// caller reads; a heading's block never reaches past the next of them.
 ///
-/// After each line that is the heading ([`heading_line`]), the block is, in
+/// After each line that is the heading ([`heading_line`], which also reads
+/// `<HEADING>` and ends the block at `</HEADING>`), the block is, in
 /// order: an unfenced JSON object or array that starts a line before the
 /// next heading or fence (on the heading's line after its colon, right below
 /// it, or after a line of text; what follows the value on later lines is
@@ -876,6 +948,33 @@ mod tests {
         let written = parse_adjudications(FIX_RUN_2_GENERATION_1).unwrap();
         assert_eq!(written.len(), 1);
         assert_eq!(written[0].id, "F1");
+    }
+
+    /// `ADJUDICATIONS` is read between XML-style tags, which end the block
+    /// before any text that follows; the tags are no heading of another
+    /// block, and a closing tag alone opens nothing.
+    #[test]
+    fn adjudications_between_tags_are_read() {
+        let entry = r#"{"id": "F1", "decision": "reject", "reason": "intended"}"#;
+        for answer in [
+            format!("Done.\n<ADJUDICATIONS>\n[{entry}]\n</ADJUDICATIONS>\nThanks."),
+            format!("<adjudications>[{entry}]</adjudications>"),
+            format!("<ADJUDICATIONS>\n```json\n[{entry}]\n```\n</ADJUDICATIONS>"),
+            format!("**<Adjudications>**\n[\n  {entry}\n]</Adjudications>"),
+        ] {
+            let written = parse_adjudications(&answer).unwrap_or_else(|e| panic!("{answer}: {e}"));
+            assert_eq!(written.len(), 1, "{answer}");
+            assert!(!written[0].accept, "{answer}");
+        }
+        assert_eq!(
+            heading_line("</ADJUDICATIONS>", &[ADJUDICATIONS_HEADING]),
+            Some(Heading::Close)
+        );
+        assert_eq!(heading_line("<OTHER>", &[ADJUDICATIONS_HEADING]), None);
+        assert!(matches!(
+            parse_adjudications("</ADJUDICATIONS>\n[]"),
+            Err(AdjudicationError::NoBlock)
+        ));
     }
 
     #[test]

@@ -18,8 +18,9 @@ const MODEL: &str = "audit-model:latest";
 ///   native Ollama provider refuses ("too many native tool calls"), as the
 ///   1.3.0 re-smoke's planner did; its next call answers a plan of two
 ///   areas, `billing` and `notify`;
-/// - the billing worker reads `billing/pagination.py` and lists `billing`,
-///   then answers with nothing not reached;
+/// - the billing worker reads `billing/pagination.py`, lists `billing`,
+///   greps it for `get_page` (one match) and for `overflow` (none), then
+///   answers with nothing not reached;
 /// - the notify worker answers at once, with no tool call, and lists a
 ///   path that does not exist as not reached, as the re-smoke's billing
 ///   worker did;
@@ -70,7 +71,11 @@ impl wiremock::Respond for ScriptedAudit {
                     {"id": "call_read", "function": {"index": 0, "name": "read_file",
                         "arguments": {"path": "billing/pagination.py"}}},
                     {"id": "call_list", "function": {"index": 1, "name": "list_dir",
-                        "arguments": {"path": "billing"}}}
+                        "arguments": {"path": "billing"}}},
+                    {"id": "call_grep", "function": {"index": 2, "name": "grep",
+                        "arguments": {"pattern": "get_page", "path": "billing"}}},
+                    {"id": "call_nomatch", "function": {"index": 3, "name": "grep",
+                        "arguments": {"pattern": "overflow", "path": "billing"}}}
                 ]}),
             );
         }
@@ -526,8 +531,9 @@ async fn an_audit_on_podman_judges_workers_by_their_recorded_tool_calls() {
         );
 
         // What the Session recorded of the workers' calls: the billing
-        // worker's read and listing with their arguments, and nothing of
-        // the host's repository captures or of the notify worker.
+        // worker's read, listing and greps with their arguments and what
+        // they returned, and nothing of the host's repository captures or
+        // of the notify worker.
         let areas_turn = &outcome.turns[2].turn_id;
         let calls = daemon
             .loadout_turn_tool_calls(&accepted.session_id, areas_turn)?
@@ -536,10 +542,20 @@ async fn an_audit_on_podman_judges_workers_by_their_recorded_tool_calls() {
             .iter()
             .map(|call| (call.tool.clone(), call.arguments.clone(), call.succeeded))
             .collect();
-        seen.sort_by(|a, b| a.0.cmp(&b.0));
+        seen.sort_by(|a, b| (&a.0, a.1.to_string()).cmp(&(&b.0, b.1.to_string())));
         assert_eq!(
             seen,
             [
+                (
+                    "grep".to_string(),
+                    serde_json::json!({"pattern": "get_page", "path": "billing"}),
+                    true
+                ),
+                (
+                    "grep".to_string(),
+                    serde_json::json!({"pattern": "overflow", "path": "billing"}),
+                    true
+                ),
                 (
                     "list_dir".to_string(),
                     serde_json::json!({"path": "billing"}),
@@ -553,10 +569,40 @@ async fn an_audit_on_podman_judges_workers_by_their_recorded_tool_calls() {
             ],
             "{calls:?}"
         );
-        assert_eq!(
-            calls[0].node_id, calls[1].node_id,
-            "both calls are the billing worker's"
+        assert!(
+            calls.iter().all(|call| call.node_id == calls[0].node_id),
+            "every call is the billing worker's"
         );
+        // Each result as the tool returned it, read from the Session's
+        // content store: the grep's matches name the file it matched.
+        let result = |tool: &str, pattern: Option<&str>| {
+            calls
+                .iter()
+                .find(|call| {
+                    call.tool == tool
+                        && pattern.is_none_or(|pattern| call.arguments["pattern"] == pattern)
+                })
+                .map(|call| call.result.clone())
+                .unwrap()
+        };
+        assert!(
+            result("read_file", None)["content"]
+                .as_str()
+                .is_some_and(|content| content.starts_with("def get_page(")),
+            "{calls:?}"
+        );
+        assert!(
+            result("list_dir", None)["listing"]
+                .as_str()
+                .is_some_and(|listing| listing.contains("pagination.py")),
+            "{calls:?}"
+        );
+        assert_eq!(
+            result("grep", Some("get_page"))["matches"],
+            "billing/pagination.py:1:def get_page(items, page, size):\n",
+            "{calls:?}"
+        );
+        assert_eq!(result("grep", Some("overflow"))["matches"], "");
 
         // Billing is covered; notify, which examined nothing, is not, and
         // the path it listed that does not exist is a gap, not a note.

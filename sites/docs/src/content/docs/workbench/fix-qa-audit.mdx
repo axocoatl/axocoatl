@@ -22,6 +22,9 @@ not always write one, so the host reads each block in any of these forms:
   space, `-` or `_`. The JSON may follow on the heading's line after a colon, on the next
   line, or after a line of text, fenced or not. When the heading appears more than once,
   the last one followed by JSON or a fenced block wins.
+- **Between XML-style tags** of the heading's name, in any case: `<FINDINGS>`, then the
+  JSON (fenced or not, on the tag's line or below it), then `</FINDINGS>`. The closing
+  tag ends the block.
 - **With no heading**, an answer that is only the JSON: the array of adjudications; for
   qa, an object with `findings` and `coverage` keys; for audit, an object `{"areas":
   [...]}` or `{"findings": [...]}` (a worker's may also hold `not_reached`), or the
@@ -210,10 +213,12 @@ three turns in one Session, each with its own Team and budget:
    so the controller starts them together. Each reports `FINDINGS` and what it did
    `NOT_REACHED`. A failed worker makes its area not covered, with its failure class.
    So does a worker that examined nothing of its area, judged from the tool calls its
-   Session recorded, not from its answer: none of its `read_file`, `grep`, `glob` or
-   `list_dir` calls succeeded inside the area's paths (or, for an area without paths,
-   anywhere), or the `worker` Agent has neither `read_file` nor `grep` (reads through
-   `bash` are not checked, so they do not count). A not-reached entry that names another
+   Session recorded, not from its answer. A worker examined its area only if it
+   successfully read at least one file inside the area's paths with `read_file`, or ran
+   a `grep` that matched at least one file inside them (for an area without paths, any
+   file). `list_dir` and `glob` only find files, and a `grep` that matches nothing reads
+   nothing, so neither counts. A `worker` Agent with neither `read_file` nor `grep`
+   examines nothing (reads through `bash` are not checked, so they do not count). A not-reached entry that names another
    planned area is left to that area's worker, and, from a worker that examined its
    area, one that names a repository path that does not exist is a note; neither makes
    the area not covered. From a worker that examined nothing, such an entry is a gap.
@@ -226,8 +231,16 @@ three turns in one Session, each with its own Team and budget:
 Audit turns have no required checks and no review. Findings do not fail the run by
 default (`fail_on_findings: false`); anything not covered does. Each worker gets the
 `worker` Agent's `budget`, or `budgets.agent` without one, and the wall clock bounds all
-three turns. When integration gives no result, the workers' findings are reported
-unmerged and integration is listed as not covered.
+three turns. When integration gives no readable result, the workers' findings are
+reported unmerged and `audit integration` is listed as not covered. The attention line
+counts only areas and names the integration apart: "The integration was not read; the
+area findings are reported unmerged".
+
+When you stop an audit, no further turn starts: areas planned but not started, and an
+integration that did not run, are not covered (`stopped`), and the workers' findings
+are reported unmerged. The Outcome keeps the turns, the not-covered entries, the
+findings and the usage observed until the stop; usage is marked incomplete
+(`usage.complete: false`) when a stopped turn's usage was not all reported.
 
 Workers start together and their model calls overlap, but they share one Session
 container and one checkout, and a local model server may answer one request at a time.

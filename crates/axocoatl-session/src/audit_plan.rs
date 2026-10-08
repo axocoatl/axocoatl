@@ -777,6 +777,95 @@ mod tests {
         assert_eq!(findings[3].severity, Some(Severity::High));
     }
 
+    /// Integrator answers of the 1.3.0 rc4 re-smoke's runs 2, 7 and 8,
+    /// exactly as recorded: the JSON array between `<FINDINGS>` and
+    /// `</FINDINGS>` tags (run 8 closes with a misspelled `</FINDDINGS>`).
+    /// All three were refused ("no FINDINGS block") and the findings were
+    /// reported unmerged.
+    const RESMOKE4_INTEGRATORS: [(&str, &str, usize); 3] = [
+        (
+            "out2",
+            include_str!("../tests/fixtures/answers/audit-resmoke4-out2-integrator.txt"),
+            8,
+        ),
+        (
+            "out7",
+            include_str!("../tests/fixtures/answers/audit-resmoke4-out7-integrator.txt"),
+            7,
+        ),
+        (
+            "out8",
+            include_str!("../tests/fixtures/answers/audit-resmoke4-out8-integrator.txt"),
+            8,
+        ),
+    ];
+
+    #[test]
+    fn the_recorded_integrations_in_findings_tags_are_read() {
+        for (run, answer, count) in RESMOKE4_INTEGRATORS {
+            assert!(answer.starts_with("<FINDINGS>\n[\n"), "{run}");
+            let findings =
+                parse_integrated(answer).unwrap_or_else(|error| panic!("{run}: {error}"));
+            assert_eq!(findings.len(), count, "{run}");
+            assert_eq!(findings[0].id, "auth-F1", "{run}");
+            assert!(findings
+                .iter()
+                .all(|f| f.source == FindingSource::Integrator));
+            assert!(findings
+                .iter()
+                .any(|f| f.location.as_deref() == Some("ingest/feed.go:29")));
+        }
+        assert!(RESMOKE4_INTEGRATORS[2]
+            .1
+            .trim_end()
+            .ends_with("</FINDDINGS>"));
+        assert_eq!(
+            parse_integrated(RESMOKE4_INTEGRATORS[1].1).unwrap()[6].severity,
+            Some(Severity::Medium)
+        );
+    }
+
+    /// Every audit block is read between XML-style tags: on their own
+    /// lines, around a fenced block, or on one line, in any case.
+    #[test]
+    fn every_audit_block_is_read_between_tags() {
+        let plan = "<AREAS>\n{\"areas\": [{\"name\": \"auth\", \"scope\": \"login\"}, {\"name\": \
+                    \"db\", \"scope\": \"queries\"}]}\n</AREAS>";
+        let names: Vec<String> = parse_plan(plan, 2, 8)
+            .unwrap()
+            .areas
+            .into_iter()
+            .map(|area| area.name)
+            .collect();
+        assert_eq!(names, ["auth", "db"]);
+        let report = "I read billing/pagination.py.\n<findings>\n```json\n[{\"id\": \"F1\", \"title\": \"off by one\", \
+                      \"severity\": \"high\", \"location\": \"billing/pagination.py:16\"}]\n```\n\
+                      </findings>\n<NOT_REACHED>[\"billing/legacy.py\"]</NOT_REACHED>";
+        let report = parse_area_report(report, "billing").unwrap();
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].id, "billing-F1");
+        assert_eq!(report.not_reached, ["billing/legacy.py"]);
+        let report = parse_area_report(
+            "<FINDINGS>[]</FINDINGS>\n<not-reached>\n[]\n</not-reached>\n",
+            "billing",
+        )
+        .unwrap();
+        assert!(report.findings.is_empty() && report.not_reached.is_empty());
+        // A tag pair with nothing between is an empty block, not a guess.
+        let error = parse_integrated("<FINDINGS>\n</FINDINGS>")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("nothing follows the FINDINGS heading"),
+            "{error}"
+        );
+        // Text that is not JSON between the tags is reported as such.
+        let error = parse_integrated("<FINDINGS>\nno defects found\n</FINDINGS>")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not valid JSON"), "{error}");
+    }
+
     /// The notify worker's answer in run 1 of the 1.3.0 re-smoke, exactly as
     /// recorded: one unfenced JSON object whose block keys are uppercase.
     /// It was refused ("no FINDINGS block") and notify was listed as not

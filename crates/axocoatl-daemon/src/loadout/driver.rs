@@ -347,6 +347,9 @@ fn warnings(run: &RunContext, report: &KindReport, turns: &[TurnObservation]) ->
     out
 }
 
+/// The usage of the observed `turns`, incomplete when one of them says so
+/// or when the record holds a turn that started and was never observed (a
+/// driver that ended, stopped or failed, without it).
 fn usage(turns: &[TurnObservation], events: &[RunEvent]) -> RunUsage {
     let mut usage = RunUsage {
         complete: true,
@@ -362,6 +365,13 @@ fn usage(turns: &[TurnObservation], events: &[RunEvent]) -> RunUsage {
         usage.complete &= turn.usage.complete;
         usage.cost_known &= turn.usage.cost_known;
         usage.retries = usage.retries.saturating_add(turn.usage.retries);
+    }
+    let unobserved = events.iter().any(|event| {
+        matches!(event, RunEvent::TurnStarted { turn_id, .. }
+            if !turns.iter().any(|turn| &turn.turn_id == turn_id))
+    });
+    if unobserved {
+        usage.complete = false;
     }
     let recorded = events
         .iter()
@@ -444,7 +454,10 @@ pub async fn run_to_outcome_with(
     let mut interrupted = host.stop_requested(&run.run_id).await;
     let mut report = KindReport::default();
     match driven {
-        Ok(driven) => report = driven,
+        Ok(driven) => {
+            interrupted |= driven.stopped;
+            report = driven;
+        }
         Err(RunError::Deadline) => report.budget_exhausted = true,
         Err(RunError::Stopped) => interrupted = true,
         Err(RunError::Usage(message)) => {
@@ -840,6 +853,46 @@ prompt: "{task}"
 
     fn later() -> Instant {
         Instant::now() + Duration::from_secs(600)
+    }
+
+    /// A kind driver stopped after it started a turn it never observed: the
+    /// Outcome is interrupted, and its usage is not presented as complete,
+    /// since that turn's usage is missing.
+    #[tokio::test]
+    async fn a_turn_started_but_never_observed_leaves_usage_incomplete() {
+        struct StartsThenStops;
+        #[async_trait]
+        impl KindDriver for StartsThenStops {
+            async fn drive(
+                &self,
+                host: &dyn RunHost,
+                run: &RunContext,
+            ) -> Result<KindReport, RunError> {
+                record(
+                    host,
+                    run,
+                    RunEvent::TurnStarted {
+                        at_ms: now_ms(),
+                        turn_id: "turn-1".into(),
+                        purpose: "run".into(),
+                    },
+                )
+                .await?;
+                Err(RunError::Stopped)
+            }
+        }
+        let run = context(&[], later());
+        let host = host(vec![observation(
+            TurnState::Stopped,
+            Vec::new(),
+            review(true, "openai/gpt-oss-120b"),
+        )]);
+        let outcome = run_to_outcome_with(&host, &run, &StartsThenStops)
+            .await
+            .unwrap();
+        assert_eq!(outcome.verdict, RunVerdict::Interrupted);
+        assert_eq!(outcome.exit_code, exit_code::INTERRUPTED);
+        assert!(!outcome.usage.complete);
     }
 
     /// A turn whose cost is not known (a Codex writer's) leaves the run's

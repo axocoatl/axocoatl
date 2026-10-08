@@ -53,6 +53,8 @@ enum Node {
     Answer(String),
     Fail(FailureClass, &'static str),
     Running,
+    /// Stopped by a person's stop of the run.
+    Stopped,
 }
 
 #[derive(Clone)]
@@ -61,6 +63,8 @@ struct Scripted {
     nodes: Vec<(String, Node)>,
     /// Wait until the deadline and report the turn still running.
     until_deadline: bool,
+    /// The turn's usage as observed; the default (unknown) without one.
+    usage: Option<RunUsage>,
 }
 
 fn turn(state: TurnState, nodes: Vec<(&str, Node)>) -> Scripted {
@@ -71,11 +75,15 @@ fn turn(state: TurnState, nodes: Vec<(&str, Node)>) -> Scripted {
             .map(|(slot, node)| (slot.to_owned(), node))
             .collect(),
         until_deadline: false,
+        usage: None,
     }
 }
 
 /// One tool call a scripted worker made: tool, arguments, succeeded.
 type Call = (&'static str, serde_json::Value, bool);
+/// One tool call as the Session recorded it: tool, arguments, succeeded,
+/// and the value it returned (`null` when not kept).
+type Recorded = (String, serde_json::Value, bool, serde_json::Value);
 
 /// What the host's record of tool calls holds.
 #[derive(Default)]
@@ -102,12 +110,14 @@ struct FakeHost {
     log: Mutex<Vec<String>>,
     events: Mutex<Vec<RunEvent>>,
     /// The tool calls of each worker slot, as the Session recorded them.
-    calls: Mutex<HashMap<String, Vec<Call>>>,
+    calls: Mutex<HashMap<String, Vec<Recorded>>>,
     record: Record,
     /// A person asked to stop the run.
     stop: std::sync::atomic::AtomicBool,
     /// A person asks to stop the run while its first turn runs.
     stop_on_wait: std::sync::atomic::AtomicBool,
+    /// A person asks to stop the run while this turn runs.
+    stop_on_turn: Mutex<Option<String>>,
 }
 
 impl FakeHost {
@@ -123,9 +133,42 @@ impl FakeHost {
         self
     }
 
-    /// Script the tool calls of `slot`'s worker.
+    /// Script the tool calls of `slot`'s worker, with no results kept.
     fn calls(self, slot: &str, calls: Vec<Call>) -> Self {
+        let calls = calls
+            .into_iter()
+            .map(|(tool, arguments, succeeded)| {
+                (
+                    tool.to_owned(),
+                    arguments,
+                    succeeded,
+                    serde_json::Value::Null,
+                )
+            })
+            .collect();
         self.calls.lock().unwrap().insert(slot.into(), calls);
+        self
+    }
+
+    /// The tool calls each worker slot made, as a run recorded them: one
+    /// JSON object per line with `slot`, `tool`, `arguments` and `result`,
+    /// `{"Ok": value}` or `{"Err": message}`, as the Session stored it.
+    fn recorded_calls(self, lines: &str) -> Self {
+        let mut calls = self.calls.lock().unwrap();
+        for line in lines.lines().filter(|line| !line.trim().is_empty()) {
+            let call: serde_json::Value = serde_json::from_str(line).unwrap();
+            let returned = call["result"].get("Ok").cloned();
+            calls
+                .entry(call["slot"].as_str().unwrap().to_owned())
+                .or_default()
+                .push((
+                    call["tool"].as_str().unwrap().to_owned(),
+                    call["arguments"].clone(),
+                    returned.is_some(),
+                    returned.unwrap_or_default(),
+                ));
+        }
+        drop(calls);
         self
     }
 
@@ -164,6 +207,12 @@ impl FakeHost {
                             message: (*message).into(),
                         }),
                     },
+                    Node::Stopped => GenerationObservation {
+                        generation: 1,
+                        state: NodeState::Stopped,
+                        answer: None,
+                        failure: None,
+                    },
                     Node::Running => GenerationObservation {
                         generation: 1,
                         state: if stopped {
@@ -197,7 +246,7 @@ impl FakeHost {
             nodes,
             checks: Vec::new(),
             review: None,
-            usage: RunUsage::default(),
+            usage: scripted.usage.clone().unwrap_or_default(),
         }
     }
 
@@ -242,7 +291,9 @@ impl RunHost for FakeHost {
         deadline: Instant,
     ) -> Result<TurnObservation, RunError> {
         let scripted = self.turns.lock().unwrap()[turn_id].clone();
-        if self.stop_on_wait.load(std::sync::atomic::Ordering::SeqCst) {
+        if self.stop_on_wait.load(std::sync::atomic::Ordering::SeqCst)
+            || self.stop_on_turn.lock().unwrap().as_deref() == Some(turn_id)
+        {
             self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         if self.stopped.lock().unwrap().iter().any(|id| id == turn_id) {
@@ -284,6 +335,11 @@ impl RunHost for FakeHost {
         Ok(())
     }
 
+    async fn recorded_events(&self, run_id: &str) -> Result<Vec<RunEvent>, RunError> {
+        assert_eq!(run_id, "run-1");
+        Ok(self.events.lock().unwrap().clone())
+    }
+
     async fn tool_calls(
         &self,
         session_id: &str,
@@ -309,20 +365,24 @@ impl RunHost for FakeHost {
             };
             let calls = match (scripted_calls.get(slot), node) {
                 (Some(calls), _) => calls.clone(),
-                (None, Node::Answer(_)) => {
-                    vec![("read_file", serde_json::json!({ "path": read(area) }), true)]
-                }
+                (None, Node::Answer(_)) => vec![(
+                    "read_file".to_owned(),
+                    serde_json::json!({ "path": read(area) }),
+                    true,
+                    serde_json::json!({ "content": "" }),
+                )],
                 (None, _) => Vec::new(),
             };
             records.extend(
                 calls
                     .into_iter()
-                    .map(|(tool, arguments, succeeded)| ToolCallRecord {
+                    .map(|(tool, arguments, succeeded, result)| ToolCallRecord {
                         node_id: format!("{turn_id}-node-{index}"),
                         generation: 1,
-                        tool: tool.into(),
+                        tool,
                         arguments,
                         succeeded,
+                        result,
                     }),
             );
         }
@@ -1400,9 +1460,141 @@ async fn a_stopped_run_gets_no_planner_retry() {
     // A stop before a turn starts ends the drive: no turn after a stop.
     let host = FakeHost::new(Vec::new());
     host.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-    let result = drive_audit(&host, &run, &build).await;
-    assert!(matches!(result, Err(RunError::Stopped)), "{result:?}");
+    let report = drive_audit(&host, &run, &build).await.unwrap();
+    assert!(report.stopped);
+    assert!(report.turns.is_empty() && report.not_covered.is_empty());
     assert!(host.sent().is_empty());
+}
+
+fn usage(input_tokens: u64, output_tokens: u64, complete: bool) -> RunUsage {
+    RunUsage {
+        input_tokens,
+        output_tokens,
+        cost_microunits: 0,
+        complete,
+        cost_known: true,
+        retries: 0,
+    }
+}
+
+/// The 1.3.0 rc4 re-smoke's run 6: two workers looped until a person
+/// stopped the run during the areas turn. Its Outcome had no turns, nothing
+/// not covered and 0 tokens marked complete, although two turns ran. Now
+/// the Outcome of a stopped run keeps its turns, what was not covered, the
+/// findings already reported (unmerged, since integration never ran) and
+/// the usage observed, incomplete when a turn's usage is.
+#[tokio::test]
+async fn a_stopped_audit_keeps_what_it_observed() {
+    let mut plan = planned();
+    plan.usage = Some(usage(1_200, 80, true));
+    let mut areas = turn(
+        TurnState::Stopped,
+        vec![
+            (
+                "worker-auth",
+                Node::Answer(worker_answer(
+                    &[("token compared with ==", "src/auth.rs:42")],
+                    &[],
+                )),
+            ),
+            ("worker-db", Node::Stopped),
+            ("worker-api", Node::Stopped),
+        ],
+    );
+    // The stopped workers' last calls never reported their usage.
+    areas.usage = Some(usage(9_000, 400, false));
+    let host = FakeHost::new(vec![plan, areas]);
+    *host.stop_on_turn.lock().unwrap() = Some("turn-2".into());
+    let run = context(later());
+    let outcome = crate::loadout::driver::run_to_outcome_with(&host, &run, &AuditDriver)
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.verdict, RunVerdict::Interrupted);
+    assert_eq!(outcome.exit_code, exit_code::INTERRUPTED);
+    // No integrator Apply or turn after the stop.
+    assert_eq!(host.sent().len(), 2);
+    assert_eq!(host.applied.lock().unwrap().len(), 2);
+    let turns: Vec<(&str, TurnState)> = outcome
+        .turns
+        .iter()
+        .map(|turn| (turn.purpose.as_str(), turn.state))
+        .collect();
+    assert_eq!(
+        turns,
+        [
+            (PLAN_PURPOSE, TurnState::Completed),
+            (AREAS_PURPOSE, TurnState::Stopped)
+        ]
+    );
+    let entries: Vec<(&str, FailureClass, &str)> = outcome
+        .not_covered
+        .iter()
+        .map(|entry| (entry.area.as_str(), entry.class, entry.detail.as_str()))
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            (
+                "db",
+                FailureClass::Stopped,
+                "the area worker has no result: it was stopped"
+            ),
+            (
+                "api",
+                FailureClass::Stopped,
+                "the area worker has no result: it was stopped"
+            ),
+            (
+                INTEGRATION,
+                FailureClass::Stopped,
+                "the run was stopped before integration; the area workers' findings are \
+                 reported unmerged"
+            ),
+        ]
+    );
+    let ids: Vec<&str> = outcome.findings.iter().map(|f| f.id.as_str()).collect();
+    assert_eq!(ids, ["auth-F1"]);
+    assert_eq!(outcome.usage.input_tokens, 10_200);
+    assert_eq!(outcome.usage.output_tokens, 480);
+    assert!(!outcome.usage.complete);
+    assert_eq!(
+        outcome.attention,
+        [
+            "2 areas were not covered",
+            "The integration was not read; the area findings are reported unmerged",
+            "A turn ended needing attention"
+        ]
+    );
+
+    // Stopped before the areas started: the planned areas are not covered,
+    // and the usage of the one turn that ran is complete.
+    let mut plan = planned();
+    plan.usage = Some(usage(1_200, 80, true));
+    let host = FakeHost::new(vec![plan]);
+    *host.stop_on_turn.lock().unwrap() = Some("turn-1".into());
+    let outcome = crate::loadout::driver::run_to_outcome_with(&host, &run, &AuditDriver)
+        .await
+        .unwrap();
+    assert_eq!(outcome.exit_code, exit_code::INTERRUPTED);
+    assert_eq!(host.sent().len(), 1);
+    assert_eq!(outcome.turns.len(), 1);
+    let entries: Vec<(&str, FailureClass, &str)> = outcome
+        .not_covered
+        .iter()
+        .map(|entry| (entry.area.as_str(), entry.class, entry.detail.as_str()))
+        .collect();
+    let before = "the run was stopped before the areas started";
+    assert_eq!(
+        entries,
+        [
+            ("auth", FailureClass::Stopped, before),
+            ("db", FailureClass::Stopped, before),
+            ("api", FailureClass::Stopped, before),
+        ]
+    );
+    assert_eq!(outcome.usage.input_tokens, 1_200);
+    assert!(outcome.usage.complete);
 }
 
 #[tokio::test]
@@ -1446,7 +1638,7 @@ async fn a_failed_integration_reports_the_workers_findings_unmerged() {
         .iter()
         .all(|finding| finding.source == FindingSource::AuditWorker));
     assert_eq!(report.not_covered.len(), 1);
-    assert_eq!(report.not_covered[0].area, INTEGRATOR_SLOT);
+    assert_eq!(report.not_covered[0].area, INTEGRATION);
     assert_eq!(report.not_covered[0].class, FailureClass::Budget);
     assert!(report.not_covered[0].detail.contains("reported unmerged"));
     assert!(report.budget_exhausted);
@@ -1486,7 +1678,7 @@ async fn the_wall_clock_stops_the_areas_turn_and_skips_integration() {
         [
             ("db", FailureClass::Budget),
             ("api", FailureClass::Budget),
-            (INTEGRATOR_SLOT, FailureClass::Budget),
+            (INTEGRATION, FailureClass::Budget),
         ]
     );
     assert_eq!(report.findings.len(), 1);
@@ -1590,6 +1782,15 @@ fn record(tool: &str, arguments: serde_json::Value, succeeded: bool) -> ToolCall
         tool: tool.into(),
         arguments,
         succeeded,
+        result: serde_json::Value::Null,
+    }
+}
+
+/// A succeeded `grep` that returned `matches`.
+fn grep(arguments: serde_json::Value, matches: &str) -> ToolCallRecord {
+    ToolCallRecord {
+        result: serde_json::json!({"matches": matches, "truncated": false}),
+        ..record("grep", arguments, true)
     }
 }
 
@@ -1601,7 +1802,9 @@ fn area(name: &str, paths: &[&str]) -> AuditArea {
     }
 }
 
-/// Which recorded calls show a worker examined its area.
+/// Which recorded calls show a worker examined its area: a read of a file
+/// inside it, or a grep that matched one. Listing and globbing only find
+/// files, and a grep that matched nothing read nothing.
 #[test]
 fn examination_is_judged_from_the_recorded_calls() {
     let tools: Vec<String> = ["read_file", "list_dir", "grep", "glob", "bash"]
@@ -1615,7 +1818,7 @@ fn examination_is_judged_from_the_recorded_calls() {
     let billing = area("billing", &["billing/**"]);
     use serde_json::json;
     for (calls, examined_it) in [
-        // Reads, searches and listings inside the area.
+        // Reads of a file inside the area, and greps that matched one.
         (
             vec![record(
                 "read_file",
@@ -1641,30 +1844,81 @@ fn examination_is_judged_from_the_recorded_calls() {
             true,
         ),
         (
-            vec![record("list_dir", json!({"path": "billing"}), true)],
+            vec![grep(
+                json!({"pattern": "page", "path": "billing"}),
+                "billing/pagination.py:4:def page_count(total_items: int, page_size: int) -> int:\n",
+            )],
+            true,
+        ),
+        // A grep of the whole repository that matched a file of the area.
+        (
+            vec![grep(
+                json!({"pattern": "page"}),
+                "./auth/tokens.py:3:# no page here\n./billing/pagination.py:4:def page_count():\n",
+            )],
             true,
         ),
         (
-            vec![record("list_dir", json!({"path": "./billing/"}), true)],
+            vec![grep(
+                json!({"pattern": "page", "path": "/work/repo/billing"}),
+                "/work/repo/billing/pagination.py:4:def page_count():\n",
+            )],
             true,
         ),
+        // A grep of one file prints `line:text`.
+        (
+            vec![grep(
+                json!({"pattern": "def", "path": "billing/pagination.py"}),
+                "4:def page_count(total_items: int, page_size: int) -> int:\n",
+            )],
+            true,
+        ),
+        // Listings, globs and greps that matched nothing, inside the area.
+        (
+            vec![record("list_dir", json!({"path": "billing"}), true)],
+            false,
+        ),
+        (
+            vec![record("list_dir", json!({"path": "./billing/"}), true)],
+            false,
+        ),
+        (
+            vec![record("glob", json!({"pattern": "billing/*.py"}), true)],
+            false,
+        ),
+        (
+            vec![record("glob", json!({"pattern": "billing/**/*.py"}), true)],
+            false,
+        ),
+        (
+            vec![grep(json!({"pattern": "overflow", "path": "billing"}), "")],
+            false,
+        ),
+        // A grep whose result was not kept is not read as a match.
         (
             vec![record(
                 "grep",
                 json!({"pattern": "page", "path": "billing"}),
                 true,
             )],
-            true,
+            false,
+        ),
+        // Matches outside the area, failed calls, the root, leaving the
+        // repository, or no read.
+        (
+            vec![grep(
+                json!({"pattern": "page"}),
+                "./auth/tokens.py:3:# billing/pagination.py:4: is not this file\n",
+            )],
+            false,
         ),
         (
-            vec![record("glob", json!({"pattern": "billing/*.py"}), true)],
-            true,
+            vec![grep(
+                json!({"pattern": "def", "path": "auth/tokens.py"}),
+                "3:def is_valid(token):\n",
+            )],
+            false,
         ),
-        (
-            vec![record("glob", json!({"pattern": "billing/**/*.py"}), true)],
-            true,
-        ),
-        // Failed, outside, the root, leaving the repository, or no read.
         (
             vec![record(
                 "read_file",
@@ -1698,17 +1952,8 @@ fn examination_is_judged_from_the_recorded_calls() {
             false,
         ),
         (vec![record("list_dir", json!({}), true)], false),
-        (vec![record("list_dir", json!({"path": ""}), true)], false),
-        (
-            vec![record("grep", json!({"pattern": "page"}), true)],
-            false,
-        ),
         (
             vec![record("glob", json!({"pattern": "**/*.py"}), true)],
-            false,
-        ),
-        (
-            vec![record("glob", json!({"pattern": "*.py"}), true)],
             false,
         ),
         (
@@ -1726,13 +1971,17 @@ fn examination_is_judged_from_the_recorded_calls() {
             "{calls:?}"
         );
     }
-    // A wildcard area is examined from the directory it starts at; a
-    // literal one names a directory.
+    // A wildcard area holds what its pattern matches; a literal one names
+    // a directory.
     let python = area("billing", &["billing/*.py"]);
     assert_eq!(
         judge(
             &python,
-            &[record("list_dir", json!({"path": "billing"}), true)]
+            &[record(
+                "read_file",
+                json!({"path": "billing/pagination.py"}),
+                true
+            )]
         ),
         Examined::Yes
     );
@@ -1763,13 +2012,20 @@ fn examination_is_judged_from_the_recorded_calls() {
         judge(&literal, &[record("list_dir", json!({"path": "."}), true)]),
         Examined::Yes
     );
-    // An area without paths: any read.
+    // An area without paths: a read or a match of any file.
     let anywhere = area("api", &[]);
     assert_eq!(
         judge(
             &anywhere,
-            &[record("grep", json!({"pattern": "route"}), true)]
+            &[grep(
+                json!({"pattern": "route"}),
+                "./src/api.rs:9:fn route() {}\n"
+            )]
         ),
+        Examined::Yes
+    );
+    assert_ne!(
+        judge(&anywhere, &[grep(json!({"pattern": "route"}), "")]),
         Examined::Yes
     );
     // Why not, in words.
@@ -1778,9 +2034,17 @@ fn examination_is_judged_from_the_recorded_calls() {
         Examined::Nothing("it made no tool call".into())
     );
     assert_eq!(
-        judge(&billing, &[record("bash", json!({"command": "ls"}), true)]),
+        judge(
+            &billing,
+            &[
+                record("bash", json!({"command": "ls"}), true),
+                record("list_dir", json!({"path": "billing"}), true),
+            ]
+        ),
         Examined::Nothing(
-            "it made 1 tool call and none was read_file, grep, glob or list_dir".into()
+            "it made 2 tool calls and none was read_file or grep (list_dir and glob only find \
+             files)"
+                .into()
         )
     );
     assert_eq!(
@@ -1788,12 +2052,12 @@ fn examination_is_judged_from_the_recorded_calls() {
             &billing,
             &[
                 record("read_file", json!({"path": "billing/x.py"}), false),
-                record("list_dir", json!({}), true),
+                grep(json!({"pattern": "x", "path": "billing"}), ""),
+                record("list_dir", json!({"path": "billing"}), true),
             ]
         ),
         Examined::Nothing(
-            "none of its 2 read_file, grep, glob or list_dir calls succeeded inside billing/**"
-                .into()
+            "none of its 2 read_file or grep calls read or matched a file inside billing/**".into()
         )
     );
     // A worker without a tool that reads files examines nothing, whatever
@@ -1813,6 +2077,160 @@ fn examination_is_judged_from_the_recorded_calls() {
         examined(&billing, &tools, Err("no record"), repo),
         Examined::Unknown("no record".into())
     );
+}
+
+/// The 1.3.0 rc4 re-smoke's run 5, with every answer and every worker's
+/// tool calls as recorded (a `bash` call's `pwd` shows `/work/repo1` for
+/// the run's repository). The ingest worker's five `read_file` calls all
+/// failed; it listed `ingest` and its greps there for `parse`, `try:`,
+/// `validate`, `json.loads` and `except` matched nothing, so it read no
+/// file of its area. rc4 counted ingest as covered and its made-up paths
+/// as notes, and missed the defect at `ingest/feed.go:29`. Now ingest is
+/// not covered, having examined nothing, and those paths are gaps.
+#[tokio::test]
+async fn a_listing_and_greps_that_matched_nothing_examine_nothing() {
+    let fixture = |name: &str| -> String {
+        let path = format!(
+            "{}/../axocoatl-session/tests/fixtures/answers/audit-resmoke4-out5-{name}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"))
+    };
+    let answer = |name: &str| fixture(&format!("{name}.txt"));
+    let slots = ["auth", "billing", "ingest", "notify"].map(|area| format!("worker-{area}"));
+    let host = FakeHost::new(vec![
+        turn(
+            TurnState::Completed,
+            vec![(PLANNER_SLOT, Node::Answer(answer("planner")))],
+        ),
+        turn(
+            TurnState::Completed,
+            slots
+                .iter()
+                .map(|slot| (slot.as_str(), Node::Answer(answer(slot))))
+                .collect(),
+        ),
+        turn(
+            TurnState::Completed,
+            vec![(INTEGRATOR_SLOT, Node::Answer(answer("integrator")))],
+        ),
+    ])
+    .recorded_calls(&fixture("worker-calls.jsonl"));
+    {
+        let calls = host.calls.lock().unwrap();
+        assert_eq!(calls.values().map(Vec::len).sum::<usize>(), 62);
+        let ingest = &calls["worker-ingest"];
+        assert_eq!(ingest.len(), 21);
+        // Its listing of ingest succeeded; every read failed; every grep
+        // inside ingest matched nothing.
+        assert!(ingest
+            .iter()
+            .any(|(tool, arguments, succeeded, _)| tool == "list_dir"
+                && arguments["path"] == "ingest"
+                && *succeeded));
+        assert!(ingest
+            .iter()
+            .filter(|(tool, ..)| tool == "read_file")
+            .all(|(_, _, succeeded, _)| !succeeded));
+        assert!(ingest
+            .iter()
+            .filter(|(tool, arguments, ..)| tool == "grep" && arguments["path"] == "ingest")
+            .all(|(_, _, succeeded, result)| *succeeded && result["matches"] == ""));
+    }
+    let repo = smoke_repository();
+    let mut run = context(later());
+    run.options.repo = repo.path().to_path_buf();
+    let (report, _) = drive(&host, &run).await;
+
+    let entries: Vec<(&str, FailureClass, &str)> = report
+        .not_covered
+        .iter()
+        .map(|entry| (entry.area.as_str(), entry.class, entry.detail.as_str()))
+        .collect();
+    let gap = |path: &str| format!("{path} (the area worker reported it did not reach this)");
+    let unexamined_gap = |path: &str| {
+        format!(
+            "{path} (the area worker reported it did not reach this; no such path exists, but \
+             the worker did not examine its area)"
+        )
+    };
+    let expected: Vec<(&str, FailureClass, String)> = vec![
+        ("auth", FailureClass::NotReached, gap("auth/__init__.py")),
+        (
+            "billing",
+            FailureClass::NotReached,
+            gap("billing/__init__.py"),
+        ),
+        (
+            "billing",
+            FailureClass::NotReached,
+            gap("billing/pagination.py"),
+        ),
+        (
+            "ingest",
+            FailureClass::NotReached,
+            "the area worker examined nothing of its area: none of its 14 read_file or grep \
+             calls read or matched a file inside ingest/**/*"
+                .into(),
+        ),
+        (
+            "ingest",
+            FailureClass::NotReached,
+            unexamined_gap("ingest/utils.py"),
+        ),
+        (
+            "ingest",
+            FailureClass::NotReached,
+            unexamined_gap("ingest/models.py"),
+        ),
+        (
+            "ingest",
+            FailureClass::NotReached,
+            unexamined_gap("ingest/legacy/old_handler.py"),
+        ),
+    ];
+    let expected: Vec<(&str, FailureClass, &str)> = expected
+        .iter()
+        .map(|(area, class, detail)| (*area, *class, detail.as_str()))
+        .collect();
+    assert_eq!(entries, expected);
+
+    // The other workers read files of their areas: what they listed that
+    // does not exist stays a note. Nothing of ingest's is a note any more
+    // but the other areas it listed.
+    let notes = host.notes();
+    assert_eq!(report.notes, notes);
+    assert!(
+        notes
+            .iter()
+            .filter(|note| note.starts_with("worker-ingest"))
+            .eq([
+                &"worker-ingest listed other planned areas as not reached (auth, billing, \
+                    notify); their own workers audit them, so they are not gaps"
+                    .to_owned()
+            ]),
+        "{notes:#?}"
+    );
+    assert_eq!(notes.len(), 10, "{notes:#?}");
+
+    // The integrator is told the ingest report rests on nothing read.
+    let request = &host.sent()[2];
+    assert_eq!(
+        request
+            .matches("Its worker read none of this area's files")
+            .count(),
+        1
+    );
+    let ingest = &request[request.find("REPORT of area ingest").unwrap()
+        ..request.find("REPORT of area notify").unwrap()];
+    assert!(
+        ingest.contains("Its worker read none of this area's files"),
+        "{ingest}"
+    );
+
+    let outcome = outcome_of(&report);
+    assert_eq!(outcome.exit_code, exit_code::NEEDS_ATTENTION);
+    assert_eq!(outcome.attention, ["3 areas were not covered"]);
 }
 
 /// The 1.3.0 re-smoke's run 4, with every answer as recorded: the billing

@@ -16,6 +16,11 @@ pub const RUN_OUTCOME_SCHEMA: &str = "axocoatl.run-outcome/1";
 /// as an audit whose plan never became usable.
 pub const WHOLE_SCOPE: &str = "whole scope";
 
+/// The not-covered `area` of an audit integration that gave no readable
+/// result: no area of the plan (an area name has no space), so the
+/// attention line names it apart from the areas.
+pub const INTEGRATION: &str = "audit integration";
+
 /// Process exit codes of `axocoatl run`.
 pub mod exit_code {
     /// Every required check passed, the required review (if any) approved,
@@ -642,7 +647,7 @@ impl RunOutcome {
         }
         // Areas, not entries: one area can have several entries (each part
         // of it a worker did not reach). The whole scope is no area count:
-        // it is everything.
+        // it is everything. Nor is the integration: it merges the areas.
         if self
             .not_covered
             .iter()
@@ -654,6 +659,7 @@ impl RunOutcome {
                 .not_covered
                 .iter()
                 .map(|entry| entry.area.as_str())
+                .filter(|area| *area != INTEGRATION)
                 .collect::<std::collections::BTreeSet<_>>()
                 .len();
             if areas > 0 {
@@ -662,6 +668,15 @@ impl RunOutcome {
                     if areas == 1 { " was" } else { "s were" }
                 ));
             }
+        }
+        if self
+            .not_covered
+            .iter()
+            .any(|entry| entry.area == INTEGRATION)
+        {
+            attention.push(
+                "The integration was not read; the area findings are reported unmerged".into(),
+            );
         }
         if inputs.turn_needs_attention {
             attention.push("A turn ended needing attention".into());
@@ -940,6 +955,51 @@ mod tests {
             exit_code::NEEDS_ATTENTION
         );
         assert_eq!(run.attention, ["The whole scope was not covered"]);
+    }
+
+    /// The 1.3.0 rc4 re-smoke's integrators answered in `<FINDINGS>` tags,
+    /// which were refused, and the attention line counted the integration
+    /// as an area: "1 area was not covered" in run 2, "2 areas" in run 7
+    /// (billing and the integration). Only areas are counted; the
+    /// integration is named apart.
+    #[test]
+    fn an_unread_integration_is_named_apart_from_the_areas() {
+        let integration = NotCovered {
+            area: INTEGRATION.into(),
+            class: FailureClass::Other,
+            detail: "the integrator's FINDINGS block could not be read (the answer has no \
+                     FINDINGS block); the area workers' findings are reported unmerged"
+                .into(),
+            node_id: Some("node-integrator".into()),
+            turn_id: Some("turn-3".into()),
+        };
+        let unmerged = "The integration was not read; the area findings are reported unmerged";
+        // Run 2: every area covered.
+        let mut run = outcome();
+        run.not_covered.push(integration.clone());
+        assert_eq!(
+            run.decide(VerdictInputs::default()),
+            exit_code::NEEDS_ATTENTION
+        );
+        assert_eq!(run.attention, [unmerged]);
+        // Run 7: billing was not covered too.
+        run.not_covered.insert(
+            0,
+            NotCovered {
+                area: "billing".into(),
+                class: FailureClass::NotReached,
+                detail: "billing/__init__.py (the area worker reported it did not reach this)"
+                    .into(),
+                node_id: None,
+                turn_id: None,
+            },
+        );
+        run.decide(VerdictInputs::default());
+        assert_eq!(run.attention, ["1 area was not covered", unmerged]);
+        // An area named like the integration's slot is still an area.
+        run.not_covered[0].area = "integrator".into();
+        run.decide(VerdictInputs::default());
+        assert_eq!(run.attention, ["1 area was not covered", unmerged]);
     }
 
     /// Notes are part of the Outcome but never change its verdict; an
