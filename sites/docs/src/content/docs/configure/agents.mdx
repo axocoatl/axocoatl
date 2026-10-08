@@ -40,7 +40,7 @@ agents:
 | `name` | User-facing label |
 | `provider`, `model` | Model target for this Agent |
 | `system_prompt` | Persistent operating instructions |
-| `tools` | The exact tools the Agent is offered and may call. In a native Session an empty or missing list means the Agent has no tools and can only answer from the conversation, so list the ones it needs, for example `[read_file, list_dir, grep, glob, write_file, edit_file, bash]`; `axocoatl validate`, `axocoatl doctor` and daemon startup warn about an Agent that is not a Worker and lists none. Add `workspace_knowledge` to offer [Workspace knowledge](/workbench/knowledge/), and `web_search` or `web_fetch` for [web research](/configure/web/) once configured, and, under `network: egress`, `request_network_access` to let a writer ask you for a host it was refused ([Network egress](/configure/sandboxes/#network-egress)); `delegate` comes from Team & budget. In a native Session, `read_file` returns a window of a file from a byte `offset` that fits the Agent's model: 64 KiB, or a quarter of its context counted at one token per byte when that is smaller, and says where the next window starts. A legacy (1.0-format) Session still gives an Agent with an empty list the baseline tools |
+| `tools` | The exact tools the Agent is offered and may call. In a native Session an empty or missing list means the Agent has no tools and can only answer from the conversation, so list the ones it needs, for example `[read_file, list_dir, grep, glob, write_file, edit_file, bash]`; `axocoatl validate`, `axocoatl doctor` and daemon startup warn about an Agent that is not a Worker and lists none. Add `workspace_knowledge` to offer [Workspace knowledge](/workbench/knowledge/), and `web_search` or `web_fetch` for [web research](/configure/web/) once configured, and, under `network: egress`, `request_network_access` to let a writer ask you for a host it was refused ([Network egress](/configure/sandboxes/#network-egress)); `delegate` comes from Team & budget. In a native Session, `read_file` returns a window of a file from a byte `offset` that fits the Agent's model: 64 KiB, or a quarter of its context counted at one token per byte when that is smaller, and says where the next window starts. `grep` returns up to 64 KiB of whole matching lines; a result it cut says how many matching lines and bytes it left out (`omitted_matches`, `omitted_bytes`) and to narrow the search with a path or a more specific pattern. A legacy (1.0-format) Session still gives an Agent with an empty list the baseline tools |
 | `writes` | Repository paths the Agent may change in a native Session. Omit it to allow any file; `[]` makes a read-only helper. See [Limit which files an Agent may change](#limit-which-files-an-agent-may-change) |
 | `depends_on` | Exact direct-parent completion predicate for a multi-Agent Session turn; also seeds legacy Automation edges during first-boot migration |
 | `role` | `autonomous`, `coordinator`, or `worker` |
@@ -199,6 +199,19 @@ its start and its outcome; its budget record holds up to 4,096 claims, and a too
 takes two, the model call and the tool call. When
 a turn has no room for another tool call, each Agent is asked for its final answer
 without tools, as when its budget runs out; the next turn starts with fresh room.
+
+An Agent whose tool calls stop showing anything new is asked for its final answer
+without tools too: after three rounds that only printed text (`echo` and the like),
+after four rounds of the same calls with the same results, and when 8 of the last 10
+calls with the same tool and arguments, or 8 of the last 10 `bash` commands with the
+same pattern (the program and its first option, such as `python3 -c`), showed nothing
+new, wherever they fall. A result shows nothing new when at most one in four of its
+lines is one that no earlier result of the activation showed and that the call's own
+arguments do not contain. An edit or a write, or a command that printed nothing, starts
+these counts again, and polling a terminal never counts. The request says why, for
+example "you repeated the same call (read_file with the same arguments) 8 times without
+new results"; a model that calls a tool instead of answering ends the activation as
+failed, with that reason.
 
 ## Limit which files an Agent may change
 

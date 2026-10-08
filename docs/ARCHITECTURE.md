@@ -959,7 +959,19 @@ claim about any model.
   the same calls and got the same results, its next request goes without tools and asks
   for the final answer, the same way. A different round in between (an edit before the
   same test runs again, another file read) starts the count again, polling a terminal
-  never counts, and new guidance from a person resets it.
+  never counts, and new guidance from a person resets it. The same happens, wherever
+  the calls fall in the activation, when 8 of the last 10 calls with the same tool and
+  arguments, or 8 of the last 10 `bash` commands with the same pattern (the program's
+  name and its first option, such as `python3 -c`), showed nothing new, with the reason
+  "you repeated the same call (…) 8 times without new results". A call shows nothing
+  new when at most one in four of its result's lines is new: a line that no earlier
+  result of the activation showed and that the call's own arguments do not contain, so
+  a script printing its own text shows nothing new. An edit or a write, or a `bash`
+  command that printed nothing (it may have changed files), starts these counts again.
+  In the 1.3.0 re-smoke two audit workers ran a different `python3 -c` script printing
+  "final audit confirmation" lines in each of 80 and 81 rounds, for 39 minutes, which
+  neither earlier pattern caught. A model that calls a tool instead of answering then
+  ends its activation as failed, with the reason in the failure.
 - **One retry for a broken stream.** A provider stream that ends early (for Ollama also
   one ended by an error record, such as an unparseable tool call) is retried once. Its
   estimated input and the output it had already streamed are charged to the same grant
@@ -968,8 +980,8 @@ claim about any model.
   record; when the turn has no room for another tool call, the Agent's next request goes
   without tools and asks for the final answer, the same way.
 - **Failure classes.** A failed activation states its failure class (provider stream,
-  budget, tool-round limit, context limit, write scope, capture, admission) and a
-  suggested next step.
+  budget, tool-round limit, context limit, write scope, capture, stopped, admission) and
+  a suggested next step.
 
 ## Multi-agent sessions and the event feed
 
@@ -1472,7 +1484,14 @@ restriction below and `write_file` and `edit_file` are withheld.
   establish the change set (an exhausted invocation allowance, a HEAD moved by a commit, a
   patch over 512 KiB, a submodule or nested checkout), the activation fails and its turn
   needs attention. The change is not reverted; it stays for the person to keep or undo.
-  Ignored files are not judged. This is review evidence, not confinement.
+  Ignored files are not judged. This is review evidence, not confinement. A writer
+  stopped before its After capture (a Stop skips it) fails as stopped, saying that its
+  captures could not rule out a change outside its paths; any change stays for review.
+- A read-only Agent cannot change a file's contents, so captures it could not complete
+  (a Stop, say) are no reason to fail it, with or without a shell: a stopped read-only
+  activation fails as stopped. A change that its complete captures do show (a permission
+  bit, which its shell can still change when run as root or on macOS) fails it as
+  above.
 
 ### Isolation backends (local-first by default; you choose the sandbox)
 

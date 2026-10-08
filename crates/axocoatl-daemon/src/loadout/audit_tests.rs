@@ -3063,16 +3063,15 @@ fn slot_plans_are_pure_and_read_only() {
     );
     let workers = area_slots(&run.resolved, &assignment).unwrap();
     assert_eq!(workers.len(), 3);
-    assert!(workers
-        .iter()
-        .all(|slot| slot.agent.tools.contains(&"bash".to_string())
-            && !slot
-                .agent
-                .tools
-                .iter()
-                .any(|tool| tool == "write_file" || tool == "edit_file")));
+    // Read-only and without a shell: the 1.3.0 re-smoke's workers spent
+    // their budget on bash loops.
+    assert!(workers.iter().all(|slot| slot.agent.tools
+        == ["read_file", "list_dir", "grep", "glob"]
+        && slot.agent.writes.as_deref() == Some(&[][..])));
+    assert!(planner[0].agent.tools.iter().all(|tool| tool != "bash"));
     let integrator = integrate_slots(&run.resolved).unwrap();
     assert_eq!(integrator[0].agent.role, LoadoutRole::Integrator);
+    assert!(integrator[0].agent.tools.iter().all(|tool| tool != "bash"));
     assert!(integrator[0].depends_on.is_empty());
     let api = worker_instructions(None, &assignment.areas[2], &["auth", "db"]);
     assert!(api.starts_with("Your area: api"));
@@ -4359,4 +4358,34 @@ fn the_host_merge_keys_findings_by_file_line_and_title() {
         normalized_title("  Missing error-check for `json.Unmarshal`! "),
         "missing error check for json unmarshal"
     );
+}
+
+/// The 1.3.0 re-smoke's closing line for a failed plan turn spoke of its
+/// areas; a plan turn has none.
+#[test]
+fn closing_a_turn_says_what_its_purpose_leaves_to_do() {
+    let plan = closing_detail(PLAN_PURPOSE, "turn-1");
+    assert!(
+        plan.starts_with("Stopping turn turn-1, which needs attention, so the audit can go on; "),
+        "{plan}"
+    );
+    assert!(!plan.contains("its areas"), "{plan}");
+    assert!(plan.contains("a plan turn has no areas yet"), "{plan}");
+    assert!(plan.contains("the planner gets its one retry"), "{plan}");
+    assert!(
+        plan.contains("a second attempt without one leaves the whole scope not covered"),
+        "{plan}"
+    );
+    let integrate = closing_detail(INTEGRATE_PURPOSE, "turn-2");
+    assert!(!integrate.contains("its areas"), "{integrate}");
+    assert!(
+        integrate.contains("the host merges the area findings"),
+        "{integrate}"
+    );
+    let reask = closing_detail(REASK_PURPOSE, "turn-3");
+    assert!(reask.contains("changes no coverage"), "{reask}");
+    for purpose in [AREAS_PURPOSE, FOLLOW_UP_PURPOSE] {
+        assert!(closing_detail(purpose, "turn-4")
+            .ends_with("; its areas without a result are listed as not covered"));
+    }
 }

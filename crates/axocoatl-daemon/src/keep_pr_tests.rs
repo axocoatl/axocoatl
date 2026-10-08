@@ -125,6 +125,7 @@ fn outcome() -> RunOutcome {
             severity: Some(Severity::Low),
             area: Some("search".into()),
             location: None,
+            line: None,
             repro: Some(ReproResult {
                 path: ".axocoatl/qa/b2.spec.ts".into(),
                 sha256: None,

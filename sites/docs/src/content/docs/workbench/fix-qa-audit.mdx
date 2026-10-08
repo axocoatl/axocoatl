@@ -230,10 +230,10 @@ never from what a worker says:
    a file is never split. The progress lines (`assigned`) and the record show the plan
    as executed and every area's files; each split, and the files given to `rest` or by
    directory, are notes.
-3. **Areas.** One worker per area, made from the `worker` Agent: read-only (`writes: []`,
-   its `bash` under Landlock with no repository writes and no TCP, which needs Linux 6.7
-   or later; [without it](/configure/agents/#limit-which-files-an-agent-may-change) its
-   `bash` does not run), each in a fresh conversation, with no dependencies between them,
+3. **Areas.** One worker per area, made from the `worker` Agent: read-only (`writes: []`)
+   with `read_file`, `list_dir`, `grep` and `glob` and no shell (in the 1.3.0 re-smoke
+   workers with `bash` spent most of their budget on scripts that printed what they had
+   already found), each in a fresh conversation, with no dependencies between them,
    so the controller starts them together. Each worker is told the files of its area
    (past 8 KiB of names, the directories they are in, with counts, and to read all of
    them) and reports `FINDINGS` and what it did `NOT_REACHED`. A turn can record only so
@@ -247,7 +247,7 @@ never from what a worker says:
    64 KiB, or a quarter of the model's context counted at one token per byte when that
    is smaller (8 KiB for a 32,768-token context). Its description tells the model the
    size, `limit` asks for less, and the result says where the next read starts. Reading
-   through `grep`, `glob`, `list_dir` or `bash` does not count. Empty files and binary
+   through `grep`, `glob` or `list_dir` does not count. Empty files and binary
    files (a NUL byte in the first 8,000 bytes) need no read; a file over 256 KiB is not
    read, and is a note. When a worker's turn ends with files of its area unread,
    Axocoatl runs a follow-up turn with a fresh activation of that worker naming exactly
@@ -293,6 +293,11 @@ never from what a worker says:
    the run does not need attention for it: in the runs measured for 1.3.0, the merge
    step never added a finding.
 
+A finding's location is `path:line`. A location whose line is not a number, such as the
+`ingest/feed.go:line_number` a re-ask once answered from prose that named no line, keeps
+the file alone: the Outcome's finding has `location: "ingest/feed.go"` and
+`line: null`, and the summary and JUnit show the file only.
+
 Audit turns have no required checks and no review. Findings do not fail the run by
 default (`fail_on_findings: false`); anything not covered does. Each worker gets the
 `worker` Agent's `budget`, or `budgets.agent` without one, for each turn it is in, and
@@ -308,7 +313,9 @@ findings are reported unmerged".
 
 When you stop an audit, no further turn starts: areas planned but not started, files no
 follow-up read, and an integration that did not run, are not covered (`stopped`), and
-the workers' findings are reported unmerged. The Outcome keeps the turns, the
+the workers' findings are reported unmerged. A worker your stop interrupted is not
+covered as `stopped` too, never `blocked`: a read-only worker cannot change a file, so
+the repository capture the stop cut short is no reason to doubt it. The Outcome keeps the turns, the
 not-covered entries, the findings and the usage observed until the stop; usage is
 marked incomplete (`usage.complete: false`) when a stopped turn's usage was not all
 reported.

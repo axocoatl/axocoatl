@@ -547,6 +547,7 @@ fn finding(reported: &ReportedFinding, detail: String, repro: ReproResult) -> Fi
         severity: reported.severity,
         area: reported.area.clone(),
         location: None,
+        line: None,
         repro: Some(repro),
     }
 }

@@ -933,7 +933,7 @@ pub struct GrepTool {
 #[async_trait::async_trait]
 impl BuiltinTool for GrepTool {
     fn description(&self) -> &str {
-        "Search file contents recursively with line numbers, returning up to 64 KiB and reporting truncation"
+        "Search file contents recursively with line numbers, returning up to 64 KiB of whole matching lines; a cut result says how many matching lines and bytes it left out and how to narrow the search"
     }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -962,17 +962,72 @@ impl BuiltinTool for GrepTool {
         if r.exit_code > 1 {
             return Err(require_ok("grep", r).unwrap_err());
         }
-        let (matches, truncated, captured_bytes) =
+        let (mut matches, truncated, captured_bytes) =
             bounded_text_fields(r.stdout, TOOL_TEXT_OUTPUT_MAX_BYTES);
+        if !truncated {
+            let returned_bytes = matches.len();
+            return Ok(serde_json::json!({
+                "matches": matches,
+                "truncated": false,
+                "returned_bytes": returned_bytes,
+                "captured_bytes": captured_bytes,
+                "output_limit_bytes": TOOL_TEXT_OUTPUT_MAX_BYTES,
+            }));
+        }
+        // Show whole lines only, then count what the cut left out.
+        if let Some(end) = matches.rfind('\n') {
+            matches.truncate(end + 1);
+        }
         let returned_bytes = matches.len();
-        Ok(serde_json::json!({
+        let shown = matches.matches('\n').count();
+        let totals = count_output(self.sandbox.as_ref(), &args).await;
+        let mut result = serde_json::json!({
             "matches": matches,
-            "truncated": truncated,
+            "truncated": true,
             "returned_bytes": returned_bytes,
             "captured_bytes": captured_bytes,
             "output_limit_bytes": TOOL_TEXT_OUTPUT_MAX_BYTES,
-        }))
+            "returned_matches": shown,
+        });
+        let left_out = match totals {
+            Some((lines, bytes)) => {
+                let lines = lines.max(shown);
+                let bytes = bytes.max(returned_bytes);
+                result["total_matches"] = lines.into();
+                result["total_bytes"] = bytes.into();
+                result["omitted_matches"] = (lines - shown).into();
+                result["omitted_bytes"] = (bytes - returned_bytes).into();
+                format!(
+                    "{shown} of {lines} matching lines are shown; {} lines ({} bytes) are left out",
+                    lines - shown,
+                    bytes - returned_bytes
+                )
+            }
+            None => format!("{shown} matching lines are shown; the rest could not be counted"),
+        };
+        result["message"] = format!(
+            "The matches were cut at 64 KiB: {left_out}. To see the rest, narrow the search: \
+             give a path (a directory or one file) or a more specific pattern."
+        )
+        .into();
+        Ok(result)
     }
+}
+
+/// The lines and bytes `argv` prints in all, counted by `wc` in the sandbox
+/// without bringing the output back; `None` when they cannot be counted.
+async fn count_output(sandbox: &dyn Sandbox, argv: &[&str]) -> Option<(usize, usize)> {
+    let mut counted = vec!["sh", "-c", "\"$@\" | wc -lc", "sh"];
+    counted.extend_from_slice(argv);
+    let result = sandbox.exec(&counted, FS_TIMEOUT).await.ok()?;
+    if result.exit_code != 0 {
+        return None;
+    }
+    let mut numbers = result
+        .stdout
+        .split_whitespace()
+        .map(|word| word.parse::<usize>().ok());
+    Some((numbers.next()??, numbers.next()??))
 }
 
 // ── glob ────────────────────────────────────────────────────────────────
@@ -2156,6 +2211,81 @@ mod tests {
             assert!(output["truncated"].as_bool().unwrap());
             assert!(output[key].as_str().unwrap().len() <= TOOL_TEXT_OUTPUT_MAX_BYTES);
         }
+    }
+
+    /// A grep cut at 64 KiB shows whole lines and says what it left out and
+    /// how to narrow the search, so a model can go on.
+    #[tokio::test]
+    async fn a_cut_grep_says_what_it_left_out_and_how_to_narrow() {
+        let line = |index: usize| format!("logs/app.log:{index}: needle in a long line of text\n");
+        let all: String = (1..=5000).map(line).collect();
+        let total_bytes = all.len();
+        let sandbox = Arc::new(StubSandbox::new(
+            "/workspace",
+            vec![
+                result(all.clone(), "", 0),
+                result(format!("   5000 {total_bytes}\n"), "", 0),
+            ],
+        ));
+        let output = GrepTool {
+            sandbox: sandbox.clone(),
+        }
+        .execute(json!({"pattern": "needle", "path": "logs"}))
+        .await
+        .unwrap();
+        let matches = output["matches"].as_str().unwrap();
+        assert!(output["truncated"].as_bool().unwrap());
+        assert!(matches.len() <= TOOL_TEXT_OUTPUT_MAX_BYTES);
+        assert!(matches.ends_with('\n') && all.starts_with(matches));
+        let shown = matches.lines().count();
+        assert_eq!(output["returned_matches"], shown);
+        assert_eq!(output["total_matches"], 5000);
+        assert_eq!(output["omitted_matches"], 5000 - shown);
+        assert_eq!(output["total_bytes"], total_bytes);
+        assert_eq!(output["omitted_bytes"], total_bytes - matches.len());
+        assert_eq!(
+            output["message"],
+            format!(
+                "The matches were cut at 64 KiB: {shown} of 5000 matching lines are shown; {} \
+                 lines ({} bytes) are left out. To see the rest, narrow the search: give a path \
+                 (a directory or one file) or a more specific pattern.",
+                5000 - shown,
+                total_bytes - matches.len()
+            )
+        );
+        // The count runs the same grep in the sandbox and brings back two numbers.
+        let calls = sandbox.exec_calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            calls[1],
+            [
+                "sh",
+                "-c",
+                "\"$@\" | wc -lc",
+                "sh",
+                "grep",
+                "-Ern",
+                "-e",
+                "needle",
+                "--",
+                "logs"
+            ]
+        );
+
+        // A result within the limit is unchanged and runs nothing more.
+        let sandbox = Arc::new(StubSandbox::new(
+            "/workspace",
+            vec![result("a.rs:1:needle\n", "", 0)],
+        ));
+        let output = GrepTool {
+            sandbox: sandbox.clone(),
+        }
+        .execute(json!({"pattern": "needle"}))
+        .await
+        .unwrap();
+        assert_eq!(output["truncated"], false);
+        assert!(output.get("message").is_none());
+        assert_eq!(sandbox.exec_calls.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

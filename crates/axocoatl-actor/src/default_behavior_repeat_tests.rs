@@ -198,3 +198,36 @@ async fn an_edit_test_loop_is_never_cut_short() {
     assert!(requests.iter().all(|request| !request.tools.is_empty()));
     assert!(requests.iter().all(|request| host_note(request).is_none()));
 }
+
+/// The 1.3.0 re-smoke's audit workers ran a different `python3 -c` script
+/// in each round for 39 minutes; none showed anything new. The Agent is
+/// asked for its answer after the eighth.
+#[tokio::test]
+async fn an_agent_repeating_a_kind_of_command_without_new_results_is_asked_for_its_answer() {
+    let script: Vec<(&'static str, serde_json::Value)> = (0..30)
+        .map(|index| {
+            (
+                "bash",
+                serde_json::json!({
+                    "command": format!(
+                        "python3 -c \"\n# Final audit confirmation\nprint('=== FINAL {index} ===')\""
+                    )
+                }),
+            )
+        })
+        .collect();
+    let (output, requests) = run_script(script).await;
+    assert_eq!(output.content, "final answer");
+    // The first command's output is new; eight more show nothing new.
+    assert_eq!(requests.len(), 10, "the answer after nine commands");
+    assert!(requests[..9].iter().all(|request| !request.tools.is_empty()));
+    let note = host_note(requests.last().unwrap()).unwrap();
+    assert!(
+        note.contains(
+            "you repeated the same call (bash `python3 -c …`) 8 times without new results"
+        ),
+        "{note}"
+    );
+    assert!(note.contains("tools are no longer available"), "{note}");
+    assert_eq!(output.tool_calls.len(), 9);
+}

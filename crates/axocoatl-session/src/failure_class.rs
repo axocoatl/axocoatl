@@ -285,6 +285,18 @@ mod tests {
                  (none); the change is kept for review.",
                 FailureClass::Blocked,
             ),
+            (
+                "Activation failed: its repository captures cannot establish which files it \
+                 changed, so changes outside the paths this Agent may change (lib/) cannot be \
+                 ruled out; any change is kept for review.",
+                FailureClass::Blocked,
+            ),
+            (
+                "Activation failed: it was stopped before the host could capture which files \
+                 it changed, so changes outside the paths this Agent may change (lib/) cannot \
+                 be ruled out; any change is kept for review.",
+                FailureClass::Stopped,
+            ),
             ("Activation failed: something new", FailureClass::Other),
             ("Stopped", FailureClass::Stopped),
             ("", FailureClass::Other),

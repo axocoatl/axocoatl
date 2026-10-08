@@ -10,9 +10,10 @@
 #      else to the area sharing its directories, else to a host-made area
 #      "rest"; it splits an area whose files need more reads than one worker
 #      makes within its invocations into numbered sub-areas; then it runs one
-#      read-only worker per area in parallel (at most 16 workers and 200
-#      planned reads to a turn, more in further turns), each told its files,
-#      with a fresh context and no dependencies (no checks, no review);
+#      read-only worker without a shell per area in parallel (at most 16
+#      workers and 200 planned reads to a turn, more in further turns), each
+#      told its files, with a fresh context and no dependencies (no checks,
+#      no review);
 #   3. follow-ups: a worker that left files of its area unread (judged from
 #      the bytes the read_file calls its Session recorded returned, never
 #      from its answer) gets another activation naming exactly those files,
@@ -69,11 +70,11 @@ agents:
   - id: worker
     role: worker
     model: { param: worker_model }
-    tools: [read_file, list_dir, grep, glob, bash]
+    tools: [read_file, list_dir, grep, glob]
     writes: []
     instructions: >-
-      Audit only your area. Change nothing; your commands cannot write to the
-      repository. Read every file your instructions name with read_file.
+      Audit only your area. Change nothing; you have no shell and no tool
+      that writes. Read every file your instructions name with read_file.
       Report each defect with file:line, evidence and severity in a FINDINGS
       JSON block, and list any file of yours you could not examine, with why,
       in a NOT_REACHED JSON block ([] when there is none). The other areas of

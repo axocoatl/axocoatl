@@ -659,7 +659,12 @@ impl PreparedActivation {
                 axocoatl_session::execution_content::RepositorySnapshotPhase::After,
             )
             .await?;
-        let scope_violation = self.controller.write_scope_violation(&self.activation)?;
+        // A stop skips the After capture; the activation ended because of it.
+        let stopped =
+            matches!(outcome, Ok(AgentRunOutcome::Cancelled { .. })) || self.control.is_cancelled();
+        let scope_violation = self
+            .controller
+            .write_scope_violation(&self.activation, stopped)?;
         let (mut text, mut completed, mut failure) = match outcome {
             Ok(AgentRunOutcome::Completed(output)) => (output.content, true, None),
             Ok(AgentRunOutcome::Cancelled { partial_output, .. }) => {

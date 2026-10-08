@@ -685,7 +685,7 @@ async fn write_scope_lookup_fails_closed() {
     // changes cannot be judged and the activation could not be accepted.
     let violation = r
         .controller
-        .write_scope_violation(&r.activation)
+        .write_scope_violation(&r.activation, false)
         .unwrap()
         .unwrap();
     assert!(
@@ -704,7 +704,7 @@ async fn write_scope_lookup_fails_closed() {
     // that were never taken cannot rule out an out-of-scope change.
     let violation = r
         .controller
-        .write_scope_violation(&r.activation)
+        .write_scope_violation(&r.activation, false)
         .unwrap()
         .unwrap();
     assert!(
@@ -726,9 +726,131 @@ async fn write_scope_lookup_fails_closed() {
         )
         .unwrap();
     assert_eq!(
-        r.controller.write_scope_violation(&r.activation).unwrap(),
+        r.controller
+            .write_scope_violation(&r.activation, false)
+            .unwrap(),
         None
     );
+}
+
+/// A read-only Agent cannot change a file: no file-writing tool is offered
+/// and its shell runs under the kernel's write restriction or not at all.
+/// Captures it could not complete are no reason to doubt it, with or
+/// without a shell (the scouts, reviewers and audit workers that have one).
+/// A writer's incomplete captures still decide.
+#[tokio::test]
+async fn read_only_agents_are_not_judged_by_captures_they_could_not_complete() {
+    for tools in [&["bash", "read_file"][..], &["read_file", "grep"]] {
+        let mut f = fixture().await;
+        let r = run_scoped(&mut f, tools, &[]);
+        let prepared = r
+            .controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(Provider::new(vec![])),
+                r.resource.clone(),
+            )
+            .unwrap();
+        // This fixture has no supervisor to take captures.
+        assert_eq!(
+            r.controller
+                .write_scope_violation(&r.activation, false)
+                .unwrap(),
+            None,
+            "{tools:?}"
+        );
+        let settled = prepared.run().await.unwrap();
+        assert!(settled.accepted, "{tools:?}: {:?}", settled.failure);
+    }
+    let mut f = fixture().await;
+    let r = run_scoped(&mut f, &["bash"], &["lib/"]);
+    let settled = r
+        .controller
+        .prepare_repository_activation(
+            r.activation.clone(),
+            r.resources(Provider::new(vec![])),
+            r.resource.clone(),
+        )
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    assert!(!settled.accepted);
+    assert!(settled
+        .failure
+        .unwrap()
+        .starts_with("its repository captures cannot establish"));
+}
+
+/// The 1.3.0 re-smoke stopped an audit during its areas turn: its running
+/// read-only workers were reported blocked ("its repository captures cannot
+/// establish which files it changed") instead of stopped. A stopped
+/// read-only activation fails as stopped; a stopped writer whose captures
+/// the stop cut short says so, and is classified as stopped too.
+#[tokio::test]
+async fn a_stopped_activation_is_classified_stopped_not_blocked() {
+    use axocoatl_session::failure_class::classify_failure_text;
+    use axocoatl_session::run_outcome::FailureClass;
+    for (writes, read_only) in [(&[][..], true), (&["lib/"][..], false)] {
+        let mut f = fixture().await;
+        let r = run_scoped(&mut f, &["bash", "read_file"], writes);
+        let provider = Provider::new(vec![(
+            "read_file",
+            serde_json::json!({"path": "never-read"}),
+        )]);
+        let start = f.owner.inner.start.clone().lock_owned().await;
+        let prepared = r
+            .controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap();
+        let task = tokio::spawn(prepared.run());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while f.owner.inner.state.lock().unwrap().active.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        r.controller.stop_activation(&r.activation).unwrap();
+        let settled = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        drop(start);
+        assert!(!settled.accepted);
+        let failure = settled.failure.clone().unwrap();
+        let text = settled.output.content().output.text.clone();
+        assert!(
+            !failure.contains("cannot establish") && !text.contains("cannot establish"),
+            "{failure}\n{text}"
+        );
+        if read_only {
+            assert_eq!(failure, "Stopped");
+            assert!(!text.starts_with("Activation failed:"), "{text}");
+        } else {
+            assert!(
+                failure.starts_with(
+                    "it was stopped before the host could capture which files it changed, so \
+                     changes outside the paths this Agent may change (lib/) cannot be ruled out"
+                ),
+                "{failure}"
+            );
+            assert!(
+                text.starts_with("Activation failed: it was stopped"),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            classify_failure_text(if read_only { &failure } else { &text }),
+            FailureClass::Stopped,
+            "{failure}"
+        );
+    }
 }
 
 pub(super) async fn actual_sandbox(f: &mut Fixture) -> Arc<axocoatl_isolation::SessionSandbox> {

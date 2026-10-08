@@ -853,6 +853,7 @@ mod tests {
             severity: Some(Severity::High),
             area: Some(area.into()),
             location: None,
+            line: None,
             repro: Some(ReproResult {
                 path: format!(".axocoatl/qa/{id}.spec.ts"),
                 sha256: None,

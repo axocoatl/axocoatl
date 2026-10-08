@@ -52,7 +52,29 @@ enum Scenario {
     /// - the integrator answers, every time, with resmoke8's out1
     ///   integrator answer exactly: a tool call written as text.
     Reasks,
+    /// The 1.3.0 resmoke9's loops and placeholders:
+    /// - the planner plans `billing` and `notify` at once;
+    /// - the billing worker reads `billing/pagination.py` and the four
+    ///   windows of `billing/events.log`, and greps `billing` for `needle`,
+    ///   whose 2,000 matching lines are more than 64 KiB; then, while tools
+    ///   are offered, it reads `billing/pagination.py` and lists `billing`
+    ///   in turn, which show nothing new; asked for its answer without
+    ///   tools, it reports a finding at `billing/pagination.py:line_number`;
+    /// - the notify and rest workers read their files and report nothing;
+    /// - the integrator merges the billing finding, at the same placeholder.
+    Loops,
+    /// The 1.3.0 resmoke9's Stop during the areas turn, for workers with a
+    /// shell (a loadout `audit-shell`, the built-in audit with `bash` in its
+    /// worker's tools):
+    /// - the planner plans `billing` and `notify` at once;
+    /// - the billing and rest workers read their files and report nothing;
+    /// - the notify worker's model never answers before the test stops the
+    ///   run, which it does once the other two have answered.
+    Stops,
 }
+
+/// A placeholder a model wrote for a line it did not know.
+const PLACEHOLDER_LOCATION: &str = "billing/pagination.py:line_number";
 
 /// The 1.3.0 resmoke8's out1 integrator answer, exactly as recorded.
 const RESMOKE8_INTEGRATOR: &str = include_str!(
@@ -66,6 +88,14 @@ struct ScriptedAudit {
     descriptions: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
     /// For each re-ask request, the tools it offered the model.
     reask_tools: Arc<std::sync::Mutex<Vec<usize>>>,
+    /// Every tool an area worker's request offered the model.
+    worker_tools: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+    /// Each host note a request without tools ended with.
+    host_notes: Arc<std::sync::Mutex<Vec<String>>>,
+    /// [`Scenario::Stops`]: the notify worker's request arrived.
+    notify_waiting: Arc<std::sync::atomic::AtomicBool>,
+    /// [`Scenario::Stops`]: how many of the other workers have reported.
+    reported: Arc<AtomicUsize>,
 }
 
 impl ScriptedAudit {
@@ -87,11 +117,21 @@ impl ScriptedAudit {
 
     /// Native tool calls, each `(name, arguments)`.
     fn calls(model: &serde_json::Value, calls: &[(&str, serde_json::Value)]) -> ResponseTemplate {
+        Self::calls_after(model, 0, calls)
+    }
+
+    /// Native tool calls whose ids start after the `earlier` calls of the
+    /// conversation, so no two are alike.
+    fn calls_after(
+        model: &serde_json::Value,
+        earlier: usize,
+        calls: &[(&str, serde_json::Value)],
+    ) -> ResponseTemplate {
         let calls: Vec<serde_json::Value> = calls
             .iter()
             .enumerate()
             .map(|(index, (name, arguments))| {
-                serde_json::json!({"id": format!("call_{index}"), "function": {
+                serde_json::json!({"id": format!("call_{}", earlier + index), "function": {
                     "index": index, "name": name, "arguments": arguments}})
             })
             .collect();
@@ -112,6 +152,100 @@ impl ScriptedAudit {
             model,
             &format!("FINDINGS\n```json\n{findings}\n```\nNOT_REACHED\n```json\n[]\n```"),
         )
+    }
+}
+
+impl ScriptedAudit {
+    /// The workers' and integrator's answers in [`Scenario::Loops`] and
+    /// [`Scenario::Stops`]; `None` for the planner's, which plans `billing`
+    /// and `notify` as in the other scenarios.
+    fn loops_and_stops(
+        &self,
+        model: &serde_json::Value,
+        body: &serde_json::Value,
+        text: &str,
+        offered: &[String],
+    ) -> Option<ResponseTemplate> {
+        let read = |path: &str| ("read_file", serde_json::json!({ "path": path }));
+        let results = body["messages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|message| message["role"] == "tool")
+            .count();
+        let finding = |area: Option<&str>| {
+            let mut finding = serde_json::json!({"id": "F1", "title": "get_page returns one \
+                item too many", "detail": "the slice ends one past the page", "severity": "high",
+                "location": PLACEHOLDER_LOCATION});
+            if let Some(area) = area {
+                finding["area"] = area.into();
+            }
+            format!("FINDINGS\n```json\n[{finding}]\n```\nNOT_REACHED\n```json\n[]\n```")
+        };
+        if text.contains("The area workers of this audit have finished") {
+            return Some(Self::answer(model, &finding(Some("billing"))));
+        }
+        let (area, files): (&str, &[&str]) = if text.contains("Your area: billing") {
+            ("billing", &["billing/pagination.py"])
+        } else if text.contains("Your area: notify") {
+            ("notify", &["notify/webhook.py"])
+        } else if text.contains("Your area: rest") {
+            ("rest", &["README.md"])
+        } else {
+            return None;
+        };
+        if self.scenario == Scenario::Stops {
+            if area == "notify" {
+                self.notify_waiting.store(true, Ordering::SeqCst);
+                return Some(Self::report(model, None).set_delay(Duration::from_secs(90)));
+            }
+            if results == 0 {
+                return Some(Self::calls(model, &[read(files[0])]));
+            }
+            self.reported.fetch_add(1, Ordering::SeqCst);
+            return Some(Self::report(model, None));
+        }
+        if area != "billing" {
+            return Some(if results == 0 {
+                Self::calls(model, &[read(files[0])])
+            } else {
+                Self::report(model, None)
+            });
+        }
+        if offered.is_empty() {
+            return Some(Self::answer(model, &finding(None)));
+        }
+        if results == 0 {
+            let window = |offset: u64| {
+                (
+                    "read_file",
+                    serde_json::json!({"path": "billing/events.log", "offset": offset}),
+                )
+            };
+            return Some(Self::calls(
+                model,
+                &[
+                    read("billing/pagination.py"),
+                    read("billing/events.log"),
+                    window(32768),
+                    window(65536),
+                    window(98304),
+                    (
+                        "grep",
+                        serde_json::json!({"pattern": "needle", "path": "billing"}),
+                    ),
+                ],
+            ));
+        }
+        Some(if results % 2 == 0 {
+            Self::calls_after(model, results, &[read("billing/pagination.py")])
+        } else {
+            Self::calls_after(
+                model,
+                results,
+                &[("list_dir", serde_json::json!({"path": "billing"}))],
+            )
+        })
     }
 }
 
@@ -139,6 +273,30 @@ impl wiremock::Respond for ScriptedAudit {
                 .lock()
                 .unwrap()
                 .push(body["tools"].as_array().map_or(0, Vec::len));
+        }
+        let offered: Vec<String> = body["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_owned))
+            .collect();
+        if text.contains("Your area: ") {
+            self.worker_tools.lock().unwrap().extend(offered.clone());
+        }
+        if offered.is_empty() {
+            if let Some(note) = body["messages"]
+                .as_array()
+                .and_then(|messages| messages.last())
+                .and_then(|message| message["content"].as_str())
+                .filter(|content| content.starts_with("[Note from the host:"))
+            {
+                self.host_notes.lock().unwrap().push(note.to_owned());
+            }
+        }
+        if matches!(self.scenario, Scenario::Loops | Scenario::Stops) {
+            if let Some(reply) = self.loops_and_stops(model, &body, &text, &offered) {
+                return reply;
+            }
         }
         if text.contains("The area workers of this audit have finished") {
             if self.scenario == Scenario::Reasks {
@@ -265,6 +423,9 @@ impl wiremock::Respond for ScriptedAudit {
                     model,
                     Some(("invoice total ignores the discount", "billing/invoice.py:2")),
                 ),
+                (Scenario::Loops | Scenario::Stops, _, _) => {
+                    unreachable!("answered by loops_and_stops")
+                }
             };
         }
         if text.contains("Your area: notify") {
@@ -279,6 +440,9 @@ impl wiremock::Respond for ScriptedAudit {
                     Self::calls(model, &[read("notify/webhook.py")])
                 }
                 (Scenario::SkipsThenReads, true) => Self::report(model, None),
+                (Scenario::Loops | Scenario::Stops, _) => {
+                    unreachable!("answered by loops_and_stops")
+                }
             };
         }
         if text.contains("Plan this audit before it starts") {
@@ -596,6 +760,10 @@ struct AuditRun {
     descriptions: Vec<String>,
     /// How many tools each re-ask request offered the model.
     reask_tools: Vec<usize>,
+    /// Every tool an area worker's request offered the model.
+    worker_tools: Vec<String>,
+    /// Each host note a request without tools ended with.
+    host_notes: Vec<String>,
 }
 
 impl AuditRun {
@@ -647,6 +815,10 @@ async fn audit_on_podman(scenario: Scenario, files: &[(&str, &[u8])], task: &str
     let planner_calls = Arc::new(AtomicUsize::new(0));
     let descriptions = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
     let reask_tools = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let worker_tools = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+    let host_notes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let notify_waiting = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reported = Arc::new(AtomicUsize::new(0));
     let server = model_server(
         scenario,
         ScriptedAudit {
@@ -654,11 +826,33 @@ async fn audit_on_podman(scenario: Scenario, files: &[(&str, &[u8])], task: &str
             planner_calls: planner_calls.clone(),
             descriptions: descriptions.clone(),
             reask_tools: reask_tools.clone(),
+            worker_tools: worker_tools.clone(),
+            host_notes: host_notes.clone(),
+            notify_waiting: notify_waiting.clone(),
+            reported: reported.clone(),
         },
     )
     .await;
     let config_dir = tempfile::tempdir().unwrap();
     let config_path = config_dir.path().join("axocoatl.yaml");
+    // Workers with a shell: the built-in audit as it was before its worker
+    // lost `bash`, as a loadout of the person's own.
+    let loadout = if scenario == Scenario::Stops {
+        let builtin = include_str!("../../axocoatl-config/loadouts/audit.yaml");
+        let shell = builtin
+            .replace("\nid: audit\n", "\nid: audit-shell\n")
+            .replace("\nname: Audit\n", "\nname: Audit with a shell\n")
+            .replace(
+                "    tools: [read_file, list_dir, grep, glob]\n    writes: []\n    instructions: >-\n      Audit only your area.",
+                "    tools: [read_file, list_dir, grep, glob, bash]\n    writes: []\n    instructions: >-\n      Audit only your area.",
+            );
+        assert!(shell.contains("id: audit-shell") && shell.contains("glob, bash]"));
+        std::fs::create_dir_all(config_dir.path().join("loadouts")).unwrap();
+        std::fs::write(config_dir.path().join("loadouts/audit-shell.yaml"), shell).unwrap();
+        "audit-shell"
+    } else {
+        "audit"
+    };
     std::fs::write(
         &config_path,
         format!(
@@ -709,7 +903,7 @@ async fn audit_on_podman(scenario: Scenario, files: &[(&str, &[u8])], task: &str
     let model = format!("ollama:{MODEL}");
     let (accepted, context) = daemon
         .admit_loadout_run(RunRequest {
-            loadout: "audit".into(),
+            loadout: loadout.into(),
             task: task.into(),
             repo: repo.display().to_string(),
             params: [
@@ -727,6 +921,19 @@ async fn audit_on_podman(scenario: Scenario, files: &[(&str, &[u8])], task: &str
         .await
         .unwrap();
     let cleanup = Cleanup(std::sync::Mutex::new(vec![accepted.session_id.clone()]));
+    // Stop the run as a person would once the notify worker waits on its
+    // model and the other two workers have reported.
+    let stopper = (scenario == Scenario::Stops).then(|| {
+        let (daemon, run_id) = (daemon.clone(), accepted.run_id.clone());
+        let (waiting, reported) = (notify_waiting.clone(), reported.clone());
+        tokio::spawn(async move {
+            while !waiting.load(Ordering::SeqCst) || reported.load(Ordering::SeqCst) < 2 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            daemon.request_loadout_run_stop(&run_id).await
+        })
+    });
     let result = async {
         let ready = daemon.loadout_run(&accepted.run_id).await?;
         assert!(ready.outcome.is_none(), "the environment failed: {ready:?}");
@@ -768,9 +975,14 @@ async fn audit_on_podman(scenario: Scenario, files: &[(&str, &[u8])], task: &str
             junit,
             descriptions: descriptions.lock().unwrap().iter().cloned().collect(),
             reask_tools: reask_tools.lock().unwrap().clone(),
+            worker_tools: worker_tools.lock().unwrap().iter().cloned().collect(),
+            host_notes: host_notes.lock().unwrap().clone(),
         })
     }
     .await;
+    if let Some(stopper) = stopper {
+        stopper.await.unwrap().unwrap();
+    }
     let shutdown = daemon.shutdown_session_runtimes_checked().await;
     drop(cleanup);
     let run = result.unwrap();
@@ -1144,6 +1356,13 @@ async fn an_audit_on_podman_judges_workers_by_their_recorded_tool_calls() {
             && phases[0].ends_with("it gets one more turn"),
         "{phases:?}"
     );
+    // The failed plan turn is closed in words true of a plan turn.
+    let closing = run.phases("closing_turn");
+    assert_eq!(closing.len(), 1, "{closing:?}");
+    assert!(
+        closing[0].contains("a plan turn has no areas yet") && !closing[0].contains("its areas"),
+        "{closing:?}"
+    );
     use crate::loadout::audit::{
         AREAS_PURPOSE, FOLLOW_UP_PURPOSE, INTEGRATE_PURPOSE, PLAN_PURPOSE,
     };
@@ -1408,6 +1627,238 @@ async fn an_audit_on_podman_re_asks_unreadable_answers_and_passes() {
     assert!(
         run.junit
             .contains("<testsuite name=\"coverage\" tests=\"0\""),
+        "{}",
+        run.junit
+    );
+}
+
+/// The 1.3.0 resmoke9's loops and placeholders on real Podman:
+/// - no worker is offered `bash`;
+/// - the billing worker's `grep` matches 2,000 lines, more than 64 KiB: the
+///   result in the hardened Session container shows whole lines and says
+///   how many lines and bytes it left out and how to narrow the search;
+/// - the worker then reads the same file and lists the same directory in
+///   turn, which show nothing new; after its eighth repeat of the read the
+///   host asks for its answer without tools, saying why;
+/// - its answer, and the integrator's, place the finding at
+///   `billing/pagination.py:line_number`: the Outcome keeps the file with
+///   the line unknown (`null`), and JUnit shows the file only;
+/// - every file is covered and the run passes.
+///
+/// ```text
+/// CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-daemon --lib \
+///   an_audit_on_podman_ends_a_repeating_worker_and_keeps_placeholders_out -- --ignored
+/// ```
+#[tokio::test]
+#[ignore = "requires rootless Podman, docker.io/library/alpine:3.20 and the egress sidecar image"]
+async fn an_audit_on_podman_ends_a_repeating_worker_and_keeps_placeholders_out() {
+    if in_child("an_audit_on_podman_ends_a_repeating_worker_and_keeps_placeholders_out").await {
+        return;
+    }
+    // 2,000 lines of 50 bytes: four 32 KiB windows, and 2,000 matching
+    // lines of more than 64 KiB once grep names the file and the line.
+    let events: String = (0..2000)
+        .map(|index| format!("needle {index:05} in the nightly billing event log ...\n"))
+        .collect();
+    assert_eq!(events.len(), 100_000);
+    let run = audit_on_podman(
+        Scenario::Loops,
+        &[
+            ("README.md", b"# Audit fixture\n"),
+            ("billing/events.log", events.as_bytes()),
+            (
+                "billing/pagination.py",
+                b"def get_page(items, page, size):\n    return items[page * size:(page + 1) * size + 1]\n",
+            ),
+            (
+                "notify/webhook.py",
+                b"WEBHOOK = 'https://hooks.example.invalid/orders'\n",
+            ),
+        ],
+        "Find correctness defects in billing and notify.",
+    )
+    .await;
+    let outcome = &run.outcome;
+    assert_eq!(
+        outcome.exit_code,
+        exit_code::PASS,
+        "{:?} {:?} {:?}",
+        outcome.attention,
+        outcome.not_covered,
+        run.events
+    );
+    assert!(outcome.not_covered.is_empty(), "{:?}", outcome.not_covered);
+    // No shell for any worker.
+    assert_eq!(
+        run.worker_tools,
+        ["glob", "grep", "list_dir", "read_file"],
+        "{:?}",
+        run.worker_tools
+    );
+    use crate::loadout::audit::AREAS_PURPOSE;
+    let recorded = &run
+        .calls
+        .iter()
+        .find(|(purpose, _)| purpose == AREAS_PURPOSE)
+        .unwrap()
+        .1;
+    // The cut grep, as the tool returned it in the Session container.
+    let grep = recorded
+        .iter()
+        .find(|call| call.tool == "grep")
+        .map(|call| call.result.clone())
+        .unwrap();
+    assert_eq!(grep["truncated"], true, "{grep}");
+    let matches = grep["matches"].as_str().unwrap();
+    assert!(matches.len() <= 65536 && matches.ends_with('\n'), "{grep}");
+    let shown = matches.lines().count();
+    assert!(matches.lines().enumerate().all(|(index, line)| line
+        == format!(
+            "billing/events.log:{}:needle {index:05} in the nightly billing event log ...",
+            index + 1
+        )));
+    let total_bytes: usize = (0..2000)
+        .map(|index| format!("billing/events.log:{}:", index + 1).len() + 50)
+        .sum();
+    assert_eq!(grep["total_matches"], 2000, "{grep}");
+    assert_eq!(grep["returned_matches"], shown, "{grep}");
+    assert_eq!(grep["omitted_matches"], 2000 - shown, "{grep}");
+    assert_eq!(grep["total_bytes"], total_bytes, "{grep}");
+    assert_eq!(grep["omitted_bytes"], total_bytes - matches.len(), "{grep}");
+    assert_eq!(
+        grep["message"],
+        format!(
+            "The matches were cut at 64 KiB: {shown} of 2000 matching lines are shown; {} lines \
+             ({} bytes) are left out. To see the rest, narrow the search: give a path (a \
+             directory or one file) or a more specific pattern.",
+            2000 - shown,
+            total_bytes - matches.len()
+        )
+    );
+    // The repeats: the read nine times (the first showed the file), the
+    // listing seven, then the answer without tools.
+    let count = |tool: &str| {
+        recorded
+            .iter()
+            .filter(|call| {
+                call.tool == tool
+                    && (tool != "read_file" || call.arguments["path"] == "billing/pagination.py")
+            })
+            .count()
+    };
+    assert_eq!(
+        (count("read_file"), count("list_dir")),
+        (9, 7),
+        "{recorded:?}"
+    );
+    assert_eq!(run.host_notes.len(), 1, "{:?}", run.host_notes);
+    assert!(
+        run.host_notes[0].starts_with(
+            "[Note from the host: you repeated the same call (read_file with the same \
+             arguments) 8 times without new results, so tools are no longer available."
+        ),
+        "{:?}",
+        run.host_notes
+    );
+    // The placeholder line is unknown: the file stands alone.
+    assert_eq!(outcome.findings.len(), 1, "{:?}", outcome.findings);
+    let finding = &outcome.findings[0];
+    assert_eq!(
+        (finding.location.as_deref(), finding.area.as_deref()),
+        (Some("billing/pagination.py"), Some("billing")),
+        "{finding:?}"
+    );
+    assert_eq!(finding.line, Some(None), "{finding:?}");
+    let json = serde_json::to_value(outcome).unwrap();
+    assert!(
+        json["findings"][0]["line"].is_null() && json["findings"][0].get("line").is_some(),
+        "{}",
+        json["findings"]
+    );
+    assert!(!run.junit.contains("line_number"), "{}", run.junit);
+    assert!(
+        run.junit
+            .contains("billing/pagination.py: the slice ends one past the page"),
+        "{}",
+        run.junit
+    );
+}
+
+/// The 1.3.0 resmoke9's Stop during the areas turn on real Podman, with
+/// workers that have a shell: the billing and rest workers have reported
+/// and the notify worker waits on its model when a person stops the run.
+/// The stopped read-only worker is not covered as stopped, never blocked
+/// for repository captures the stop cut short; the integration is not
+/// run; the run is interrupted.
+///
+/// ```text
+/// CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-daemon --lib \
+///   an_audit_on_podman_stopped_during_its_areas_lists_them_as_stopped -- --ignored
+/// ```
+#[tokio::test]
+#[ignore = "requires rootless Podman, docker.io/library/alpine:3.20 and the egress sidecar image"]
+async fn an_audit_on_podman_stopped_during_its_areas_lists_them_as_stopped() {
+    if in_child("an_audit_on_podman_stopped_during_its_areas_lists_them_as_stopped").await {
+        return;
+    }
+    let run = audit_on_podman(
+        Scenario::Stops,
+        &[
+            ("README.md", b"# Audit fixture\n"),
+            (
+                "billing/pagination.py",
+                b"def get_page(items, page, size):\n    return items[page * size:(page + 1) * size + 1]\n",
+            ),
+            (
+                "notify/webhook.py",
+                b"WEBHOOK = 'https://hooks.example.invalid/orders'\n",
+            ),
+        ],
+        "Find correctness defects in billing and notify.",
+    )
+    .await;
+    let outcome = &run.outcome;
+    assert_eq!(
+        outcome.exit_code,
+        exit_code::INTERRUPTED,
+        "{:?} {:?} {:?}",
+        outcome.attention,
+        outcome.not_covered,
+        run.events
+    );
+    // The workers had a shell.
+    assert!(
+        run.worker_tools.iter().any(|tool| tool == "bash"),
+        "{:?}",
+        run.worker_tools
+    );
+    let entries: Vec<(&str, FailureClass, &str)> = outcome
+        .not_covered
+        .iter()
+        .map(|entry| (entry.area.as_str(), entry.class, entry.detail.as_str()))
+        .collect();
+    assert!(
+        entries
+            .iter()
+            .any(|(area, class, _)| *area == "notify" && *class == FailureClass::Stopped),
+        "{entries:?}"
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|(_, class, detail)| *class == FailureClass::Stopped
+                && !detail.contains("repository captures")
+                && !detail.contains("cannot establish")),
+        "{entries:?}"
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|(area, _, _)| ["notify", "audit integration"].contains(area)),
+        "{entries:?}"
+    );
+    assert!(
+        !run.junit.contains("blocked") && run.junit.contains("stopped"),
         "{}",
         run.junit
     );

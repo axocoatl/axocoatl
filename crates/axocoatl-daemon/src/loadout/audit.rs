@@ -21,8 +21,9 @@
 //!    one replaced by its sub-areas) and the assignment are `assigned`
 //!    phase events; a planned area without files is not run (a note).
 //! 3. **Areas**: one `worker-<area>` slot per executed area, instantiated
-//!    from the `worker` Agent: read-only (`writes: []`; its commands run
-//!    under the supervisor's write restriction), a fresh context
+//!    from the `worker` Agent: read-only (`writes: []`) with the built-in
+//!    loadout's `read_file`, `list_dir`, `grep` and `glob` and no shell, a
+//!    fresh context
 //!    (`reset_history`), no dependencies, required, no checks and no
 //!    review, so the controller starts every one at once. Each worker's
 //!    instructions name its files ([`files::file_list`]). One turn runs at
@@ -411,7 +412,7 @@ const READ_RULES: &str = "The host checks your read_file calls, not your answer:
      counts as examined only when read_file returned every byte of it. read_file returns a \
      window of the file from its offset (0 by default), as large as its description says, or \
      limit bytes; when the result says truncated, read on with more calls at each result's \
-     next_offset until truncated is false. grep, glob, list_dir and bash find and search \
+     next_offset until truncated is false. grep, glob and list_dir find and search \
      files, but what they show does not count as reading. The host names any file of yours \
      you did not read to its end back to you to read.\n";
 
@@ -1067,6 +1068,31 @@ pub fn failure_of(node: Option<&NodeObservation>, deadline_hit: bool) -> (Failur
     }
 }
 
+/// The `closing_turn` line for the turn `turn_id` of `purpose`, which ended
+/// needing attention: what the audit does about it, which depends on what
+/// the turn was for (a plan or an integration has no areas).
+pub fn closing_detail(purpose: &str, turn_id: &str) -> String {
+    let what = match purpose {
+        PLAN_PURPOSE => {
+            "a plan turn has no areas yet: when it left no usable plan, the planner gets its \
+             one retry unless the wall clock, a stop or a provider refusal ended it, and a \
+             second attempt without one leaves the whole scope not covered"
+        }
+        INTEGRATE_PURPOSE => {
+            "an integration turn has no areas: when it left no readable result, the integrator \
+             is retried or re-asked, the host merges the area findings, or the integration is \
+             listed as not covered"
+        }
+        REASK_PURPOSE => {
+            "a re-ask turn reads nothing and changes no coverage: findings still unreadable \
+             after the re-asks are listed as unreadable, or merged by the host for the \
+             integration"
+        }
+        _ => "its areas without a result are listed as not covered",
+    };
+    format!("Stopping turn {turn_id}, which needs attention, so the audit can go on; {what}")
+}
+
 /// A failure that would end a follow-up the same way: the wall clock, a
 /// person's stop, or a provider refusing the request itself (400-403).
 fn final_failure(class: FailureClass) -> bool {
@@ -1363,14 +1389,8 @@ impl Audit<'_> {
             return Ok(());
         };
         let turn_id = self.report.turns[index].turn_id.clone();
-        self.phase(
-            "closing_turn",
-            format!(
-                "Stopping turn {turn_id}, which needs attention, so the audit can go on; \
-                 its areas without a result are listed as not covered"
-            ),
-        )
-        .await?;
+        let detail = closing_detail(&self.report.turn_refs[index].purpose, &turn_id);
+        self.phase("closing_turn", detail).await?;
         self.host.stop_turn(&self.run.session_id, &turn_id).await?;
         let closed = self
             .host

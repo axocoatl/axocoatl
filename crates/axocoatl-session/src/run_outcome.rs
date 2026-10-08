@@ -359,11 +359,27 @@ pub struct Finding {
     /// Audit area or QA area.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub area: Option<String>,
-    /// `path:line` when known.
+    /// `path:line` when the line is known, `path` alone when it is not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
+    /// The line `location` names: `null` when it names a file but no line
+    /// number; absent without a location.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_line"
+    )]
+    pub line: Option<Option<u32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repro: Option<ReproResult>,
+}
+
+/// A `line` that is present, `null` included.
+fn present_line<'de, D>(deserializer: D) -> Result<Option<Option<u32>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<u32>::deserialize(deserializer).map(Some)
 }
 
 /// Why something was not covered.
@@ -1153,6 +1169,7 @@ mod tests {
             severity: None,
             area: None,
             location: None,
+            line: None,
             repro: Some(ReproResult {
                 path: ".axocoatl/qa/b1.spec.ts".into(),
                 sha256: None,

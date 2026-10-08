@@ -840,13 +840,19 @@ pub struct ExecutionActivationView {
     pub failure: Option<ActivationFailureView>,
 }
 
+/// How the host's failure line begins for a writer stopped before its
+/// repository captures could establish what it changed: the stop ended it,
+/// and any change it made is kept for review.
+pub const STOPPED_BEFORE_CAPTURE: &str =
+    "it was stopped before the host could capture which files it changed";
+
 /// A failed activation's cause in plain terms, with its recommended step.
 /// The step is a suggestion for a person; nothing runs by itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ActivationFailureView {
     /// provider_incomplete | provider_error | provider_refusal |
     /// budget_limited | round_limit | context_limit | scope_violation |
-    /// capture_unavailable | admission | other
+    /// capture_unavailable | stopped | admission | other
     pub class: &'static str,
     pub explanation: String,
     /// continue | finish_partial | review_then_finish | inspect
@@ -961,6 +967,12 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
         (
             "scope_violation",
             "The Agent changed files it does not own. The changes are kept; review them before keeping or undoing them.",
+            "review_then_finish",
+        )
+    } else if line.starts_with(STOPPED_BEFORE_CAPTURE) {
+        (
+            "stopped",
+            "The Agent was stopped before the host could observe what it changed. Any change is kept; review it before keeping or undoing it.",
             "review_then_finish",
         )
     } else if line.starts_with("its repository captures cannot establish") {
@@ -5369,6 +5381,11 @@ mod tests {
         assert_eq!(
             class("Activation failed: its admitted write scope cannot be read, so its changes cannot be judged; any change is kept for review.\n\nmodel text"),
             Some(("capture_unavailable", "review_then_finish"))
+        );
+        // A writer stopped before its After capture ended because of the stop.
+        assert_eq!(
+            class("Activation failed: it was stopped before the host could capture which files it changed, so changes outside the paths this Agent may change (lib/) cannot be ruled out; any change is kept for review.\n\nmodel text"),
+            Some(("stopped", "review_then_finish"))
         );
         // The model cannot choose the class: only the host's first line counts.
         assert_eq!(

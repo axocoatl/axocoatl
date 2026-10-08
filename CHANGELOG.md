@@ -130,7 +130,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure or its budget, are listed as not covered, and the run needs attention.
 - **Built-in `audit` loadout (opt-in).** Runs only when named. A planner splits the
   scope into 2 to 8 areas in a structured block, one read-only worker per area runs in
-  parallel with a fresh context, and an integrator merges their findings. Coverage is
+  parallel with a fresh context, and an integrator merges their findings. No Agent of
+  the audit has a shell: its workers, planner and integrator have `read_file`,
+  `list_dir`, `grep` and `glob` (in the last re-smoke two workers with `bash` spent 39
+  minutes on 80 and 81 calls printing "final audit confirmation" scripts). Coverage is
   the host's, never the workers' word. After the plan the host lists the repository's
   files (`git ls-files --cached --others --exclude-standard` in a Git work tree, else a
   walk that skips what `glob` skips; regular files only, at most 20,000) and gives each
@@ -152,8 +155,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cover every byte of it, whatever its size: each read covers what its result reports,
   from its `offset` for its `returned_bytes`, and a partial read of a small file leaves
   it unread. Empty files and binary files (a NUL byte in the first 8,000 bytes) need no
-  read; a file over 256 KiB is not read, a note. `grep`, `glob`, `list_dir` and `bash`
-  read nothing for coverage. When a worker's turn ends with files of its area unread,
+  read; a file over 256 KiB is not read, a note. `grep`, `glob` and `list_dir` (and
+  `bash`, in a loadout of your own that gives a worker one) read nothing for coverage. When a worker's turn ends with files of its area unread,
   the host runs a follow-up turn with a fresh activation of every such worker naming
   exactly its unread files ("read these files and report additional findings in the
   same format"), and its findings join the area's report; follow-ups go on while each
@@ -192,7 +195,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for another reason (the wall clock, a stop), the workers' findings are reported
   unmerged and `audit integration` is listed as not covered; the attention line counts
   only areas and says "The integration was not read; the area findings are reported
-  unmerged". A stopped audit
+  unmerged". A finding's location is `path:line` only when the line is a number: a
+  location such as `ingest/feed.go:line_number`, which a re-ask once wrote from prose
+  that named no line, keeps the file alone, with the finding's `line` `null` in the
+  Outcome, and the summary and JUnit show the file only. A stopped audit
   starts no further turn, lists the areas not started, the files no follow-up read and
   the integration not run as not covered (`stopped`), reports the workers' findings
   unmerged, and keeps in its Outcome the turns, not-covered entries, findings and usage
@@ -363,6 +369,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `provider_rejected`, `budget`, `blocked`, `not_reached`, `runtime_limit`, `stopped`,
   `other`), and a run's Outcome lists it as not covered with the reason. The lead still
   receives a failed helper's error as before.
+- **An Agent whose calls keep showing nothing new is asked for its answer.** Besides
+  three rounds that only print and four rounds of the same calls with the same results,
+  a native Agent's next request now goes without tools and asks for its final answer
+  when 8 of its last 10 calls with the same tool and arguments, or 8 of its last 10
+  `bash` commands with the same pattern (the program and its first option, such as
+  `python3 -c`), showed nothing new, wherever they fall in the activation. A result
+  shows nothing new when at most one in four of its lines is one that no earlier result
+  of the activation showed and that the call's own arguments do not contain, so a script
+  that prints its own text shows nothing new. An edit or a write, or a command that
+  printed nothing, starts these counts again; polling a terminal never counts. The
+  request says why ("you repeated the same call (bash `python3 -c …`) 8 times without
+  new results"), and a model that calls a tool instead of answering ends the activation
+  as failed with that reason, which a run's follow-ups and re-asks then handle like any
+  other worker without a result.
+- **A cut `grep` result says what it left out.** `grep` returns up to 64 KiB of whole
+  matching lines; a result it cut now also gives `returned_matches`, `total_matches`,
+  `total_bytes`, `omitted_matches` and `omitted_bytes` (the same search counted in the
+  Session's container, its output not brought back) and a `message` saying how many
+  matching lines and bytes were left out and to narrow the search with a path (a
+  directory or one file) or a more specific pattern.
 - **Public claims withdrawn or labeled.** "Small local models are a first-class target"
   is withdrawn from the README, the product document, `llms.txt` and the docs: nothing
   measured it; the mechanisms it named are still described. Pages that cite the measured
@@ -391,6 +417,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only by `aggregate_bytes`.
 
 ### Fixed
+- **A stopped read-only Agent is stopped, not blocked.** A Stop skips an activation's
+  After repository capture, so a read-only Agent with `bash` (a Scout, a Reviewer, or
+  an audit worker with a shell) that was stopped failed with "its repository captures
+  cannot establish which files it changed … any change is kept for review" (class
+  `capture_unavailable`), and a run listed it as `blocked`. A read-only Agent cannot change a file's
+  contents, so captures it could not complete are no longer a reason to fail it; a
+  change its complete captures do show still is. A stopped read-only activation now
+  fails as stopped, and a writer stopped before its After capture fails with "it was
+  stopped before the host could capture which files it changed …", classed `stopped`
+  with any change kept for review.
 - **Read-only Agents read a repository only its owner may enter.** Read-only Agents,
   every Agent of an audit and the required reviewer among them, run as `helper_user`,
   which read only what the file modes let any user read: on a Linux host a repository

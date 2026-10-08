@@ -372,6 +372,7 @@ fn finding_from(entry: &Value, source: FindingSource) -> Result<Option<Finding>,
                 severity: None,
                 area: None,
                 location: None,
+                line: None,
                 repro: None,
             }))
         }
@@ -396,13 +397,15 @@ fn finding_from(entry: &Value, source: FindingSource) -> Result<Option<Finding>,
         None if !detail.trim().is_empty() => first_line(&detail).to_owned(),
         None => return Ok(None),
     };
-    let location = text(&["location"]).or_else(|| {
-        let file = text(&["file", "path"])?;
-        Some(match object.get("line").and_then(scalar_text) {
-            Some(line) => format!("{}:{}", file.trim(), line.trim()),
-            None => file,
+    let location = text(&["location"])
+        .or_else(|| {
+            let file = text(&["file", "path"])?;
+            Some(match object.get("line").and_then(scalar_text) {
+                Some(line) => format!("{}:{}", file.trim(), line.trim()),
+                None => file,
+            })
         })
-    });
+        .and_then(|location| split_location(&location));
     let area = text(&["area"]).or_else(|| {
         let names: Vec<String> = object
             .get("areas")?
@@ -423,9 +426,60 @@ fn finding_from(entry: &Value, source: FindingSource) -> Result<Option<Finding>,
         detail: bounded(detail.trim(), MAX_DETAIL_BYTES),
         severity: text(&["severity", "priority"]).and_then(|word| severity_of(&word)),
         area: area.map(|area| bounded(area.trim(), MAX_TITLE_BYTES)),
-        location: location.map(|location| bounded(location.trim(), MAX_LOCATION_BYTES)),
+        line: location.as_ref().map(|(_, line)| *line),
+        location: location.map(|(location, _)| bounded(&location, MAX_LOCATION_BYTES)),
         repro: None,
     }))
+}
+
+/// Whether a location's file is a placeholder for none.
+fn is_placeholder(file: &str) -> bool {
+    file.is_empty()
+        || [
+            "n/a", "na", "none", "unknown", "null", "-", "?", "path", "file",
+        ]
+        .contains(&file.to_ascii_lowercase().as_str())
+}
+
+/// A finding's location as the host records it, and the line it names. A
+/// model writes `path:line`, and sometimes a placeholder for a line it did
+/// not know (`feed.go:line_number`, `feed.go:N`): a line counts only when
+/// what follows the first `:` starts with a line number above 0 (after an
+/// optional `L` or `line`), alone or followed by a column, a range or a
+/// space (`:12`, `:12:5`, `:12-14`, `:L12`). Then the location stands as
+/// written and the line is that number; otherwise the location is the file
+/// alone and the line is unknown (`None`), never the placeholder. `None` for
+/// a location that names no file.
+pub fn split_location(location: &str) -> Option<(String, Option<u32>)> {
+    let location = location.trim();
+    let Some((file, rest)) = location.split_once(':') else {
+        return (!is_placeholder(location)).then(|| (location.to_owned(), None));
+    };
+    let file = file.trim();
+    if is_placeholder(file) {
+        return None;
+    }
+    let rest = rest.trim();
+    let lower = rest.to_ascii_lowercase();
+    let skip = ["lines", "line", "l"]
+        .iter()
+        .find(|prefix| lower.starts_with(**prefix))
+        .map_or(0, |prefix| prefix.len());
+    let number = rest[skip..].trim_start();
+    let digits = number.len()
+        - number
+            .trim_start_matches(|c: char| c.is_ascii_digit())
+            .len();
+    let after = &number[digits..];
+    let line = number[..digits]
+        .parse::<u32>()
+        .ok()
+        .filter(|line| *line > 0)
+        .filter(|_| after.is_empty() || after.starts_with([':', '-', ',', ' ', '\u{2013}', '(']));
+    Some(match line {
+        Some(line) => (format!("{file}:{rest}"), Some(line)),
+        None => (file.to_owned(), None),
+    })
 }
 
 /// A string or number as text.
@@ -1199,5 +1253,92 @@ FINDINGS
             "{error}"
         );
         assert!(ingest.contains("json.Unmarshal error is not checked"));
+    }
+
+    /// The 1.3.0 re-smoke's re-ask answered from prose that named no line
+    /// with `ingest/feed.go:line_number`, which the host kept as given.
+    #[test]
+    fn a_location_without_a_line_number_keeps_its_file_and_no_line() {
+        for (location, expected) in [
+            ("ingest/feed.go:line_number", Some(("ingest/feed.go", None))),
+            ("ingest/feed.go:N", Some(("ingest/feed.go", None))),
+            ("ingest/feed.go:?", Some(("ingest/feed.go", None))),
+            ("ingest/feed.go:0", Some(("ingest/feed.go", None))),
+            ("ingest/feed.go:", Some(("ingest/feed.go", None))),
+            ("ingest/feed.go", Some(("ingest/feed.go", None))),
+            ("ingest/feed.go:29", Some(("ingest/feed.go:29", Some(29)))),
+            (
+                " ingest/feed.go : 29 ",
+                Some(("ingest/feed.go:29", Some(29))),
+            ),
+            (
+                "ingest/feed.go:29:7",
+                Some(("ingest/feed.go:29:7", Some(29))),
+            ),
+            (
+                "ingest/feed.go:29-31",
+                Some(("ingest/feed.go:29-31", Some(29))),
+            ),
+            (
+                "billing/pagination.py:016",
+                Some(("billing/pagination.py:016", Some(16))),
+            ),
+            ("ingest/feed.go:L29", Some(("ingest/feed.go:L29", Some(29)))),
+            (
+                "ingest/feed.go:line 29",
+                Some(("ingest/feed.go:line 29", Some(29))),
+            ),
+            ("ingest/feed.go:29x", Some(("ingest/feed.go", None))),
+            ("N/A", None),
+            ("unknown:12", None),
+            (":12", None),
+            ("", None),
+        ] {
+            let split = split_location(location);
+            assert_eq!(
+                split
+                    .as_ref()
+                    .map(|(location, line)| (location.as_str(), *line)),
+                expected,
+                "{location:?}"
+            );
+        }
+        let answer = "FINDINGS\n```json\n[\
+            {\"id\": \"F1\", \"title\": \"Feed errors are dropped\", \"severity\": \"high\", \
+             \"location\": \"ingest/feed.go:line_number\"},\
+            {\"id\": \"F2\", \"title\": \"Unchecked size\", \"file\": \"ingest/feed.go\", \
+             \"line\": \"unknown\"},\
+            {\"id\": \"F3\", \"title\": \"Unbounded read\", \"file\": \"ingest/feed.go\", \"line\": 29},\
+            {\"id\": \"F4\", \"title\": \"No location\"}]\n```";
+        let report = parse_area_report(answer, "ingest").unwrap();
+        let at: Vec<(Option<&str>, Option<Option<u32>>)> = report
+            .findings
+            .iter()
+            .map(|finding| (finding.location.as_deref(), finding.line))
+            .collect();
+        assert_eq!(
+            at,
+            [
+                (Some("ingest/feed.go"), Some(None)),
+                (Some("ingest/feed.go"), Some(None)),
+                (Some("ingest/feed.go:29"), Some(Some(29))),
+                (None, None),
+            ]
+        );
+        // The Outcome records the unknown line as null, and reads it back.
+        let json = serde_json::to_value(&report.findings[0]).unwrap();
+        assert_eq!(json["location"], "ingest/feed.go");
+        assert!(
+            json["line"].is_null() && json.get("line").is_some(),
+            "{json}"
+        );
+        let json = serde_json::to_value(&report.findings[3]).unwrap();
+        assert!(json.get("line").is_none(), "{json}");
+        let back: Finding =
+            serde_json::from_value(serde_json::to_value(&report.findings[0]).unwrap()).unwrap();
+        assert_eq!(back, report.findings[0]);
+        let back: Finding =
+            serde_json::from_value(serde_json::to_value(&report.findings[2]).unwrap()).unwrap();
+        assert_eq!(back.line, Some(Some(29)));
     }
 }

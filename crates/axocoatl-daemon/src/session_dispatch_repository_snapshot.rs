@@ -411,15 +411,23 @@ impl SessionDispatchController {
     /// hard link, or to a path swapped while it runs, can still reach another
     /// file, and a shell can write anywhere, so the exact Before and After
     /// captures of every such activation decide. A read-only activation
-    /// without a shell is the exception: it can write nothing. Returns why
-    /// the activation must not be accepted, or `None` when every change stayed
-    /// in scope. A scope that cannot be read is itself a reason. The captures
+    /// cannot change a file: it is offered no file-writing tool, and its
+    /// shell, when it has one, runs under a write restriction the kernel
+    /// enforces or does not run at all. Without a shell it is never judged;
+    /// with one, a change its complete captures show (a permission bit, say)
+    /// is still reported, but captures it could not complete (a Stop skips
+    /// the After capture) are no reason to doubt it. Returns why the
+    /// activation must not be accepted, or `None` when every change stayed in
+    /// scope. A scope that cannot be read is itself a reason. A writer that
+    /// was `stopped` before its captures could establish what it changed is
+    /// told so in words the failure classes read as a stop. The captures
     /// compare complete manifests, whatever the index's flags; files the
     /// repository's ignore rules exclude are not judged, but the ignore files
     /// Git reads, and Git's own settings, hooks and exclude files, are.
     pub(crate) fn write_scope_violation(
         &self,
         activation: &ActivationRef,
+        stopped: bool,
     ) -> Result<Option<String>> {
         let state = self.lock()?;
         let admitted = state
@@ -448,6 +456,16 @@ impl SessionDispatchController {
             .repository_snapshots(&snapshot, activation)
             .map_err(error)?;
         let Some(changed) = judged_changed_paths(&captures) else {
+            if scope.is_read_only() {
+                return Ok(None);
+            }
+            if stopped {
+                return Ok(Some(format!(
+                    "{STOPPED_BEFORE_CAPTURE}, so changes outside the paths this Agent may \
+                     change ({}) cannot be ruled out; any change is kept for review",
+                    scope.describe()
+                )));
+            }
             return Ok(Some(format!(
                 "its repository captures cannot establish which files it changed, so changes \
                  outside the paths this Agent may change ({}) cannot be ruled out; any change \
@@ -469,6 +487,11 @@ impl SessionDispatchController {
         }))
     }
 }
+
+/// How the failure of a writer stopped before its captures could establish
+/// what it changed begins; `classify_activation_failure` reads it as a stop.
+pub(crate) const STOPPED_BEFORE_CAPTURE: &str =
+    axocoatl_session::execution_content::STOPPED_BEFORE_CAPTURE;
 
 /// The tool the host's repository captures of an activation run as: its own
 /// `bash`, or, for an activation limited to named paths without a shell, the
