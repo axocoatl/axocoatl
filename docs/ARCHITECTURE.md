@@ -697,8 +697,11 @@ attention. Nothing is a pass by default.
 the loadout's exact text), `events.jsonl` (append-only, synced, at most 100,000 events of
 at most 256 KiB) and `outcome.json` (written once), through `SecureDir`. Runs are never
 evicted and outlive their Session. A daemon restart during a run marks it failed; it is not
-resumed. `render_junit` writes the JUnit view (not covered is always a failure, fails on
-clean build is skipped). The record bundle (`axocoatl.record-bundle/1`) streams the
+resumed. The run's Session loads again after the restart: its `Custom` mode lists no Agent
+(the run applies the loadout's team), which startup validation accepts with its `loadout`
+binding. `render_junit` writes the JUnit view (not covered is always a failure, fails on
+clean build is skipped); `render_refused_run_junit` writes the one `axocoatl run --junit`
+leaves for a run that was never admitted. The record bundle (`axocoatl.record-bundle/1`) streams the
 manifest, loadout, Outcome, Session, team (with each applied slot's `reset_history`, tools
 and definition), every turn's control-plane projection, the versioned History export,
 every network-record event and every run event as JSON Lines, ending with the line count

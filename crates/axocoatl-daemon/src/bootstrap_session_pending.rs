@@ -82,6 +82,16 @@ impl PendingSessionEntry {
             .is_some())
     }
 
+    /// Whether its repository owner holds the Workspace operation.
+    pub(super) fn holds_workspace_operation(&self) -> Result<bool> {
+        Ok(self
+            .owner
+            .lock()
+            .map_err(|_| failure("pending repository owner failed"))?
+            .as_ref()
+            .is_some_and(SessionRepositoryOwner::holds_workspace_operation))
+    }
+
     pub(super) fn with_team_stores<T>(
         &self,
         use_stores: impl FnOnce(

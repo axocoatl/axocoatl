@@ -347,6 +347,16 @@ impl SessionRepositoryOwner {
         self.inner.workspace_gate.clone()
     }
 
+    /// Whether this owner still holds its Workspace operation (it releases
+    /// it when it retires or is cleaned up).
+    pub(crate) fn holds_workspace_operation(&self) -> bool {
+        self.inner
+            .workspace_operation
+            .lock()
+            .map(|operation| operation.is_some())
+            .unwrap_or(true)
+    }
+
     /// Mint a fresh capability for the same still-current resource. The old
     /// owner's released bit and every old execution lease remain permanently
     /// retired. No command, Stop, or runtime cleanup is performed here.

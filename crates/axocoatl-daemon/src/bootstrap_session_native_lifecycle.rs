@@ -53,31 +53,7 @@ impl AxocoatlDaemon {
                 .map(|binding| format!(" (loadout run {})", binding.run_id))
                 .unwrap_or_default();
             holders.open.push(format!("{}{run}", session.id));
-            let open_turn = match self.active_session_turn(&session.id).await {
-                Ok(Some(active)) => Some(format!("turn {} is running", active.turn_id)),
-                _ => self
-                    .list_versioned_session_turns(&session.id)
-                    .await
-                    .ok()
-                    .and_then(|entries| {
-                        entries.into_iter().rev().find_map(|entry| match entry {
-                            axocoatl_session::session_history::SessionHistoryEntry::ExecutionV2(
-                                turn,
-                            ) if !turn.state.is_closed() => Some(format!(
-                                "turn {} {}",
-                                turn.turn_id.as_str(),
-                                if turn.state
-                                    == axocoatl_session::turn_contract::LogicalTurnState::Running
-                                {
-                                    "is running"
-                                } else {
-                                    "needs attention"
-                                }
-                            )),
-                            _ => None,
-                        })
-                    }),
-            };
+            let open_turn = self.open_turn_of(&session.id).await;
             if let Some(turn) = open_turn {
                 holders
                     .turns
@@ -92,6 +68,11 @@ impl AxocoatlDaemon {
     /// would last until the turn ends (and a needs-attention turn holds it
     /// until a person acts). Refuse at once instead, naming that turn, and
     /// change nothing; the same request succeeds once the turn has ended.
+    /// This Session's own turn and Ways, which Close and Delete stop
+    /// themselves, are waited for as before. Any other operation of the
+    /// Workspace is waited for as long as
+    /// [`workspace_operation::WORKSPACE_OPERATION_WAIT`], then the action is
+    /// refused as busy, naming that operation when it named itself.
     pub(super) async fn refuse_lifecycle_while_another_turn_holds_workspace(
         &self,
         id: &str,
@@ -109,13 +90,34 @@ impl AxocoatlDaemon {
         let holders = self
             .workspace_holders(&session.workspace_id, Some(id))
             .await;
+        let refused = format!("Session {id} was not {action}d");
         if holders.turns.is_empty() {
-            // A short operation, or this Session's own turn, which Close
-            // has asked to stop: wait for it as before.
-            return Ok(());
+            if self.session_holds_own_workspace_work(id).await? {
+                // This Session's own turn, which Close has asked to stop, or
+                // its Ways, which Close interrupts: wait for them as before.
+                return Ok(());
+            }
+            // Another operation of the Workspace: wait for it, briefly.
+            if tokio::time::timeout(
+                workspace_operation::WORKSPACE_OPERATION_WAIT,
+                operation.lock(),
+            )
+            .await
+            .is_ok()
+            {
+                return Ok(());
+            }
+            return Err(self
+                .workspace_busy(
+                    &session.workspace_id,
+                    &workspace_attempt_operation_key(&session.workspace_id),
+                    &refused,
+                    true,
+                )
+                .await);
         }
         Err(DaemonError::WorkspaceBusy(format!(
-            "Session {id} was not {action}d: its Workspace {} {}. A Session is {action}d only \
+            "{refused}: its Workspace {} {}. A Session is {action}d only \
              while no other Session's turn holds its Workspace: let that turn finish, or stop \
              it, then {action} this Session again",
             session.working_dir.display(),
@@ -292,13 +294,28 @@ impl AxocoatlDaemon {
         self.session_dispatch_lifecycles
             .require_native_environment_change_ready(id)?;
         self.require_no_unresolved_attempt(id).await?;
+        // Its cleanup waits for the Workspace: refuse a busy one first.
+        self.refuse_lifecycle_while_another_turn_holds_workspace(id, "reconfigure")
+            .await?;
         let mut cleanup = self
             .session_dispatch_lifecycles
             .prepare_session_cleanup(id, SESSION_DISPATCH_CLEANUP_TIMEOUT)
             .await?;
         let _operation = match cleanup.take_operation() {
-            Some(operation) => operation,
-            None => self.attempt_operation(id).await.lock_owned().await.into(),
+            Some(operation) => (Some(operation), None),
+            None => (
+                None,
+                Some(
+                    self.take_session_workspace_operation(
+                        id,
+                        workspace_operation::WorkspaceRequest {
+                            doing: format!("the change of Session {id}'s environment"),
+                            refused: format!("The environment of Session {id} was not changed"),
+                        },
+                    )
+                    .await?,
+                ),
+            ),
         };
         let start = {
             let mut starts = self.sandbox_starts.lock().await;

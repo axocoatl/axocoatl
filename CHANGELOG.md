@@ -31,7 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `bridge` or the `image` workload, and a host that cannot provide egress and the
   `hardened` workload (rootful Podman, E2B) fails the run with exit code 5 instead of
   falling back. Session records carry the binding as `loadout` (absent for every other
-  Session).
+  Session), and a run's Session loads again when the daemon restarts, with its
+  loadout's network additions.
 - **`axocoatl run`.** `axocoatl run <loadout> --task "…"` runs a loadout headless against
   the running daemon, found from `--url`, `AXOCOATL_URL` or the configuration and
   authenticated with `AXOCOATL_TOKEN` or the local API token; it never starts one.
@@ -53,7 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ending with its line count and SHA-256, which `axocoatl record verify` checks. The
   bundle's header carries the time the run finished, so `--record` and every later
   download of a finished run are the same bytes while its record and Session do not
-  change. Both are written even when the run fails. Usage reads "cost unknown (reserved
+  change. Both are written even when the run fails. A run that was never admitted (the
+  daemon refused it or could not be reached, or the flags were refused) still gets its
+  `--junit` file, whose verdict is an `<error type="busy">`, `"usage"` or `"error"` with
+  `axocoatl.exit_code`; there is no run to record, so `--record` writes nothing and says
+  so. Usage reads "cost unknown (reserved
   up to $X)" in the summary, the JUnit `axocoatl.usage` property, the Run outcome panel
   and the pull request body when a call's cost is not known (`usage.cost_known: false`),
   such as a Codex writer's. Ctrl-C stops the run and exits 6. A run needs its
@@ -119,12 +124,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential; Claude Code's requests for its account's policy limits and remote
   settings are refused and recorded, and it runs without them. A refused request's 403
   hint names the route Axocoatl added for the writer, and one on a loadout's own route
-  names the loadout's route, never a `sandbox.egress.routes` entry.
+  names the loadout's route, never a `sandbox.egress.routes` entry. When the model API
+  answers a program's call through its route with `401`, the not-covered reason says
+  first that the stored credential (such as `claude-code-oauth`) was rejected and to
+  store it again with `axocoatl secret set <name>`, piping in only the token.
 - **`axocoatl secret set|list|remove`.** Stores a route credential, such as the output
   of `claude setup-token`, read from standard input only (a pipe or a file; a terminal,
   where the value would show, is refused), as an owner-only file under `secrets/` in the
   data root. It is never printed, logged or recorded. A loadout route's
   `credential` resolves to a `credentials` entry first, then to a stored secret.
+  `secret set` warns on standard error, and still stores the value, when it has
+  whitespace inside it, starts with `Bearer `, looks like JSON or holds several tokens,
+  or, for the secret Claude Code's route sends, does not start with `sk-ant-oat01-`; the
+  warning never shows the value.
 - **`axocoatl recipe build|list`.** Builds a Session image from Axocoatl's pinned recipes
   (`claude-code`, `codex`, `e2e`, combinable) with Podman and trusts it by its recorded
   image id.
@@ -316,14 +328,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again with nothing left to continue. Work that never started and depends on restarted
   work now waits for it in the new epoch and runs once it is accepted; work that also
   depends on failed work left unselected stays blocked until that is continued too.
-- **Closing a Session no longer waits a minute for another Session's turn.** Closing
+- **Closing or creating a Session no longer waits for another Session's turn.** Closing
   (or deleting) an idle Session while another Session's turn held their Workspace waited
   for the Workspace and failed after 60 seconds with a `500` that blamed the Session
-  being closed. It is now refused at once with `409` and
-  `"code": "workspace_busy"`, naming the Session and turn that hold the Workspace, and
-  nothing changes; close it again once that turn ends. When a lifecycle action does
-  time out, its message says what it waited for. A turn that cannot start because the
-  Workspace is held is busy too, and a loadout run then exits 7, not 5.
+  being closed, and creating a Session on that Workspace (`POST /api/sessions`,
+  `POST /api/workspaces/{id}/sessions`) answered only when the turn ended, which for a
+  turn that needs attention could be never. Both are now refused at once with `409` and
+  `"code": "workspace_busy"`, naming the Session, run and turn that hold the Workspace,
+  and nothing changes; try again once that turn ends. Attachment, environment, file and
+  Git changes, Reopen and the Ways reads, checks, judge and Keep are refused the same way
+  (`409`) instead of waiting. An operation that is not a turn, such as another Session's
+  creation, is waited for at most 10 seconds, then the request is refused, naming it.
+  When a lifecycle action does time out, its message says what it waited for. A turn
+  that cannot start because the Workspace is held is busy too, and a loadout run then
+  exits 7, not 5.
 - **Close removes a Session's runtime volumes.** Closing a Session left its
   `axo-egr-`, `axo-egi-`, `axo-svc-` and `axo-ca-` Podman volumes behind, hundreds after
   many runs. Close now removes them: their sockets and trust files are filled again
@@ -333,7 +351,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `history_version` it answered `400` for a Session whose History holds native
   execution, such as every loadout run's. It now exports such a Session in the
   versioned form, as JSON or Markdown, like the record bundle and the other History
-  reads; `GET /api/session-turns/search` with a `session_id` does the same.
+  reads; `GET /api/session-turns/search` with a `session_id` does the same. An unknown
+  Session is a `404`, not a `400`.
 
 ### Security
 - The docs site's build dependencies are updated: `http-cache-semantics` 4.3.0 fixes

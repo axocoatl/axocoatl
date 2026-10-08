@@ -68,13 +68,23 @@ fn data_dir(config: &Path) -> Result<PathBuf, String> {
     Ok(data_dir)
 }
 
-/// `secret set` with an explicit stdin, for tests.
+/// What `secret set` stored: its confirmation (standard output) and its
+/// warnings (standard error), none of which contains the value.
+#[derive(Debug)]
+pub(crate) struct Stored {
+    pub(crate) message: String,
+    pub(crate) warnings: Vec<String>,
+}
+
+/// `secret set` with an explicit stdin, for tests. A value that does not
+/// look like one bare token is stored, with a warning that says why and how
+/// to store it again.
 pub(crate) fn set_from(
     data_dir: &Path,
     name: &str,
     stdin: impl std::io::Read,
     stdin_is_terminal: bool,
-) -> Result<String, (i32, String)> {
+) -> Result<Stored, (i32, String)> {
     if stdin_is_terminal {
         return Err((USAGE, pipe_hint(name)));
     }
@@ -85,11 +95,25 @@ pub(crate) fn set_from(
         secret_store::SecretStoreError::Invalid(_) => (USAGE, error.to_string()),
         _ => (FAILURE, error.to_string()),
     })?;
-    Ok(format!(
-        "Stored secret {name} ({bytes} bytes) in {}. Routes that name it as their credential \
-         get it from the daemon; containers only see a placeholder.",
-        secret_store::secret_path(data_dir, name).display()
-    ))
+    let reasons = secret_store::value_warnings(name, &value);
+    let mut warnings: Vec<String> = reasons
+        .iter()
+        .map(|reason| format!("! secret {name}: {reason}."))
+        .collect();
+    if !warnings.is_empty() {
+        warnings.push(format!(
+            "! It was stored as given. If it is not the bare token, {}.",
+            secret_store::store_again_hint(name)
+        ));
+    }
+    Ok(Stored {
+        message: format!(
+            "Stored secret {name} ({bytes} bytes) in {}. Routes that name it as their credential \
+             get it from the daemon; containers only see a placeholder.",
+            secret_store::secret_path(data_dir, name).display()
+        ),
+        warnings,
+    })
 }
 
 /// Returns the process exit code.
@@ -111,8 +135,11 @@ pub async fn cmd_secret(command: SecretCommands) -> i32 {
             let stdin = std::io::stdin();
             let terminal = stdin.is_terminal();
             match set_from(&data_dir, &name, stdin.lock(), terminal) {
-                Ok(message) => {
-                    println!("✓ {message}");
+                Ok(stored) => {
+                    println!("✓ {}", stored.message);
+                    for warning in &stored.warnings {
+                        eprintln!("{warning}");
+                    }
                     0
                 }
                 Err((code, message)) => {
@@ -200,13 +227,15 @@ mod tests {
         assert!(message.contains("claude setup-token | axocoatl secret set claude-code-oauth"));
         assert!(secret_store::list_secrets(root.path()).unwrap().is_empty());
 
-        let message = set_from(
+        let stored = set_from(
             root.path(),
             "claude-code-oauth",
             &b"sk-ant-oat01-piped\n"[..],
             false,
         )
         .unwrap();
+        assert!(stored.warnings.is_empty(), "{:?}", stored.warnings);
+        let message = stored.message;
         assert!(!message.contains("sk-ant"), "{message}");
         assert!(message.contains("18 bytes"), "{message}");
         let path = secret_store::secret_path(root.path(), "claude-code-oauth");
@@ -223,5 +252,52 @@ mod tests {
             set_from(root.path(), "name", &b"line one\nline two"[..], false).unwrap_err();
         assert_eq!(code, USAGE);
         assert!(!message.contains("line one"), "{message}");
+    }
+
+    /// A value that is not one bare token is still stored, with warnings on
+    /// standard error that say why and how to store it again, never the
+    /// value itself.
+    #[test]
+    fn set_warns_about_a_value_that_is_not_one_bare_token_and_still_stores_it() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let value = "Bearer sk-ant-api03-secretvalue";
+        let stored = set_from(
+            root.path(),
+            "claude-code-oauth",
+            format!("{value}\n").as_bytes(),
+            false,
+        )
+        .unwrap();
+        let path = secret_store::secret_path(root.path(), "claude-code-oauth");
+        assert_eq!(std::fs::read(&path).unwrap(), value.as_bytes());
+        assert_eq!(stored.warnings.len(), 3, "{:?}", stored.warnings);
+        assert!(stored.warnings[0]
+            .starts_with("! secret claude-code-oauth: it starts with \"Bearer \""));
+        assert!(stored.warnings[1].contains("starts with \"sk-ant-oat01-\""));
+        assert!(stored.warnings[2].contains(
+            "If it is not the bare token, store it again with `axocoatl secret set \
+             claude-code-oauth`, piping in only the token"
+        ));
+        for line in stored.warnings.iter().chain([&stored.message]) {
+            assert!(!line.contains("secretvalue"), "{line}");
+        }
+        // JSON and several tokens, for any name.
+        let stored = set_from(
+            root.path(),
+            "example-token",
+            &br#"{"access_token": "abc", "refresh_token": "def"}"#[..],
+            false,
+        )
+        .unwrap();
+        let text = stored.warnings.join("\n");
+        assert!(text.contains("looks like JSON"), "{text}");
+        assert!(text.contains("whitespace inside"), "{text}");
+        assert!(text.contains("tokens or words"), "{text}");
+        assert!(!text.contains("abc") && !text.contains("def"), "{text}");
+        assert_eq!(
+            std::fs::read(secret_store::secret_path(root.path(), "example-token")).unwrap(),
+            br#"{"access_token": "abc", "refresh_token": "def"}"#
+        );
     }
 }

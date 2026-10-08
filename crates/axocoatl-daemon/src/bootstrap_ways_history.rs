@@ -212,8 +212,15 @@ impl AxocoatlDaemon {
         session_id: &str,
         decision_id: &str,
     ) -> Result<(), DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                session_id,
+                super::workspace_operation::WorkspaceRequest {
+                    doing: format!("a Ways decision of Session {session_id} being deleted"),
+                    refused: "The Ways decision was not deleted".into(),
+                },
+            )
+            .await?;
         let id = DecisionId(
             axocoatl_session::turn_contract::EvidenceRef::new(decision_id)
                 .map_err(archive_error)?,

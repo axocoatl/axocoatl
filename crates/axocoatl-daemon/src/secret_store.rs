@@ -240,6 +240,103 @@ pub fn credential_source_in(
     }))
 }
 
+/// The names the external-agent routes for Claude Code add as their
+/// credential (`claude-code-oauth`): an OAuth token from `claude setup-token`.
+fn claude_code_route_secrets() -> Vec<String> {
+    crate::external_agent::routes_for(axocoatl_config::loadout::AgentRuntime::ClaudeCode)
+        .map(|routes| {
+            routes
+                .into_iter()
+                .filter_map(|route| route.credential)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The prefix of the OAuth token `claude setup-token` prints.
+pub const CLAUDE_CODE_TOKEN_PREFIX: &str = "sk-ant-oat01-";
+
+/// How to store secret `name` again: piping in only the token. For the
+/// refusal of a credential a model API rejected and for `secret set`'s
+/// warnings.
+pub fn store_again_hint(name: &str) -> String {
+    let token = if claude_code_route_secrets()
+        .iter()
+        .any(|secret| secret == name)
+    {
+        format!(
+            " (the {CLAUDE_CODE_TOKEN_PREFIX}… token `claude setup-token` prints, with nothing \
+             around it)"
+        )
+    } else if name == crate::external_agent::codex::CODEX_SECRET {
+        " (the OpenAI API key, for example `printenv OPENAI_API_KEY | axocoatl secret set \
+         codex-openai`)"
+            .to_string()
+    } else {
+        String::new()
+    };
+    format!("store it again with `axocoatl secret set {name}`, piping in only the token{token}")
+}
+
+/// Why `value`, about to be stored as `name`, may not be the bare token its
+/// route sends: whitespace inside it, a `Bearer ` prefix (the route adds the
+/// scheme), JSON, several tokens, or, for a secret a Claude Code route sends,
+/// no [`CLAUDE_CODE_TOKEN_PREFIX`]. Each reason is in words that never
+/// contain the value; none of them stops the value from being stored.
+pub fn value_warnings(name: &str, value: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(value);
+    let text = text
+        .strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix('\n'))
+        .unwrap_or(&text);
+    let mut warnings = Vec::new();
+    let bearer = text
+        .get(..7)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("bearer "));
+    if bearer {
+        warnings.push(
+            "it starts with \"Bearer \": the route adds that itself, so store only the token"
+                .to_string(),
+        );
+    }
+    let token = if bearer { &text[7..] } else { text };
+    let trimmed = token.trim();
+    if trimmed.starts_with('{')
+        || trimmed.starts_with('[')
+        || (trimmed.len() > 1 && trimmed.starts_with('"') && trimmed.ends_with('"'))
+    {
+        warnings.push("it looks like JSON: store only the token, not what holds it".into());
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        warnings.push("it has whitespace inside it, and a token has none".into());
+    } else if token.len() != trimmed.len() {
+        warnings.push("it starts or ends with whitespace".into());
+    }
+    let parts = trimmed
+        .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';'))
+        .filter(|part| !part.is_empty())
+        .count();
+    let prefixes = trimmed.matches("sk-").count();
+    if parts > 1 || prefixes > 1 {
+        warnings.push(format!(
+            "it looks like {} tokens or words, not one",
+            parts.max(prefixes)
+        ));
+    }
+    if claude_code_route_secrets()
+        .iter()
+        .any(|secret| secret == name)
+        && !text.starts_with(CLAUDE_CODE_TOKEN_PREFIX)
+    {
+        warnings.push(format!(
+            "Claude Code's route sends {name} as an OAuth token, which starts with \
+             \"{CLAUDE_CODE_TOKEN_PREFIX}\" (the token `claude setup-token` prints), and this \
+             value does not"
+        ));
+    }
+    warnings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,5 +630,77 @@ mod tests {
             assert!(!serde_json::to_string(event).unwrap().contains(&secret));
         }
         drop(grant);
+    }
+
+    #[test]
+    fn values_that_are_not_one_bare_token_are_warned_about_without_the_value() {
+        let secret = "sk-ant-oat01-AbC_dEf-123";
+        assert!(value_warnings("claude-code-oauth", secret.as_bytes()).is_empty());
+        assert!(value_warnings("claude-code-oauth", format!("{secret}\n").as_bytes()).is_empty());
+        assert!(value_warnings("example-token", b"ghp_plain").is_empty());
+        for (name, value, expected) in [
+            (
+                "example-token",
+                format!("Bearer {secret}"),
+                &["\"Bearer \""][..],
+            ),
+            (
+                "example-token",
+                format!("bearer {secret}"),
+                &["\"Bearer \""],
+            ),
+            (
+                "example-token",
+                format!("{{\"token\": \"{secret}\"}}"),
+                &["looks like JSON", "whitespace inside", "2 tokens"],
+            ),
+            (
+                "example-token",
+                format!("\"{secret}\""),
+                &["looks like JSON"],
+            ),
+            (
+                "example-token",
+                format!("token: {secret}"),
+                &["whitespace inside", "2 tokens"],
+            ),
+            ("example-token", format!("{secret},{secret}"), &["2 tokens"]),
+            ("example-token", format!("{secret}{secret}"), &["2 tokens"]),
+            ("example-token", format!(" {secret}"), &["starts or ends"]),
+            (
+                "claude-code-oauth",
+                "sk-ant-api03-key".to_string(),
+                &["\"sk-ant-oat01-\""],
+            ),
+            (
+                "claude-code-oauth",
+                format!("Bearer {secret}"),
+                &["\"Bearer \"", "\"sk-ant-oat01-\""],
+            ),
+        ] {
+            let warnings = value_warnings(name, value.as_bytes());
+            assert_eq!(warnings.len(), expected.len(), "{value:?}: {warnings:?}");
+            for (warning, wanted) in warnings.iter().zip(expected) {
+                assert!(warning.contains(wanted), "{value:?}: {warning}");
+                assert!(!warning.contains(secret), "{warning}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_store_again_hint_says_to_pipe_only_the_token() {
+        let hint = store_again_hint("claude-code-oauth");
+        assert!(
+            hint.starts_with(
+                "store it again with `axocoatl secret set claude-code-oauth`, piping in only the token"
+            ),
+            "{hint}"
+        );
+        assert!(hint.contains("sk-ant-oat01-…"), "{hint}");
+        assert!(store_again_hint("codex-openai").contains("OPENAI_API_KEY"));
+        assert_eq!(
+            store_again_hint("example-token"),
+            "store it again with `axocoatl secret set example-token`, piping in only the token"
+        );
     }
 }
