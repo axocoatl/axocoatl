@@ -789,7 +789,10 @@ fn approved_reviewer_identity(
     }))
 }
 /// Warnings about a team: a required reviewer on the model of an Agent that
-/// may change files (`same_model_reviewer`).
+/// may change files (`same_model_reviewer`), through the same provider or
+/// another one. A slot's retained definition names an external writer's
+/// runtime as its provider; its model is the one its program calls
+/// ([`crate::external_agent::definition_identity`]).
 pub(crate) fn team_warnings(
     slots: &[SessionTeamSlotEdit],
     reviewer: Option<&axocoatl_session::run_outcome::ModelIdentity>,
@@ -800,11 +803,7 @@ pub(crate) fn team_warnings(
     let writers: Vec<axocoatl_session::run_outcome::ModelIdentity> = slots
         .iter()
         .filter(|slot| !matches!(&slot.writes, Some(Some(paths)) if paths.is_empty()))
-        .map(|slot| axocoatl_session::run_outcome::ModelIdentity {
-            provider: slot.provider.clone(),
-            model: slot.model.clone(),
-            runtime: "native".into(),
-        })
+        .map(|slot| crate::external_agent::definition_identity(&slot.provider, &slot.model))
         .collect();
     axocoatl_session::run_outcome::same_model_warning(&writers, reviewer)
         .into_iter()
@@ -2060,6 +2059,43 @@ impl AxocoatlDaemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Team view rebuilds each slot from its retained definition, whose
+    /// provider is an external writer's runtime: the warning compares the
+    /// model its program calls, so a reviewer on OpenRouter running that
+    /// model is warned about. A read-only slot is not a writer.
+    #[test]
+    fn a_reviewer_on_an_external_writers_model_is_warned_about_in_the_team_view() {
+        let reviewer = axocoatl_session::run_outcome::ModelIdentity {
+            provider: "openrouter".into(),
+            model: "openai/gpt-5.5".into(),
+            runtime: "native".into(),
+        };
+        let mut codex = slot(Some(serde_json::Value::Null));
+        codex.provider = "codex".into();
+        codex.model = "gpt-5.5".into();
+        let warnings = team_warnings(std::slice::from_ref(&codex), Some(&reviewer));
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0]
+                .message
+                .contains("(openai:gpt-5.5, which the reviewer runs as openrouter:openai/gpt-5.5)"),
+            "{}",
+            warnings[0].message
+        );
+        codex.model = "gpt-5.6-sol".into();
+        assert!(team_warnings(std::slice::from_ref(&codex), Some(&reviewer)).is_empty());
+        let mut claude = slot(Some(serde_json::json!([])));
+        claude.provider = "claude-code".into();
+        claude.model = "claude-haiku-4-5".into();
+        let haiku = axocoatl_session::run_outcome::ModelIdentity {
+            model: "anthropic/claude-haiku-4.5".into(),
+            ..reviewer.clone()
+        };
+        assert!(team_warnings(std::slice::from_ref(&claude), Some(&haiku)).is_empty());
+        claude.writes = Some(None);
+        assert_eq!(team_warnings(&[claude], Some(&haiku)).len(), 1);
+    }
 
     /// A slot edit as a client sends it; `None` leaves `writes` out.
     fn slot(writes: Option<serde_json::Value>) -> SessionTeamSlotEdit {

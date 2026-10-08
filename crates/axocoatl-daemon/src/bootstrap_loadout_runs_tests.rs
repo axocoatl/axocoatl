@@ -544,6 +544,25 @@ async fn admission_child_body() {
             .replace("tokens: 100000", "tokens: 40000"),
     )
     .unwrap();
+    // The same budget shape for a native OpenRouter writer, and a Codex
+    // writer whose budget holds less than one call of its pinned model.
+    std::fs::write(
+        dir.path()
+            .join(USER_LOADOUT_DIR)
+            .join("tight-openrouter.yaml"),
+        NATIVE_RUN
+            .replace("id: native-run", "id: tight-openrouter")
+            .replace("tokens: 100000", "tokens: 20000"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join(USER_LOADOUT_DIR).join("tight-codex.yaml"),
+        NATIVE_RUN
+            .replace("id: native-run", "id: tight-codex")
+            .replace("    tools: [read_file]\n", "    runtime: codex\n")
+            .replace("tokens: 100000", "tokens: 300000"),
+    )
+    .unwrap();
     let config = axocoatl_config::load_config(&path).await.unwrap();
     let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
     daemon.set_config_path(&path);
@@ -646,6 +665,81 @@ async fn admission_child_body() {
              output tokens (agents.writer.max_output_tokens), at least 40960 tokens; raise it \
              to at least 40960 or lower agents.writer.max_output_tokens"
         )
+    );
+
+    // A native OpenRouter writer's floor comes from OpenRouter's public
+    // catalog, read once: the smallest call Team & budget would check, its
+    // prompt allowance, output bound and reasoning allowance at the model's
+    // default effort, never the 131072-token window.
+    let catalog = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": [
+                {"id": "openai/gpt-oss-120b", "context_length": 131072,
+                 "reasoning": {"mandatory": false, "default_enabled": true,
+                     "default_effort": "medium", "supported_efforts": ["high", "medium", "low"]}}
+            ]})),
+        )
+        .expect(1)
+        .mount(&catalog)
+        .await;
+    *daemon.loadout_runs.openrouter_catalog.lock().unwrap() = Some(catalog.uri());
+    let run = |loadout: &str, model: &str, id: &str| RunRequest {
+        loadout: loadout.into(),
+        task: "Read README.md.".into(),
+        repo: repo.path().display().to_string(),
+        params: [("writer_model".to_string(), model.to_string())]
+            .into_iter()
+            .collect(),
+        keep: Default::default(),
+        check_command: None,
+        setup_command: None,
+        request_id: id.into(),
+    };
+    let message = usage(
+        admit(run(
+            "tight-openrouter",
+            "openrouter:openai/gpt-oss-120b",
+            "tight-openrouter",
+        ))
+        .await,
+    );
+    assert_eq!(
+        message,
+        "loadout field budgets.agent.tokens: 20000 tokens is less than one model call of Agent \
+         writer (openrouter:openai/gpt-oss-120b) needs: the 4096-token prompt allowance a native \
+         OpenRouter call reserves at least (each call reserves its own request, within the \
+         model's 131072-token context in OpenRouter's catalog) plus 8192 output tokens \
+         (agents.writer.max_output_tokens) and 8192 reasoning tokens (reasoning effort medium), \
+         at least 20480 tokens; raise it to at least 20480 or lower \
+         agents.writer.max_output_tokens or set agents.writer.reasoning_effort lower"
+    );
+    catalog.verify().await;
+
+    // A Codex writer's floor is one call of its pinned model.
+    let message = usage(admit(run("tight-codex", "openai:gpt-5.5", "tight-codex")).await);
+    assert_eq!(
+        message,
+        "loadout field budgets.agent.tokens: 300000 tokens is less than one model call of Agent \
+         writer (openai:gpt-5.5) needs: the 272000-token context Codex 0.160.1 keeps for gpt-5.5 \
+         plus the model's 128000 output tokens, at least 400000 tokens; raise it to at least \
+         400000"
+    );
+    // An external writer's model names the provider its program calls.
+    let message = usage(
+        admit(run(
+            "tight-codex",
+            "openrouter:openai/gpt-5.5",
+            "codex-on-openrouter",
+        ))
+        .await,
+    );
+    assert_eq!(
+        message,
+        "loadout parameter writer_model: a codex writer calls openai's model API, so its model \
+         is openai:<the program's model name>; openrouter:openai/gpt-5.5 names the provider \
+         openrouter"
     );
 
     // A reproductions directory that is a link is refused before anything

@@ -34,9 +34,10 @@ mod observation;
 mod stream;
 use observation::CallShape;
 pub use observation::{
-    observe_native_openrouter_profiles, NativeOpenRouterEfforts, NativeOpenRouterObservation,
-    NativeOpenRouterReasoning, NativeOpenRouterReasoningRequest, MINIMUM_REASONING_ALLOWANCE,
-    PROMPT_TEMPLATE_ALLOWANCE, STREAMED_BYTES_PER_RESPONSE_TOKEN,
+    catalog_call_floor, observe_native_openrouter_profiles, CatalogCallFloor,
+    NativeOpenRouterEfforts, NativeOpenRouterObservation, NativeOpenRouterReasoning,
+    NativeOpenRouterReasoningRequest, MINIMUM_REASONING_ALLOWANCE, PROMPT_TEMPLATE_ALLOWANCE,
+    STREAMED_BYTES_PER_RESPONSE_TOKEN,
 };
 
 const PROVIDER: &str = "openrouter";

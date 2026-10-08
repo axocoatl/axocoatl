@@ -305,8 +305,8 @@ prompt: "{task}"
             std::fs::write(&secret, "value").unwrap();
         }
         let text = CUSTOM.replace(
-            "    tools: [read_file, write_file]\n",
-            "    runtime: claude-code\n",
+            "    model: { provider: openrouter, model: qwen/qwen3-coder }\n    tools: [read_file, write_file]\n",
+            "    model: { provider: anthropic, model: claude-haiku-4-5 }\n    runtime: claude-code\n",
         );
         let external = resolved(&text);
         let mut base = EgressPolicyConfig::default();
@@ -346,8 +346,8 @@ prompt: "{task}"
     fn an_external_writer_waits_for_its_routes() {
         let text = CUSTOM
             .replace(
-                "    tools: [read_file, write_file]\n",
-                "    runtime: claude-code\n",
+                "    model: { provider: openrouter, model: qwen/qwen3-coder }\n    tools: [read_file, write_file]\n",
+                "    model: { provider: anthropic, model: claude-haiku-4-5 }\n    runtime: claude-code\n",
             )
             .replace("egress:\n  allow:\n    - host: registry.npmjs.org\n", "");
         let resolved = resolved(&text);

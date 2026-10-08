@@ -62,7 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so. Usage reads "cost unknown (reserved
   up to $X)" in the summary, the JUnit `axocoatl.usage` property, the Run outcome panel
   and the pull request body when a call's cost is not known (`usage.cost_known: false`),
-  such as a Codex writer's. Ctrl-C stops the run and exits 6. A run needs its
+  such as a Codex writer's on a model without a price, and "$X (includes cost computed
+  from reported tokens at list prices)" when part of it is computed from a program's
+  reported tokens (`usage.cost_computed`), such as a Codex writer's. Ctrl-C stops the run and exits 6. A run needs its
   repository's Workspace to itself: when another Session's turn holds it, the run is
   refused at once, before anything is created, naming that Session and turn (busy;
   retry later), and once a run has what its Outcome needs it stops each of its own turns
@@ -73,8 +75,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `axocoatl session upgrade --confirm` first, and until then a run exits 5 with a
   message that says so. A `tokens` budget too small for one model call (2,048 plus the
   Agent's `max_output_tokens`, 8,192 when unset) is refused by `axocoatl loadouts
-  validate`, and a run whose Ollama model's loaded context does not fit its budget is
-  refused before anything is created, naming the budget and the minimum (exit code 3).
+  validate`, and a run whose budget cannot hold one call of its model is refused before
+  anything is created, naming the budget and the minimum (exit code 3): an Ollama model's
+  loaded context plus the output bound; for an OpenRouter model, read from OpenRouter's
+  public catalog, the 4,096-token prompt allowance a call reserves at least (within the
+  model's `context_length`) plus the output bound and the reasoning allowance of its
+  effort, never the whole context window; for an external writer's model in Axocoatl's
+  pinned table, the most one call of the program can use (400,000 tokens for Codex
+  0.160.1's models, the model's window for Claude Code's). An external writer whose
+  model the table does not list is not checked, and the run warns
+  (`external_model_not_pinned`).
   When a required check failed, the JUnit verdict's message names that check first. The API is `POST /api/runs`,
   `GET /api/runs`, `GET /api/runs/{run_id}`, `/events`, `/stop`, `/junit` and `/record`;
   runs are kept under `loadout-runs/` in the data root and outlive their Session.
@@ -85,7 +95,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recorded and shown in the run output, JUnit, the Run outcome panel, the pull request
   body and the record; a finding left unanswered makes the run need attention. When the
   reviewer runs the writer's model, Axocoatl warns (`same_model_reviewer`) in loadout
-  validation, the API, Settings, Team and budget, the run output and the record. Like
+  validation, the API, Settings, Team and budget, the run output and the record, through
+  whichever provider each runs it: a reviewer on `openrouter:openai/gpt-5.5` runs a Codex
+  writer's `openai:gpt-5.5`, and one on `openrouter:anthropic/claude-haiku-4.5` a Claude
+  Code writer's `anthropic:claude-haiku-4-5` (case, `.` against `-`, a snapshot date,
+  `-latest` and an OpenRouter `:variant` are ignored). Like
   the qa and audit blocks, `ADJUDICATIONS` is read after a heading in any case and with
   or without Markdown marks, fenced or not, between XML-style tags
   (`<ADJUDICATIONS>` … `</ADJUDICATIONS>`), or as an answer that is only the JSON; a
@@ -136,8 +150,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   daemon adds on the host, so the container holds only a placeholder; the Session's
   certificate authority is trusted through `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE`.
   Every model call is in the network record, and the program's JSON output is parsed into
-  the activation's evidence and answer. Spend is bounded by an up-front reservation, the
-  route's request count and the program's own usage report, not per call. Each route
+  the activation's evidence and answer. The writer's model names the provider whose API
+  its program calls (`anthropic:` for Claude Code, `openai:` for Codex); any other is
+  refused by validation and by a run (exit code 3), so the model a run records is the one
+  that ran. Spend is bounded by an up-front reservation, the route's request count and
+  the program's own usage report, not per call. Claude Code reports its cost. Codex
+  reports tokens but no cost: its cost is computed from its reported uncached input,
+  cached input, cache writes and output at the configuration's `pricing` entry for its
+  model, else at the list price Axocoatl pins for each model Codex 0.160.1 lists for API
+  use (OpenAI's Standard prices of 2026-10-08), and the run settles to it, marked as
+  computed in the work log and the Outcome. A Codex model with neither has no known cost,
+  and its activation reserves only an equal share of the cost left. Each route
   allows only the program's model calls, since every allowed request gets the
   credential; Claude Code's requests for its account's policy limits and remote
   settings are refused and recorded, and it runs without them. A refused request's 403

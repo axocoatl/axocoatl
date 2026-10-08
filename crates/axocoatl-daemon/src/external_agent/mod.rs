@@ -22,14 +22,15 @@
 //!   write scope from those captures, exactly as for a native writer.
 //! - Its activation is admitted, granted and captured like a native one.
 //!   The tool loop makes one model call; that call is the program run. It
-//!   reserves what the grant still allows (all its tokens; all its cost, or
-//!   for a program that never reports cost an equal share per activation
-//!   left, see [`cost_reservation`]), runs the
+//!   reserves what the grant still allows (all its tokens; all its cost
+//!   when the run's cost will be known, or else an equal share per
+//!   activation left, see [`cost_reservation`]), runs the
 //!   program through the in-sandbox supervisor as the writer user, with the
 //!   egress credential of that activation (proxy, route placeholders and the
 //!   Session's trust files), and settles with the usage the program
-//!   reports. With no report the usage stays incomplete and the reservation
-//!   stays charged.
+//!   reports: its own cost (Claude Code), or the cost Axocoatl computes from
+//!   its reported tokens at its model's price (Codex, [`models`]). With no
+//!   report the usage stays incomplete and the reservation stays charged.
 //! - The program's own model calls are the route requests of that credential.
 //!   They are counted while it runs; when they reach the invocations the
 //!   grant still allows, the program is stopped.
@@ -42,6 +43,7 @@
 
 pub mod claude_code;
 pub mod codex;
+pub mod models;
 pub mod recipe_images;
 
 use axocoatl_config::loadout::AgentRuntime;
@@ -90,6 +92,12 @@ pub enum ExternalItem {
         input_tokens: u64,
         output_tokens: u64,
         cost_microunits: Option<u64>,
+        /// The part of `input_tokens` read from the prompt cache.
+        #[serde(default)]
+        cached_input_tokens: u64,
+        /// The part of `input_tokens` written to the prompt cache.
+        #[serde(default)]
+        cache_write_tokens: u64,
     },
     Error {
         message: String,
@@ -109,12 +117,29 @@ pub struct ExternalActivationResult {
 impl ExternalActivationResult {
     /// The usage the program reported, if any: `(input, output, cost)`.
     pub fn usage(&self) -> Option<(u64, u64, Option<u64>)> {
+        self.usage_report()
+            .map(|(usage, cost)| (usage.input_tokens, usage.output_tokens, cost))
+    }
+
+    /// The usage the program reported, with its cache parts, and the cost
+    /// it reported, if any.
+    pub fn usage_report(&self) -> Option<(models::ExternalUsage, Option<u64>)> {
         self.items.iter().rev().find_map(|item| match item {
             ExternalItem::Usage {
                 input_tokens,
                 output_tokens,
                 cost_microunits,
-            } => Some((*input_tokens, *output_tokens, *cost_microunits)),
+                cached_input_tokens,
+                cache_write_tokens,
+            } => Some((
+                models::ExternalUsage {
+                    input_tokens: *input_tokens,
+                    cached_input_tokens: *cached_input_tokens,
+                    cache_write_tokens: *cache_write_tokens,
+                    output_tokens: *output_tokens,
+                },
+                *cost_microunits,
+            )),
             _ => None,
         })
     }
@@ -162,31 +187,59 @@ pub fn runtime_provider(runtime: AgentRuntime) -> Option<&'static str> {
 }
 
 /// The provider of the model API `runtime`'s program calls: `anthropic` for
-/// Claude Code, `openai` for Codex, as a loadout names the program's model.
+/// Claude Code, `openai` for Codex, as a loadout names the program's model
+/// ([`AgentRuntime::model_provider`], which loadout validation holds an
+/// external writer's configured model to).
 pub fn model_provider(runtime: AgentRuntime) -> Option<&'static str> {
-    match runtime {
-        AgentRuntime::Native => None,
-        AgentRuntime::ClaudeCode => Some(claude_code::MODEL_PROVIDER),
-        AgentRuntime::Codex => Some(codex::MODEL_PROVIDER),
+    runtime.model_provider()
+}
+
+/// How a run and the Team view name the model of a retained definition
+/// whose `provider` and `model` they read. An external writer's retained
+/// definition names its runtime as the provider (`claude-code`, `codex`);
+/// its identity is the provider of the model API its program is configured
+/// to call ([`model_provider`]: the route Axocoatl adds for it, the provider
+/// loadout validation holds its configured model to), the program's model
+/// and that runtime, as `loadout::team_plan::model_identity` names the
+/// loadout's writer. Any other definition is a native Agent of `provider`.
+pub fn definition_identity(
+    provider: &str,
+    model: &str,
+) -> axocoatl_session::run_outcome::ModelIdentity {
+    match runtime_for_provider(provider)
+        .and_then(|runtime| Some((runtime, model_provider(runtime)?)))
+    {
+        Some((runtime, model_provider)) => axocoatl_session::run_outcome::ModelIdentity {
+            provider: model_provider.into(),
+            model: model.into(),
+            runtime: runtime.id().into(),
+        },
+        None => axocoatl_session::run_outcome::ModelIdentity {
+            provider: provider.into(),
+            model: model.into(),
+            runtime: AgentRuntime::Native.id().into(),
+        },
     }
 }
 
 /// Whether `runtime`'s program reports what its run cost. Claude Code
-/// does (`total_cost_usd`); Codex reports tokens only, so the cost its run
-/// reserves stays charged.
+/// does (`total_cost_usd`); Codex reports tokens only, so its cost is
+/// computed from them at its model's price ([`models::computed_price`]),
+/// and is not known for a model without one.
 pub fn reports_cost(runtime: AgentRuntime) -> bool {
     matches!(runtime, AgentRuntime::ClaudeCode)
 }
 
 /// What one activation of `runtime` reserves of the `cost_microunits` its
 /// grant still allows, with `activations_left` activations left, this one
-/// included. A program that reports its cost reserves all of it and settles
-/// to its report. One that does not keeps its reservation charged, so it
-/// reserves an equal share: whole-grant reservations would leave nothing
-/// for the grant's later activations, such as the revision a review asks
-/// for.
-pub fn cost_reservation(runtime: AgentRuntime, cost_microunits: u64, activations_left: u32) -> u64 {
-    if reports_cost(runtime) || cost_microunits == 0 {
+/// included. A run whose cost will be known (`cost_known`: the program
+/// reports it, or its model has a price to compute it at) reserves all of
+/// it and settles to that cost. One whose cost will not be known keeps its
+/// reservation charged, so it reserves an equal share: whole-grant
+/// reservations would leave nothing for the grant's later activations,
+/// such as the revision a review asks for.
+pub fn cost_reservation(cost_known: bool, cost_microunits: u64, activations_left: u32) -> u64 {
+    if cost_known || cost_microunits == 0 {
         return cost_microunits;
     }
     (cost_microunits / u64::from(activations_left.max(1))).max(1)
@@ -586,6 +639,7 @@ pub fn work_log(
                 input_tokens,
                 output_tokens,
                 cost_microunits,
+                ..
             } => format!(
                 "[usage] {input_tokens} input and {output_tokens} output tokens{}, as the \
                  program reported\n",

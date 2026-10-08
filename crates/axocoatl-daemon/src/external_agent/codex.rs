@@ -94,6 +94,8 @@ pub fn argv(model: &str) -> Result<Vec<String>, ExternalAgentError> {
 #[derive(Default)]
 struct Usage {
     input: u64,
+    cached: u64,
+    written: u64,
     output: u64,
     reported: bool,
 }
@@ -194,6 +196,8 @@ pub fn parse_output(stdout: &[u8]) -> Result<ExternalActivationResult, ExternalA
                     let total = &params["tokenUsage"]["total"];
                     usage = Usage {
                         input: u64_at(total, &["inputTokens"]).unwrap_or(0),
+                        cached: u64_at(total, &["cachedInputTokens"]).unwrap_or(0),
+                        written: u64_at(total, &["cacheWriteInputTokens"]).unwrap_or(0),
                         output: u64_at(total, &["outputTokens"]).unwrap_or(0),
                         reported: total.is_object(),
                     };
@@ -226,10 +230,17 @@ pub fn parse_output(stdout: &[u8]) -> Result<ExternalActivationResult, ExternalA
                 turns_completed += 1;
                 let reported = &value["usage"];
                 if reported.is_object() {
-                    // Cached input and reasoning output are parts of these.
+                    // Cached input and cache writes are parts of the input,
+                    // reasoning a part of the output.
                     usage.input = usage
                         .input
                         .saturating_add(u64_at(reported, &["input_tokens"]).unwrap_or(0));
+                    usage.cached = usage
+                        .cached
+                        .saturating_add(u64_at(reported, &["cached_input_tokens"]).unwrap_or(0));
+                    usage.written = usage.written.saturating_add(
+                        u64_at(reported, &["cache_write_input_tokens"]).unwrap_or(0),
+                    );
                     usage.output = usage
                         .output
                         .saturating_add(u64_at(reported, &["output_tokens"]).unwrap_or(0));
@@ -255,8 +266,11 @@ pub fn parse_output(stdout: &[u8]) -> Result<ExternalActivationResult, ExternalA
         items.push(ExternalItem::Usage {
             input_tokens: usage.input,
             output_tokens: usage.output,
-            // Codex reports tokens, never a charge.
+            // Codex reports tokens, never a charge: the host computes it
+            // from these at the model's price (`models::computed_price`).
             cost_microunits: None,
+            cached_input_tokens: usage.cached,
+            cache_write_tokens: usage.written,
         });
     }
     if turns_completed == 0 && !failed {

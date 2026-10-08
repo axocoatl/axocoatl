@@ -1260,22 +1260,24 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_reject
     );
     assert_eq!(writer.model.runtime, recipe, "{context}");
     // Claude Code reports what its run cost. Codex reports tokens but no
-    // cost: the run's cost is what its calls reserved, which the Outcome and
-    // the JUnit file say, never a price.
+    // cost: the run's cost is computed from them at gpt-5.5's pinned list
+    // price, which the Outcome and the JUnit file say is a computation.
     let junit = junit.unwrap_or_else(|error| panic!("{error}\n{context}"));
     assert!(outcome.usage.complete, "{context}");
+    assert!(outcome.usage.cost_known, "{context}");
+    assert!(!junit.contains("cost unknown"), "{junit}");
     match runtime {
         AgentRuntime::Codex => {
-            assert!(!outcome.usage.cost_known, "{context}");
+            assert!(outcome.usage.cost_computed, "{context}");
             assert!(outcome.usage.cost_microunits > 0, "{context}");
             assert!(
-                junit.contains("output tokens, cost unknown (reserved up to $"),
+                junit.contains("(includes cost computed from reported tokens at list prices)\"/>"),
                 "{junit}"
             );
         }
         _ => {
-            assert!(outcome.usage.cost_known, "{context}");
-            assert!(!junit.contains("cost unknown"), "{junit}");
+            assert!(!outcome.usage.cost_computed, "{context}");
+            assert!(!junit.contains("computed from reported tokens"), "{junit}");
         }
     }
     assert_eq!(outcome.checks.len(), 1, "{context}");

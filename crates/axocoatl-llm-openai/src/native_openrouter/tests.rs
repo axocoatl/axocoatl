@@ -489,6 +489,67 @@ fn reasoning_allowance_follows_openrouter_effort_shares() {
     assert_eq!(R::Disabled.allowance(4096), 0);
 }
 
+/// Admission reads the smallest call from the public model catalog before
+/// a Session exists: the same prompt allowance and reasoning allowance as
+/// the endpoint observation's smallest call, which Team & budget checks.
+#[tokio::test]
+async fn the_catalog_floor_is_the_observed_smallest_call() {
+    use axocoatl_core::ReasoningEffort as E;
+    for (model, effort, reasoning) in [
+        // Reasoning mandatory, default effort high: 4x the output.
+        (CLAUDE, None, 4 * 8192),
+        (CLAUDE, Some(E::Low), 2048),
+        // Reasoning on by default at medium: once the output.
+        (GPT, None, 8192),
+        (GPT, Some(E::None), 0),
+    ] {
+        let (row, _) = captured(model);
+        let catalog = json!({"data": [row]});
+        let floor = catalog_call_floor(&catalog, model, 8192, effort).unwrap();
+        assert_eq!(floor.prompt_tokens, PROMPT_TEMPLATE_ALLOWANCE, "{model}");
+        assert_eq!(floor.reasoning_tokens, reasoning, "{model} {effort:?}");
+        assert_eq!(floor.tokens(8192), 4096 + 8192 + reasoning);
+        let (_, profiles) = captured_profiles(model).await;
+        for profile in &profiles {
+            let request = profile.reasoning_request(effort).unwrap();
+            assert_eq!(request, floor.reasoning);
+            let bounds = profile
+                .minimum_call_bounds(8192, request, 1024 * 1024)
+                .unwrap();
+            assert_eq!(bounds.token_limit, floor.tokens(8192) as u64, "{model}");
+        }
+    }
+    let (row, _) = captured(GPT);
+    assert_eq!(
+        catalog_call_floor(&json!({"data": [row.clone()]}), GPT, 8192, None)
+            .unwrap()
+            .context_tokens,
+        1_050_000
+    );
+    // The catalog cannot say: not listed, listed twice, an effort the model
+    // refuses (its observation then refuses it by name).
+    assert!(catalog_call_floor(&json!({"data": [row.clone()]}), CLAUDE, 8192, None).is_none());
+    assert!(catalog_call_floor(
+        &json!({"data": [row.clone(), row.clone()]}),
+        GPT,
+        8192,
+        None
+    )
+    .is_none());
+    let (claude, _) = captured(CLAUDE);
+    assert!(catalog_call_floor(&json!({"data": [claude]}), CLAUDE, 8192, Some(E::None)).is_none());
+    assert!(catalog_call_floor(&json!({}), GPT, 8192, None).is_none());
+    // A small context bounds the prompt allowance.
+    let mut small = row;
+    small["context_length"] = json!(3000);
+    assert_eq!(
+        catalog_call_floor(&json!({"data": [small]}), GPT, 1024, None)
+            .unwrap()
+            .prompt_tokens,
+        3000
+    );
+}
+
 const SONNET_PROVIDER: &str = "Anthropic";
 
 fn frame(delta: Value, finish: Option<&str>, usage: Option<Value>) -> String {

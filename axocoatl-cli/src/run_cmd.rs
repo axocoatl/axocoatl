@@ -2130,8 +2130,8 @@ mod tests {
         }
     }
 
-    /// A Codex writer reports tokens but no cost; what its calls reserved
-    /// is not shown as the run's cost.
+    /// A call whose cost is not known (a Codex writer on a model without a
+    /// price): what its calls reserved is not shown as the run's cost.
     #[test]
     fn summary_says_when_the_cost_is_not_known() {
         let unknown = outcome(
@@ -2153,6 +2153,17 @@ mod tests {
         );
         assert!(summary(&known)
             .contains("\nUsage: 240 input + 14 output tokens, $0.0003, 1 provider retries\n"));
+        // A Codex writer's cost computed from its reported tokens says so.
+        let computed = outcome(
+            "pass",
+            serde_json::json!({"usage": {"input_tokens": 4107, "output_tokens": 60,
+                "cost_microunits": 17_835, "complete": true, "cost_known": true,
+                "cost_computed": true}}),
+        );
+        assert!(summary(&computed).contains(
+            "\nUsage: 4107 input + 60 output tokens, $0.0178 (includes cost computed from \
+             reported tokens at list prices)\n"
+        ));
     }
 
     #[test]

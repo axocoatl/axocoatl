@@ -645,7 +645,13 @@ pricing:
 
 Values are dollars per million tokens. Provider-reported `reasoning_tokens` are charged at
 the model's `output_per_mtok` rate. Missing remote model prices remain
-unknown. Ollama Ways have a known-zero model API charge only when
+unknown.
+
+A loadout's Codex writer reports tokens but no cost: its cost is computed from them at the
+`pricing` entry for exactly its model name when there is one, before the list price
+Axocoatl pins for the model (see
+[What a run costs](/configure/external-agents/#what-a-run-costs)). The entry's input rate
+applies to every input token, cached or not. Ollama Ways have a known-zero model API charge only when
 `providers.ollama.base_url` uses `localhost`, a `.localhost` host, or a loopback
 IP address. A non-loopback Ollama endpoint uses its configured model price or
 remains unknown.

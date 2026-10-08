@@ -184,6 +184,10 @@ pub(crate) struct ExternalSettings {
     /// Where route requests are counted; `None` reads the Session's record.
     pub(crate) source: Option<Arc<dyn RouteRequestSource>>,
     pub(crate) meter_interval: Duration,
+    /// The configuration's `pricing`, by exact model name: a program that
+    /// reports no cost is priced at its model's entry here before the pinned
+    /// list price (`external_agent::models::computed_price`).
+    pub(crate) pricing: Arc<HashMap<String, axocoatl_config::ModelPriceYaml>>,
     /// Tests point the pinned programs at a local upstream's port.
     #[cfg(test)]
     pub(crate) adjust_argv: Option<AdjustArgv>,
@@ -194,6 +198,7 @@ impl Default for ExternalSettings {
         Self {
             source: None,
             meter_interval: DEFAULT_METER_INTERVAL,
+            pricing: Arc::default(),
             #[cfg(test)]
             adjust_argv: None,
         }
@@ -391,12 +396,18 @@ impl AutonomousActivationFactory for ExternalActivationFactory {
         let Some(resolved) = resolved else {
             return self.native.resources(input).await;
         };
+        let price = external::models::computed_price(
+            resolved.runtime,
+            &resolved.config.model,
+            self.settings.pricing.get(&resolved.config.model),
+        );
         let provider = Arc::new(ExternalProgramProvider {
             controller: self.controller.clone(),
             activation: input.activation.clone(),
             runtime: resolved.runtime,
             provider: resolved.config.provider.clone(),
             model: resolved.config.model.clone(),
+            price,
             settings: self.settings.clone(),
         });
         Ok(AutonomousActivationResources {
@@ -416,7 +427,18 @@ pub(crate) struct ExternalProgramProvider {
     runtime: AgentRuntime,
     provider: String,
     model: String,
+    /// The price its reported tokens are computed at, for a program that
+    /// reports no cost of its own and whose model has one.
+    price: Option<(external::models::ListPrice, external::models::PriceSource)>,
     settings: ExternalSettings,
+}
+
+impl ExternalProgramProvider {
+    /// Whether the run's cost will be known: the program reports it, or its
+    /// tokens are priced.
+    fn cost_known(&self) -> bool {
+        external::reports_cost(self.runtime) || self.price.is_some()
+    }
 }
 
 type EventStream =
@@ -435,16 +457,59 @@ fn host_wrap_up(request: &ChatRequest) -> Option<String> {
         .then(|| text.to_string())
 }
 
+/// The work-log line that says how the run's cost is known: the program's
+/// own report, a computation from its reported tokens (and at which
+/// price), or that it is not known.
+fn cost_line(
+    runtime: AgentRuntime,
+    model: &str,
+    usage: &external::models::ExternalUsage,
+    reported: Option<u64>,
+    computed: Option<(u64, external::models::PriceSource)>,
+) -> String {
+    let dollars = |cost: u64| format!("${}.{:06}", cost / 1_000_000, cost % 1_000_000);
+    match (reported, computed) {
+        (Some(cost), _) => format!("[cost] {}, as the program reported\n", dollars(cost)),
+        (None, Some((cost, source))) => format!(
+            "[cost] {} computed from the reported tokens ({} input, of which {} cached and {} \
+             written to the cache, and {} output) at {}; {} reports no cost of its own\n",
+            dollars(cost),
+            usage.input_tokens,
+            usage.cached_input_tokens,
+            usage.cache_write_tokens,
+            usage.output_tokens,
+            match source {
+                external::models::PriceSource::Configured => {
+                    format!("the configuration's `pricing` entry for {model}")
+                }
+                external::models::PriceSource::Pinned => format!(
+                    "{model}'s list price as Axocoatl pinned it on {}",
+                    external::models::PINNED_ON
+                ),
+            },
+            external::models::program_name(runtime)
+        ),
+        (None, None) => format!(
+            "[cost] not known: {} reported no cost, and {model} has no price in Axocoatl's \
+             pinned table or the configuration's `pricing`; the reservation stays charged\n",
+            external::models::program_name(runtime)
+        ),
+    }
+}
+
 /// The events of one finished run: the work log as reasoning, then the
-/// usage the program reported (unless it overran the reservation), then
-/// the answer, or the reason there is none. A failed run that reported its
-/// usage settles to that usage; one that did not keeps the reservation. A
-/// failed run whose model call an upstream rejected (HTTP 401) through the
-/// route says first which stored credential was rejected and how to store
-/// it again.
+/// usage the program reported (unless it overran the reservation) with its
+/// cost (the program's own, or, for a program that reports none, its
+/// tokens at `price`), then the answer, or the reason there is none. A
+/// failed run that reported its usage settles to that usage; one that did
+/// not keeps the reservation. A failed run whose model call an upstream
+/// rejected (HTTP 401) through the route says first which stored
+/// credential was rejected and how to store it again.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_events(
     runtime: AgentRuntime,
     model: &str,
+    price: Option<(external::models::ListPrice, external::models::PriceSource)>,
     result: &ExternalActivationResult,
     routes: &RouteUse,
     stopped: Option<&str>,
@@ -459,7 +524,24 @@ pub(crate) fn run_events(
     let provider = external::runtime_provider(runtime)
         .unwrap_or("external")
         .to_string();
-    let usage = result.usage();
+    // The program's own cost, or its reported tokens at the model's price.
+    let report = result.usage_report();
+    let computed = report.and_then(|(usage, reported)| match (reported, price) {
+        (None, Some((price, source))) => Some((price.cost_microunits(&usage), source)),
+        _ => None,
+    });
+    if let Some((usage, reported)) = report {
+        events.push(Ok(StreamEvent::ReasoningDelta {
+            delta: cost_line(runtime, model, &usage, reported, computed),
+        }));
+    }
+    let usage = report.map(|(usage, reported)| {
+        (
+            usage.input_tokens,
+            usage.output_tokens,
+            reported.or(computed.map(|(cost, _)| cost)),
+        )
+    });
     let overrun = usage.and_then(|(input, output, cost)| {
         let tokens = input.saturating_add(output);
         if tokens > reserved.token_limit {
@@ -470,8 +552,13 @@ pub(crate) fn run_events(
             ))
         } else if cost.is_some_and(|cost| cost > reserved.cost_microunits) {
             Some(format!(
-                "the program reported a cost above the {} micro-dollars its grant still allowed; \
-                 the whole reservation stays charged",
+                "{} above the {} micro-dollars its grant still allowed; the whole reservation \
+                 stays charged",
+                if computed.is_some() {
+                    "the cost computed from the program's reported tokens is"
+                } else {
+                    "the program reported a cost"
+                },
                 reserved.cost_microunits
             ))
         } else {
@@ -593,9 +680,9 @@ impl LlmProvider for ExternalProgramProvider {
         }
     }
     /// The run reserves the tokens the grant still allows, and its spending:
-    /// all of it for a program that reports its cost, an equal share of it
-    /// per activation left for one that does not
-    /// ([`external::cost_reservation`]).
+    /// all of it when the run's cost will be known (the program reports it,
+    /// or its tokens are priced), an equal share of it per activation left
+    /// when it will not ([`external::cost_reservation`]).
     fn execution_bounds(&self, _request: &ChatRequest) -> Option<ProviderExecutionBounds> {
         let (allowance, activations_left) = {
             let state = self.controller.lock().ok()?;
@@ -607,7 +694,7 @@ impl LlmProvider for ExternalProgramProvider {
         Some(ProviderExecutionBounds {
             token_limit: allowance.tokens.unwrap_or(0).max(1),
             cost_microunits: external::cost_reservation(
-                self.runtime,
+                self.cost_known(),
                 allowance.cost_microunits.unwrap_or(0),
                 activations_left,
             ),
@@ -663,6 +750,7 @@ impl LlmProvider for ExternalProgramProvider {
         let events = run_events(
             self.runtime,
             &self.model,
+            self.price,
             &outcome.result,
             &outcome.routes,
             outcome.stopped.as_deref(),
@@ -1184,6 +1272,7 @@ mod tests {
         let events = run_events(
             AgentRuntime::ClaudeCode,
             "m",
+            None,
             &claude(None, Some((0, 0, Some(0))), 1),
             &routes,
             None,
@@ -1209,6 +1298,7 @@ mod tests {
         let events = run_events(
             AgentRuntime::ClaudeCode,
             "m",
+            None,
             &claude(Some("Done."), Some((10, 2, Some(5))), 0),
             &routes,
             None,
@@ -1252,6 +1342,8 @@ mod tests {
                 input_tokens,
                 output_tokens,
                 cost_microunits,
+                cached_input_tokens: 0,
+                cache_write_tokens: 0,
             });
         }
         ExternalActivationResult {
@@ -1289,6 +1381,7 @@ mod tests {
         let events = run_events(
             AgentRuntime::ClaudeCode,
             "m",
+            None,
             &claude(Some("Done."), Some((100, 20, Some(5000))), 0),
             &requests(2),
             None,
@@ -1310,6 +1403,7 @@ mod tests {
         let events = run_events(
             AgentRuntime::ClaudeCode,
             "m",
+            None,
             &claude(None, Some((10, 0, None)), 1),
             &requests(1),
             None,
@@ -1323,6 +1417,7 @@ mod tests {
         let events = run_events(
             AgentRuntime::Codex,
             "m",
+            None,
             &claude(Some("half"), None, 137),
             &requests(1),
             None,
@@ -1339,6 +1434,7 @@ mod tests {
         let events = run_events(
             AgentRuntime::ClaudeCode,
             "m",
+            None,
             &claude(Some("answer"), Some((10, 1, None)), 0),
             &requests(5),
             Some("it made 5 model requests and its grant allowed 4"),
@@ -1353,6 +1449,7 @@ mod tests {
         let events = run_events(
             AgentRuntime::ClaudeCode,
             "m",
+            None,
             &claude(Some("answer"), Some((900, 200, Some(1))), 0),
             &requests(1),
             None,
@@ -1365,20 +1462,108 @@ mod tests {
     }
 
     #[test]
-    fn only_a_program_without_a_cost_report_reserves_a_share_of_the_cost() {
+    fn only_a_run_whose_cost_will_not_be_known_reserves_a_share_of_the_cost() {
         use crate::external_agent::cost_reservation;
-        assert_eq!(
-            cost_reservation(AgentRuntime::ClaudeCode, 1_000_000, 3),
-            1_000_000
-        );
-        assert_eq!(cost_reservation(AgentRuntime::Codex, 1_000_000, 3), 333_333);
+        // Claude Code reports its cost; a priced Codex model's is computed.
+        assert_eq!(cost_reservation(true, 1_000_000, 3), 1_000_000);
+        assert_eq!(cost_reservation(false, 1_000_000, 3), 333_333);
         // The second of three, after the first kept its share charged.
-        assert_eq!(cost_reservation(AgentRuntime::Codex, 666_667, 2), 333_333);
-        assert_eq!(cost_reservation(AgentRuntime::Codex, 666_666, 1), 666_666);
+        assert_eq!(cost_reservation(false, 666_667, 2), 333_333);
+        assert_eq!(cost_reservation(false, 666_666, 1), 666_666);
         // A share is never a zero charge for an unknown cost.
-        assert_eq!(cost_reservation(AgentRuntime::Codex, 2, 3), 1);
-        assert_eq!(cost_reservation(AgentRuntime::Codex, 0, 3), 0);
-        assert_eq!(cost_reservation(AgentRuntime::Codex, 10, 0), 10);
+        assert_eq!(cost_reservation(false, 2, 3), 1);
+        assert_eq!(cost_reservation(false, 0, 3), 0);
+        assert_eq!(cost_reservation(false, 10, 0), 10);
+    }
+
+    /// Codex reports tokens but no cost: a priced model's run settles to
+    /// its tokens at that price, says so in its work log, and a computed
+    /// cost above what the grant allowed is an overrun like a reported one.
+    /// A model without a price keeps its cost unknown.
+    #[test]
+    fn a_codex_run_settles_to_its_tokens_at_its_models_price() {
+        use crate::external_agent::models::{computed_price, ExternalUsage};
+        let price = computed_price(AgentRuntime::Codex, "gpt-5.5", None);
+        let mut result = claude(Some("Done."), None, 0);
+        result.items.push(ExternalItem::Usage {
+            input_tokens: 4107,
+            output_tokens: 60,
+            cost_microunits: None,
+            cached_input_tokens: 1000,
+            cache_write_tokens: 0,
+        });
+        result.usage_complete = true;
+        let expected = price.unwrap().0.cost_microunits(&ExternalUsage {
+            input_tokens: 4107,
+            cached_input_tokens: 1000,
+            cache_write_tokens: 0,
+            output_tokens: 60,
+        });
+        assert_eq!(expected, 17_835);
+        let events = run_events(
+            AgentRuntime::Codex,
+            "gpt-5.5",
+            price,
+            &result,
+            &requests(1),
+            None,
+            &bounds(1_000_000, 20_000),
+            "",
+        );
+        assert_eq!(
+            kinds(&events),
+            ["usage:4107+60:true", "cost:17835", "text:Done.", "done"]
+        );
+        let log: String = events
+            .iter()
+            .filter_map(|event| match event {
+                Ok(StreamEvent::ReasoningDelta { delta }) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            log.contains(
+                "[cost] $0.017835 computed from the reported tokens (4107 input, of which 1000 \
+                 cached and 0 written to the cache, and 60 output) at gpt-5.5's list price as \
+                 Axocoatl pinned it on 2026-10-08; Codex 0.160.1 reports no cost of its own"
+            ),
+            "{log}"
+        );
+        // Above what the grant still allowed: the reservation stays charged.
+        let events = run_events(
+            AgentRuntime::Codex,
+            "gpt-5.5",
+            price,
+            &result,
+            &requests(1),
+            None,
+            &bounds(1_000_000, 17_834),
+            "",
+        );
+        let seen = kinds(&events);
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!(
+            seen[0].contains(
+                "the cost computed from the program's reported tokens is above the 17834 \
+                 micro-dollars"
+            ),
+            "{seen:?}"
+        );
+        // No price: tokens settle, the cost stays unknown.
+        let events = run_events(
+            AgentRuntime::Codex,
+            "gpt-7",
+            None,
+            &result,
+            &requests(1),
+            None,
+            &bounds(1_000_000, 20_000),
+            "",
+        );
+        assert_eq!(kinds(&events), ["usage:4107+60:true", "text:Done.", "done"]);
+        assert!(events.iter().any(|event| matches!(event,
+            Ok(StreamEvent::ReasoningDelta { delta }) if delta.starts_with(
+                "[cost] not known: Codex 0.160.1 reported no cost, and gpt-7 has no price"))));
     }
 
     #[test]

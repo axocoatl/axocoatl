@@ -192,10 +192,12 @@ pub fn parse_output(stdout: &[u8]) -> Result<ExternalActivationResult, ExternalA
                 saw_result = true;
                 let usage = &value["usage"];
                 let reported = usage.is_object();
+                let written = u64_at(usage, &["cache_creation_input_tokens"]).unwrap_or(0);
+                let cached = u64_at(usage, &["cache_read_input_tokens"]).unwrap_or(0);
                 let input = u64_at(usage, &["input_tokens"])
                     .unwrap_or(0)
-                    .saturating_add(u64_at(usage, &["cache_creation_input_tokens"]).unwrap_or(0))
-                    .saturating_add(u64_at(usage, &["cache_read_input_tokens"]).unwrap_or(0));
+                    .saturating_add(written)
+                    .saturating_add(cached);
                 let output = u64_at(usage, &["output_tokens"]).unwrap_or(0);
                 let cost = value["total_cost_usd"].as_f64().and_then(usd_to_microunits);
                 if reported {
@@ -204,6 +206,8 @@ pub fn parse_output(stdout: &[u8]) -> Result<ExternalActivationResult, ExternalA
                         input_tokens: input,
                         output_tokens: output,
                         cost_microunits: cost,
+                        cached_input_tokens: cached,
+                        cache_write_tokens: written,
                     });
                 }
                 let is_error = value["is_error"].as_bool().unwrap_or(true)

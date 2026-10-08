@@ -145,6 +145,7 @@ fn outcome() -> RunOutcome {
             cost_microunits: 12_345,
             complete: false,
             cost_known: true,
+            cost_computed: false,
             retries: 1,
         },
         network: NetworkSummary::default(),
@@ -358,11 +359,23 @@ fn the_body_carries_checks_review_adjudications_not_covered_and_the_record() {
     assert!(body.contains("**missing**"));
     assert!(body.contains(RUN));
 
-    // A cost the run does not know (a Codex writer's) is what was
-    // reserved, never a price.
+    // A cost the run does not know (a Codex writer's on a model without a
+    // price) is what was reserved, never a price; one computed from a Codex
+    // writer's reported tokens says so.
     assert!(pr_body(&outcome())
         .unwrap()
         .contains("output tokens, $0.0123"));
+    let mut computed = outcome();
+    computed.usage.cost_computed = true;
+    computed.usage.complete = true;
+    let body = pr_body(&computed).unwrap();
+    assert!(
+        body.contains(
+            "300 output tokens, $0.0123 (includes cost computed from reported tokens at list \
+             prices). Provider"
+        ),
+        "{body}"
+    );
     let mut codex = outcome();
     codex.usage.cost_known = false;
     let body = pr_body(&codex).unwrap();

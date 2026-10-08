@@ -1473,6 +1473,7 @@ fn usage(input_tokens: u64, output_tokens: u64, complete: bool) -> RunUsage {
         cost_microunits: 0,
         complete,
         cost_known: true,
+        cost_computed: false,
         retries: 0,
     }
 }

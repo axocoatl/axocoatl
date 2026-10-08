@@ -732,10 +732,13 @@ stdout bounded to 16 MiB. Its JSON output becomes the activation's evidence and 
 Model traffic goes through routes from `external_agent::routes_for` with credentials from
 `credentials` or the secret store (`{data root}/secrets/<name>`, `0600`, written from stdin
 by `axocoatl secret set`); the container holds placeholders and trusts the Session CA. The
-activation reserves its grant's limits up front (a Codex activation, whose cost is never
-reported and stays charged, reserves the cost left divided by the activations left, and
-its run's `usage.cost_known` is false), route requests count against its invocations, and
-the program's own usage report settles it; there is no per-call reservation, and the
+activation reserves its grant's limits up front, route requests count against its
+invocations, and the program's own usage report settles it: Claude Code reports its cost;
+Codex reports tokens only, and its cost is computed from them at the configuration's
+`pricing` entry or the pinned list price of its model (`external_agent::models`; the run's
+`usage.cost_computed` says so). A Codex model with no price keeps its cost unknown: its
+activation reserves the cost left divided by the activations left, that stays charged, and
+its run's `usage.cost_known` is false; there is no per-call reservation, and the
 program's internal tool calls are evidence, not admitted calls.
 
 **e2e.** An `e2e` check expands to a wrapper that forces `E2E_TELEMETRY_DISABLED=1`, sets

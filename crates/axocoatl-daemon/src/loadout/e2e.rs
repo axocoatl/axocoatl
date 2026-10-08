@@ -595,6 +595,33 @@ pub trait ModelCatalog: Send + Sync {
     async fn openrouter_models(&self) -> Result<serde_json::Value, String>;
 }
 
+/// A [`ModelCatalog`] read at most once: admission asks for OpenRouter's
+/// catalog for its native callers' floors and for its e2e checks, and the
+/// second ask gets the first answer.
+pub struct OnceCatalog {
+    inner: OpenRouterCatalog,
+    answer: tokio::sync::OnceCell<Result<serde_json::Value, String>>,
+}
+
+impl OnceCatalog {
+    pub fn new(inner: OpenRouterCatalog) -> Self {
+        Self {
+            inner,
+            answer: tokio::sync::OnceCell::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl ModelCatalog for OnceCatalog {
+    async fn openrouter_models(&self) -> Result<serde_json::Value, String> {
+        self.answer
+            .get_or_init(|| self.inner.openrouter_models())
+            .await
+            .clone()
+    }
+}
+
 /// OpenRouter's catalog over HTTPS from the host. The catalog is public:
 /// the request carries no credential.
 #[derive(Debug, Clone)]

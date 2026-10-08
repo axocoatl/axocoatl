@@ -66,6 +66,9 @@ pub(crate) struct LoadoutRuns {
     /// is written: the Session's first container already mounts
     /// `.e2e/cache` read-only.
     e2e_runs: StdMutex<HashSet<String>>,
+    /// Where a test's admission reads OpenRouter's model catalog.
+    #[cfg(test)]
+    pub(crate) openrouter_catalog: StdMutex<Option<String>>,
 }
 
 impl LoadoutRuns {
@@ -77,6 +80,8 @@ impl LoadoutRuns {
             drivers: StdMutex::new(HashSet::new()),
             stops: StdMutex::new(HashSet::new()),
             e2e_runs: StdMutex::new(HashSet::new()),
+            #[cfg(test)]
+            openrouter_catalog: StdMutex::new(None),
         }
     }
 
@@ -440,6 +445,7 @@ fn usage_of(value: &crate::session_control_plane::EvidenceValue<serde_json::Valu
         // The projection carries no cost: a call whose usage is not known
         // has no known cost either.
         cost_known: complete,
+        cost_computed: false,
         retries: 0,
     }
 }
@@ -471,23 +477,12 @@ fn turn_state(state: &str) -> TurnState {
 /// `provider` and `model`, as [`crate::loadout::team_plan::model_identity`]
 /// names a loadout's Agents. An external writer's retained definition names
 /// its runtime as the provider (`claude-code`, `codex`); its identity is the
-/// provider of the model API its program calls (`anthropic`, `openai`), the
-/// program's model and that runtime.
+/// provider of the model API its program is configured to call
+/// ([`axocoatl_config::loadout::AgentRuntime::model_provider`]: the route
+/// Axocoatl adds for it, and the provider loadout validation holds the
+/// writer's configured model to), the program's model and that runtime.
 fn node_identity(provider: String, model: String) -> ModelIdentity {
-    match crate::external_agent::runtime_for_provider(&provider)
-        .and_then(crate::external_agent::model_provider)
-    {
-        Some(model_provider) => ModelIdentity {
-            provider: model_provider.into(),
-            model,
-            runtime: provider,
-        },
-        None => ModelIdentity {
-            provider,
-            model,
-            runtime: "native".into(),
-        },
-    }
+    crate::external_agent::definition_identity(&provider, &model)
 }
 
 /// What the run driver observes of one turn's control-plane projection:
@@ -541,6 +536,11 @@ pub fn observation_from_control_plane(
             _ => (String::new(), String::new(), String::new()),
         };
         let identity = node_identity(provider, model);
+        // A program that reports tokens but no cost (Codex) has its cost
+        // computed from them at its model's price: a known cost of such a
+        // node is a computed one.
+        let computes_cost = crate::external_agent::runtime_for_provider(&identity.runtime)
+            .is_some_and(|runtime| !crate::external_agent::reports_cost(runtime));
         let (kind, slot_id, required) = match helpers.get(node.node_id.as_str()) {
             Some(template) => (
                 "helper",
@@ -580,6 +580,14 @@ pub fn observation_from_control_plane(
             if !matches!(state, NodeState::NeverStarted | NodeState::Running) {
                 usage.complete &= activation_usage.complete;
                 usage.cost_known &= activation_usage.cost_known;
+            }
+            if computes_cost
+                && activation_usage.cost_known
+                && (activation_usage.cost_microunits > 0
+                    || activation_usage.input_tokens > 0
+                    || activation_usage.output_tokens > 0)
+            {
+                usage.cost_computed = true;
             }
             // An empty recorded reason says nothing: it is no reason. Nor is
             // the activation's own partial answer. An activation that ends
@@ -1116,6 +1124,22 @@ impl AxocoatlDaemon {
                     .into(),
             ));
         }
+        // A tokens budget that cannot hold one model call is refused now,
+        // as a usage error naming the budget and the minimum, not after the
+        // run's Session started: each model's floor as its provider shows
+        // it before the run (`team_plan::call_floor`). OpenRouter's public
+        // catalog is read once, for this and for the e2e checks below.
+        let catalog = crate::loadout::e2e::OnceCatalog::new(self.loadout_openrouter_catalog());
+        let observed = self
+            .loadout_admission_observations(&resolved, &catalog)
+            .await;
+        crate::loadout::team_plan::refuse_budgets_below_one_call(&resolved, &observed)
+            .map_err(run_error)?;
+        // An external writer whose model the pinned table does not list is
+        // not checked, and its cost may not be known: the run says so.
+        let unpinned =
+            crate::external_agent::models::unpinned_warnings(&resolved, &self.config.pricing);
+        resolved.warnings.extend(unpinned);
         let overlay = crate::loadout::egress::loadout_overlay(
             &self.network_policy.current(),
             &resolved,
@@ -1156,12 +1180,9 @@ impl AxocoatlDaemon {
         // An e2e check's agent needs tool calls and image input: refused
         // when OpenRouter's catalog says its model has neither, a warning
         // when the provider's catalog cannot say.
-        let e2e_warnings = crate::loadout::e2e::verify_e2e_models(
-            &resolved,
-            &crate::loadout::e2e::OpenRouterCatalog::default(),
-        )
-        .await
-        .map_err(run_error)?;
+        let e2e_warnings = crate::loadout::e2e::verify_e2e_models(&resolved, &catalog)
+            .await
+            .map_err(run_error)?;
         for warning in e2e_warnings {
             if !resolved
                 .warnings
@@ -1177,14 +1198,6 @@ impl AxocoatlDaemon {
                     });
             }
         }
-        // A tokens budget that cannot hold one model call is refused now,
-        // as a usage error naming the budget and the minimum, not after the
-        // run's Session started.
-        let contexts = self.loadout_model_contexts(&resolved).await;
-        crate::loadout::team_plan::refuse_budgets_below_one_call(&resolved, |model| {
-            contexts.get(model).copied().flatten()
-        })
-        .map_err(run_error)?;
         let workspace = self.create_workspace(&repo_text, None).await?;
         let run_id = format!("run-{}", uuid::Uuid::new_v4());
         let loadout_ref = LoadoutRef {
@@ -1422,11 +1435,65 @@ impl AxocoatlDaemon {
         Ok((accepted, context))
     }
 
+    /// OpenRouter's public model catalog, which admission reads for the
+    /// floor of a native OpenRouter call and for an e2e check's model.
+    fn loadout_openrouter_catalog(&self) -> crate::loadout::e2e::OpenRouterCatalog {
+        #[cfg(test)]
+        if let Some(base) = self
+            .loadout_runs
+            .openrouter_catalog
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+        {
+            return crate::loadout::e2e::OpenRouterCatalog::new(base);
+        }
+        crate::loadout::e2e::OpenRouterCatalog::default()
+    }
+
+    /// What admission observes of the run's models
+    /// ([`crate::loadout::team_plan::AdmissionObservations`]): each native
+    /// Ollama model's loaded context ([`Self::loadout_model_contexts`]), and
+    /// OpenRouter's public catalog when a native caller runs an OpenRouter
+    /// model. A catalog that cannot be read leaves those callers the
+    /// smallest native context; Team & budget then checks their call
+    /// against the endpoint it selects.
+    async fn loadout_admission_observations(
+        &self,
+        resolved: &axocoatl_config::loadout::ResolvedLoadout,
+        catalog: &crate::loadout::e2e::OnceCatalog,
+    ) -> crate::loadout::team_plan::AdmissionObservations {
+        use crate::loadout::e2e::ModelCatalog;
+        let openrouter = crate::loadout::team_plan::resolved_call_budgets(resolved)
+            .iter()
+            .any(|(budget, model)| {
+                budget.runtime == AgentRuntime::Native
+                    && model
+                        .as_ref()
+                        .is_some_and(|model| model.provider == "openrouter")
+            });
+        let openrouter_catalog = if openrouter {
+            match catalog.openrouter_models().await {
+                Ok(catalog) => Some(catalog),
+                Err(error) => {
+                    tracing::debug!(%error, "admission could not read OpenRouter's model catalog");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        crate::loadout::team_plan::AdmissionObservations {
+            ollama_contexts: self.loadout_model_contexts(resolved).await,
+            openrouter_catalog,
+        }
+    }
+
     /// The context each native Ollama model of the run is loaded with,
     /// observed as its first call observes it (a load without a prompt, no
     /// inference), within [`ADMISSION_CONTEXT_TIMEOUT`]. A model that cannot
     /// be observed now maps to `None`; its run reports the provider's own
-    /// error. Other providers' models are not observed before the run.
+    /// error.
     async fn loadout_model_contexts(
         &self,
         resolved: &axocoatl_config::loadout::ResolvedLoadout,
@@ -2071,10 +2138,12 @@ impl AxocoatlDaemon {
         let measured = self.loadout_turn_provider_usage(session_id, turn_id);
         let mut observation = observation_from_control_plane(&view, checks, reviewer, &measured);
         // Cost is charged to grants, one per call: the turn's cost is what
-        // its grants were charged (settled calls, and the reservations of
+        // its grants were charged (settled calls, a Codex writer's at the
+        // cost computed from its reported tokens, and the reservations of
         // calls still running or whose cost is not known, such as a Codex
-        // writer's, which `cost_known` then says). Without the grants the
-        // cost is not known, and the usage is a known subtotal.
+        // writer's on a model without a price, which `cost_known` then
+        // says). Without the grants the cost is not known, and the usage is
+        // a known subtotal.
         match self.session_control_grants(session_id, turn_id).await {
             Ok(grants) => {
                 observation.usage.cost_microunits = grants
@@ -2120,8 +2189,9 @@ impl AxocoatlDaemon {
     /// authority of the Session's current turn, or a closed turn's retained
     /// one. Every settled call counts, so a call that succeeded before its
     /// activation failed is in the usage, and so does an external writer's
-    /// one admitted call, whose program reported no cost when it is Codex
-    /// (`cost_known: false`). An activation the authority does not account,
+    /// one admitted call, whose cost for Codex is computed from its reported
+    /// tokens, or not known (`cost_known: false`) for a model without a
+    /// price. An activation the authority does not account,
     /// or a turn whose authority cannot be read, is left out; the
     /// observation then keeps the projection's usage for it.
     pub(crate) fn loadout_turn_provider_usage(
@@ -2183,6 +2253,7 @@ impl AxocoatlDaemon {
                             cost_microunits: usage.cost_microunits,
                             complete: usage.tokens.complete,
                             cost_known: usage.cost_known,
+                            cost_computed: false,
                             retries: 0,
                         },
                     );
@@ -2849,6 +2920,7 @@ mod tests {
                 cost_microunits: 0,
                 complete: true,
                 cost_known: true,
+                cost_computed: false,
                 retries: 0,
             },
         )]
@@ -2939,9 +3011,12 @@ mod tests {
         );
     }
 
-    /// A Codex activation's calls are measured with complete token usage
-    /// but no cost: the turn's usage says its cost is not known, while a
-    /// native call that settled with its cost keeps it known.
+    /// A Codex activation on a model without a price is measured with
+    /// complete token usage but no cost: the turn's usage says its cost is
+    /// not known, while a native call that settled with its cost keeps it
+    /// known. A Codex activation whose cost was computed from its reported
+    /// tokens is known and marked computed; a Claude Code one, which reports
+    /// its own cost, is not.
     #[test]
     fn a_call_without_a_cost_makes_the_turns_cost_unknown() {
         use crate::session_control_plane::EvidenceValue;
@@ -2957,20 +3032,42 @@ mod tests {
                 RunUsage {
                     input_tokens: 600,
                     output_tokens: 18,
-                    cost_microunits: 0,
+                    cost_microunits: if cost_known { 3_540 } else { 0 },
                     complete: true,
                     cost_known,
+                    cost_computed: false,
                     retries: 0,
                 },
             )]
             .into_iter()
             .collect()
         };
-        let codex = observation_from_control_plane(&view, &[], None, &measured(false));
+        let codex = observation_from_control_plane(
+            &defined(view.clone(), "codex", "gpt-7"),
+            &[],
+            None,
+            &measured(false),
+        );
         assert!(codex.usage.complete);
         assert!(!codex.usage.cost_known);
+        assert!(!codex.usage.cost_computed);
         let native = observation_from_control_plane(&view, &[], None, &measured(true));
         assert!(native.usage.cost_known);
+        assert!(!native.usage.cost_computed);
+        let priced = observation_from_control_plane(
+            &defined(view.clone(), "codex", "gpt-5.5"),
+            &[],
+            None,
+            &measured(true),
+        );
+        assert!(priced.usage.cost_known && priced.usage.cost_computed);
+        let reported = observation_from_control_plane(
+            &defined(view.clone(), "claude-code", "claude-haiku-4-5"),
+            &[],
+            None,
+            &measured(true),
+        );
+        assert!(reported.usage.cost_known && !reported.usage.cost_computed);
         // Without the authority's measure, the projection carries no cost: a
         // call whose usage is not known has no known cost either.
         let unknown = observation_from_control_plane(&view, &[], None, &HashMap::new());
