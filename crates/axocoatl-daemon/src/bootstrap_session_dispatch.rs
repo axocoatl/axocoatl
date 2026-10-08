@@ -190,6 +190,27 @@ impl SessionDispatchCleanup {
     }
 }
 
+/// How a Session's lifecycle cleanup has the Session's Workspace.
+pub(crate) enum CleanupWorkspace {
+    /// Wait for it, and for another lifecycle action of the Session, within
+    /// the cleanup's timeout (daemon shutdown, several Ways).
+    Wait,
+    /// A lifecycle action a person waits on (Close, Delete, an environment
+    /// change): it never waits for the Workspace or for another lifecycle
+    /// action of the Session. It holds the Workspace already when it could
+    /// take it.
+    Lifecycle(Option<OwnedMutexGuard<()>>),
+}
+
+/// The detail of a lifecycle action's cleanup refused because another
+/// operation holds the Session's Workspace between turns; the daemon names
+/// that operation in its refusal.
+pub(crate) const LIFECYCLE_WORKSPACE_HELD: &str = "another operation holds the Session's Workspace";
+
+fn lifecycle_workspace_held() -> DaemonError {
+    DaemonError::WorkspaceBusy(LIFECYCLE_WORKSPACE_HELD.into())
+}
+
 /// Holds the actual Workspace gate and, for registered work, the exact cleanup
 /// serialization gate. Dropping a failed/cancelled caller leaves the registry's
 /// parked Workspace owner intact. This token makes no process-settlement claim.
@@ -598,20 +619,84 @@ impl SessionDispatchRegistry {
         session_id: &str,
         timeout: Duration,
     ) -> Result<SessionDispatchCleanup> {
+        self.prepare_session_cleanup_with(session_id, timeout, CleanupWorkspace::Wait)
+            .await
+    }
+
+    /// [`Self::prepare_session_cleanup`], with how the cleanup has the
+    /// Session's Workspace. A lifecycle action a person waits on
+    /// ([`CleanupWorkspace::Lifecycle`]) waits only for the Session's own
+    /// turn to reach a safe point: another lifecycle action of the Session
+    /// in progress is refused as busy at once, and so is, between turns, a
+    /// Workspace that another operation holds ([`LIFECYCLE_WORKSPACE_HELD`]);
+    /// both refusals change nothing. The Workspace the action already holds
+    /// is parked for a retained owner, or returned as the cleanup's
+    /// operation when the Session has no registered owner.
+    pub(crate) async fn prepare_session_cleanup_with(
+        &self,
+        session_id: &str,
+        timeout: Duration,
+        workspace: CleanupWorkspace,
+    ) -> Result<SessionDispatchCleanup> {
+        let (lifecycle, mut held) = match workspace {
+            CleanupWorkspace::Wait => (false, None),
+            CleanupWorkspace::Lifecycle(held) => (true, held),
+        };
         let (entry, pending) = {
             let mut state = self
                 .state
                 .lock()
                 .map_err(|_| failure("Session dispatch registry failed"))?;
-            state.closing_sessions.insert(session_id.to_owned());
+            if !lifecycle {
+                state.closing_sessions.insert(session_id.to_owned());
+            }
             (
                 state.entries.get(session_id).cloned(),
                 state.pending.get(session_id).cloned(),
             )
         };
+        // A lifecycle action takes what it would otherwise wait for before
+        // it changes anything, so a refusal leaves the Session as it was.
+        let mut taken_cleanup = None;
+        if lifecycle {
+            let cleanup_gate = match (&pending, &entry) {
+                (Some(pending), _) => Some(pending.cleanup.clone()),
+                (None, Some(entry)) => Some(entry.cleanup.clone()),
+                (None, None) => None,
+            };
+            if let Some(gate) = cleanup_gate {
+                taken_cleanup = Some(gate.try_lock_owned().map_err(|_| {
+                    DaemonError::WorkspaceBusy(format!(
+                        "another Close, Delete or environment change of Session {session_id} is \
+                         in progress. Try again once it has ended"
+                    ))
+                })?);
+            }
+            if let (None, Some(entry), None) = (&pending, &entry, &held) {
+                let between_turns = entry
+                    .between_turns
+                    .lock()
+                    .map_err(|_| failure("released repository identity failed"))?
+                    .is_some();
+                if between_turns && !entry.retired.load(Ordering::SeqCst) {
+                    let gate = entry.owner()?.workspace_gate();
+                    held = Some(
+                        gate.try_lock_owned()
+                            .map_err(|_| lifecycle_workspace_held())?,
+                    );
+                }
+            }
+        }
+        if lifecycle {
+            self.state
+                .lock()
+                .map_err(|_| failure("Session dispatch registry failed"))?
+                .closing_sessions
+                .insert(session_id.to_owned());
+        }
         if let Some(pending) = pending {
             return self
-                .prepare_pending_cleanup(session_id, pending, timeout)
+                .prepare_pending_cleanup(session_id, pending, timeout, taken_cleanup, held)
                 .await;
         }
         let Some(entry) = entry else {
@@ -619,7 +704,7 @@ impl SessionDispatchRegistry {
                 session_id: session_id.to_owned(),
                 entry: None,
                 pending: None,
-                operation: None,
+                operation: held.map(SessionDispatchOperation::from),
                 _cleanup: None,
             });
         };
@@ -632,7 +717,10 @@ impl SessionDispatchRegistry {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = stage;
         };
         let prepared = tokio::time::timeout(timeout, async {
-            let cleanup = Arc::new(entry.cleanup.clone().lock_owned().await);
+            let cleanup = Arc::new(match taken_cleanup {
+                Some(cleanup) => cleanup,
+                None => entry.cleanup.clone().lock_owned().await,
+            });
             // Another lifecycle may have completed while this one waited. It
             // must not reuse an old entry to act on a later registration.
             {
@@ -644,7 +732,7 @@ impl SessionDispatchRegistry {
                     Some(current) if !Arc::ptr_eq(current, &entry) => {
                         return Err(failure("Session registration changed while cleanup waited"))
                     }
-                    None => return Ok(None),
+                    None => return Ok((None, held)),
                     Some(_) => {}
                 }
             }
@@ -665,9 +753,28 @@ impl SessionDispatchRegistry {
                     // No process work remains in this permanently retired owner.
                     // Acquire the actual Workspace mutex, then park it below
                     // without an intervening await. A cancelled Close keeps it.
+                    // A lifecycle action took it before anything changed.
                     wait_for(CleanupWait::Workspace);
-                    owner.workspace_gate().lock_owned().await
+                    match held.take() {
+                        Some(guard) => {
+                            let gate = owner.workspace_gate();
+                            if !Arc::ptr_eq(OwnedMutexGuard::mutex(&guard), &gate) {
+                                return Err(failure("the action holds another Workspace"));
+                            }
+                            guard
+                        }
+                        None if lifecycle => owner
+                            .workspace_gate()
+                            .try_lock_owned()
+                            .map_err(|_| lifecycle_workspace_held())?,
+                        None => owner.workspace_gate().lock_owned().await,
+                    }
                 } else {
+                    if held.is_some() {
+                        // The owner holds the Workspace until its turn ends,
+                        // so a lifecycle action cannot hold it too.
+                        return Err(failure("the Session's owner lost its Workspace"));
+                    }
                     wait_for(CleanupWait::Boundary);
                     owner.wait_for_execution_boundary(timeout).await?;
                     if owner.execution_is_idle()? {
@@ -691,7 +798,7 @@ impl SessionDispatchRegistry {
                 .map_err(|_| failure("parked Workspace ownership failed"))?
                 .clone()
                 .ok_or_else(|| failure("retired Session registration lost its Workspace gate"))?;
-            Ok::<_, DaemonError>(Some((operation, cleanup)))
+            Ok::<_, DaemonError>((Some((operation, cleanup)), None))
         })
         .await
         .map_err(|_| {
@@ -706,12 +813,13 @@ impl SessionDispatchRegistry {
             };
             failure(timeout_message(session_id, stage, timeout, &holders))
         })??;
+        let (prepared, held) = prepared;
         let Some((operation, cleanup)) = prepared else {
             return Ok(SessionDispatchCleanup {
                 session_id: session_id.to_owned(),
                 entry: None,
                 pending: None,
-                operation: None,
+                operation: held.map(SessionDispatchOperation::from),
                 _cleanup: None,
             });
         };

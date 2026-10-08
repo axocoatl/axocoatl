@@ -1207,11 +1207,20 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
 
     // 6. Daemon running?
     let socket_path = axocoatl_daemon::ipc::default_socket_path();
-    if axocoatl_daemon::ipc::IpcClient::connect(&socket_path)
-        .await
-        .is_ok()
-    {
+    if let Ok(mut client) = axocoatl_daemon::ipc::IpcClient::connect(&socket_path).await {
         pass("Daemon is running (IPC reachable)");
+        // What it did about leaked Session runtime volumes when it started.
+        let check = match client
+            .request(&axocoatl_daemon::ipc::IpcRequest::RuntimeVolumes)
+            .await
+        {
+            Ok(axocoatl_daemon::ipc::IpcResponse::RuntimeVolumes { check }) => Some(check),
+            _ => None,
+        };
+        match runtime_volume_doctor_line(check.as_ref()) {
+            Ok(line) => pass(&line),
+            Err((line, hint)) => warn(&line, &hint),
+        }
     } else {
         warn(
             "No running daemon",
@@ -1302,6 +1311,73 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
         println!("Some required checks FAILED — see hints above.");
     }
     hard_ok
+}
+
+/// The `doctor` line for what the running daemon did about leaked Session
+/// runtime volumes when it started (`None`: it did not say, as a daemon
+/// older than 1.3.0 does not). `Err` is a warning with its hint.
+fn runtime_volume_doctor_line(
+    check: Option<&axocoatl_daemon::RuntimeVolumeCheck>,
+) -> Result<String, (String, String)> {
+    use axocoatl_daemon::RuntimeVolumeCheck;
+    match check {
+        None => Err((
+            "Runtime volumes: the running daemon does not report leaked Session runtime volumes"
+                .to_string(),
+            "Restart it with Axocoatl 1.3.0 or later; it removes them when it starts.".to_string(),
+        )),
+        Some(RuntimeVolumeCheck::Deferred) => Ok(
+            "Runtime volumes: not checked yet (Podman was not running when the daemon started); \
+             leaked Session runtime volumes are removed before the first local Session starts"
+                .to_string(),
+        ),
+        Some(RuntimeVolumeCheck::Failed { error }) => Err((
+            "Runtime volumes: leaked Session runtime volumes were not checked when the daemon \
+             started"
+                .to_string(),
+            format!("{error}. Restart the daemon once Podman is ready to check them again."),
+        )),
+        Some(RuntimeVolumeCheck::Checked { report }) => {
+            let summary = format!(
+                "Runtime volumes: the daemon removed {} leaked Session runtime volume{} of closed, \
+                 deleted or unknown Sessions when it started; kept {} of open Sessions; left {} of \
+                 other daemons{}",
+                report.removed.len(),
+                if report.removed.len() == 1 { "" } else { "s" },
+                report.kept_open,
+                report.other_daemons,
+                if report.unlabelled_kept == 0 {
+                    String::new()
+                } else {
+                    format!(" and {} without an owner label", report.unlabelled_kept)
+                },
+            );
+            if report.failed.is_empty() {
+                Ok(summary)
+            } else {
+                let shown = report
+                    .failed
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n           ");
+                let more = report.failed.len().saturating_sub(5);
+                Err((
+                    format!("{summary}; {} could not be removed", report.failed.len()),
+                    format!(
+                        "{shown}{}\n           Remove each with `podman volume rm <name>` once no \
+                         container uses it, or restart the daemon to try again.",
+                        if more == 0 {
+                            String::new()
+                        } else {
+                            format!("\n           …and {more} more")
+                        }
+                    ),
+                ))
+            }
+        }
+    }
 }
 
 /// The `doctor` line for a validated `sandbox.network`. Config loading has
@@ -3775,6 +3851,59 @@ mod tests {
             line.contains("reach only: npm, 2 route hosts (below), and hosts"),
             "{line}"
         );
+    }
+
+    #[test]
+    fn doctor_reports_what_the_daemon_did_about_leaked_runtime_volumes() {
+        use axocoatl_daemon::RuntimeVolumeCheck;
+        use axocoatl_isolation::runtime_volumes::RuntimeVolumeReap;
+        let checked = |removed: usize, failed: Vec<String>| RuntimeVolumeCheck::Checked {
+            report: RuntimeVolumeReap {
+                removed: (0..removed)
+                    .map(|index| format!("axo-egr-ses-{index}"))
+                    .collect(),
+                kept_open: 3,
+                other_daemons: 12,
+                unlabelled_kept: 0,
+                failed,
+            },
+        };
+        assert_eq!(
+            runtime_volume_doctor_line(Some(&checked(195, Vec::new()))).unwrap(),
+            "Runtime volumes: the daemon removed 195 leaked Session runtime volumes of closed, \
+             deleted or unknown Sessions when it started; kept 3 of open Sessions; left 12 of \
+             other daemons"
+        );
+        assert!(runtime_volume_doctor_line(Some(&checked(1, Vec::new())))
+            .unwrap()
+            .contains("removed 1 leaked Session runtime volume of"));
+        let (line, hint) = runtime_volume_doctor_line(Some(&checked(
+            0,
+            vec!["axo-egr-ses-9: volume is being used by container x".into()],
+        )))
+        .unwrap_err();
+        assert!(line.ends_with("; 1 could not be removed"), "{line}");
+        assert!(
+            hint.starts_with("axo-egr-ses-9: volume is being used"),
+            "{hint}"
+        );
+        assert!(hint.contains("podman volume rm <name>"), "{hint}");
+        assert!(
+            runtime_volume_doctor_line(Some(&RuntimeVolumeCheck::Deferred))
+                .unwrap()
+                .contains("before the first local Session starts")
+        );
+        let (line, hint) = runtime_volume_doctor_line(Some(&RuntimeVolumeCheck::Failed {
+            error: "listing Session runtime volumes: no connection".into(),
+        }))
+        .unwrap_err();
+        assert!(line.contains("were not checked"), "{line}");
+        assert!(
+            hint.starts_with("listing Session runtime volumes"),
+            "{hint}"
+        );
+        let (line, _) = runtime_volume_doctor_line(None).unwrap_err();
+        assert!(line.contains("does not report"), "{line}");
     }
 
     #[test]

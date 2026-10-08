@@ -654,3 +654,117 @@ async fn a_busy_workspace_exits_seven_and_close_refuses_at_once_then_removes_run
     daemon.stop();
     drop(guard);
 }
+
+/// A daemon whose data root was removed (as the browser test harness
+/// removes its fixture daemon's) left its run Session's runtime volumes on
+/// Podman. A new daemon on a data root at the same path has the same runtime
+/// authority: when it starts it removes those volumes, its log counts them,
+/// and `axocoatl doctor` says how many it removed.
+///
+/// ```text
+/// CONTAINER_CONNECTION=<machine> cargo test -p axocoatl-cli \
+///   --test run_lifecycle_podman -- --ignored --nocapture leaked_runtime_volumes
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires Podman; run this test explicitly"]
+async fn a_daemon_removes_the_leaked_runtime_volumes_of_its_data_root_and_doctor_says_so() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let repo = root.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("README.md"), "# Volumes\n").unwrap();
+    let model = model_server().await;
+    let port = free_port();
+    let config = write_config(&root, port, &model.uri());
+    let data = root.join("data");
+    let fresh_data = || {
+        std::fs::create_dir(&data).unwrap();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        copy_model_cache(&data);
+    };
+    fresh_data();
+    let mut daemon = Daemon::start(&root, &config, port, 0).await;
+    let base = format!("http://127.0.0.1:{port}");
+    let writer = format!("writer=ollama:{MODEL}");
+    let guard = SessionGuard(std::sync::Mutex::new(Vec::new()));
+
+    // A run's Session, left open with its runtime volumes.
+    let ran = finished(run_cli(
+        &root,
+        &run_args(&repo, "Say done.", &writer, &base, &config),
+    ))
+    .await;
+    let err = String::from_utf8_lossy(&ran.stderr).to_string();
+    assert_eq!(ran.status.code(), Some(0), "{err}\n{}", daemon.logs());
+    let session = err
+        .lines()
+        .find_map(|line| line.split(" in Session ").nth(1))
+        .unwrap_or_else(|| panic!("no Session in\n{err}"))
+        .trim()
+        .to_string();
+    guard.0.lock().unwrap().push(session.clone());
+    daemon.stop();
+    let leaked: Vec<String> = runtime_volumes(&session)
+        .into_iter()
+        .filter(|volume| podman_exists("volume", volume))
+        .collect();
+    assert!(leaked.contains(&format!("axo-egr-{session}")), "{leaked:?}");
+
+    // Its data root goes; a new one at the same path starts.
+    std::fs::remove_dir_all(&data).unwrap();
+    fresh_data();
+    let mut daemon = Daemon::start(&root, &config, port, 1).await;
+    for volume in &leaked {
+        assert!(
+            !podman_exists("volume", volume),
+            "{volume} survived the start"
+        );
+    }
+    // The new daemon's log (this start's), without terminal colors.
+    let log = ["stdout-1.log", "stderr-1.log"]
+        .map(|name| std::fs::read_to_string(root.join(name)).unwrap_or_default())
+        .join("\n");
+    let mut plain = String::new();
+    let mut escape = false;
+    for character in log.chars() {
+        match (escape, character) {
+            (false, '\u{1b}') => escape = true,
+            (true, 'm') => escape = false,
+            (true, _) => {}
+            (false, character) => plain.push(character),
+        }
+    }
+    let line = plain
+        .lines()
+        .find(|line| line.contains("checked leaked Session runtime volumes"))
+        .unwrap_or_else(|| panic!("no count in the log:\n{plain}"));
+    assert!(
+        line.contains(&format!("removed={}", leaked.len())),
+        "{line}"
+    );
+    assert!(line.contains("failed=0"), "{line}");
+    eprintln!("daemon log: {}", line.trim());
+
+    // `doctor` reads what the running daemon did.
+    let doctor = axocoatl(&root)
+        .args(["doctor", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    let report = String::from_utf8_lossy(&doctor.stdout);
+    let expected = format!(
+        "[ OK ] Runtime volumes: the daemon removed {} leaked Session runtime volumes of \
+         closed, deleted or unknown Sessions when it started; kept 0 of open Sessions; left ",
+        leaked.len()
+    );
+    assert!(report.contains(&expected), "{report}");
+    for line in report
+        .lines()
+        .filter(|line| line.contains("Runtime volumes"))
+    {
+        eprintln!("doctor: {line}");
+    }
+
+    daemon.stop();
+    drop(guard);
+}

@@ -1,8 +1,9 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import {
   access,
+  appendFile,
   copyFile,
   mkdtemp,
   mkdir,
@@ -175,6 +176,82 @@ async function api(baseUrl, method, pathname, body) {
     throw new Error(`${method} ${pathname} returned HTTP ${response.status}: ${text}`);
   }
   return payload;
+}
+
+// What a fixture Session can have on Podman, all named after its id: its
+// container and the containers that serve it, its runtime volumes, and its
+// Node dependency volume.
+const SESSION_CONTAINER_PREFIXES = ['axo-ses-', 'axo-egr-', 'axo-brw-', 'axo-pvw-', 'axo-svc-'];
+const SESSION_VOLUME_PREFIXES = ['axo-egr-', 'axo-egi-', 'axo-svc-', 'axo-ca-'];
+
+function podman(arguments_) {
+  return new Promise((resolve) => {
+    execFile('podman', arguments_, { timeout: 60_000 }, (error, stdout, stderr) => {
+      resolve({ ok: !error, stdout: String(stdout || ''), stderr: String(stderr || error?.message || '') });
+    });
+  });
+}
+
+// Delete every Session of a fixture daemon through its API, as a person would,
+// so it leaves nothing on Podman: Delete removes a Session's containers, its
+// runtime volumes and its dependency volume (Close would keep the last).
+// Returns every Session id the daemon listed.
+async function deleteFixtureSessions(baseUrl) {
+  let sessions;
+  try {
+    sessions = await api(baseUrl, 'GET', '/api/sessions');
+  } catch (error) {
+    console.warn(`browser test teardown: could not list the fixture daemon's Sessions: ${error.message}`);
+    return [];
+  }
+  const ids = (Array.isArray(sessions) ? sessions : [])
+    .map((session) => session?.id)
+    .filter((id) => typeof id === 'string' && /^[A-Za-z0-9_.-]+$/.test(id));
+  for (const id of ids) {
+    try {
+      await api(baseUrl, 'DELETE', `/api/sessions/${encodeURIComponent(id)}?force=true`);
+    } catch (error) {
+      console.warn(`browser test teardown: Session ${id} was not deleted: ${error.message}`);
+    }
+  }
+  return ids;
+}
+
+// After the daemon stopped: remove, by exact name, anything a Delete above
+// could not (a daemon that exited early, a refused Delete). Nothing is
+// matched by prefix, so another daemon's containers and volumes are never
+// touched. Without Podman there is nothing to remove.
+// Returns the names it found and removed.
+async function removeFixtureLeftovers(ids) {
+  if (!ids.length) return [];
+  const listedContainers = await podman(['ps', '-a', '--format', '{{.Names}}']);
+  const listedVolumes = await podman(['volume', 'ls', '--format', '{{.Name}}']);
+  if (!listedContainers.ok || !listedVolumes.ok) return [];
+  const containers = new Set(listedContainers.stdout.split('\n').map((name) => name.trim()));
+  const volumes = new Set(listedVolumes.stdout.split('\n').map((name) => name.trim()));
+  const leftContainers = ids.flatMap((id) => SESSION_CONTAINER_PREFIXES.map((prefix) => `${prefix}${id}`))
+    .filter((name) => containers.has(name));
+  const leftVolumes = ids.flatMap((id) => [
+    ...SESSION_VOLUME_PREFIXES.map((prefix) => `${prefix}${id}`),
+    `axo-ses-${id}-node-modules`,
+  ]).filter((name) => volumes.has(name));
+  if (!leftContainers.length && !leftVolumes.length) return [];
+  console.warn(`browser test teardown: removing what the fixture's Sessions left: ${[...leftContainers, ...leftVolumes].join(', ')}`);
+  if (leftContainers.length) await podman(['rm', '-f', '--time', '0', '--ignore', ...leftContainers]);
+  if (leftVolumes.length) {
+    const removed = await podman(['volume', 'rm', '--force', ...leftVolumes]);
+    if (!removed.ok) console.warn(`browser test teardown: ${removed.stderr.trim()}`);
+  }
+  return [...leftContainers, ...leftVolumes];
+}
+
+// With AXOCOATL_E2E_TEARDOWN_LOG set to a file, each fixture daemon's
+// teardown appends one JSON line: its Sessions and what had to be removed by
+// name. A check after the suite reads it to prove nothing was left behind.
+async function logTeardown(entry) {
+  const file = process.env.AXOCOATL_E2E_TEARDOWN_LOG;
+  if (!file) return;
+  await appendFile(file, `${JSON.stringify(entry)}\n`);
 }
 
 async function makeProject(root, name, { packageLock = true, devcontainer = null } = {}) {
@@ -470,7 +547,13 @@ consolidation:
         await startDaemon();
       },
       async stop() {
+        // Delete the fixture's Sessions while the daemon still runs, then
+        // remove by exact name whatever they still have on Podman.
+        const running = child && child.exitCode === null && child.signalCode === null;
+        const sessions = running ? await deleteFixtureSessions(baseUrl) : [];
         await stopProcess(child);
+        const removed = await removeFixtureLeftovers(sessions);
+        await logTeardown({ run_root: runRoot, sessions, removed_by_name: removed });
         unregisterDaemon(port);
         // Only the unique mkdtemp directory created above is eligible for
         // cleanup. The guard prevents a malformed path from widening scope.

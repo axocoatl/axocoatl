@@ -66,7 +66,7 @@ impl PendingStores {
 pub(super) struct PendingSessionEntry {
     stores: Mutex<PendingStores>,
     owner: Mutex<Option<SessionRepositoryOwner>>,
-    cleanup: Arc<AsyncMutex<()>>,
+    pub(super) cleanup: Arc<AsyncMutex<()>>,
     pub(super) operation: Mutex<Option<Arc<OwnedMutexGuard<()>>>>,
     pub(super) retired: AtomicBool,
     pub(super) closed_history: AtomicBool,
@@ -1174,14 +1174,22 @@ impl SessionDispatchRegistry {
         Ok((controller, reference))
     }
 
+    /// A lifecycle action passes the cleanup gate it took (`taken_cleanup`)
+    /// and the Workspace it holds (`held`), which becomes the cleanup's
+    /// operation when no repository owner holds the Workspace.
     pub(super) async fn prepare_pending_cleanup(
         &self,
         session_id: &str,
         entry: Arc<PendingSessionEntry>,
         timeout: Duration,
+        taken_cleanup: Option<OwnedMutexGuard<()>>,
+        held: Option<OwnedMutexGuard<()>>,
     ) -> Result<SessionDispatchCleanup> {
         let (operation, cleanup) = tokio::time::timeout(timeout, async {
-            let cleanup = Arc::new(entry.cleanup.clone().lock_owned().await);
+            let cleanup = Arc::new(match taken_cleanup {
+                Some(cleanup) => cleanup,
+                None => entry.cleanup.clone().lock_owned().await,
+            });
             {
                 let state = self
                     .state
@@ -1220,7 +1228,8 @@ impl SessionDispatchRegistry {
                 .operation
                 .lock()
                 .map_err(|_| failure("pending Workspace ownership failed"))?
-                .clone();
+                .clone()
+                .or_else(|| held.map(Arc::new));
             Ok::<_, DaemonError>((operation, cleanup))
         })
         .await

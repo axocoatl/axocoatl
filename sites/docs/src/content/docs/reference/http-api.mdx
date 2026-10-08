@@ -257,7 +257,7 @@ below.
 | POST | `/api/sessions` | Compatibility create from `{name, working_dir, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}`; finds or creates the matching Workspace. A busy Workspace is a `409` with `"code": "workspace_busy"` at once, as above; any other refusal is a `400` |
 | GET | `/api/sessions/{id}` | One persisted Session, or `404`; a Session a [loadout run](#loadouts-and-runs) created carries `loadout` |
 | PATCH | `/api/sessions/{id}` | Rename with `{name}` |
-| DELETE | `/api/sessions/{id}?force=false` | Close: stops the Session's containers and removes the Podman volumes its runtime fills again on start (`axo-egr-`, `axo-egi-`, `axo-svc-`, `axo-ca-`); the Node dependency volume stays for Reopen. `force=true` deletes the Session record and that volume too. While another Session's turn holds the Workspace, both answer `409` at once with `{"error": "…", "code": "workspace_busy"}`, naming that Session and turn, and change nothing; another operation of the Workspace is waited for up to 10 seconds, then refused the same way, naming it. Another conflict is a `409` without `code` |
+| DELETE | `/api/sessions/{id}?force=false` | Close: stops the Session's containers and removes the Podman volumes its runtime fills again on start (`axo-egr-`, `axo-egi-`, `axo-svc-`, `axo-ca-`); the Node dependency volume stays for Reopen. `force=true` deletes the Session record and that volume too. While another Session's turn or any other operation holds the Workspace (another Session's file or Git change, Ways, creation or run admission), both answer `409` at once with `{"error": "…", "code": "workspace_busy"}`, naming that Session and turn or that operation, and change nothing. They wait only for this Session's own work, which they stop: its turn, until its command reaches a safe point (at most 30 seconds), and its running Ways or checks, which they interrupt (at most 15 seconds). A second Close or Delete of the Session while one is in progress is the same `409` at once. Another conflict is a `409` without `code` |
 | PUT | `/api/sessions/{id}/environment` | Review/change `{image, setup_command, setup_approved, setup_reviewed:true}` and synchronously prepare that exact generation |
 | POST | `/api/sessions/{id}/environment/rebuild` | Remove the old runtime and reproduce the persisted reviewed environment plan |
 | POST | `/api/sessions/{id}/environment/confirm-runtime-cleanup` | High-friction E2B recovery acknowledgment. Send exactly one target: `{runtime_id, confirmed:true}` after manually deleting that retained runtime, or `{creation_token, confirmed_all_matching_sandboxes_deleted:true}` after manually deleting every sandbox whose metadata contains `axocoatl_creation_token=<exact token>` |
@@ -417,14 +417,26 @@ A turn holds its Session's Workspace for as long as it runs or needs attention. 
 request that acts on the Workspace never waits for a turn: while a turn of any Session
 of the Workspace holds it, the request is refused at once with `409`, naming that
 Session, its loadout run and its turn, and nothing changes; send it again once the turn
-has ended, or stop the turn. An operation that is not a turn, such as another Session
-being created and its environment prepared, a run's admission, a Git change or Ways
-checks, is waited for up to 10 seconds; when it has not ended by then, the request is
-refused the same way, naming that operation. Creating a Session (`POST /api/sessions`,
-`POST /api/workspaces/{id}/sessions`), Close and Delete carry `"code": "workspace_busy"`
-beside `error`; attachment changes, environment changes, Reopen, file and Git changes
-and the Ways reads, checks, judge and Keep answer the same `409` without it.
-[`POST /api/runs`](#loadouts-and-runs) refuses at once whatever holds the Workspace.
+has ended, or stop the turn.
+
+A lifecycle action never waits for another Session's work at all: creating, closing,
+deleting or reopening a Session, changing or repairing its environment, confirming its
+runtime cleanup and starting several Ways are refused at once whatever else holds the
+Workspace (another Session being created and its environment prepared, a run's
+admission, a file or Git change, Ways or their checks), naming that operation, and
+nothing changes. Close and Delete wait only for the Session's own work, which they
+stop: its turn, until its running command reaches a safe point (at most 30 seconds),
+its running Ways or Ways checks, which they interrupt, and its runtime while it starts
+(at most 15 seconds each); after that they are refused the same way. Other requests
+(attachment, file and Git changes, the Ways reads, checks, judge and Keep) wait up to
+10 seconds for an operation that is not a turn; when it has not ended by then, the
+request is refused the same way, naming that operation.
+
+Creating a Session (`POST /api/sessions`, `POST /api/workspaces/{id}/sessions`), Close
+and Delete carry `"code": "workspace_busy"` beside `error`; attachment changes,
+environment changes, Reopen, file and Git changes and the Ways reads, checks, judge and
+Keep answer the same `409` without it. [`POST /api/runs`](#loadouts-and-runs) refuses at
+once whatever holds the Workspace.
 
 ### Session network record
 

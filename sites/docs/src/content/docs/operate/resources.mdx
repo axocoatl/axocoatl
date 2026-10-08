@@ -73,7 +73,12 @@ Account for:
   starts (`axo-egr-`, `axo-egi-` and `axo-svc-` sockets and the `axo-ca-` trust files),
   so a closed Session leaves only its dependency volume. If Podman cannot remove one
   because another container still uses it, the Close still succeeds and the daemon log
-  names the volume;
+  names the volume. Volumes like these that Sessions closed by Axocoatl 1.2, a daemon
+  that stopped before Close, or a removed data root left behind are removed when the
+  daemon next starts: it removes only its own (each carries the runtime authority label
+  of the data root whose daemon made it) whose Session is closed, deleted or unknown,
+  keeps an open Session's, and never touches another daemon's. `axocoatl doctor` shows
+  how many it removed and kept;
 - every Workspace repository and its build artifacts;
 - `.axo-variants/` clones and manifests during unresolved Attempts;
 - the full Axocoatl data root, attachments, and retained native Ways decisions;

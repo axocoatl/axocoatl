@@ -1,12 +1,15 @@
 //! Session lifecycle on a live daemon, as the 1.3 smoke runs found it:
 //! closing an idle Session or creating another while another Session's turn
-//! holds their Workspace, what Close leaves on Podman, and a data directory
-//! made before the daemon first started. Each body runs in a child process
-//! with its own data root, because bootstrap reads the process environment.
+//! or another operation holds their Workspace, what Close leaves on Podman,
+//! the runtime volumes a daemon removes when it starts (and another
+//! daemon's it leaves), and a data directory made before the daemon first
+//! started. Each body runs in a child process with its own data root,
+//! because bootstrap reads the process environment.
 use super::*;
 use crate::loadout::api::{RunAccepted, RunRequest};
 use crate::loadout::host::{CheckLabel, ReproRequest};
 use crate::loadout::{RunContext, RunError, RunHost};
+use crate::RuntimeVolumeCheck;
 use axocoatl_session::run_outcome::{NetworkSummary, ReproRun, RunOutcome, TurnObservation};
 use axocoatl_session::run_outcome::{TurnState, RUN_OUTCOME_SCHEMA};
 use axocoatl_session::run_record::RunEvent;
@@ -482,8 +485,8 @@ impl Drop for Cleanup {
 ///   ways of creating one; not after B's whole turn) and a file change in A
 ///   are refused the same way.
 /// - Once B is stopped, an operation that is not a turn holds the
-///   Workspace: Close waits for it ten seconds, then refuses, naming it;
-///   released within that time, Close goes on.
+///   Workspace: Close and Delete refuse at once, naming it, and change
+///   nothing; once it is released, Close goes on.
 /// - Once B is stopped, A closes. Close removes A's runtime volumes (egress
 ///   socket, identity socket, service socket, trust) and keeps its Node
 ///   dependency volume; Reopen starts A again with new runtime volumes, and
@@ -736,46 +739,54 @@ async fn an_idle_session_closes_once_another_sessions_turn_lets_go() {
             axocoatl_session::run_outcome::exit_code::INTERRUPTED,
             "{b_outcome:?}"
         );
-        // An operation that is not a turn holds the Workspace: Close waits
-        // for it as long as WORKSPACE_OPERATION_WAIT, then refuses, naming
-        // it, and changes nothing.
-        let wait = super::workspace_operation::WORKSPACE_OPERATION_WAIT;
-        let request = || super::workspace_operation::WorkspaceRequest {
-            doing: "the test's own operation".into(),
-            refused: "unused".into(),
-        };
+        // An operation that is not a turn holds the Workspace: Close and
+        // Delete refuse at once (they never wait for another operation),
+        // naming it, and change nothing.
         let held = daemon
-            .take_workspace_operation(&workspace_id, request())
+            .take_lifecycle_workspace_operation(
+                &workspace_id,
+                super::workspace_operation::WorkspaceRequest {
+                    doing: "the test's own operation".into(),
+                    refused: "unused".into(),
+                },
+            )
             .await?;
-        let asked = tokio::time::Instant::now();
-        match daemon.close_session(&a_id).await {
-            Err(DaemonError::WorkspaceBusy(message)) => {
-                assert!(
-                    message.starts_with(&format!("Session {a_id} was not closed: its Workspace ")),
-                    "{message}"
-                );
-                assert!(
-                    message.contains("is held by another operation: the test's own operation"),
-                    "{message}"
-                );
-                assert!(message.contains("did not end within 10 s"), "{message}");
+        for action in ["close", "delete"] {
+            let asked = tokio::time::Instant::now();
+            let refused = if action == "close" {
+                daemon.close_session(&a_id).await
+            } else {
+                daemon.delete_session(&a_id).await
+            };
+            match refused {
+                Err(DaemonError::WorkspaceBusy(message)) => {
+                    assert!(
+                        message.starts_with(&format!(
+                            "Session {a_id} was not {action}d: its Workspace "
+                        )),
+                        "{message}"
+                    );
+                    assert!(
+                        message.contains("is held by another operation: the test's own operation"),
+                        "{message}"
+                    );
+                    assert!(!message.contains("did not end within"), "{message}");
+                }
+                other => panic!("{action}: expected a busy Workspace, got {other:?}"),
             }
-            other => panic!("expected a busy Workspace, got {other:?}"),
+            assert!(
+                asked.elapsed() < Duration::from_secs(2),
+                "{action} took {:?}",
+                asked.elapsed()
+            );
         }
-        assert!(
-            asked.elapsed() >= wait && asked.elapsed() < wait + Duration::from_secs(10),
-            "{:?}",
-            asked.elapsed()
-        );
         assert_eq!(
             daemon.get_session(&a_id).await.unwrap().status,
             axocoatl_session::SessionStatus::Active
         );
-        // Released within that time: Close goes on.
-        let release = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            drop(held);
-        });
+        assert!(container_exists(&format!("axo-ses-{a_id}")).await);
+        // Released: Close goes on at once.
+        drop(held);
         let asked = tokio::time::Instant::now();
         daemon.close_session(&a_id).await?;
         assert!(
@@ -783,7 +794,6 @@ async fn an_idle_session_closes_once_another_sessions_turn_lets_go() {
             "{:?}",
             asked.elapsed()
         );
-        release.await.unwrap();
 
         // Close removed A's containers and runtime volumes, and kept its
         // dependency volume for Reopen.
@@ -821,4 +831,528 @@ async fn an_idle_session_closes_once_another_sessions_turn_lets_go() {
     drop(cleanup);
     result.unwrap();
     shutdown.unwrap();
+}
+
+/// Wait until run `stall`'s provider call has started: its turn then holds
+/// the Workspace until it is stopped.
+async fn wait_for_stalled_call(server: &MockServer) {
+    let started = tokio::time::Instant::now();
+    loop {
+        let calls = server.received_requests().await.unwrap_or_default();
+        if calls.iter().any(|request| {
+            request.url.path() == "/api/chat"
+                && String::from_utf8_lossy(&request.body).contains(STALL)
+        }) {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(180),
+            "the stalled provider call never started"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Every lifecycle action of a Session on real Podman, while an operation
+/// that is not another Session's turn holds the Workspace:
+/// - a file change of another Session (the real writer lease a file write
+///   holds): Close, Delete and an environment change of the idle Session,
+///   and a new Session on the Workspace, are refused at once (not after 10
+///   or 60 s), naming that change, and nothing changes;
+/// - a file change of the Session itself: Close is refused at once the same
+///   way; and so is Reopen of a closed Session during another's file change;
+/// - its own turn: Close stops the turn and closes the Session, waiting only
+///   for the turn's command to reach a safe point; a second Close of it at
+///   the same time is refused at once or finds it closed, never waits.
+///
+/// ```text
+/// CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-daemon --lib \
+///   lifecycle_actions_never_wait_for_another_operation -- --ignored
+/// ```
+#[tokio::test]
+#[ignore = "requires rootless Podman, docker.io/library/alpine:3.20 and the egress sidecar image"]
+async fn lifecycle_actions_never_wait_for_another_operation() {
+    if std::env::var_os(CHILD).is_none() {
+        run_child(
+            "bootstrap::session_native_lifecycle::lifecycle_tests::lifecycle_actions_never_wait_for_another_operation",
+            copy_model_cache,
+        )
+        .await;
+        return;
+    }
+    let server = model_server().await;
+    let config_dir = tempfile::tempdir().unwrap();
+    let config = load_config(config_dir.path(), &server.uri()).await;
+    let daemon = Arc::new(AxocoatlDaemon::bootstrap_headless(config).await.unwrap());
+    daemon.set_config_path(&config_dir.path().join("axocoatl.yaml"));
+    let outside = tempfile::Builder::new()
+        .prefix("axocoatl-lifecycle-")
+        .tempdir_in(std::env::temp_dir())
+        .unwrap();
+    let repo = outside.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("README.md"), "# Lifecycle\n").unwrap();
+    let cleanup = Cleanup(std::sync::Mutex::new(Vec::new()));
+
+    let result = async {
+        // A: a run's Session, idle between turns (its registration released
+        // the Workspace). B: a workbench Session on the same Workspace.
+        let (a, a_context) = daemon
+            .admit_loadout_run(run_request(&repo, "Say done.", "run-a"))
+            .await?;
+        cleanup.0.lock().unwrap().push(a.session_id.clone());
+        let outcome = crate::loadout::driver::run_to_outcome(&Host::new(&daemon), &a_context)
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        assert_eq!(outcome.turns[0].state, TurnState::Completed, "{outcome:?}");
+        let a_id = a.session_id.clone();
+        let mode = || SessionMode::SingleAgent {
+            agent_id: HELPER.into(),
+        };
+        let b = daemon
+            .create_session_with_environment(
+                "b",
+                &repo.display().to_string(),
+                mode(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                true,
+                true,
+            )
+            .await?;
+        cleanup.0.lock().unwrap().push(b.id.clone());
+        assert_eq!(
+            b.environment.state,
+            SessionEnvironmentState::Ready,
+            "{:?}",
+            b.environment
+        );
+        let workspace_id = b.workspace_id.clone();
+        let sessions = daemon.list_sessions().await.len();
+
+        // B's file change holds the Workspace (the lease a file write holds
+        // while it runs).
+        let change = daemon.session_writer(&b.id).await?;
+        let holder = format!(
+            "is held by another operation: a change to Session {}'s files or Git",
+            b.id
+        );
+        let refused_at_once =
+            |what: &str, result: Result<(), DaemonError>, asked: tokio::time::Instant| {
+                match result {
+                    Err(DaemonError::WorkspaceBusy(message)) => {
+                        assert!(message.contains(&holder), "{what}: {message}");
+                        assert!(!message.contains("did not end within"), "{what}: {message}");
+                    }
+                    other => panic!("{what}: expected a busy Workspace, got {other:?}"),
+                }
+                assert!(
+                    asked.elapsed() < Duration::from_secs(2),
+                    "{what} took {:?}",
+                    asked.elapsed()
+                );
+            };
+        let asked = tokio::time::Instant::now();
+        refused_at_once("close", daemon.close_session(&a_id).await, asked);
+        let asked = tokio::time::Instant::now();
+        refused_at_once("delete", daemon.delete_session(&a_id).await, asked);
+        let asked = tokio::time::Instant::now();
+        let session = daemon.get_session(&a_id).await.unwrap();
+        refused_at_once(
+            "an environment change",
+            daemon
+                .configure_session_environment(
+                    &a_id,
+                    session.image.clone(),
+                    session.environment.setup_command.clone(),
+                    session.environment.setup_approved,
+                    session.environment.setup_reviewed,
+                )
+                .await
+                .map(|_| ()),
+            asked,
+        );
+        let asked = tokio::time::Instant::now();
+        refused_at_once(
+            "a new Session",
+            daemon
+                .create_session_in_workspace(
+                    &workspace_id,
+                    "probe",
+                    mode(),
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                    false,
+                    true,
+                )
+                .await
+                .map(|_| ()),
+            asked,
+        );
+        // Nothing changed: A is open, its container runs, and no Session was
+        // created.
+        assert_eq!(
+            daemon.get_session(&a_id).await.unwrap().status,
+            axocoatl_session::SessionStatus::Active
+        );
+        assert!(container_exists(&format!("axo-ses-{a_id}")).await);
+        assert_eq!(daemon.list_sessions().await.len(), sessions);
+        drop(change);
+
+        // B's own file change: Close of B is refused at once, naming it.
+        let change = daemon.session_writer(&b.id).await?;
+        let asked = tokio::time::Instant::now();
+        refused_at_once("close of B", daemon.close_session(&b.id).await, asked);
+        drop(change);
+
+        // B closes. Reopening it while A's file change holds the Workspace is
+        // refused at once, naming that change, and B stays closed.
+        daemon.close_session(&b.id).await?;
+        let change = daemon.session_writer(&a_id).await?;
+        let asked = tokio::time::Instant::now();
+        match daemon.reopen_session(&b.id).await {
+            Err(DaemonError::WorkspaceBusy(message)) => {
+                assert!(
+                    message.starts_with(&format!(
+                        "Session {} was not reopened: its Workspace ",
+                        b.id
+                    )),
+                    "{message}"
+                );
+                assert!(
+                    message.contains(&format!(
+                        "is held by another operation: a change to Session {a_id}'s files or Git"
+                    )),
+                    "{message}"
+                );
+            }
+            other => panic!("reopen: expected a busy Workspace, got {other:?}"),
+        }
+        assert!(
+            asked.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            asked.elapsed()
+        );
+        assert_eq!(
+            daemon.get_session(&b.id).await.unwrap().status,
+            axocoatl_session::SessionStatus::Closed
+        );
+        drop(change);
+
+        // C, a run whose turn stalls, is admitted.
+        let (c, c_context) = daemon
+            .admit_loadout_run(run_request(&repo, STALL, "run-c"))
+            .await?;
+        cleanup.0.lock().unwrap().push(c.session_id.clone());
+        let c_driver = {
+            let host = Host::new(&daemon);
+            tokio::spawn(
+                async move { crate::loadout::driver::run_to_outcome(&host, &c_context).await },
+            )
+        };
+        wait_for_stalled_call(&server).await;
+        // Closing C stops its own turn and closes it, waiting only for that
+        // turn; a second Close of C at the same time never waits for the
+        // first.
+        let asked = tokio::time::Instant::now();
+        let (first, second) = tokio::join!(daemon.close_session(&c.session_id), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let asked = tokio::time::Instant::now();
+            (daemon.close_session(&c.session_id).await, asked.elapsed())
+        });
+        let closed_in = asked.elapsed();
+        eprintln!("Close of C during its own turn took {closed_in:?}");
+        first?;
+        match second {
+            (Ok(()), _) => {}
+            (Err(DaemonError::WorkspaceBusy(message)), elapsed) => {
+                assert!(
+                    message.starts_with(&format!(
+                        "Session {} was not closed: another Close, Delete or environment change \
+                         of Session {} is in progress",
+                        c.session_id, c.session_id
+                    )),
+                    "{message}"
+                );
+                assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+            }
+            (Err(other), _) => panic!("second Close: {other}"),
+        }
+        assert!(closed_in < Duration::from_secs(30), "{closed_in:?}");
+        assert_eq!(
+            daemon.get_session(&c.session_id).await.unwrap().status,
+            axocoatl_session::SessionStatus::Closed
+        );
+        for volume in SessionSandbox::runtime_volume_names(&c.session_id) {
+            assert!(!volume_exists(&volume).await, "{volume} survived Close");
+        }
+        let c_outcome = tokio::time::timeout(Duration::from_secs(180), c_driver)
+            .await
+            .expect("the closed run ends")
+            .unwrap();
+        eprintln!("run C after Close: {c_outcome:?}");
+
+        // A closes at once now that nothing holds the Workspace.
+        daemon.close_session(&a_id).await?;
+        for session in [&a_id, &b.id, &c.session_id] {
+            daemon.delete_session(session).await?;
+        }
+        Ok::<(), DaemonError>(())
+    }
+    .await;
+    let shutdown = daemon.shutdown_session_runtimes_checked().await;
+    drop(cleanup);
+    result.unwrap();
+    shutdown.unwrap();
+}
+
+/// The phase a child of [`leaked_runtime_volumes_are_reaped_by_their_own_daemon_only`]
+/// runs, and the directory its phases share their Session ids through.
+const PHASE: &str = "AXOCOATL_LIFECYCLE_TEST_PHASE";
+const SHARED: &str = "AXOCOATL_LIFECYCLE_TEST_SHARED";
+const REAP_TEST: &str = "bootstrap::session_native_lifecycle::lifecycle_tests::leaked_runtime_volumes_are_reaped_by_their_own_daemon_only";
+
+/// Make `data` a data root no daemon has used yet (owner-only), with the
+/// embedding model from AXOCOATL_E2E_MODEL_CACHE when it is set.
+fn fresh_data_root(data: &std::path::Path) {
+    std::fs::create_dir_all(data).unwrap();
+    std::fs::set_permissions(data, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let Some(cache) = std::env::var_os("AXOCOATL_E2E_MODEL_CACHE") else {
+        return;
+    };
+    let cache = std::path::PathBuf::from(cache);
+    let models = data.join("models").join("all-MiniLM-L6-v2");
+    for name in ["config.json", "tokenizer.json", "model.safetensors"] {
+        if cache.join(name).is_file() {
+            std::fs::create_dir_all(&models).unwrap();
+            std::fs::copy(cache.join(name), models.join(name)).unwrap();
+        }
+    }
+}
+
+/// Run `phase` of the reap test in a child whose data root is `data`, in
+/// `cwd`, sharing Session ids through `shared`.
+async fn run_reap_phase(
+    phase: &str,
+    data: &std::path::Path,
+    cwd: &std::path::Path,
+    shared: &std::path::Path,
+) {
+    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", REAP_TEST, "--nocapture", "--include-ignored"])
+        .env(CHILD, "1")
+        .env(PHASE, phase)
+        .env(SHARED, shared)
+        .env("AXOCOATL_DATA_DIR", data)
+        .env("AXOCOATL_SOCKET_PATH", "ipc/daemon.sock")
+        .current_dir(cwd)
+        .kill_on_drop(true);
+    let result = tokio::time::timeout(Duration::from_secs(600), command.output())
+        .await
+        .unwrap()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    for line in stderr.lines().filter(|line| line.starts_with("phase ")) {
+        eprintln!("{line}");
+    }
+    assert!(
+        result.status.success(),
+        "phase {phase}:\n{}\n{stderr}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+}
+
+fn read_shared(name: &str) -> String {
+    let shared = std::path::PathBuf::from(std::env::var_os(SHARED).unwrap());
+    std::fs::read_to_string(shared.join(name)).unwrap()
+}
+
+fn write_shared(name: &str, value: &str) {
+    let shared = std::path::PathBuf::from(std::env::var_os(SHARED).unwrap());
+    std::fs::write(shared.join(name), value).unwrap();
+}
+
+/// A run whose turn completes at once, on `repo`: its Session (under
+/// `network: egress`) is left open with its runtime volumes.
+async fn completed_run(daemon: &Arc<AxocoatlDaemon>, repo: &std::path::Path, id: &str) -> String {
+    let (accepted, context) = daemon
+        .admit_loadout_run(run_request(repo, "Say done.", id))
+        .await
+        .unwrap();
+    let outcome = crate::loadout::driver::run_to_outcome(&Host::new(daemon), &context)
+        .await
+        .unwrap();
+    assert_eq!(outcome.turns[0].state, TurnState::Completed, "{outcome:?}");
+    for volume in ["axo-egr-", "axo-egi-"] {
+        assert!(volume_exists(&format!("{volume}{}", accepted.session_id)).await);
+    }
+    accepted.session_id
+}
+
+/// The runtime volumes a run's Session has on Podman.
+async fn runtime_volumes_present(session: &str) -> Vec<String> {
+    let mut present = Vec::new();
+    for volume in SessionSandbox::runtime_volume_names(session) {
+        if volume_exists(&volume).await {
+            present.push(volume);
+        }
+    }
+    present
+}
+
+/// The reap check the daemon made at start, as `doctor` reads it.
+fn reap_report(daemon: &AxocoatlDaemon) -> axocoatl_isolation::runtime_volumes::RuntimeVolumeReap {
+    match daemon.runtime_volume_check() {
+        RuntimeVolumeCheck::Checked { report } => report,
+        other => panic!("the daemon did not check its runtime volumes: {other:?}"),
+    }
+}
+
+async fn reap_phase(phase: &str) {
+    let server = model_server().await;
+    let config_dir = tempfile::tempdir().unwrap();
+    let config = load_config(config_dir.path(), &server.uri()).await;
+    let daemon = Arc::new(AxocoatlDaemon::bootstrap_headless(config).await.unwrap());
+    daemon.set_config_path(&config_dir.path().join("axocoatl.yaml"));
+    let repo = std::path::PathBuf::from(read_shared("repo"));
+    let report = reap_report(&daemon);
+    eprintln!("phase {phase}: the daemon's start check: {report:?}");
+    match phase {
+        // Daemon A's first data root at this path: a run's Session, left
+        // with its volumes when the data root is then removed.
+        "wiped" => {
+            assert!(report.failed.is_empty(), "{report:?}");
+            let session = completed_run(&daemon, &repo, "run-wiped").await;
+            write_shared("wiped", &session);
+        }
+        // Daemon A again, on a new data root at the same path: its authority
+        // is the same, and the removed root's Session is unknown to it.
+        "a1" => {
+            let wiped = read_shared("wiped");
+            for volume in SessionSandbox::runtime_volume_names(&wiped) {
+                if volume.starts_with("axo-egr-") || volume.starts_with("axo-egi-") {
+                    assert!(report.removed.contains(&volume), "{volume}: {report:?}");
+                }
+            }
+            assert!(runtime_volumes_present(&wiped).await.is_empty());
+            assert!(report.failed.is_empty(), "{report:?}");
+            // One Session stays open; the other is closed as a 1.2 daemon
+            // closed it, or as a Close cut short by a crash leaves it:
+            // closed, its runtime volumes still there.
+            let open = completed_run(&daemon, &repo, "run-open").await;
+            let closed = completed_run(&daemon, &repo, "run-closed").await;
+            daemon.session_store.lock().await.close(&closed).unwrap();
+            write_shared("open", &open);
+            write_shared("closed", &closed);
+        }
+        // Daemon B, another data root on the same Podman machine.
+        "b1" => {
+            let other = completed_run(&daemon, &repo, "run-other").await;
+            write_shared("other", &other);
+        }
+        // Daemon A restarts: it removes the closed Session's volumes, keeps
+        // the open one's and leaves daemon B's alone.
+        "a2" => {
+            let (open, closed, other) = (
+                read_shared("open"),
+                read_shared("closed"),
+                read_shared("other"),
+            );
+            assert!(report.failed.is_empty(), "{report:?}");
+            for volume in ["axo-egr-", "axo-egi-"] {
+                let closed = format!("{volume}{closed}");
+                assert!(report.removed.contains(&closed), "{closed}: {report:?}");
+                assert!(!volume_exists(&closed).await, "{closed}");
+                let open = format!("{volume}{open}");
+                assert!(!report.removed.contains(&open), "{open}: {report:?}");
+                assert!(volume_exists(&open).await, "{open}");
+                let other = format!("{volume}{other}");
+                assert!(!report.removed.contains(&other), "{other}: {report:?}");
+                assert!(volume_exists(&other).await, "{other}");
+            }
+            assert!(report.kept_open >= 2, "{report:?}");
+            assert!(report.other_daemons >= 2, "{report:?}");
+            assert!(report
+                .removed
+                .iter()
+                .all(|volume| !volume.ends_with(&open) && !volume.ends_with(&other)));
+            // Delete removes the rest of its own.
+            daemon.delete_session(&open).await.unwrap();
+            daemon.delete_session(&closed).await.unwrap();
+            assert!(runtime_volumes_present(&open).await.is_empty());
+        }
+        // Daemon B restarts and keeps its open Session's volumes; Delete
+        // removes them.
+        "b2" => {
+            let other = read_shared("other");
+            assert!(!report.removed.iter().any(|volume| volume.ends_with(&other)));
+            assert!(!runtime_volumes_present(&other).await.is_empty());
+            daemon.delete_session(&other).await.unwrap();
+            assert!(runtime_volumes_present(&other).await.is_empty());
+        }
+        other => panic!("unknown phase {other}"),
+    }
+    daemon.shutdown_session_runtimes_checked().await.unwrap();
+}
+
+/// Two daemons, each with its own data root, on one Podman machine. Each
+/// removes, when it starts, only the runtime volumes that carry its own
+/// runtime authority and whose Session is unknown to its data root (the
+/// data root was removed, as the browser test harness removes its fixture
+/// daemon's) or closed (as a 1.2 daemon closed it, or as a Close cut short
+/// by a crash leaves it); it keeps an open Session's and never touches the
+/// other daemon's. Its start check reports what it removed and kept.
+///
+/// ```text
+/// CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-daemon --lib \
+///   leaked_runtime_volumes_are_reaped_by_their_own_daemon_only -- --ignored
+/// ```
+#[tokio::test]
+#[ignore = "requires rootless Podman, docker.io/library/alpine:3.20 and the egress sidecar image"]
+async fn leaked_runtime_volumes_are_reaped_by_their_own_daemon_only() {
+    if let Some(phase) = std::env::var_os(PHASE) {
+        reap_phase(&phase.to_string_lossy()).await;
+        return;
+    }
+    let root = tempfile::Builder::new()
+        .prefix("axocoatl-reap-")
+        .tempdir_in(std::env::temp_dir())
+        .unwrap();
+    let shared = root.path().join("shared");
+    let repo = root.path().join("repo");
+    let (a, b) = (root.path().join("a"), root.path().join("b"));
+    for dir in [&shared, &repo, &a, &b] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(repo.join("README.md"), "# Reap\n").unwrap();
+    std::fs::write(shared.join("repo"), repo.display().to_string()).unwrap();
+    let (data_a, data_b) = (a.join("data"), b.join("data"));
+    // Removes, whatever an assertion did, every volume and container the
+    // phases' Sessions have, by exact name.
+    let cleanup = Cleanup(std::sync::Mutex::new(Vec::new()));
+    let remember = |name: &str| {
+        if let Ok(id) = std::fs::read_to_string(shared.join(name)) {
+            cleanup.0.lock().unwrap().push(id);
+        }
+    };
+
+    fresh_data_root(&data_a);
+    run_reap_phase("wiped", &data_a, &a, &shared).await;
+    remember("wiped");
+    std::fs::remove_dir_all(&data_a).unwrap();
+    fresh_data_root(&data_a);
+    run_reap_phase("a1", &data_a, &a, &shared).await;
+    remember("open");
+    remember("closed");
+    fresh_data_root(&data_b);
+    run_reap_phase("b1", &data_b, &b, &shared).await;
+    remember("other");
+    run_reap_phase("a2", &data_a, &a, &shared).await;
+    run_reap_phase("b2", &data_b, &b, &shared).await;
+    drop(cleanup);
 }

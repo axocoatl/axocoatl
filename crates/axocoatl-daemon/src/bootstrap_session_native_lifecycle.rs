@@ -63,68 +63,6 @@ impl AxocoatlDaemon {
         holders
     }
 
-    /// Close and Delete act on a Session's Workspace, so they wait for its
-    /// Workspace operation. When another Session's turn holds it, that wait
-    /// would last until the turn ends (and a needs-attention turn holds it
-    /// until a person acts). Refuse at once instead, naming that turn, and
-    /// change nothing; the same request succeeds once the turn has ended.
-    /// This Session's own turn and Ways, which Close and Delete stop
-    /// themselves, are waited for as before. Any other operation of the
-    /// Workspace is waited for as long as
-    /// [`workspace_operation::WORKSPACE_OPERATION_WAIT`], then the action is
-    /// refused as busy, naming that operation when it named itself.
-    pub(super) async fn refuse_lifecycle_while_another_turn_holds_workspace(
-        &self,
-        id: &str,
-        action: &str,
-    ) -> Result<(), DaemonError> {
-        let Some(session) = self.get_session(id).await else {
-            return Ok(());
-        };
-        let operation = self
-            .attempt_operation_for_workspace(&session.workspace_id)
-            .await;
-        if operation.try_lock().is_ok() {
-            return Ok(());
-        }
-        let holders = self
-            .workspace_holders(&session.workspace_id, Some(id))
-            .await;
-        let refused = format!("Session {id} was not {action}d");
-        if holders.turns.is_empty() {
-            if self.session_holds_own_workspace_work(id).await? {
-                // This Session's own turn, which Close has asked to stop, or
-                // its Ways, which Close interrupts: wait for them as before.
-                return Ok(());
-            }
-            // Another operation of the Workspace: wait for it, briefly.
-            if tokio::time::timeout(
-                workspace_operation::WORKSPACE_OPERATION_WAIT,
-                operation.lock(),
-            )
-            .await
-            .is_ok()
-            {
-                return Ok(());
-            }
-            return Err(self
-                .workspace_busy(
-                    &session.workspace_id,
-                    &workspace_attempt_operation_key(&session.workspace_id),
-                    &refused,
-                    true,
-                )
-                .await);
-        }
-        Err(DaemonError::WorkspaceBusy(format!(
-            "{refused}: its Workspace {} {}. A Session is {action}d only \
-             while no other Session's turn holds its Workspace: let that turn finish, or stop \
-             it, then {action} this Session again",
-            session.working_dir.display(),
-            holders.held_by()
-        )))
-    }
-
     /// After Close stopped a local Session's containers: remove the volumes
     /// its runtime fills again whenever it starts (the egress proxy's socket,
     /// identity-socket and service-socket volumes and the trust volume), so a
@@ -184,25 +122,23 @@ impl AxocoatlDaemon {
     async fn retry_paused_session_environment(&self, id: &str) -> Result<Session, DaemonError> {
         self.require_runtime_admission()?;
         // Hold the Workspace operation gate first: no attach or Begin can take
-        // a repository owner for this Workspace while the repair runs.
+        // a repository owner for this Workspace while the repair runs. A
+        // held Workspace refuses the repair at once, naming its holder.
         let _operation = self
-            .attempt_operation(id)
-            .await
-            .try_lock_owned()
-            .map_err(|_| {
-                DaemonError::SessionConflict(
-                    "The Workspace has another operation in progress; retry the repair when it finishes"
-                        .into(),
-                )
-            })?;
-        let start = {
-            let mut starts = self.sandbox_starts.lock().await;
-            starts
-                .entry(id.to_owned())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone()
-        };
-        let _start = start.lock_owned().await;
+            .take_session_lifecycle_operation(
+                id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("the repair of Session {id}'s environment"),
+                    refused: format!("The environment of Session {id} was not repaired"),
+                },
+            )
+            .await?;
+        let _start = self
+            .lock_session_start_for_lifecycle(
+                id,
+                &format!("The environment of Session {id} was not repaired"),
+            )
+            .await?;
         self.require_runtime_admission()?;
         self.require_no_unresolved_attempt(id).await?;
         self.session_dispatch_lifecycles
@@ -294,37 +230,37 @@ impl AxocoatlDaemon {
         self.session_dispatch_lifecycles
             .require_native_environment_change_ready(id)?;
         self.require_no_unresolved_attempt(id).await?;
-        // Its cleanup waits for the Workspace: refuse a busy one first.
-        self.refuse_lifecycle_while_another_turn_holds_workspace(id, "reconfigure")
+        // Take the Workspace before anything changes, without waiting for
+        // another Session's work: a busy Workspace refuses at once.
+        let request = workspace_operation::WorkspaceRequest {
+            doing: format!("the change of Session {id}'s environment"),
+            refused: format!("The environment of Session {id} was not changed"),
+        };
+        let workspace = self
+            .take_session_lifecycle_workspace(id, &request.refused, false)
             .await?;
-        let mut cleanup = self
-            .session_dispatch_lifecycles
-            .prepare_session_cleanup(id, SESSION_DISPATCH_CLEANUP_TIMEOUT)
+        let (mut cleanup, _named) = self
+            .prepare_lifecycle_cleanup(id, &request, workspace)
             .await?;
         let _operation = match cleanup.take_operation() {
             Some(operation) => (Some(operation), None),
             None => (
                 None,
                 Some(
-                    self.take_session_workspace_operation(
+                    self.take_session_lifecycle_operation(
                         id,
                         workspace_operation::WorkspaceRequest {
-                            doing: format!("the change of Session {id}'s environment"),
-                            refused: format!("The environment of Session {id} was not changed"),
+                            doing: request.doing.clone(),
+                            refused: request.refused.clone(),
                         },
                     )
                     .await?,
                 ),
             ),
         };
-        let start = {
-            let mut starts = self.sandbox_starts.lock().await;
-            starts
-                .entry(id.to_owned())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone()
-        };
-        let _start = start.lock().await;
+        let _start = self
+            .lock_session_start_for_lifecycle(id, &request.refused)
+            .await?;
         self.require_runtime_admission()?;
         self.require_no_unresolved_attempt(id).await?;
         self.session_dispatch_lifecycles

@@ -95,6 +95,9 @@ pub enum IpcRequest {
     /// Re-read the daemon's configuration file and apply its egress and
     /// browser allowlists to running Sessions (`axocoatl network reload`).
     ReloadNetworkPolicy,
+    /// What the daemon did about leaked Session runtime volumes when it
+    /// started (`axocoatl doctor`).
+    RuntimeVolumes,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -196,6 +199,8 @@ pub enum IpcResponse {
     NetworkReloaded {
         report: crate::session_network_reload::NetworkReloadReport,
     },
+    /// What the daemon did about leaked Session runtime volumes.
+    RuntimeVolumes { check: crate::RuntimeVolumeCheck },
 }
 
 /// Summary of a directory session, for IPC clients.
@@ -825,6 +830,9 @@ async fn handle_client(
                 }
             }
             IpcRequest::Ping => IpcResponse::Pong,
+            IpcRequest::RuntimeVolumes => IpcResponse::RuntimeVolumes {
+                check: daemon.read().await.runtime_volume_check(),
+            },
             IpcRequest::ReloadNetworkPolicy => {
                 let daemon = daemon.read().await;
                 match daemon.reload_network_policy().await {
