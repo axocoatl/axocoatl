@@ -9,8 +9,16 @@ The harness builds `axocoatl-cli`, starts a fresh daemon on a free loopback
 port, assigns it a unique data directory and IPC socket, creates two temporary
 project folders, and seeds named Workspaces and AwaitingApproval Sessions
 through the public HTTP API. Chromium then drives the visible `/` product
-surface. The temporary daemon, socket, data, and projects are removed after the
-run; an already-running Axocoatl daemon is not touched.
+surface. When a test file ends, `runtime.stop()` deletes every Session of its
+fixture daemon through the API (`DELETE /api/sessions/{id}?force=true`, which
+removes a Session's containers, runtime volumes and dependency volume), stops the
+daemon, and then removes, by exact name, any container or volume still named after
+one of those Sessions; nothing is matched by prefix, so another daemon's
+containers and volumes are never touched. The temporary daemon, socket, data, and
+projects are then removed; an already-running Axocoatl daemon is not touched. So
+the suite leaves nothing behind on Podman, including the egress volumes of the
+loadout runs. Set `AXOCOATL_E2E_TEARDOWN_LOG` to a file to have each teardown append
+one JSON line with the fixture's Session ids and anything it had to remove by name.
 
 ## Local API token
 

@@ -8,6 +8,7 @@ pub mod error;
 pub mod podman;
 pub mod pty;
 pub mod recipes;
+pub mod runtime_volumes;
 pub mod searxng;
 pub mod session_sandbox;
 pub mod session_trust;

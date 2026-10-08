@@ -82,6 +82,8 @@ workbench uses.
 | Preview transport cannot be allocated | Check Podman health; each Session receives its own dynamic loopback host mapping |
 | Files show unexpected changes | `git status --short`, Source Control **All**, then **Last turn** |
 | Stop appears ineffective | The current tool may be reaching a safe boundary; inspect active turn and History |
+| Close, Delete, Reopen or creating a Session answers `409` `workspace_busy` | Another Session's turn or another operation of the Workspace (named in the error) holds it; lifecycle actions never wait for another Session's work. Try again once it has ended, or stop that turn |
+| Podman lists many `axo-egr-`, `axo-egi-`, `axo-svc-` or `axo-ca-` volumes | Sessions closed by Axocoatl 1.2, or a daemon that stopped before Close, left them. Restart the daemon: at start it removes its own whose Session is closed, deleted or unknown, and `axocoatl doctor` says how many. Another daemon's (another data root's) are left alone; remove those with that daemon |
 | Retry is unavailable | The historical turn used immutable attached context; attach it again and send a new turn |
 
 ## Ways and Git

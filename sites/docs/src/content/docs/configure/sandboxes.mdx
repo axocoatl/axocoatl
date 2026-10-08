@@ -141,6 +141,14 @@ How a Session runs under it:
   listens on a Unix socket of its own, or on UDP, is still within its reach: an
   abstract Unix socket always, and a socket file whenever its permissions let the
   helper's user connect.
+- The proxy's socket, the identity socket, the service sockets and the trust files
+  live in Podman volumes named after the Session (`axo-egr-`, `axo-egi-`, `axo-svc-`,
+  `axo-ca-`), labelled with the runtime authority of the data root whose daemon made
+  them. Close removes them; the Session's runtime fills them again when it starts.
+  When the daemon starts, it removes its own that a closed, deleted or unknown Session
+  left behind (a daemon that stopped before Close, Sessions closed by Axocoatl 1.2),
+  keeps an open Session's and never touches another daemon's; `axocoatl doctor`
+  reports how many.
 - A Ways attempt's container starts no proxy of its own. It uses its Session's proxy
   and decision point: its Agents' `bash` commands and its setup commands get
   credentials of their own, and their connections are written to the Session's

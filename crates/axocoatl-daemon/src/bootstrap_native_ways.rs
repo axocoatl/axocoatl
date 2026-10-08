@@ -272,29 +272,25 @@ impl AxocoatlDaemon {
                 .require_native_environment_change_ready(&peer.id)?;
         }
         for peer in peers {
-            let mut cleanup = self
-                .session_dispatch_lifecycles
-                .prepare_session_cleanup(&peer.id, SESSION_DISPATCH_CLEANUP_TIMEOUT)
+            // As a lifecycle action: a Workspace another operation holds
+            // refuses the Ways at once, naming it, before anything changes.
+            let request = || super::workspace_operation::WorkspaceRequest {
+                doing: format!("Session {} being stopped for several Ways", peer.id),
+                refused: format!("No Ways were started: Session {} was not stopped", peer.id),
+            };
+            let workspace = self
+                .take_session_lifecycle_workspace(&peer.id, &request().refused, false)
+                .await?;
+            let (mut cleanup, _named) = self
+                .prepare_lifecycle_cleanup(&peer.id, &request(), workspace)
                 .await?;
             let _operation = match cleanup.take_operation() {
                 Some(operation) => (Some(operation), None),
                 None => (
                     None,
                     Some(
-                        self.take_session_workspace_operation(
-                            &peer.id,
-                            super::workspace_operation::WorkspaceRequest {
-                                doing: format!(
-                                    "Session {} being stopped for several Ways",
-                                    peer.id
-                                ),
-                                refused: format!(
-                                    "No Ways were started: Session {} was not stopped",
-                                    peer.id
-                                ),
-                            },
-                        )
-                        .await?,
+                        self.take_session_lifecycle_operation(&peer.id, request())
+                            .await?,
                     ),
                 ),
             };

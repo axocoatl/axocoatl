@@ -378,25 +378,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again with nothing left to continue. Work that never started and depends on restarted
   work now waits for it in the new epoch and runs once it is accepted; work that also
   depends on failed work left unselected stays blocked until that is continued too.
-- **Closing or creating a Session no longer waits for another Session's turn.** Closing
-  (or deleting) an idle Session while another Session's turn held their Workspace waited
+- **Lifecycle actions no longer wait for another Session's work.** Closing (or
+  deleting) an idle Session while another Session's turn held their Workspace waited
   for the Workspace and failed after 60 seconds with a `500` that blamed the Session
   being closed, and creating a Session on that Workspace (`POST /api/sessions`,
   `POST /api/workspaces/{id}/sessions`) answered only when the turn ended, which for a
-  turn that needs attention could be never. Both are now refused at once with `409` and
-  `"code": "workspace_busy"`, naming the Session, run and turn that hold the Workspace,
-  and nothing changes; try again once that turn ends. Attachment, environment, file and
-  Git changes, Reopen and the Ways reads, checks, judge and Keep are refused the same way
-  (`409`) instead of waiting. An operation that is not a turn, such as another Session's
-  creation, is waited for at most 10 seconds, then the request is refused, naming it.
-  When a lifecycle action does time out, its message says what it waited for. A turn
-  that cannot start because the Workspace is held is busy too, and a loadout run then
-  exits 7, not 5.
-- **Close removes a Session's runtime volumes.** Closing a Session left its
-  `axo-egr-`, `axo-egi-`, `axo-svc-` and `axo-ca-` Podman volumes behind, hundreds after
-  many runs. Close now removes them: their sockets and trust files are filled again
-  when the Session starts. The Node dependency volume still stays until the Session is
-  deleted, so Reopen reuses the installed dependencies.
+  turn that needs attention could be never. Close and Delete also waited up to 60
+  seconds when the holder was not a turn: the Session's own Ways checks, which they did
+  not interrupt, or another operation that took the Workspace after their first check.
+  Every lifecycle action (creating, closing, deleting or reopening a Session, changing
+  or repairing its environment, confirming its runtime cleanup) and the start of
+  several Ways now takes the Workspace before it changes anything and never waits for
+  another Session's work: while another Session's turn, file or Git change, Ways,
+  creation or run admission holds it, the action is refused at once with `409` and
+  `"code": "workspace_busy"`, naming that Session, run and turn or that operation, and
+  nothing changes; try again once it has ended. Close and Delete wait only for their own
+  Session's work, which they stop: its turn, until its running command reaches a safe
+  point (under a second when measured; at most 30 seconds), and its running Ways or Ways
+  checks, which they interrupt, or its runtime while it is starting (at most 15
+  seconds each), then they are refused the same way. A second Close, Delete or
+  environment change of a Session while one is in progress is refused at once. Other
+  requests a person waits on (attachment, file and Git changes, the Ways reads, checks,
+  judge and Keep) are refused at once while a turn holds the Workspace and wait at most
+  10 seconds for another operation, then are refused, naming it. A turn that cannot
+  start because the Workspace is held is busy too, and a loadout run then exits 7, not 5.
+- **Close removes a Session's runtime volumes, and the daemon removes the ones left
+  behind.** Closing a Session left its `axo-egr-`, `axo-egi-`, `axo-svc-` and `axo-ca-`
+  Podman volumes behind, hundreds after many runs. Close now removes them: their sockets
+  and trust files are filled again when the Session starts. The Node dependency volume
+  still stays until the Session is deleted, so Reopen reuses the installed dependencies.
+  Volumes that Sessions closed by 1.2, a daemon that stopped before Close, or a removed
+  data root left behind are removed when the daemon starts (or, when Podman is not
+  running then, before the first local Session starts): each carries the runtime
+  authority label of the data root whose daemon made it, and a daemon removes only its
+  own whose Session is closed, deleted or unknown to its data root. It keeps an open
+  Session's and never touches another daemon's. The log says how many it removed and
+  kept, and `axocoatl doctor` shows it ("Runtime volumes: the daemon removed …"). The
+  browser test harness deletes its fixture daemon's Sessions when a test ends, so the
+  browser gate leaves no container or volume behind.
 - **`GET /api/sessions/{id}/export` exports native Sessions.** Without
   `history_version` it answered `400` for a Session whose History holds native
   execution, such as every loadout run's. It now exports such a Session in the
