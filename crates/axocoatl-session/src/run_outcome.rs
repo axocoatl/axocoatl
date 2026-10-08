@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 /// `schema` of a serialized [`RunOutcome`].
 pub const RUN_OUTCOME_SCHEMA: &str = "axocoatl.run-outcome/1";
 
+/// The not-covered `area` of a run that covered nothing of its scope, such
+/// as an audit whose plan never became usable.
+pub const WHOLE_SCOPE: &str = "whole scope";
+
 /// Process exit codes of `axocoatl run`.
 pub mod exit_code {
     /// Every required check passed, the required review (if any) approved,
@@ -560,6 +564,12 @@ pub struct RunOutcome {
     pub findings: Vec<Finding>,
     #[serde(default)]
     pub not_covered: Vec<NotCovered>,
+    /// What the run noticed that is neither a gap nor a warning, in words,
+    /// such as an audit worker's not-reached entry naming a path that does
+    /// not exist. Notes never change the verdict. Absent when there are
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
     #[serde(default)]
     pub warnings: Vec<RunWarning>,
     #[serde(default)]
@@ -631,18 +641,27 @@ impl RunOutcome {
             ));
         }
         // Areas, not entries: one area can have several entries (each part
-        // of it a worker did not reach).
-        let areas = self
+        // of it a worker did not reach). The whole scope is no area count:
+        // it is everything.
+        if self
             .not_covered
             .iter()
-            .map(|entry| entry.area.as_str())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len();
-        if areas > 0 {
-            attention.push(format!(
-                "{areas} area{} not covered",
-                if areas == 1 { " was" } else { "s were" }
-            ));
+            .any(|entry| entry.area == WHOLE_SCOPE)
+        {
+            attention.push("The whole scope was not covered".into());
+        } else {
+            let areas = self
+                .not_covered
+                .iter()
+                .map(|entry| entry.area.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len();
+            if areas > 0 {
+                attention.push(format!(
+                    "{areas} area{} not covered",
+                    if areas == 1 { " was" } else { "s were" }
+                ));
+            }
         }
         if inputs.turn_needs_attention {
             attention.push("A turn ended needing attention".into());
@@ -796,6 +815,7 @@ mod tests {
             adjudications: Vec::new(),
             findings: Vec::new(),
             not_covered: Vec::new(),
+            notes: Vec::new(),
             warnings: Vec::new(),
             usage: RunUsage::default(),
             network: NetworkSummary::default(),
@@ -901,6 +921,44 @@ mod tests {
         run.not_covered.truncate(3);
         run.decide(VerdictInputs::default());
         assert_eq!(run.attention, ["1 area was not covered"]);
+    }
+
+    /// The audit re-smoke's planner failed before any plan, and the summary
+    /// said "1 area was not covered": the whole scope is no area.
+    #[test]
+    fn the_whole_scope_not_covered_is_said_as_such() {
+        let mut run = outcome();
+        run.not_covered.push(NotCovered {
+            area: WHOLE_SCOPE.into(),
+            class: FailureClass::ProviderFailure,
+            detail: "the planner has no answer: too many native tool calls".into(),
+            node_id: None,
+            turn_id: None,
+        });
+        assert_eq!(
+            run.decide(VerdictInputs::default()),
+            exit_code::NEEDS_ATTENTION
+        );
+        assert_eq!(run.attention, ["The whole scope was not covered"]);
+    }
+
+    /// Notes are part of the Outcome but never change its verdict; an
+    /// Outcome without notes, or written before they existed, has none.
+    #[test]
+    fn notes_are_kept_and_never_decide() {
+        let mut run = outcome();
+        run.notes
+            .push("worker-billing listed billing/old.py as not reached; it does not exist".into());
+        assert_eq!(run.decide(VerdictInputs::default()), exit_code::PASS);
+        let value = serde_json::to_value(&run).unwrap();
+        assert_eq!(value["notes"][0], run.notes[0]);
+        let back: RunOutcome = serde_json::from_value(value).unwrap();
+        assert_eq!(back.notes, run.notes);
+        let mut value = serde_json::to_value(outcome()).unwrap();
+        assert!(value.get("notes").is_none());
+        value.as_object_mut().unwrap().remove("notes");
+        let old: RunOutcome = serde_json::from_value(value).unwrap();
+        assert!(old.notes.is_empty());
     }
 
     #[test]

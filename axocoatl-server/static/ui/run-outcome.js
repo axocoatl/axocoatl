@@ -5,8 +5,9 @@ import { adopt } from './sheets.js';
  * reports it: verdict and exit code, the required checks with their report
  * test cases, the review rounds, the writer's adjudications (missing ones in
  * red), findings with their reproduction classification ("fails on clean
- * build" as its own label), everything not covered and why, warnings (the
- * same-model reviewer warning included), usage (a known subtotal when
+ * build" as its own label), everything not covered and why, the run's notes
+ * (what was neither a gap nor a warning), warnings (the same-model reviewer
+ * warning included), usage (a known subtotal when
  * incomplete, and a cost the run does not know as such), the network summary, a link to download the record bundle and
  * Keep as PR (`<ax-keep-pr>`, workstream keep).
  *
@@ -287,6 +288,11 @@ export class AxRunOutcome extends HTMLElement {
         list.append(li);
       }
       section.append(list);
+    }
+    if (outcome.notes?.length) {
+      const list = el('ul');
+      for (const note of outcome.notes) list.append(el('li', 'note', note));
+      this.#section('Notes').append(list);
     }
     this.#section('Usage').append(el('p', 'usage', usageText(outcome.usage)));
     const network = outcome.network || {};

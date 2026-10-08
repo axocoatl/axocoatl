@@ -9,8 +9,9 @@ import { REPOSITORY_ROOT, launchTestDaemon } from '../support/daemon.mjs';
 
 // The opt-in audit loadout end to end against a stub of the audited local
 // Ollama server: the planner splits the scope into two areas, one read-only
-// worker per area reports its findings in one turn, and the integrator
-// merges them in a third turn; each turn has its own Team Apply.
+// worker per area reads its area's file and reports its findings in one
+// turn, and the integrator merges them in a third turn; each turn has its
+// own Team Apply.
 const MODEL = 'browser-test-model:latest';
 const DIGEST = 'a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72';
 let runtime, modelServer;
@@ -33,6 +34,9 @@ function run(command, args, env = {}) {
 
 const fence = (value) => `\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\`\n`;
 
+/** The file each area's worker reads before it answers. */
+const READS = { docs: 'README.md', code: 'src/lib.rs' };
+
 /** What the stub answers to one chat request. */
 function answer(body) {
   const text = (body?.messages || []).map((message) => typeof message.content === 'string' ? message.content : '').join('\n');
@@ -40,6 +44,13 @@ function answer(body) {
     return { role: 'assistant', content: `FINDINGS${fence([{ id: 'A1', title: 'README has no usage section', severity: 'low', location: 'README.md:1', area: 'docs' }])}` };
   }
   const area = text.match(/Your area: ([a-z0-9-]+)/);
+  // A worker reads its area's file first: the run judges from the recorded
+  // tool calls whether a worker examined its area.
+  if (area && !(body?.messages || []).some((message) => message.role === 'tool')) {
+    return { role: 'assistant', content: '', tool_calls: [
+      { id: `call_${area[1]}`, function: { index: 0, name: 'read_file', arguments: { path: READS[area[1]] } } },
+    ] };
+  }
   if (area?.[1] === 'docs') {
     const findings = [{ id: 'F1', title: 'README has no usage section', severity: 'low', location: 'README.md:1' }];
     return { role: 'assistant', content: `FINDINGS${fence(findings)}NOT_REACHED${fence([])}` };
@@ -118,6 +129,12 @@ test('the audit loadout plans two areas, runs a read-only worker per area and in
   assert.deepEqual(outcome.not_covered, []);
   assert.match(result.stderr, /note: worker-code listed other planned areas as not reached \(docs\)/);
   assert.match(result.stderr, /note: worker-code listed src\/main\.rs as not reached, and no such path exists/);
+  // The notes are in the Outcome and the JUnit verdict too, not only in
+  // the progress lines.
+  assert.equal(outcome.notes.length, 2, JSON.stringify(outcome.notes));
+  assert.match(outcome.notes.join('\n'), /worker-code listed src\/main\.rs as not reached/);
+  assert.match(outcome.notes.join('\n'), /worker-code listed other planned areas as not reached \(docs\)/);
+  assert.match(await readFile(junitPath, 'utf8'), /<testcase classname="axocoatl.run" name="verdict">\n {6}<system-out>note: worker-code listed /);
   assert.equal(outcome.findings.length, 1, JSON.stringify(outcome.findings));
   assert.equal(outcome.findings[0].title, 'README has no usage section');
   assert.equal(outcome.findings[0].area, 'docs');
@@ -125,6 +142,8 @@ test('the audit loadout plans two areas, runs a read-only worker per area and in
   const workers = chats.filter((body) => /Your area: /.test(JSON.stringify(body)));
   const areas = new Set(workers.map((body) => JSON.stringify(body).match(/Your area: ([a-z0-9-]+)/)[1]));
   assert.deepEqual([...areas].sort(), ['code', 'docs']);
+  // Each worker's second call carried its read's result.
+  assert.equal(workers.filter((body) => body.messages.some((message) => message.role === 'tool')).length, 2);
   assert.equal(await git(repo, 'status', '--porcelain'), '');
   assert.match(await readFile(junitPath, 'utf8'), /<testsuite name="findings"/);
 });

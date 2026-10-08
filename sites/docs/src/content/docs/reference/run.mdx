@@ -86,7 +86,8 @@ on the repository is admitted. The Outcome keeps each turn as it was observed.
    state, exit code and report counts; the review verdict and rounds; each adjudication
    (finding, decision, reason); the findings, each with its area, severity and location
    when known, and "fails on clean build" shown as such; every not-covered entry with its
-   reason; the warnings, including the same-model warning; usage (marked "known subtotal"
+   reason; the notes (what was neither a gap nor a warning, such as an audit worker's
+   not-reached path that does not exist); the warnings, including the same-model warning; usage (marked "known subtotal"
    when a call's usage is unknown, and with the cost as "cost unknown (reserved up to
    $X)" when a call's cost is not known, such as a Codex writer's, which reports none);
    and the record id. With `--json`, standard output holds only the Outcome, one JSON
@@ -196,6 +197,7 @@ The JUnit file has one `testsuite` per kind of result, and a last one for the ve
 | A reproduction that could not run, or is missing | `<error>` |
 | Anything not covered | `<failure type="not_covered">`, never skipped |
 | A warning, such as the same-model reviewer | a property `axocoatl.warning.<code>` |
+| The run's notes | the `verdict` case's `<system-out>`, one `note: ` line each, whatever the verdict |
 | Usage | a property `axocoatl.usage`, worded as in the summary: a cost the run does not know is "cost unknown (reserved up to $X)", never a price |
 | The run's verdict | suite `run`, case `verdict`: a `<failure>` with the reasons when checks failed or the run needs attention, an `<error>` when it was interrupted or could not run (`type="busy"` when another run or Session held the Workspace, exit code 7), so a CI job that reads only JUnit still sees a run that did not pass |
 

@@ -30,7 +30,7 @@ use axocoatl_session::run_outcome::{
 };
 use serde::{Deserialize, Serialize};
 
-pub use host::RunHost;
+pub use host::{RunHost, ToolCallRecord};
 
 /// Why a run step failed.
 #[derive(Debug, thiserror::Error)]
@@ -119,7 +119,13 @@ pub struct KindReport {
     pub findings: Vec<Finding>,
     pub adjudications: Vec<Adjudication>,
     pub not_covered: Vec<NotCovered>,
+    /// Notes for the Outcome: what is neither a gap nor a warning.
+    pub notes: Vec<String>,
     pub warnings: Vec<RunWarning>,
+    /// Nodes, as `(turn id, node id)`, whose missing result the kind driver
+    /// accounted for itself, such as a planner it gave another turn: the
+    /// Outcome builder does not list them as not covered again.
+    pub accounted: Vec<(String, String)>,
     pub fail_on_findings: bool,
     pub budget_exhausted: bool,
 }

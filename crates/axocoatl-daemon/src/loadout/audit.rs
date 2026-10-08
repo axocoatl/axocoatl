@@ -2,19 +2,24 @@
 //! own Team and budget Apply.
 //!
 //! 1. **Plan**: the `planner` slot alone answers with an `AREAS` block of
-//!    `min_areas`..`max_areas` areas. An invalid plan gets one retry turn
-//!    that quotes the parse error; a second invalid plan (or a planner with
-//!    no answer) ends the run with the whole scope not covered.
+//!    `min_areas`..`max_areas` areas. An invalid plan, or a planner without
+//!    an answer (a provider failure, say), gets one retry turn (quoting the
+//!    parse error after an invalid plan); a second attempt without a usable
+//!    plan ends the run with the whole scope not covered. A planner stopped
+//!    by the wall clock or a person, or refused by its provider (400-403),
+//!    is not retried.
 //! 2. **Areas**: one `worker-<area>` slot per area, instantiated from the
 //!    `worker` Agent: read-only (`writes: []`; its commands run under the
 //!    supervisor's write restriction), a fresh context (`reset_history`), no
 //!    dependencies, required, no checks and no review, so the controller
 //!    starts every one at once. A worker without a result, an unreadable
-//!    report and every `NOT_REACHED` entry of its own area are listed as not
-//!    covered. An entry that names another planned area is dropped (that
-//!    area's own worker audits it), and one that names a repository path
-//!    that does not exist is recorded as a note, not a gap
-//!    ([`classify_not_reached`]).
+//!    report, a worker that examined nothing of its area ([`examined`],
+//!    judged from the Session's recorded tool calls) and every
+//!    `NOT_REACHED` entry of its own area are listed as not covered. An
+//!    entry that names another planned area is dropped (that area's own
+//!    worker audits it), and one that names a repository path that does
+//!    not exist is a note, not a gap, when the worker examined its area
+//!    ([`classify_not_reached`]). Notes go to the record and the Outcome.
 //! 3. **Integrate**: the `integrator` slot alone receives every worker's
 //!    report (each bounded to 24 KiB, truncation noted) and the not-covered
 //!    list, and answers with the merged `FINDINGS`. When integration has no
@@ -47,7 +52,7 @@ use axocoatl_session::run_outcome::{
 use axocoatl_session::run_record::RunEvent;
 
 use super::team_plan::{self, SlotPlan};
-use super::{KindDriver, KindReport, RunContext, RunError, RunHost};
+use super::{KindDriver, KindReport, RunContext, RunError, RunHost, ToolCallRecord};
 use crate::SessionTeamEdit;
 
 /// Slot of the plan turn.
@@ -59,7 +64,12 @@ pub const WORKER_SLOT_PREFIX: &str = "worker-";
 /// Largest worker report the integrator receives, in bytes.
 pub const MAX_REPORT_BYTES: usize = 24 * 1024;
 /// The not-covered entry of a run whose plan never became usable.
-pub const WHOLE_SCOPE: &str = "whole scope";
+pub const WHOLE_SCOPE: &str = axocoatl_session::run_outcome::WHOLE_SCOPE;
+/// Tools whose calls inside an area's paths show its worker examined it.
+pub const EXAMINING_TOOLS: [&str; 4] = ["read_file", "grep", "glob", "list_dir"];
+/// Tools that read what files hold: a worker with neither examines nothing,
+/// whatever it lists.
+pub const READING_TOOLS: [&str; 2] = ["read_file", "grep"];
 /// `RunTurnRef::purpose` of each turn.
 pub const PLAN_PURPOSE: &str = "audit_plan";
 pub const AREAS_PURPOSE: &str = "audit_areas";
@@ -284,6 +294,11 @@ pub fn worker_instructions(base: Option<&str>, area: &AuditArea, plan: &AuditPla
         others.join(", ")
     );
     text.push_str(
+        "Read your area's files with read_file and grep (glob and list_dir find them). The host \
+         checks your tool calls: when none of your read_file, grep, glob or list_dir calls \
+         succeeds inside your area's paths, your area is not covered, whatever you answer.\n",
+    );
+    text.push_str(
         "\nEnd your answer with two blocks:\nFINDINGS\n```json\n[{\"id\": \"F1\", \"title\": \
          \"...\", \"detail\": \"what is wrong and your evidence\", \"severity\": \
          \"low|medium|high|critical\", \"location\": \"path:line\"}]\n```\nNOT_REACHED\n```json\n\
@@ -499,6 +514,184 @@ fn path_exists(repo: &Path, path: &str) -> Option<bool> {
     Some(false)
 }
 
+/// Whether an area worker examined its area, judged from the tool calls the
+/// Session recorded for the generation that answered ([`examined`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Examined {
+    /// A succeeded `read_file`, `grep`, `glob` or `list_dir` call reached
+    /// inside the area's paths.
+    Yes,
+    /// It read nothing of its area; why, in words.
+    Nothing(String),
+    /// Its tool calls could not be read; why, in words.
+    Unknown(String),
+}
+
+/// Judge whether a worker with `tools` examined `area`, from `calls` (its
+/// own recorded calls; `Err` when they could not be read). It examined its
+/// area when it has a tool that reads files (`read_file` or `grep`) and at
+/// least one `read_file`, `grep`, `glob` or `list_dir` call of it succeeded
+/// with a target inside the area's paths: a file or directory under them,
+/// or the directory a wildcard path starts from (`billing` for
+/// `billing/*.py`). A call's target is its `path` (`.` when `list_dir` or
+/// `grep` has none) or the `glob` pattern, relative to `repo`, the run's
+/// repository, which the Session container mounts at the same path. An
+/// area without paths is examined by any such call.
+pub fn examined(
+    area: &AuditArea,
+    tools: &[String],
+    calls: Result<&[&ToolCallRecord], &str>,
+    repo: &Path,
+) -> Examined {
+    if !tools
+        .iter()
+        .any(|tool| READING_TOOLS.contains(&tool.as_str()))
+    {
+        return Examined::Nothing(format!(
+            "it has neither read_file nor grep, the tools whose reads the host checks (its \
+             tools: {})",
+            if tools.is_empty() {
+                "none".to_owned()
+            } else {
+                tools.join(", ")
+            }
+        ));
+    }
+    let calls = match calls {
+        Ok(calls) => calls,
+        Err(reason) => return Examined::Unknown(reason.to_owned()),
+    };
+    let examining: Vec<&ToolCallRecord> = calls
+        .iter()
+        .copied()
+        .filter(|call| EXAMINING_TOOLS.contains(&call.tool.as_str()))
+        .collect();
+    if examining.iter().any(|call| {
+        call.succeeded
+            && call_target(call, repo).is_some_and(|target| target_in_area(call, &target, area))
+    }) {
+        return Examined::Yes;
+    }
+    let paths = if area.paths.is_empty() {
+        "the repository".to_owned()
+    } else {
+        area.paths.join(", ")
+    };
+    Examined::Nothing(match (calls.len(), examining.len()) {
+        (0, _) => "it made no tool call".to_owned(),
+        (_, 0) => format!(
+            "it made {} tool call{} and none was read_file, grep, glob or list_dir",
+            calls.len(),
+            if calls.len() == 1 { "" } else { "s" }
+        ),
+        (_, examining) => format!(
+            "none of its {examining} read_file, grep, glob or list_dir call{} succeeded inside \
+             {paths}",
+            if examining == 1 { "" } else { "s" }
+        ),
+    })
+}
+
+/// The repository-relative target of an examining call, `""` for the
+/// repository's root; `None` when it has none or it leaves the repository.
+fn call_target(call: &ToolCallRecord, repo: &Path) -> Option<String> {
+    let argument = |key: &str| {
+        call.arguments
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+    };
+    let raw = match call.tool.as_str() {
+        "read_file" => argument("path")?,
+        "glob" => argument("pattern")?,
+        "list_dir" | "grep" => match argument("path") {
+            Some(path) if !path.is_empty() => path,
+            _ if call.arguments.is_object() => ".",
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if raw.is_empty() {
+        return None;
+    }
+    let candidate = Path::new(raw);
+    let relative = if candidate.is_absolute() {
+        candidate.strip_prefix(repo).ok()?
+    } else {
+        candidate
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(part) => parts.push(part.to_str()?),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                parts.pop()?;
+            }
+            _ => return None,
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// Whether `path` lies inside an area `pattern`: matched by it, or, for a
+/// pattern without wildcards, that path itself or under it as a directory
+/// (`billing` holds `billing/pagination.py`).
+fn area_holds(pattern: &str, path: &str) -> bool {
+    if pattern_matches(pattern, path) {
+        return true;
+    }
+    let literal = pattern.trim_start_matches("./").trim_end_matches('/');
+    !literal.is_empty()
+        && !literal.contains(['*', '?'])
+        && (path == literal
+            || path
+                .strip_prefix(literal)
+                .is_some_and(|rest| rest.starts_with('/')))
+}
+
+/// The literal directory a wildcard pattern starts from: `billing` for
+/// `billing/*.py` and `billing/**`, the root (`""`) for `*.py`. `None` for
+/// a pattern without wildcards.
+fn wildcard_base(pattern: &str) -> Option<String> {
+    let pattern = pattern.trim_start_matches("./");
+    if !pattern.contains(['*', '?']) {
+        return None;
+    }
+    Some(
+        pattern
+            .split('/')
+            .take_while(|segment| !segment.contains(['*', '?']))
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
+
+/// Whether an examining call's `target` reaches inside `area`.
+fn target_in_area(call: &ToolCallRecord, target: &str, area: &AuditArea) -> bool {
+    if area.paths.is_empty() {
+        return true;
+    }
+    let directory = |directory: &str| {
+        area.paths.iter().any(|pattern| {
+            area_holds(pattern, directory)
+                || wildcard_base(pattern).is_some_and(|base| base == directory)
+        })
+    };
+    match call.tool.as_str() {
+        "read_file" => area.paths.iter().any(|pattern| area_holds(pattern, target)),
+        // A directory searched or listed, or a file.
+        "list_dir" | "grep" => directory(target),
+        // A pattern: inside the area as written, or listing from a
+        // directory of it.
+        "glob" => {
+            area.paths.iter().any(|pattern| area_holds(pattern, target))
+                || wildcard_base(target).is_some_and(|base| directory(&base))
+        }
+        _ => false,
+    }
+}
+
 /// The areas turn's request (each worker's own instructions name its area).
 pub fn areas_request(prompt: &str, plan: &AuditPlan) -> String {
     let names: Vec<&str> = plan.areas.iter().map(|area| area.name.as_str()).collect();
@@ -517,6 +710,9 @@ pub fn areas_request(prompt: &str, plan: &AuditPlan) -> String {
 pub struct AreaResult {
     pub area: AuditArea,
     pub body: AreaBody,
+    /// The worker examined its area ([`Examined::Yes`]). The integrator is
+    /// told when it did not.
+    pub examined: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -577,6 +773,12 @@ pub fn integrate_request(
             result.area.name,
             cut(&result.area.scope, MAX_LISTED_DETAIL_BYTES).0
         );
+        if !result.examined {
+            text.push_str(
+                "Its worker read none of this area's files, so the area is not covered: keep a \
+                 finding of it only if you verify it in the repository.\n",
+            );
+        }
         text.push_str(&report_text(&result.body));
     }
     text.push_str(
@@ -794,6 +996,14 @@ impl Audit<'_> {
             .await
     }
 
+    /// A note: a `note` phase event in the record (and on standard error)
+    /// and a line of the Outcome's notes.
+    async fn note(&mut self, detail: String) -> Result<(), RunError> {
+        self.phase("note", detail.clone()).await?;
+        self.report.notes.push(detail);
+        Ok(())
+    }
+
     async fn not_covered(&mut self, entry: NotCovered) -> Result<(), RunError> {
         if entry.class == FailureClass::Budget {
             self.report.budget_exhausted = true;
@@ -867,6 +1077,10 @@ impl Audit<'_> {
     /// when the wall clock ran out before it could start.
     async fn turn(&mut self, request: &str, purpose: &str) -> Result<Option<Observed>, RunError> {
         self.close_open_turn().await?;
+        // A person who stopped the run gets no further turn.
+        if self.host.stop_requested(&self.run.run_id).await {
+            return Err(RunError::Stopped);
+        }
         if Instant::now() >= self.run.deadline {
             self.report.budget_exhausted = true;
             return Ok(None);
@@ -957,14 +1171,19 @@ impl Audit<'_> {
         }
     }
 
-    /// Turn 1: the plan, with one retry after an invalid plan.
+    /// Turn 1: the plan, with one retry after an invalid plan or a planner
+    /// without an answer.
     async fn plan(&mut self, settings: &AuditSettings) -> Result<Option<AuditPlan>, RunError> {
         let (min, max) = (settings.min_areas, settings.max_areas);
         self.apply("audit plan: the planner", plan_slots(&self.run.resolved)?)
             .await?;
         let prompt = self.run.resolved.prompt.clone();
+        // Why the attempt before this one gave no plan: its parse error,
+        // which the retry quotes, or its missing answer.
         let mut refused: Option<String> = None;
-        for _attempt in 0..2 {
+        let mut failed: Option<String> = None;
+        for attempt in 0..2 {
+            let last = attempt == 1;
             let request = match &refused {
                 None => plan_request(&prompt, min, max),
                 Some(error) => plan_retry_request(&prompt, min, max, error),
@@ -985,13 +1204,52 @@ impl Audit<'_> {
                 .find(|node| node.slot_id == PLANNER_SLOT);
             let Some(answer) = accepted_answer(node).map(str::to_owned) else {
                 let (class, detail) = failure_of(node, observed.deadline_hit);
-                let entry = self.whole_scope(
-                    class,
-                    format!("the planner has no answer: {detail}"),
-                    Some(&observed),
-                );
-                self.not_covered(entry).await?;
-                return Ok(None);
+                // The wall clock, a person's stop and a provider's refusal
+                // of the request itself (400-403) end the same way again.
+                let retry = !last
+                    && !observed.deadline_hit
+                    && !matches!(
+                        class,
+                        FailureClass::Budget
+                            | FailureClass::Stopped
+                            | FailureClass::ProviderRejected
+                    )
+                    && !self.host.stop_requested(&self.run.run_id).await;
+                if !retry {
+                    let detail = match (&failed, &refused) {
+                        (Some(first), _) => format!(
+                            "the planner has no answer in two attempts: {detail} (the first: \
+                             {first})"
+                        ),
+                        (None, Some(error)) => format!(
+                            "the planner has no answer after its AREAS block was refused \
+                             ({error}): {detail}"
+                        ),
+                        (None, None) => format!("the planner has no answer: {detail}"),
+                    };
+                    let entry = self.whole_scope(class, detail, Some(&observed));
+                    self.not_covered(entry).await?;
+                    return Ok(None);
+                }
+                // The retry stands for this attempt: its failure is in the
+                // run's phases, and in the whole scope's entry if the retry
+                // fails too, never a separate gap.
+                if let Some(node) = node {
+                    self.report
+                        .accounted
+                        .push((observation.turn_id.clone(), node.node_id.clone()));
+                }
+                self.phase(
+                    "plan_failed",
+                    format!(
+                        "the planner has no answer ({}: {detail}); it gets one more turn",
+                        class_name(class)
+                    ),
+                )
+                .await?;
+                failed = Some(format!("{}: {detail}", class_name(class)));
+                refused = None;
+                continue;
             };
             match parse_plan(&answer, min, max) {
                 Ok(plan) => {
@@ -1006,15 +1264,18 @@ impl Audit<'_> {
                 Err(error) => {
                     let error = error.to_string();
                     self.phase("plan_refused", error.clone()).await?;
-                    if refused.is_some() {
-                        let entry = self.whole_scope(
-                            FailureClass::Other,
-                            format!(
+                    if last {
+                        let detail = match &failed {
+                            Some(first) => format!(
+                                "the planner's AREAS block was invalid after it had no answer \
+                                 ({first}): {error}"
+                            ),
+                            None => format!(
                                 "the planner's AREAS block was invalid twice; the last one: \
                                  {error}"
                             ),
-                            Some(&observed),
-                        );
+                        };
+                        let entry = self.whole_scope(FailureClass::Other, detail, Some(&observed));
                         self.not_covered(entry).await?;
                         return Ok(None);
                     }
@@ -1051,6 +1312,24 @@ impl Audit<'_> {
             }
             return Ok(Vec::new());
         };
+        let tools = agent(&self.run.resolved, LoadoutRole::Worker)?
+            .tools
+            .clone();
+        // The tool calls the Session recorded for the turn, read once.
+        let recorded: Result<Vec<ToolCallRecord>, String> = {
+            let observation = self.observation(&observed);
+            match self
+                .host
+                .tool_calls(&self.run.session_id, &observation.turn_id)
+                .await
+            {
+                Ok(Some(calls)) => Ok(calls),
+                Ok(None) => Err("the Session's record of tool calls could not be read".into()),
+                Err(error) => Err(format!(
+                    "the Session's record of tool calls could not be read: {error}"
+                )),
+            }
+        };
         let mut results = Vec::new();
         for area in &plan.areas {
             let observation = self.observation(&observed);
@@ -1070,6 +1349,52 @@ impl Audit<'_> {
                 .await?;
                 continue;
             };
+            // Only the calls of the generation that answered count.
+            let generation = node
+                .and_then(|node| node.latest())
+                .map(|latest| latest.generation);
+            let own: Result<Vec<&ToolCallRecord>, &str> = match &recorded {
+                Ok(calls) => Ok(calls
+                    .iter()
+                    .filter(|call| {
+                        Some(&call.node_id) == node_id.as_ref()
+                            && Some(call.generation) == generation
+                    })
+                    .collect()),
+                Err(reason) => Err(reason.as_str()),
+            };
+            let examination = examined(
+                area,
+                &tools,
+                own.as_deref().map_err(|reason| *reason),
+                &self.run.options.repo,
+            );
+            let looked = examination == Examined::Yes;
+            match &examination {
+                Examined::Yes => {}
+                Examined::Nothing(reason) => {
+                    self.not_covered(NotCovered {
+                        area: area.name.clone(),
+                        class: FailureClass::NotReached,
+                        detail: format!("the area worker examined nothing of its area: {reason}"),
+                        node_id: node_id.clone(),
+                        turn_id: turn_id.clone(),
+                    })
+                    .await?;
+                }
+                Examined::Unknown(reason) => {
+                    self.not_covered(NotCovered {
+                        area: area.name.clone(),
+                        class: FailureClass::Other,
+                        detail: format!(
+                            "whether the area worker examined its area is not known: {reason}"
+                        ),
+                        node_id: node_id.clone(),
+                        turn_id: turn_id.clone(),
+                    })
+                    .await?;
+                }
+            }
             match parse_area_report(&answer, &area.name) {
                 Ok(report) => {
                     let classified = {
@@ -1104,15 +1429,29 @@ impl Audit<'_> {
                                     other_areas.push(name);
                                 }
                             }
-                            NotReachedItem::NoSuchPath(path) => {
-                                self.phase(
-                                    "note",
-                                    format!(
-                                        "{} listed {path} as not reached, and no such path \
-                                         exists in the repository; a note, not a gap",
-                                        worker_slot_id(&area.name)
+                            // A missing path is a note only from a worker
+                            // that examined its area; from one that did
+                            // not, nothing it says counts as looked at.
+                            NotReachedItem::NoSuchPath(path) if looked => {
+                                self.note(format!(
+                                    "{} listed {path} as not reached, and no such path exists \
+                                     in the repository; a note, not a gap",
+                                    worker_slot_id(&area.name)
+                                ))
+                                .await?;
+                            }
+                            NotReachedItem::NoSuchPath(_) => {
+                                self.not_covered(NotCovered {
+                                    area: area.name.clone(),
+                                    class: FailureClass::NotReached,
+                                    detail: format!(
+                                        "{item} (the area worker reported it did not reach this; \
+                                         no such path exists, but the worker did not examine its \
+                                         area)"
                                     ),
-                                )
+                                    node_id: node_id.clone(),
+                                    turn_id: turn_id.clone(),
+                                })
                                 .await?;
                             }
                             NotReachedItem::Gap => {
@@ -1130,20 +1469,18 @@ impl Audit<'_> {
                         }
                     }
                     if !other_areas.is_empty() {
-                        self.phase(
-                            "note",
-                            format!(
-                                "{} listed other planned areas as not reached ({}); their own \
-                                 workers audit them, so they are not gaps",
-                                worker_slot_id(&area.name),
-                                other_areas.join(", ")
-                            ),
-                        )
+                        self.note(format!(
+                            "{} listed other planned areas as not reached ({}); their own \
+                             workers audit them, so they are not gaps",
+                            worker_slot_id(&area.name),
+                            other_areas.join(", ")
+                        ))
                         .await?;
                     }
                     results.push(AreaResult {
                         area: area.clone(),
                         body: AreaBody::Report(report),
+                        examined: looked,
                     });
                 }
                 Err(error) => {
@@ -1164,6 +1501,7 @@ impl Audit<'_> {
                             answer,
                             error: error.to_string(),
                         },
+                        examined: looked,
                     });
                 }
             }

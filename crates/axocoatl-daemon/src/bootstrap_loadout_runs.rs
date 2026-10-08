@@ -871,6 +871,7 @@ fn ended_outcome(manifest: &RunManifest, error: String, warnings: Vec<RunWarning
         adjudications: Vec::new(),
         findings: Vec::new(),
         not_covered: Vec::new(),
+        notes: Vec::new(),
         warnings,
         usage: RunUsage::default(),
         network: NetworkSummary::default(),
@@ -1990,6 +1991,27 @@ impl AxocoatlDaemon {
         )))
     }
 
+    /// Every tool call of `turn_id` its Session recorded, with arguments
+    /// and outcome ([`crate::loadout::RunHost::tool_calls`]), read through
+    /// the Session's current controller; `None` when the turn is not one of
+    /// its turns. A Session without a current controller (closing, or only
+    /// recovered) is an error, which the audit reports as not known.
+    pub fn loadout_turn_tool_calls(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Result<Option<Vec<crate::loadout::ToolCallRecord>>, DaemonError> {
+        let token = self
+            .session_dispatch_lifecycles
+            .session_team_token(session_id)?;
+        self.session_dispatch_lifecycles
+            .with_session_team_controller(&token, |controller| {
+                controller
+                    .turn_tool_calls(turn_id)
+                    .map_err(|error| DaemonError::Session(error.to_string()))
+            })
+    }
+
     /// What each started activation of `turn_id` measured over its provider
     /// calls, by activation id, from the turn's control authority: the held
     /// authority of the Session's current turn, or a closed turn's retained
@@ -2755,3 +2777,7 @@ mod tests {
 #[cfg(all(test, unix))]
 #[path = "bootstrap_loadout_runs_tests.rs"]
 mod daemon_tests;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_loadout_audit_tests.rs"]
+mod audit_tests;

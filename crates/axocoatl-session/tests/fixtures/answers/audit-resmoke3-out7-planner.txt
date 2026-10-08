@@ -1,0 +1,34 @@
+```json
+{
+  "areas": [
+    {
+      "name": "auth",
+      "scope": "Authentication module implementing session token checks in Python",
+      "paths": [
+        "auth/**/*"
+      ]
+    },
+    {
+      "name": "billing",
+      "scope": "Billing module handling invoice pagination and totals in Python",
+      "paths": [
+        "billing/**/*"
+      ]
+    },
+    {
+      "name": "ingest",
+      "scope": "Ingest module loading order feeds in Go",
+      "paths": [
+        "ingest/**/*"
+      ]
+    },
+    {
+      "name": "notify",
+      "scope": "Notification module sending outbound webhooks in Python",
+      "paths": [
+        "notify/**/*"
+      ]
+    }
+  ]
+}
+```

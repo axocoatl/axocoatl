@@ -549,6 +549,7 @@ mod tests {
             adjudications: Vec::new(),
             findings: Vec::new(),
             not_covered: Vec::new(),
+            notes: Vec::new(),
             warnings: Vec::new(),
             usage: RunUsage::default(),
             network: NetworkSummary::default(),

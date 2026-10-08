@@ -46,7 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interrupted and 7 when another run or Session's turn holds the repository's Workspace
   (busy: run it again later; `POST /api/runs` answers `409` with
   `"code": "workspace_busy"`, and JUnit shows `<error type="busy">`). `--junit` writes JUnit of checks, check reports, review, adjudications,
-  findings and coverage, with anything not covered as a failure. `--record` writes the
+  findings and coverage, with anything not covered as a failure and the run's notes in
+  the verdict's `<system-out>`. `--record` writes the
   run's whole record (manifest, loadout text, Outcome, Session, the team as applied with
   each slot's `reset_history`, tools and definition, turns, the Session's versioned
   History, every network-record event and every run event) as one JSON Lines bundle
@@ -97,13 +98,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Built-in `audit` loadout (opt-in).** Runs only when named. A planner splits the
   scope into 2 to 8 areas in a structured block, one read-only worker per area runs in
   parallel with a fresh context, and an integrator merges their findings; a failed area
-  is not covered. An invalid plan gets one retry that quotes the error, and a second
-  leaves the whole scope not covered; when integration has no result, the workers'
-  findings are reported unmerged and integration is listed as not covered. A worker's
-  `FINDINGS` and `NOT_REACHED` keys are read in any case. A not-reached entry that names
-  another planned area is left to that area's worker, and one that names a repository
-  path that does not exist is a `note` on standard error and in the record; neither is
-  a gap. The attention line counts areas, not entries. Its documentation states the trade-off measured with Claude Code
+  is not covered. So is the area of a worker that examined nothing of it, judged from
+  the tool calls its Session recorded: none of its `read_file`, `grep`, `glob` or
+  `list_dir` calls succeeded inside the area's paths, or it has neither `read_file` nor
+  `grep`. An invalid plan, or a planner without an answer (a provider failure, say),
+  gets one retry, which quotes the error after an invalid plan; a second attempt without
+  a plan leaves the whole scope not covered, and the attention line says "The whole
+  scope was not covered". When integration has no result, the
+  workers' findings are reported unmerged and integration is listed as not covered. A
+  worker's `FINDINGS` and `NOT_REACHED` keys are read in any case. A not-reached entry
+  that names another planned area is left to that area's worker, and, from a worker
+  that examined its area, one that names a repository path that does not exist is a
+  note; neither is a gap. Notes are in the run's progress, the record, the Outcome's
+  `notes`, the summary, the Run outcome panel and the JUnit verdict's `<system-out>`.
+  The attention line counts areas, not entries. Its documentation states the trade-off measured with Claude Code
   subagents, not through Axocoatl: more recall at lower precision and about three times
   the tokens on an audit larger than one context, as a sensitivity analysis.
 - **External agents.** A loadout's writer can be the Claude Code CLI

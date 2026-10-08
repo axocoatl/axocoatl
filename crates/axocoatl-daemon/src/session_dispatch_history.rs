@@ -119,6 +119,74 @@ impl SessionDispatchController {
     }
 }
 
+impl SessionDispatchController {
+    /// Every tool call an Agent of `turn_id` made, from the invocation
+    /// audit, with the arguments it gave (from the protected content store;
+    /// `null` when they cannot be read) and whether it succeeded, for a
+    /// loadout run's driver. The host's own repository captures around each
+    /// activation are not the Agent's calls and are left out. `None` when
+    /// the turn is not one of this Session's canonical turns. It changes
+    /// nothing and conveys no authority; the arguments go to the run driver
+    /// only, never to a projection.
+    pub(crate) fn turn_tool_calls(
+        &self,
+        turn_id: &str,
+    ) -> Result<Option<Vec<crate::loadout::ToolCallRecord>>> {
+        let state = self.lock()?;
+        let Ok(turn) = LogicalTurnId::new(turn_id) else {
+            return Ok(None);
+        };
+        if state.canonical.turn(&turn).map_err(error)?.is_none() {
+            return Ok(None);
+        }
+        let snapshot = state.canonical.snapshot(&turn).map_err(error)?;
+        let mut captures: HashMap<String, HashSet<InvocationId>> = HashMap::new();
+        let mut calls = Vec::new();
+        for audited in state.audit.turn_invocations(&turn).map_err(error)? {
+            let intent = &audited.intent;
+            if &intent.activation.turn_id != snapshot.turn_id() {
+                continue;
+            }
+            let activation = intent.activation.activation_id.as_str().to_owned();
+            if !captures.contains_key(&activation) {
+                let host = state
+                    .content
+                    .repository_snapshots(&snapshot, &intent.activation)
+                    .map_err(error)?
+                    .into_iter()
+                    .filter_map(|capture| capture.content.invocation)
+                    .collect();
+                captures.insert(activation.clone(), host);
+            }
+            if captures[&activation].contains(&intent.invocation_id) {
+                continue;
+            }
+            let arguments = state
+                .content
+                .tool_arguments(&snapshot, &intent.activation, &intent.invocation_id)
+                .ok()
+                .flatten()
+                .and_then(|receipt| state.content.read_tool_arguments(&receipt).ok())
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or(serde_json::Value::Null);
+            calls.push(crate::loadout::ToolCallRecord {
+                node_id: intent.activation.node_id.as_str().to_owned(),
+                generation: intent.activation.generation,
+                tool: intent.tool_name.clone(),
+                arguments,
+                succeeded: matches!(
+                    &audited.final_evidence,
+                    Some(InvocationFinalEvidence::Outcome {
+                        outcome: InvocationOutcome::Succeeded,
+                        ..
+                    })
+                ),
+            });
+        }
+        Ok(Some(calls))
+    }
+}
+
 impl DispatchState {
     /// Shared current/historical read projection. Historical capability remains
     /// read-only even if its old receipt was Accepted or its usage is unknown.

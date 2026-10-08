@@ -198,17 +198,27 @@ three turns in one Session, each with its own Team and budget:
 
 1. **Plan.** The planner, alone and read-only, splits the scope into 2 to 8 areas in one
    `AREAS` JSON block: each area's name, its scope and the paths it covers. An invalid
-   plan gets one more turn with the error; a second invalid plan ends the run needing
-   attention, with "whole scope" not covered.
+   plan gets one more turn with the error, and a planner without an answer (a provider
+   failure, say) gets one more turn with the same request. A planner stopped by the wall
+   clock or by you, or refused by its provider (HTTP 400 to 403), gets none. A second
+   attempt without a plan ends the run needing attention: "The whole scope was not
+   covered".
 2. **Areas.** One worker per area, made from the `worker` Agent: read-only (`writes: []`,
    its `bash` under Landlock with no repository writes and no TCP, which needs Linux 6.7
    or later; [without it](/configure/agents/#limit-which-files-an-agent-may-change) its
    `bash` does not run), each in a fresh conversation, with no dependencies between them,
    so the controller starts them together. Each reports `FINDINGS` and what it did
    `NOT_REACHED`. A failed worker makes its area not covered, with its failure class.
-   A not-reached entry that names another planned area is left to that area's worker,
-   and one that names a repository path that does not exist is a note on standard error
-   and in the record; neither makes the area not covered.
+   So does a worker that examined nothing of its area, judged from the tool calls its
+   Session recorded, not from its answer: none of its `read_file`, `grep`, `glob` or
+   `list_dir` calls succeeded inside the area's paths (or, for an area without paths,
+   anywhere), or the `worker` Agent has neither `read_file` nor `grep` (reads through
+   `bash` are not checked, so they do not count). A not-reached entry that names another
+   planned area is left to that area's worker, and, from a worker that examined its
+   area, one that names a repository path that does not exist is a note; neither makes
+   the area not covered. From a worker that examined nothing, such an entry is a gap.
+   Notes are in the progress lines, the summary, the Outcome's `notes`, the Run outcome
+   panel, the JUnit verdict's `<system-out>` and the record.
 3. **Integrate.** The integrator gets every accepted worker report (each up to 24 KiB,
    with a note when cut) and the list of areas not covered, and answers with one merged
    `FINDINGS` block.
