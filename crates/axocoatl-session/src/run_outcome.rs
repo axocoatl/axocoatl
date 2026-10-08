@@ -536,7 +536,7 @@ pub struct KeepResult {
 pub struct RunTurnRef {
     pub turn_id: String,
     /// What the turn was for: `run`, `audit_plan`, `audit_areas`,
-    /// `audit_integrate`.
+    /// `audit_follow_up`, `audit_integrate`.
     pub purpose: String,
     pub state: TurnState,
 }

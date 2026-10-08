@@ -679,8 +679,10 @@ index-aligned `check_options` (name, timeout, report), the required review synth
 a read-only Worker, and dependencies. It goes through the existing preview and apply path,
 so every 1.2 grant, write-scope and readiness rule applies. The driver sends the turn,
 waits for a terminal state or the deadline (then stops it and records the budget), and
-observes nodes, generations, check views and review proofs. An audit runs three turns in
-one Session: plan, parallel read-only area workers with fresh contexts, integrate.
+observes nodes, generations, check views and review proofs. An audit runs its turns in
+one Session: plan; parallel read-only area workers with fresh contexts, each told the
+files the host listed and assigned to its area; up to two follow-ups naming the files a
+worker did not read, judged from the `read_file` calls its Session recorded; integrate.
 
 **Outcome.** `RunOutcome` (`axocoatl.run-outcome/1`) adds to a turn's view: check results
 with parsed reports, the review rounds with findings split by id, adjudications, findings

@@ -86,8 +86,9 @@ on the repository is admitted. The Outcome keeps each turn as it was observed.
    state, exit code and report counts; the review verdict and rounds; each adjudication
    (finding, decision, reason); the findings, each with its area, severity and location
    when known, and "fails on clean build" shown as such; every not-covered entry with its
-   reason; the notes (what was neither a gap nor a warning, such as an audit worker's
-   not-reached path that does not exist); the warnings, including the same-model warning; usage (marked "known subtotal"
+   reason; the notes (what was neither a gap nor a warning, such as what an audit
+   worker said it did not reach, or the files an audit gave to its area `rest`); the
+   warnings, including the same-model warning; usage (marked "known subtotal"
    when a call's usage is unknown, and with the cost as "cost unknown (reserved up to
    $X)" when a call's cost is not known, such as a Codex writer's, which reports none);
    and the record id. With `--json`, standard output holds only the Outcome, one JSON

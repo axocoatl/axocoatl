@@ -1,0 +1,61 @@
+FINDINGS
+```json
+[
+  {
+    "id": "auth-tokens-F1",
+    "title": "Potential timing attack vulnerability in token validation",
+    "detail": "The is_valid function performs a direct string comparison between the provided signature and the expected signature using '!=' operator. This can be vulnerable to timing attacks where an attacker could potentially determine if the signature is valid by measuring the time taken for the comparison. The function should use a constant-time comparison method to prevent this vulnerability.",
+    "severity": "medium",
+    "location": "auth/tokens.py:19",
+    "area": "auth-tokens"
+  },
+  {
+    "id": "billing-pagination-F1",
+    "title": "Incorrect page slicing in get_page function",
+    "detail": "The get_page function has incorrect slicing logic. It calculates 'end = start + page_size - 1' but then uses items[start:end] which excludes the end index. This causes the last item on each page to be missing from the returned slice. For example, with page_size=5, start=5, the slice items[5:9] would return items 5,6,7,8 but item 9 would be excluded.",
+    "severity": "high",
+    "location": "billing/pagination.py:17",
+    "area": "billing-pagination"
+  },
+  {
+    "id": "ingest-feed-F1",
+    "title": "Missing error handling for JSON unmarshaling",
+    "detail": "In the LoadFeed function, json.Unmarshal is called without checking its error return value. If the JSON data is malformed or invalid, the error will be silently ignored, potentially leading to unexpected behavior or data corruption. The function should check the error returned by json.Unmarshal and propagate it to the caller.",
+    "severity": "high",
+    "location": "ingest/feed.go:29",
+    "area": "ingest-feed"
+  },
+  {
+    "id": "notify-webhook-F1",
+    "title": "Hardcoded API token in source code",
+    "detail": "The webhook.py file contains a hardcoded API token (WEBHOOK_TOKEN = \"sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef\") which appears to be a real-looking token format but is clearly a placeholder. This is a security vulnerability as it exposes credentials in the source code, even if it's a fake token.",
+    "severity": "high",
+    "location": "notify/webhook.py:7",
+    "area": "notify-webhook"
+  },
+  {
+    "id": "notify-webhook-F2",
+    "title": "Use of insecure test domain",
+    "detail": "The webhook URL uses a test domain 'hooks.example.invalid/orders' which is not a real endpoint. While this might be intentional for testing, it could lead to confusion or misconfiguration if not properly handled in production environments.",
+    "severity": "medium",
+    "location": "notify/webhook.py:5",
+    "area": "notify-webhook"
+  },
+  {
+    "id": "notify-webhook-F3",
+    "title": "No error handling for webhook sending",
+    "detail": "The send() function in webhook.py directly calls urllib.request.urlopen without any error handling. If the webhook call fails (network issues, 4xx/5xx responses, etc.), the function will raise an exception without proper handling, potentially crashing the application.",
+    "severity": "medium",
+    "location": "notify/webhook.py:19",
+    "area": "notify-webhook"
+  },
+  {
+    "id": "notify-webhook-F4",
+    "title": "Potential denial of service through timeout",
+    "detail": "The timeout parameter is set to 5.0 seconds by default, but this value is hardcoded. If the webhook endpoint is slow to respond, this could cause the application to hang or timeout unexpectedly, leading to potential denial of service issues.",
+    "severity": "low",
+    "location": "notify/webhook.py:18",
+    "area": "notify-webhook"
+  }
+]
+```

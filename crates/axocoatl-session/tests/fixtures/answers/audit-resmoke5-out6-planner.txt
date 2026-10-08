@@ -1,0 +1,1 @@
+{"areas": [{"name": "auth", "scope": "session token checks (Python)", "paths": ["auth/**"]}, {"name": "billing", "scope": "invoice pagination and totals (Python)", "paths": ["billing/**"]}, {"name": "ingest", "scope": "order-feed loader (Go)", "paths": ["ingest/**"]}, {"name": "notify", "scope": "outbound webhook client (Python)", "paths": ["notify/**"]}]}

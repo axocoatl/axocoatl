@@ -1,0 +1,60 @@
+<FINDINGS>
+[
+  {
+    "id": "auth-F1",
+    "title": "Timing Attack Vulnerability in Token Signature Comparison",
+    "detail": "The is_valid function uses a simple string comparison (signature != expected) which is vulnerable to timing attacks. An attacker could potentially determine the correct signature by measuring response times. The function should use hmac.compare_digest() for constant-time comparison to prevent this vulnerability.",
+    "severity": "high",
+    "location": "auth/tokens.py:15",
+    "area": "auth"
+  },
+  {
+    "id": "billing-F1",
+    "title": "Incorrect slicing logic in get_page function",
+    "detail": "The get_page function has incorrect slicing logic. The line 'end = start + page_size - 1' is wrong. For a page size of 5, this creates a slice that returns only 4 items instead of 5. For example, with items [1,2,3,4,5,6,7,8,9,10] and page 1, page_size 5, it should return [1,2,3,4,5] but returns [1,2,3,4]. This is a critical logic error that affects pagination functionality.",
+    "severity": "critical",
+    "location": "billing/pagination.py:14",
+    "area": "billing"
+  },
+  {
+    "id": "billing-F2",
+    "title": "Missing error handling in invoice_total function",
+    "detail": "The invoice_total function does not handle missing keys in the line items. If a line item is missing either 'quantity' or 'unit_cents' keys, it will raise a KeyError. This is a security and correctness issue as it can cause crashes when processing malformed data.",
+    "severity": "high",
+    "location": "billing/pagination.py:24",
+    "area": "billing"
+  },
+  {
+    "id": "ingest-F1",
+    "title": "Missing Error Check for JSON Unmarshal",
+    "detail": "In the LoadFeed function, json.Unmarshal is called without checking its return error. If the JSON parsing fails, the function will silently continue and return a potentially invalid Feed object. This could lead to incorrect behavior or crashes downstream when processing the feed data.",
+    "severity": "medium",
+    "location": "ingest/feed.go:29",
+    "area": "ingest"
+  },
+  {
+    "id": "notify-F1",
+    "title": "Hardcoded API token in source code",
+    "detail": "The webhook module contains a hardcoded API token 'sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef' in the source code. This is a critical security defect as it exposes authentication credentials directly in the codebase, making them vulnerable to theft and misuse. The token is used for Authorization header in webhook requests.",
+    "severity": "critical",
+    "location": "notify/webhook.py:6",
+    "area": "notify"
+  },
+  {
+    "id": "notify-F2",
+    "title": "Hardcoded webhook URL in source code",
+    "detail": "The webhook module contains a hardcoded webhook URL 'https://hooks.example.invalid/orders' in the source code. This is a high severity issue as it hardcodes the destination endpoint, making it inflexible and potentially insecure if the URL needs to be changed or if it points to a non-production endpoint.",
+    "severity": "high",
+    "location": "notify/webhook.py:4",
+    "area": "notify"
+  },
+  {
+    "id": "notify-F3",
+    "title": "No error handling for HTTP requests",
+    "detail": "The send function in webhook.py does not handle potential exceptions that could occur during HTTP requests. If the webhook endpoint is unavailable or returns an error status code, the function will raise an exception that is not caught, potentially causing the calling application to crash. The function only returns the HTTP status code but doesn't validate or handle error responses.",
+    "severity": "medium",
+    "location": "notify/webhook.py:17",
+    "area": "notify"
+  }
+]
+</FINDINGS>

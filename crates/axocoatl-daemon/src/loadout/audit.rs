@@ -1,5 +1,7 @@
-//! The audit loadout: three turns in the run's one Session, each after its
-//! own Team and budget Apply.
+//! The audit loadout: a plan, the areas with their follow-ups, and an
+//! integration, each turn in the run's one Session after its own Team and
+//! budget Apply. Coverage is the host's, from the files it listed and the
+//! tool calls the Session recorded ([`files`]), never the workers' word.
 //!
 //! 1. **Plan**: the `planner` slot alone answers with an `AREAS` block of
 //!    `min_areas`..`max_areas` areas. An invalid plan, or a planner without
@@ -8,49 +10,58 @@
 //!    plan ends the run with the whole scope not covered. A planner stopped
 //!    by the wall clock or a person, or refused by its provider (400-403),
 //!    is not retried.
-//! 2. **Areas**: one `worker-<area>` slot per area, instantiated from the
-//!    `worker` Agent: read-only (`writes: []`; its commands run under the
-//!    supervisor's write restriction), a fresh context (`reset_history`), no
-//!    dependencies, required, no checks and no review, so the controller
-//!    starts every one at once. A worker without a result, an unreadable
-//!    report, a worker that examined nothing of its area ([`examined`],
-//!    judged from the Session's recorded tool calls: it examined its area
-//!    only when a `read_file` of a file inside it succeeded or a `grep`
-//!    matched a file inside it; `list_dir` and `glob` only find files) and
-//!    every `NOT_REACHED` entry of its own area are listed as not covered. An
-//!    entry that names another planned area is dropped (that area's own
-//!    worker audits it), and one that names a repository path that does
-//!    not exist is a note, not a gap, when the worker examined its area
-//!    ([`classify_not_reached`]). Notes go to the record and the Outcome.
-//! 3. **Integrate**: the `integrator` slot alone receives every worker's
+//! 2. **Assignment**: the host lists the repository's files and assigns
+//!    each to one area ([`files::assign`]): the first area whose paths
+//!    match it, else the area whose paths share the most directories with
+//!    it, else the host-made area `rest`. The plan as executed (the planned
+//!    areas that got files, then `rest`) and the assignment are `assigned`
+//!    phase events; a planned area without files is not run (a note).
+//! 3. **Areas**: one `worker-<area>` slot per executed area, instantiated
+//!    from the `worker` Agent: read-only (`writes: []`; its commands run
+//!    under the supervisor's write restriction), a fresh context
+//!    (`reset_history`), no dependencies, required, no checks and no
+//!    review, so the controller starts every one at once. Each worker's
+//!    instructions name its files ([`files::file_list`]).
+//! 4. **Follow-ups**: when a worker's turn ends with text files of its area
+//!    unread ([`files::unread`], judged from the Session's recorded
+//!    `read_file` calls of the worker's activations that answered), the
+//!    host runs up to [`MAX_FOLLOW_UPS`] follow-up turns, each with a fresh
+//!    activation of every such worker naming exactly its unread files; its
+//!    findings join the area's report. A file still unread after them, or
+//!    when the wall clock or a person's stop ends them, is not covered,
+//!    listed by file. A worker without a result, an unreadable report and
+//!    a record of tool calls that cannot be read are listed too. What a
+//!    worker says it did not reach (`NOT_REACHED`) is a note: the host's
+//!    coverage decides. Empty and binary files need no read; a file over
+//!    [`files::MAX_AUDITED_FILE_BYTES`] is a note.
+//! 5. **Integrate**: the `integrator` slot alone receives every worker's
 //!    report (each bounded to 24 KiB, truncation noted) and the not-covered
 //!    list, and answers with the merged `FINDINGS`. When integration has no
 //!    readable result, the workers' findings are reported unmerged and
 //!    [`INTEGRATION`] is listed as not covered, which the attention line
 //!    names apart from the areas.
 //!
-//! The run's wall clock bounds all three turns: at the deadline the turn is
-//! stopped, what did not finish is not covered (budget), and no further turn
-//! starts. A person's stop starts no further turn either: areas planned but
-//! not started, and an integration not run, are not covered (`stopped`),
-//! and the report keeps everything observed until the stop. Findings change
-//! the exit code only with `fail_on_findings` (default false); anything not
-//! covered always needs attention.
+//! The run's wall clock bounds every turn: at the deadline the turn is
+//! stopped, what did not finish is not covered (budget), and no further
+//! turn starts. A person's stop starts no further turn either: areas
+//! planned but not started, files no follow-up read and an integration not
+//! run are not covered (`stopped`), and the report keeps everything
+//! observed until the stop. Findings change the exit code only with
+//! `fail_on_findings` (default false); anything not covered always needs
+//! attention.
 //!
 //! Owner: audit.
 
 use std::fmt::Write as _;
-use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use axocoatl_config::loadout::{AuditSettings, LoadoutAgent, LoadoutRole, ResolvedLoadout};
 use axocoatl_session::audit_plan::{
-    normalize_area_name, parse_area_report, parse_integrated, parse_plan, AreaReport, AuditArea,
-    AuditPlan,
+    parse_area_report, parse_integrated, parse_plan, AreaReport, AuditArea, AuditPlan,
+    MAX_AREA_FINDINGS,
 };
 use axocoatl_session::failure_class::{classify_failure, FailureFacts};
-use axocoatl_session::path_scope::{in_git_directory, pattern_matches};
 use axocoatl_session::run_outcome::{
     FailureClass, Finding, NodeObservation, NodeState, NotCovered, RunTurnRef, TurnObservation,
     TurnState,
@@ -60,6 +71,11 @@ use axocoatl_session::run_record::RunEvent;
 use super::team_plan::{self, SlotPlan};
 use super::{KindDriver, KindReport, RunContext, RunError, RunHost, ToolCallRecord};
 use crate::SessionTeamEdit;
+
+#[path = "audit_files.rs"]
+pub mod files;
+
+use files::{AssignedArea, Assignment, FileKind, RepoFile, MAX_FILE_LIST_BYTES};
 
 /// Slot of the plan turn.
 pub const PLANNER_SLOT: &str = "planner";
@@ -73,23 +89,33 @@ pub const MAX_REPORT_BYTES: usize = 24 * 1024;
 pub const WHOLE_SCOPE: &str = axocoatl_session::run_outcome::WHOLE_SCOPE;
 /// The not-covered entry of an integration without a readable result.
 pub const INTEGRATION: &str = axocoatl_session::run_outcome::INTEGRATION;
-/// Tools whose calls can show a worker examined its area: a `read_file`
-/// that read a file inside it, or a `grep` that matched a file inside it.
-/// `list_dir` and `glob` only find files, so a worker with neither of these
-/// examines nothing, whatever it lists.
-pub const EXAMINING_TOOLS: [&str; 2] = ["read_file", "grep"];
+/// The not-covered entry of the files the host could not list: past its
+/// listing bound, or with names that are not UTF-8.
+pub const UNLISTED: &str = "unlisted files";
+/// Follow-up activations a worker gets for the files of its area it did
+/// not read.
+pub const MAX_FOLLOW_UPS: u32 = 2;
 /// `RunTurnRef::purpose` of each turn.
 pub const PLAN_PURPOSE: &str = "audit_plan";
 pub const AREAS_PURPOSE: &str = "audit_areas";
+pub const FOLLOW_UP_PURPOSE: &str = "audit_follow_up";
 pub const INTEGRATE_PURPOSE: &str = "audit_integrate";
 /// How long a stopped turn may take to settle before it is observed.
 const STOP_GRACE: Duration = Duration::from_secs(30);
 /// Not-covered entries listed in the integrate request; the rest are counted.
 const MAX_LISTED_NOT_COVERED: usize = 64;
 const MAX_LISTED_DETAIL_BYTES: usize = 300;
-/// Most repository entries looked at to tell whether a `NOT_REACHED` path
-/// pattern names anything; past it the entry stays a gap.
-const MAX_PATH_WALK_ENTRIES: usize = 20_000;
+/// Unread files of one area listed one by one as not covered; the rest are
+/// one entry naming their directories.
+const MAX_LISTED_UNREAD: usize = 100;
+/// Files too large to read noted one by one per area; the rest are counted.
+const MAX_NOTED_TOO_LARGE: usize = 20;
+/// The longest list of paths in one record line (an `assigned` or
+/// `coverage` phase, a note).
+const MAX_INLINE_LIST_BYTES: usize = 2 * 1024;
+/// `NOT_REACHED` entries quoted in one note, and the longest quoted.
+const MAX_NOTED_NOT_REACHED: usize = 16;
+const MAX_NOTED_ITEM_BYTES: usize = 200;
 
 /// Builds the Team and budget edit of one turn; `team_plan::team_edit` in
 /// the daemon, a recording fake in tests.
@@ -106,7 +132,7 @@ impl KindDriver for AuditDriver {
     }
 }
 
-/// Run the three audit turns with `build` making each turn's edit.
+/// Run the audit's turns with `build` making each turn's edit.
 pub async fn drive_audit(
     host: &dyn RunHost,
     run: &RunContext,
@@ -190,21 +216,56 @@ pub fn plan_slots(resolved: &ResolvedLoadout) -> Result<Vec<SlotPlan>, RunError>
     )?])
 }
 
-/// The areas turn's team: one fresh read-only worker per area, none
-/// depending on another.
-pub fn area_slots(resolved: &ResolvedLoadout, plan: &AuditPlan) -> Result<Vec<SlotPlan>, RunError> {
+/// The areas turn's team: one fresh read-only worker per area of the plan
+/// as executed, none depending on another, each told its files.
+pub fn area_slots(
+    resolved: &ResolvedLoadout,
+    assignment: &Assignment,
+) -> Result<Vec<SlotPlan>, RunError> {
     let worker = agent(resolved, LoadoutRole::Worker)?;
-    plan.areas
+    let names = assignment.names();
+    assignment
+        .areas
         .iter()
-        .map(|area| {
+        .map(|assigned| {
+            let others: Vec<&str> = names
+                .iter()
+                .copied()
+                .filter(|name| *name != assigned.area.name)
+                .collect();
+            read_only_slot(
+                resolved,
+                worker_slot_id(&assigned.area.name),
+                worker,
+                Some(worker_instructions(
+                    worker.instructions.as_deref(),
+                    assigned,
+                    &others,
+                )),
+            )
+        })
+        .collect()
+}
+
+/// A follow-up turn's team: one fresh read-only worker per area with files
+/// left unread, each told exactly those files.
+pub fn follow_up_slots(
+    resolved: &ResolvedLoadout,
+    due: &[(&AuditArea, Vec<&str>)],
+    round: u32,
+) -> Result<Vec<SlotPlan>, RunError> {
+    let worker = agent(resolved, LoadoutRole::Worker)?;
+    due.iter()
+        .map(|(area, unread)| {
             read_only_slot(
                 resolved,
                 worker_slot_id(&area.name),
                 worker,
-                Some(worker_instructions(
+                Some(follow_up_instructions(
                     worker.instructions.as_deref(),
                     area,
-                    plan,
+                    unread,
+                    round,
                 )),
             )
         })
@@ -250,9 +311,12 @@ fn area_rules(min: u32, max: u32) -> String {
     format!(
         "Answer with one AREAS block of {min}-{max} areas that together cover the scope \
          without overlap. Each area is audited in parallel by its own read-only worker with a \
-         fresh context, so give each a self-contained scope. Names are lowercase letters, \
-         digits and hyphens, start with a letter, are at most 32 characters and unique.\n\
-         {AREAS_SHAPE}\n"
+         fresh context, so give each a self-contained scope. The host lists the repository's \
+         files and gives each to the first area whose paths match it (a file no area's paths \
+         match goes to the area that shares its directories, or to an area of its own), and \
+         each worker must read every file it is given, so name each area's files in its \
+         paths. Names are lowercase letters, digits and hyphens, start with a letter, are at \
+         most 32 characters and unique.\n{AREAS_SHAPE}\n"
     )
 }
 
@@ -274,486 +338,177 @@ pub fn plan_retry_request(prompt: &str, min: u32, max: u32, error: &str) -> Stri
     )
 }
 
-/// An area worker's instructions: the loadout's worker instructions, its
-/// area, the other areas, and the report it ends with.
-pub fn worker_instructions(base: Option<&str>, area: &AuditArea, plan: &AuditPlan) -> String {
+/// How a worker reads, as the host checks it.
+const READ_RULES: &str = "The host checks your read_file calls, not your answer: a file \
+     counts as examined only when a read_file of it succeeded. read_file returns at most 64 \
+     KiB from its offset (0 by default), or limit bytes; read a longer file to its end with \
+     more calls at each result's next_offset, with a smaller limit when a whole 64 KiB would \
+     not fit your context. grep, glob, list_dir and bash find and search files, but what they \
+     show does not count as reading. The host names any file of yours you did not read back \
+     to you to read.\n";
+
+/// The blocks a worker's answer ends with.
+const REPORT_SHAPE: &str = "\nEnd your answer with two blocks:\nFINDINGS\n```json\n[{\"id\": \
+     \"F1\", \"title\": \"...\", \"detail\": \"what is wrong and your evidence\", \"severity\": \
+     \"low|medium|high|critical\", \"location\": \"path:line\"}]\n```\nNOT_REACHED\n```json\n\
+     [\"each file of yours you could not examine, and why\"]\n```\nWrite [] for a block with \
+     no entries.";
+
+fn instructions_head(base: Option<&str>, area: &AuditArea) -> String {
     let mut text = String::new();
     if let Some(base) = base.map(str::trim).filter(|base| !base.is_empty()) {
         text.push_str(base);
         text.push_str("\n\n");
     }
     let _ = writeln!(text, "Your area: {}\nScope: {}", area.name, area.scope);
-    if area.paths.is_empty() {
-        text.push_str("Paths: the plan names none; find the code this scope covers.\n");
+    text
+}
+
+/// An area worker's instructions: the loadout's worker instructions, its
+/// area, the files the host assigned to it, the other areas, how the host
+/// checks its reads and the report it ends with.
+pub fn worker_instructions(base: Option<&str>, assigned: &AssignedArea, others: &[&str]) -> String {
+    let area = &assigned.area;
+    let mut text = instructions_head(base, area);
+    if assigned.host_made {
+        text.push_str("The host made this area for the files no planned area's paths name.\n");
+    } else if area.paths.is_empty() {
+        text.push_str("Paths: the plan names none.\n");
     } else {
         text.push_str("Paths:\n");
         for path in &area.paths {
             let _ = writeln!(text, "- {path}");
         }
     }
-    let others: Vec<&str> = plan
-        .areas
-        .iter()
-        .filter(|other| other.name != area.name)
-        .map(|other| other.name.as_str())
+    let to_read: Vec<&str> = assigned
+        .text_files()
+        .map(|file| file.path.as_str())
         .collect();
-    let _ = writeln!(
-        text,
-        "Other workers audit the other areas ({}) at the same time, each with a fresh context, \
-         so those areas are covered: never list them as not reached. Stay inside yours. You are \
-         read-only: change no file.",
-        others.join(", ")
-    );
-    text.push_str(
-        "Read your area's files with read_file and grep (glob and list_dir find them). The host \
-         checks your tool calls: your area counts as examined only when you read at least one \
-         file inside your area's paths with read_file, or ran a grep that matched at least one \
-         file inside them. list_dir and glob only find files, and a grep that matches nothing \
-         reads nothing. Otherwise your area is not covered, whatever you answer.\n",
-    );
-    text.push_str(
-        "\nEnd your answer with two blocks:\nFINDINGS\n```json\n[{\"id\": \"F1\", \"title\": \
-         \"...\", \"detail\": \"what is wrong and your evidence\", \"severity\": \
-         \"low|medium|high|critical\", \"location\": \"path:line\"}]\n```\nNOT_REACHED\n```json\n\
-         [\"each existing path of your area you did not examine, and why\"]\n```\nWrite [] for a \
-         block with no entries: NOT_REACHED is [] when you examined all of your area.",
-    );
+    let skipped = assigned.files.len() - to_read.len();
+    if to_read.is_empty() {
+        text.push_str(
+            "Your files: the host listed the repository, and none of the files it gave your \
+             area needs a read (each is empty, binary or over 256 KiB).\n",
+        );
+    } else {
+        let (list, grouped) = files::file_list(&to_read, MAX_FILE_LIST_BYTES);
+        if grouped {
+            let _ = writeln!(
+                text,
+                "Your files: the host listed the repository and gave your area {} files to \
+                 read, too many to name one by one. Read all of them: every file of yours in or \
+                 below these directories (each count is of your files there):",
+                to_read.len()
+            );
+        } else {
+            let _ = writeln!(
+                text,
+                "Your files: the host listed the repository and gave your area {} file{} to \
+                 read. Read every one of them:",
+                to_read.len(),
+                if to_read.len() == 1 { "" } else { "s" }
+            );
+        }
+        text.push_str(&list);
+        if skipped > 0 {
+            let _ = writeln!(
+                text,
+                "({skipped} more file{} of your area {} empty, binary or over 256 KiB and \
+                 need{} no read.)",
+                if skipped == 1 { "" } else { "s" },
+                if skipped == 1 { "is" } else { "are" },
+                if skipped == 1 { "s" } else { "" }
+            );
+        }
+    }
+    if others.is_empty() {
+        text.push_str("Stay inside your area. You are read-only: change no file.\n");
+    } else {
+        let _ = writeln!(
+            text,
+            "Other workers audit the other areas ({}) at the same time, each with a fresh \
+             context: stay inside yours. You are read-only: change no file.",
+            others.join(", ")
+        );
+    }
+    text.push_str(READ_RULES);
+    text.push_str(REPORT_SHAPE);
     text
 }
 
-/// What one `NOT_REACHED` entry of an area worker's report is
-/// ([`classify_not_reached`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NotReachedItem {
-    /// A part of the worker's own area it did not examine: not covered.
-    Gap,
-    /// Another planned area (by name, or a path only that area's patterns
-    /// name): its own worker audits it, so it is no gap of this one.
-    OtherArea(String),
-    /// A repository path or pattern that names nothing in the repository: a
-    /// note, not a gap.
-    NoSuchPath(String),
-}
-
-/// Classify one `NOT_REACHED` entry of `area`'s worker against the plan and
-/// the repository at `repo` (the run's canonical repository on the host;
-/// the audit is read-only, so it holds what the workers read). When the
-/// repository cannot be read, or a pattern matches too much of it to tell,
-/// the entry stays a gap: nothing is dropped on a guess.
-pub fn classify_not_reached(
-    item: &str,
+/// A follow-up activation's instructions: its area and exactly the files of
+/// it the worker did not read.
+pub fn follow_up_instructions(
+    base: Option<&str>,
     area: &AuditArea,
-    plan: &AuditPlan,
-    repo: &Path,
-) -> NotReachedItem {
-    let subject = item_subject(item);
-    let others = || plan.areas.iter().filter(|other| other.name != area.name);
-    if let Some(name) = area_word(subject) {
-        if let Some(other) = others().find(|other| other.name == name) {
-            return NotReachedItem::OtherArea(other.name.clone());
-        }
-    }
-    let Some(path) = path_token(subject) else {
-        return NotReachedItem::Gap;
-    };
-    let own = area
-        .paths
-        .iter()
-        .any(|pattern| pattern_matches(pattern, &path));
-    if !own {
-        if let Some(other) = others().find(|other| {
-            other
-                .paths
-                .iter()
-                .any(|pattern| pattern_matches(pattern, &path))
-        }) {
-            return NotReachedItem::OtherArea(other.name.clone());
-        }
-    }
-    match path_exists(repo, &path) {
-        Some(false) => NotReachedItem::NoSuchPath(path),
-        Some(true) | None => NotReachedItem::Gap,
-    }
-}
-
-/// The entry without a trailing `(reason)`, quotes, bold marks or end
-/// punctuation: `"src/a.rs (budget)"` and `**src/a.rs**` are `src/a.rs`.
-fn item_subject(item: &str) -> &str {
-    let mut subject = item.trim();
-    if subject.ends_with(')') {
-        if let Some(open) = subject.rfind(" (") {
-            subject = subject[..open].trim_end();
-        }
-    }
-    if let Some(inner) = subject
-        .strip_prefix("**")
-        .and_then(|rest| rest.strip_suffix("**"))
-        .filter(|inner| !inner.is_empty())
-    {
-        subject = inner;
-    }
-    subject
-        .trim_matches(|c: char| matches!(c, '`' | '"' | '\''))
-        .trim_end_matches(['.', ',', ';', ':'])
-        .trim()
-}
-
-/// The area name an entry says, when it is only a name: `billing`, `the
-/// billing area`, `Billing module`, `billing/`, `API routes`
-/// (`api-routes`).
-fn area_word(subject: &str) -> Option<String> {
-    let lower = subject.to_ascii_lowercase();
-    let mut word = lower.trim();
-    word = word.strip_prefix("the ").unwrap_or(word).trim();
-    for suffix in [" area", " module", " directory", " package", "/**", "/"] {
-        word = word.strip_suffix(suffix).unwrap_or(word).trim();
-    }
-    if word.is_empty() || word.contains('/') {
-        return None;
-    }
-    normalize_area_name(word)
-}
-
-/// The repository-relative path or pattern an entry names, when it is one:
-/// one word with a `/`, a wildcard or a file extension, never absolute,
-/// never leaving the repository and never inside `.git`. A `:line` suffix
-/// and a leading `./` are dropped.
-fn path_token(subject: &str) -> Option<String> {
-    if subject.is_empty()
-        || subject.contains(char::is_whitespace)
-        || subject.contains("://")
-        || subject.contains('\\')
-        || subject.starts_with(['/', '~'])
-    {
-        return None;
-    }
-    let mut path = subject.strip_prefix("./").unwrap_or(subject);
-    if let Some((head, tail)) = path.rsplit_once(':') {
-        if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit() || c == '-') {
-            path = head;
-        }
-    }
-    let path = path.trim_end_matches('/');
-    if path.is_empty()
-        || path.contains(':')
-        || in_git_directory(path)
-        || path
-            .split('/')
-            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-    {
-        return None;
-    }
-    let extension = path
-        .rsplit('/')
-        .next()
-        .and_then(|name| name.rsplit_once('.'))
-        .is_some_and(|(stem, extension)| {
-            !stem.is_empty()
-                && (1..=10).contains(&extension.len())
-                && extension.chars().all(|c| c.is_ascii_alphanumeric())
-        });
-    (path.contains(['/', '*', '?']) || extension).then(|| path.to_owned())
-}
-
-/// Whether `path` names anything under `repo`: `Some(true)` or
-/// `Some(false)`, `None` when it cannot tell (the repository cannot be read,
-/// or a pattern needs more than [`MAX_PATH_WALK_ENTRIES`] entries looked
-/// at). A literal path with a `/` is looked up; a pattern, or a name without
-/// a `/` (which may be at any depth), is matched against the files and
-/// directories under its literal leading directories. Links are not
-/// followed.
-fn path_exists(repo: &Path, path: &str) -> Option<bool> {
-    if !std::fs::metadata(repo).ok()?.is_dir() {
-        return None;
-    }
-    let pattern = path.contains(['*', '?']) || !path.contains('/');
-    if !pattern {
-        return match std::fs::symlink_metadata(repo.join(path)) {
-            Ok(_) => Some(true),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(false),
-            Err(_) => None,
-        };
-    }
-    // The literal directories before the first wildcard (none for a bare
-    // name, which matches at any depth).
-    let mut start = String::new();
-    if path.contains('/') {
-        for segment in path.split('/') {
-            if segment.contains(['*', '?']) {
-                break;
-            }
-            if !start.is_empty() {
-                start.push('/');
-            }
-            start.push_str(segment);
-        }
-    }
-    let root = repo.join(&start);
-    match std::fs::symlink_metadata(&root) {
-        Ok(metadata) if metadata.is_dir() => {}
-        Ok(_) => return Some(pattern_matches(path, &start)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(false),
-        Err(_) => return None,
-    }
-    let mut pending = vec![(root, start)];
-    let mut seen = 0usize;
-    while let Some((directory, relative)) = pending.pop() {
-        for entry in std::fs::read_dir(&directory).ok()? {
-            let entry = entry.ok()?;
-            seen += 1;
-            if seen > MAX_PATH_WALK_ENTRIES {
-                return None;
-            }
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            let child = if relative.is_empty() {
-                name.to_owned()
-            } else {
-                format!("{relative}/{name}")
-            };
-            if in_git_directory(&child) {
-                continue;
-            }
-            if pattern_matches(path, &child) {
-                return Some(true);
-            }
-            if entry.file_type().ok()?.is_dir() {
-                pending.push((entry.path(), child));
-            }
-        }
-    }
-    Some(false)
-}
-
-/// Whether an area worker examined its area, judged from the tool calls the
-/// Session recorded for the generation that answered ([`examined`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Examined {
-    /// A `read_file` of a file inside the area's paths succeeded, or a
-    /// `grep` matched a file inside them.
-    Yes,
-    /// It read nothing of its area; why, in words.
-    Nothing(String),
-    /// Its tool calls could not be read; why, in words.
-    Unknown(String),
-}
-
-/// Judge whether a worker with `tools` examined `area`, from `calls` (its
-/// own recorded calls; `Err` when they could not be read). It examined its
-/// area only when a `read_file` call of it succeeded on a file inside the
-/// area's paths, or a `grep` call of it succeeded and matched at least one
-/// file inside them (read from the matches it returned). `list_dir` and
-/// `glob` only find files, and a `grep` that matched nothing read nothing,
-/// so neither counts; nor does a worker with neither `read_file` nor
-/// `grep`. Paths are relative to `repo`, the run's repository, which the
-/// Session container mounts at the same path. An area without paths is
-/// examined by such a read or match of any file.
-pub fn examined(
-    area: &AuditArea,
-    tools: &[String],
-    calls: Result<&[&ToolCallRecord], &str>,
-    repo: &Path,
-) -> Examined {
-    if !tools
-        .iter()
-        .any(|tool| EXAMINING_TOOLS.contains(&tool.as_str()))
-    {
-        return Examined::Nothing(format!(
-            "it has neither read_file nor grep, the tools whose reads the host checks (its \
-             tools: {})",
-            if tools.is_empty() {
-                "none".to_owned()
-            } else {
-                tools.join(", ")
-            }
-        ));
-    }
-    let calls = match calls {
-        Ok(calls) => calls,
-        Err(reason) => return Examined::Unknown(reason.to_owned()),
-    };
-    let examining: Vec<&ToolCallRecord> = calls
-        .iter()
-        .copied()
-        .filter(|call| EXAMINING_TOOLS.contains(&call.tool.as_str()))
-        .collect();
-    let inside = |file: &String| {
-        area.paths.is_empty() || area.paths.iter().any(|pattern| area_holds(pattern, file))
-    };
-    if examining
-        .iter()
-        .any(|call| call.succeeded && files_examined(call, repo).iter().any(inside))
-    {
-        return Examined::Yes;
-    }
-    let paths = if area.paths.is_empty() {
-        "the repository".to_owned()
+    unread: &[&str],
+    round: u32,
+) -> String {
+    let mut text = instructions_head(base, area);
+    let (list, grouped) = files::file_list(unread, MAX_FILE_LIST_BYTES);
+    if grouped {
+        let _ = writeln!(
+            text,
+            "Follow-up {round} of at most {MAX_FOLLOW_UPS}: the host checked the read_file calls \
+             of your area's worker, and {} files of your area were not read, too many to name \
+             one by one: every unread file of yours in or below these directories (each count \
+             is of those files). Read these files and report additional findings in the same \
+             format:",
+            unread.len()
+        );
     } else {
-        area.paths.join(", ")
-    };
-    Examined::Nothing(match (calls.len(), examining.len()) {
-        (0, _) => "it made no tool call".to_owned(),
-        (_, 0) => format!(
-            "it made {} tool call{} and none was read_file or grep (list_dir and glob only find \
-             files)",
-            calls.len(),
-            if calls.len() == 1 { "" } else { "s" }
-        ),
-        (_, examining) => format!(
-            "none of its {examining} read_file or grep call{} read or matched a file inside \
-             {paths}",
-            if examining == 1 { "" } else { "s" }
-        ),
-    })
-}
-
-/// The repository-relative files a succeeded examining call read: the file
-/// a `read_file` read, or every file a `grep` matched, from the `matches`
-/// it returned (`path:line:text`, or `line:text` when it searched one
-/// file). Empty for any other call, or when the result was not kept.
-fn files_examined(call: &ToolCallRecord, repo: &Path) -> Vec<String> {
-    let Some(target) = call_target(call, repo) else {
-        return Vec::new();
-    };
-    match call.tool.as_str() {
-        "read_file" if !target.is_empty() => vec![target],
-        "grep" => {
-            let Some(matches) = call.result.get("matches").and_then(|value| value.as_str()) else {
-                return Vec::new();
-            };
-            let mut files: Vec<String> = Vec::new();
-            for line in matches.lines() {
-                let file = match matched_file(line) {
-                    Some(MatchedFile::Searched) if !target.is_empty() => Some(target.clone()),
-                    Some(MatchedFile::Path(path)) => repo_relative(path, repo),
-                    _ => None,
-                };
-                if let Some(file) = file.filter(|file| !file.is_empty()) {
-                    if !files.contains(&file) {
-                        files.push(file);
-                    }
-                }
-            }
-            files
-        }
-        _ => Vec::new(),
+        let _ = writeln!(
+            text,
+            "Follow-up {round} of at most {MAX_FOLLOW_UPS}: the host checked the read_file calls \
+             of your area's worker, and these files of your area were not read. Read these \
+             files and report additional findings in the same format:"
+        );
     }
+    text.push_str(&list);
+    text.push_str("You are read-only: change no file.\n");
+    text.push_str(READ_RULES);
+    text.push_str(REPORT_SHAPE);
+    text
 }
 
-/// Which file one line of `grep -n` output names.
-enum MatchedFile<'a> {
-    /// `line:text`: the one file the call searched.
-    Searched,
-    /// `path:line:text`.
-    Path(&'a str),
-}
-
-fn matched_file(line: &str) -> Option<MatchedFile<'_>> {
-    let digits = |text: &str| text.bytes().take_while(u8::is_ascii_digit).count();
-    let lead = digits(line);
-    if lead > 0 && line[lead..].starts_with(':') {
-        return Some(MatchedFile::Searched);
-    }
-    let mut from = 0;
-    while let Some(colon) = line[from..].find(':').map(|at| from + at) {
-        let rest = &line[colon + 1..];
-        let count = digits(rest);
-        if colon > 0 && count > 0 && rest[count..].starts_with(':') {
-            return Some(MatchedFile::Path(&line[..colon]));
-        }
-        from = colon + 1;
-    }
-    None
-}
-
-/// The repository-relative target of an examining call, `""` for the
-/// repository's root: the `path` of `read_file`, or of `grep` (`.` when it
-/// has none). `None` when it has none or it leaves the repository.
-fn call_target(call: &ToolCallRecord, repo: &Path) -> Option<String> {
-    let argument = |key: &str| {
-        call.arguments
-            .get(key)
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-    };
-    let raw = match call.tool.as_str() {
-        "read_file" => argument("path")?,
-        "grep" => match argument("path") {
-            Some(path) if !path.is_empty() => path,
-            _ if call.arguments.is_object() => ".",
-            _ => return None,
-        },
-        _ => return None,
-    };
-    repo_relative(raw, repo)
-}
-
-/// `raw`, a path relative to the repository or absolute inside it, as a
-/// normalized repository-relative path (`""` for its root); `None` when it
-/// is empty or leaves the repository.
-fn repo_relative(raw: &str, repo: &Path) -> Option<String> {
-    if raw.is_empty() {
-        return None;
-    }
-    let candidate = Path::new(raw);
-    let relative = if candidate.is_absolute() {
-        candidate.strip_prefix(repo).ok()?
-    } else {
-        candidate
-    };
-    let mut parts: Vec<&str> = Vec::new();
-    for component in relative.components() {
-        match component {
-            std::path::Component::Normal(part) => parts.push(part.to_str()?),
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                parts.pop()?;
-            }
-            _ => return None,
-        }
-    }
-    Some(parts.join("/"))
-}
-
-/// Whether `path` lies inside an area `pattern`: matched by it, or, for a
-/// pattern without wildcards, that path itself or under it as a directory
-/// (`billing` holds `billing/pagination.py`).
-fn area_holds(pattern: &str, path: &str) -> bool {
-    if pattern_matches(pattern, path) {
-        return true;
-    }
-    let literal = pattern.trim_start_matches("./").trim_end_matches('/');
-    !literal.is_empty()
-        && !literal.contains(['*', '?'])
-        && (path == literal
-            || path
-                .strip_prefix(literal)
-                .is_some_and(|rest| rest.starts_with('/')))
-}
-
-/// The areas turn's request (each worker's own instructions name its area).
-pub fn areas_request(prompt: &str, plan: &AuditPlan) -> String {
-    let names: Vec<&str> = plan.areas.iter().map(|area| area.name.as_str()).collect();
+/// The areas turn's request (each worker's own instructions name its area
+/// and its files).
+pub fn areas_request(prompt: &str, assignment: &Assignment) -> String {
+    let names = assignment.names();
     format!(
-        "{}\n\nThis turn audits the {} areas of the plan in parallel: {}. Your instructions \
-         name your area. Audit only that area and end with the FINDINGS and NOT_REACHED blocks \
-         your instructions describe.",
+        "{}\n\nThis turn audits the {} areas of the plan as executed in parallel: {}. The host \
+         listed the repository's files and gave each to one area. Your instructions name your \
+         area and its files: read them, audit only that area, and end with the FINDINGS and \
+         NOT_REACHED blocks your instructions describe.",
         prompt.trim_end(),
         names.len(),
         names.join(", ")
     )
 }
 
-/// What one area worker produced.
+/// A follow-up turn's request.
+pub fn follow_up_request(prompt: &str, names: &[&str], round: u32) -> String {
+    format!(
+        "{}\n\nFollow-up {round} of the audit's areas ({}): the host found files of these areas \
+         that their workers did not read. Your instructions name the files of yours to read. \
+         Read them and end with the FINDINGS and NOT_REACHED blocks your instructions describe.",
+        prompt.trim_end(),
+        names.join(", ")
+    )
+}
+
+/// What one area of the plan as executed produced, for the integrator.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AreaResult {
     pub area: AuditArea,
-    pub body: AreaBody,
-    /// The worker examined its area ([`Examined::Yes`]). The integrator is
-    /// told when it did not.
-    pub examined: bool,
+    /// Its worker's readable reports merged into one, then each answer
+    /// that could not be read.
+    pub bodies: Vec<AreaBody>,
+    /// Text files of the area its worker had to read.
+    pub files: usize,
+    /// Of those, the ones it did not read; `None` when its record of tool
+    /// calls could not be read. The integrator is told.
+    pub unread: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -769,16 +524,16 @@ pub enum AreaBody {
 /// [`MAX_REPORT_BYTES`] with truncation noted, and the not-covered list.
 pub fn integrate_request(
     prompt: &str,
-    plan: &AuditPlan,
+    assignment: &Assignment,
     results: &[AreaResult],
     not_covered: &[NotCovered],
 ) -> String {
-    let names: Vec<&str> = plan.areas.iter().map(|area| area.name.as_str()).collect();
+    let names = assignment.names();
     let mut text = String::new();
     text.push_str(prompt.trim_end());
     let _ = writeln!(
         text,
-        "\n\nThe area workers of this audit have finished. Areas planned: {}.\n\
+        "\n\nThe area workers of this audit have finished. Areas audited: {}.\n\
          Merge their findings into one list: the same defect reported by more than one area \
          is one finding; keep every distinct defect with its area, location and severity. You \
          may read the repository to check a finding; add none that no worker reported unless \
@@ -814,13 +569,25 @@ pub fn integrate_request(
             result.area.name,
             cut(&result.area.scope, MAX_LISTED_DETAIL_BYTES).0
         );
-        if !result.examined {
-            text.push_str(
-                "Its worker read none of this area's files, so the area is not covered: keep a \
-                 finding of it only if you verify it in the repository.\n",
-            );
+        match result.unread {
+            None => text.push_str(
+                "Whether its worker read this area's files is not known, so the area is not \
+                 covered: keep a finding of it only if you verify it in the repository.\n",
+            ),
+            Some(0) => {}
+            Some(unread) => {
+                let _ = writeln!(
+                    text,
+                    "Its worker did not read {unread} of this area's {} files to read (they are \
+                     listed as not covered): keep a finding of those only if you verify it in \
+                     the repository.",
+                    result.files
+                );
+            }
         }
-        text.push_str(&report_text(&result.body));
+        for body in &result.bodies {
+            text.push_str(&report_text(body));
+        }
     }
     text.push_str(
         "\nAnswer with one FINDINGS block:\nFINDINGS\n```json\n[{\"id\": \"A1\", \"title\": \
@@ -911,6 +678,16 @@ fn cut(text: &str, max: usize) -> (&str, bool) {
     (&text[..end], true)
 }
 
+/// `paths` as one line, `a, b, c`, within [`MAX_INLINE_LIST_BYTES`]: past
+/// it, the directories they are in with counts.
+fn inline_list(paths: &[&str]) -> String {
+    let (list, _) = files::file_list(paths, MAX_INLINE_LIST_BYTES);
+    list.lines()
+        .map(|line| line.strip_prefix("- ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub fn class_name(class: FailureClass) -> &'static str {
     match class {
         FailureClass::ProviderRefusal => "provider_refusal",
@@ -993,6 +770,15 @@ pub fn failure_of(node: Option<&NodeObservation>, deadline_hit: bool) -> (Failur
     }
 }
 
+/// A failure that would end a follow-up the same way: the wall clock, a
+/// person's stop, or a provider refusing the request itself (400-403).
+fn final_failure(class: FailureClass) -> bool {
+    matches!(
+        class,
+        FailureClass::Budget | FailureClass::Stopped | FailureClass::ProviderRejected
+    )
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1004,6 +790,77 @@ fn now_ms() -> u64 {
 struct Observed {
     index: usize,
     deadline_hit: bool,
+}
+
+/// One area of the plan as executed, across its worker's activations.
+struct AreaState {
+    assigned: AssignedArea,
+    /// The tool calls of its worker's activations that answered.
+    calls: Vec<ToolCallRecord>,
+    /// Each readable report, in order; a follow-up's finding ids say so.
+    reports: Vec<AreaReport>,
+    /// Each accepted answer that could not be read, with why.
+    unreadable: Vec<(String, String)>,
+    /// Activations so far: its turn, then each follow-up.
+    activations: u32,
+    follow_ups: u32,
+    /// An activation of it answered.
+    answered: bool,
+    /// Why its latest activation has no result, when it has none.
+    failure: Option<(FailureClass, String)>,
+    /// Its record of tool calls could not be read: coverage is not known.
+    unknown: Option<String>,
+    /// Its latest node and turn, for the not-covered entries.
+    node_id: Option<String>,
+    turn_id: Option<String>,
+}
+
+impl AreaState {
+    fn new(assigned: &AssignedArea) -> Self {
+        Self {
+            assigned: assigned.clone(),
+            calls: Vec::new(),
+            reports: Vec::new(),
+            unreadable: Vec::new(),
+            activations: 0,
+            follow_ups: 0,
+            answered: false,
+            failure: None,
+            unknown: None,
+            node_id: None,
+            turn_id: None,
+        }
+    }
+
+    fn name(&self) -> &str {
+        &self.assigned.area.name
+    }
+
+    /// Its text files no activation that answered read.
+    fn unread(&self, repo: &std::path::Path) -> Vec<&RepoFile> {
+        let calls: Vec<&ToolCallRecord> = self.calls.iter().collect();
+        files::unread(&self.assigned.files, &calls, repo)
+    }
+
+    /// Whether another follow-up could read its unread files.
+    fn may_follow_up(&self, reads: bool) -> bool {
+        reads
+            && self.unknown.is_none()
+            && self.follow_ups < MAX_FOLLOW_UPS
+            && !self
+                .failure
+                .as_ref()
+                .is_some_and(|(class, _)| final_failure(*class))
+    }
+}
+
+/// What the activation of one area worker in a turn did.
+struct Activation {
+    index: usize,
+    node_id: Option<String>,
+    answer: Option<String>,
+    generation: Option<u32>,
+    failure: (FailureClass, String),
 }
 
 struct Audit<'a> {
@@ -1020,13 +877,26 @@ struct Audit<'a> {
 }
 
 impl Audit<'_> {
-    /// The three turns, in order.
+    /// The turns, in order.
     async fn run(&mut self, settings: &AuditSettings) -> Result<(), RunError> {
-        if let Some(plan) = self.plan(settings).await? {
-            let results = self.areas(&plan).await?;
-            self.integrate(&plan, &results).await?;
+        let Some(plan) = self.plan(settings).await? else {
+            return Ok(());
+        };
+        let Some(assignment) = self.assign(&plan).await? else {
+            return Ok(());
+        };
+        let (results, stopped) = self.areas(&assignment).await?;
+        if stopped {
+            self.integration_missing(
+                &results,
+                FailureClass::Stopped,
+                "the run was stopped before integration".into(),
+                None,
+            )
+            .await?;
+            return Err(RunError::Stopped);
         }
-        Ok(())
+        self.integrate(&assignment, &results).await
     }
 
     fn observation(&self, observed: &Observed) -> &TurnObservation {
@@ -1274,12 +1144,7 @@ impl Audit<'_> {
                 // of the request itself (400-403) end the same way again.
                 let retry = !last
                     && !observed.deadline_hit
-                    && !matches!(
-                        class,
-                        FailureClass::Budget
-                            | FailureClass::Stopped
-                            | FailureClass::ProviderRejected
-                    )
+                    && !final_failure(class)
                     && !self.host.stop_requested(&self.run.run_id).await;
                 if !retry {
                     let detail = match (&failed, &refused) {
@@ -1352,24 +1217,196 @@ impl Audit<'_> {
         Ok(None)
     }
 
-    /// Turn 2: every area at once.
-    async fn areas(&mut self, plan: &AuditPlan) -> Result<Vec<AreaResult>, RunError> {
-        let names: Vec<&str> = plan.areas.iter().map(|area| area.name.as_str()).collect();
+    /// The host lists the repository and assigns its files to the plan's
+    /// areas; the plan as executed and the assignment are recorded. `None`
+    /// when no area is left to run.
+    async fn assign(&mut self, plan: &AuditPlan) -> Result<Option<Assignment>, RunError> {
+        let listing = match files::list_repository(&self.run.options.repo).await {
+            Ok(listing) => listing,
+            Err(error) => {
+                let entry = self.whole_scope(
+                    FailureClass::Other,
+                    format!(
+                        "the host could not list the repository's files, so no worker's \
+                         coverage can be checked: {error}"
+                    ),
+                    None,
+                );
+                self.not_covered(entry).await?;
+                return Ok(None);
+            }
+        };
+        let assignment = files::assign(plan, &listing.files);
+        let counts: Vec<String> = assignment
+            .areas
+            .iter()
+            .map(|assigned| {
+                format!(
+                    "{} {}{}",
+                    assigned.area.name,
+                    assigned.files.len(),
+                    if assigned.host_made {
+                        " (host-made)"
+                    } else {
+                        ""
+                    }
+                )
+            })
+            .collect();
+        self.phase(
+            "assigned",
+            format!(
+                "{} file{} listed by {} in {} area{}: {}",
+                listing.files.len(),
+                if listing.files.len() == 1 { "" } else { "s" },
+                listing.method.describe(),
+                assignment.areas.len(),
+                if assignment.areas.len() == 1 { "" } else { "s" },
+                if counts.is_empty() {
+                    "none".to_owned()
+                } else {
+                    counts.join(", ")
+                }
+            ),
+        )
+        .await?;
+        for assigned in &assignment.areas {
+            let shown: Vec<String> = assigned
+                .files
+                .iter()
+                .map(|file| match file.kind {
+                    FileKind::Text => file.path.clone(),
+                    kind => format!("{} ({})", file.path, kind.label()),
+                })
+                .collect();
+            let shown: Vec<&str> = shown.iter().map(String::as_str).collect();
+            let paths = if assigned.host_made {
+                "host-made for the files no planned area's paths name".to_owned()
+            } else if assigned.area.paths.is_empty() {
+                "no paths".to_owned()
+            } else {
+                format!("paths {}", assigned.area.paths.join(", "))
+            };
+            self.phase(
+                "assigned",
+                format!("{} ({paths}): {}", assigned.area.name, inline_list(&shown)),
+            )
+            .await?;
+        }
+        for assigned in &assignment.areas {
+            if assigned.host_made {
+                let paths: Vec<&str> = assigned.files.iter().map(|f| f.path.as_str()).collect();
+                self.note(format!(
+                    "the host made area {} for {} file{} no planned area's paths name and that \
+                     share no directory with them: {}",
+                    assigned.area.name,
+                    paths.len(),
+                    if paths.len() == 1 { "" } else { "s" },
+                    inline_list(&paths)
+                ))
+                .await?;
+            } else if !assigned.by_path.is_empty() {
+                let paths: Vec<&str> = assigned.by_path.iter().map(String::as_str).collect();
+                self.note(format!(
+                    "{} file{} no area's paths match {} assigned to {}, whose paths share {} \
+                     directories: {}",
+                    paths.len(),
+                    if paths.len() == 1 { "" } else { "s" },
+                    if paths.len() == 1 { "was" } else { "were" },
+                    assigned.area.name,
+                    if paths.len() == 1 { "its" } else { "their" },
+                    inline_list(&paths)
+                ))
+                .await?;
+            }
+        }
+        if !assignment.without_files.is_empty() {
+            let names = assignment.without_files.join(", ");
+            self.note(format!(
+                "planned area{} {names} got no file (no file its paths name is left to it), so \
+                 {} not run",
+                if assignment.without_files.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                if assignment.without_files.len() == 1 {
+                    "it was"
+                } else {
+                    "they were"
+                }
+            ))
+            .await?;
+        }
+        if listing.capped {
+            self.not_covered(NotCovered {
+                area: UNLISTED.into(),
+                class: FailureClass::Other,
+                detail: format!(
+                    "the repository has more than {} files; the host listed and assigned the \
+                     first {} by path, and the rest were given to no worker",
+                    files::MAX_LISTED_FILES,
+                    files::MAX_LISTED_FILES
+                ),
+                node_id: None,
+                turn_id: None,
+            })
+            .await?;
+        }
+        if listing.unnamed > 0 {
+            self.not_covered(NotCovered {
+                area: UNLISTED.into(),
+                class: FailureClass::Other,
+                detail: format!(
+                    "{} name{} in the repository {} not UTF-8, so no worker could name {} to \
+                     read_file; {} not audited",
+                    listing.unnamed,
+                    if listing.unnamed == 1 { "" } else { "s" },
+                    if listing.unnamed == 1 { "is" } else { "are" },
+                    if listing.unnamed == 1 { "it" } else { "them" },
+                    if listing.unnamed == 1 {
+                        "it was"
+                    } else {
+                        "they were"
+                    },
+                ),
+                node_id: None,
+                turn_id: None,
+            })
+            .await?;
+        }
+        if assignment.areas.is_empty() {
+            self.note("the repository has no files to audit".into())
+                .await?;
+            return Ok(None);
+        }
+        Ok(Some(assignment))
+    }
+
+    /// Turn 2 and the follow-ups: every area at once, then, up to
+    /// [`MAX_FOLLOW_UPS`] times, a fresh activation of each worker that left
+    /// files of its area unread, naming them. Returns each area's result and
+    /// whether a person stopped the run.
+    async fn areas(
+        &mut self,
+        assignment: &Assignment,
+    ) -> Result<(Vec<AreaResult>, bool), RunError> {
+        let names = assignment.names();
         let what = format!(
             "audit areas: {} read-only workers ({})",
             names.len(),
             names.join(", ")
         );
-        let slots = area_slots(&self.run.resolved, plan)?;
-        let request = areas_request(&self.run.resolved.prompt, plan);
+        let slots = area_slots(&self.run.resolved, assignment)?;
+        let request = areas_request(&self.run.resolved.prompt, assignment);
         let started = match self
             .apply_and_turn(&what, slots, &request, AREAS_PURPOSE)
             .await
         {
             Err(RunError::Stopped) => {
-                for area in &plan.areas {
+                for assigned in &assignment.areas {
                     self.not_covered(NotCovered {
-                        area: area.name.clone(),
+                        area: assigned.area.name.clone(),
                         class: FailureClass::Stopped,
                         detail: "the run was stopped before the areas started".into(),
                         node_id: None,
@@ -1382,9 +1419,9 @@ impl Audit<'_> {
             started => started?,
         };
         let Some(observed) = started else {
-            for area in &plan.areas {
+            for assigned in &assignment.areas {
                 self.not_covered(NotCovered {
-                    area: area.name.clone(),
+                    area: assigned.area.name.clone(),
                     class: FailureClass::Budget,
                     detail: "the run's wall clock ran out before the areas started".into(),
                     node_id: None,
@@ -1392,210 +1429,396 @@ impl Audit<'_> {
                 })
                 .await?;
             }
-            return Ok(Vec::new());
+            return Ok((Vec::new(), false));
         };
-        let tools = agent(&self.run.resolved, LoadoutRole::Worker)?
+        let reads = agent(&self.run.resolved, LoadoutRole::Worker)?
             .tools
-            .clone();
-        // The tool calls the Session recorded for the turn, read once.
-        let recorded: Result<Vec<ToolCallRecord>, String> = {
-            let observation = self.observation(&observed);
+            .iter()
+            .any(|tool| tool == "read_file");
+        let repo = self.run.options.repo.clone();
+        let mut states: Vec<AreaState> = assignment.areas.iter().map(AreaState::new).collect();
+        let every: Vec<usize> = (0..states.len()).collect();
+        self.observe_workers(&observed, &mut states, &every).await?;
+        let mut deadline_hit = observed.deadline_hit;
+        let mut stopped = false;
+        for round in 1..=MAX_FOLLOW_UPS {
+            if deadline_hit {
+                break;
+            }
+            let due: Vec<usize> = states
+                .iter()
+                .enumerate()
+                .filter(|(_, state)| state.may_follow_up(reads) && !state.unread(&repo).is_empty())
+                .map(|(index, _)| index)
+                .collect();
+            if due.is_empty() {
+                break;
+            }
+            let (slots, names) = {
+                let unread: Vec<(&AuditArea, Vec<&str>)> = due
+                    .iter()
+                    .map(|index| {
+                        let state = &states[*index];
+                        (
+                            &state.assigned.area,
+                            state
+                                .unread(&repo)
+                                .into_iter()
+                                .map(|file| file.path.as_str())
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                let names: Vec<String> = unread
+                    .iter()
+                    .map(|(area, files)| format!("{} ({} unread)", area.name, files.len()))
+                    .collect();
+                (follow_up_slots(&self.run.resolved, &unread, round)?, names)
+            };
+            for index in &due {
+                states[*index].follow_ups += 1;
+            }
+            let area_names: Vec<&str> = due.iter().map(|index| states[*index].name()).collect();
+            let request = follow_up_request(&self.run.resolved.prompt, &area_names, round);
+            let what = format!(
+                "audit follow-up {round}: {} read-only worker{} ({})",
+                due.len(),
+                if due.len() == 1 { "" } else { "s" },
+                names.join(", ")
+            );
             match self
-                .host
-                .tool_calls(&self.run.session_id, &observation.turn_id)
+                .apply_and_turn(&what, slots, &request, FOLLOW_UP_PURPOSE)
                 .await
             {
+                Err(RunError::Stopped) => {
+                    // The follow-up never started: it is not counted.
+                    for index in &due {
+                        states[*index].follow_ups -= 1;
+                    }
+                    stopped = true;
+                    break;
+                }
+                Err(error) => return Err(error),
+                Ok(None) => {
+                    for index in &due {
+                        states[*index].follow_ups -= 1;
+                    }
+                    deadline_hit = true;
+                    break;
+                }
+                Ok(Some(observed)) => {
+                    self.observe_workers(&observed, &mut states, &due).await?;
+                    deadline_hit = observed.deadline_hit;
+                }
+            }
+        }
+        let results = self.conclude(&states, reads, stopped, deadline_hit).await?;
+        Ok((results, stopped))
+    }
+
+    /// Read what each area worker of `which` did in the observed turn: its
+    /// answer and report, or why it has none, and the tool calls of its
+    /// activation when it answered.
+    async fn observe_workers(
+        &mut self,
+        observed: &Observed,
+        states: &mut [AreaState],
+        which: &[usize],
+    ) -> Result<(), RunError> {
+        let turn_id = self.observation(observed).turn_id.clone();
+        // The tool calls the Session recorded for the turn, read once.
+        let recorded: Result<Vec<ToolCallRecord>, String> =
+            match self.host.tool_calls(&self.run.session_id, &turn_id).await {
                 Ok(Some(calls)) => Ok(calls),
                 Ok(None) => Err("the Session's record of tool calls could not be read".into()),
                 Err(error) => Err(format!(
                     "the Session's record of tool calls could not be read: {error}"
                 )),
-            }
-        };
-        let mut results = Vec::new();
-        for area in &plan.areas {
-            let observation = self.observation(&observed);
-            let turn_id = Some(observation.turn_id.clone());
-            let slot = worker_slot_id(&area.name);
-            let node = observation.nodes.iter().find(|node| node.slot_id == slot);
-            let node_id = node.map(|node| node.node_id.clone());
-            let Some(answer) = accepted_answer(node).map(str::to_owned) else {
-                let (class, detail) = failure_of(node, observed.deadline_hit);
-                self.not_covered(NotCovered {
-                    area: area.name.clone(),
-                    class,
-                    detail: format!("the area worker has no result: {detail}"),
-                    node_id,
-                    turn_id,
+            };
+        let activations: Vec<Activation> = {
+            let observation = self.observation(observed);
+            which
+                .iter()
+                .map(|index| {
+                    let slot = worker_slot_id(states[*index].name());
+                    let node = observation.nodes.iter().find(|node| node.slot_id == slot);
+                    Activation {
+                        index: *index,
+                        node_id: node.map(|node| node.node_id.clone()),
+                        answer: accepted_answer(node).map(str::to_owned),
+                        generation: node
+                            .and_then(|node| node.latest())
+                            .map(|latest| latest.generation),
+                        failure: failure_of(node, observed.deadline_hit),
+                    }
                 })
-                .await?;
+                .collect()
+        };
+        for activation in activations {
+            let state = &mut states[activation.index];
+            state.activations += 1;
+            state.node_id = activation.node_id.clone();
+            state.turn_id = Some(turn_id.clone());
+            let slot = worker_slot_id(state.name());
+            let Some(answer) = activation.answer else {
+                let (class, detail) = activation.failure;
+                // The audit lists what this worker left not covered itself.
+                if let Some(node_id) = &activation.node_id {
+                    self.report
+                        .accounted
+                        .push((turn_id.clone(), node_id.clone()));
+                }
+                if state.answered {
+                    self.phase(
+                        "follow_up_failed",
+                        format!(
+                            "{slot} has no result in follow-up {} ({}: {})",
+                            state.follow_ups,
+                            class_name(class),
+                            cut(&detail, MAX_LISTED_DETAIL_BYTES).0
+                        ),
+                    )
+                    .await?;
+                }
+                state.failure = Some((class, detail));
                 continue;
             };
-            // Only the calls of the generation that answered count.
-            let generation = node
-                .and_then(|node| node.latest())
-                .map(|latest| latest.generation);
-            let own: Result<Vec<&ToolCallRecord>, &str> = match &recorded {
-                Ok(calls) => Ok(calls
-                    .iter()
-                    .filter(|call| {
-                        Some(&call.node_id) == node_id.as_ref()
-                            && Some(call.generation) == generation
-                    })
-                    .collect()),
-                Err(reason) => Err(reason.as_str()),
-            };
-            let examination = examined(
-                area,
-                &tools,
-                own.as_deref().map_err(|reason| *reason),
-                &self.run.options.repo,
-            );
-            let looked = examination == Examined::Yes;
-            match &examination {
-                Examined::Yes => {}
-                Examined::Nothing(reason) => {
-                    self.not_covered(NotCovered {
-                        area: area.name.clone(),
-                        class: FailureClass::NotReached,
-                        detail: format!("the area worker examined nothing of its area: {reason}"),
-                        node_id: node_id.clone(),
-                        turn_id: turn_id.clone(),
-                    })
-                    .await?;
+            state.answered = true;
+            state.failure = None;
+            match &recorded {
+                Ok(calls) => state.calls.extend(
+                    calls
+                        .iter()
+                        .filter(|call| {
+                            Some(&call.node_id) == activation.node_id.as_ref()
+                                && Some(call.generation) == activation.generation
+                        })
+                        .cloned(),
+                ),
+                Err(reason) => state.unknown = Some(reason.clone()),
+            }
+            match parse_area_report(&answer, state.name()) {
+                Ok(mut report) => {
+                    if state.activations > 1 {
+                        follow_up_ids(&mut report, state.name(), state.activations - 1);
+                    }
+                    if !report.not_reached.is_empty() {
+                        let note = not_reached_note(&slot, &report.not_reached);
+                        self.note(note).await?;
+                    }
+                    state.reports.push(report);
                 }
-                Examined::Unknown(reason) => {
-                    self.not_covered(NotCovered {
-                        area: area.name.clone(),
-                        class: FailureClass::Other,
-                        detail: format!(
-                            "whether the area worker examined its area is not known: {reason}"
+                Err(error) => state.unreadable.push((answer, error.to_string())),
+            }
+        }
+        Ok(())
+    }
+
+    /// Record each area's coverage and what it left not covered, and build
+    /// the results the integrator receives.
+    async fn conclude(
+        &mut self,
+        states: &[AreaState],
+        reads: bool,
+        stopped: bool,
+        deadline_hit: bool,
+    ) -> Result<Vec<AreaResult>, RunError> {
+        let repo = self.run.options.repo.clone();
+        let mut results = Vec::new();
+        for state in states {
+            let name = state.name().to_owned();
+            let entry = |class: FailureClass, detail: String| NotCovered {
+                area: name.clone(),
+                class,
+                detail,
+                node_id: state.node_id.clone(),
+                turn_id: state.turn_id.clone(),
+            };
+            if !state.answered {
+                let (class, detail) = state
+                    .failure
+                    .clone()
+                    .unwrap_or((FailureClass::Other, "it never answered".into()));
+                self.not_covered(entry(
+                    class,
+                    format!("the area worker has no result: {detail}"),
+                ))
+                .await?;
+            }
+            if let Some(reason) = &state.unknown {
+                self.not_covered(entry(
+                    FailureClass::Other,
+                    format!("whether the area worker read its files is not known: {reason}"),
+                ))
+                .await?;
+            }
+            for (_, error) in &state.unreadable {
+                self.not_covered(entry(
+                    FailureClass::Other,
+                    format!(
+                        "the area worker's report could not be read ({error}); the integrator \
+                         received its answer as text"
+                    ),
+                ))
+                .await?;
+            }
+            let left_out: usize = state.reports.iter().map(|report| report.left_out).sum();
+            if left_out > 0 {
+                self.not_covered(entry(
+                    FailureClass::Other,
+                    format!(
+                        "{left_out} finding{} beyond the first {MAX_AREA_FINDINGS} of a report \
+                         {} left out of it",
+                        if left_out == 1 { "" } else { "s" },
+                        if left_out == 1 { "was" } else { "were" }
+                    ),
+                ))
+                .await?;
+            }
+            let known = state.unknown.is_none();
+            let unread: Vec<&RepoFile> = if known {
+                state.unread(&repo)
+            } else {
+                Vec::new()
+            };
+            self.coverage(state, &unread, known).await?;
+            if !unread.is_empty() {
+                let (class, why) = unread_reason(state, reads, stopped, deadline_hit);
+                for file in unread.iter().take(MAX_LISTED_UNREAD) {
+                    self.not_covered(entry(class, format!("{}: not read ({why})", file.path)))
+                        .await?;
+                }
+                if unread.len() > MAX_LISTED_UNREAD {
+                    let rest: Vec<&str> = unread[MAX_LISTED_UNREAD..]
+                        .iter()
+                        .map(|file| file.path.as_str())
+                        .collect();
+                    self.not_covered(entry(
+                        class,
+                        format!(
+                            "{} more files of this area: not read ({why}): {}",
+                            rest.len(),
+                            inline_list(&rest)
                         ),
-                        node_id: node_id.clone(),
-                        turn_id: turn_id.clone(),
-                    })
+                    ))
                     .await?;
                 }
             }
-            match parse_area_report(&answer, &area.name) {
-                Ok(report) => {
-                    let classified = {
-                        let (items, own, planned, repo) = (
-                            report.not_reached.clone(),
-                            area.clone(),
-                            plan.clone(),
-                            self.run.options.repo.clone(),
-                        );
-                        tokio::task::spawn_blocking(move || {
-                            items
-                                .into_iter()
-                                .map(|item| {
-                                    let kind = classify_not_reached(&item, &own, &planned, &repo);
-                                    (item, kind)
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .await
-                        .map_err(|error| {
-                            RunError::Infrastructure(format!(
-                                "reading the {} worker's NOT_REACHED list: {error}",
-                                area.name
-                            ))
-                        })?
-                    };
-                    let mut other_areas = Vec::new();
-                    for (item, kind) in classified {
-                        match kind {
-                            NotReachedItem::OtherArea(name) => {
-                                if !other_areas.contains(&name) {
-                                    other_areas.push(name);
-                                }
-                            }
-                            // A missing path is a note only from a worker
-                            // that examined its area; from one that did
-                            // not, nothing it says counts as looked at.
-                            NotReachedItem::NoSuchPath(path) if looked => {
-                                self.note(format!(
-                                    "{} listed {path} as not reached, and no such path exists \
-                                     in the repository; a note, not a gap",
-                                    worker_slot_id(&area.name)
-                                ))
-                                .await?;
-                            }
-                            NotReachedItem::NoSuchPath(_) => {
-                                self.not_covered(NotCovered {
-                                    area: area.name.clone(),
-                                    class: FailureClass::NotReached,
-                                    detail: format!(
-                                        "{item} (the area worker reported it did not reach this; \
-                                         no such path exists, but the worker did not examine its \
-                                         area)"
-                                    ),
-                                    node_id: node_id.clone(),
-                                    turn_id: turn_id.clone(),
-                                })
-                                .await?;
-                            }
-                            NotReachedItem::Gap => {
-                                self.not_covered(NotCovered {
-                                    area: area.name.clone(),
-                                    class: FailureClass::NotReached,
-                                    detail: format!(
-                                        "{item} (the area worker reported it did not reach this)"
-                                    ),
-                                    node_id: node_id.clone(),
-                                    turn_id: turn_id.clone(),
-                                })
-                                .await?;
-                            }
-                        }
+            if state.answered {
+                let mut bodies = Vec::new();
+                if !state.reports.is_empty() {
+                    let mut merged = AreaReport::default();
+                    for report in &state.reports {
+                        merged.findings.extend(report.findings.iter().cloned());
+                        merged
+                            .not_reached
+                            .extend(report.not_reached.iter().cloned());
+                        merged.left_out += report.left_out;
                     }
-                    if !other_areas.is_empty() {
-                        self.note(format!(
-                            "{} listed other planned areas as not reached ({}); their own \
-                             workers audit them, so they are not gaps",
-                            worker_slot_id(&area.name),
-                            other_areas.join(", ")
-                        ))
-                        .await?;
-                    }
-                    results.push(AreaResult {
-                        area: area.clone(),
-                        body: AreaBody::Report(report),
-                        examined: looked,
+                    bodies.push(AreaBody::Report(merged));
+                }
+                for (answer, error) in &state.unreadable {
+                    bodies.push(AreaBody::Unreadable {
+                        answer: answer.clone(),
+                        error: error.clone(),
                     });
                 }
-                Err(error) => {
-                    self.not_covered(NotCovered {
-                        area: area.name.clone(),
-                        class: FailureClass::Other,
-                        detail: format!(
-                            "the area worker's report could not be read ({error}); the \
-                             integrator received its answer as text"
-                        ),
-                        node_id,
-                        turn_id,
-                    })
-                    .await?;
-                    results.push(AreaResult {
-                        area: area.clone(),
-                        body: AreaBody::Unreadable {
-                            answer,
-                            error: error.to_string(),
-                        },
-                        examined: looked,
-                    });
-                }
+                results.push(AreaResult {
+                    area: state.assigned.area.clone(),
+                    bodies,
+                    files: state.assigned.text_files().count(),
+                    unread: known.then_some(unread.len()),
+                });
             }
         }
         Ok(results)
+    }
+
+    /// The `coverage` phase of one area, and a note for each file too large
+    /// to read.
+    async fn coverage(
+        &mut self,
+        state: &AreaState,
+        unread: &[&RepoFile],
+        known: bool,
+    ) -> Result<(), RunError> {
+        let files = &state.assigned.files;
+        let of_kind = |kind: FileKind| -> Vec<&str> {
+            files
+                .iter()
+                .filter(|file| file.kind == kind)
+                .map(|file| file.path.as_str())
+                .collect()
+        };
+        let (empty, binary, too_large) = (
+            of_kind(FileKind::Empty),
+            of_kind(FileKind::Binary),
+            of_kind(FileKind::TooLarge),
+        );
+        let text = state.assigned.text_files().count();
+        let mut detail = if known {
+            let read = text - unread.len();
+            format!(
+                "{}: {} of {} files examined: {read} read",
+                state.name(),
+                read + empty.len() + binary.len(),
+                files.len()
+            )
+        } else {
+            format!(
+                "{}: {} files; whether its worker read the {text} to read is not known",
+                state.name(),
+                files.len()
+            )
+        };
+        for (label, paths) in [
+            (FileKind::Empty.not_read(), &empty),
+            (FileKind::Binary.not_read(), &binary),
+            (FileKind::TooLarge.not_read(), &too_large),
+        ] {
+            if !paths.is_empty() {
+                let _ = write!(detail, "; {label}: {}", inline_list(paths));
+            }
+        }
+        if !unread.is_empty() {
+            let paths: Vec<&str> = unread.iter().map(|file| file.path.as_str()).collect();
+            let _ = write!(detail, "; not read, not covered: {}", inline_list(&paths));
+        }
+        self.phase("coverage", detail).await?;
+        let large: Vec<&RepoFile> = files
+            .iter()
+            .filter(|file| file.kind == FileKind::TooLarge)
+            .collect();
+        for file in large.iter().take(MAX_NOTED_TOO_LARGE) {
+            self.note(format!(
+                "{} ({} bytes) of area {} was not read: too large (over {} KiB, the most a \
+                 worker is asked to read); a note, not a gap",
+                file.path,
+                file.size,
+                state.name(),
+                files::MAX_AUDITED_FILE_BYTES / 1024
+            ))
+            .await?;
+        }
+        if large.len() > MAX_NOTED_TOO_LARGE {
+            self.note(format!(
+                "{} more files of area {} were not read: too large (over {} KiB); a note, not a \
+                 gap",
+                large.len() - MAX_NOTED_TOO_LARGE,
+                state.name(),
+                files::MAX_AUDITED_FILE_BYTES / 1024
+            ))
+            .await?;
+        }
+        Ok(())
     }
 
     /// The workers' own findings, reported when integration has no result.
     fn unmerged(results: &[AreaResult]) -> Vec<Finding> {
         results
             .iter()
-            .filter_map(|result| match &result.body {
+            .flat_map(|result| result.bodies.iter())
+            .filter_map(|body| match body {
                 AreaBody::Report(report) => Some(report.findings.iter().cloned()),
                 AreaBody::Unreadable { .. } => None,
             })
@@ -1635,10 +1858,10 @@ impl Audit<'_> {
         self.findings(Self::unmerged(results)).await
     }
 
-    /// Turn 3: merge every report.
+    /// The last turn: merge every report.
     async fn integrate(
         &mut self,
-        plan: &AuditPlan,
+        assignment: &Assignment,
         results: &[AreaResult],
     ) -> Result<(), RunError> {
         if results.is_empty() {
@@ -1666,7 +1889,7 @@ impl Audit<'_> {
         .await?;
         let request = integrate_request(
             &self.run.resolved.prompt,
-            plan,
+            assignment,
             results,
             &self.report.not_covered,
         );
@@ -1730,6 +1953,100 @@ impl Audit<'_> {
             }
         }
     }
+}
+
+/// Why an area's files are still unread, as the class and words of their
+/// not-covered entries.
+fn unread_reason(
+    state: &AreaState,
+    reads: bool,
+    stopped: bool,
+    deadline_hit: bool,
+) -> (FailureClass, String) {
+    if !state.answered {
+        let class = state
+            .failure
+            .as_ref()
+            .map_or(FailureClass::Other, |(class, _)| *class);
+        return (class, "the area worker has no result".into());
+    }
+    if !reads {
+        return (
+            FailureClass::NotReached,
+            "the worker Agent has no read_file tool".into(),
+        );
+    }
+    if state.may_follow_up(reads) {
+        if stopped {
+            return (
+                FailureClass::Stopped,
+                "the run was stopped before a follow-up read it".into(),
+            );
+        }
+        if deadline_hit {
+            return (
+                FailureClass::Budget,
+                "the run's wall clock ran out before a follow-up read it".into(),
+            );
+        }
+    }
+    if let Some((class, detail)) = &state.failure {
+        return (
+            *class,
+            format!(
+                "the area worker's last follow-up has no result: {}",
+                cut(detail, MAX_LISTED_DETAIL_BYTES).0
+            ),
+        );
+    }
+    (
+        FailureClass::NotReached,
+        format!(
+            "the area worker did not read it in its turn or its {} follow-up{}",
+            state.follow_ups,
+            if state.follow_ups == 1 { "" } else { "s" }
+        ),
+    )
+}
+
+/// A follow-up's finding ids: `<area>-followup<n>-<id>`, so they never
+/// repeat an earlier activation's.
+fn follow_up_ids(report: &mut AreaReport, area: &str, round: u32) {
+    let prefix = format!("{area}-");
+    for finding in &mut report.findings {
+        let own = finding
+            .id
+            .strip_prefix(&prefix)
+            .unwrap_or(&finding.id)
+            .to_owned();
+        finding.id = cut(&format!("{area}-followup{round}-{own}"), 64)
+            .0
+            .to_owned();
+    }
+}
+
+/// The note of what a worker listed as not reached, quoted and bounded.
+fn not_reached_note(slot: &str, items: &[String]) -> String {
+    let mut quoted: Vec<String> = items
+        .iter()
+        .take(MAX_NOTED_NOT_REACHED)
+        .map(|item| {
+            let (shown, cut_off) = cut(item.trim(), MAX_NOTED_ITEM_BYTES);
+            if cut_off {
+                format!("{shown}…")
+            } else {
+                shown.to_owned()
+            }
+        })
+        .collect();
+    if items.len() > MAX_NOTED_NOT_REACHED {
+        quoted.push(format!("and {} more", items.len() - MAX_NOTED_NOT_REACHED));
+    }
+    format!(
+        "{slot} listed as not reached: {}; a note: the host decides coverage from the files \
+         its workers read",
+        quoted.join("; ")
+    )
 }
 
 #[cfg(test)]

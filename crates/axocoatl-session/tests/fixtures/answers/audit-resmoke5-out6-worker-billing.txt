@@ -1,0 +1,8 @@
+FINDINGS
+```json
+[{"id": "F1", "title": "get_page drops the last item of every page", "detail": "end = start + page_size - 1 makes the slice one item short.", "severity": "high", "location": "billing/pagination.py:16"}]
+```
+NOT_REACHED
+```json
+[]
+```

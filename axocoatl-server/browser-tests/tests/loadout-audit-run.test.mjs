@@ -45,8 +45,8 @@ function answer(body) {
     return { role: 'assistant', content: `FINDINGS${fence([{ id: 'A1', title: 'README has no usage section', severity: 'low', location: 'README.md:1', area: 'docs' }])}` };
   }
   const area = text.match(/Your area: ([a-z0-9-]+)/);
-  // A worker reads its area's file first: the run judges from the recorded
-  // tool calls whether a worker examined its area.
+  // A worker reads its area's file first: the host checks from the
+  // recorded read_file calls that every file of its area was read.
   if (area && !(body?.messages || []).some((message) => message.role === 'tool')) {
     return { role: 'assistant', content: '', tool_calls: [
       { id: `call_${area[1]}`, function: { index: 0, name: 'read_file', arguments: { path: READS[area[1]] } } },
@@ -59,7 +59,8 @@ function answer(body) {
   if (area) {
     // As the 1.3.0 re-smoke's notify worker answered: one unfenced JSON
     // object with uppercase block keys, listing another planned area and a
-    // path that does not exist as not reached.
+    // path that does not exist as not reached. Coverage is the host's: the
+    // list is a note.
     return { role: 'assistant', content: JSON.stringify({ FINDINGS: [], NOT_REACHED: ['docs', 'src/main.rs'] }, null, 2) };
   }
   return { role: 'assistant', content: `AREAS${fence({ areas: [
@@ -182,16 +183,18 @@ test('the audit loadout plans two areas, runs a read-only worker per area and in
   assert.equal(result.code, 0);
   assert.deepEqual(outcome.turns.map((turn) => [turn.purpose, turn.state]),
     [['audit_plan', 'completed'], ['audit_areas', 'completed'], ['audit_integrate', 'completed']]);
-  // The code worker's answer was read; neither the other area nor the
-  // missing path is a gap, and both are notes in the run's progress.
+  // The host listed the repository with git ls-files and gave each file
+  // to the area whose paths match it; each worker read its file.
+  assert.match(result.stderr, /assigned: 2 files listed by git ls-files --cached --others --exclude-standard in 2 areas: docs 1, code 1/);
+  assert.match(result.stderr, /coverage: code: 1 of 1 files examined: 1 read/);
+  // The code worker's answer was read; what it listed as not reached is a
+  // note in the run's progress, not a gap.
   assert.deepEqual(outcome.not_covered, [], failed);
-  assert.match(result.stderr, /note: worker-code listed other planned areas as not reached \(docs\)/);
-  assert.match(result.stderr, /note: worker-code listed src\/main\.rs as not reached, and no such path exists/);
-  // The notes are in the Outcome and the JUnit verdict too, not only in
-  // the progress lines.
-  assert.equal(outcome.notes.length, 2, JSON.stringify(outcome.notes));
-  assert.match(outcome.notes.join('\n'), /worker-code listed src\/main\.rs as not reached/);
-  assert.match(outcome.notes.join('\n'), /worker-code listed other planned areas as not reached \(docs\)/);
+  assert.match(result.stderr, /note: worker-code listed as not reached: docs; src\/main\.rs; a note: the host decides coverage from the files its workers read/);
+  // The note is in the Outcome and the JUnit verdict too, not only in the
+  // progress lines.
+  assert.equal(outcome.notes.length, 1, JSON.stringify(outcome.notes));
+  assert.match(outcome.notes[0], /^worker-code listed as not reached: docs; src\/main\.rs;/);
   assert.match(await readFile(junitPath, 'utf8'), /<testcase classname="axocoatl.run" name="verdict">\n {6}<system-out>note: worker-code listed /);
   assert.equal(outcome.findings.length, 1, JSON.stringify(outcome.findings));
   assert.equal(outcome.findings[0].title, 'README has no usage section');
