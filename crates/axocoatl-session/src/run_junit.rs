@@ -16,7 +16,9 @@
 //! `<skipped>`, `repro_error` and `missing` are `<error>`s; every not-covered
 //! entry is a `<failure type="not_covered">` whose message is
 //! [`NotCovered::reason`](crate::run_outcome::NotCovered::reason), never
-//! skipped. The `run` suite's `verdict` case is an `<error type="busy">`
+//! skipped. The run's notes are the `verdict` case's `<system-out>`, one
+//! `note: ` line each, whatever the verdict. The `run` suite's `verdict`
+//! case is an `<error type="busy">`
 //! when the run ended with exit code 7 (another run or Session held the
 //! Workspace), so CI can tell it from an `<error type="error">`. Text is
 //! XML-escaped with control characters other than tab and newline removed,
@@ -474,7 +476,18 @@ fn failed_checks(outcome: &RunOutcome) -> Vec<String> {
 }
 
 fn verdict_case(outcome: &RunOutcome) -> Case {
-    let case = Case::new("axocoatl.run", "verdict");
+    let mut case = Case::new("axocoatl.run", "verdict");
+    // Notes never decide the verdict; they are said beside it, one a line.
+    if !outcome.notes.is_empty() {
+        case.system_out = Some(
+            outcome
+                .notes
+                .iter()
+                .map(|note| format!("note: {note}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
     let reasons = outcome.attention.join("; ");
     match outcome.verdict {
         RunVerdict::Pass => case,
@@ -894,6 +907,7 @@ mod tests {
                     turn_id: None,
                 },
             ],
+            notes: Vec::new(),
             warnings: vec![RunWarning {
                 code: SAME_MODEL_REVIEWER.into(),
                 message: "same model".into(),
@@ -1152,6 +1166,51 @@ mod tests {
         assert!(xml.contains(
             "<property name=\"axocoatl.usage\" value=\"600 input + 18 output tokens, $0.0003\"/>"
         ));
+    }
+
+    /// The audit re-smoke's notes were only on standard error: a passing
+    /// run's JUnit said nothing of the paths a worker listed that do not
+    /// exist.
+    #[test]
+    fn notes_are_the_verdict_case_s_system_out() {
+        let mut outcome = fixture();
+        outcome.checks.clear();
+        outcome.review = None;
+        outcome.adjudications.clear();
+        outcome.findings.clear();
+        outcome.not_covered.clear();
+        outcome.notes = vec![
+            "worker-billing listed billing/legacy.py as not reached, and no such path exists \
+             in the repository; a note, not a gap"
+                .into(),
+            "worker-auth listed other planned areas as not reached (billing) & <more>".into(),
+        ];
+        assert_eq!(outcome.decide(VerdictInputs::default()), exit_code::PASS);
+        let xml = render_junit(&outcome).unwrap();
+        assert!(
+            xml.contains(
+                "    <testcase classname=\"axocoatl.run\" name=\"verdict\">\n      \
+                 <system-out>note: worker-billing listed billing/legacy.py as not reached, and \
+                 no such path exists in the repository; a note, not a gap\nnote: worker-auth \
+                 listed other planned areas as not reached (billing) &amp; &lt;more&gt;\
+                 </system-out>\n    </testcase>\n"
+            ),
+            "{xml}"
+        );
+        assert!(xml.contains("tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\""));
+        // Beside a verdict that needs attention, too.
+        outcome.not_covered.push(NotCovered {
+            area: "auth".into(),
+            class: FailureClass::NotReached,
+            detail: "auth/tokens.py".into(),
+            node_id: None,
+            turn_id: None,
+        });
+        outcome.decide(VerdictInputs::default());
+        let xml = render_junit(&outcome).unwrap();
+        let verdict = &xml[xml.find("name=\"verdict\"").unwrap()..];
+        assert!(verdict.contains("<failure type=\"needs_attention\""));
+        assert!(verdict.contains("<system-out>note: worker-billing"));
     }
 
     #[test]

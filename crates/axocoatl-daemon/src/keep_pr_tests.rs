@@ -134,6 +134,7 @@ fn outcome() -> RunOutcome {
             }),
         }],
         not_covered: Vec::new(),
+        notes: Vec::new(),
         warnings: vec![RunWarning {
             code: "same_model_reviewer".into(),
             message: "The reviewer runs the writer's model.".into(),

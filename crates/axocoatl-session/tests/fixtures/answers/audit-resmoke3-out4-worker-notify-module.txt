@@ -1,0 +1,1 @@
+{"FINDINGS": [{"id": "F1", "title": "Hardcoded webhook URL", "detail": "The webhook URL is hardcoded to 'https://hooks.example.invalid/orders' which is a placeholder and not a real endpoint. This will cause webhook events to fail to be sent to actual partners.", "severity": "high", "location": "notify/webhook.py:5"}], "NOT_REACHED": []}

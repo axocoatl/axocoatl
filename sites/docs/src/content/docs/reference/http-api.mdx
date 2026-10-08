@@ -196,7 +196,9 @@ output tails, `candidate_sha256`, `report` and `reason`), `review` (the reviewer
 round's verdict and numbered findings), `adjudications` (`round`, `finding_id`, `finding`,
 `decision` `accept`, `reject` or `missing`, `reason`), `findings` (with `repro` and its
 `classification`: `confirmed`, `fails_on_clean_build`, `reproduced`, `not_reproduced`,
-`repro_error` or `missing`), `not_covered` (`area`, `class`, `detail`), `warnings`,
+`repro_error` or `missing`), `not_covered` (`area`, `class`, `detail`), `notes` (what
+the run noticed that is neither a gap nor a warning, in words; absent when there are
+none), `warnings`,
 `usage` (`input_tokens`, `output_tokens`, `cost_microunits`, `complete`, `cost_known`
 and `retries`; `cost_known` is false when a call's cost is not known, such as a Codex
 writer's, and `cost_microunits` then counts what those calls reserved), `network` (event,

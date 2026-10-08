@@ -398,6 +398,7 @@ pub fn empty_outcome(run: &RunContext, started_at_ms: u64) -> RunOutcome {
         adjudications: Vec::new(),
         findings: Vec::new(),
         not_covered: Vec::new(),
+        notes: Vec::new(),
         warnings: Vec::new(),
         usage: RunUsage::default(),
         network: Default::default(),
@@ -489,6 +490,13 @@ pub async fn run_to_outcome_with(
     outcome.findings = report.findings.clone();
     outcome.not_covered = report.not_covered.clone();
     for entry in scan_not_covered(&report.turns, wall_clock_ran_out) {
+        let accounted = report.accounted.iter().any(|(turn, node)| {
+            entry.turn_id.as_deref() == Some(turn.as_str())
+                && entry.node_id.as_deref() == Some(node.as_str())
+        });
+        if accounted {
+            continue;
+        }
         let known = outcome.not_covered.iter().any(|existing| {
             (entry.node_id.is_some()
                 && existing.node_id == entry.node_id
@@ -499,6 +507,7 @@ pub async fn run_to_outcome_with(
             outcome.not_covered.push(entry);
         }
     }
+    outcome.notes = report.notes.clone();
     outcome.warnings = warnings(run, &report, &report.turns);
     let events = host.recorded_events(&run.run_id).await.unwrap_or_default();
     outcome.usage = usage(&report.turns, &events);

@@ -686,7 +686,7 @@ one Session: plan, parallel read-only area workers with fresh contexts, integrat
 with parsed reports, the review rounds with findings split by id, adjudications, findings
 with their reproduction classification, not-covered entries with a failure class
 (`provider_refusal`, `provider_failure`, `provider_rejected`, `budget`, `blocked`,
-`not_reached`, `runtime_limit`, `stopped`, `other`), warnings, usage with retry counts, a
+`not_reached`, `runtime_limit`, `stopped`, `other`), notes, warnings, usage with retry counts, a
 network summary and Keep. `RunOutcome::decide` sets the verdict and exit code with the
 precedence error (5) > interrupted (6) > checks failed (1) > needs attention (2) > pass
 (0); anything not covered, a check that did not run on the final result, an unanswered

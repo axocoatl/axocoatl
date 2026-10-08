@@ -2,16 +2,20 @@
 #
 # Three turns in one Session, each after its own Team and budget Apply:
 #   1. plan: the planner splits the scope into 2-8 areas (an AREAS JSON
-#      block); an invalid plan gets one retry that quotes the error, and a
-#      second invalid plan leaves the whole scope not covered;
+#      block); an invalid plan, or a planner without an answer, gets one
+#      retry, and a second attempt without a plan leaves the whole scope not
+#      covered;
 #   2. areas: the daemon runs one read-only worker per area in parallel, each
 #      with a fresh context and no dependencies (no checks, no review);
 #   3. integrate: the integrator merges every worker's report. Integration is
 #      its own turn, so the integrator has no depends_on.
-# A worker without a result and every NOT_REACHED entry of its own area are
-# listed as not covered, which makes the run need attention (exit 2); an
-# entry naming another planned area is dropped (that area's worker audits
-# it), and one naming a path that does not exist is a note, not a gap.
+# A worker without a result, a worker that examined nothing of its area (no
+# read_file, grep, glob or list_dir call of it succeeded inside the area's
+# paths, as its Session recorded them) and every NOT_REACHED entry of its own
+# area are listed as not covered, which makes the run need attention (exit
+# 2); an entry naming another planned area is dropped (that area's worker
+# audits it), and, from a worker that examined its area, one naming a path
+# that does not exist is a note, not a gap.
 # Findings alone do not change the exit code unless fail_on_findings is true.
 #
 # Measured trade-off, not an Axocoatl result: on an audit larger than one

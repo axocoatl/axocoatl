@@ -74,6 +74,24 @@ fn turn(state: TurnState, nodes: Vec<(&str, Node)>) -> Scripted {
     }
 }
 
+/// One tool call a scripted worker made: tool, arguments, succeeded.
+type Call = (&'static str, serde_json::Value, bool);
+
+/// What the host's record of tool calls holds.
+#[derive(Default)]
+enum Record {
+    /// Each worker that answered read one file of its area
+    /// (`src/<area>/mod.rs`), unless [`FakeHost::calls`] scripts its calls.
+    #[default]
+    Reads,
+    /// Each answering worker read `<path>` from this function of its area.
+    ReadsOf(fn(&str) -> String),
+    /// The host keeps no record of tool calls.
+    None,
+    /// Reading the record fails.
+    Fails,
+}
+
 #[derive(Default)]
 struct FakeHost {
     script: Mutex<VecDeque<Scripted>>,
@@ -83,6 +101,13 @@ struct FakeHost {
     sent: Mutex<Vec<String>>,
     log: Mutex<Vec<String>>,
     events: Mutex<Vec<RunEvent>>,
+    /// The tool calls of each worker slot, as the Session recorded them.
+    calls: Mutex<HashMap<String, Vec<Call>>>,
+    record: Record,
+    /// A person asked to stop the run.
+    stop: std::sync::atomic::AtomicBool,
+    /// A person asks to stop the run while its first turn runs.
+    stop_on_wait: std::sync::atomic::AtomicBool,
 }
 
 impl FakeHost {
@@ -91,6 +116,29 @@ impl FakeHost {
             script: Mutex::new(script.into()),
             ..Self::default()
         }
+    }
+
+    fn with_record(mut self, record: Record) -> Self {
+        self.record = record;
+        self
+    }
+
+    /// Script the tool calls of `slot`'s worker.
+    fn calls(self, slot: &str, calls: Vec<Call>) -> Self {
+        self.calls.lock().unwrap().insert(slot.into(), calls);
+        self
+    }
+
+    fn notes(&self) -> Vec<String> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                RunEvent::Phase { phase, detail, .. } if phase == "note" => Some(detail.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     fn observe(&self, turn_id: &str, scripted: &Scripted, state: TurnState) -> TurnObservation {
@@ -194,6 +242,9 @@ impl RunHost for FakeHost {
         deadline: Instant,
     ) -> Result<TurnObservation, RunError> {
         let scripted = self.turns.lock().unwrap()[turn_id].clone();
+        if self.stop_on_wait.load(std::sync::atomic::Ordering::SeqCst) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         if self.stopped.lock().unwrap().iter().any(|id| id == turn_id) {
             return Ok(self.observe(turn_id, &scripted, TurnState::Stopped));
         }
@@ -231,6 +282,55 @@ impl RunHost for FakeHost {
         assert_eq!(run_id, "run-1");
         self.events.lock().unwrap().push(event);
         Ok(())
+    }
+
+    async fn tool_calls(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Result<Option<Vec<ToolCallRecord>>, RunError> {
+        assert_eq!(session_id, "ses-1");
+        let read: fn(&str) -> String = match self.record {
+            Record::None => return Ok(None),
+            Record::Fails => {
+                return Err(RunError::Infrastructure(
+                    "the invocation audit could not be read".into(),
+                ))
+            }
+            Record::Reads => |area| format!("src/{area}/mod.rs"),
+            Record::ReadsOf(read) => read,
+        };
+        let scripted = self.turns.lock().unwrap()[turn_id].clone();
+        let scripted_calls = self.calls.lock().unwrap();
+        let mut records = Vec::new();
+        for (index, (slot, node)) in scripted.nodes.iter().enumerate() {
+            let Some(area) = slot.strip_prefix(WORKER_SLOT_PREFIX) else {
+                continue;
+            };
+            let calls = match (scripted_calls.get(slot), node) {
+                (Some(calls), _) => calls.clone(),
+                (None, Node::Answer(_)) => {
+                    vec![("read_file", serde_json::json!({ "path": read(area) }), true)]
+                }
+                (None, _) => Vec::new(),
+            };
+            records.extend(
+                calls
+                    .into_iter()
+                    .map(|(tool, arguments, succeeded)| ToolCallRecord {
+                        node_id: format!("{turn_id}-node-{index}"),
+                        generation: 1,
+                        tool: tool.into(),
+                        arguments,
+                        succeeded,
+                    }),
+            );
+        }
+        Ok(Some(records))
+    }
+
+    async fn stop_requested(&self, _run_id: &str) -> bool {
+        self.stop.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -386,6 +486,7 @@ fn outcome_of(report: &KindReport) -> RunOutcome {
         adjudications: Vec::new(),
         findings: report.findings.clone(),
         not_covered: report.not_covered.clone(),
+        notes: report.notes.clone(),
         warnings: Vec::new(),
         usage: RunUsage::default(),
         network: NetworkSummary::default(),
@@ -834,8 +935,9 @@ async fn other_areas_and_missing_paths_are_not_gaps() {
     let repo = smoke_repository();
     let mut run = context(later());
     run.options.repo = repo.path().to_path_buf();
+    let reads = Record::ReadsOf(|area| format!("{area}/__init__.py"));
 
-    let host = FakeHost::new(script(notify.to_owned()));
+    let host = FakeHost::new(script(notify.to_owned())).with_record(reads);
     let (report, _) = drive(&host, &run).await;
     assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
     // The notify worker's report was read: the integrator got its findings.
@@ -844,18 +946,10 @@ async fn other_areas_and_missing_paths_are_not_gaps() {
     assert!(request.contains("Hardcoded Webhook Token"), "{request}");
     assert!(!request.contains("could not be read"), "{request}");
     assert!(!request.contains("Not covered"), "{request}");
-    // What was not a gap is in the record as a note.
-    let notes: Vec<String> = host
-        .events
-        .lock()
-        .unwrap()
-        .iter()
-        .filter_map(|event| match event {
-            RunEvent::Phase { phase, detail, .. } if phase == "note" => Some(detail.clone()),
-            _ => None,
-        })
-        .collect();
+    // What was not a gap is in the record and the Outcome as a note.
+    let notes = host.notes();
     assert_eq!(notes.len(), 5, "{notes:?}");
+    assert_eq!(report.notes, notes);
     assert!(notes[0].contains(
         "worker-auth listed other planned areas as not reached (billing, ingest, notify)"
     ));
@@ -883,7 +977,8 @@ async fn other_areas_and_missing_paths_are_not_gaps() {
             "notify/__init__.py",
             "All other files in notify directory were examined",
         ],
-    )));
+    )))
+    .with_record(Record::ReadsOf(|area| format!("{area}/__init__.py")));
     let (report, _) = drive(&host, &run).await;
     let entries: Vec<(&str, &str)> = report
         .not_covered
@@ -1041,8 +1136,10 @@ async fn an_invalid_plan_twice_needs_attention_with_the_whole_scope_not_covered(
     ));
 }
 
+/// A provider that refuses the request itself (400-403) would refuse the
+/// retry too.
 #[tokio::test]
-async fn a_planner_without_an_answer_is_not_retried() {
+async fn a_planner_its_provider_rejects_is_not_retried() {
     let host = FakeHost::new(vec![turn(
         TurnState::NeedsAttention,
         vec![(
@@ -1055,8 +1152,257 @@ async fn a_planner_without_an_answer_is_not_retried() {
     assert_eq!(host.sent().len(), 1);
     assert_eq!(report.not_covered[0].area, WHOLE_SCOPE);
     assert_eq!(report.not_covered[0].class, FailureClass::ProviderRejected);
+    assert_eq!(
+        report.not_covered[0].detail,
+        "the planner has no answer: HTTP 401"
+    );
     // Nothing follows, so the paused turn is left for the person.
     assert!(host.stopped.lock().unwrap().is_empty());
+}
+
+/// What ended the 1.3.0 re-smoke's runs 1 and 6 at once: the planner's
+/// first model call asked for more native tool calls than Ollama allows.
+const TOO_MANY_TOOL_CALLS: &str = "Activation failed: LLM provider error: ollama returned a \
+     response that was refused: Streaming error: native Ollama: too many native tool calls";
+
+fn planner_failed() -> Scripted {
+    turn(
+        TurnState::NeedsAttention,
+        vec![(
+            PLANNER_SLOT,
+            Node::Fail(FailureClass::ProviderFailure, TOO_MANY_TOOL_CALLS),
+        )],
+    )
+}
+
+fn workers_answered() -> Scripted {
+    turn(
+        TurnState::Completed,
+        vec![
+            ("worker-auth", Node::Answer(worker_answer(&[], &[]))),
+            ("worker-db", Node::Answer(worker_answer(&[], &[]))),
+            ("worker-api", Node::Answer(worker_answer(&[], &[]))),
+        ],
+    )
+}
+
+fn phases(host: &FakeHost, name: &str) -> Vec<String> {
+    host.events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|event| match event {
+            RunEvent::Phase { phase, detail, .. } if phase == name => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A planner without an answer gets the same one retry as an invalid plan:
+/// the plan request again, after its paused turn is stopped, with no
+/// second Apply.
+#[tokio::test]
+async fn a_planner_provider_failure_gets_one_retry() {
+    let host = FakeHost::new(vec![
+        planner_failed(),
+        planned(),
+        workers_answered(),
+        turn(
+            TurnState::Completed,
+            vec![(INTEGRATOR_SLOT, Node::Answer(integrated_answer(&[])))],
+        ),
+    ]);
+    let run = context(later());
+    let (report, calls) = drive(&host, &run).await;
+    let sent = host.sent();
+    assert_eq!(sent.len(), 4);
+    assert_eq!(sent[1], sent[0], "the retry is the plan request itself");
+    assert!(!sent[1].contains("could not be used"));
+    assert_eq!(calls.len(), 3);
+    assert_eq!(
+        host.log()[..5],
+        [
+            "apply",
+            "send:turn-1",
+            "stop:turn-1",
+            "send:turn-2",
+            "apply"
+        ]
+    );
+    let failed = phases(&host, "plan_failed");
+    assert_eq!(failed.len(), 1);
+    assert!(
+        failed[0].starts_with("the planner has no answer (provider_failure: Activation failed")
+            && failed[0].ends_with("too many native tool calls); it gets one more turn"),
+        "{failed:?}"
+    );
+    assert!(report.not_covered.is_empty(), "{:?}", report.not_covered);
+    assert_eq!(
+        report
+            .turn_refs
+            .iter()
+            .map(|turn| turn.purpose.as_str())
+            .collect::<Vec<_>>(),
+        [PLAN_PURPOSE, PLAN_PURPOSE, AREAS_PURPOSE, INTEGRATE_PURPOSE]
+    );
+    assert_eq!(outcome_of(&report).exit_code, exit_code::PASS);
+    // The retry stands for the failed attempt: the Outcome builder does not
+    // list that planner as not covered.
+    assert_eq!(
+        report.accounted,
+        [("turn-1".to_string(), "turn-1-node-0".to_string())]
+    );
+}
+
+/// The whole run, as the Outcome builder folds it: a planner retry that
+/// planned leaves nothing not covered, so the run passes (the live run
+/// first listed the failed attempt's planner as not covered).
+#[tokio::test]
+async fn a_run_whose_planner_retry_planned_passes() {
+    let host = FakeHost::new(vec![
+        planner_failed(),
+        planned(),
+        workers_answered(),
+        turn(
+            TurnState::Completed,
+            vec![(INTEGRATOR_SLOT, Node::Answer(integrated_answer(&[])))],
+        ),
+    ]);
+    let run = context(later());
+    let outcome = crate::loadout::driver::run_to_outcome_with(&host, &run, &AuditDriver)
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.exit_code,
+        exit_code::PASS,
+        "{:?} {:?}",
+        outcome.attention,
+        outcome.not_covered
+    );
+    assert!(outcome.not_covered.is_empty());
+    assert_eq!(outcome.turns.len(), 4);
+
+    // Failing twice: the whole scope, and no separate planner entry.
+    let host = FakeHost::new(vec![planner_failed(), planner_failed()]);
+    let outcome = crate::loadout::driver::run_to_outcome_with(&host, &run, &AuditDriver)
+        .await
+        .unwrap();
+    let areas: Vec<&str> = outcome
+        .not_covered
+        .iter()
+        .map(|entry| entry.area.as_str())
+        .collect();
+    assert_eq!(areas, [WHOLE_SCOPE]);
+    assert_eq!(
+        outcome.attention,
+        [
+            "The whole scope was not covered",
+            "A turn ended needing attention"
+        ]
+    );
+}
+
+/// Two attempts without a plan leave the whole scope not covered, and the
+/// attention line says so instead of counting it as one area.
+#[tokio::test]
+async fn a_planner_failing_twice_leaves_the_whole_scope_not_covered() {
+    let host = FakeHost::new(vec![planner_failed(), planner_failed()]);
+    let run = context(later());
+    let (report, calls) = drive(&host, &run).await;
+    assert_eq!(host.sent().len(), 2);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(report.not_covered.len(), 1);
+    let entry = &report.not_covered[0];
+    assert_eq!(entry.area, WHOLE_SCOPE);
+    assert_eq!(entry.class, FailureClass::ProviderFailure);
+    assert!(
+        entry
+            .detail
+            .starts_with("the planner has no answer in two attempts: Activation failed")
+            && entry
+                .detail
+                .contains("(the first: provider_failure: Activation failed"),
+        "{}",
+        entry.detail
+    );
+    assert_eq!(entry.turn_id.as_deref(), Some("turn-2"));
+    let outcome = outcome_of(&report);
+    assert_eq!(outcome.exit_code, exit_code::NEEDS_ATTENTION);
+    assert_eq!(outcome.attention, ["The whole scope was not covered"]);
+
+    // A failure and then an invalid plan: the retry was the planner's last.
+    let host = FakeHost::new(vec![
+        planner_failed(),
+        turn(
+            TurnState::Completed,
+            vec![(
+                PLANNER_SLOT,
+                Node::Answer(plan_answer(&[("everything", "the whole repo", &[])])),
+            )],
+        ),
+    ]);
+    let (report, _) = drive(&host, &run).await;
+    assert_eq!(host.sent().len(), 2);
+    assert_eq!(report.not_covered.len(), 1);
+    assert_eq!(report.not_covered[0].class, FailureClass::Other);
+    assert!(
+        report.not_covered[0]
+            .detail
+            .starts_with("the planner's AREAS block was invalid after it had no answer"),
+        "{}",
+        report.not_covered[0].detail
+    );
+
+    // An invalid plan and then no answer: no third attempt.
+    let host = FakeHost::new(vec![
+        turn(
+            TurnState::Completed,
+            vec![(
+                PLANNER_SLOT,
+                Node::Answer(plan_answer(&[("everything", "the whole repo", &[])])),
+            )],
+        ),
+        planner_failed(),
+    ]);
+    let (report, _) = drive(&host, &run).await;
+    assert_eq!(host.sent().len(), 2);
+    assert!(host.sent()[1].contains("Your AREAS block could not be used"));
+    assert_eq!(report.not_covered[0].class, FailureClass::ProviderFailure);
+    assert!(
+        report.not_covered[0]
+            .detail
+            .starts_with("the planner has no answer after its AREAS block was refused"),
+        "{}",
+        report.not_covered[0].detail
+    );
+}
+
+/// A person's stop is no failure to retry: the run ends interrupted
+/// without another planner turn.
+#[tokio::test]
+async fn a_stopped_run_gets_no_planner_retry() {
+    let host = FakeHost::new(vec![planner_failed()]);
+    host.stop_on_wait
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let run = context(later());
+    let builds = Arc::new(Builds::default());
+    let build =
+        move |resolved: &ResolvedLoadout, slots: &[SlotPlan], checks: bool, revision: u64| {
+            builds.build(resolved, slots, checks, revision)
+        };
+    let report = drive_audit(&host, &run, &build).await.unwrap();
+    assert_eq!(host.sent().len(), 1);
+    assert!(phases(&host, "plan_failed").is_empty());
+    assert_eq!(report.not_covered.len(), 1);
+    assert_eq!(report.not_covered[0].area, WHOLE_SCOPE);
+    assert_eq!(report.not_covered[0].class, FailureClass::ProviderFailure);
+
+    // A stop before a turn starts ends the drive: no turn after a stop.
+    let host = FakeHost::new(Vec::new());
+    host.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let result = drive_audit(&host, &run, &build).await;
+    assert!(matches!(result, Err(RunError::Stopped)), "{result:?}");
+    assert!(host.sent().is_empty());
 }
 
 #[tokio::test]
@@ -1235,4 +1581,563 @@ fn failures_are_classified_from_the_observation() {
         FailureClass::Budget
     );
     assert_eq!(failure_of(None, false).0, FailureClass::Other);
+}
+
+fn record(tool: &str, arguments: serde_json::Value, succeeded: bool) -> ToolCallRecord {
+    ToolCallRecord {
+        node_id: "n".into(),
+        generation: 1,
+        tool: tool.into(),
+        arguments,
+        succeeded,
+    }
+}
+
+fn area(name: &str, paths: &[&str]) -> AuditArea {
+    AuditArea {
+        name: name.into(),
+        scope: format!("the {name} module"),
+        paths: paths.iter().map(|path| path.to_string()).collect(),
+    }
+}
+
+/// Which recorded calls show a worker examined its area.
+#[test]
+fn examination_is_judged_from_the_recorded_calls() {
+    let tools: Vec<String> = ["read_file", "list_dir", "grep", "glob", "bash"]
+        .map(String::from)
+        .to_vec();
+    let repo = Path::new("/work/repo");
+    let judge = |area: &AuditArea, calls: &[ToolCallRecord]| {
+        let calls: Vec<&ToolCallRecord> = calls.iter().collect();
+        examined(area, &tools, Ok(&calls), repo)
+    };
+    let billing = area("billing", &["billing/**"]);
+    use serde_json::json;
+    for (calls, examined_it) in [
+        // Reads, searches and listings inside the area.
+        (
+            vec![record(
+                "read_file",
+                json!({"path": "billing/pagination.py"}),
+                true,
+            )],
+            true,
+        ),
+        (
+            vec![record(
+                "read_file",
+                json!({"path": "/work/repo/billing/pagination.py"}),
+                true,
+            )],
+            true,
+        ),
+        (
+            vec![record(
+                "read_file",
+                json!({"path": "./auth/../billing/x.py"}),
+                true,
+            )],
+            true,
+        ),
+        (
+            vec![record("list_dir", json!({"path": "billing"}), true)],
+            true,
+        ),
+        (
+            vec![record("list_dir", json!({"path": "./billing/"}), true)],
+            true,
+        ),
+        (
+            vec![record(
+                "grep",
+                json!({"pattern": "page", "path": "billing"}),
+                true,
+            )],
+            true,
+        ),
+        (
+            vec![record("glob", json!({"pattern": "billing/*.py"}), true)],
+            true,
+        ),
+        (
+            vec![record("glob", json!({"pattern": "billing/**/*.py"}), true)],
+            true,
+        ),
+        // Failed, outside, the root, leaving the repository, or no read.
+        (
+            vec![record(
+                "read_file",
+                json!({"path": "billing/pagination.py"}),
+                false,
+            )],
+            false,
+        ),
+        (
+            vec![record("read_file", json!({"path": "auth/tokens.py"}), true)],
+            false,
+        ),
+        (
+            vec![record(
+                "read_file",
+                json!({"path": "/elsewhere/billing/x.py"}),
+                true,
+            )],
+            false,
+        ),
+        (
+            vec![record(
+                "read_file",
+                json!({"path": "../billing/x.py"}),
+                true,
+            )],
+            false,
+        ),
+        (
+            vec![record("read_file", serde_json::Value::Null, true)],
+            false,
+        ),
+        (vec![record("list_dir", json!({}), true)], false),
+        (vec![record("list_dir", json!({"path": ""}), true)], false),
+        (
+            vec![record("grep", json!({"pattern": "page"}), true)],
+            false,
+        ),
+        (
+            vec![record("glob", json!({"pattern": "**/*.py"}), true)],
+            false,
+        ),
+        (
+            vec![record("glob", json!({"pattern": "*.py"}), true)],
+            false,
+        ),
+        (
+            vec![record(
+                "bash",
+                json!({"command": "cat billing/pagination.py"}),
+                true,
+            )],
+            false,
+        ),
+    ] {
+        assert_eq!(
+            judge(&billing, &calls) == Examined::Yes,
+            examined_it,
+            "{calls:?}"
+        );
+    }
+    // A wildcard area is examined from the directory it starts at; a
+    // literal one names a directory.
+    let python = area("billing", &["billing/*.py"]);
+    assert_eq!(
+        judge(
+            &python,
+            &[record("list_dir", json!({"path": "billing"}), true)]
+        ),
+        Examined::Yes
+    );
+    assert_ne!(
+        judge(
+            &python,
+            &[record(
+                "read_file",
+                json!({"path": "billing/sub/x.py"}),
+                true
+            )]
+        ),
+        Examined::Yes
+    );
+    let literal = area("billing", &["billing"]);
+    assert_eq!(
+        judge(
+            &literal,
+            &[record(
+                "read_file",
+                json!({"path": "billing/pagination.py"}),
+                true
+            )]
+        ),
+        Examined::Yes
+    );
+    assert_ne!(
+        judge(&literal, &[record("list_dir", json!({"path": "."}), true)]),
+        Examined::Yes
+    );
+    // An area without paths: any read.
+    let anywhere = area("api", &[]);
+    assert_eq!(
+        judge(
+            &anywhere,
+            &[record("grep", json!({"pattern": "route"}), true)]
+        ),
+        Examined::Yes
+    );
+    // Why not, in words.
+    assert_eq!(
+        judge(&billing, &[]),
+        Examined::Nothing("it made no tool call".into())
+    );
+    assert_eq!(
+        judge(&billing, &[record("bash", json!({"command": "ls"}), true)]),
+        Examined::Nothing(
+            "it made 1 tool call and none was read_file, grep, glob or list_dir".into()
+        )
+    );
+    assert_eq!(
+        judge(
+            &billing,
+            &[
+                record("read_file", json!({"path": "billing/x.py"}), false),
+                record("list_dir", json!({}), true),
+            ]
+        ),
+        Examined::Nothing(
+            "none of its 2 read_file, grep, glob or list_dir calls succeeded inside billing/**"
+                .into()
+        )
+    );
+    // A worker without a tool that reads files examines nothing, whatever
+    // it lists; a record that cannot be read leaves it not known.
+    let listing = ["list_dir", "glob"].map(String::from).to_vec();
+    let calls = [record("list_dir", json!({"path": "billing"}), true)];
+    let calls: Vec<&ToolCallRecord> = calls.iter().collect();
+    assert_eq!(
+        examined(&billing, &listing, Ok(&calls), repo),
+        Examined::Nothing(
+            "it has neither read_file nor grep, the tools whose reads the host checks (its \
+             tools: list_dir, glob)"
+                .into()
+        )
+    );
+    assert_eq!(
+        examined(&billing, &tools, Err("no record"), repo),
+        Examined::Unknown("no record".into())
+    );
+}
+
+/// The 1.3.0 re-smoke's run 4, with every answer as recorded: the billing
+/// worker made no tool call and listed six paths that do not exist, which
+/// all became notes and let the run pass with billing never read. Now
+/// billing is not covered, its missing paths are gaps, and the notes of
+/// the ingest worker, which did read its area, are in the Outcome.
+#[tokio::test]
+async fn a_worker_that_examined_nothing_is_not_covered() {
+    let answer = |name: &str| -> String {
+        let path = format!(
+            "{}/../axocoatl-session/tests/fixtures/answers/audit-resmoke3-out4-{name}.txt",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"))
+    };
+    use serde_json::json;
+    // Each worker's calls as recorded (the run's record holds their names
+    // and outcomes; the arguments are the Session's protected evidence).
+    let host = FakeHost::new(vec![
+        turn(
+            TurnState::Completed,
+            vec![(PLANNER_SLOT, Node::Answer(answer("planner")))],
+        ),
+        turn(
+            TurnState::Completed,
+            vec![
+                (
+                    "worker-auth-module",
+                    Node::Answer(answer("worker-auth-module")),
+                ),
+                (
+                    "worker-billing-module",
+                    Node::Answer(answer("worker-billing-module")),
+                ),
+                (
+                    "worker-ingest-module",
+                    Node::Answer(answer("worker-ingest-module")),
+                ),
+                (
+                    "worker-notify-module",
+                    Node::Answer(answer("worker-notify-module")),
+                ),
+            ],
+        ),
+        turn(
+            TurnState::Completed,
+            vec![(INTEGRATOR_SLOT, Node::Answer(answer("integrator")))],
+        ),
+    ])
+    .calls(
+        "worker-auth-module",
+        vec![
+            ("glob", json!({"pattern": "auth/**/*"}), true),
+            ("list_dir", json!({"path": "auth"}), true),
+            ("grep", json!({"pattern": "hmac", "path": "auth"}), true),
+            ("grep", json!({"pattern": "SECRET", "path": "auth"}), true),
+            ("read_file", json!({"path": "auth/tokens.py"}), true),
+        ],
+    )
+    .calls("worker-billing-module", Vec::new())
+    .calls(
+        "worker-ingest-module",
+        vec![
+            ("list_dir", json!({"path": "ingest"}), true),
+            ("glob", json!({"pattern": "ingest/**/*.go"}), true),
+            ("read_file", json!({"path": "ingest/main.go"}), false),
+            ("read_file", json!({"path": "ingest/parser.go"}), false),
+            ("read_file", json!({"path": "ingest/handler.go"}), false),
+            ("read_file", json!({"path": "ingest/feed.go"}), true),
+            (
+                "grep",
+                json!({"pattern": "Unmarshal", "path": "ingest"}),
+                true,
+            ),
+            ("grep", json!({"pattern": "err", "path": "ingest"}), true),
+            ("bash", json!({"command": "go vet ./ingest/..."}), true),
+        ],
+    )
+    .calls(
+        "worker-notify-module",
+        vec![
+            ("list_dir", json!({"path": "notify"}), true),
+            ("glob", json!({"pattern": "notify/**/*.py"}), true),
+            ("read_file", json!({"path": "notify/__init__.py"}), true),
+            ("read_file", json!({"path": "notify/client.py"}), false),
+            ("read_file", json!({"path": "notify/sender.py"}), false),
+            ("read_file", json!({"path": "notify/templates.py"}), false),
+            ("read_file", json!({"path": "notify/webhook.py"}), true),
+            (
+                "grep",
+                json!({"pattern": "https://", "path": "notify"}),
+                true,
+            ),
+            ("grep", json!({"pattern": "token", "path": "notify"}), true),
+            ("grep", json!({"pattern": "retry", "path": "notify"}), true),
+            (
+                "bash",
+                json!({"command": "python3 -m py_compile notify/webhook.py"}),
+                true,
+            ),
+        ],
+    );
+    let repo = smoke_repository();
+    let mut run = context(later());
+    run.options.repo = repo.path().to_path_buf();
+    let (report, _) = drive(&host, &run).await;
+
+    let entries: Vec<(&str, FailureClass, &str)> = report
+        .not_covered
+        .iter()
+        .map(|entry| (entry.area.as_str(), entry.class, entry.detail.as_str()))
+        .collect();
+    assert_eq!(entries.len(), 7, "{entries:#?}");
+    assert_eq!(
+        entries[0],
+        (
+            "billing-module",
+            FailureClass::NotReached,
+            "the area worker examined nothing of its area: it made no tool call"
+        )
+    );
+    for (entry, path) in entries[1..].iter().zip([
+        "billing-module/legacy/old_handler.py",
+        "billing-module/utils.py",
+        "billing-module/models.py",
+        "billing-module/database.py",
+        "billing-module/api.py",
+        "billing-module/tests",
+    ]) {
+        assert_eq!(entry.0, "billing-module");
+        assert_eq!(
+            entry.2,
+            format!(
+                "{path} (the area worker reported it did not reach this; no such path exists, \
+                 but the worker did not examine its area)"
+            )
+        );
+    }
+    assert!(report
+        .not_covered
+        .iter()
+        .all(|entry| entry.turn_id.as_deref() == Some("turn-2")
+            && entry.node_id.as_deref() == Some("turn-2-node-1")));
+
+    // The ingest worker read its area: its missing path and the other
+    // areas it listed are notes, in the record and in the Outcome.
+    let notes = host.notes();
+    assert_eq!(report.notes, notes);
+    assert_eq!(
+        notes,
+        [
+            "worker-ingest-module listed ingest/legacy/old_handler.py as not reached, and no \
+             such path exists in the repository; a note, not a gap",
+            "worker-ingest-module listed other planned areas as not reached (auth-module, \
+             billing-module, notify-module); their own workers audit them, so they are not gaps",
+        ]
+    );
+
+    // The integrator is told the billing report rests on nothing read.
+    let request = &host.sent()[2];
+    let billing = &request[request.find("REPORT of area billing-module").unwrap()
+        ..request.find("REPORT of area ingest-module").unwrap()];
+    assert!(
+        billing.contains("Its worker read none of this area's files"),
+        "{billing}"
+    );
+    assert_eq!(
+        request
+            .matches("Its worker read none of this area's files")
+            .count(),
+        1
+    );
+    assert!(request.contains("- billing-module (not_reached): the area worker examined nothing"));
+    assert_eq!(report.findings.len(), 3);
+
+    let outcome = outcome_of(&report);
+    assert_eq!(outcome.exit_code, exit_code::NEEDS_ATTENTION);
+    assert_eq!(outcome.attention, ["1 area was not covered"]);
+    assert_eq!(outcome.notes, notes);
+}
+
+/// The 1.3.0 re-smoke's run 7, whose workers could only list and glob: the
+/// notify worker answered a finding about a file it never read, with
+/// nothing not reached, and counted as covered. A worker without a tool
+/// that reads files examined nothing.
+#[tokio::test]
+async fn a_worker_without_read_tools_examined_nothing() {
+    let answer = |name: &str| -> String {
+        let path = format!(
+            "{}/../axocoatl-session/tests/fixtures/answers/audit-resmoke3-out7-{name}.txt",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"))
+    };
+    use serde_json::json;
+    let listing: Vec<Call> = vec![
+        ("glob", json!({"pattern": "notify/**/*"}), true),
+        ("list_dir", json!({"path": "notify"}), true),
+        ("list_dir", json!({"path": "notify"}), true),
+        ("glob", json!({"pattern": "notify/*.py"}), true),
+    ];
+    let host = FakeHost::new(vec![
+        turn(
+            TurnState::Completed,
+            vec![(PLANNER_SLOT, Node::Answer(answer("planner")))],
+        ),
+        turn(
+            TurnState::NeedsAttention,
+            vec![
+                ("worker-auth", Node::Answer(answer("worker-auth"))),
+                (
+                    "worker-billing",
+                    Node::Fail(FailureClass::ProviderFailure, TOO_MANY_TOOL_CALLS),
+                ),
+                (
+                    "worker-ingest",
+                    Node::Fail(FailureClass::ProviderFailure, TOO_MANY_TOOL_CALLS),
+                ),
+                ("worker-notify", Node::Answer(answer("worker-notify"))),
+            ],
+        ),
+        turn(
+            TurnState::Completed,
+            vec![(
+                INTEGRATOR_SLOT,
+                Node::Answer(integrated_answer(&[(
+                    "Potential hardcoded webhook URL",
+                    "notify",
+                )])),
+            )],
+        ),
+    ])
+    .calls(
+        "worker-auth",
+        vec![
+            ("list_dir", json!({"path": "auth"}), true),
+            ("glob", json!({"pattern": "auth/**/*"}), true),
+        ],
+    )
+    .calls("worker-notify", listing);
+    let repo = smoke_repository();
+    let mut run = context(later());
+    run.options.repo = repo.path().to_path_buf();
+    // The loadout's workers have only list_dir and glob.
+    for agent in &mut run.resolved.loadout.file.agents {
+        if agent.role == LoadoutRole::Worker {
+            agent.tools = vec!["list_dir".into(), "glob".into()];
+        }
+    }
+    let (report, _) = drive(&host, &run).await;
+    let no_reader = "the area worker examined nothing of its area: it has neither read_file \
+                     nor grep, the tools whose reads the host checks (its tools: list_dir, glob)";
+    let entries: Vec<(&str, &str)> = report
+        .not_covered
+        .iter()
+        .map(|entry| (entry.area.as_str(), entry.detail.as_str()))
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            ("auth", no_reader),
+            (
+                "auth",
+                "auth/tokens.py (the area worker reported it did not reach this)"
+            ),
+            (
+                "auth",
+                "auth/__init__.py (the area worker reported it did not reach this)"
+            ),
+            (
+                "billing",
+                &*format!("the area worker has no result: {TOO_MANY_TOOL_CALLS}")
+            ),
+            (
+                "ingest",
+                &*format!("the area worker has no result: {TOO_MANY_TOOL_CALLS}")
+            ),
+            ("notify", no_reader),
+        ]
+    );
+    let outcome = outcome_of(&report);
+    assert_eq!(outcome.exit_code, exit_code::NEEDS_ATTENTION);
+    assert_eq!(outcome.attention, ["4 areas were not covered"]);
+}
+
+/// Without a readable record of tool calls, whether a worker examined its
+/// area is not known, and nothing is taken as covered on a guess.
+#[tokio::test]
+async fn an_unreadable_record_of_tool_calls_covers_nothing() {
+    for (record, reason) in [
+        (
+            Record::None,
+            "the Session's record of tool calls could not be read",
+        ),
+        (
+            Record::Fails,
+            "the Session's record of tool calls could not be read: the invocation audit could \
+             not be read",
+        ),
+    ] {
+        let host = FakeHost::new(vec![
+            planned(),
+            workers_answered(),
+            turn(
+                TurnState::Completed,
+                vec![(INTEGRATOR_SLOT, Node::Answer(integrated_answer(&[])))],
+            ),
+        ])
+        .with_record(record);
+        let run = context(later());
+        let (report, _) = drive(&host, &run).await;
+        let entries: Vec<(&str, FailureClass, String)> = report
+            .not_covered
+            .iter()
+            .map(|entry| (entry.area.as_str(), entry.class, entry.detail.clone()))
+            .collect();
+        let detail = format!("whether the area worker examined its area is not known: {reason}");
+        assert_eq!(
+            entries,
+            [
+                ("auth", FailureClass::Other, detail.clone()),
+                ("db", FailureClass::Other, detail.clone()),
+                ("api", FailureClass::Other, detail),
+            ]
+        );
+    }
 }

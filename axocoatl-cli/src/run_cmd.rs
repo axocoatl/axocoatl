@@ -678,6 +678,12 @@ pub fn summary(outcome: &RunOutcome) -> String {
             let _ = writeln!(out, "  {}: {}", entry.area, entry.reason());
         }
     }
+    if !outcome.notes.is_empty() {
+        let _ = writeln!(out, "Notes:");
+        for note in &outcome.notes {
+            let _ = writeln!(out, "  {note}");
+        }
+    }
     if !outcome.warnings.is_empty() {
         let _ = writeln!(out, "Warnings:");
         for warning in &outcome.warnings {
@@ -1424,6 +1430,28 @@ mod tests {
             progress_line(&event).as_deref(),
             Some("! not covered: checkout: not_reached: ran out of steps")
         );
+    }
+
+    /// The audit re-smoke's notes were only progress lines on standard
+    /// error: the summary of a run that passed said nothing of them.
+    #[test]
+    fn the_summary_lists_the_notes() {
+        let run = outcome(
+            "pass",
+            serde_json::json!({"notes": [
+                "worker-ingest listed ingest/legacy.py as not reached, and no such path exists \
+                 in the repository; a note, not a gap"
+            ]}),
+        );
+        let text = summary(&run);
+        assert!(
+            text.contains(
+                "Notes:\n  worker-ingest listed ingest/legacy.py as not reached, and no such \
+                 path exists in the repository; a note, not a gap\nWarnings:"
+            ),
+            "{text}"
+        );
+        assert!(!summary(&outcome("pass", serde_json::json!({}))).contains("Notes:"));
     }
 
     /// Bytes written to a `Console` stream, kept for the assertions.

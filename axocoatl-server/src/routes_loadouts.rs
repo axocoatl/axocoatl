@@ -569,6 +569,18 @@ impl RunHost for DaemonRunHost {
             .map_err(daemon_error)
     }
 
+    async fn tool_calls(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Result<Option<Vec<axocoatl_daemon::loadout::ToolCallRecord>>, RunError> {
+        self.state
+            .read()
+            .await
+            .loadout_turn_tool_calls(session_id, turn_id)
+            .map_err(daemon_error)
+    }
+
     async fn network_summary(&self, session_id: &str) -> Result<NetworkSummary, RunError> {
         Ok(self
             .state

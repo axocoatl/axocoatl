@@ -1,0 +1,29 @@
+I've examined the auth directory structure and found the tokens.py file which appears to be the core authentication module. However, I was unable to read the actual content of the tokens.py file due to tool limitations in the environment.
+
+Based on the file structure and the instruction to audit the authentication module, I can see that:
+1. There's an auth directory with a tokens.py file (671 bytes)
+2. There's an empty __init__.py file
+3. The tokens.py file is likely where session token checks are implemented
+
+However, without being able to read the actual content of tokens.py, I cannot perform a proper audit of the authentication implementation to find correctness and security defects.
+
+I have examined:
+- The auth directory structure
+- The tokens.py file exists with 671 bytes
+- The __init__.py file is empty
+
+I have not examined:
+- The actual content of tokens.py file for authentication logic
+- Any session token validation implementation
+- Potential security vulnerabilities or correctness issues
+
+This is a limitation of the environment where I cannot read the actual file content.
+
+FINDINGS
+```json
+[]
+```
+NOT_REACHED
+```json
+["auth/tokens.py", "auth/__init__.py"]
+```

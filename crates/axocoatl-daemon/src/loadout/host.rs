@@ -57,6 +57,21 @@ impl CheckLabel {
     }
 }
 
+/// One tool call of a turn as the Session recorded it: which node and
+/// generation made it, the tool, its arguments as the Agent gave them, and
+/// whether it succeeded (the audit judges from these whether an area worker
+/// examined its area).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCallRecord {
+    pub node_id: String,
+    pub generation: u32,
+    pub tool: String,
+    /// The call's arguments; `null` when they could not be read.
+    pub arguments: serde_json::Value,
+    /// The call has an outcome and it succeeded.
+    pub succeeded: bool,
+}
+
 #[async_trait]
 pub trait RunHost: Send + Sync {
     /// Preview and apply a Team and budget edit for future turns. The run
@@ -107,6 +122,17 @@ pub trait RunHost: Send + Sync {
     /// Daemon: `RunRecordStore` (core). A host without a record has none.
     async fn recorded_events(&self, _run_id: &str) -> Result<Vec<RunEvent>, RunError> {
         Ok(Vec::new())
+    }
+
+    /// Every tool call the Session recorded for `turn_id`, from its
+    /// invocation audit, with the arguments; `None` when this host keeps no
+    /// such record. Daemon: `loadout_turn_tool_calls` (audit).
+    async fn tool_calls(
+        &self,
+        _session_id: &str,
+        _turn_id: &str,
+    ) -> Result<Option<Vec<ToolCallRecord>>, RunError> {
+        Ok(None)
     }
 
     /// What the Session's network record holds. Daemon: the Session's
