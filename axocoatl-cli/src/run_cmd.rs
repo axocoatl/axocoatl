@@ -717,21 +717,58 @@ pub async fn cmd_run(args: RunArgs) -> i32 {
 
 /// `axocoatl run` writing to `console`; returns the process exit code.
 async fn run_on(args: RunArgs, console: &mut Console, note_after: Duration) -> i32 {
-    match run(args, console, note_after).await {
+    let mut admitted = false;
+    match run(&args, console, note_after, &mut admitted).await {
         Ok(code) => code,
         Err(failure) => {
             console.note(&format!("axocoatl run: {}", failure.message));
+            if !admitted {
+                write_unadmitted_files(&args, &failure, console);
+            }
             failure.code
         }
     }
 }
 
-async fn run(args: RunArgs, console: &mut Console, note_after: Duration) -> Result<i32, Failure> {
+/// No run was admitted (the daemon refused it, could not be reached, or the
+/// flags were refused): `--junit` still gets a file whose verdict is the
+/// refusal, an `<error>` of type `busy`, `usage` or `error` with the exit
+/// code, so a CI job that reads only JUnit sees it. `--record` has no run to
+/// record, so nothing is written there.
+fn write_unadmitted_files(args: &RunArgs, failure: &Failure, console: &mut Console) {
+    if let Some(path) = &args.junit {
+        let xml = axocoatl_session::run_junit::render_refused_run_junit(
+            &args.loadout,
+            failure.code,
+            &failure.message,
+        );
+        match write_atomically(path, xml.as_bytes()) {
+            Ok(()) => console.note(&format!("· JUnit written to {}", path.display())),
+            Err(error) => console.note(&format!(
+                "axocoatl run: JUnit: writing {}: {error}",
+                path.display()
+            )),
+        }
+    }
+    if let Some(path) = &args.record {
+        console.note(&format!(
+            "· no record written to {}: no run was admitted, so there is nothing to record",
+            path.display()
+        ));
+    }
+}
+
+async fn run(
+    args: &RunArgs,
+    console: &mut Console,
+    note_after: Duration,
+    admitted: &mut bool,
+) -> Result<i32, Failure> {
     let task_from_file = match &args.task_file {
         Some(path) => Some(read_task_file(path)?),
         None => None,
     };
-    let plan = plan(&args, task_from_file)?;
+    let plan = plan(args, task_from_file)?;
     let daemon = Daemon::locate(args.url.as_deref(), &args.config).await?;
     let request = serde_json::json!({
         "loadout": plan.loadout,
@@ -744,6 +781,7 @@ async fn run(args: RunArgs, console: &mut Console, note_after: Duration) -> Resu
         "request_id": format!("cli-{}", uuid::Uuid::new_v4()),
     });
     let accepted = admit(&daemon, &request, console, note_after).await?;
+    *admitted = true;
     // Only an admitted run starts: a refused one prints its reason and
     // nothing that says otherwise.
     console.note(&format!(
@@ -1972,6 +2010,124 @@ mod tests {
         .await;
         assert_eq!(code, exit_code::USAGE);
         assert_eq!(err.text(), "axocoatl run: integrator_model: required\n");
+    }
+
+    /// A run the daemon refused at admission (or could not admit) has no
+    /// run id: `--junit` still gets a valid file whose verdict is the
+    /// refusal (`busy`, `usage` or `error`) with the command's exit code,
+    /// and `--record` has nothing to write.
+    #[tokio::test]
+    async fn a_refused_run_writes_its_verdict_to_junit_and_no_record() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let busy = "Workspace busy: the Workspace /repo is held by Session ses-1 (loadout run \
+                    run-1), whose turn turn-1 is running";
+        let unreachable = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            drop(listener);
+            format!("http://127.0.0.1:{port}")
+        };
+        for (status, body, code, kind) in [
+            (
+                Some(409),
+                serde_json::json!({"error": busy, "code": axocoatl_daemon::WORKSPACE_BUSY_CODE}),
+                exit_code::BUSY,
+                "busy",
+            ),
+            (
+                Some(422),
+                serde_json::json!({"error": "integrator_model: required"}),
+                exit_code::USAGE,
+                "usage",
+            ),
+            (
+                Some(500),
+                serde_json::json!({"error": "the Session environment failed"}),
+                exit_code::INFRASTRUCTURE,
+                "error",
+            ),
+            (
+                None,
+                serde_json::Value::Null,
+                exit_code::DAEMON_UNAVAILABLE,
+                "error",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            if let Some(status) = status {
+                Mock::given(method("POST"))
+                    .and(path("/api/runs"))
+                    .respond_with(ResponseTemplate::new(status).set_body_json(body))
+                    .mount(&server)
+                    .await;
+            }
+            let url = match status {
+                Some(_) => server.uri(),
+                None => unreachable.clone(),
+            };
+            let dir = tempfile::tempdir().unwrap();
+            let junit = dir.path().join("out").join("junit.xml");
+            std::fs::create_dir(dir.path().join("out")).unwrap();
+            let record = dir.path().join("out").join("run.axorecord.jsonl");
+            let (mut console, out, err) = captured_console();
+            let exit = run_on(
+                run_args(
+                    &url,
+                    dir.path(),
+                    &[
+                        "--junit",
+                        junit.to_str().unwrap(),
+                        "--record",
+                        record.to_str().unwrap(),
+                    ],
+                ),
+                &mut console,
+                ADMISSION_NOTE_AFTER,
+            )
+            .await;
+            let (out, err) = (out.text(), err.text());
+            assert_eq!(exit, code, "{err}");
+            assert_eq!(out, "");
+            let xml = std::fs::read_to_string(&junit).unwrap_or_else(|error| {
+                panic!("{kind}: no JUnit file ({error})\n{err}");
+            });
+            assert!(
+                xml.contains(&format!(
+                    "<property name=\"axocoatl.exit_code\" value=\"{code}\"/>"
+                )),
+                "{xml}"
+            );
+            assert!(
+                xml.contains(&format!("<error type=\"{kind}\" message=\"")),
+                "{xml}"
+            );
+            assert!(
+                xml.contains("<property name=\"axocoatl.loadout\" value=\"fix\"/>"),
+                "{xml}"
+            );
+            if code == exit_code::BUSY {
+                assert!(xml.contains("held by Session ses-1"), "{xml}");
+            }
+            assert!(!record.exists(), "a record was written for no run");
+            // Only the two files' notes after the reason; nothing says the
+            // run started.
+            assert!(!err.contains("· run "), "{err}");
+            assert!(
+                err.ends_with(&format!(
+                    "· JUnit written to {}\n· no record written to {}: no run was admitted, so \
+                     there is nothing to record\n",
+                    junit.display(),
+                    record.display()
+                )),
+                "{err}"
+            );
+            // Nothing else is left beside them.
+            assert_eq!(
+                std::fs::read_dir(dir.path().join("out")).unwrap().count(),
+                1
+            );
+        }
     }
 
     /// A Codex writer reports tokens but no cost; what its calls reserved

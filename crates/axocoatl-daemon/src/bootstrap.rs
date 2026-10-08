@@ -42,6 +42,8 @@ mod session_recovery;
 pub mod session_repository;
 #[path = "bootstrap_session_writers.rs"]
 mod session_writers;
+#[path = "bootstrap_workspace_operation.rs"]
+pub(crate) mod workspace_operation;
 
 // 1.3 loadouts. Each file has one owning workstream; see
 // docs/design/1.3-loadouts.md ("Ownership").
@@ -118,6 +120,9 @@ const ATTEMPT_OPERATION_RELEASE_TIMEOUT: Duration = Duration::from_secs(15);
 /// Join a cancelled repository check and, if needed, its exact local runtime
 /// cleanup before a lifecycle action acquires the Workspace operation.
 const SESSION_DISPATCH_CLEANUP_TIMEOUT: Duration = Duration::from_secs(60);
+/// What a Session's creation is called while it holds its Workspace (it
+/// holds it while the new Session's environment is prepared).
+const SESSION_CREATION: &str = "the creation of a Session and the preparation of its environment";
 /// Podman Desktop's macOS bind mount can briefly expose the old directory
 /// entry after an atomic host rename. Ways keeps its nofollow host write, then
 /// proves the replacement is consumable from the already-running container
@@ -3080,8 +3085,14 @@ fn is_safe_persisted_session_reference(value: &str) -> bool {
 
 /// Validate only durable shape and storage safety. Config membership is a
 /// future-execution concern: removing or renaming an Agent/team must not erase
-/// the Session spine or hide its canonical History at startup.
-fn validate_persisted_session_structure(mode: &SessionMode) -> Result<(), DaemonError> {
+/// the Session spine or hide its canonical History at startup. A loadout
+/// run's Session (`loadout` is its binding) selects no configured Agent: its
+/// run applies the loadout's own team, which the Session's team store
+/// keeps, so its Custom mode lists none.
+fn validate_persisted_session_structure(
+    mode: &SessionMode,
+    loadout: Option<&axocoatl_session::run_record::SessionLoadoutBinding>,
+) -> Result<(), DaemonError> {
     let validate_reference = |kind: &str, id: &str| {
         if is_safe_persisted_session_reference(id) {
             Ok(())
@@ -3095,6 +3106,9 @@ fn validate_persisted_session_structure(mode: &SessionMode) -> Result<(), Daemon
         SessionMode::SingleAgent { agent_id } => validate_reference("Agent", agent_id),
         SessionMode::Custom { agents } => {
             if agents.is_empty() {
+                if loadout.is_some() {
+                    return Ok(());
+                }
                 return Err(DaemonError::Session(
                     "persisted Custom mode has no Agent ids".to_string(),
                 ));
@@ -3508,19 +3522,22 @@ fn quarantine_invalid_loaded_sessions(
         .list()
         .into_iter()
         .filter_map(|session| {
-            let validation = validate_persisted_session_structure(&session.mode)
-                .and_then(|()| validate_persisted_session_runtime_ownership(config, &session.mode))
-                .and_then(|()| {
-                    if let Some(runtime) = session.environment.runtime.as_ref() {
-                        if runtime.backend == "podman" && runtime.id != session.id {
-                            return Err(DaemonError::Session(format!(
-                                "persisted Podman runtime '{}' does not belong to Session '{}'",
-                                runtime.id, session.id
-                            )));
+            let validation =
+                validate_persisted_session_structure(&session.mode, session.loadout.as_ref())
+                    .and_then(|()| {
+                        validate_persisted_session_runtime_ownership(config, &session.mode)
+                    })
+                    .and_then(|()| {
+                        if let Some(runtime) = session.environment.runtime.as_ref() {
+                            if runtime.backend == "podman" && runtime.id != session.id {
+                                return Err(DaemonError::Session(format!(
+                                    "persisted Podman runtime '{}' does not belong to Session '{}'",
+                                    runtime.id, session.id
+                                )));
+                            }
                         }
-                    }
-                    Ok(())
-                });
+                        Ok(())
+                    });
             validation.err().map(|error| (session.id, error))
         })
         .collect();
@@ -3718,6 +3735,9 @@ pub struct AxocoatlDaemon {
     /// Serializes every workspace-owning operation for a session across the
     /// full async operation, closing start/turn/review/decision TOCTOU races.
     attempt_operations: Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// What holds each Workspace operation, for the busy refusals of
+    /// requests that found it held (see [`workspace_operation`]).
+    workspace_operation_labels: Arc<workspace_operation::WorkspaceOperationLabels>,
     pub tool_executor: Arc<ToolExecutor>,
     shared_registry: Arc<axocoatl_memory::SharedBlockRegistry>,
     agent_handles: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
@@ -5486,6 +5506,7 @@ impl AxocoatlDaemon {
             active_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             attempt_cancellations: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
             attempt_operations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            workspace_operation_labels: Arc::default(),
             automation_store,
             pending_interrupts,
             run_store,
@@ -6408,8 +6429,17 @@ impl AxocoatlDaemon {
                 .touch(&workspace.id)
                 .map_err(|error| DaemonError::Session(error.to_string()))?
         };
-        let operation = self.attempt_operation_for_workspace(&workspace.id).await;
-        let _operation = operation.lock().await;
+        // Never wait for a turn: a busy Workspace refuses at once, naming
+        // who holds it.
+        let _operation = self
+            .take_workspace_operation(
+                &workspace.id,
+                workspace_operation::WorkspaceRequest {
+                    doing: SESSION_CREATION.into(),
+                    refused: "No Session was created".into(),
+                },
+            )
+            .await?;
         if let Some((owner, set_id)) = self
             .unresolved_attempt_owner_for_workspace_id(&workspace.id)
             .await?
@@ -6486,8 +6516,15 @@ impl AxocoatlDaemon {
             .get_workspace(workspace_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("workspace '{workspace_id}' not found")))?;
-        let operation = self.attempt_operation_for_workspace(workspace_id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_workspace_operation(
+                workspace_id,
+                workspace_operation::WorkspaceRequest {
+                    doing: SESSION_CREATION.into(),
+                    refused: "No Session was created".into(),
+                },
+            )
+            .await?;
         if let Some((owner, set_id)) = self
             .unresolved_attempt_owner_for_workspace_id(workspace_id)
             .await?
@@ -6584,8 +6621,15 @@ impl AxocoatlDaemon {
         &self,
         create: CreateSessionAttachmentRef,
     ) -> Result<SessionAttachmentRef, DaemonError> {
-        let operation = self.attempt_operation(&create.session_id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                &create.session_id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("a file being attached to Session {}", create.session_id),
+                    refused: "The file was not attached".into(),
+                },
+            )
+            .await?;
         if self.get_session(&create.session_id).await.is_none() {
             return Err(DaemonError::Session(format!(
                 "session '{}' not found",
@@ -6649,8 +6693,15 @@ impl AxocoatlDaemon {
         reference_id: &str,
         scope: TurnContextScope,
     ) -> Result<SessionAttachmentRef, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                session_id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("an attachment of Session {session_id} being changed"),
+                    refused: "The attachment was not changed".into(),
+                },
+            )
+            .await?;
         self.require_session_attachment(session_id, reference_id)
             .await?;
         self.session_attachment_store
@@ -6665,8 +6716,15 @@ impl AxocoatlDaemon {
         session_id: &str,
         reference_id: &str,
     ) -> Result<SessionAttachmentRef, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                session_id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("an attachment of Session {session_id} being detached"),
+                    refused: "The attachment was not detached".into(),
+                },
+            )
+            .await?;
         let turns = self
             .session_history_snapshot(session_id)
             .await?
@@ -6788,8 +6846,15 @@ impl AxocoatlDaemon {
         self.require_runtime_admission()?;
         self.session_dispatch_lifecycles
             .require_session_reopenable(id)?;
-        let operation = self.attempt_operation(id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("Session {id} being reopened"),
+                    refused: format!("Session {id} was not reopened"),
+                },
+            )
+            .await?;
         self.require_no_unresolved_attempt(id).await?;
         let start = {
             let mut starts = self.sandbox_starts.lock().await;
@@ -7489,8 +7554,15 @@ impl AxocoatlDaemon {
             ));
         }
         self.require_no_unresolved_attempt(id).await?;
-        let operation = self.attempt_operation(id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("the change of Session {id}'s environment"),
+                    refused: format!("The environment of Session {id} was not changed"),
+                },
+            )
+            .await?;
         let start = {
             let mut starts = self.sandbox_starts.lock().await;
             starts
@@ -7602,8 +7674,15 @@ impl AxocoatlDaemon {
             ));
         }
         self.require_no_unresolved_attempt(id).await?;
-        let operation = self.attempt_operation(id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("the confirmation of Session {id}'s runtime cleanup"),
+                    refused: format!("The runtime cleanup of Session {id} was not confirmed"),
+                },
+            )
+            .await?;
         let start = {
             let mut starts = self.sandbox_starts.lock().await;
             starts
@@ -12651,8 +12730,15 @@ trap - EXIT HUP INT TERM
         index: usize,
         path: &str,
     ) -> Result<crate::git::GitDiff, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                session_id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("a Way's diff of Session {session_id} being read"),
+                    refused: "The Way's diff was not read".into(),
+                },
+            )
+            .await?;
         let set = self.require_attempt_set(session_id, set_id).await?;
         Self::require_review_storage(&set)?;
         let lane = set
@@ -13804,15 +13890,19 @@ trap - 0 1 2 15
     }
 
     async fn attempt_operation(&self, session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
-        // Workspace identity—not legacy path spelling—prevents aliases and
-        // migrated Sessions from snapshotting, checking, or applying the same
-        // durable Workspace concurrently.
-        let key = self
-            .get_session(session_id)
+        let key = self.attempt_operation_key(session_id).await;
+        self.attempt_operation_for_key(key).await
+    }
+
+    /// The operation key of `session_id`'s Workspace. Workspace identity—not
+    /// legacy path spelling—prevents aliases and migrated Sessions from
+    /// snapshotting, checking, or applying the same durable Workspace
+    /// concurrently.
+    async fn attempt_operation_key(&self, session_id: &str) -> String {
+        self.get_session(session_id)
             .await
             .map(|session| workspace_attempt_operation_key(&session.workspace_id))
-            .unwrap_or_else(|| format!("session:{session_id}"));
-        self.attempt_operation_for_key(key).await
+            .unwrap_or_else(|| format!("session:{session_id}"))
     }
 
     async fn attempt_operation_for_workspace(
@@ -15845,6 +15935,12 @@ trap - 0 1 2 15
                     .to_string(),
             )
         })?;
+        // Named while it holds the Workspace, for other requests' busy
+        // refusals.
+        let _named = self.workspace_operation_labels.name(
+            &self.attempt_operation_key(session_id).await,
+            format!("several Ways of Session {session_id}"),
+        );
         // A generous ceiling — the user configures the count. Beyond a handful
         // it gets slow on local models, but we let them push it and degrade
         // gracefully (a failed lane errors on its own; a failed worktree set
@@ -16753,8 +16849,15 @@ trap - 0 1 2 15
         set_id: &str,
         baseline: usize,
     ) -> Result<crate::trajectory::Alignment, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                session_id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("the Ways' routes of Session {session_id} being compared"),
+                    refused: "The Ways' routes were not compared".into(),
+                },
+            )
+            .await?;
         let set = self.require_attempt_set(session_id, set_id).await?;
         let session = self
             .get_session(session_id)
@@ -16882,8 +16985,15 @@ trap - 0 1 2 15
         set_id: &str,
         check: &str,
     ) -> Result<Vec<crate::git::LaneVerdict>, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                session_id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("the Ways' checks of Session {session_id}"),
+                    refused: "The Ways' checks did not run".into(),
+                },
+            )
+            .await?;
         /// Test suites are slow; give a lane's check real room before killing it.
         const CHECK_TIMEOUT: Duration = Duration::from_secs(900);
 
@@ -17836,8 +17946,15 @@ trap - 0 1 2 15
         set_id: &str,
         agent_id: &str,
     ) -> Result<crate::git::Judgment, WaysControlFailure> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                session_id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("the Ways' judge of Session {session_id}"),
+                    refused: "The Ways' judge did not run".into(),
+                },
+            )
+            .await?;
         let (set, _) = self.require_terminal_attempt(session_id, set_id).await?;
         if !matches!(
             set.state,
@@ -18192,8 +18309,15 @@ trap - 0 1 2 15
         session_id: &str,
         set_id: &str,
     ) -> Result<Vec<crate::git::VariantStatus>, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                session_id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("the Ways' changes of Session {session_id} being read"),
+                    refused: "The Ways' changes were not read".into(),
+                },
+            )
+            .await?;
         let set = self.require_attempt_set(session_id, set_id).await?;
         Self::require_review_storage(&set)?;
         let session = self
@@ -19935,8 +20059,15 @@ trap - 0 1 2 15
         if !native_decision {
             self.require_legacy_history_mutation(session_id, HistoryMutation::KeepAttempt)?;
         }
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
+        let _operation = self
+            .take_session_workspace_operation(
+                session_id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("a Way of Session {session_id} being kept"),
+                    refused: "No Way was kept".into(),
+                },
+            )
+            .await?;
         let session = self
             .get_session(session_id)
             .await
@@ -20338,8 +20469,15 @@ trap - 0 1 2 15
                     return Ok(());
                 }
                 if self.peek_current_attempt_set(session_id).await?.is_none() {
-                    let operation = self.attempt_operation(session_id).await;
-                    let _operation = operation.lock().await;
+                    let _operation = self
+                        .take_session_workspace_operation(
+                            session_id,
+                            workspace_operation::WorkspaceRequest {
+                                doing: format!("the Ways' cleanup of Session {session_id}"),
+                                refused: "The Ways' cleanup did not finish".into(),
+                            },
+                        )
+                        .await?;
                     return self.resume_disposed_ways_cleanup(session_id, set_id).await;
                 }
             }
@@ -30010,6 +30148,57 @@ providers:
         assert!(session_path.is_file(), "quarantine preserves operator data");
     }
 
+    /// A loadout run's Session selects no configured Agent (its run applies
+    /// the loadout's team), and loads again after a restart; a Custom
+    /// Session with no Agent and no loadout binding is still quarantined.
+    #[test]
+    fn a_loadout_run_session_loads_again_and_an_unbound_empty_custom_one_does_not() {
+        let data = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let sessions_dir = data.path().join("sessions");
+        let mut writer = SessionStore::new(&sessions_dir).unwrap();
+        let mut create = |name: &str| {
+            writer
+                .create(
+                    name,
+                    "wsp-loadout",
+                    work.path(),
+                    SessionMode::Custom { agents: Vec::new() },
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                )
+                .unwrap()
+        };
+        let bound = create("loadout run");
+        let unbound = create("no team");
+        let binding = axocoatl_session::run_record::SessionLoadoutBinding {
+            run_id: format!("run-{}", uuid::Uuid::new_v4()),
+            loadout: axocoatl_session::run_outcome::LoadoutRef {
+                id: "fix".into(),
+                version: 1,
+                kind: "fix".into(),
+                digest: "0".repeat(64),
+                builtin: true,
+            },
+            network: "egress".into(),
+            workload: "hardened".into(),
+        };
+        writer.bind_loadout(&bound.id, binding.clone()).unwrap();
+        drop(writer);
+
+        let mut reopened = SessionStore::new(&sessions_dir).unwrap();
+        reopened.load_all().unwrap();
+        assert_eq!(
+            quarantine_invalid_loaded_sessions(&test_config(), &mut reopened),
+            1
+        );
+        let loaded = reopened.get(&bound.id).expect("the loadout Session loads");
+        assert_eq!(loaded.loadout, Some(binding));
+        assert_eq!(loaded.mode, SessionMode::Custom { agents: Vec::new() });
+        assert!(reopened.get(&unbound.id).is_none());
+    }
+
     #[test]
     fn removed_non_agent_style_team_retains_session_and_history_but_blocks_a_new_turn() {
         let data = tempfile::tempdir().unwrap();
@@ -30089,9 +30278,12 @@ providers:
             "failed current-config validation cannot append a new Begin"
         );
 
-        assert!(validate_persisted_session_structure(&SessionMode::Lattice {
-            workflow_id: Some("review.v1".to_string()),
-        })
+        assert!(validate_persisted_session_structure(
+            &SessionMode::Lattice {
+                workflow_id: Some("review.v1".to_string()),
+            },
+            None
+        )
         .is_ok());
     }
 

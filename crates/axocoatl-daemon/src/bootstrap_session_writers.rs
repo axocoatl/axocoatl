@@ -6,12 +6,12 @@
 //! descendants. Interactive terminals/background tasks require separate
 //! process-boundary integration and do not acquire these short-operation leases.
 
+use super::workspace_operation::{WorkspaceOperation, WorkspaceRequest};
 use super::{require_session_environment_ready, session_git_arguments, AxocoatlDaemon};
 use crate::error::DaemonError;
 use axocoatl_isolation::session_sandbox::{ExecResult, Sandbox};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::OwnedMutexGuard;
 
 type Result<T> = std::result::Result<T, DaemonError>;
 
@@ -19,7 +19,7 @@ type Result<T> = std::result::Result<T, DaemonError>;
 /// prevents unrelated requests from borrowing another writer's authority.
 pub(super) struct SessionWriterLease {
     session_id: String,
-    operation: Arc<OwnedMutexGuard<()>>,
+    operation: Arc<WorkspaceOperation>,
 }
 
 impl SessionWriterLease {
@@ -67,7 +67,17 @@ impl SessionWriterLease {
 impl AxocoatlDaemon {
     pub(super) async fn session_writer(&self, session_id: &str) -> Result<SessionWriterLease> {
         self.require_runtime_admission()?;
-        let operation = self.attempt_operation(session_id).await.lock_owned().await;
+        // A turn holds the Workspace until it ends: a change made while one
+        // runs is refused at once rather than waiting for it.
+        let operation = self
+            .take_session_workspace_operation(
+                session_id,
+                WorkspaceRequest {
+                    doing: format!("a change to Session {session_id}'s files or Git"),
+                    refused: "The change was not made".into(),
+                },
+            )
+            .await?;
         self.require_runtime_admission()?;
         self.require_no_unresolved_attempt(session_id).await?;
         let session = self
@@ -148,7 +158,7 @@ mod tests {
         let gate = Arc::new(Mutex::new(()));
         let writer = SessionWriterLease {
             session_id: "session-a".into(),
-            operation: Arc::new(gate.clone().lock_owned().await),
+            operation: Arc::new(gate.clone().lock_owned().await.into()),
         };
         let (started, ready) = oneshot::channel();
         let (finish, finished) = oneshot::channel();
@@ -181,7 +191,7 @@ mod tests {
         let gate = Arc::new(Mutex::new(()));
         let writer = SessionWriterLease {
             session_id: "session-a".into(),
-            operation: Arc::new(gate.clone().lock_owned().await),
+            operation: Arc::new(gate.clone().lock_owned().await.into()),
         };
         assert_eq!(writer.run(async { Ok(7) }).await.unwrap(), 7);
         assert!(gate.clone().try_lock_owned().is_err());

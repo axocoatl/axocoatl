@@ -277,13 +277,26 @@ impl AxocoatlDaemon {
                 .prepare_session_cleanup(&peer.id, SESSION_DISPATCH_CLEANUP_TIMEOUT)
                 .await?;
             let _operation = match cleanup.take_operation() {
-                Some(operation) => operation,
-                None => self
-                    .attempt_operation(&peer.id)
-                    .await
-                    .lock_owned()
-                    .await
-                    .into(),
+                Some(operation) => (Some(operation), None),
+                None => (
+                    None,
+                    Some(
+                        self.take_session_workspace_operation(
+                            &peer.id,
+                            super::workspace_operation::WorkspaceRequest {
+                                doing: format!(
+                                    "Session {} being stopped for several Ways",
+                                    peer.id
+                                ),
+                                refused: format!(
+                                    "No Ways were started: Session {} was not stopped",
+                                    peer.id
+                                ),
+                            },
+                        )
+                        .await?,
+                    ),
+                ),
             };
             self.stop_session_actors_checked(&peer.id).await?;
             self.stop_session_sandbox_checked(&peer.id).await?;

@@ -223,6 +223,44 @@ impl SessionDispatchRegistry {
         Ok(state.entries.contains_key(session_id) || state.pending.contains_key(session_id))
     }
 
+    /// Whether `session_id`'s own registration holds its Workspace
+    /// operation: its registered (or first, pending) repository owner, while
+    /// its turn is open or its first turn is being prepared, or the
+    /// operation a lifecycle action that did not finish parked for its retry.
+    pub(crate) fn holds_workspace(&self, session_id: &str) -> Result<bool> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session dispatch registry failed"))?;
+        let parked = |operation: &Mutex<Option<Arc<OwnedMutexGuard<()>>>>| {
+            operation
+                .lock()
+                .map(|operation| operation.is_some())
+                .unwrap_or(true)
+        };
+        if let Some(entry) = state.entries.get(session_id) {
+            let held = if entry.retired.load(Ordering::SeqCst) {
+                parked(&entry.operation)
+            } else {
+                entry.owner()?.holds_workspace_operation()
+            };
+            if held {
+                return Ok(true);
+            }
+        }
+        if let Some(pending) = state.pending.get(session_id) {
+            let held = if pending.retired.load(Ordering::SeqCst) {
+                parked(&pending.operation)
+            } else {
+                pending.holds_workspace_operation()?
+            };
+            if held {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(crate) fn live_native_turns(&self) -> Result<Vec<(String, String)>> {
         let state = self
             .state

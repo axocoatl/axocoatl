@@ -1584,24 +1584,30 @@ pub struct CreateWorkspaceSessionBody {
     pub setup_reviewed: bool,
 }
 
+/// `POST /api/workspaces/{id}/sessions`. A Workspace an open turn holds is a
+/// `409` with the code `workspace_busy` at once, naming that Session and
+/// turn (see [`create_session`]).
 pub async fn create_workspace_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<CreateWorkspaceSessionBody>,
-) -> Result<Json<axocoatl_session::Session>, (StatusCode, Json<ErrorResponse>)> {
-    let workspace = state
-        .read()
-        .await
-        .get_workspace(&id)
-        .await
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("workspace '{id}' not found")))?;
+) -> Result<Json<axocoatl_session::Session>, CodedRouteError> {
+    let workspace = state.read().await.get_workspace(&id).await.ok_or_else(|| {
+        uncoded(err(
+            StatusCode::NOT_FOUND,
+            format!("workspace '{id}' not found"),
+        ))
+    })?;
     reject_unsupported_session_image(
         &state,
         Some(workspace.canonical_path.as_path()),
         body.image.as_deref(),
     )
-    .await?;
-    reject_unsupported_session_ports(&state, &body.exposed_ports).await?;
+    .await
+    .map_err(uncoded)?;
+    reject_unsupported_session_ports(&state, &body.exposed_ports)
+        .await
+        .map_err(uncoded)?;
     state
         .read()
         .await
@@ -1618,7 +1624,7 @@ pub async fn create_workspace_session(
         )
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -1674,17 +1680,26 @@ pub async fn get_session(
         })
 }
 
+/// `POST /api/sessions`. Creating a Session takes its Workspace without
+/// waiting for a turn: while an open turn of any Session holds the
+/// Workspace, the answer is a `409` with the code `workspace_busy` at once,
+/// naming that Session, its loadout run and its turn, and no Session is
+/// created; another operation of the Workspace is waited for up to ten
+/// seconds first. Any other refusal is a `400`.
 pub async fn create_session(
     State(state): State<AppState>,
     Json(body): Json<CreateSessionBody>,
-) -> Result<Json<axocoatl_session::Session>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<axocoatl_session::Session>, CodedRouteError> {
     reject_unsupported_session_image(
         &state,
         Some(std::path::Path::new(&body.working_dir)),
         body.image.as_deref(),
     )
-    .await?;
-    reject_unsupported_session_ports(&state, &body.exposed_ports).await?;
+    .await
+    .map_err(uncoded)?;
+    reject_unsupported_session_ports(&state, &body.exposed_ports)
+        .await
+        .map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .create_session_with_environment(
@@ -1700,13 +1715,9 @@ pub async fn create_session(
         )
         .await
         .map(Json)
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
+        .map_err(|error| match error {
+            error @ axocoatl_daemon::DaemonError::WorkspaceBusy(_) => coded_err(error),
+            other => uncoded(err(StatusCode::BAD_REQUEST, other.to_string())),
         })
 }
 
@@ -2225,7 +2236,8 @@ pub struct SessionExportQuery {
     pub format: Option<String>,
 }
 
-/// GET /api/sessions/{id}/export — canonical transcript as Markdown or JSON.
+/// GET /api/sessions/{id}/export — canonical transcript as Markdown or JSON;
+/// `404` for a Session this daemon does not know.
 pub async fn export_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -2233,6 +2245,13 @@ pub async fn export_session(
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     let format = query.format.as_deref().unwrap_or("markdown");
     let daemon = state.read().await;
+    // A Session this daemon does not know is not found, not a bad request.
+    if daemon.get_session(&id).await.is_none() {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            format!("session '{id}' not found"),
+        ));
+    }
     // Without `history_version`, a Session whose History holds native
     // execution exports in the versioned form, as the record bundle does.
     let versioned = history_version_for(&daemon, &id, query.history_version).await?;
@@ -2764,6 +2783,11 @@ pub(crate) fn coded_err(error: axocoatl_daemon::DaemonError) -> CodedRouteError 
         .then_some(axocoatl_daemon::WORKSPACE_BUSY_CODE);
     let (status, Json(ErrorResponse { error })) = attempt_err(error);
     (status, Json(CodedErrorResponse { error, code }))
+}
+
+/// A route error with no `code`, for a route that answers [`coded_err`]s.
+pub(crate) fn uncoded((status, Json(ErrorResponse { error })): RouteError) -> CodedRouteError {
+    (status, Json(CodedErrorResponse { error, code: None }))
 }
 
 #[derive(Serialize)]

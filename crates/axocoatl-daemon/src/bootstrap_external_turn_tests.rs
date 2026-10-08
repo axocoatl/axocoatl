@@ -588,7 +588,9 @@ fn openai_answer(body: &serde_json::Value) -> (String, &'static str) {
 }
 
 impl FakeModelApi {
-    async fn start(host: &str) -> Self {
+    /// The API; when `rejects`, it answers every model request `401` as for
+    /// a credential it does not accept.
+    async fn start(host: &str, rejects: bool) -> Self {
         use http_body_util::{BodyExt, Full};
         use hyper::body::Incoming;
         let ca = crate::egress_broker::SessionCa::new("external-turn-model-api").unwrap();
@@ -640,7 +642,17 @@ impl FakeModelApi {
                                     .unwrap_or_default();
                                 let body: serde_json::Value =
                                     serde_json::from_slice(&bytes).unwrap_or_default();
+                                let rejected = rejects
+                                    && method == "POST"
+                                    && matches!(path.as_str(), "/v1/messages" | "/v1/responses");
                                 let answer = match (method.as_str(), path.as_str()) {
+                                    _ if rejected => Some((
+                                        serde_json::json!({"type": "error", "error": {
+                                            "type": "authentication_error",
+                                            "message": "invalid x-api-key"}})
+                                        .to_string(),
+                                        "application/json",
+                                    )),
                                     ("POST", "/v1/messages") => Some(anthropic_answer(&body)),
                                     ("POST", "/v1/responses") => Some(openai_answer(&body)),
                                     _ => None,
@@ -660,7 +672,9 @@ impl FakeModelApi {
                                     hyper::header::CONTENT_TYPE,
                                     hyper::header::HeaderValue::from_static(kind),
                                 );
-                                if kind == "application/json" && path != "/v1/messages" {
+                                if rejected {
+                                    *response.status_mut() = hyper::StatusCode::UNAUTHORIZED;
+                                } else if kind == "application/json" && path != "/v1/messages" {
                                     *response.status_mut() = hyper::StatusCode::NOT_FOUND;
                                 }
                                 Ok::<_, std::convert::Infallible>(response)
@@ -908,8 +922,10 @@ fn git(repo: &std::path::Path, args: &[&str]) {
 /// classes, upstream port and upstream trust are the test's. A `reviewed`
 /// run is a fix loadout whose native reviewer (a fake Ollama model) asks for
 /// changes once, so the writer runs its program a second time, answers the
-/// finding and is approved.
-async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool) {
+/// finding and is approved. When `api_rejects`, the API answers every model
+/// request `401`: the run needs attention, and its not-covered reason says
+/// the stored credential was rejected and how to store it again.
+async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_rejects: bool) {
     use axocoatl_session::network_record::{Decision, NetworkEvent};
     use axocoatl_session::run_outcome::{RunVerdict, TurnState};
     let (recipe, host, credential, placeholder, answer) = match runtime {
@@ -974,7 +990,7 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool) {
     // The model API, reached at its real host name and port through the
     // route: the broker resolves the host to the fake and trusts its
     // authority. Everything else is production's.
-    let api = FakeModelApi::start(host).await;
+    let api = FakeModelApi::start(host, api_rejects).await;
     daemon
         .egress_points
         .use_test_upstreams(super::session_network_policy::TestUpstreams {
@@ -1170,6 +1186,51 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool) {
             .collect::<Vec<_>>()
     );
     shutdown.unwrap();
+
+    if api_rejects {
+        // The model API refused the stored credential: the run needs
+        // attention, and its writer's not-covered reason says which stored
+        // credential was rejected and how to store it again, before
+        // anything else, and never its value.
+        let junit = junit.unwrap_or_else(|error| panic!("{error}\n{context}"));
+        assert_eq!(outcome.verdict, RunVerdict::NeedsAttention, "{context}");
+        assert_eq!(outcome.exit_code, 2, "{context}");
+        let reasons: Vec<String> = outcome
+            .not_covered
+            .iter()
+            .map(|entry| entry.reason())
+            .collect();
+        let reason = reasons
+            .iter()
+            .find(|reason| reason.contains("rejected the stored credential"))
+            .unwrap_or_else(|| panic!("{reasons:?}\n{context}"));
+        assert!(
+            reason.contains(&format!(
+                "the model API rejected the stored credential {credential} (HTTP 401 through \
+                 the Session's route): store it again with `axocoatl secret set {credential}`, \
+                 piping in only the token"
+            )),
+            "{reason}"
+        );
+        assert!(!reason.contains(&secret), "{reason}");
+        assert!(junit.contains("rejected the stored credential"), "{junit}");
+        assert!(!junit.contains(&secret), "{junit}");
+        // The program's requests reached the API with the stored value,
+        // through the route, and were answered 401.
+        let calls = seen
+            .iter()
+            .filter(|request| request.method == "POST")
+            .count();
+        assert!(calls >= 1, "{context}");
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, NetworkEvent::Response { status: 401, .. })),
+            "{context}"
+        );
+        drop(cleanup);
+        return;
+    }
 
     // The run passed: its turn completed, the writer's answer is the
     // program's final text, and the required check found the change.
@@ -1467,7 +1528,7 @@ async fn reviewer_model_server() -> (wiremock::MockServer, Arc<AtomicUsize>) {
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the claude-code recipe image"]
 async fn actual_loadout_run_with_the_pinned_claude_code() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run_child_body(AgentRuntime::ClaudeCode, false).await;
+        pinned_run_child_body(AgentRuntime::ClaudeCode, false, false).await;
         return;
     }
     run_child("actual_loadout_run_with_the_pinned_claude_code", None, true).await;
@@ -1479,7 +1540,7 @@ async fn actual_loadout_run_with_the_pinned_claude_code() {
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
 async fn actual_loadout_run_with_the_pinned_codex() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run_child_body(AgentRuntime::Codex, false).await;
+        pinned_run_child_body(AgentRuntime::Codex, false, false).await;
         return;
     }
     run_child("actual_loadout_run_with_the_pinned_codex", None, true).await;
@@ -1491,7 +1552,7 @@ async fn actual_loadout_run_with_the_pinned_codex() {
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the claude-code recipe image"]
 async fn actual_reviewed_loadout_run_with_the_pinned_claude_code() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run_child_body(AgentRuntime::ClaudeCode, true).await;
+        pinned_run_child_body(AgentRuntime::ClaudeCode, true, false).await;
         return;
     }
     run_child(
@@ -1508,11 +1569,30 @@ async fn actual_reviewed_loadout_run_with_the_pinned_claude_code() {
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
 async fn actual_reviewed_loadout_run_with_the_pinned_codex() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run_child_body(AgentRuntime::Codex, true).await;
+        pinned_run_child_body(AgentRuntime::Codex, true, false).await;
         return;
     }
     run_child(
         "actual_reviewed_loadout_run_with_the_pinned_codex",
+        None,
+        true,
+    )
+    .await;
+}
+
+/// Claude Code from its recipe image against a model API that rejects the
+/// stored credential (`401`), as the 1.3 smoke run's was: the run needs
+/// attention and says to store `claude-code-oauth` again, piping in only
+/// the token (see [`pinned_run_child_body`]).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the claude-code recipe image"]
+async fn a_rejected_claude_code_credential_is_named_with_how_to_store_it_again() {
+    if std::env::var_os(CHILD).is_some() {
+        pinned_run_child_body(AgentRuntime::ClaudeCode, false, true).await;
+        return;
+    }
+    run_child(
+        "a_rejected_claude_code_credential_is_named_with_how_to_store_it_again",
         None,
         true,
     )

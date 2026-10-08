@@ -206,7 +206,7 @@ else `AXOCOATL_URL`, else the configured server address, and authenticate with
 
 | Command | Purpose |
 | --- | --- |
-| `axocoatl secret set <NAME> [-c CONFIG]` | Read one value from standard input, never from an argument, and store it as `secrets/<NAME>` in the data root (`0600`, replaced atomically). Standard input must be a pipe or a file; a terminal is refused (exit code 3). It is never printed. A route's `credential` can name it. See [Store the credential](/configure/external-agents/#store-the-credential) |
+| `axocoatl secret set <NAME> [-c CONFIG]` | Read one value from standard input, never from an argument, and store it as `secrets/<NAME>` in the data root (`0600`, replaced atomically). Standard input must be a pipe or a file; a terminal is refused (exit code 3). It is never printed. A value with whitespace inside it, a `Bearer ` prefix, JSON or several tokens, or a `claude-code-oauth` value that does not start with `sk-ant-oat01-`, is stored with a warning on standard error that never shows it. A route's `credential` can name it. See [Store the credential](/configure/external-agents/#store-the-credential) |
 | `axocoatl secret list` | Print the stored secret names, never values |
 | `axocoatl secret remove <NAME>` | Delete one stored secret |
 | `axocoatl recipe build <RECIPE>... [-c CONFIG]` | Build one Session image with Podman from Axocoatl's pinned recipes `claude-code`, `codex` and `e2e`, combined in that order, and record its image id in the data root; Sessions trust it by that id |

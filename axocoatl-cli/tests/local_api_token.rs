@@ -1,5 +1,7 @@
 //! The per-daemon local API token, end to end: a real `axocoatl serve` on a
-//! loopback port with no configured credentials, and `axocoatl url`.
+//! loopback port with no configured credentials, and `axocoatl url`. The
+//! same daemon also answers an authenticated request for a Session it does
+//! not know, and its export, with `404`.
 //!
 //! The daemon starts with no agents, so it needs no model download. It still
 //! probes the configured Podman connection at startup; on a Mac, set
@@ -98,6 +100,20 @@ async fn local_api_requires_the_per_daemon_token() {
             .header("cookie", format!("{cookie_name}={token}")),
     ] {
         assert_eq!(status(request).await, 200);
+    }
+
+    // A Session the daemon does not know is not found, its export too
+    // (not a `400`).
+    for path in [
+        "/api/sessions/ses-00000000-0000-4000-8000-000000000000",
+        "/api/sessions/ses-00000000-0000-4000-8000-000000000000/export",
+        "/api/sessions/ses-00000000-0000-4000-8000-000000000000/export?format=json",
+    ] {
+        assert_eq!(
+            status(client.get(format!("{base}{path}")).bearer_auth(&token)).await,
+            404,
+            "{path}"
+        );
     }
 
     // Public paths.

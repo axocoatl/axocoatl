@@ -1415,6 +1415,12 @@ impl AxocoatlDaemon {
                     .await)
             }
         };
+        // Named while it holds the Workspace (its Session's environment is
+        // prepared under it), for other requests' busy refusals.
+        let _named = self.workspace_operation_labels.name(
+            &super::workspace_attempt_operation_key(workspace_id),
+            format!("the admission of loadout run {}", binding.run_id),
+        );
         if let Some((owner, set_id)) = self
             .unresolved_attempt_owner_for_workspace_id(workspace_id)
             .await?
@@ -1474,7 +1480,16 @@ impl AxocoatlDaemon {
     /// running or needs a person (each such turn holds the Workspace until
     /// it ends), or, when none has one, every open Session of the Workspace.
     async fn workspace_in_use(&self, workspace_id: &str, path: &std::path::Path) -> DaemonError {
-        let held_by = self.workspace_holders(workspace_id, None).await.held_by();
+        let holders = self.workspace_holders(workspace_id, None).await;
+        let label = self
+            .workspace_operation_labels
+            .get(&super::workspace_attempt_operation_key(workspace_id));
+        let held_by = match label {
+            Some(label) if holders.turns.is_empty() => {
+                format!("is held by another operation: {label}")
+            }
+            _ => holders.held_by(),
+        };
         DaemonError::WorkspaceBusy(format!(
             "the Workspace {} {held_by}. A loadout run needs the Workspace to itself: let that \
              turn finish, or stop it or close its Session, then run again",

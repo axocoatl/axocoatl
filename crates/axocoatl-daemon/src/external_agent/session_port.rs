@@ -58,13 +58,28 @@ pub(crate) trait RouteRequestSource: Send + Sync {
 }
 
 /// Counts the allowed route requests made on connections opened with one
-/// egress credential (its token tag), reading the record incrementally.
+/// egress credential (its token tag), reading the record incrementally, and
+/// notes the stored credential of the first of them its upstream answered
+/// with HTTP 401.
 pub(crate) struct RouteMeter {
     source: Arc<dyn RouteRequestSource>,
     token: String,
     after: Option<u64>,
     connections: HashSet<String>,
     allowed: u64,
+    /// The credential each allowed request added, until its response.
+    credentials: HashMap<(String, u64), String>,
+    rejected: Option<String>,
+}
+
+/// What a run's route record showed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RouteUse {
+    /// Allowed route requests made with the run's credential.
+    pub(crate) requests: u64,
+    /// The stored credential (its name) an upstream rejected with HTTP 401,
+    /// when one did.
+    pub(crate) rejected_credential: Option<String>,
 }
 
 impl RouteMeter {
@@ -75,7 +90,15 @@ impl RouteMeter {
             after: None,
             connections: HashSet::new(),
             allowed: 0,
+            credentials: HashMap::new(),
+            rejected: None,
         }
+    }
+
+    /// The stored credential an upstream rejected with HTTP 401, as of the
+    /// last poll.
+    pub(crate) fn rejected_credential(&self) -> Option<&str> {
+        self.rejected.as_deref()
     }
 
     /// Allowed route requests so far.
@@ -98,10 +121,26 @@ impl RouteMeter {
                     }
                     NetworkEvent::Request {
                         conn,
+                        seq_in_conn,
                         decision: RecordDecision::Allow,
+                        credential,
                         ..
                     } if self.connections.contains(&conn) => {
                         self.allowed = self.allowed.saturating_add(1);
+                        if let Some(name) = credential {
+                            self.credentials.insert((conn, seq_in_conn), name);
+                        }
+                    }
+                    NetworkEvent::Response {
+                        conn,
+                        seq_in_conn,
+                        status,
+                        ..
+                    } => {
+                        let added = self.credentials.remove(&(conn, seq_in_conn));
+                        if status == 401 && self.rejected.is_none() {
+                            self.rejected = added;
+                        }
                     }
                     _ => {}
                 }
@@ -172,7 +211,7 @@ pub(crate) struct ExternalProgram {
 /// A parsed external run and how it ended.
 pub(crate) struct ExternalOutcome {
     pub(crate) result: ExternalActivationResult,
-    pub(crate) route_requests: u64,
+    pub(crate) routes: RouteUse,
     pub(crate) stopped: Option<String>,
     pub(crate) stderr: String,
     /// What the run's model call reserved.
@@ -185,8 +224,8 @@ pub(crate) struct ExternalRun {
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: String,
     pub(crate) outcome: ProcessOutcome,
-    /// Allowed route requests made with the run's credential.
-    pub(crate) route_requests: u64,
+    /// What the run's route record showed.
+    pub(crate) routes: RouteUse,
     /// Why the host stopped the program, when it did.
     pub(crate) stopped: Option<String>,
 }
@@ -399,18 +438,21 @@ fn host_wrap_up(request: &ChatRequest) -> Option<String> {
 /// The events of one finished run: the work log as reasoning, then the
 /// usage the program reported (unless it overran the reservation), then
 /// the answer, or the reason there is none. A failed run that reported its
-/// usage settles to that usage; one that did not keeps the reservation.
+/// usage settles to that usage; one that did not keeps the reservation. A
+/// failed run whose model call an upstream rejected (HTTP 401) through the
+/// route says first which stored credential was rejected and how to store
+/// it again.
 pub(crate) fn run_events(
     runtime: AgentRuntime,
     model: &str,
     result: &ExternalActivationResult,
-    route_requests: u64,
+    routes: &RouteUse,
     stopped: Option<&str>,
     reserved: &ProviderExecutionBounds,
     stderr: &str,
 ) -> Vec<std::result::Result<StreamEvent, ProviderError>> {
     let mut events: Vec<std::result::Result<StreamEvent, ProviderError>> =
-        external::work_log(runtime, model, result, route_requests, stopped)
+        external::work_log(runtime, model, result, routes.requests, stopped)
             .into_iter()
             .map(|delta| Ok(StreamEvent::ReasoningDelta { delta }))
             .collect();
@@ -478,6 +520,13 @@ pub(crate) fn run_events(
                 .collect();
             reason.push_str("; its error output ends: ");
             reason.push_str(tail.trim());
+        }
+        if let Some(name) = &routes.rejected_credential {
+            reason = format!(
+                "the model API rejected the stored credential {name} (HTTP 401 through the \
+                 Session's route): {}. {reason}",
+                crate::secret_store::store_again_hint(name)
+            );
         }
         Some(reason)
     } else {
@@ -615,7 +664,7 @@ impl LlmProvider for ExternalProgramProvider {
             self.runtime,
             &self.model,
             &outcome.result,
-            outcome.route_requests,
+            &outcome.routes,
             outcome.stopped.as_deref(),
             &outcome.reserved,
             &outcome.stderr,
@@ -729,7 +778,7 @@ impl SessionDispatchController {
         }
         Ok(ExternalOutcome {
             result,
-            route_requests: run.route_requests,
+            routes: run.routes,
             stopped: run.stopped,
             stderr: run.stderr,
             reserved,
@@ -926,7 +975,10 @@ impl SessionDispatchController {
                 }
             }
         };
-        let route_requests = meter.poll().unwrap_or(meter.allowed);
+        let routes = RouteUse {
+            requests: meter.poll().unwrap_or(meter.allowed),
+            rejected_credential: meter.rejected_credential().map(str::to_string),
+        };
         let ServerMessage::Finished {
             outcome,
             stdout,
@@ -963,7 +1015,7 @@ impl SessionDispatchController {
             stdout,
             stderr,
             outcome: outcome.clone(),
-            route_requests,
+            routes,
             stopped,
         })
     }
@@ -1079,6 +1131,100 @@ mod tests {
         assert_eq!(meter.poll().unwrap(), 3);
     }
 
+    fn credentialed(conn: &str, seq: u64, credential: &str) -> NetworkEvent {
+        serde_json::from_value(serde_json::json!({
+            "kind": "request", "conn": conn, "seq_in_conn": seq, "method": "POST",
+            "path": "/v1/messages", "host": "api.anthropic.com", "decision": "allow",
+            "rule": "route#0.rules[0]", "credential": credential
+        }))
+        .unwrap()
+    }
+
+    fn response(conn: &str, seq: u64, status: u16) -> NetworkEvent {
+        serde_json::from_value(serde_json::json!({
+            "kind": "response", "conn": conn, "seq_in_conn": seq, "status": status,
+            "up": 100, "down": 60, "ms": 12, "outcome": "completed"
+        }))
+        .unwrap()
+    }
+
+    /// A 401 to one of the run's own credentialed requests names that
+    /// stored credential; a 401 on another credential's connection, or any
+    /// other status, does not.
+    #[test]
+    fn the_meter_names_the_stored_credential_an_upstream_rejected() {
+        let events = Arc::new(Events(Mutex::new(vec![
+            open("g1:1", "mine"),
+            open("g1:2", "other"),
+            credentialed("g1:1", 1, "claude-code-oauth"),
+            response("g1:1", 1, 429),
+            credentialed("g1:2", 1, "someone-else"),
+            response("g1:2", 1, 401),
+        ])));
+        let mut meter = RouteMeter::new(events.clone(), "mine");
+        assert_eq!(meter.poll().unwrap(), 1);
+        assert_eq!(meter.rejected_credential(), None);
+        events.0.lock().unwrap().extend([
+            credentialed("g1:1", 2, "claude-code-oauth"),
+            response("g1:1", 2, 401),
+        ]);
+        assert_eq!(meter.poll().unwrap(), 2);
+        assert_eq!(meter.rejected_credential(), Some("claude-code-oauth"));
+    }
+
+    /// A run whose model call was answered 401 through the route says
+    /// first that the stored credential was rejected and how to store it
+    /// again, without the value.
+    #[test]
+    fn a_rejected_credential_is_named_with_how_to_store_it_again() {
+        let routes = RouteUse {
+            requests: 2,
+            rejected_credential: Some("claude-code-oauth".into()),
+        };
+        let events = run_events(
+            AgentRuntime::ClaudeCode,
+            "m",
+            &claude(None, Some((0, 0, Some(0))), 1),
+            &routes,
+            None,
+            &bounds(1000, 0),
+            "",
+        );
+        let seen = kinds(&events);
+        let refused = seen.last().unwrap();
+        assert!(
+            refused.starts_with(
+                "refused:the model API rejected the stored credential claude-code-oauth (HTTP \
+                 401 through the Session's route): store it again with `axocoatl secret set \
+                 claude-code-oauth`, piping in only the token"
+            ),
+            "{refused}"
+        );
+        assert!(refused.contains("sk-ant-oat01-"), "{refused}");
+        assert!(
+            refused.contains("the program exited with status 1 and gave no answer"),
+            "{refused}"
+        );
+        // A run that finished is not blamed on an earlier 401.
+        let events = run_events(
+            AgentRuntime::ClaudeCode,
+            "m",
+            &claude(Some("Done."), Some((10, 2, Some(5))), 0),
+            &routes,
+            None,
+            &bounds(1000, 100),
+            "",
+        );
+        assert_eq!(kinds(&events).last().unwrap(), "done");
+    }
+
+    fn requests(requests: u64) -> RouteUse {
+        RouteUse {
+            requests,
+            rejected_credential: None,
+        }
+    }
+
     fn bounds(tokens: u64, cost: u64) -> ProviderExecutionBounds {
         ProviderExecutionBounds {
             token_limit: tokens,
@@ -1144,7 +1290,7 @@ mod tests {
             AgentRuntime::ClaudeCode,
             "m",
             &claude(Some("Done."), Some((100, 20, Some(5000))), 0),
-            2,
+            &requests(2),
             None,
             &bounds(1000, 10_000),
             "",
@@ -1165,7 +1311,7 @@ mod tests {
             AgentRuntime::ClaudeCode,
             "m",
             &claude(None, Some((10, 0, None)), 1),
-            1,
+            &requests(1),
             None,
             &bounds(1000, 0),
             "",
@@ -1178,7 +1324,7 @@ mod tests {
             AgentRuntime::Codex,
             "m",
             &claude(Some("half"), None, 137),
-            1,
+            &requests(1),
             None,
             &bounds(1000, 0),
             "killed by something\n",
@@ -1194,7 +1340,7 @@ mod tests {
             AgentRuntime::ClaudeCode,
             "m",
             &claude(Some("answer"), Some((10, 1, None)), 0),
-            5,
+            &requests(5),
             Some("it made 5 model requests and its grant allowed 4"),
             &bounds(1000, 0),
             "",
@@ -1208,7 +1354,7 @@ mod tests {
             AgentRuntime::ClaudeCode,
             "m",
             &claude(Some("answer"), Some((900, 200, Some(1))), 0),
-            1,
+            &requests(1),
             None,
             &bounds(1000, 10),
             "",

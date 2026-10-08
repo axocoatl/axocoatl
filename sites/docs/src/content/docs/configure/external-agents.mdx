@@ -73,7 +73,15 @@ axocoatl secret set codex-openai < openai-key.txt
 
 A value is one line of at most 8 KiB with no control characters; one trailing line break
 is ignored. If the command prints more than the token, put the token alone in a file and
-redirect it. `axocoatl secret list` prints the stored names, never values, and
+redirect it. A route sends the value exactly as stored, so `secret set` warns on standard
+error, and still stores it, when the value has whitespace inside it, starts with
+`Bearer ` (the route adds that itself), looks like JSON or holds several tokens, and, for
+`claude-code-oauth` (the secret Claude Code's route sends), when it does not start with
+`sk-ant-oat01-`, as the token `claude setup-token` prints does. The warning never shows
+the value. When the model API rejects a stored credential (`401` through the route), the
+run's not-covered reason names the credential and says to store it again with
+`axocoatl secret set <name>`, piping in only the token.
+`axocoatl secret list` prints the stored names, never values, and
 `axocoatl secret remove <name>` deletes one. A route's `credential` resolves to a
 `credentials` entry in the configuration first, then to a stored secret of that name; a
 name found in neither refuses the run (exit code 3).

@@ -96,7 +96,12 @@ on the repository is admitted. The Outcome keeps each turn as it was observed.
    the record's `keep` event and in `GET /api/runs/{run_id}`.
 
 `--junit` and `--record` are written even when the run fails, each to a temporary file
-that is then renamed, so a reader never sees half a file. With `--keep`, Keep runs first,
+that is then renamed, so a reader never sees half a file. A run that never started (the
+daemon refused it, as for a busy Workspace or a missing parameter, could not be reached,
+or the flags were refused) has no run id: `--junit` still writes a file whose `run`
+suite's `verdict` case is an `<error>` of type `busy` (exit code 7), `usage` (3) or
+`error` (any other code), with the reason and `axocoatl.exit_code`, and `--record` writes
+nothing, since there is no run to record; standard error says so. With `--keep`, Keep runs first,
 so the `--record` file holds its `keep` event like `GET /api/runs/{run_id}/record`. When
 the run passed but one of the files could not be written, `axocoatl run` exits with that
 error's code instead of 0.
@@ -199,7 +204,7 @@ The JUnit file has one `testsuite` per kind of result, and a last one for the ve
 | A warning, such as the same-model reviewer | a property `axocoatl.warning.<code>` |
 | The run's notes | the `verdict` case's `<system-out>`, one `note: ` line each, whatever the verdict |
 | Usage | a property `axocoatl.usage`, worded as in the summary: a cost the run does not know is "cost unknown (reserved up to $X)", never a price |
-| The run's verdict | suite `run`, case `verdict`: a `<failure>` with the reasons when checks failed or the run needs attention, an `<error>` when it was interrupted or could not run (`type="busy"` when another run or Session held the Workspace, exit code 7), so a CI job that reads only JUnit still sees a run that did not pass |
+| The run's verdict | suite `run`, case `verdict`: a `<failure>` with the reasons when checks failed or the run needs attention, an `<error>` when it was interrupted or could not run (`type="busy"` when another run or Session held the Workspace, exit code 7), so a CI job that reads only JUnit still sees a run that did not pass. A run that was never admitted has only this case, an `<error>` of type `busy`, `usage` or `error`, with `axocoatl.loadout`, `axocoatl.verdict` (`error`) and `axocoatl.exit_code` and no run or Session id |
 
 Text is XML-escaped and control characters other than tab and newline are removed. Each
 message is at most 4 KiB and the file at most 8 MiB; cases beyond that are summarized in

@@ -4,13 +4,19 @@
 //! - a data directory made (and given a stored secret) before the daemon
 //!   first started runs loadouts with no `axocoatl session upgrade`;
 //! - while one run's turn holds the repository's Workspace, another run
-//!   exits 7 (busy) at once, and closing the idle Session of an earlier run
-//!   is a `409` with the code `workspace_busy` at once, naming the run
-//!   that holds it, not a `500` after 60 seconds;
+//!   exits 7 (busy) at once and still writes its `--junit` file (the
+//!   verdict an `<error type="busy">`, exit code 7) and no `--record` file;
+//!   closing the idle Session of an earlier run, and creating a Session on
+//!   the repository (`POST /api/sessions` and `POST
+//!   /api/workspaces/{id}/sessions`), are each a `409` with the code
+//!   `workspace_busy` at once, naming the run that holds it, not a `500`
+//!   after 60 seconds or an answer once that turn ends;
 //! - `GET /api/sessions/{id}/export` serves a run Session's versioned
-//!   History as JSON and Markdown;
+//!   History as JSON and Markdown, and an unknown Session is a `404`;
 //! - once the holding run is stopped, Close succeeds and removes the
-//!   Session's runtime volumes from Podman.
+//!   Session's runtime volumes from Podman;
+//! - a run's Session left open across a daemon restart loads again with no
+//!   quarantine (its loadout binding intact), exports and closes.
 //!
 //! ```text
 //! CONTAINER_CONNECTION=<machine> cargo test -p axocoatl-cli \
@@ -127,12 +133,21 @@ async fn model_server() -> MockServer {
     server
 }
 
+/// The configured Agent a workbench Session is created with.
+const HELPER: &str = "helper";
+
 fn write_config(root: &Path, port: u16, model_url: &str) -> PathBuf {
     let config = root.join("axocoatl.yaml");
     std::fs::write(
         &config,
         format!(
-            r#"agents: []
+            r#"agents:
+  - id: {HELPER}
+    name: Helper
+    provider: ollama
+    model: {MODEL}
+    role: autonomous
+    tools: [read_file]
 providers:
   ollama:
     base_url: "{model_url}"
@@ -384,12 +399,18 @@ async fn a_busy_workspace_exits_seven_and_close_refuses_at_once_then_removes_run
     }
 
     // A third run on the repository exits 7 at once and names B's Session.
+    // Its JUnit file says so; there is no run to record.
     let asked = Instant::now();
-    let refused = finished(run_cli(
-        &root,
-        &run_args(&repo, "Say done.", &writer, &base, &config),
-    ))
-    .await;
+    let junit = root.join("refused-junit.xml");
+    let record = root.join("refused.axorecord.jsonl");
+    let mut refused_args = run_args(&repo, "Say done.", &writer, &base, &config);
+    refused_args.extend([
+        "--junit".as_ref(),
+        junit.as_os_str(),
+        "--record".as_ref(),
+        record.as_os_str(),
+    ]);
+    let refused = finished(run_cli(&root, &refused_args)).await;
     let refused_err = String::from_utf8_lossy(&refused.stderr).to_string();
     assert_eq!(refused.status.code(), Some(7), "{refused_err}");
     assert!(
@@ -400,6 +421,93 @@ async fn a_busy_workspace_exits_seven_and_close_refuses_at_once_then_removes_run
     assert!(refused_err.contains("Workspace busy: "), "{refused_err}");
     assert!(refused_err.contains(&b_session), "{refused_err}");
     assert!(!refused_err.contains("· run "), "{refused_err}");
+    let xml = std::fs::read_to_string(&junit)
+        .unwrap_or_else(|error| panic!("no JUnit file ({error})\n{refused_err}"));
+    assert!(
+        xml.contains("<property name=\"axocoatl.exit_code\" value=\"7\"/>"),
+        "{xml}"
+    );
+    assert!(xml.contains("<error type=\"busy\" message=\""), "{xml}");
+    assert!(xml.contains(&b_session), "{xml}");
+    assert!(!record.exists());
+    assert!(
+        refused_err.contains("no run was admitted, so there is nothing to record"),
+        "{refused_err}"
+    );
+
+    // Creating a Session on the repository is a 409 with the code at once,
+    // by path and by Workspace, naming B; no Session is created.
+    let sessions = |token: String| {
+        let base = base.clone();
+        async move {
+            let listed: serde_json::Value = client(port)
+                .get(format!("{base}/api/sessions"))
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            listed.as_array().unwrap().len()
+        }
+    };
+    let before = sessions(token.clone()).await;
+    let workspaces: serde_json::Value = client(port)
+        .get(format!("{base}/api/workspaces"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let workspace_id = workspaces
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|workspace| {
+            workspace["canonical_path"].as_str() == Some(repo.to_str().unwrap())
+                || workspace["path"].as_str() == Some(repo.to_str().unwrap())
+        })
+        .unwrap_or_else(|| panic!("no Workspace for {} in {workspaces}", repo.display()))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mode = serde_json::json!({"kind": "single_agent", "agent_id": HELPER});
+    for (path, body) in [
+        (
+            "/api/sessions".to_string(),
+            serde_json::json!({"name": "probe", "working_dir": repo, "mode": mode}),
+        ),
+        (
+            format!("/api/workspaces/{workspace_id}/sessions"),
+            serde_json::json!({"name": "probe", "mode": mode, "setup_reviewed": true}),
+        ),
+    ] {
+        let asked = Instant::now();
+        let created = client(port)
+            .post(format!("{base}{path}"))
+            .bearer_auth(&token)
+            .json(&body)
+            .timeout(Duration::from_secs(50))
+            .send()
+            .await
+            .unwrap_or_else(|error| panic!("{path} waited for B's turn: {error}"));
+        assert_eq!(created.status().as_u16(), 409, "{path}");
+        assert!(
+            asked.elapsed() < Duration::from_secs(10),
+            "{path}: {:?}",
+            asked.elapsed()
+        );
+        let body: serde_json::Value = created.json().await.unwrap();
+        assert_eq!(body["code"], "workspace_busy", "{path}: {body}");
+        let message = body["error"].as_str().unwrap();
+        assert!(message.contains("No Session was created"), "{message}");
+        assert!(message.contains(&b_session), "{message}");
+        assert!(message.contains(&b_run), "{message}");
+    }
+    assert_eq!(sessions(token.clone()).await, before);
 
     // Closing idle A is a 409 with the code at once, naming B.
     let asked = Instant::now();
@@ -453,6 +561,16 @@ async fn a_busy_workspace_exits_seven_and_close_refuses_at_once_then_removes_run
     assert_eq!(markdown.status().as_u16(), 200);
     let markdown = markdown.text().await.unwrap();
     assert!(markdown.contains("Say done."), "{markdown}");
+    // A Session the daemon does not know is not found.
+    let unknown = client(port)
+        .get(format!(
+            "{base}/api/sessions/ses-00000000-0000-4000-8000-000000000000/export"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status().as_u16(), 404);
 
     // Stop B: its command exits 6, and A then closes.
     let stopped = client(port)
@@ -469,26 +587,69 @@ async fn a_busy_workspace_exits_seven_and_close_refuses_at_once_then_removes_run
         "{}",
         String::from_utf8_lossy(&b.stderr)
     );
-    for session in [&a_session, &b_session] {
-        assert!(podman_exists("volume", &format!("axo-egr-{session}")));
-        let closed = client(port)
-            .delete(format!("{base}/api/sessions/{session}?force=false"))
-            .bearer_auth(&token)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(
-            closed.status().as_u16(),
-            200,
-            "{}",
-            closed.text().await.unwrap_or_default()
-        );
-        // Close leaves no container and no runtime volume of the Session.
-        assert!(!podman_exists("container", &format!("axo-ses-{session}")));
-        for volume in runtime_volumes(session) {
-            assert!(!podman_exists("volume", &volume), "{volume} survived Close");
+    let close = |session: String, token: String| {
+        let base = base.clone();
+        async move {
+            let closed = client(port)
+                .delete(format!("{base}/api/sessions/{session}?force=false"))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                closed.status().as_u16(),
+                200,
+                "{}",
+                closed.text().await.unwrap_or_default()
+            );
+            // Close leaves no container and no runtime volume of the Session.
+            assert!(!podman_exists("container", &format!("axo-ses-{session}")));
+            for volume in runtime_volumes(&session) {
+                assert!(!podman_exists("volume", &volume), "{volume} survived Close");
+            }
         }
-    }
+    };
+    assert!(podman_exists("volume", &format!("axo-egr-{b_session}")));
+    close(b_session.clone(), token.clone()).await;
+
+    // Restart the daemon with A still open: its loadout Session loads
+    // again, with no quarantine, and can still be exported and closed.
+    daemon.stop();
+    let mut daemon = Daemon::start(&root, &config, port, 1).await;
+    let restarted = std::fs::read_to_string(root.join("stderr-1.log")).unwrap_or_default()
+        + &std::fs::read_to_string(root.join("stdout-1.log")).unwrap_or_default();
+    assert!(!restarted.contains("quarantined"), "{restarted}");
+    assert!(
+        !restarted
+            .lines()
+            .any(|line| line.contains("ERROR") && line.contains(&a_session)),
+        "{restarted}"
+    );
+    let token = std::fs::read_to_string(data.join("local-api-token"))
+        .unwrap()
+        .trim()
+        .to_string();
+    let loaded: serde_json::Value = client(port)
+        .get(format!("{base}/api/sessions/{a_session}"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(loaded["status"], "active", "{loaded}");
+    assert!(loaded["loadout"]["run_id"].is_string(), "{loaded}");
+    let exported = client(port)
+        .get(format!(
+            "{base}/api/sessions/{a_session}/export?format=json"
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(exported.status().as_u16(), 200);
+    close(a_session.clone(), token.clone()).await;
 
     daemon.stop();
     drop(guard);

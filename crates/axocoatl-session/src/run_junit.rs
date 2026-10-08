@@ -736,6 +736,61 @@ fn assemble(outcome: &RunOutcome, suites: Vec<Suite>) -> String {
     xml
 }
 
+/// JUnit of a run that never started: the daemon refused it at admission,
+/// could not be reached, or its flags were refused, so there is no run id,
+/// Session or Outcome (`axocoatl run --junit` writes it then). The suites are
+/// the usual ones, empty, and the `run` suite's `verdict` case is an
+/// `<error>` whose type is `busy` (exit code 7: another run or Session held
+/// the Workspace), `usage` (3) or `error` (any other code), with `reason` as
+/// its message. `axocoatl.exit_code` is the command's exit code and
+/// `axocoatl.loadout` the loadout as it was asked for.
+pub fn render_refused_run_junit(loadout: &str, exit_code: i32, reason: &str) -> String {
+    let kind = match exit_code {
+        crate::run_outcome::exit_code::BUSY => "busy",
+        crate::run_outcome::exit_code::USAGE => "usage",
+        _ => "error",
+    };
+    let verdict = Case::new("axocoatl.run", "verdict").status(Status::Error {
+        kind: kind.into(),
+        message: if reason.is_empty() {
+            "the run was not admitted".into()
+        } else {
+            reason.into()
+        },
+    });
+    let mut counts = Counts::default();
+    counts.add(&verdict.status);
+    let mut xml = String::new();
+    xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    let _ = writeln!(
+        xml,
+        "<testsuites name=\"axocoatl\" {} time=\"0.000\">",
+        counts.attrs()
+    );
+    xml.push_str("  <properties>\n");
+    for (name, value) in [
+        ("axocoatl.loadout", loadout.to_string()),
+        ("axocoatl.verdict", "error".to_string()),
+        ("axocoatl.exit_code", exit_code.to_string()),
+    ] {
+        let _ = writeln!(
+            xml,
+            "    <property name=\"{}\" value=\"{}\"/>",
+            attr(name),
+            attr(&bounded(&value))
+        );
+    }
+    xml.push_str("  </properties>\n");
+    let empty = Counts::default();
+    for name in ["checks", "adjudications", "findings", "coverage"] {
+        let _ = writeln!(xml, "  <testsuite name=\"{name}\" {}/>", empty.attrs());
+    }
+    let _ = writeln!(xml, "  <testsuite name=\"run\" {}>", counts.attrs());
+    xml.push_str(&verdict.render());
+    xml.push_str("  </testsuite>\n</testsuites>\n");
+    xml
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1226,5 +1281,42 @@ mod tests {
         assert!(xml.contains(
             "<testsuites name=\"axocoatl\" tests=\"2\" failures=\"0\" errors=\"0\" skipped=\"0\""
         ));
+    }
+
+    #[test]
+    fn a_refused_run_has_a_verdict_error_of_its_kind_and_its_exit_code() {
+        for (code, kind) in [
+            (exit_code::BUSY, "busy"),
+            (exit_code::USAGE, "usage"),
+            (exit_code::DAEMON_UNAVAILABLE, "error"),
+            (exit_code::INFRASTRUCTURE, "error"),
+        ] {
+            let xml = render_refused_run_junit(
+                "fix",
+                code,
+                "Workspace busy: held by Session <ses-1> & \"run\"",
+            );
+            assert!(
+                xml.contains(&format!(
+                    "<property name=\"axocoatl.exit_code\" value=\"{code}\"/>"
+                )),
+                "{xml}"
+            );
+            assert!(
+                xml.contains(&format!(
+                    "<error type=\"{kind}\" message=\"Workspace busy: held by Session &lt;ses-1&gt; &amp; &quot;run&quot;\"/>"
+                )),
+                "{xml}"
+            );
+            assert!(xml.contains("<property name=\"axocoatl.loadout\" value=\"fix\"/>"));
+            assert!(xml.contains(
+                "<testsuites name=\"axocoatl\" tests=\"1\" failures=\"0\" errors=\"1\" skipped=\"0\""
+            ));
+            assert!(xml.contains(
+                "<testsuite name=\"run\" tests=\"1\" failures=\"0\" errors=\"1\" skipped=\"0\">"
+            ));
+            assert!(!xml.contains("axocoatl.run_id"), "{xml}");
+            assert!(xml.ends_with("</testsuites>\n"));
+        }
     }
 }

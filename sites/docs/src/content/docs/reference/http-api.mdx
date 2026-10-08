@@ -252,12 +252,12 @@ below.
 | GET | `/api/workspaces/{id}` | One Workspace |
 | PATCH | `/api/workspaces/{id}` | Rename with `{name}`; the filesystem path does not change |
 | GET | `/api/workspaces/{id}/sessions` | Every Session owned by the Workspace, including closed records |
-| POST | `/api/workspaces/{id}/sessions` | Create from `{name, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}` under the Workspace's fixed path |
+| POST | `/api/workspaces/{id}/sessions` | Create from `{name, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}` under the Workspace's fixed path. While a Session's turn holds the Workspace, answers `409` at once with `"code": "workspace_busy"`, naming that Session, its run and its turn, and creates nothing (see [A busy Workspace](#a-busy-workspace)) |
 | GET | `/api/sessions` | Every persisted Session, including closed records |
-| POST | `/api/sessions` | Compatibility create from `{name, working_dir, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}`; finds or creates the matching Workspace |
+| POST | `/api/sessions` | Compatibility create from `{name, working_dir, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}`; finds or creates the matching Workspace. A busy Workspace is a `409` with `"code": "workspace_busy"` at once, as above; any other refusal is a `400` |
 | GET | `/api/sessions/{id}` | One persisted Session, or `404`; a Session a [loadout run](#loadouts-and-runs) created carries `loadout` |
 | PATCH | `/api/sessions/{id}` | Rename with `{name}` |
-| DELETE | `/api/sessions/{id}?force=false` | Close: stops the Session's containers and removes the Podman volumes its runtime fills again on start (`axo-egr-`, `axo-egi-`, `axo-svc-`, `axo-ca-`); the Node dependency volume stays for Reopen. `force=true` deletes the Session record and that volume too. While another Session's turn holds the Workspace, both answer `409` at once with `{"error": "…", "code": "workspace_busy"}`, naming that Session and turn, and change nothing; another conflict is a `409` without `code` |
+| DELETE | `/api/sessions/{id}?force=false` | Close: stops the Session's containers and removes the Podman volumes its runtime fills again on start (`axo-egr-`, `axo-egi-`, `axo-svc-`, `axo-ca-`); the Node dependency volume stays for Reopen. `force=true` deletes the Session record and that volume too. While another Session's turn holds the Workspace, both answer `409` at once with `{"error": "…", "code": "workspace_busy"}`, naming that Session and turn, and change nothing; another operation of the Workspace is waited for up to 10 seconds, then refused the same way, naming it. Another conflict is a `409` without `code` |
 | PUT | `/api/sessions/{id}/environment` | Review/change `{image, setup_command, setup_approved, setup_reviewed:true}` and synchronously prepare that exact generation |
 | POST | `/api/sessions/{id}/environment/rebuild` | Remove the old runtime and reproduce the persisted reviewed environment plan |
 | POST | `/api/sessions/{id}/environment/confirm-runtime-cleanup` | High-friction E2B recovery acknowledgment. Send exactly one target: `{runtime_id, confirmed:true}` after manually deleting that retained runtime, or `{creation_token, confirmed_all_matching_sandboxes_deleted:true}` after manually deleting every sandbox whose metadata contains `axocoatl_creation_token=<exact token>` |
@@ -276,7 +276,7 @@ below.
 | POST | `/api/sessions/{id}/network/proposals/{proposal_id}/reject` | `{command_id}`; reject a host an Agent asked for. Returns `{proposal_id, state}` |
 | POST | `/api/network/reload` | Read the daemon's configuration file again and [apply its allowlists](#reload-the-network-allowlists) to new and running Sessions. Returns `{applied, unchanged, restart_required, revisions, changes}`, with `503` and `failed` when a running Session kept its policy |
 | GET | `/api/session-turns/search?q=…&session_id=…` | Literal case-insensitive search; omit Session ID for all. With a Session ID and no `history_version`, answers in that Session's [form](#session-history-versions) |
-| GET | `/api/sessions/{id}/export?format=markdown` | Markdown by default; accepts `markdown`, `md`, or `json`. Without `history_version`, a Session whose History holds native execution (every loadout run's) exports in the versioned [form](#session-history-versions), as its record bundle does |
+| GET | `/api/sessions/{id}/export?format=markdown` | Markdown by default; accepts `markdown`, `md`, or `json`. Without `history_version`, a Session whose History holds native execution (every loadout run's) exports in the versioned [form](#session-history-versions), as its record bundle does. An unknown Session is a `404` |
 | POST | `/api/sessions/{id}/rewind` | `{keep_through_turn_id?}`; legacy `{keep}` is raw message count |
 
 `GET /api/session-teams` returns config-owned records of this shape:
@@ -410,6 +410,21 @@ closes. The error names the turn and the two ways out, both through
 
 The app offers the same two choices when a message is sent while the turn needs
 attention.
+
+### A busy Workspace
+
+A turn holds its Session's Workspace for as long as it runs or needs attention. A
+request that acts on the Workspace never waits for a turn: while a turn of any Session
+of the Workspace holds it, the request is refused at once with `409`, naming that
+Session, its loadout run and its turn, and nothing changes; send it again once the turn
+has ended, or stop the turn. An operation that is not a turn, such as another Session
+being created and its environment prepared, a run's admission, a Git change or Ways
+checks, is waited for up to 10 seconds; when it has not ended by then, the request is
+refused the same way, naming that operation. Creating a Session (`POST /api/sessions`,
+`POST /api/workspaces/{id}/sessions`), Close and Delete carry `"code": "workspace_busy"`
+beside `error`; attachment changes, environment changes, Reopen, file and Git changes
+and the Ways reads, checks, judge and Keep answer the same `409` without it.
+[`POST /api/runs`](#loadouts-and-runs) refuses at once whatever holds the Workspace.
 
 ### Session network record
 

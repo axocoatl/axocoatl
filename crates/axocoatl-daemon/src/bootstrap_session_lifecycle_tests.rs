@@ -1,8 +1,8 @@
 //! Session lifecycle on a live daemon, as the 1.3 smoke runs found it:
-//! closing an idle Session while another Session's turn holds their
-//! Workspace, what Close leaves on Podman, and a data directory made before
-//! the daemon first started. Each body runs in a child process with its own
-//! data root, because bootstrap reads the process environment.
+//! closing an idle Session or creating another while another Session's turn
+//! holds their Workspace, what Close leaves on Podman, and a data directory
+//! made before the daemon first started. Each body runs in a child process
+//! with its own data root, because bootstrap reads the process environment.
 use super::*;
 use crate::loadout::api::{RunAccepted, RunRequest};
 use crate::loadout::host::{CheckLabel, ReproRequest};
@@ -312,13 +312,17 @@ esac
     format!("{}:/usr/bin:/bin", bin.display())
 }
 
-/// The daemon's configuration, with the lifecycle loadout beside it.
+/// The configured Agent a workbench Session is created with.
+const HELPER: &str = "helper";
+
+/// The daemon's configuration, with the lifecycle loadout beside it. Its one
+/// configured Agent ([`HELPER`]) is what a workbench Session selects.
 async fn load_config(dir: &std::path::Path, model_url: &str) -> AxocoatlConfig {
     let config_path = dir.join("axocoatl.yaml");
     std::fs::write(
         &config_path,
         format!(
-            "agents: []\nproviders:\n  ollama:\n    base_url: {model_url}\nsandbox:\n  backend: podman\n  network: bridge\nconsolidation:\n  enabled: false\n"
+            "agents:\n  - id: {HELPER}\n    name: Helper\n    provider: ollama\n    model: {MODEL}\n    role: autonomous\n    tools: [read_file]\nproviders:\n  ollama:\n    base_url: {model_url}\nsandbox:\n  backend: podman\n  network: bridge\nconsolidation:\n  enabled: false\n"
         ),
     )
     .unwrap();
@@ -393,6 +397,27 @@ async fn a_run_on_a_legacy_data_root_names_the_upgrade_command() {
     .await;
 }
 
+/// With AXOCOATL_E2E_MODEL_CACHE set to a directory holding the
+/// all-MiniLM-L6-v2 files, put them in the child's data root (made
+/// owner-only first) so its configured Agent's memory does not download
+/// them.
+fn copy_model_cache(root: &std::path::Path) -> Option<String> {
+    let cache = std::path::PathBuf::from(std::env::var_os("AXOCOATL_E2E_MODEL_CACHE")?);
+    let files = ["config.json", "tokenizer.json", "model.safetensors"];
+    if !files.iter().all(|name| cache.join(name).is_file()) {
+        return None;
+    }
+    let data = root.join("data");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let models = data.join("models").join("all-MiniLM-L6-v2");
+    std::fs::create_dir_all(&models).unwrap();
+    for name in files {
+        std::fs::copy(cache.join(name), models.join(name)).unwrap();
+    }
+    None
+}
+
 /// Whether Podman has a volume named `name`.
 async fn volume_exists(name: &str) -> bool {
     let status = tokio::process::Command::new("podman")
@@ -453,7 +478,12 @@ impl Drop for Cleanup {
 /// its Session is idle; run B's turn holds the same Workspace.
 /// - Closing or deleting A is refused at once (not after 60 s) with a busy
 ///   Workspace that names B's Session and turn, and changes nothing; a new
-///   turn of A and a third run on the repository are refused the same way.
+///   turn of A, a third run on the repository, a new Session on it (both
+///   ways of creating one; not after B's whole turn) and a file change in A
+///   are refused the same way.
+/// - Once B is stopped, an operation that is not a turn holds the
+///   Workspace: Close waits for it ten seconds, then refuses, naming it;
+///   released within that time, Close goes on.
 /// - Once B is stopped, A closes. Close removes A's runtime volumes (egress
 ///   socket, identity socket, service socket, trust) and keeps its Node
 ///   dependency volume; Reopen starts A again with new runtime volumes, and
@@ -463,13 +493,16 @@ impl Drop for Cleanup {
 /// CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-daemon --lib \
 ///   an_idle_session_closes_once_another_sessions_turn_lets_go -- --ignored
 /// ```
+///
+/// Set AXOCOATL_E2E_MODEL_CACHE to a directory with the all-MiniLM-L6-v2
+/// files to avoid downloading the embedding model.
 #[tokio::test]
 #[ignore = "requires rootless Podman, docker.io/library/alpine:3.20 and the egress sidecar image"]
 async fn an_idle_session_closes_once_another_sessions_turn_lets_go() {
     if std::env::var_os(CHILD).is_none() {
         run_child(
             "bootstrap::session_native_lifecycle::lifecycle_tests::an_idle_session_closes_once_another_sessions_turn_lets_go",
-            |_| None,
+            copy_model_cache,
         )
         .await;
         return;
@@ -610,6 +643,86 @@ async fn an_idle_session_closes_once_another_sessions_turn_lets_go() {
             Err(other) => panic!("expected a busy Workspace, got {other}"),
             Ok(accepted) => panic!("admitted {}", accepted.run_id),
         }
+        // A new Session on the repository is refused at once, naming B, by
+        // path and by Workspace, and none is created.
+        let workspace_id = daemon.get_session(&a_id).await.unwrap().workspace_id;
+        let sessions = daemon.list_sessions().await.len();
+        for by_workspace in [false, true] {
+            let asked = tokio::time::Instant::now();
+            let mode = SessionMode::SingleAgent {
+                agent_id: HELPER.into(),
+            };
+            let created = tokio::time::timeout(Duration::from_secs(60), async {
+                if by_workspace {
+                    daemon
+                        .create_session_in_workspace(
+                            &workspace_id,
+                            "probe",
+                            mode,
+                            Vec::new(),
+                            Vec::new(),
+                            None,
+                            None,
+                            false,
+                            true,
+                        )
+                        .await
+                } else {
+                    daemon
+                        .create_session(
+                            "probe",
+                            &repo.display().to_string(),
+                            mode,
+                            Vec::new(),
+                            Vec::new(),
+                            None,
+                        )
+                        .await
+                }
+            })
+            .await
+            .expect("creating a Session never waits for another Session's turn");
+            match created {
+                Err(DaemonError::WorkspaceBusy(message)) => {
+                    assert!(
+                        message.starts_with("No Session was created: its Workspace "),
+                        "{message}"
+                    );
+                    assert!(message.contains(&b.session_id), "{message}");
+                    assert!(message.contains(&b.run_id), "{message}");
+                    assert!(message.contains("is running"), "{message}");
+                }
+                Err(other) => panic!("expected a busy Workspace, got {other}"),
+                Ok(session) => panic!("created {}", session.id),
+            }
+            assert!(
+                asked.elapsed() < Duration::from_secs(10),
+                "{:?}",
+                asked.elapsed()
+            );
+        }
+        assert_eq!(daemon.list_sessions().await.len(), sessions);
+        // So is a change to A's files: it would wait for B's whole turn.
+        match tokio::time::timeout(
+            Duration::from_secs(20),
+            daemon.session_write_file(&a_id, "README.md", "# Changed\n"),
+        )
+        .await
+        .expect("a file change never waits for another Session's turn")
+        {
+            Err(DaemonError::WorkspaceBusy(message)) => {
+                assert!(
+                    message.starts_with("The change was not made: its Workspace "),
+                    "{message}"
+                );
+                assert!(message.contains(&b.session_id), "{message}");
+            }
+            other => panic!("expected a busy Workspace, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(repo.join("README.md")).unwrap(),
+            "# Lifecycle\n"
+        );
 
         // B is stopped; A then closes at once.
         daemon.request_loadout_run_stop(&b.run_id).await?;
@@ -623,6 +736,46 @@ async fn an_idle_session_closes_once_another_sessions_turn_lets_go() {
             axocoatl_session::run_outcome::exit_code::INTERRUPTED,
             "{b_outcome:?}"
         );
+        // An operation that is not a turn holds the Workspace: Close waits
+        // for it as long as WORKSPACE_OPERATION_WAIT, then refuses, naming
+        // it, and changes nothing.
+        let wait = super::workspace_operation::WORKSPACE_OPERATION_WAIT;
+        let request = || super::workspace_operation::WorkspaceRequest {
+            doing: "the test's own operation".into(),
+            refused: "unused".into(),
+        };
+        let held = daemon
+            .take_workspace_operation(&workspace_id, request())
+            .await?;
+        let asked = tokio::time::Instant::now();
+        match daemon.close_session(&a_id).await {
+            Err(DaemonError::WorkspaceBusy(message)) => {
+                assert!(
+                    message.starts_with(&format!("Session {a_id} was not closed: its Workspace ")),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("is held by another operation: the test's own operation"),
+                    "{message}"
+                );
+                assert!(message.contains("did not end within 10 s"), "{message}");
+            }
+            other => panic!("expected a busy Workspace, got {other:?}"),
+        }
+        assert!(
+            asked.elapsed() >= wait && asked.elapsed() < wait + Duration::from_secs(10),
+            "{:?}",
+            asked.elapsed()
+        );
+        assert_eq!(
+            daemon.get_session(&a_id).await.unwrap().status,
+            axocoatl_session::SessionStatus::Active
+        );
+        // Released within that time: Close goes on.
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            drop(held);
+        });
         let asked = tokio::time::Instant::now();
         daemon.close_session(&a_id).await?;
         assert!(
@@ -630,6 +783,7 @@ async fn an_idle_session_closes_once_another_sessions_turn_lets_go() {
             "{:?}",
             asked.elapsed()
         );
+        release.await.unwrap();
 
         // Close removed A's containers and runtime volumes, and kept its
         // dependency volume for Reopen.
