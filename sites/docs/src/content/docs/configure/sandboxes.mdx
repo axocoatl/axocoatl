@@ -323,12 +323,16 @@ In a hardened container:
   also refuses Unix sockets (only connected socket pairs remain, stream and
   sequenced-packet, which child processes' pipes and Rust's process spawning use),
   `inotify` and `fanotify` watches and changes of extended attributes, which the
-  capability would otherwise reach through directories it could not enter before.
+  capability would otherwise reach through directories it could not enter before, and
+  System V IPC (shared memory, semaphores and message queues) and POSIX message
+  queues, which no file permission or Landlock rule covers and which every user of the
+  container shares, so a helper can neither use a writer's nor leave one behind.
 - A helper writes almost nowhere. The capability grants no write, and the same
   Landlock domain refuses writing, creating, truncating, renaming, linking and
   removing files everywhere but where noted here. Its file tools (`read_file`, `grep`,
   `glob`, `list_dir`) write nothing: they may only open `/dev/null` to discard output,
-  and their seccomp filter also refuses changing a file's mode, owner or times. Its
+  and their seccomp filter also refuses changing a file's mode, owner or times, and
+  opening any socket, so they reach no network address. Its
   shell writes only beneath its own temporary directory and to `/dev/null`,
   `/dev/zero`, `/dev/tty` and `/dev/urandom`; not to `/tmp`, `/var/tmp`, `/dev/shm` or
   `/dev` themselves, the Workspace, or a directory any user may change inside another
@@ -336,7 +340,8 @@ In a hardened container:
   Perl, Node and npm work there, and so does `cargo check` with `CARGO_TARGET_DIR` and
   `CARGO_HOME` under `$TMPDIR`. A program that writes to a fixed
   path in `/tmp` or `/dev/shm` instead of `$TMPDIR` fails; Python's `multiprocessing`
-  locks (POSIX semaphores in `/dev/shm`), for example, do not work in a helper. It
+  locks (POSIX semaphores in `/dev/shm`), for example, do not work in a helper, and
+  neither does a program that needs System V IPC or POSIX message queues. It
   cannot run a file only its owner may execute; run such a script with its
   interpreter (`sh script.sh`).
 - A helper cannot read the environment of a writer's processes under `/proc`, so it
@@ -348,8 +353,9 @@ In a hardened container:
   `perf_event_open`, `bpf`, kernel keyrings, loading kernel modules, `mount` and the
   other mount calls, `setns`, `open_by_handle_at`, new user namespaces, and packet,
   `vsock`, Bluetooth and key sockets with `EPERM`; a helper's also refuses Unix sockets,
-  `inotify` and `fanotify` watches and extended attribute changes, and its file tools'
-  also changes of a file's mode, owner or times. `clone3` and the `io_uring` calls get `ENOSYS`, so the C
+  `inotify` and `fanotify` watches, extended attribute changes, System V IPC and POSIX
+  message queues, and its file tools' also changes of a file's mode, owner or times and
+  every socket. `clone3` and the `io_uring` calls get `ENOSYS`, so the C
   library and libuv fall back to older calls. Each such command also runs in a
   Landlock domain of its own: it cannot trace a process it did not start, or read that
   process's memory or environment, another writer's command included. Debuggers,
@@ -359,7 +365,8 @@ In a hardened container:
 - Under `network: egress` the only proxy socket in the container is the proxy's
   identity socket, in a directory only root can enter. The users reach the proxy only
   through `127.0.0.1:3128`, with a credential; a helper's shell cannot open TCP
-  connections at all, and no helper command can open a Unix socket. The container's first process, which serves that address,
+  connections at all, its file tools cannot open any socket, and no helper command can
+  open a Unix socket. The container's first process, which serves that address,
   starts each connection with the identity of the program that opened it, which it
   reads from `/proc`: the program's path, the SHA-256 of its file, its user and group,
   and the paths of its parent programs. The proxy accepts no connection on that

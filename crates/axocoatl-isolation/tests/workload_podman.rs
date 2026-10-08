@@ -1702,8 +1702,9 @@ fn peer_of(fixture: &Fixture, before: usize, exe: &str) -> PeerIdentity {
 /// the proxy only through its identity socket, so every connection the
 /// decision point hears of names the program that opened it: its path,
 /// SHA-256, user and parents, as PID 1 found them. A writer's tool, the
-/// program a tool started, a helper and a terminal are told apart; a line a
-/// process writes itself is refused.
+/// program a tool started, the helper's user and a terminal are told apart;
+/// a helper's own commands make no connection; a line a process writes
+/// itself is refused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test workload_podman -- --ignored --test-threads=1"]
 async fn hardened_egress_names_the_program_behind_each_connection() {
@@ -1765,17 +1766,31 @@ async fn hardened_egress_names_the_program_behind_each_connection() {
         assert!(peer.ancestors.contains(&shell), "{peer:?}");
         assert!(peer.ancestors.iter().any(|parent| parent == "/axocoatl-exec-supervisor"), "{peer:?}");
 
-        // Every connection from the container is named, including a helper's
-        // without a credential (refused) and a terminal's.
+        // A helper's commands make no connection at all: its file tools open
+        // no socket and its shell's TCP is refused by Landlock, so the proxy
+        // never hears of them.
         let before = fixture.authority.events().len();
-        supervised(
-            sandbox.as_ref(),
-            ExecIdentity::Helper,
+        for restriction in [None, Some(helper_restriction(sandbox.root()))] {
+            let ran = supervised(
+                sandbox.as_ref(),
+                ExecIdentity::Helper,
+                "http_proxy=http://127.0.0.1:3128 wget -q -T 5 -O - http://upstream.test:8000/helper 2>&1; echo wget=$?",
+                None,
+                restriction,
+            )
+            .await;
+            assert!(!ran.stdout.contains("wget=0"), "{}", ran.stdout);
+        }
+        assert_eq!(fixture.authority.events().len(), before);
+        // Every connection from the container is named, including one by the
+        // helper's user without a credential (refused), as a process outside
+        // the supervisor would make it, and a terminal's.
+        let outside = podman(&[
+            "exec", "--user", "1001:1001", &container, "sh", "-c",
             "http_proxy=http://127.0.0.1:3128 wget -q -T 5 -O - http://upstream.test:8000/helper 2>&1; true",
-            None,
-            None,
-        )
+        ])
         .await;
+        assert!(outside.status.success(), "{outside:?}");
         let helper = peer_of(&fixture, before, &wget);
         assert_eq!((helper.uid, helper.gid), (Some(1001), Some(1001)), "{helper:?}");
         assert!(fixture.authority.events()[before..].iter().any(|event| matches!(event,
@@ -2410,7 +2425,9 @@ async fn a_helper_reads_nothing_outside_the_workspace_it_could_not_read_before()
 /// A helper's command holds `CAP_DAC_READ_SEARCH` and nothing else, and
 /// what that capability would extend beyond Landlock is refused: Unix
 /// sockets (the proxy's identity socket in root's directory) and watches.
-/// A setuid program gains nothing.
+/// Neither its shell (Landlock refuses TCP) nor its file tools (which open
+/// no socket) reach the proxy's loopback relay. A setuid program gains
+/// nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test workload_podman -- --ignored --test-threads=1"]
 async fn a_helpers_only_capability_reaches_no_socket_and_no_new_privilege() {
@@ -2434,6 +2451,8 @@ async fn a_helpers_only_capability_reaches_no_socket_and_no_new_privilege() {
                 "/usr/local/axo-setuid/id -u; \
                  printf 'CONNECT upstream.test:8000 HTTP/1.1\\r\\n\\r\\n' | \
                  nc -w 2 local:/run/axocoatl/egress/identity.sock 2>&1; echo nc=$?; \
+                 printf 'CONNECT upstream.test:8000 HTTP/1.1\\r\\n\\r\\n' | \
+                 nc -w 2 127.0.0.1 3128 2>&1; echo relay=$?; \
                  stat -c '%n %F' /run/axocoatl/egress/identity.sock 2>&1; \
                  ls /run/axocoatl/egress >/dev/null 2>&1 || echo list=refused; \
                  timeout 3 busybox inotifyd true node_modules/.private:w 2>&1; echo inotifyd=$?",
@@ -2446,6 +2465,7 @@ async fn a_helpers_only_capability_reaches_no_socket_and_no_new_privilege() {
             assert!(!ran.stdout.contains("HTTP/1.1"), "{}", ran.stdout);
             assert!(ran.stdout.contains("Operation not permitted"), "{}", ran.stdout);
             assert!(seen.iter().any(|line| line.starts_with("nc=") && *line != "nc=0"), "{}", ran.stdout);
+            assert!(seen.iter().any(|line| line.starts_with("relay=") && *line != "relay=0"), "{}", ran.stdout);
             assert!(seen.contains(&"list=refused"), "{}", ran.stdout);
             // Refused at once, not watching until the timeout.
             assert!(seen.contains(&"inotifyd=1"), "{}", ran.stdout);

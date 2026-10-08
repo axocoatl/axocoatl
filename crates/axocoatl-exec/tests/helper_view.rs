@@ -266,6 +266,17 @@ fn a_helper_reads_a_private_workspace_and_no_private_file_outside_it() {
     let ws = |name: &str| fixture.workspace.join(name).to_string_lossy().into_owned();
     let home = fixture.home_file.to_string_lossy().into_owned();
     let tmp = fixture.tmp_file.path().to_string_lossy().into_owned();
+    // The writer's links out of the Workspace lead nowhere the helper may
+    // read: Landlock judges the file a link opens, not the link.
+    for (name, target) in [
+        ("home-link", fixture.home_file.as_path()),
+        ("tmp-link", fixture.tmp_file.path()),
+        ("shadow-link", Path::new("/etc/shadow")),
+    ] {
+        let link = fixture.workspace.join(name);
+        std::os::unix::fs::symlink(target, &link).unwrap();
+        std::os::unix::fs::lchown(&link, Some(WRITER.0), Some(WRITER.1)).unwrap();
+    }
     let ran = helper(
         &fixture.workspace,
         &format!(
@@ -280,6 +291,9 @@ fn a_helper_reads_a_private_workspace_and_no_private_file_outside_it() {
             &ws("src/lib.rs"),
             &home,
             &tmp,
+            &ws("home-link"),
+            &ws("tmp-link"),
+            &ws("shadow-link"),
             "/etc/shadow",
             "/etc/passwd",
             "/proc/self/status",
@@ -298,6 +312,8 @@ fn a_helper_reads_a_private_workspace_and_no_private_file_outside_it() {
         format!("{}=read", ws("src/lib.rs")),
         format!("{home}=denied"),
         format!("{tmp}=denied"),
+        format!("{}=denied", ws("home-link")),
+        format!("{}=denied", ws("tmp-link")),
         "/etc/passwd=read".into(),
         "/proc/self/status=denied".into(),
         "/proc/1/status=denied".into(),
@@ -318,11 +334,33 @@ fn a_helper_reads_a_private_workspace_and_no_private_file_outside_it() {
     }
     if Path::new("/etc/shadow").exists() {
         assert!(got.contains("/etc/shadow=denied"), "{}", ran.stdout);
+        assert!(
+            got.contains(&format!("{}=denied", ws("shadow-link"))),
+            "{}",
+            ran.stdout
+        );
     }
-    assert!(
-        ran.stdout.contains(". .. README.md run.sh src"),
-        "{}",
-        ran.stdout
+    let listing = ran
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix(".: "))
+        .and_then(|line| line.split("src:").next())
+        .unwrap_or_else(|| panic!("no listing: {}", ran.stdout));
+    let mut listed: Vec<&str> = listing.split_whitespace().collect();
+    listed.sort_unstable();
+    assert_eq!(
+        listed,
+        [
+            ".",
+            "..",
+            "README.md",
+            "home-link",
+            "run.sh",
+            "shadow-link",
+            "src",
+            "tmp-link"
+        ],
+        "{listing}"
     );
     assert!(ran.stdout.contains("lib.rs"), "{}", ran.stdout);
     // The file tools write nothing, so they get no scratch directory.
@@ -1173,4 +1211,256 @@ fn a_helper_launch_without_its_workspace_is_refused() {
             && message.contains("does not exist"),
         "{message}"
     );
+}
+
+/// A Workspace named through a final symbolic link, or one that is not a
+/// directory, is refused: the link could lead the view, and with it the
+/// capability, anywhere (here the writer's private home).
+#[test]
+fn a_helper_launch_through_a_linked_or_non_directory_workspace_is_refused() {
+    require_launch!();
+    let fixture = Fixture::new();
+    let base = fixture.workspace.parent().unwrap();
+    let link = base.join("linked-workspace");
+    std::os::unix::fs::symlink(fixture.home_file.parent().unwrap(), &link).unwrap();
+    let file = base.join("file-workspace");
+    write_private(&file, "not a directory\n", WRITER, 0o600);
+    for workspace in [&link, &file] {
+        let ran = helper_in(Path::new("/"), workspace, "cat token; echo ran", &[], None);
+        let ProcessOutcome::LaunchFailed { message } = &ran.outcome else {
+            panic!("{workspace:?}: {:?}: {}", ran.outcome, ran.stdout);
+        };
+        assert!(
+            message.starts_with("helper view unavailable: the Workspace")
+                && message.contains("is not a directory"),
+            "{message}"
+        );
+        assert!(!ran.stdout.contains("writer-home-token"));
+    }
+}
+
+/// System V IPC objects and POSIX message queues live outside the file
+/// system Landlock covers, are shared by the container's users and outlast
+/// a command: a helper can neither make one nor use a writer's, even one
+/// whose mode lets any user (as an ordinary other user still can). Its
+/// file tools open no socket at all, so no TCP or UDP address (the egress
+/// proxy's loopback relay among them) is in reach; its shell's TCP
+/// connections are refused by Landlock.
+#[test]
+fn a_helper_uses_no_ipc_object_and_reaches_no_tcp_listener() {
+    require_launch!();
+    if !require_python() {
+        return;
+    }
+    let fixture = Fixture::new();
+    // A writer's message queue and shared memory segment any user may use.
+    // SAFETY: plain System V IPC calls with scalar arguments and a complete
+    // local message buffer.
+    let (queue, segment) = unsafe {
+        let queue = libc::msgget(libc::IPC_PRIVATE, libc::IPC_CREAT | 0o666);
+        let segment = libc::shmget(libc::IPC_PRIVATE, 4096, libc::IPC_CREAT | 0o666);
+        assert!(
+            queue >= 0 && segment >= 0,
+            "{}",
+            std::io::Error::last_os_error()
+        );
+        #[repr(C)]
+        struct Message {
+            kind: libc::c_long,
+            text: [u8; 16],
+        }
+        let message = Message {
+            kind: 1,
+            text: *b"writer-ipc-data\0",
+        };
+        assert_eq!(
+            libc::msgsnd(queue, (&message as *const Message).cast(), 16, 0),
+            0
+        );
+        (queue, segment)
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    let script = r#"
+import ctypes, os, socket, sys
+libc = ctypes.CDLL(None, use_errno=True)
+queue, segment, port = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+def attempt(name, call):
+    ctypes.set_errno(0)
+    try:
+        ok = call()
+    except OSError as error:
+        print(name + "=errno-" + str(error.errno)); return
+    print(name + ("=ok" if ok else "=errno-" + str(ctypes.get_errno())))
+failed = ctypes.c_void_p(-1).value
+libc.shmat.restype = ctypes.c_void_p
+libc.msgrcv.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_long, ctypes.c_int]
+libc.msgrcv.restype = ctypes.c_ssize_t
+buffer = ctypes.create_string_buffer(64)
+# Only using the writer's objects: an ordinary other user's baseline makes
+# nothing that would outlast the test.
+attempt("msgrcv", lambda: libc.msgrcv(queue, buffer, 48, 0, 0o4000) >= 0)
+attempt("shmat", lambda: libc.shmat(segment, None, 0) not in (None, failed))
+if sys.argv[4:] == ["plain"]:
+    sys.exit(0)
+attempt("msgsnd", lambda: libc.msgsnd(queue, buffer, 8, 0o4000) == 0)
+attempt("shmget", lambda: libc.shmget(0, 4096, 0o1600) >= 0)
+attempt("msgget", lambda: libc.msgget(0, 0o1600) >= 0)
+attempt("semget", lambda: libc.semget(0, 1, 0o1600) >= 0)
+attempt("mq_open", lambda: libc.mq_open(b"/axo-helper-view", os.O_CREAT | os.O_RDWR, 0o600, None) >= 0)
+def tcp(family, address):
+    with socket.socket(family, socket.SOCK_STREAM) as s:
+        s.settimeout(2)
+        s.connect(address)
+    return True
+def udp():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.sendto(b"x", ("127.0.0.1", port))
+    return True
+attempt("tcp", lambda: tcp(socket.AF_INET, ("127.0.0.1", port)))
+attempt("tcp6", lambda: tcp(socket.AF_INET6, ("::1", port)))
+attempt("udp", udp)
+"#;
+    let args = [script, &queue.to_string(), &segment.to_string(), &port];
+    let eperm = format!("errno-{}", libc::EPERM);
+    for restriction in [None, Some(shell_restriction(&fixture.workspace))] {
+        let shell = restriction.is_some();
+        let ran = helper(
+            &fixture.workspace,
+            "p=$1; shift; python3 -c \"$p\" \"$@\"",
+            &args,
+            restriction,
+        );
+        if shell && landlock_abi() < 4 {
+            continue;
+        }
+        ran.exited();
+        let got = ran.lines();
+        for call in [
+            "shmget", "msgget", "semget", "mq_open", "msgrcv", "msgsnd", "shmat",
+        ] {
+            assert!(
+                got.contains(&format!("{call}={eperm}")),
+                "{shell}: {call}: {}\n{}",
+                ran.stdout,
+                ran.stderr
+            );
+        }
+        if shell {
+            // Landlock refuses the connection itself.
+            let eacces = format!("tcp=errno-{}", libc::EACCES);
+            assert!(got.contains(&eacces), "{}\n{}", ran.stdout, ran.stderr);
+        } else {
+            for call in ["tcp", "tcp6", "udp"] {
+                assert!(
+                    got.contains(&format!("{call}={eperm}")),
+                    "{call}: {}\n{}",
+                    ran.stdout,
+                    ran.stderr
+                );
+            }
+        }
+    }
+    // Nothing reached the listener, and the writer's message is still
+    // queued; an ordinary other user, without the supervisor, takes it.
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    // SAFETY: msqid_ds is fully written by a successful IPC_STAT.
+    let queued = unsafe {
+        let mut status: libc::msqid_ds = std::mem::zeroed();
+        assert_eq!(libc::msgctl(queue, libc::IPC_STAT, &mut status), 0);
+        status.msg_qnum
+    };
+    assert_eq!(queued, 1);
+    let plain = Command::new("python3")
+        .args([
+            "-c",
+            script,
+            &queue.to_string(),
+            &segment.to_string(),
+            &port,
+            "plain",
+        ])
+        .uid(HELPER.0)
+        .gid(HELPER.1)
+        .current_dir("/")
+        .output()
+        .unwrap();
+    let plain = String::from_utf8_lossy(&plain.stdout).into_owned();
+    // SAFETY: removing the objects this test made.
+    unsafe {
+        libc::msgctl(queue, libc::IPC_RMID, std::ptr::null_mut());
+        libc::shmctl(segment, libc::IPC_RMID, std::ptr::null_mut());
+    }
+    for line in ["msgrcv=ok", "shmat=ok"] {
+        assert!(plain.lines().any(|seen| seen == line), "{line}: {plain}");
+    }
+}
+
+/// The helper's secure bits are set and locked, so no change of user gives
+/// it capabilities back, and neither a set-user-ID-root program nor its own
+/// requests raise its user or another capability.
+#[test]
+fn a_setuid_program_and_capability_requests_gain_a_helper_nothing() {
+    require_launch!();
+    if !require_python() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let id = Command::new("sh")
+        .args(["-c", "readlink -f \"$(command -v id)\""])
+        .output()
+        .unwrap();
+    let id = String::from_utf8(id.stdout).unwrap();
+    let setuid = fixture.workspace.join("setuid-id");
+    std::fs::copy(id.trim(), &setuid).unwrap();
+    chown(&setuid, Some(0), Some(0)).unwrap();
+    std::fs::set_permissions(&setuid, std::fs::Permissions::from_mode(0o4755)).unwrap();
+    let script = r#"
+import ctypes, os
+libc = ctypes.CDLL(None, use_errno=True)
+print("securebits=%d" % libc.prctl(27, 0, 0, 0, 0))
+def attempt(name, call):
+    try:
+        call(); print(name + "=ok")
+    except OSError as error:
+        print(name + "=errno-" + str(error.errno))
+def check(result):
+    if result != 0:
+        raise OSError(ctypes.get_errno(), "")
+attempt("setuid", lambda: os.setuid(0))
+attempt("setgid", lambda: os.setgid(0))
+attempt("securebits", lambda: check(libc.prctl(28, 0, 0, 0, 0)))
+attempt("ambient", lambda: check(libc.prctl(47, 2, 21, 0, 0)))
+"#;
+    for restriction in [None, Some(shell_restriction(&fixture.workspace))] {
+        let shell = restriction.is_some();
+        let ran = helper(
+            &fixture.workspace,
+            "./setuid-id -u; ./setuid-id -ru; python3 -c \"$1\"",
+            &[script],
+            restriction,
+        );
+        if shell && landlock_abi() < 4 {
+            continue;
+        }
+        ran.exited();
+        let lines: Vec<&str> = ran.stdout.lines().collect();
+        assert_eq!(lines[..2], [HELPER.0.to_string(), HELPER.0.to_string()]);
+        let got = ran.lines();
+        let eperm = format!("errno-{}", libc::EPERM);
+        // SECBIT_NOROOT and SECBIT_NO_SETUID_FIXUP, both locked.
+        assert!(got.contains("securebits=15"), "{shell}: {}", ran.stdout);
+        for call in ["setuid", "setgid", "securebits", "ambient"] {
+            assert!(
+                got.contains(&format!("{call}={eperm}")),
+                "{shell}: {call}: {}\n{}",
+                ran.stdout,
+                ran.stderr
+            );
+        }
+    }
 }

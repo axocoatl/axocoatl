@@ -368,8 +368,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequenced-packet, stay allowed: child processes' pipes and Rust's process spawning,
   and so `cargo check`, use them), `inotify` and `fanotify` watches and setting or
   removing extended attributes, which the capability would otherwise reach through
-  directories it could not enter before; so an app's own Unix socket, abstract or not,
-  and the egress proxy's identity socket are out of its reach. The command's standard
+  directories it could not enter before, and System V IPC and POSIX message queues,
+  which no Landlock rule covers and every user of the container shares; so an app's own
+  Unix socket, abstract or not, and the egress proxy's identity socket are out of its
+  reach, and its file tools, whose filter also refuses opening any socket, do not reach
+  the proxy over TCP either. The command's standard
   pipes are its own, so it can write to `/dev/stdout` and `/dev/stderr`. A
   hardened Session container now keeps `CAP_DAC_READ_SEARCH` for root (Podman does not
   grant it by default; root already reads everything through `CAP_DAC_OVERRIDE`). What
@@ -526,8 +529,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hardened commands' seccomp filter also refuses `open_by_handle_at`, which opens a
   file by its handle without checking the directories above it; a read-only helper's
   filter also refuses `AF_UNIX` sockets other than connected socket pairs, `inotify`
-  and `fanotify` watches and extended attribute changes, and its file tools' filter
-  also refuses changing a file's mode, owner or times (see Fixed).
+  and `fanotify` watches, extended attribute changes, System V IPC and POSIX message
+  queues (before, a helper could read or change a writer's IPC object whose mode let
+  any user, and leave its own behind), and its file tools' filter also refuses changing
+  a file's mode, owner or times and opening any socket (before, only their fixed
+  commands kept them from connecting to the egress proxy's loopback relay, which
+  refuses a connection without a credential; see Fixed). The supervisor refuses a
+  helper's launch whose Workspace is a symbolic link or not a directory, and one
+  without `--harden`.
 - A read-only helper's file tools in a hardened Session container write nothing
   (before, only the file modes limited what they could write), and its shell writes
   only in a temporary directory of its own and to four devices instead of anywhere in

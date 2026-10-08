@@ -18,10 +18,17 @@
 //! A read-only helper's filter ([`Filter::helper`]) also refuses, with
 //! `EPERM`, `socket` for `AF_UNIX`, `socketpair` of any type but
 //! `SOCK_STREAM` and `SOCK_SEQPACKET`, `inotify_add_watch`, `fanotify_init`
-//! and `fanotify_mark`,
-//! and setting or removing extended attributes (`setxattr`, `lsetxattr`,
-//! `fsetxattr`, `setxattrat`, `removexattr`, `lremovexattr`,
-//! `fremovexattr`, `removexattrat`). The helper holds `CAP_DAC_READ_SEARCH`,
+//! and `fanotify_mark`, setting or removing extended attributes (`setxattr`,
+//! `lsetxattr`, `fsetxattr`, `setxattrat`, `removexattr`, `lremovexattr`,
+//! `fremovexattr`, `removexattrat`), and every System V IPC and POSIX
+//! message queue call (`shmget`, `shmat`, `shmdt`, `shmctl`, `msgget`,
+//! `msgsnd`, `msgrcv`, `msgctl`, `semget`, `semop`, `semtimedop`, `semctl`,
+//! `mq_open`, `mq_unlink`, `mq_timedsend`, `mq_timedreceive`, `mq_notify`,
+//! `mq_getsetattr`). Those objects live outside any file system Landlock
+//! covers, are shared by every user of the container and outlast the
+//! command, so a helper could otherwise leave state behind there, or read
+//! and change a writer's object whose mode lets any user. The helper holds
+//! `CAP_DAC_READ_SEARCH`,
 //! which lets it pass directories it could not enter before; Landlock keeps
 //! it from opening, listing or executing anything there, but covers neither
 //! connecting to (or sending to) a Unix socket by path nor watching a path,
@@ -35,9 +42,13 @@
 //! write restriction, get [`Filter::helper_file_tools`]: the helper's, which
 //! also refuses changing a file's mode, owner or times (`chmod`, `fchmod`,
 //! `fchmodat`, `fchmodat2`, `chown`, `fchown`, `lchown`, `fchownat`, `utime`,
-//! `utimes`, `futimesat`, `utimensat`, where the architecture has them).
-//! Landlock covers none of these; with them refused, and Landlock refusing
-//! every write right, a file tool changes nothing.
+//! `utimes`, `futimesat`, `utimensat`, where the architecture has them),
+//! and opening any socket (`socket`, whatever its family; connected pairs
+//! stay allowed). Landlock covers none of these; with them refused, and
+//! Landlock refusing every write right, a file tool changes nothing, and
+//! it reaches no TCP or UDP address, the egress proxy's loopback relay
+//! included (the file tools run without the shell's TCP restriction, which
+//! needs Landlock ABI 4).
 //!
 //! A call made under another architecture's numbering (32-bit compatibility
 //! calls) kills the process, and on x86_64 every x32 call fails with `EPERM`,
@@ -152,7 +163,8 @@ pub fn denied_calls() -> Vec<u32> {
 }
 
 /// What a read-only helper's commands are also refused: watching a path
-/// (`inotify`, `fanotify`) and setting or removing extended attributes.
+/// (`inotify`, `fanotify`), setting or removing extended attributes, and
+/// System V IPC and POSIX message queues ([`ipc_calls`]).
 pub fn helper_denied_calls() -> Vec<u32> {
     [
         libc::SYS_inotify_add_watch,
@@ -169,11 +181,42 @@ pub fn helper_denied_calls() -> Vec<u32> {
     ]
     .iter()
     .map(|number| *number as u32)
+    .chain(ipc_calls())
+    .collect()
+}
+
+/// Every System V IPC (shared memory, message queues, semaphores) and POSIX
+/// message queue call. Their objects are kept by the kernel outside any
+/// path Landlock covers, shared by every user of the container's IPC
+/// namespace and kept after the command ends.
+pub fn ipc_calls() -> Vec<u32> {
+    [
+        libc::SYS_shmget,
+        libc::SYS_shmat,
+        libc::SYS_shmdt,
+        libc::SYS_shmctl,
+        libc::SYS_msgget,
+        libc::SYS_msgsnd,
+        libc::SYS_msgrcv,
+        libc::SYS_msgctl,
+        libc::SYS_semget,
+        libc::SYS_semop,
+        libc::SYS_semtimedop,
+        libc::SYS_semctl,
+        libc::SYS_mq_open,
+        libc::SYS_mq_unlink,
+        libc::SYS_mq_timedsend,
+        libc::SYS_mq_timedreceive,
+        libc::SYS_mq_notify,
+        libc::SYS_mq_getsetattr,
+    ]
+    .iter()
+    .map(|number| *number as u32)
     .collect()
 }
 
 /// What a read-only helper's file tools are also refused: changing a file's
-/// mode, owner or times.
+/// mode, owner or times, and opening a socket of any family.
 pub fn file_tool_denied_calls() -> Vec<u32> {
     [
         libc::SYS_fchmod,
@@ -182,6 +225,7 @@ pub fn file_tool_denied_calls() -> Vec<u32> {
         libc::SYS_fchown,
         libc::SYS_fchownat,
         libc::SYS_utimensat,
+        libc::SYS_socket,
     ]
     .iter()
     .chain(LEGACY_FILE_CHANGES)
@@ -266,8 +310,8 @@ impl Spec {
     }
 
     /// A read-only helper's: also no Unix sockets but connected pairs, no
-    /// `inotify` or `fanotify` watches and no extended attribute changes
-    /// ([`helper_denied_calls`]).
+    /// `inotify` or `fanotify` watches, no extended attribute changes and
+    /// no System V IPC or POSIX message queues ([`helper_denied_calls`]).
     pub fn helper() -> Self {
         let mut spec = Self::native();
         spec.denied.extend(helper_denied_calls());
@@ -277,7 +321,8 @@ impl Spec {
     }
 
     /// A read-only helper's file tools': the helper's, and no change of a
-    /// file's mode, owner or times either ([`file_tool_denied_calls`]).
+    /// file's mode, owner or times and no socket either
+    /// ([`file_tool_denied_calls`]).
     pub fn helper_file_tools() -> Self {
         let mut spec = Self::helper();
         spec.denied.extend(file_tool_denied_calls());
@@ -563,13 +608,14 @@ mod tests {
     }
 
     /// A helper's filter refuses what the writer's does, and also Unix
-    /// sockets (but connected pairs), `inotify` and `fanotify` watches and
-    /// extended attribute changes; the writer's keeps them all.
+    /// sockets (but connected pairs), `inotify` and `fanotify` watches,
+    /// extended attribute changes, System V IPC and POSIX message queues;
+    /// the writer's keeps them all.
     #[test]
     fn a_helpers_filter_also_refuses_unix_sockets_watches_and_attribute_changes() {
         let writer = build(&Spec::native());
         let helper = build(&Spec::helper());
-        assert!(helper.len() < 130, "{}", helper.len());
+        assert!(helper.len() < 150, "{}", helper.len());
         let call = |program: &[Instruction], nr: i64, args: [u64; 2]| {
             evaluate_with(program, AUDIT_ARCH, nr as u32, args)
         };
@@ -637,6 +683,31 @@ mod tests {
             assert_eq!(call(&helper, xattr, [0, 0]), eperm(), "{xattr}");
             assert_eq!(call(&writer, xattr, [0, 0]), RET_ALLOW, "{xattr}");
         }
+        let ipc = ipc_calls();
+        assert_eq!(ipc.len(), 18);
+        for nr in [
+            libc::SYS_shmget,
+            libc::SYS_shmat,
+            libc::SYS_shmctl,
+            libc::SYS_msgget,
+            libc::SYS_msgsnd,
+            libc::SYS_msgrcv,
+            libc::SYS_msgctl,
+            libc::SYS_semget,
+            libc::SYS_semop,
+            libc::SYS_semtimedop,
+            libc::SYS_semctl,
+            libc::SYS_mq_open,
+            libc::SYS_mq_unlink,
+            libc::SYS_mq_timedsend,
+            libc::SYS_mq_timedreceive,
+        ] {
+            assert!(ipc.contains(&(nr as u32)), "{nr}");
+        }
+        for nr in ipc {
+            assert_eq!(call(&helper, nr.into(), [0, 0]), eperm(), "{nr}");
+            assert_eq!(call(&writer, nr.into(), [0, 0]), RET_ALLOW, "{nr}");
+        }
         // Reading extended attributes, and the shell's own changes of mode
         // and times in its scratch directory, stay allowed.
         for allowed in [
@@ -658,7 +729,7 @@ mod tests {
     fn a_helpers_file_tools_also_cannot_change_modes_owners_or_times() {
         let shell = build(&Spec::helper());
         let tools = build(&Spec::helper_file_tools());
-        assert!(tools.len() < 140, "{}", tools.len());
+        assert!(tools.len() < 160, "{}", tools.len());
         let call =
             |program: &[Instruction], nr: u32| evaluate_with(program, AUDIT_ARCH, nr, [0, 0]);
         for nr in Spec::helper().denied {
@@ -690,6 +761,31 @@ mod tests {
             assert_eq!(call(&tools, nr), eperm(), "{nr}");
             assert_eq!(call(&shell, nr), RET_ALLOW, "{nr}");
         }
+        // No socket of any family, so no TCP or UDP address (the egress
+        // proxy's loopback relay among them); the shell keeps TCP for
+        // Landlock to refuse, and connected pairs stay allowed to both.
+        let socket = libc::SYS_socket as u32;
+        let stream = libc::SOCK_STREAM as u64;
+        for family in [
+            libc::AF_INET,
+            libc::AF_INET6,
+            libc::AF_UNIX,
+            libc::AF_NETLINK,
+            libc::AF_UNSPEC,
+        ] {
+            let args = [family as u64, stream];
+            assert_eq!(evaluate_with(&tools, AUDIT_ARCH, socket, args), eperm());
+        }
+        for family in [libc::AF_INET, libc::AF_INET6] {
+            let args = [family as u64, stream];
+            assert_eq!(evaluate_with(&shell, AUDIT_ARCH, socket, args), RET_ALLOW);
+        }
+        let pair = [libc::AF_UNIX as u64, stream];
+        let socketpair = libc::SYS_socketpair as u32;
+        assert_eq!(
+            evaluate_with(&tools, AUDIT_ARCH, socketpair, pair),
+            RET_ALLOW
+        );
         for allowed in [
             libc::SYS_read,
             libc::SYS_openat,

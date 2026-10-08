@@ -1461,7 +1461,7 @@ restriction below and `write_file` and `edit_file` are withheld.
   refuses to launch that command, and the Agent is told to use its read-only file tools
   instead. The read-only file tools and the host's own repository captures run without
   the restriction; in a hardened container the file tools run through the helper's
-  view, which refuses them every write.
+  view, which refuses them every write and every socket.
 - A writer's shell can still write outside its paths, so the activation's own Before and
   After repository captures decide: an equal tree digest means no change; otherwise
   complete manifests are compared exactly, or the retained patches against the same HEAD
