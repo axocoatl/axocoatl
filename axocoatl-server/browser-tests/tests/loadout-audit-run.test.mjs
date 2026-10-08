@@ -12,7 +12,8 @@ import { REPOSITORY_ROOT, launchTestDaemon } from '../support/daemon.mjs';
 // worker per area reads its area's file and reports its findings in one
 // turn, and the integrator merges them in a third turn; each turn has its
 // own Team Apply. Read-only Agents run as the hardened container's helper
-// user, which reads only what the file modes let any user read.
+// user, which reads the repository through its view of it, whatever the
+// repository's file modes.
 const MODEL = 'browser-test-model:latest';
 const DIGEST = 'a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72';
 let runtime, modelServer;
@@ -105,22 +106,25 @@ async function git(repo, ...args) {
 }
 
 /**
- * A committed fixture repository whose directory has `mode`; its files are
- * readable to other users, whatever the umask.
+ * A committed fixture repository whose directory has `mode`; its entries are
+ * readable to other users (as git clone makes them), or with `ownerOnly`
+ * readable to their owner alone (as under `umask 077`).
  */
-async function fixtureRepo(prefix, mode) {
+async function fixtureRepo(prefix, mode, { ownerOnly = false } = {}) {
   const projects = await mkdtemp(path.join(tmpdir(), prefix));
   workspaces.push(projects);
   const repo = await realpath(projects);
-  await mkdir(path.join(repo, 'src'), { mode: 0o755 });
-  await writeFile(path.join(repo, 'README.md'), '# fixture\n', { mode: 0o644 });
-  await writeFile(path.join(repo, 'src', 'lib.rs'), 'pub fn one() -> u32 { 1 }\n', { mode: 0o644 });
-  for (const [entry, entryMode] of [['src', 0o755], ['README.md', 0o644], ['src/lib.rs', 0o644]]) {
+  const [dirMode, fileMode] = ownerOnly ? [0o700, 0o600] : [0o755, 0o644];
+  await mkdir(path.join(repo, 'src'), { mode: dirMode });
+  await writeFile(path.join(repo, 'README.md'), '# fixture\n', { mode: fileMode });
+  await writeFile(path.join(repo, 'src', 'lib.rs'), 'pub fn one() -> u32 { 1 }\n', { mode: fileMode });
+  for (const [entry, entryMode] of [['src', dirMode], ['README.md', fileMode], ['src/lib.rs', fileMode]]) {
     await chmod(path.join(repo, entry), entryMode);
   }
   await git(repo, 'init', '-q', '-b', 'main');
   await git(repo, 'add', '.');
   await git(repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Add a fixture');
+  if (ownerOnly) assert.equal((await run('chmod', ['-R', 'go-rwx', path.join(repo, '.git')])).code, 0);
   await chmod(repo, mode);
   return repo;
 }
@@ -206,29 +210,32 @@ test('the audit loadout plans two areas, runs a read-only worker per area and in
   assert.match(await readFile(junitPath, 'utf8'), /<testsuite name="findings"/);
 });
 
-// On a Linux host the helper user is one of the other users, so a
-// repository they may not enter is closed to every read-only Agent: the run
-// does not start, and says why, instead of reporting areas that nobody
-// could examine. A macOS Podman machine's shared folder reports the helper
-// as the owner of every file and lets it in.
-test('an audit of a repository other users may not enter is refused before its first turn on a Linux host', {
-  timeout: 900_000,
-  skip: process.platform === 'linux' ? false : 'only a Linux host keeps the helper user out of a 0700 repository',
-}, async () => {
-  const repo = await fixtureRepo('axocoatl-audit-private-', 0o700);
+// A repository only its owner may enter, as `mktemp -d` and `umask 077`
+// make one (directories 0700, files 0600): the read-only Agents run as the
+// helper user, one of the other users, and still read it through their view
+// of it, on a Linux host as on a macOS Podman machine; they change nothing.
+test('an audit of a repository only its owner may enter reads it and changes nothing', { timeout: 900_000 }, async () => {
+  const repo = await fixtureRepo('axocoatl-audit-private-', 0o700, { ownerOnly: true });
   const model = `ollama:${MODEL}`;
   const asked = chats.length;
   const result = await run(binary(), ['run', 'audit', '--task', 'Find defects.', '--repo', repo,
     '--model', `planner=${model}`, '--model', `worker=${model}`, '--model', `integrator=${model}`,
     '--json', '--url', runtime.baseUrl], { AXOCOATL_TOKEN: runtime.token });
   const outcome = JSON.parse(result.stdout.slice(0, result.stdout.lastIndexOf('}') + 1));
-  const shown = `${JSON.stringify(outcome, null, 2)}\n${result.stderr}`;
-  assert.equal(outcome.exit_code, 5, shown);
-  assert.equal(result.code, 5, shown);
-  assert.equal(outcome.verdict, 'error', shown);
-  assert.deepEqual(outcome.turns, [], shown);
-  assert.match(outcome.error, /^the read-only Agents of this run \(planner, worker, integrator\) run as the helper user 1001:1001, which cannot enter or list the repository /, shown);
-  assert.ok(outcome.error.includes(`${repo} (mode 0700`), shown);
-  assert.ok(outcome.error.includes(`chmod -R o+rX ${repo}`), shown);
-  assert.equal(chats.length, asked, 'no model was asked');
+  const shown = `${JSON.stringify(outcome, null, 2)}\n${result.stderr}\n${await workerCalls(outcome)}`;
+  assert.equal(outcome.exit_code, 0, shown);
+  assert.equal(result.code, 0, shown);
+  assert.deepEqual(outcome.turns.map((turn) => [turn.purpose, turn.state]),
+    [['audit_plan', 'completed'], ['audit_areas', 'completed'], ['audit_integrate', 'completed']], shown);
+  assert.deepEqual(outcome.not_covered, [], shown);
+  assert.equal(outcome.findings.length, 1, shown);
+  // Each worker read its area's private file: the content came back.
+  const workers = chats.slice(asked).filter((body) => /Your area: /.test(JSON.stringify(body)));
+  const results = workers.flatMap((body) => (body.messages || []).filter((message) => message.role === 'tool'))
+    .map((message) => (typeof message.content === 'string' ? message.content : JSON.stringify(message.content)));
+  assert.ok(results.some((text) => text.includes('# fixture')), `${shown}\n${results.join('\n')}`);
+  assert.ok(results.some((text) => text.includes('pub fn one() -> u32')), `${shown}\n${results.join('\n')}`);
+  assert.equal(await git(repo, 'status', '--porcelain'), '');
+  const mode = await run('stat', process.platform === 'linux' ? ['-c', '%a', repo] : ['-f', '%Lp', repo]);
+  assert.equal(mode.stdout.trim(), '700');
 });

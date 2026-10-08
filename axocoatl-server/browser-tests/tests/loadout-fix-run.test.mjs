@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
@@ -13,8 +13,8 @@ import { REPOSITORY_ROOT, launchTestDaemon } from '../support/daemon.mjs';
 // with host git without touching the checkout. Writer and reviewer run the
 // same model, so the run carries the same-model warning. The reviewer is
 // read-only and runs as the hardened container's helper user, which reads
-// only what the file modes let any user read, so each repository is made
-// readable to other users as git clone makes one (mkdtemp makes it 0700).
+// the repository through its view of it, so each repository keeps the 0700
+// mkdtemp gives it.
 const MODEL = 'browser-test-model:latest';
 const DIGEST = 'a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72';
 let runtime, modelServer;
@@ -96,7 +96,6 @@ test('the built-in fix loadout runs under egress, passes, warns about the same m
   const projects = await mkdtemp(path.join(tmpdir(), 'axocoatl-fix-repo-'));
   workspaces.push(projects);
   const repo = await realpath(projects);
-  await chmod(repo, 0o755);
   await writeFile(path.join(repo, 'README.md'), '# fixture\n');
   await git(repo, 'init', '-q', '-b', 'main');
   // Keep commits as the repository's git identity. Set one here so the test does not
@@ -155,7 +154,6 @@ test('Ctrl-C stops a running loadout run: exit 6, the run interrupted, and its J
   const projects = await mkdtemp(path.join(tmpdir(), 'axocoatl-fix-stop-'));
   workspaces.push(projects);
   const repo = await realpath(projects);
-  await chmod(repo, 0o755);
   await writeFile(path.join(repo, 'README.md'), '# fixture\n');
   await git(repo, 'init', '-q', '-b', 'main');
   await git(repo, 'add', 'README.md');

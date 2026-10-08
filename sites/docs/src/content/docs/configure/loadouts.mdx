@@ -93,14 +93,14 @@ workload, for example under rootful Podman or with `backend: e2b`, the run fails
 exit code 5 and says why; it never falls back to a weaker setting.
 
 Read-only Agents, every Agent of an audit and the required reviewer among them, read
-the repository as `helper_user`, which reads only what the file modes let any user
-read. On a Linux host a repository directory that other users may not enter or list,
-such as one made by `mktemp -d` or under `umask 077` (mode `0700`), is closed to them.
-A run with such an Agent asks its Session container whether `helper_user` can enter and
-list the repository, and when it cannot, the run ends with exit code 5 before its first
-turn, naming the directory, its mode and a fix such as `chmod -R o+rX <repo>`. A
-repository made by `git clone` with the usual `umask 022` is readable; on macOS the
-Podman machine's shared folder lets the helper in.
+the repository as `helper_user`, through a read-only view of it that reads every file
+whatever its mode, so a repository only you may enter, such as one made by `mktemp -d`
+or under `umask 077` (mode `0700`), works as well as one made by `git clone`. Outside
+the repository they read only what any user may (see
+[Sandboxes](/configure/sandboxes/#workload-users)). A run with such an Agent checks in its
+Session container, through that view, that they can enter and list the repository;
+when they cannot (a repository another user owns, or a container or kernel that cannot
+give the view), the run ends with exit code 5 before its first turn and says why.
 
 A run approves at most one setup command: `--setup`, or else the loadout's
 `environment.setup`. A command Axocoatl detects in the repository, such as `npm ci`, is never

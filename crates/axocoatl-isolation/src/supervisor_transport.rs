@@ -268,15 +268,19 @@ impl SessionSandbox {
         if let Some(env_file) = env_file {
             command.arg("--env-file").arg(env_file);
         }
+        let users = self.workload_users();
         command
             .args(self.exec_user(identity))
             .arg("-w")
-            .arg(root)
+            .arg(&root)
             .arg(&runtime)
-            .args(supervisor_serve_args(
-                self.workload_users().is_some(),
-                identity,
-            ));
+            .args(supervisor_serve_args(users.is_some(), identity))
+            .args(
+                users
+                    .filter(|_| identity == crate::ExecIdentity::Helper)
+                    .map(|users| crate::session_sandbox::helper_view(&users, &root).args())
+                    .unwrap_or_default(),
+            );
         Ok((command, runtime, program.sha256().to_owned()))
     }
 }
@@ -285,6 +289,8 @@ impl SessionSandbox {
 /// container the workload users' commands (writers' and helpers') get
 /// `--harden`: no new privileges, the supervisor's seccomp denylist and a
 /// Landlock domain of their own. Root's (readiness and provisioning) do not.
+/// A helper's are followed by its view's arguments (`--helper`, ...): its
+/// supervisor starts as root and launches the command as the helper.
 fn supervisor_serve_args(hardened: bool, identity: crate::ExecIdentity) -> Vec<&'static str> {
     let mut args = vec![
         crate::supervisor_program::SUPERVISOR_CONTAINER_PATH,

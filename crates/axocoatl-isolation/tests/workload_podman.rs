@@ -1,9 +1,13 @@
 //! Podman checks of the workload layout: port sockets outside the Session
 //! container under `network: egress`, hardened workload users (a non-root
-//! writer and a separate helper, neither with capabilities), the program
-//! behind each connection of a hardened egress Session, the seccomp filter on
-//! hardened workload users' commands, and Ways attempts that use their
-//! Session's egress proxy.
+//! writer without capabilities and a separate helper whose only capability,
+//! `CAP_DAC_READ_SEARCH`, reads the Workspace through its Landlock view), the
+//! program behind each connection of a hardened egress Session, the seccomp
+//! filter on hardened workload users' commands, and Ways attempts that use
+//! their Session's egress proxy. A Node project's dependency volume lives on
+//! the Podman machine's own disk, so the helper-view cases put a private
+//! (`0700`) tree there: its file modes are enforced as on any Linux host,
+//! which a macOS machine's shared folder does not do.
 //!
 //! The decision point is a fake that maps names to the fixture's upstream and
 //! records every event. Objects the fixture creates directly (network,
@@ -487,13 +491,25 @@ async fn supervised(
     env_file: Option<&Path>,
     restriction: Option<WriteRestriction>,
 ) -> Ran {
+    supervised_capturing(sandbox, identity, script, env_file, restriction, 16 * 1024).await
+}
+
+/// [`supervised`], keeping up to `stdout_bytes` of its output.
+async fn supervised_capturing(
+    sandbox: &dyn Sandbox,
+    identity: ExecIdentity,
+    script: &str,
+    env_file: Option<&Path>,
+    restriction: Option<WriteRestriction>,
+    stdout_bytes: usize,
+) -> Ran {
     let request = ExecRequest {
         protocol: PROTOCOL_VERSION,
         stdin: None,
         invocation_id: format!("workload-{}", uuid::Uuid::new_v4().simple()),
         argv: vec!["sh".into(), "-c".into(), script.into()],
-        timeout_ms: 30_000,
-        stdout_bytes: 16 * 1024,
+        timeout_ms: 120_000,
+        stdout_bytes,
         stderr_bytes: 16 * 1024,
         write_restriction: restriction,
     };
@@ -511,17 +527,23 @@ async fn supervised(
     else {
         panic!("no terminal result");
     };
-    let text = |captured: &axocoatl_exec::protocol::CapturedOutput| {
-        String::from_utf8_lossy(&captured.retained_bytes(16 * 1024).unwrap()).into_owned()
+    let text = |captured: &axocoatl_exec::protocol::CapturedOutput, capacity: usize| {
+        String::from_utf8_lossy(&captured.retained_bytes(capacity).unwrap()).into_owned()
     };
     let code = match outcome {
         ProcessOutcome::Exited { code } => *code,
-        other => panic!("{other:?}: {}", text(stderr)),
+        other => panic!("{other:?}: {}", text(stderr, 16 * 1024)),
     };
+    let stdout_text = text(stdout, stdout_bytes);
+    assert_eq!(
+        stdout.observed_bytes,
+        stdout_text.len() as u64,
+        "keep the whole output: {stdout_text}"
+    );
     Ran {
         code,
-        stdout: text(stdout),
-        stderr: text(stderr),
+        stdout: stdout_text,
+        stderr: text(stderr, 16 * 1024),
     }
 }
 
@@ -529,8 +551,9 @@ async fn supervised(
 const STATUS: &str = "id -u; id -g; echo HOME=$HOME; \
                       grep -E '^(CapInh|CapPrm|CapEff|CapAmb|NoNewPrivs):' /proc/self/status";
 
-/// The upstream image's node, copied into a Session container's `/tmp`.
-const NODE: &str = "LD_LIBRARY_PATH=/tmp/node-lib /tmp/node -e";
+/// The upstream image's node, copied into a Session container's
+/// `/usr/local/axo-node` (owned by root, where a helper may run it).
+const NODE: &str = "LD_LIBRARY_PATH=/usr/local/axo-node/lib /usr/local/axo-node/node -e";
 
 /// Apps that listen on Unix sockets of their own: an abstract one, a socket
 /// file anyone may connect to (as PostgreSQL's default) and an owner-only one.
@@ -590,6 +613,81 @@ async fn seccomp_filters(container: &str, user: &str) -> u32 {
         .unwrap()
 }
 
+/// The `/proc/<pid>/status` of a read-only helper's running command, read
+/// as root: through its view the command cannot read its own `/proc`
+/// entries.
+async fn helper_command_status(sandbox: &SessionSandbox, container: &str) -> String {
+    let request = ExecRequest {
+        protocol: PROTOCOL_VERSION,
+        stdin: None,
+        invocation_id: format!("workload-helper-sleep-{}", uuid::Uuid::new_v4().simple()),
+        argv: vec!["sh".into(), "-c".into(), "exec sleep 30".into()],
+        timeout_ms: 60_000,
+        stdout_bytes: 1024,
+        stderr_bytes: 1024,
+        write_restriction: None,
+    };
+    let running = Sandbox::prepare_supervised_command_as(
+        sandbox,
+        request,
+        None,
+        ProcessEnv { env_file: None },
+        ExecIdentity::Helper,
+    )
+    .await
+    .unwrap()
+    .dispatch()
+    .unwrap();
+    let mut status = String::new();
+    for _ in 0..50 {
+        status = podman_ok(&[
+            "exec",
+            "--user",
+            "0",
+            container,
+            "sh",
+            "-c",
+            "for p in /proc/[0-9]*; do \
+             [ \"$(awk '/^Name:/{print $2}' $p/status 2>/dev/null)\" = sleep ] && \
+             [ \"$(awk '/^Uid:/{print $2}' $p/status 2>/dev/null)\" = 1001 ] && cat $p/status; \
+             done; true",
+        ])
+        .await;
+        if !status.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    running.cancellation().cancel();
+    let _ = running.finish().await;
+    status
+}
+
+/// A read-only helper's command: the helper's user and group in every
+/// slot, no supplementary group, `CAP_DAC_READ_SEARCH` alone in every
+/// capability set, no new privileges, and a seccomp filter.
+fn assert_helper_command(status: &str) {
+    let field = |name: &str| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{name}:")))
+            .map(|value| value.trim().to_string())
+            .unwrap_or_else(|| panic!("no {name}: {status}"))
+    };
+    for (name, id) in [("Uid", "1001"), ("Gid", "1001")] {
+        assert!(
+            field(name).split_whitespace().all(|value| value == id),
+            "{name}: {status}"
+        );
+    }
+    assert_eq!(field("Groups"), "", "{status}");
+    for set in ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"] {
+        assert_eq!(field(set), "0000000000000004", "{set}: {status}");
+    }
+    assert_eq!(field("NoNewPrivs"), "1", "{status}");
+    assert_eq!(field("Seccomp"), "2", "{status}");
+}
+
 fn assert_unprivileged(ran: &Ran, uid: u32, home: &str) {
     let lines: Vec<&str> = ran.stdout.lines().collect();
     assert_eq!(lines[0], uid.to_string(), "{}", ran.stdout);
@@ -608,8 +706,9 @@ fn assert_unprivileged(ran: &Ran, uid: u32, home: &str) {
 /// Gap 1: under egress the Session container holds no port socket, so a
 /// read-only helper's restricted shell cannot reach the Session's apps over TCP
 /// or through the port sockets, while Preview and the forwarder's sockets reach
-/// them. Landlock does not cover Unix sockets, so an app's own abstract socket,
-/// and a socket file whose mode lets the helper's user connect, stay reachable.
+/// them. Landlock does not cover Unix sockets, but the helper's seccomp filter
+/// refuses creating one, so an app's own abstract socket and a socket file
+/// anyone may connect to are out of its reach too; the writer reaches both.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test workload_podman -- --ignored --test-threads=1"]
 async fn helpers_cannot_reach_the_sessions_apps_but_preview_and_the_forwarder_can() {
@@ -674,17 +773,19 @@ async fn helpers_cannot_reach_the_sessions_apps_but_preview_and_the_forwarder_ca
             .expect("the socket listing ran");
         assert!(sockets.trim().is_empty(), "sockets in the container: {sockets}");
 
-        // An app that listens on a Unix socket of its own is still within the
-        // helper's reach: Landlock does not cover Unix sockets, an abstract
-        // socket has no file mode, and only its mode keeps the helper from a
-        // socket file. Busybox's nc takes no abstract names, so the apps and
-        // the probe use node, copied from the upstream container.
+        // An app that listens on a Unix socket of its own is out of the
+        // helper's reach too: Landlock does not cover Unix sockets and an
+        // abstract socket has no file mode, but the helper's seccomp filter
+        // refuses creating any Unix socket (its capability would otherwise
+        // take it through directories it could not enter before). Busybox's
+        // nc takes no abstract names, so the apps and the probe use node,
+        // copied from the upstream container.
         let container = format!("axo-ses-{session}");
-        podman_ok(&["exec", "--user", "0", &container, "mkdir", "-p", "/tmp/node-lib"]).await;
+        podman_ok(&["exec", "--user", "0", &container, "mkdir", "-p", "/usr/local/axo-node/lib"]).await;
         for (from, to) in [
-            ("/usr/local/bin/node", "/tmp/node"),
-            ("/usr/lib/libstdc++.so.6", "/tmp/node-lib/libstdc++.so.6"),
-            ("/usr/lib/libgcc_s.so.1", "/tmp/node-lib/libgcc_s.so.1"),
+            ("/usr/local/bin/node", "/usr/local/axo-node/node"),
+            ("/usr/lib/libstdc++.so.6", "/usr/local/axo-node/lib/libstdc++.so.6"),
+            ("/usr/lib/libgcc_s.so.1", "/usr/local/axo-node/lib/libgcc_s.so.1"),
         ] {
             podman_ok(&[
                 "cp",
@@ -693,6 +794,11 @@ async fn helpers_cannot_reach_the_sessions_apps_but_preview_and_the_forwarder_ca
             ])
             .await;
         }
+        podman_ok(&[
+            "exec", "--user", "0", &container, "sh", "-c",
+            "chown -R 0:0 /usr/local/axo-node && chmod -R a+rX /usr/local/axo-node",
+        ])
+        .await;
         sandbox.spawn_background(&format!("{NODE} \"{UNIX_APPS}\""));
         let probe = format!(
             "{NODE} \"{UNIX_PROBE}\"; stat -c '%n %a %u' /tmp/app-open.sock /tmp/app-private.sock"
@@ -734,9 +840,9 @@ async fn helpers_cannot_reach_the_sessions_apps_but_preview_and_the_forwarder_ca
         assert_eq!(
             helper.stdout.lines().collect::<Vec<_>>(),
             [
-                "abstract=abstract-ok",
-                "open=open-ok",
-                "private=EACCES",
+                "abstract=EPERM",
+                "open=EPERM",
+                "private=EPERM",
                 "/tmp/app-open.sock 777 1000",
                 "/tmp/app-private.sock 700 1000",
             ],
@@ -786,9 +892,10 @@ async fn helpers_cannot_reach_the_sessions_apps_but_preview_and_the_forwarder_ca
 }
 
 /// Gap 4: in a hardened egress Session, Agents' processes run as the writer
-/// and helpers as a second user, neither with capabilities; the helper cannot
-/// read the writer's credential or signal it, neither reaches the proxy's
-/// socket, and the writer reaches allowed hosts with its own credential.
+/// without capabilities and helpers as a second user whose only capability
+/// reads the Workspace through its view; the helper cannot read the writer's
+/// credential or signal it, neither reaches the proxy's socket, and the writer
+/// reaches allowed hosts with its own credential.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test workload_podman -- --ignored --test-threads=1"]
 async fn hardened_writers_and_helpers_are_separate_users_without_capabilities() {
@@ -815,19 +922,22 @@ async fn hardened_writers_and_helpers_are_separate_users_without_capabilities() 
         assert!(capability_set(&container, "1", "CapEff").await & (1 << 19) != 0);
         let writer = supervised(sandbox.as_ref(), ExecIdentity::Writer, STATUS, None, None).await;
         assert_unprivileged(&writer, 1000, "/home/axocoatl");
-        let helper = supervised(sandbox.as_ref(), ExecIdentity::Helper, STATUS, None, None).await;
-        assert_unprivileged(&helper, 1001, "/tmp");
+        // The helper's command, seen from outside: it cannot read its own
+        // /proc entries through its view.
+        assert_helper_command(&helper_command_status(sandbox.as_ref(), &container).await);
         let names = supervised(
             sandbox.as_ref(),
             ExecIdentity::Helper,
-            "id -un; getent passwd 1000 | cut -d: -f6; stat -c '%u %a' /home/axocoatl",
+            "id -un; getent passwd 1000 | cut -d: -f6; stat -c '%u %a' /home/axocoatl; \
+             case $HOME in /tmp/axocoatl-helper.*) echo own-home;; esac; \
+             cat /proc/self/status >/dev/null 2>&1 || echo own-proc=refused",
             None,
             None,
         )
         .await;
         assert_eq!(
             names.stdout.lines().collect::<Vec<_>>(),
-            ["axocoatl-helper", "/home/axocoatl", "1000 700"],
+            ["axocoatl-helper", "/home/axocoatl", "1000 700", "own-home", "own-proc=refused"],
             "{}",
             names.stderr
         );
@@ -871,9 +981,9 @@ async fn hardened_writers_and_helpers_are_separate_users_without_capabilities() 
             "the host owner of a file the writer made"
         );
 
-        // The helper reads world-readable files and cannot write, whatever
-        // the file modes: Landlock refuses it. Landlock does not cover
-        // permission bits or timestamps; only the owner may change those.
+        // The helper reads the Workspace whatever its file modes, and cannot
+        // write it: Landlock refuses it. Landlock does not cover permission
+        // bits or timestamps; only the owner may change those.
         let reads = supervised(
             sandbox.as_ref(),
             ExecIdentity::Helper,
@@ -899,15 +1009,14 @@ async fn hardened_writers_and_helpers_are_separate_users_without_capabilities() 
         // bits and timestamps (documented). Where it reports the real owner
         // (the writer), the helper can do neither and cannot read an
         // owner-only file.
+        assert_eq!(lines[2], "private=0", "{}", reads.stdout);
         if lines[1] == "1001" {
-            assert_eq!(lines[2], "private=0", "{}", reads.stdout);
             assert_eq!(lines[5], "chmod=0", "{}", reads.stdout);
             assert_eq!(lines[6], "touch=0", "{}", reads.stdout);
             assert_eq!(private_mode, 0o644);
             assert_eq!(public_mtime, 978_307_200);
         } else {
             assert_eq!(lines[1], "1000", "{}", reads.stdout);
-            assert_eq!(lines[2], "private=1", "{}", reads.stdout);
             assert_eq!(lines[5], "chmod=1", "{}", reads.stdout);
             assert_eq!(lines[6], "touch=1", "{}", reads.stdout);
             assert!(reads.stderr.contains("Operation not permitted"), "{}", reads.stderr);
@@ -915,28 +1024,23 @@ async fn hardened_writers_and_helpers_are_separate_users_without_capabilities() 
             assert!(public_mtime > 978_307_200);
         }
 
-        // The helper can enter and list this Workspace (0755), so read-only
-        // Agents can read it. Where the file modes separate the users, one
-        // other users may not enter (a mkdtemp directory, 0700) is closed to
-        // it; a macOS shared folder reports the helper as its owner and lets
-        // it in. One that nobody may list is closed to it everywhere.
+        // The helper can enter and list this Workspace (0755), and one
+        // other users may not enter (a mkdtemp directory, 0700): its view
+        // reads the Workspace whatever its modes. Where the file modes
+        // separate the users, so does one nobody may list (0000); a macOS
+        // shared folder checks that one against the host user, which may not.
         assert_eq!(
             sandbox.helper_workspace_access().await.unwrap(),
             Some(HelperWorkspaceAccess::Readable)
         );
         let shared_folder = lines[1] == "1001";
-        for (mode, readable) in [(0o700, shared_folder), (0o000, false)] {
+        for (mode, readable) in [(0o700, Some(true)), (0o000, (!shared_folder).then_some(true))] {
             std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(mode)).unwrap();
             let access = Sandbox::helper_workspace_access(sandbox.as_ref()).await;
             std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o755)).unwrap();
             match access.unwrap() {
-                Some(HelperWorkspaceAccess::Readable) => assert!(readable, "mode {mode:o}"),
-                Some(HelperWorkspaceAccess::Unreadable(printed)) => {
-                    assert!(!readable, "mode {mode:o}: {printed}");
-                    // What the image's shell and `ls` print, e.g. busybox's
-                    // "can't cd to …: Permission denied".
-                    assert!(!printed.is_empty(), "mode {mode:o}");
-                }
+                Some(HelperWorkspaceAccess::Readable) => {}
+                Some(other) => assert!(readable.is_none(), "mode {mode:o}: {other:?}"),
                 None => panic!("a hardened container has a helper user to probe"),
             }
         }
@@ -963,7 +1067,9 @@ async fn hardened_writers_and_helpers_are_separate_users_without_capabilities() 
 
         // Neither user can reach the proxy's socket: the directory that holds
         // it is root's alone, and it holds only the identity socket, where
-        // every connection starts with PID 1's line.
+        // every connection starts with PID 1's line. The helper's capability
+        // takes it through that directory, but its view lists nothing there
+        // and its filter refuses every Unix socket.
         let listed = podman_ok(&["exec", "--user", "0", &container, "ls", "/run/axocoatl/egress"]).await;
         assert_eq!(listed.trim(), "identity.sock");
         for identity in [ExecIdentity::Writer, ExecIdentity::Helper] {
@@ -1015,14 +1121,21 @@ async fn hardened_writers_and_helpers_are_separate_users_without_capabilities() 
             .and_then(|rest| rest.split('@').next())
             .unwrap()
             .to_string();
+        // The helper cannot list /proc, so root names the process.
+        let pid = podman_ok(&["exec", "--user", "0", &container, "sh", "-c", "pgrep -u 1000 -x sleep | head -1"])
+            .await
+            .trim()
+            .to_string();
         let probe = supervised(
             sandbox.as_ref(),
             ExecIdentity::Helper,
-            "pid=$(pgrep -u 1000 -x sleep | head -1); echo pid=$pid; \
-             cat /proc/$pid/environ >/dev/null 2>/tmp/environ-error; echo environ=$?; cat /tmp/environ-error; \
-             kill -TERM $pid 2>&1; echo kill=$?; \
-             for f in /proc/[0-9]*/environ; do tr '\\0' '\\n' < $f 2>/dev/null; done | grep -c '^HTTPS_PROXY=' ; \
-             readlink /proc/$pid/exe >/dev/null 2>&1; echo exe=$?",
+            &format!(
+                "pid={pid}; echo pid=$pid; \
+                 cat /proc/$pid/environ >/dev/null 2>$TMPDIR/environ-error; echo environ=$?; cat $TMPDIR/environ-error; \
+                 kill -TERM $pid 2>&1; echo kill=$?; \
+                 for f in /proc/[0-9]*/environ; do tr '\\0' '\\n' < $f 2>/dev/null; done | grep -c '^HTTPS_PROXY=' ; \
+                 readlink /proc/$pid/exe >/dev/null 2>&1; echo exe=$?"
+            ),
             None,
             None,
         )
@@ -1712,6 +1825,10 @@ for name, number in numbers.items():
     result = libc.syscall(ctypes.c_long(number), *values)
     error = ctypes.get_errno()
     print(f"{name}={result if result >= 0 else errno.errorcode.get(error, error)}")
+# PR_GET_NO_NEW_PRIVS and PR_GET_SECCOMP (2: a filter): a helper cannot read
+# its own /proc entries.
+print(f"no_new_privs={libc.prctl(39, 0, 0, 0, 0)}")
+print(f"seccomp={libc.prctl(21, 0, 0, 0, 0)}")
 "#;
 
 /// Gap 4, seccomp (J3): a hardened Session's writers' and helpers' commands
@@ -1736,9 +1853,10 @@ async fn hardened_commands_run_under_the_seccomp_filter() {
             )
             .await;
         let container = format!("axo-ses-{session}");
+        // A helper reads back only what it writes in its own TMPDIR.
         let probe = format!(
-            "probe=/tmp/probe-$(id -u).py; cat > $probe <<'PROBE'\n{SYSCALL_PROBE}\nPROBE\n\
-             python3 $probe; grep -E '^(Seccomp_filters|NoNewPrivs):' /proc/self/status; \
+            "probe=${{TMPDIR:-/tmp}}/probe-$(id -u).py; cat > $probe <<'PROBE'\n{SYSCALL_PROBE}\nPROBE\n\
+             python3 $probe; grep -E '^Seccomp_filters:' /proc/self/status 2>/dev/null; \
              unshare -U true 2>&1; echo unshare=$?"
         );
         let baseline = seccomp_filters(&container, "1000:1000").await;
@@ -1754,16 +1872,27 @@ async fn hardened_commands_run_under_the_seccomp_filter() {
                 "io_uring_setup=ENOSYS",
                 "userfaultfd=EPERM",
                 "bpf=EPERM",
-                "NoNewPrivs:\t1",
+                "no_new_privs=1",
+                "seccomp=2",
                 "unshare=1",
             ] {
                 assert!(seen.contains(&expected), "{identity:?}: {expected}: {}", ran.stdout);
             }
-            assert!(
-                seen.contains(&format!("Seccomp_filters:\t{}", baseline + 1).as_str()),
-                "{identity:?}: {}",
-                ran.stdout
-            );
+            // The writer reads its own status; the helper's is read from
+            // outside, as root.
+            if identity == ExecIdentity::Writer {
+                assert!(
+                    seen.contains(&format!("Seccomp_filters:\t{}", baseline + 1).as_str()),
+                    "{identity:?}: {}",
+                    ran.stdout
+                );
+            } else {
+                let status = helper_command_status(sandbox.as_ref(), &container).await;
+                assert!(
+                    status.contains(&format!("Seccomp_filters:\t{}", baseline + 1)),
+                    "{status}"
+                );
+            }
             assert!(ran.stdout.contains("Operation not permitted"), "{}", ran.stdout);
         }
         // The same user outside the supervisor (as terminals run): only
@@ -1810,6 +1939,33 @@ async fn hardened_commands_run_under_the_seccomp_filter() {
             "{}",
             work.stderr
         );
+        // The same programs run as a read-only helper, through its view and
+        // its shell's restriction, in a Workspace only the writer may enter.
+        let workspace = sandbox.root().to_path_buf();
+        podman_ok(&[
+            "exec", "--user", "1000:1000", &container, "sh", "-c",
+            "chmod 0600 public.txt private.txt && chmod -R go-rwx .git",
+        ])
+        .await;
+        let read = supervised(
+            sandbox.as_ref(),
+            ExecIdentity::Helper,
+            "set -e; git status --short public.txt; git log --oneline 2>/dev/null | wc -l; \
+             python3 -c 'import subprocess, threading; t = threading.Thread(target=lambda: None); t.start(); t.join(); subprocess.run([\"true\"], check=True); print(open(\"private.txt\").read().strip())'; \
+             perl -e 'print \"perl ok\\n\"'; bash -c 'echo bash ok'; cargo --version >/dev/null && echo cargo ok; \
+             /opt/node/bin/node -e \"require('child_process').execSync('true'); new (require('worker_threads').Worker)('1',{eval:true}).on('exit',c=>{console.log('node ok');process.exit(c)})\"; \
+             PATH=/opt/node/bin:$PATH /opt/node/bin/node /opt/node/lib/node_modules/npm/bin/npm-cli.js --version >/dev/null && echo npm ok",
+            None,
+            Some(helper_restriction(&workspace)),
+        )
+        .await;
+        assert_eq!(read.code, 0, "{}\n{}", read.stdout, read.stderr);
+        assert_eq!(
+            read.stdout.lines().collect::<Vec<_>>(),
+            ["A  public.txt", "0", "private", "perl ok", "bash ok", "cargo ok", "node ok", "npm ok"],
+            "{}",
+            read.stderr
+        );
         // Terminals run as the writer without the filter.
         let terminal = Sandbox::spawn_terminal(
             sandbox.as_ref(),
@@ -1830,6 +1986,372 @@ async fn hardened_commands_run_under_the_seccomp_filter() {
         }
         assert!(Sandbox::kill_terminal(sandbox.as_ref(), &terminal.id));
         assert!(seen.contains(&expected), "terminal: {seen:?}");
+    })
+    .await;
+}
+
+/// Start a hardened Node project Session: its dependency volume
+/// (`node_modules`) is on the Podman machine's own disk, where the writer
+/// makes a private tree (`0700` directories, `0600` files), as in a
+/// repository made by `mktemp -d` or under `umask 077`.
+async fn private_tree_session(fixture: &Fixture) -> (Arc<SessionSandbox>, String, PathBuf) {
+    let session = session_name();
+    let workspace = fixture.workspace(&session);
+    std::fs::write(workspace.join("package.json"), "{}\n").unwrap();
+    std::fs::set_permissions(
+        workspace.join("package.json"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    fixture.sessions.lock().unwrap().push(session.clone());
+    let sandbox = Arc::new(
+        SessionSandbox::start(
+            &session,
+            &workspace,
+            Some(&image("AXO_WORKLOAD_TEST_IMAGE", TEST_IMAGE)),
+            &[],
+            &[],
+            &fixture.policy(Some(USERS)),
+        )
+        .await
+        .expect("the Session starts"),
+    );
+    fixture.sandboxes.lock().unwrap().push(sandbox.clone());
+    assert!(sandbox.uses_node_dependency_volume());
+    let made = supervised(
+        sandbox.as_ref(),
+        ExecIdentity::Writer,
+        "umask 077 && mkdir -p node_modules/.private/sub && \
+         echo machine-disk-secret > node_modules/.private/secret.js && \
+         echo nested-secret > node_modules/.private/sub/nested.js && \
+         git init -q node_modules/.private/sub && git -C node_modules/.private/sub add nested.js && \
+         git -C node_modules/.private/sub -c user.name=Writer -c user.email=writer@example.invalid \
+         commit -qm 'Add the nested file' && \
+         stat -c '%u %a' node_modules/.private node_modules/.private/secret.js && \
+         awk -v d=\"$PWD/node_modules\" '$5 == d {for (i = 6; i < NF; i++) if ($i == \"-\") print $(i + 1)}' \
+         /proc/self/mountinfo",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(made.code, 0, "{}", made.stderr);
+    let lines: Vec<&str> = made.stdout.lines().collect();
+    assert_eq!(lines[..2], ["1000 700", "1000 600"], "{}", made.stdout);
+    // The volume is the machine's own filesystem, not a shared folder.
+    assert!(
+        lines[2..]
+            .iter()
+            .any(|fs| ["xfs", "ext4", "btrfs", "overlay"].contains(fs)),
+        "{}",
+        made.stdout
+    );
+    (sandbox, format!("axo-ses-{session}"), workspace)
+}
+
+/// The helper reads a Workspace only its writer may enter, on the Podman
+/// machine's own disk: today's helper (its user, without the supervisor's
+/// view) cannot, and the probe now finds the Workspace readable. It cannot
+/// write any of it, from its shell or its file tools.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test workload_podman -- --ignored --test-threads=1"]
+async fn a_helper_reads_a_private_workspace_on_the_machines_disk_and_cannot_write_it() {
+    with_fixture(10, |fixture| async move {
+        let (sandbox, container, workspace) = private_tree_session(&fixture).await;
+        let private = format!("{}/node_modules/.private", workspace.display());
+        // The helper's user without the view: the modes keep it out.
+        let plain = podman(&[
+            "exec", "--user", "1001:1001", "-w", "/", &container, "sh", "-c",
+            &format!("cat {private}/secret.js; ls {private}"),
+        ])
+        .await;
+        let plain_err = String::from_utf8_lossy(&plain.stderr);
+        assert!(!plain.status.success(), "{plain_err}");
+        assert!(plain_err.contains("Permission denied"), "{plain_err}");
+        // Through its view, from its file tools (no restriction) and its
+        // shell (the restriction), whatever the modes.
+        for restriction in [None, Some(helper_restriction(&workspace))] {
+            let read = supervised(
+                sandbox.as_ref(),
+                ExecIdentity::Helper,
+                "cat node_modules/.private/secret.js && ls -a node_modules/.private | tr '\\n' ' ' && echo && \
+                 cd node_modules/.private/sub && cat nested.js && git log --format=%s && cd - >/dev/null && \
+                 cat package.json",
+                None,
+                restriction.clone(),
+            )
+            .await;
+            assert_eq!(read.code, 0, "{:?}: {}\n{}", restriction.is_some(), read.stdout, read.stderr);
+            assert_eq!(
+                read.stdout.lines().collect::<Vec<_>>(),
+                [
+                    "machine-disk-secret",
+                    ". .. secret.js sub ",
+                    "nested-secret",
+                    "Add the nested file",
+                    "{}"
+                ],
+                "{}",
+                read.stderr
+            );
+            // It cannot write: not the writer's files and directories, from
+            // its file tools (their modes; the capability grants no write)
+            // or its shell (also Landlock). On a macOS shared folder, which
+            // reports every file as the asker's, modes keep nobody out of the
+            // Workspace's own directory, so that is checked for the shell
+            // alone, below.
+            let write = supervised(
+                sandbox.as_ref(),
+                ExecIdentity::Helper,
+                "(echo x >> node_modules/.private/secret.js) 2>/dev/null || echo append=refused; \
+                 (echo x > node_modules/.private/new.js) 2>/dev/null || echo create=refused; \
+                 rm -f node_modules/.private/sub/nested.js 2>/dev/null || echo remove=refused; \
+                 chmod 0644 node_modules/.private/secret.js 2>/dev/null || echo chmod=refused; \
+                 mv node_modules/.private/sub node_modules/.private/moved 2>/dev/null || echo rename=refused",
+                None,
+                restriction.clone(),
+            )
+            .await;
+            assert_eq!(
+                write.stdout.lines().collect::<Vec<_>>(),
+                [
+                    "append=refused",
+                    "create=refused",
+                    "remove=refused",
+                    "chmod=refused",
+                    "rename=refused"
+                ],
+                "{:?}: {}",
+                restriction.is_some(),
+                write.stderr
+            );
+        }
+        // The shell's restriction keeps it out of the Workspace's own
+        // directory too, whatever the file modes say.
+        let top = supervised(
+            sandbox.as_ref(),
+            ExecIdentity::Helper,
+            "(echo x > helper.txt) 2>/dev/null || echo create-top=refused",
+            None,
+            Some(helper_restriction(&workspace)),
+        )
+        .await;
+        assert_eq!(top.stdout.trim(), "create-top=refused", "{}", top.stderr);
+        let after = podman_ok(&[
+            "exec", "--user", "0", &container, "sh", "-c",
+            &format!("cat {private}/secret.js {private}/sub/nested.js; stat -c %a {private}/secret.js; ls {private}"),
+        ])
+        .await;
+        assert_eq!(
+            after.lines().collect::<Vec<_>>(),
+            ["machine-disk-secret", "nested-secret", "600", "secret.js", "sub"]
+        );
+        assert!(!workspace.join("helper.txt").exists());
+        // A Workspace only its owner may enter reads as readable to the
+        // probe, which launches its command exactly as a helper's.
+        std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let access = sandbox.helper_workspace_access().await;
+        std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(access.unwrap(), Some(HelperWorkspaceAccess::Readable));
+    })
+    .await;
+}
+
+/// Outside the Workspace the helper reads nothing that its user could not
+/// read before: not the writer's home or its files in `/tmp`, not
+/// `/etc/shadow` or root's home, no process's `/proc` entries. Every path
+/// its view opens or lists, the same user without it (as `podman exec`
+/// runs it) opens or lists too, except in the Workspace.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test workload_podman -- --ignored --test-threads=1"]
+async fn a_helper_reads_nothing_outside_the_workspace_it_could_not_read_before() {
+    with_fixture(11, |fixture| async move {
+        let (sandbox, container, workspace) = private_tree_session(&fixture).await;
+        let made = supervised(
+            sandbox.as_ref(),
+            ExecIdentity::Writer,
+            "umask 077 && echo writer-home-token > $HOME/token && mkdir -p $HOME/.config && \
+             echo writer-config > $HOME/.config/settings && (umask 022 && echo writer-open > $HOME/open.txt) && \
+             echo writer-tmp-token > /tmp/writer-private && (umask 022 && echo writer-tmp-open > /tmp/writer-open) && \
+             ls -ln $HOME /tmp/writer-private | wc -l",
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(made.code, 0, "{}", made.stderr);
+        // A running writer process, with a marker in its environment.
+        let request = ExecRequest {
+            protocol: PROTOCOL_VERSION,
+            stdin: None,
+            invocation_id: "workload-writer-marker".into(),
+            argv: vec!["sh".into(), "-c".into(), "AXO_WRITER_MARKER=writer-environment exec sleep 60".into()],
+            timeout_ms: 90_000,
+            stdout_bytes: 1024,
+            stderr_bytes: 1024,
+            write_restriction: None,
+        };
+        let running = Sandbox::prepare_supervised_command_as(
+            sandbox.as_ref(),
+            request,
+            None,
+            ProcessEnv { env_file: None },
+            ExecIdentity::Writer,
+        )
+        .await
+        .unwrap()
+        .dispatch()
+        .unwrap();
+        let mut writer_pid = String::new();
+        for _ in 0..50 {
+            writer_pid = podman_ok(&["exec", "--user", "0", &container, "sh", "-c", "pgrep -u 1000 -x sleep | head -1"])
+                .await
+                .trim()
+                .to_string();
+            if !writer_pid.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(!writer_pid.is_empty());
+
+        // Named reads: each prints `name=read` or `name=refused`.
+        let named = [
+            ("home", "/home/axocoatl/token"),
+            ("home-open", "/home/axocoatl/open.txt"),
+            ("home-config", "/home/axocoatl/.config/settings"),
+            ("tmp", "/tmp/writer-private"),
+            ("shadow", "/etc/shadow"),
+            ("root", "/root"),
+            ("environ", &format!("/proc/{writer_pid}/environ")),
+            ("writer-status", &format!("/proc/{writer_pid}/status")),
+            ("pid1", "/proc/1/status"),
+            ("run", "/run/axocoatl"),
+            ("passwd", "/etc/passwd"),
+        ]
+        .map(|(name, path)| (name, path.to_string()));
+        let script = named
+            .iter()
+            .map(|(name, path)| {
+                format!(
+                    "if [ -d {path} ]; then ls {path} >/dev/null 2>&1 && echo {name}=read || echo {name}=refused; \
+                     else cat {path} >/dev/null 2>&1 && echo {name}=read || echo {name}=refused; fi"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        for restriction in [None, Some(helper_restriction(&workspace))] {
+            let ran = supervised(sandbox.as_ref(), ExecIdentity::Helper, &script, None, restriction.clone()).await;
+            let seen: Vec<&str> = ran.stdout.lines().collect();
+            for (name, _) in &named {
+                let expected = if *name == "passwd" {
+                    format!("{name}=read")
+                } else {
+                    format!("{name}=refused")
+                };
+                assert!(seen.contains(&expected.as_str()), "{:?}: {expected}: {}", restriction.is_some(), ran.stdout);
+            }
+            for marker in ["writer-home-token", "writer-config", "writer-open", "writer-tmp", "writer-environment"] {
+                assert!(!ran.stdout.contains(marker), "{}", ran.stdout);
+            }
+        }
+
+        // Every path below these, opened or listed by the helper's view and
+        // by the same user without it (today's helper).
+        let roots = format!(
+            "/etc /root /home /tmp /var /run /srv /opt /mnt /dev/shm /proc/1 /proc/{writer_pid} /proc/sys/kernel /proc/sys/net/ipv4"
+        );
+        podman_ok(&[
+            "exec", "--user", "0", &container, "sh", "-c",
+            &format!(
+                "cd {} && find {roots} -xdev -maxdepth 6 -type f 2>/dev/null | grep -v '^/proc/[0-9]*/task/' | grep -v \"$PWD\" > axo-candidates; \
+                 find {roots} -xdev -maxdepth 6 -type d 2>/dev/null | grep -v '^/proc/[0-9]*/task/' | grep -v \"$PWD\" > axo-dirs; \
+                 chmod 0644 axo-candidates axo-dirs; wc -l < axo-candidates",
+                workspace.display()
+            ),
+        ])
+        .await;
+        let probe = "while IFS= read -r p; do head -c 1 -- \"$p\" >/dev/null 2>&1 && echo \"read $p\"; \
+                     done < axo-candidates; while IFS= read -r p; do ls -- \"$p\" >/dev/null 2>&1 && \
+                     echo \"list $p\"; done < axo-dirs; true";
+        let with_view = supervised_capturing(
+            sandbox.as_ref(),
+            ExecIdentity::Helper,
+            probe,
+            None,
+            None,
+            4 * 1024 * 1024,
+        )
+        .await;
+        let plain = podman_ok(&[
+            "exec", "--user", "1001:1001", "-w", &workspace.to_string_lossy(), &container, "sh", "-c", probe,
+        ])
+        .await;
+        running.cancellation().cancel();
+        let _ = running.finish().await;
+        let plain: std::collections::BTreeSet<&str> = plain.lines().collect();
+        let gained: Vec<&str> = with_view
+            .stdout
+            .lines()
+            .filter(|line| !plain.contains(line))
+            .collect();
+        eprintln!(
+            "outside the Workspace the view opened or listed {} paths, the same user without it {}",
+            with_view.stdout.lines().count(),
+            plain.len()
+        );
+        assert!(gained.is_empty(), "read with the view but not without it: {gained:?}");
+        // What it reads there is ordinary configuration, never a process's.
+        assert!(with_view.stdout.lines().any(|line| line == "read /etc/passwd"), "{}", with_view.stdout);
+        assert!(!with_view.stdout.contains(&format!("/proc/{writer_pid}/")), "{}", with_view.stdout);
+        assert!(plain.contains(format!("read /proc/{writer_pid}/cmdline").as_str()));
+        std::fs::remove_file(workspace.join("axo-candidates")).unwrap();
+        std::fs::remove_file(workspace.join("axo-dirs")).unwrap();
+    })
+    .await;
+}
+
+/// A helper's command holds `CAP_DAC_READ_SEARCH` and nothing else, and
+/// what that capability would extend beyond Landlock is refused: Unix
+/// sockets (the proxy's identity socket in root's directory) and watches.
+/// A setuid program gains nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test workload_podman -- --ignored --test-threads=1"]
+async fn a_helpers_only_capability_reaches_no_socket_and_no_new_privilege() {
+    with_fixture(12, |fixture| async move {
+        let (sandbox, container, workspace) = private_tree_session(&fixture).await;
+        assert_helper_command(&helper_command_status(sandbox.as_ref(), &container).await);
+        // The writer's commands still have nothing.
+        let writer = supervised(sandbox.as_ref(), ExecIdentity::Writer, STATUS, None, None).await;
+        assert_unprivileged(&writer, 1000, "/home/axocoatl");
+        // A setuid-root copy of id stands in for any setuid program.
+        podman_ok(&[
+            "exec", "--user", "0", &container, "sh", "-c",
+            "mkdir -p /usr/local/axo-setuid && cp \"$(readlink -f \"$(command -v id)\")\" /usr/local/axo-setuid/id && \
+             chmod 4755 /usr/local/axo-setuid/id",
+        ])
+        .await;
+        for restriction in [None, Some(helper_restriction(&workspace))] {
+            let ran = supervised(
+                sandbox.as_ref(),
+                ExecIdentity::Helper,
+                "/usr/local/axo-setuid/id -u; \
+                 printf 'CONNECT upstream.test:8000 HTTP/1.1\\r\\n\\r\\n' | \
+                 nc -w 2 local:/run/axocoatl/egress/identity.sock 2>&1; echo nc=$?; \
+                 stat -c '%n %F' /run/axocoatl/egress/identity.sock 2>&1; \
+                 ls /run/axocoatl/egress >/dev/null 2>&1 || echo list=refused; \
+                 timeout 3 busybox inotifyd true node_modules/.private:w 2>&1; echo inotifyd=$?",
+                None,
+                restriction.clone(),
+            )
+            .await;
+            let seen: Vec<&str> = ran.stdout.lines().collect();
+            assert_eq!(seen[0], "1001", "{}", ran.stdout);
+            assert!(!ran.stdout.contains("HTTP/1.1"), "{}", ran.stdout);
+            assert!(ran.stdout.contains("Operation not permitted"), "{}", ran.stdout);
+            assert!(seen.iter().any(|line| line.starts_with("nc=") && *line != "nc=0"), "{}", ran.stdout);
+            assert!(seen.contains(&"list=refused"), "{}", ran.stdout);
+            // Refused at once, not watching until the timeout.
+            assert!(seen.contains(&"inotifyd=1"), "{}", ran.stdout);
+        }
     })
     .await;
 }

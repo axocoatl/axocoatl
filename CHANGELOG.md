@@ -278,17 +278,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only by `aggregate_bytes`.
 
 ### Fixed
-- **A run whose read-only Agents cannot read the repository says so instead of
-  auditing nothing.** Read-only Agents, every Agent of an audit and the required
-  reviewer among them, run as `helper_user`, which reads only what the file modes let
-  any user read. On a Linux host a repository directory other users may not enter or
-  list (`mktemp -d`, or `umask 077`: mode `0700`) made every read of theirs fail with
-  `Permission denied`, so an audit reported each area as examined by nobody (exit
-  code 2), while a macOS Podman machine's shared folder let them in. A run with such an
-  Agent now asks its Session container whether `helper_user` can enter and list the
-  repository, and when it cannot, the run ends with exit code 5 before its first turn,
-  naming the directory, its mode and the fix (`chmod -R o+rX <repo>`). The helper user
-  keeps its own uid and gid and gains no access.
+- **Read-only Agents read a repository only its owner may enter.** Read-only Agents,
+  every Agent of an audit and the required reviewer among them, run as `helper_user`,
+  which read only what the file modes let any user read: on a Linux host a repository
+  made by `mktemp -d` or under `umask 077` (mode `0700`) made every read of theirs fail
+  with `Permission denied`, so an audit reported each area as examined by nobody. The
+  execution supervisor now gives every command of a read-only helper a view of the
+  Workspace: it starts as root (`podman exec --user 0`) and launches the command as
+  `helper_user` with `CAP_DAC_READ_SEARCH` as its only capability (in every set and the
+  bounding set, ambient so its children keep it, with no-new-privileges and locked
+  secure bits), so it reads and lists Workspace files whatever their modes, in a
+  Landlock domain that also handles opening files to read or execute them and listing
+  directories. Beneath the Workspace it may read, list and execute; beneath a temporary
+  directory of its own (its `HOME` and `TMPDIR`, removed when the command ends)
+  anything, though it no longer reads back what it writes to `/tmp` or `/dev/shm`;
+  elsewhere only what any user may read when the command starts, judged entry
+  by entry in the system directories (`/usr`, `/bin`, `/sbin`, `/lib*`, `/opt`, `/etc`,
+  `/proc/sys`, `/sys/devices/system/cpu`), plus a few devices and the kernel's global
+  `/proc` files. It cannot read the writer's home, other users' files in `/tmp`,
+  `/etc/shadow`, root's directories or any process's `/proc` entries (its own
+  included; `ps` and `pgrep` do not work in a helper), and it still cannot read a
+  writer process's environment or signal it, or write the Workspace. Its seccomp
+  filter also refuses `AF_UNIX` sockets (stream socket pairs, which child processes'
+  pipes use, stay allowed) and `inotify` watches, which the capability would otherwise
+  reach through directories it could not enter before; so an app's own Unix socket,
+  abstract or not, and the egress proxy's identity socket are out of its reach. A
+  hardened Session container now keeps `CAP_DAC_READ_SEARCH` for root (Podman does not
+  grant it by default; root already reads everything through `CAP_DAC_OVERRIDE`). What
+  a helper may read outside the Workspace is judged when each command starts, and
+  Landlock does not cover passing through a directory, so a helper can still `stat` a
+  path it names in a directory it could not enter before, without listing or opening
+  it; the Sandboxes page lists these limits. Rootless
+  Podman cannot give the helper an idmapped view of a bind-mounted Workspace instead:
+  `mount_setattr(MOUNT_ATTR_IDMAP)` needs `CAP_SYS_ADMIN` over the Workspace's
+  filesystem, which a rootless container never has. The run's check before its first
+  turn stays, and now launches its probe exactly as the helper's commands are: it ends
+  the run with exit code 5 only when that view cannot enter or list the repository (one
+  another user owns) or the container or kernel cannot give it, naming why (Landlock,
+  Linux 5.13 or later; or a hardened Session container started by an earlier build,
+  which lacks the capability: restart the Session). The walk of the system directories
+  takes tens of milliseconds per helper command in common images (about 40 ms for
+  Rust's 25,000 entries). Both embedded execution supervisors are rebuilt from this
+  source and re-pinned.
 - **Native OpenRouter reserves each call's own request, not the context window.** A
   call reserved the endpoint's whole context window plus its output, about 1.06 million
   tokens and $2.08 on a 1M-context model, so a modest grant could never make one. A call
@@ -405,6 +436,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Session is a `404`, not a `400`.
 
 ### Security
+- Hardened commands' seccomp filter also refuses `open_by_handle_at`, which opens a
+  file by its handle without checking the directories above it; a read-only helper's
+  filter also refuses `AF_UNIX` sockets other than stream socket pairs and `inotify`
+  watches (see Fixed).
 - The docs site's build dependencies are updated: `http-cache-semantics` 4.3.0 fixes
   GHSA-ch52-4w7c-c8xp, so its reviewed exception is removed; `sharp` 0.35.5, with
   libvips 1.3.4, fixes GHSA-wq5f-xc86-pv6w; `source-map-js` 1.2.2 fixes

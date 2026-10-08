@@ -115,6 +115,88 @@ impl WriteRestriction {
     }
 }
 
+/// How `--serve --harden` launches a read-only helper's command in a
+/// hardened container (`--helper UID:GID --writer UID:GID --workspace
+/// PATH`). The supervisor starts as root and launches the command as the
+/// helper user with `CAP_DAC_READ_SEARCH` as its only capability, in a
+/// Landlock domain that lets it open, list and execute the Workspace whatever
+/// its file modes, and outside it only what any user could read already. Its
+/// seccomp filter also refuses Unix sockets (other than stream socket pairs)
+/// and `inotify` watches, which the capability would otherwise extend. These
+/// are transport arguments, chosen by the host with the container's users,
+/// not part of the request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelperView {
+    /// The helper's `(uid, gid)`: the command runs as them.
+    pub helper: (u32, u32),
+    /// The writer's `(uid, gid)`: nothing the writer owns outside the
+    /// Workspace is opened to the helper.
+    pub writer: (u32, u32),
+    /// The Workspace, readable to the helper whatever its file modes.
+    pub workspace: String,
+}
+
+impl HelperView {
+    pub fn validate(&self) -> Result<(), String> {
+        let (helper, writer) = (self.helper, self.writer);
+        let ids = [helper.0, helper.1, writer.0, writer.1];
+        if ids.contains(&0)
+            || [helper.0, helper.1]
+                .iter()
+                .any(|id| *id == writer.0 || *id == writer.1)
+            || !self.workspace.starts_with('/')
+            || self.workspace == "/"
+            || self.workspace.len() > 4096
+            || self.workspace.contains('\0')
+            || self.workspace.split('/').any(|part| part == "..")
+        {
+            return Err("invalid helper view".into());
+        }
+        Ok(())
+    }
+
+    /// The supervisor arguments that follow `--serve --harden`.
+    pub fn args(&self) -> Vec<String> {
+        vec![
+            "--helper".into(),
+            format!("{}:{}", self.helper.0, self.helper.1),
+            "--writer".into(),
+            format!("{}:{}", self.writer.0, self.writer.1),
+            "--workspace".into(),
+            self.workspace.clone(),
+        ]
+    }
+
+    /// The view [`Self::args`] wrote, exactly in that order.
+    pub fn parse(args: &[String]) -> Result<Self, String> {
+        let ids = |value: &str| -> Result<(u32, u32), String> {
+            let (uid, gid) = value.split_once(':').ok_or("invalid helper view ids")?;
+            let id = |part: &str| {
+                if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return Err("invalid helper view ids".to_string());
+                }
+                part.parse::<u32>()
+                    .map_err(|_| "invalid helper view ids".to_string())
+            };
+            Ok((id(uid)?, id(gid)?))
+        };
+        let [helper_flag, helper, writer_flag, writer, workspace_flag, workspace] = args else {
+            return Err("invalid helper view arguments".into());
+        };
+        if helper_flag != "--helper" || writer_flag != "--writer" || workspace_flag != "--workspace"
+        {
+            return Err("invalid helper view arguments".into());
+        }
+        let view = Self {
+            helper: ids(helper)?,
+            writer: ids(writer)?,
+            workspace: workspace.clone(),
+        };
+        view.validate()?;
+        Ok(view)
+    }
+}
+
 impl ExecRequest {
     pub fn validate(&self) -> Result<(), String> {
         if self.protocol != PROTOCOL_VERSION
@@ -460,6 +542,82 @@ fn nibble(byte: u8) -> Option<u8> {
 }
 fn is_digest(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| nibble(byte).is_some())
+}
+
+#[cfg(test)]
+mod helper_view_tests {
+    use super::HelperView;
+
+    fn view() -> HelperView {
+        HelperView {
+            helper: (1001, 1001),
+            writer: (1000, 1000),
+            workspace: "/work/repo".into(),
+        }
+    }
+
+    #[test]
+    fn a_helper_view_round_trips_through_its_arguments() {
+        let args = view().args();
+        assert_eq!(
+            args,
+            [
+                "--helper",
+                "1001:1001",
+                "--writer",
+                "1000:1000",
+                "--workspace",
+                "/work/repo"
+            ]
+        );
+        assert_eq!(HelperView::parse(&args).unwrap(), view());
+    }
+
+    #[test]
+    fn a_helper_view_refuses_root_shared_ids_and_other_paths() {
+        for invalid in [
+            HelperView {
+                helper: (0, 1001),
+                ..view()
+            },
+            HelperView {
+                writer: (1000, 0),
+                ..view()
+            },
+            HelperView {
+                helper: (1000, 1001),
+                ..view()
+            },
+            HelperView {
+                helper: (1001, 1000),
+                ..view()
+            },
+            HelperView {
+                workspace: "relative".into(),
+                ..view()
+            },
+            HelperView {
+                workspace: "/".into(),
+                ..view()
+            },
+            HelperView {
+                workspace: "/work/../etc".into(),
+                ..view()
+            },
+        ] {
+            assert!(invalid.validate().is_err(), "{invalid:?}");
+            assert!(HelperView::parse(&invalid.args()).is_err(), "{invalid:?}");
+        }
+        let mut args = view().args();
+        args.swap(0, 2);
+        assert!(HelperView::parse(&args).is_err());
+        for ids in ["1001", "1001:", ":1001", "+1001:1001", "1001:1001:1", "x:1"] {
+            let mut args = view().args();
+            args[1] = ids.into();
+            assert!(HelperView::parse(&args).is_err(), "{ids}");
+        }
+        assert!(HelperView::parse(&view().args()[..4]).is_err());
+    }
 }
 
 #[cfg(test)]

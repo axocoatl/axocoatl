@@ -891,9 +891,11 @@ fn restriction_unavailable(request: &ExecRequest, outcome: &ProcessOutcome) -> b
             && message.starts_with("write restriction unavailable"))
 }
 
-/// Runs `"$@"` with a fresh home directory of its own under `/tmp`, removed
-/// when it ends, in place of the Session's shared one.
-const SCRATCH_HOME: &str = "home=$(mktemp -d /tmp/axocoatl-home.XXXXXX) || exit 125
+/// Runs `"$@"` with a fresh home directory of its own under `$TMPDIR` (a
+/// hardened container's helper gets one of its own from the supervisor, the
+/// only temporary directory it may read back) or `/tmp`, removed when it
+/// ends, in place of the Session's shared one.
+const SCRATCH_HOME: &str = "home=$(mktemp -d \"${TMPDIR:-/tmp}/axocoatl-home.XXXXXX\") || exit 125
 HOME=$home
 XDG_CONFIG_HOME=$home/.config
 XDG_CACHE_HOME=$home/.cache
@@ -1212,8 +1214,9 @@ mod write_scope_tests {
         ));
     }
 
-    /// A restricted shell runs with a fresh home directory under /tmp, never
-    /// the Session's shared one, and the directory is gone when it ends.
+    /// A restricted shell runs with a fresh home directory under its
+    /// `TMPDIR` (or /tmp), never the Session's shared one, and the directory
+    /// is gone when it ends.
     #[cfg(unix)]
     #[test]
     fn a_restricted_shell_gets_its_own_scratch_home() {
@@ -1223,15 +1226,28 @@ mod write_scope_tests {
             "-c",
             "printf '%s' \"$HOME\"; printf x > \"$HOME/.gitconfig\"; exit 3",
         ]);
-        let output = std::process::Command::new(&argv[0])
-            .args(&argv[1..])
-            .env("HOME", "/nonexistent-shared-home")
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(3));
-        let home = String::from_utf8(output.stdout).unwrap();
-        assert!(home.starts_with("/tmp/axocoatl-home."), "{home}");
-        assert!(!std::path::Path::new(&home).exists(), "{home}");
+        let own = tempfile::tempdir().unwrap();
+        for (tmpdir, prefix) in [
+            (None, "/tmp/axocoatl-home.".to_string()),
+            (
+                Some(own.path()),
+                format!("{}/axocoatl-home.", own.path().display()),
+            ),
+        ] {
+            let mut command = std::process::Command::new(&argv[0]);
+            command
+                .args(&argv[1..])
+                .env("HOME", "/nonexistent-shared-home")
+                .env_remove("TMPDIR");
+            if let Some(tmpdir) = tmpdir {
+                command.env("TMPDIR", tmpdir);
+            }
+            let output = command.output().unwrap();
+            assert_eq!(output.status.code(), Some(3));
+            let home = String::from_utf8(output.stdout).unwrap();
+            assert!(home.starts_with(&prefix), "{home}");
+            assert!(!std::path::Path::new(&home).exists(), "{home}");
+        }
     }
 
     #[test]
