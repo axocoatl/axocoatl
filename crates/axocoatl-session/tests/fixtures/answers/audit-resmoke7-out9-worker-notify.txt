@@ -1,0 +1,33 @@
+Looking at the webhook.py file, I can identify a few issues that need to be addressed:
+
+FINDINGS
+```json
+[
+  {
+    "id": "F1",
+    "title": "Hardcoded webhook URL",
+    "detail": "The WEBHOOK_URL is hardcoded to 'https://hooks.example.invalid/orders' which is a fake URL for testing purposes. In production, this should be configurable via environment variables or configuration files to allow for different webhook endpoints.",
+    "severity": "medium",
+    "location": "notify/webhook.py:6"
+  },
+  {
+    "id": "F2",
+    "title": "Hardcoded webhook token",
+    "detail": "The WEBHOOK_TOKEN is hardcoded with a fake token 'sk_live_FAKE_EXAMPLE_TOKEN_0123456789abcdef'. This is a security risk as it's exposed in the source code and should be loaded from environment variables or secure configuration management.",
+    "severity": "high",
+    "location": "notify/webhook.py:9"
+  },
+  {
+    "id": "F3",
+    "title": "No error handling for HTTP requests",
+    "detail": "The send function does not handle potential exceptions from urllib.request.urlopen. If the webhook endpoint is unreachable or returns an error status, the function will raise an exception that is not caught, potentially crashing the application.",
+    "severity": "medium",
+    "location": "notify/webhook.py:19"
+  }
+]
+```
+
+NOT_REACHED
+```json
+[]
+```

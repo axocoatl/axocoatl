@@ -1,0 +1,16 @@
+Based on my examination of the auth/tokens.py file, I've identified a potential security defect in the session token validation logic.
+
+FINDINGS
+```json
+[{
+  "id": "F1", 
+  "title": "Timing Attack Vulnerability in Token Signature Comparison",
+  "detail": "The is_valid function uses a simple string comparison (signature != expected) which is vulnerable to timing attacks. An attacker could potentially determine if a signature is valid by measuring the time it takes to process the comparison, as the comparison will take longer when the signature matches the expected value at the beginning of the string. The function should use hmac.compare_digest() for constant-time comparison to prevent this vulnerability.",
+  "severity": "medium",
+  "location": "auth/tokens.py:15"
+}]
+```
+NOT_REACHED
+```json
+[]
+```

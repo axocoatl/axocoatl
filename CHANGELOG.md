@@ -125,18 +125,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose paths share the most directories with it, else to an area `rest` the host makes
   for such files. A planned area left without files is not run. The plan as executed
   and the assignment are in the run's progress (`assigned`) and the record, and the
-  files given to `rest` or by directory are notes. Each worker's instructions name its
+  files given to `rest` or by directory are notes. An area whose files need more reads
+  than one worker activation makes within its budget is split, before any worker runs,
+  into numbered sub-areas (`src-1`, `src-2`, …) of consecutive files, each with its own
+  worker, and the split is a note: the reads are one per default `read_file` window of
+  each text file, and one activation makes its `invocations` less a fifth (at least 4)
+  held back, at two a read, at most 200 (about 120 for the built-in budget). One turn
+  runs at most 16 workers whose reads add up to at most 200; more run in further turns,
+  since a turn records only so many tool calls. Each worker's instructions name its
   files (past 8 KiB of names, the directories they are in with counts, all to be
-  read). From the `read_file` calls its Session recorded, a file is read when a read of
-  it succeeded in one of its area worker's activations that answered: any read when the
-  file fits one read (64 KiB), else reads that together cover all of it, each from its
-  `offset` for its `limit`. Empty files and binary files (a NUL byte in the first 8,000
-  bytes) need no read; a file over 256 KiB is not read, a note. `grep`, `glob`,
-  `list_dir` and `bash` read nothing for coverage. When a worker's turn ends with files of its area unread,
-  the host runs up to two follow-up turns, each with a fresh activation of every such
-  worker naming exactly its unread files ("read these files and report additional
-  findings in the same format"), and their findings join the area's report; a worker
-  without a result gets them too, unless the wall clock, a person's stop or a 400-403
+  read). From the `read_file` calls its Session recorded, a file is read when the bytes
+  the succeeded reads of it returned, in its area worker's activations that answered,
+  cover every byte of it, whatever its size: each read covers what its result reports,
+  from its `offset` for its `returned_bytes`, and a partial read of a small file leaves
+  it unread. Empty files and binary files (a NUL byte in the first 8,000 bytes) need no
+  read; a file over 256 KiB is not read, a note. `grep`, `glob`, `list_dir` and `bash`
+  read nothing for coverage. When a worker's turn ends with files of its area unread,
+  the host runs a follow-up turn with a fresh activation of every such worker naming
+  exactly its unread files ("read these files and report additional findings in the
+  same format"), and its findings join the area's report; follow-ups go on while each
+  one reads something of its files that no earlier read returned, so a worker whose
+  follow-up read nothing new gets no other, and the wall clock bounds them. A worker
+  without a result gets one too, unless the wall clock, a person's stop or a 400-403
   refusal ended it. Each file still unread after them, or when the wall clock or a stop
   ends them, is not covered, listed by file with why; so is a worker without a result,
   an unreadable report, findings beyond a report's 200 left out of it, and an area whose
@@ -161,12 +171,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documentation states the trade-off measured with Claude Code subagents, not through
   Axocoatl: more recall at lower precision and about three times the tokens on an audit
   larger than one context, as a sensitivity analysis.
-- **`read_file` reads a long file to its end.** `read_file` takes an optional `offset`
-  (bytes, 0 by default) and `limit` (1 to 65,536 bytes, 65,536 by default) and returns
-  that many bytes from there; when more follows, the result says `truncated: true` and
-  gives `next_offset`, where the next read starts, so a model can read a long file in
-  pieces its context holds. A read without them runs as before; its result adds
-  `next_offset` when it was cut.
+- **`read_file` reads a long file to its end, in windows that fit the model.**
+  `read_file` takes an optional `offset` (bytes, 0 by default) and `limit` (1 to 65,536
+  bytes) and returns a window from there; when more follows, the result says
+  `truncated: true` and gives `next_offset`, where the next read starts. In a native
+  Session a read without `limit` returns the calling Agent's window: 64 KiB, or a
+  quarter of its model's context counted at one token per byte when that is smaller
+  (8 KiB for a 32,768-token context), from the provider's live context (an Ollama
+  model's loaded one); the tool's description states it, and a larger `limit` reads
+  that window. The window travels as a hex dump, so `returned_bytes` and `next_offset`
+  count the file's own bytes even when it is not UTF-8: only `content` is decoded,
+  with U+FFFD for bytes that are not UTF-8 and `invalid_utf8: true`, and a window that
+  would end inside a character ends before it. `read_file` now needs `od` in the
+  Session image, as Debian, Ubuntu, Alpine and macOS have.
 - **External agents.** A loadout's writer can be the Claude Code CLI
   (`runtime: claude-code`) or the Codex CLI (`runtime: codex`), run inside the Session
   container as the non-root writer user under `--harden`, admitted, granted and captured

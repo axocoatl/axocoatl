@@ -159,6 +159,9 @@ struct BoundActivation {
     control: AgentRunControl,
     steering_open: bool,
     repository: Option<RepositoryActivationResource>,
+    /// Bytes `read_file` returns without `limit` for this activation: the
+    /// window its model's context holds (`axocoatl_tools::read_file_window`).
+    read_window: usize,
 }
 
 struct DispatchState {
@@ -1089,6 +1092,7 @@ impl DispatchState {
             control,
             steering_open: false,
             repository,
+            read_window: axocoatl_tools::READ_FILE_WINDOW_BYTES,
         })
     }
     fn append(&mut self, operation: &str, event: TurnContractEvent) -> Result<()> {

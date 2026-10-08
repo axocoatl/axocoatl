@@ -49,7 +49,7 @@ const outcome = {
     { area: 'checkout', class: 'not_reached', detail: 'Not reached: ran out of steps' },
     { area: 'writer', class: 'stopped', detail: '' },
   ],
-  notes: ['worker-ingest listed ingest/legacy.py as not reached, and no such path exists in the repository; a note, not a gap'],
+  notes: ['worker-ingest listed as not reached: ingest/legacy.py; a note: the host decides coverage from the files its workers read'],
   warnings: [{ code: 'same_model_reviewer', message: 'The reviewer runs the writer’s model (openrouter:qwen/qwen3-coder).' }],
   usage: { input_tokens: 1200, output_tokens: 300, cost_microunits: 12345, complete: false, retries: 1 },
   network: { events: 9, allowed_connections: 4, refused_connections: 1, route_requests: 3, routes: [['openrouter.ai', 3]] },
