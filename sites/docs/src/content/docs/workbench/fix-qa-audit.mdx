@@ -313,7 +313,8 @@ findings are reported unmerged".
 
 When you stop an audit, no further turn starts: areas planned but not started, files no
 follow-up read, and an integration that did not run, are not covered (`stopped`), and
-the workers' findings are reported unmerged. A worker your stop interrupted is not
+the workers' findings are reported unmerged. When no area has a report there is nothing
+to integrate: the integration is skipped and not listed. A worker your stop interrupted is not
 covered as `stopped` too, never `blocked`: a read-only worker cannot change a file, so
 the repository capture the stop cut short is no reason to doubt it. The Outcome keeps the turns, the
 not-covered entries, the findings and the usage observed until the stop; usage is

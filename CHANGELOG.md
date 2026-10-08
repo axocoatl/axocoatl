@@ -200,7 +200,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that named no line, keeps the file alone, with the finding's `line` `null` in the
   Outcome, and the summary and JUnit show the file only. A stopped audit
   starts no further turn, lists the areas not started, the files no follow-up read and
-  the integration not run as not covered (`stopped`), reports the workers' findings
+  the integration not run as not covered (`stopped`; with no area report to merge the
+  integration is skipped and not listed), reports the workers' findings
   unmerged, and keeps in its Outcome the turns, not-covered entries, findings and usage
   observed until the stop, with usage marked incomplete when it is. A worker's
   `FINDINGS` and `NOT_REACHED` keys are read in any case, and every block (`AREAS`,
