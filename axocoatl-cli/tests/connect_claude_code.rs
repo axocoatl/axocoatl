@@ -1,9 +1,14 @@
 //! `axocoatl connect claude-code` and `axocoatl secret set --from-env` as
 //! the built binary runs them. `connect` runs in a pseudo-terminal (it needs
-//! one) with the fake `claude` in `fixtures/fake-claude.sh` and
-//! `--no-verify`; verification against a fake HTTPS endpoint is covered by
-//! the crate's unit tests. Nothing here reaches a network or a real account.
+//! one) with the fake `claude` in `fixtures/fake-claude.sh` (which can replay
+//! what Claude Code's renderer writes, from `src/connect_cmd/ink_model.rs`)
+//! and `--no-verify`; verification against a fake HTTPS endpoint is covered
+//! by the crate's unit tests. Nothing here reaches a network or a real
+//! account.
 #![cfg(unix)]
+
+#[path = "../src/connect_cmd/ink_model.rs"]
+mod ink_model;
 
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -72,6 +77,17 @@ struct Session {
     deadline: Instant,
 }
 
+/// The size of the terminal `connect` runs in.
+const SIZE: (u16, u16) = (100, 30);
+
+/// For mode `replay`: what Claude Code writes in a terminal of `size`.
+fn write_replay(root: &Path, (cols, rows): (u16, u16), before: &[u8], after: &[u8]) {
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join(format!("before-{cols}x{rows}")), before).unwrap();
+    std::fs::write(bin.join(format!("after-{cols}x{rows}")), after).unwrap();
+}
+
 impl Session {
     /// `axocoatl connect claude-code` with `args`, the fake `claude` (in
     /// mode `mode`, printing `token`) and the root's data directory.
@@ -87,8 +103,8 @@ impl Session {
 
         let pair = native_pty_system()
             .openpty(PtySize {
-                rows: 30,
-                cols: 100,
+                rows: SIZE.1,
+                cols: SIZE.0,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -134,9 +150,29 @@ impl Session {
         String::from_utf8_lossy(&self.screen.lock().unwrap()).into_owned()
     }
 
+    /// Wait until the screen shows `text`.
+    fn wait_for(&mut self, text: &str) {
+        while !self.shown().contains(text) {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                panic!("axocoatl exited early ({status:?}):\n{}", self.shown());
+            }
+            assert!(
+                Instant::now() < self.deadline,
+                "never shown: {text}\n{}",
+                self.shown()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// Wait for the fake's prompt and press Enter.
     fn press_enter_at_the_prompt(&mut self) {
-        while !self.shown().contains("Press Enter to continue") {
+        self.press_enter_at("Press Enter to continue");
+    }
+
+    /// Wait for `prompt` and press Enter.
+    fn press_enter_at(&mut self, prompt: &str) {
+        while !self.shown().contains(prompt) {
             if let Some(status) = self.child.try_wait().unwrap() {
                 panic!("axocoatl exited early ({status:?}):\n{}", self.shown());
             }
@@ -203,6 +239,83 @@ fn connect_runs_claude_in_a_terminal_and_stores_the_token_it_never_shows() {
         String::from_utf8_lossy(&listed.stdout),
         "claude-code-oauth\n"
     );
+}
+
+/// What Claude Code 2.1.271 writes for `claude setup-token`, replayed by the
+/// fake: `claude` runs in a terminal as large as the user's, the token Ink
+/// wraps into rows placed by cursor movement is stored exactly, and the
+/// user sees the mask where it was.
+#[test]
+fn connect_stores_the_token_claude_code_draws_and_never_shows_it() {
+    let root = root();
+    let token = fresh_token();
+    let (before, after) = ink_model::session(
+        &token,
+        usize::from(SIZE.0),
+        usize::from(SIZE.1),
+        ink_model::Shape::Claude,
+    );
+    write_replay(&root.path, SIZE, &before, &after);
+    let mut session = Session::connect(&root.path, "replay", &token, &["--no-verify"]);
+    session.press_enter_at(ink_model::PROMPT);
+    let (code, screen) = session.finish();
+    let text = String::from_utf8_lossy(&screen).into_owned();
+    assert_eq!(code, Some(0), "{text}");
+    let leaks = leaked_positions(&screen, &token);
+    assert!(leaks.is_empty(), "token bytes at {leaks:?} were shown");
+    assert!(text.contains("[token hidden by axocoatl]"), "{text}");
+    assert!(text.contains("Your OAuth token (valid for 1 year):"));
+    let path = secret_file(&root.path, "claude-code-oauth");
+    assert_eq!(std::fs::read(&path).unwrap(), token.as_bytes());
+}
+
+/// The terminal is resized while Claude Code waits for the sign-in: the
+/// command gets `SIGWINCH`, resizes `claude`'s terminal (which gets the
+/// signal and sees the new size), and the token Claude Code then draws for
+/// the new width is stored exactly and never shown.
+#[test]
+fn connect_resizes_claudes_terminal_with_the_users() {
+    let root = root();
+    let token = fresh_token();
+    let new = (60u16, 30u16);
+    let (before, after) = ink_model::session(
+        &token,
+        usize::from(SIZE.0),
+        usize::from(SIZE.1),
+        ink_model::Shape::Claude,
+    );
+    write_replay(&root.path, SIZE, &before, &after);
+    let resized = ink_model::resized_session(
+        &token,
+        (usize::from(SIZE.0), usize::from(SIZE.1)),
+        (usize::from(new.0), usize::from(new.1)),
+    );
+    std::fs::write(
+        root.path.join(format!("bin/after-{}x{}", new.0, new.1)),
+        &resized,
+    )
+    .unwrap();
+    let mut session = Session::connect(&root.path, "replay", &token, &["--no-verify"]);
+    session.wait_for(ink_model::PROMPT);
+    session
+        .master
+        .resize(PtySize {
+            rows: new.1,
+            cols: new.0,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    session.wait_for("[size 30 60]");
+    session.press_enter_at("[size 30 60]");
+    let (code, screen) = session.finish();
+    let text = String::from_utf8_lossy(&screen).into_owned();
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("[SIGWINCH]"), "{text}");
+    let leaks = leaked_positions(&screen, &token);
+    assert!(leaks.is_empty(), "token bytes at {leaks:?} were shown");
+    let path = secret_file(&root.path, "claude-code-oauth");
+    assert_eq!(std::fs::read(&path).unwrap(), token.as_bytes());
 }
 
 /// A store that could not take the token (a link or a directory where the

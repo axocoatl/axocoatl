@@ -1,12 +1,15 @@
 //! `axocoatl connect claude-code`: store a Claude Code OAuth token without
 //! the user ever seeing, copying or typing it. Owner: workstream `agents`.
 //!
-//! The command runs `claude setup-token` in a pseudo-terminal 1000 columns
-//! wide (so the token is printed on one line), with the user's terminal in
-//! raw mode (always restored) and keystrokes relayed to it. The program's
-//! output reaches the user's terminal only through a streaming filter that
-//! replaces every `sk-ant-…` token with a mask ([`redact`]); the filter also
-//! keeps the tokens it hid, in memory only. Exactly one OAuth token
+//! The command runs `claude setup-token` in a pseudo-terminal the size of the
+//! user's terminal, resized with it on `SIGWINCH` ([`relay`]), with the
+//! user's terminal in raw mode (always restored) and keystrokes relayed to
+//! the program until it exits. The program's output reaches the user's
+//! terminal only through a streaming filter that runs it through a model of
+//! the terminal ([`screen`]) and shows every `sk-ant-…` token it writes
+//! masked, cell for cell, however the program's renderer places the token's
+//! characters ([`redact`]); the filter also keeps the tokens it hid, in
+//! memory only, and drops clipboard writes. Exactly one OAuth token
 //! (`sk-ant-oat01-…`) must be found. Unless `--no-verify`, it is checked
 //! with Anthropic ([`verify`]), then stored through the same secret store
 //! as `axocoatl secret set` (same data root, `0600`).
@@ -17,8 +20,11 @@
 
 mod redact;
 mod relay;
+mod screen;
 mod verify;
 
+#[cfg(test)]
+mod ink_model;
 #[cfg(test)]
 mod tests;
 
@@ -141,6 +147,28 @@ impl Interrupt {
     }
 }
 
+/// `SIGWINCH`: the user's terminal changed size, so the program's must too.
+#[derive(Clone, Default)]
+pub(crate) struct Resized(Arc<AtomicBool>);
+
+impl Resized {
+    /// Listen for `SIGWINCH` for as long as the returned task runs.
+    fn listen(&self) -> Option<tokio::task::JoinHandle<()>> {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut stream = signal(SignalKind::window_change()).ok()?;
+        let resized = self.clone();
+        Some(tokio::spawn(async move {
+            while stream.recv().await.is_some() {
+                resized.raise();
+            }
+        }))
+    }
+
+    pub(crate) fn raise(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
 /// What `connect` needs besides the terminal.
 pub(crate) struct Connect {
     pub(crate) claude: PathBuf,
@@ -148,8 +176,6 @@ pub(crate) struct Connect {
     pub(crate) data_dir: PathBuf,
     /// `None` with `--no-verify`.
     pub(crate) verifier: Option<Verifier>,
-    /// The program's terminal width ([`relay::WIDE_COLUMNS`]).
-    pub(crate) cols: u16,
 }
 
 /// Is `path` a regular file someone may execute?
@@ -232,23 +258,25 @@ fn connected_message(secret: &str) -> String {
 
 /// Run `claude setup-token` on the terminal `input`/`output`, capture its
 /// token, check it and store it. Returns the confirmation to print.
+/// `resized` is raised when the terminal changes size.
 pub(crate) async fn connect(
     request: Connect,
     input: OwnedFd,
     output: Box<dyn Write + Send>,
     interrupt: &Interrupt,
+    resized: &Resized,
 ) -> Result<String, Failure> {
     let Connect {
         claude,
         secret,
         data_dir,
         verifier,
-        cols,
     } = request;
     let flag = interrupt.flag.clone();
+    let resized = resized.0.clone();
     let (run, mut output) = tokio::task::spawn_blocking(move || {
         let mut output = output;
-        let run = relay::run_setup_token(&claude, input.as_fd(), &mut *output, cols, &flag);
+        let run = relay::run_setup_token(&claude, input.as_fd(), &mut *output, &flag, &resized);
         (run, output)
     })
     .await
@@ -294,7 +322,9 @@ pub(crate) async fn connect(
         }
     };
     // Every other copy of the token (the relay's captures) is zeroized now,
-    // not after the network check.
+    // not after the network check. The keystroke relay stopped when the
+    // program exited, so what the user types from here on stays in the
+    // terminal for the shell.
     drop(run);
     if let Some(verifier) = &verifier {
         let _ = writeln!(
@@ -428,18 +458,20 @@ pub async fn cmd_connect(command: ConnectCommands) -> i32 {
         claude.display()
     );
     let interrupt = Interrupt::default();
-    let listeners = interrupt.listen();
+    let mut listeners = interrupt.listen();
+    let resized = Resized::default();
+    listeners.extend(resized.listen());
     let result = connect(
         Connect {
             claude,
             secret,
             data_dir,
             verifier,
-            cols: relay::WIDE_COLUMNS,
         },
         input,
         Box::new(std::io::stdout()),
         &interrupt,
+        &resized,
     )
     .await;
     for listener in listeners {
