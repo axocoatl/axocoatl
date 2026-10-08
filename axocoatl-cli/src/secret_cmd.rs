@@ -14,6 +14,7 @@
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
+use axocoatl_config::egress_routes::is_valid_credential_name;
 use axocoatl_daemon::external_agent::claude_code::CLAUDE_CODE_SECRET;
 use axocoatl_daemon::secret_store;
 use clap::Subcommand;
@@ -36,6 +37,11 @@ pub enum SecretCommands {
         /// Path to config file (selects the data directory)
         #[arg(short, long, default_value_os_t = crate::default_config_path_for_clap())]
         config: PathBuf,
+        /// A value given on the command line (`secret set NAME "$TOKEN"`).
+        /// It is refused without being shown: clap's own "unexpected
+        /// argument" error would print it.
+        #[arg(hide = true, value_name = "VALUE")]
+        on_command_line: Vec<String>,
     },
     /// List stored secret names
     List {
@@ -54,10 +60,14 @@ pub enum SecretCommands {
 
 /// The hint printed when stdin is a terminal: values never come from
 /// argv or from typing them where they would echo.
+///
+/// Only the well-known names are repeated, as `secret set "$TOKEN"` typed in
+/// a terminal would otherwise print a value that happens to look like a name.
 fn pipe_hint(name: &str) -> String {
-    let variable = match name {
-        "codex-openai" => "OPENAI_API_KEY",
-        _ => "VAR",
+    let (name, variable) = match name {
+        "codex-openai" => (name, "OPENAI_API_KEY"),
+        CLAUDE_CODE_SECRET => (name, "VAR"),
+        _ => ("<name>", "VAR"),
     };
     let mut hint = format!(
         "axocoatl secret set reads the value from stdin or an environment variable, not from \
@@ -98,6 +108,7 @@ pub(crate) fn set_from(
     stdin: impl std::io::Read,
     stdin_is_terminal: bool,
 ) -> Result<Stored, (i32, String)> {
+    check_name(name)?;
     if stdin_is_terminal {
         return Err((USAGE, pipe_hint(name)));
     }
@@ -106,8 +117,36 @@ pub(crate) fn set_from(
     store(data_dir, name, &value)
 }
 
+/// A secret name, checked before anything could repeat it: an invalid one
+/// (often a value passed where the name belongs) is refused unshown.
+fn check_name(name: &str) -> Result<(), (i32, String)> {
+    if is_valid_credential_name(name) {
+        Ok(())
+    } else {
+        Err((USAGE, secret_store::INVALID_NAME.to_string()))
+    }
+}
+
+/// The refusal of `secret set NAME VALUE`, which never repeats the value.
+pub(crate) const VALUE_ON_COMMAND_LINE: &str =
+    "secret set takes only a name, never a value on the command line (it is not shown here); \
+     nothing was stored. Pass the value with `--from-env VAR` (the variable's name, without \
+     `$`) or on stdin. If that argument was a secret, it is now in your shell history: \
+     replace it.";
+
+/// Whether `variable` looks like an environment variable's name: a letter
+/// or `_`, then up to 127 letters, digits or `_`.
+fn is_variable_name(variable: &str) -> bool {
+    let mut bytes = variable.bytes();
+    matches!(bytes.next(), Some(b'A'..=b'Z' | b'a'..=b'z' | b'_'))
+        && variable.len() <= 128
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
 /// `secret set --from-env variable`, with the environment as `lookup`, for
-/// tests. An unset or empty variable is refused; the value is never echoed.
+/// tests. An unset or empty variable is refused. Neither the value nor the
+/// argument is ever echoed: `--from-env "$TOKEN"` passes the value where the
+/// name belongs, and a value can look like a name (`ghp_…`).
 pub(crate) fn set_from_env(
     data_dir: &Path,
     name: &str,
@@ -115,23 +154,30 @@ pub(crate) fn set_from_env(
     lookup: impl FnOnce(&str) -> Option<std::ffi::OsString>,
 ) -> Result<Stored, (i32, String)> {
     use std::os::unix::ffi::OsStringExt;
-    if variable.is_empty() || variable.contains(['=', '\0']) {
+    check_name(name)?;
+    if !is_variable_name(variable) {
         return Err((
             USAGE,
-            format!("{variable:?} is not an environment variable name"),
+            "--from-env takes the name of an environment variable (such as OPENAI_API_KEY, \
+             without `$`), not its value; the argument is not shown and nothing was stored. If \
+             it was a secret, it is now in your shell history: replace it."
+                .to_string(),
         ));
     }
     let Some(value) = lookup(variable) else {
         return Err((
             USAGE,
-            format!("the environment variable {variable} is not set; nothing was stored"),
+            "the environment variable named by --from-env is not set (export it first if it \
+             is a shell variable; its name is not shown, in case it is a value); nothing was \
+             stored"
+                .to_string(),
         ));
     };
     let value = Zeroizing::new(value.into_vec());
     if value.is_empty() {
         return Err((
             USAGE,
-            format!("the environment variable {variable} is empty; nothing was stored"),
+            "the environment variable named by --from-env is empty; nothing was stored".to_string(),
         ));
     }
     let value =
@@ -169,6 +215,15 @@ fn store(data_dir: &Path, name: &str, value: &[u8]) -> Result<Stored, (i32, Stri
 
 /// Returns the process exit code.
 pub async fn cmd_secret(command: SecretCommands) -> i32 {
+    if let SecretCommands::Set {
+        on_command_line, ..
+    } = &command
+    {
+        if !on_command_line.is_empty() {
+            eprintln!("✗ {VALUE_ON_COMMAND_LINE}");
+            return USAGE;
+        }
+    }
     let config = match &command {
         SecretCommands::Set { config, .. }
         | SecretCommands::List { config }
@@ -265,16 +320,23 @@ mod tests {
     fn set_takes_no_value_on_the_command_line() {
         assert!(Cli::try_parse_from(["x", "set", "name"]).is_ok());
         for argv in [
-            &["x", "set", "name", "sk-value"][..],
-            &["x", "set", "name", "--value", "sk-value"],
+            &["x", "set", "name", "--value", "sk-value"][..],
             &["x", "set"],
         ] {
             assert!(Cli::try_parse_from(argv).is_err(), "{argv:?}");
         }
+        // A value after the name parses, so that `cmd_secret` refuses it
+        // with a message that does not repeat it (clap's error would).
+        let parsed = Cli::try_parse_from(["x", "set", "name", "sk-value"]).unwrap();
+        assert!(
+            matches!(&parsed.command, SecretCommands::Set { on_command_line, .. }
+            if on_command_line == &["sk-value"])
+        );
+        assert!(!VALUE_ON_COMMAND_LINE.contains("sk-"));
         let parsed = Cli::try_parse_from(["x", "set", "name", "-c", "/tmp/a.yaml"]).unwrap();
         assert!(
-            matches!(parsed.command, SecretCommands::Set { name, config, from_env: None }
-            if name == "name" && config == Path::new("/tmp/a.yaml"))
+            matches!(parsed.command, SecretCommands::Set { name, config, from_env: None, on_command_line }
+            if name == "name" && config == Path::new("/tmp/a.yaml") && on_command_line.is_empty())
         );
         let parsed = Cli::try_parse_from(["x", "set", "name", "--from-env", "MY_TOKEN"]).unwrap();
         assert!(
@@ -405,19 +467,28 @@ mod tests {
         let (code, message) =
             set_from_env(root.path(), "codex-openai", "UNSET_VAR", |_| None).unwrap_err();
         assert_eq!(code, USAGE);
-        assert_eq!(
-            message,
-            "the environment variable UNSET_VAR is not set; nothing was stored"
+        assert!(
+            message.starts_with("the environment variable named by --from-env is not set"),
+            "{message}"
         );
+        assert!(!message.contains("UNSET_VAR"), "{message}");
         let (code, message) =
             set_from_env(root.path(), "codex-openai", "EMPTY", lookup("EMPTY", "")).unwrap_err();
         assert_eq!(code, USAGE);
-        assert!(message.contains("EMPTY is empty"), "{message}");
-        for variable in ["", "A=B"] {
-            let (code, _) =
+        assert_eq!(
+            message,
+            "the environment variable named by --from-env is empty; nothing was stored"
+        );
+        for variable in ["", "A=B", "1ABC", "A-B", "A B", "\u{e9}", &"A".repeat(129)] {
+            let (code, message) =
                 set_from_env(root.path(), "codex-openai", variable, |_| None).unwrap_err();
             assert_eq!(code, USAGE);
+            assert!(
+                message.starts_with("--from-env takes the name"),
+                "{message}"
+            );
         }
+        assert!(is_variable_name(&"A".repeat(128)) && is_variable_name("_a1"));
         let (code, message) = set_from_env(
             root.path(),
             "codex-openai",
@@ -432,5 +503,52 @@ mod tests {
         );
         // The value stored before is untouched by the refusals.
         assert_eq!(std::fs::read(&path).unwrap(), b"sk-proj-envvalue");
+    }
+
+    /// `--from-env "$TOKEN"` (the value where the variable's name belongs)
+    /// and `secret set "$TOKEN"` (the value where the secret's name
+    /// belongs) are refused without the value appearing in any message,
+    /// whether it looks like a name or not.
+    #[test]
+    fn a_value_passed_as_a_name_is_never_echoed() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let values = [
+            "sk-ant-oat01-FAKEFAKEfakefake0123456789-abcdefghijklmnopqrstuvwxyzABCDEFGHIJ_KLMNOAA",
+            "sk-proj-FAKEPROBEVALUE0123456789abcdef",
+            "OPENAI_API_KEY=sk-proj-FAKEPROBEVALUE0123456789abcdef",
+            "ghp_FAKEfake0123456789FAKEfake0123456789",
+            "AKIAFAKEFAKEFAKEFAKE",
+        ];
+        let shows = |message: &str, value: &str| {
+            let tail = value.rsplit(['=', '-', '_']).next().unwrap_or(value);
+            message.contains(value) || (tail.len() >= 8 && message.contains(tail))
+        };
+        for value in values {
+            let (code, message) =
+                set_from_env(root.path(), "codex-openai", value, |_| None).unwrap_err();
+            assert_eq!(code, USAGE);
+            assert!(!shows(&message, value), "{message}");
+            let (code, message) =
+                set_from_env(root.path(), "codex-openai", value, |_| Some("".into())).unwrap_err();
+            assert_eq!(code, USAGE);
+            assert!(!shows(&message, value), "{message}");
+            for terminal in [true, false] {
+                if let Err((_, message)) = set_from(root.path(), value, &b"x"[..], terminal) {
+                    assert!(!shows(&message, value), "{message}");
+                } else {
+                    assert!(
+                        is_valid_credential_name(value),
+                        "an invalid name was stored: {value}"
+                    );
+                }
+            }
+            if !is_valid_credential_name(value) {
+                let (code, message) =
+                    set_from_env(root.path(), value, "OPENAI_API_KEY", |_| None).unwrap_err();
+                assert_eq!(code, USAGE);
+                assert!(!shows(&message, value), "{message}");
+            }
+        }
     }
 }

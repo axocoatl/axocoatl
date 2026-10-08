@@ -101,7 +101,10 @@ data root as `secrets/<name>`, a file only your user can read (`0600`), replaced
 atomically. It never takes the value as an argument, never prints it, and never writes
 it to a log or a record. Standard input must be a pipe or a file: when it is a terminal,
 where typing or pasting would show the value, the command refuses and prints how to
-pipe it. An unset or empty `--from-env` variable is refused.
+pipe it. An unset or empty `--from-env` variable is refused. `--from-env` takes the
+variable's name, without `$`: `--from-env "$OPENAI_API_KEY"` would put the key itself
+on the command line, so a value there (or after the name) is refused, and the message
+never repeats it.
 
 ```sh
 # Codex: an OpenAI API key, from the environment or from a file

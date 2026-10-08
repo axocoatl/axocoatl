@@ -155,14 +155,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and color codes. It captures exactly one `sk-ant-oat01-…` token in memory (refusing
   none or several), checks it with Anthropic over HTTPS (`GET /v1/models`, free; skipped
   with `--no-verify`; a `401`/`403` or an unreachable API stores nothing), and stores it
-  as `claude-code-oauth` (or `--secret NAME`) through the secret store. The token never
+  as `claude-code-oauth` (or `--secret NAME`) through the secret store. It checks before
+  the sign-in that the store can take the token (a link or a directory where the secret
+  goes, or a store already holding 64 secrets, is refused before `claude setup-token`
+  runs, so no token is made and then lost). The token never
   enters an argv, a child's environment, a log, a temporary file or a message. Exit codes
   0 stored, 1 rejected, 2 no single token, 3 usage, 4 not checked, 5 store failure, 6
   interrupted.
 - **`axocoatl secret set|list|remove`.** Stores a route credential read from standard
   input (a pipe or a file; a terminal, where the value would show, is refused) or, with
   `--from-env VAR`, from an environment variable (unset or empty is refused), as an
-  owner-only file under `secrets/` in the data root. It is never printed, logged or recorded. A loadout route's
+  owner-only file under `secrets/` in the data root. It is never printed, logged or recorded.
+  No message repeats an argument that may be a value passed where a name belongs:
+  `--from-env "$TOKEN"` or `--from-env VAR=value` (only a variable's name, a letter or
+  `_` then letters, digits or `_`, is accepted), `secret set NAME "$TOKEN"`, and a secret
+  name that is not valid (`secret set "$TOKEN"`, `connect claude-code --secret "$TOKEN"`)
+  are each refused with exit code 3 and a fixed message. A loadout route's
   `credential` resolves to a `credentials` entry first, then to a stored secret.
   `secret set` warns on standard error, and still stores the value, when it has
   whitespace inside it, starts with `Bearer `, looks like JSON or holds several tokens,

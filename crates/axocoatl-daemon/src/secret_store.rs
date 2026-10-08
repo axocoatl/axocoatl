@@ -43,14 +43,18 @@ pub fn secret_path(data_dir: &Path, name: &str) -> PathBuf {
     data_dir.join(SECRETS_DIR).join(name)
 }
 
+/// The error for a name that is not a secret name. It never repeats the
+/// name: a value passed where the name belongs (`secret set "$TOKEN"`) would
+/// otherwise be printed.
+pub const INVALID_NAME: &str = "that is not a secret name (it is not shown, in case it is a \
+     value): use 1-64 letters, digits, '_', '.' or '-', starting with a letter or digit (for \
+     example claude-code-oauth)";
+
 fn check_name(name: &str) -> Result<(), SecretStoreError> {
     if is_valid_credential_name(name) {
         Ok(())
     } else {
-        Err(SecretStoreError::Invalid(format!(
-            "{name:?} is not a secret name: use 1-64 letters, digits, '_', '.' or '-', \
-             starting with a letter or digit (for example claude-code-oauth)"
-        )))
+        Err(SecretStoreError::Invalid(INVALID_NAME.to_string()))
     }
 }
 
@@ -148,13 +152,35 @@ pub fn set_secret(data_dir: &Path, name: &str, value: &[u8]) -> Result<(), Secre
     let directory = secrets_dir(data_dir, true)?.ok_or_else(|| {
         SecretStoreError::Invalid("the secrets directory could not be created".into())
     })?;
+    check_room(&directory, name)?;
+    directory.atomic_write_with_mode(name, &value, 0o600)?;
+    Ok(())
+}
+
+/// Check, without writing anything, that [`set_secret`] could store a
+/// value as secret `name` now: the name is valid, the data root and any
+/// existing secrets directory open, `secrets/<name>` is absent or a regular
+/// file, and a new name still fits under [`MAX_SECRETS`]. `axocoatl connect`
+/// runs it before the sign-in, so a store that cannot take the token fails
+/// before a new token is made rather than after.
+pub fn check_can_store(data_dir: &Path, name: &str) -> Result<(), SecretStoreError> {
+    check_name(name)?;
+    let Some(directory) = secrets_dir(data_dir, false)? else {
+        return Ok(());
+    };
+    check_room(&directory, name)?;
+    Ok(())
+}
+
+/// `secrets/<name>` is absent or a regular file (never a link or a
+/// directory), and a new name still fits under [`MAX_SECRETS`].
+fn check_room(directory: &SecureDir, name: &str) -> Result<(), SecretStoreError> {
     let exists = directory.has_exact_file(name)?;
-    if !exists && stored_names(&directory)?.len() >= MAX_SECRETS {
+    if !exists && stored_names(directory)?.len() >= MAX_SECRETS {
         return Err(SecretStoreError::Invalid(format!(
             "the store already holds {MAX_SECRETS} secrets; remove one first"
         )));
     }
-    directory.atomic_write_with_mode(name, &value, 0o600)?;
     Ok(())
 }
 
@@ -733,5 +759,58 @@ mod tests {
         assert!(how_to_store("claude-code-oauth").starts_with("run `axocoatl connect claude-code`"));
         assert!(how_to_store("example-token")
             .starts_with("pipe the value into `axocoatl secret set example-token`"));
+    }
+
+    /// `check_can_store` refuses, without writing, every store `set_secret`
+    /// would refuse: a link or a directory at `secrets/<name>`, a full store
+    /// for a new name, and an invalid name, whose error never repeats it.
+    #[test]
+    fn check_can_store_refuses_what_set_secret_refuses_without_writing() {
+        let root = data_root();
+        check_can_store(root.path(), "claude-code-oauth").unwrap();
+        assert!(!root.path().join(SECRETS_DIR).exists(), "nothing created");
+
+        set_secret(root.path(), "claude-code-oauth", b"sk-test-one").unwrap();
+        check_can_store(root.path(), "claude-code-oauth").unwrap();
+
+        let target = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(target.path(), secret_path(root.path(), "linked")).unwrap();
+        std::fs::create_dir(secret_path(root.path(), "a-directory")).unwrap();
+        for name in ["linked", "a-directory"] {
+            let refused = check_can_store(root.path(), name).unwrap_err().to_string();
+            assert!(refused.contains("unexpected file type"), "{refused}");
+            assert!(set_secret(root.path(), name, b"sk-test-two").is_err());
+        }
+        std::fs::remove_file(secret_path(root.path(), "linked")).unwrap();
+        std::fs::remove_dir(secret_path(root.path(), "a-directory")).unwrap();
+
+        for index in 1..MAX_SECRETS {
+            set_secret(root.path(), &format!("filler-{index}"), b"sk-test-x").unwrap();
+        }
+        assert_eq!(list_secrets(root.path()).unwrap().len(), MAX_SECRETS);
+        let full = check_can_store(root.path(), "one-more")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            full.contains(&format!("already holds {MAX_SECRETS}")),
+            "{full}"
+        );
+        assert!(set_secret(root.path(), "one-more", b"sk-test-x").is_err());
+        // Replacing an existing name still fits.
+        check_can_store(root.path(), "claude-code-oauth").unwrap();
+
+        let value = "sk-ant-oat01-NOTANAMEbutAVALUEthatIsLongerThanSixtyFourCharacters_ABCDEFGH";
+        for refused in [
+            check_can_store(root.path(), value).unwrap_err().to_string(),
+            set_secret(root.path(), value, b"x")
+                .unwrap_err()
+                .to_string(),
+            remove_secret(root.path(), value).unwrap_err().to_string(),
+            has_secret(root.path(), value).unwrap_err().to_string(),
+        ] {
+            assert!(refused.contains("not a secret name"), "{refused}");
+            assert!(!refused.contains("sk-ant"), "{refused}");
+            assert!(!refused.contains("NOTANAME"), "{refused}");
+        }
     }
 }

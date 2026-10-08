@@ -293,6 +293,9 @@ pub(crate) async fn connect(
             ));
         }
     };
+    // Every other copy of the token (the relay's captures) is zeroized now,
+    // not after the network check.
+    drop(run);
     if let Some(verifier) = &verifier {
         let _ = writeln!(
             output,
@@ -338,6 +341,19 @@ pub(crate) async fn connect(
     Ok(connected_message(&secret))
 }
 
+/// Check, before the sign-in, that the store will take the token: every
+/// refusal `set_secret` would make after it (a link or a directory at
+/// `secrets/<name>`, a full store, a data root that does not open) comes
+/// now, before `claude setup-token` makes a token that would then be lost.
+pub(crate) fn check_store(data_dir: &Path, secret: &str) -> Result<(), Failure> {
+    secret_store::check_can_store(data_dir, secret).map_err(|error| {
+        failure(
+            exit::FAILURE,
+            format!("{error}; `claude setup-token` was not run, so no token was made"),
+        )
+    })
+}
+
 /// The message when standard input or output is not a terminal.
 fn needs_terminal() -> String {
     "axocoatl connect claude-code needs an interactive terminal: it runs `claude setup-token`, \
@@ -359,11 +375,10 @@ pub async fn cmd_connect(command: ConnectCommands) -> i32 {
         eprintln!("✗ {}", needs_terminal());
         return exit::USAGE;
     }
+    // The message never repeats the argument: `--secret "$TOKEN"` would
+    // otherwise print a token.
     if !is_valid_credential_name(&secret) {
-        eprintln!(
-            "✗ {secret:?} is not a secret name: use 1-64 letters, digits, '_', '.' or '-', \
-             starting with a letter or digit (for example {CLAUDE_CODE_SECRET})"
-        );
+        eprintln!("✗ --secret: {}", secret_store::INVALID_NAME);
         return exit::USAGE;
     }
     let data_dir = match crate::secret_cmd::data_dir(&config) {
@@ -373,10 +388,9 @@ pub async fn cmd_connect(command: ConnectCommands) -> i32 {
             return exit::FAILURE;
         }
     };
-    // The store must open before the sign-in, not after it.
-    if let Err(error) = secret_store::list_secrets(&data_dir) {
-        eprintln!("✗ {error}");
-        return exit::FAILURE;
+    if let Err(Failure { code, message }) = check_store(&data_dir, &secret) {
+        eprintln!("✗ {message}");
+        return code;
     }
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let claude = match find_claude(
