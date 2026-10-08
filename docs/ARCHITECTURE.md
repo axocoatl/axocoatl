@@ -1445,7 +1445,10 @@ restriction below and `write_file` and `edit_file` are withheld.
 - A read-only Agent (`writes: []`), including a required reviewer with `bash`, is not
   offered `write_file` or `edit_file`. Its own `bash` commands run under a kernel
   restriction (Landlock, applied by the in-sandbox execution supervisor between fork and
-  exec): only `/tmp`, `/var/tmp` and `/dev` are writable, never the repository, and every
+  exec): only `/tmp`, `/var/tmp` and `/dev` are writable (for a hardened container's
+  helper user, whose view the supervisor builds, only a scratch directory of the
+  command's own and `/dev/null`, `/dev/zero`, `/dev/tty` and `/dev/urandom`), never the
+  repository, and every
   TCP bind and connect is refused on any address, loopback included (Landlock network
   rules with no allowed port). Landlock does not cover UDP, or `listen` on an unbound
   socket, which the kernel binds to an ephemeral port itself. The execution request names
@@ -1457,7 +1460,8 @@ restriction below and `write_file` and `edit_file` are withheld.
   ABI 3, Linux 6.2, cannot refuse truncation; below ABI 4, Linux 6.7, cannot refuse TCP)
   refuses to launch that command, and the Agent is told to use its read-only file tools
   instead. The read-only file tools and the host's own repository captures run without
-  the restriction.
+  the restriction; in a hardened container the file tools run through the helper's
+  view, which refuses them every write and every socket.
 - A writer's shell can still write outside its paths, so the activation's own Before and
   After repository captures decide: an equal tree digest means no change; otherwise
   complete manifests are compared exactly, or the retained patches against the same HEAD

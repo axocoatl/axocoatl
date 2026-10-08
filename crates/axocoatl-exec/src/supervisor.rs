@@ -29,15 +29,28 @@ extern "C" fn cancellation_signal(_: libc::c_int) {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServeOptions {
     /// `--harden`: the command and its descendants run in a Landlock domain
-    /// (the write restriction's, or one that only refuses creating block
-    /// devices), so they get no ptrace access to processes they did not
-    /// start, and get `PR_SET_NO_NEW_PRIVS` and the seccomp denylist of
-    /// [`crate::harden`] before `execve`. Without Landlock nothing launches.
+    /// (the write restriction's, a read-only helper's, or one that only
+    /// refuses creating block devices), so they get no ptrace access to
+    /// processes they did not start, and get `PR_SET_NO_NEW_PRIVS` and the
+    /// seccomp denylist of [`crate::harden`] before `execve`. Without
+    /// Landlock nothing launches.
     pub harden: bool,
     /// With `harden`: launch the command as a read-only helper through its
     /// view of the Workspace ([`HelperView`], see [`helper_view`]). The
     /// supervisor must start as root; the command never runs as root.
     pub helper: Option<HelperView>,
+}
+
+impl ServeOptions {
+    /// A helper's launch is always hardened: without `harden` its command
+    /// would get neither its view nor the helper's seccomp filter, so the
+    /// supervisor refuses before reading a request.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.helper.is_some() && !self.harden {
+            return Err("a read-only helper's launch needs --harden".into());
+        }
+        Ok(())
+    }
 }
 
 /// Run exactly one request. This must be called by the dedicated helper binary,
@@ -48,6 +61,7 @@ pub fn serve() -> Result<(), String> {
 
 /// [`serve`] with options.
 pub fn serve_with(options: ServeOptions) -> Result<(), String> {
+    options.validate()?;
     establish_supervision()?;
     nonblocking(libc::STDIN_FILENO)?;
     nonblocking(libc::STDOUT_FILENO)?;
@@ -274,17 +288,31 @@ fn execute(
         }
     };
     // Also built before fork: the child only installs it.
-    let filter = options.harden.then(|| match helper {
-        Some(_) => crate::harden::Filter::helper(),
-        None => crate::harden::Filter::native(),
-    });
+    let filter = options
+        .harden
+        .then(|| match (&helper, &request.write_restriction) {
+            (Some(_), Some(_)) => crate::harden::Filter::helper(),
+            (Some(_), None) => crate::harden::Filter::helper_file_tools(),
+            (None, _) => crate::harden::Filter::native(),
+        });
     let mut command = Command::new(&request.argv[0]);
     if let Some(launch) = &helper {
-        // Its own home and temporary directory: nothing it writes there
-        // reaches another process, and nothing of another's is in it.
-        command
-            .env("HOME", launch.scratch.path())
-            .env("TMPDIR", launch.scratch.path());
+        match &launch.scratch {
+            // The shell's own home and temporary directory: nothing it
+            // writes there reaches another process, and nothing of
+            // another's is in it.
+            Some(scratch) => {
+                command
+                    .env("HOME", scratch.path())
+                    .env("TMPDIR", scratch.path());
+            }
+            // The file tools write nothing.
+            None => {
+                command
+                    .env("HOME", helper_view::NO_HOME)
+                    .env_remove("TMPDIR");
+            }
+        }
     }
     if restriction.is_some() || filter.is_some() {
         let fd = restriction.as_ref().map(landlock::Ruleset::fd);
@@ -868,31 +896,45 @@ fn bounded_error(message: String) -> String {
 /// A read-only helper's launch (`--helper`): the supervisor starts as root
 /// and launches the command as the helper user, with `CAP_DAC_READ_SEARCH`
 /// as its only capability (ambient, so its descendants keep it; every other
-/// capability leaves its bounding set), in a Landlock domain that also
-/// handles opening files to read or execute them and listing directories.
+/// capability leaves its bounding set), in a Landlock domain that handles
+/// every write right (Landlock ABI 3), opening files to read or execute them
+/// and listing directories.
 ///
 /// The capability lets the helper read the Workspace whatever its file modes
 /// (a `mkdtemp` repository is `0700`, its files `0600`), which the writer
 /// owns. Landlock grants reading, listing and executing beneath the
-/// Workspace; beneath its own scratch directory (its `HOME` and `TMPDIR`,
-/// removed when the command ends) everything the ruleset handles; and
-/// elsewhere only what any user may read when the command starts, in the
-/// system directories ([`SYSTEM_ROOTS`], walked at each launch; see `Walk`)
-/// and a few single files (devices, the kernel's global `/proc` files). So
-/// the helper reads nothing outside the Workspace that it could not read
-/// before: not the writer's home, its files in `/tmp`, `/etc/shadow`, root's
-/// directories, or any process's `/proc/<pid>` (its own included).
+/// Workspace, and elsewhere only what any user may read when the command
+/// starts, in the system directories ([`SYSTEM_ROOTS`], walked at each
+/// launch; see `Walk`) and a few single files (devices, the kernel's global
+/// `/proc` files). So the helper reads nothing outside the Workspace that it
+/// could not read before: not the writer's home, anything in `/tmp`,
+/// `/var/tmp`, `/dev/shm`, `/home`, `/root` or `/run`, `/etc/shadow`, or any
+/// process's `/proc/<pid>` (its own included).
+///
+/// It writes almost nowhere. The file tools (no write restriction) may only
+/// open `/dev/null` for writing ([`TOOL_DEVICES`]) and get no scratch
+/// directory. The shell (a write restriction, whose `writable` roots a
+/// helper does not get) may write only beneath its own scratch directory
+/// (its `HOME` and `TMPDIR`, made for the command and removed when it ends)
+/// and open a few devices for writing ([`SHELL_DEVICES`]).
 ///
 /// Landlock covers neither passing through a directory nor connecting to a
-/// Unix socket or watching a path, which the capability would extend to
-/// directories the helper could not enter before; the helper's seccomp
-/// filter refuses Unix sockets and `inotify` watches ([`crate::harden`]).
-/// What remains is the metadata (`stat`, `readlink`, extended attributes) of
-/// a path the helper names in such a directory. Reading another process's
-/// environment or memory still needs ptrace access, which neither its user
-/// nor its domain has.
+/// Unix socket, watching a path or changing its extended attributes, which
+/// the capability would extend to directories the helper could not enter
+/// before, nor System V IPC or POSIX message queues; the helper's seccomp
+/// filter refuses Unix sockets, `inotify` and `fanotify`, extended
+/// attribute changes and every IPC call ([`crate::harden`]), and the file
+/// tools' also refuses changing a file's mode, owner or times and opening
+/// any socket. The Workspace must be a directory named without a final
+/// symbolic link. What
+/// remains is the metadata (`stat`, `readlink`, reading extended attributes)
+/// of a path the helper names in such a directory. Reading another
+/// process's environment or memory still needs ptrace access, which neither
+/// its user nor its domain has.
 mod helper_view {
-    use super::landlock::{self, Fd, Handled, Ruleset, EXECUTE, READ, READ_DIR, READ_FILE};
+    use super::landlock::{
+        self, Fd, Handled, Ruleset, EXECUTE, READ, READ_DIR, READ_FILE, WRITE_FILE,
+    };
     use crate::protocol::{HelperView, WriteRestriction};
     use std::ffi::{CStr, CString, OsStr};
     use std::io;
@@ -941,6 +983,19 @@ mod helper_view {
         "/proc/filesystems",
     ];
 
+    /// The devices a helper's shell may open for writing, besides its scratch
+    /// directory: nothing written to them is kept or reaches another process.
+    pub(super) const SHELL_DEVICES: &[&str] =
+        &["/dev/null", "/dev/zero", "/dev/tty", "/dev/urandom"];
+
+    /// The one device a helper's file tools may open for writing, which
+    /// discards what they drain there.
+    pub(super) const TOOL_DEVICES: &[&str] = &["/dev/null"];
+
+    /// `HOME` for a helper's file tools, which get no scratch directory: a
+    /// path that does not exist, as for a system user without a home.
+    pub(super) const NO_HOME: &str = "/nonexistent";
+
     /// How many entries of the system directories are inspected at most.
     const WALK_LIMIT: usize = 1_000_000;
     /// How deep beneath a system directory the walk goes; anything deeper
@@ -949,7 +1004,9 @@ mod helper_view {
 
     /// What a helper's launch keeps until the command ends.
     pub(super) struct Launch {
-        pub(super) scratch: Scratch,
+        /// The shell's own home and temporary directory; the file tools get
+        /// none.
+        pub(super) scratch: Option<Scratch>,
         pub(super) identity: Identity,
     }
 
@@ -959,9 +1016,11 @@ mod helper_view {
 
     /// Check that this supervisor can launch the helper, make its scratch
     /// directory and build its ruleset. A refusal names what is missing.
-    /// Without a write restriction (the file tools) the ruleset handles
-    /// reading and creating block devices; with one (the shell) also every
-    /// write right and, when it denies the network, TCP.
+    /// The ruleset handles reading and every write right, for the file tools
+    /// (no write restriction) as for the shell (one, which when it denies
+    /// the network also handles TCP). The file tools may write nothing but
+    /// [`TOOL_DEVICES`]; the shell only beneath its scratch directory and
+    /// [`SHELL_DEVICES`], never the restriction's own `writable` roots.
     pub(super) fn prepare(
         view: &HelperView,
         restriction: Option<&WriteRestriction>,
@@ -970,38 +1029,37 @@ mod helper_view {
         let identity = Identity::check(view.helper)?;
         let abi = landlock::abi().map_err(|message| {
             unavailable(format!(
-                "{message}; a read-only helper's view needs Landlock (Linux 5.13 or later)"
+                "{message}; a read-only helper's view needs Landlock ABI 3 (Linux 6.2 or later)"
             ))
         })?;
-        let writes = match restriction {
-            Some(restriction) => restriction
-                .validate()
-                .and_then(|()| landlock::handled_access(abi, restriction.deny_network))
-                .map_err(|message| format!("write restriction unavailable: {message}"))?,
-            None => landlock::DOMAIN_ONLY,
+        let handled = handled(abi, restriction)?;
+        let scratch = match restriction {
+            Some(_) => Some(Scratch::create(view.helper).map_err(|error| {
+                unavailable(format!("creating its scratch directory in /tmp: {error}"))
+            })?),
+            None => None,
         };
-        let handled = Handled {
-            fs: writes.fs | READ,
-            net: writes.net,
-        };
-        let scratch = Scratch::create(view.helper).map_err(|error| {
-            unavailable(format!("creating its scratch directory in /tmp: {error}"))
-        })?;
-        let ruleset = landlock::create(handled).map_err(unavailable)?;
-        if !landlock::allow_path(&ruleset, &view.workspace, READ, EXECUTE | READ_FILE)
-            .map_err(unavailable)?
-        {
-            return Err(unavailable(format!(
-                "the Workspace {} does not exist",
-                view.workspace
-            )));
+        if let Some(scratch) = &scratch {
+            if within(scratch.path_str(), &view.workspace) {
+                return Err(unavailable(format!(
+                    "its scratch directory {} would be inside the Workspace {}",
+                    scratch.path_str(),
+                    view.workspace
+                )));
+            }
         }
-        let scratch_path = scratch.path_str();
-        landlock::allow_path(&ruleset, scratch_path, handled.fs, 0).map_err(unavailable)?;
-        if let Some(restriction) = restriction {
-            // Writes only: the helper reads none of what others put there.
-            landlock::allow_writes(&ruleset, restriction, Some(scratch_path), writes.fs)
-                .map_err(|message| format!("write restriction unavailable: {message}"))?;
+        let ruleset = landlock::create(handled).map_err(unavailable)?;
+        allow_workspace(&ruleset, &view.workspace).map_err(unavailable)?;
+        let devices = match &scratch {
+            Some(scratch) => {
+                landlock::allow_path(&ruleset, scratch.path_str(), handled.fs, 0)
+                    .map_err(unavailable)?;
+                SHELL_DEVICES
+            }
+            None => TOOL_DEVICES,
+        };
+        for device in devices {
+            allow_device_writes(&ruleset, device).map_err(unavailable)?;
         }
         let mut walk = Walk {
             ruleset: &ruleset,
@@ -1015,6 +1073,95 @@ mod helper_view {
             walk.root(root).map_err(unavailable)?;
         }
         Ok((ruleset, Launch { scratch, identity }))
+    }
+
+    /// What a helper's ruleset handles on a kernel offering Landlock `abi`:
+    /// reading and every write right, and for a shell whose restriction
+    /// denies the network also TCP. A kernel that cannot refuse all of it
+    /// gets no launch: the file tools need ABI 3 (Linux 6.2), the shell
+    /// ABI 4 (Linux 6.7). The shell's refusal starts as the write
+    /// restriction's does, so the daemon tells it apart.
+    pub(super) fn handled(
+        abi: i64,
+        restriction: Option<&WriteRestriction>,
+    ) -> Result<Handled, String> {
+        let writes = match restriction {
+            Some(restriction) => restriction
+                .validate()
+                .and_then(|()| landlock::handled_access(abi, restriction.deny_network))
+                .map_err(|message| format!("write restriction unavailable: {message}"))?,
+            None => landlock::handled_access(abi, false).map_err(|message| {
+                unavailable(format!(
+                    "{message}; a read-only helper's view refuses every write with it"
+                ))
+            })?,
+        };
+        Ok(Handled {
+            fs: writes.fs | READ,
+            net: writes.net,
+        })
+    }
+
+    /// Whether `inner` is `outer` or beneath it.
+    pub(super) fn within(inner: &str, outer: &str) -> bool {
+        let outer = outer.trim_end_matches('/');
+        outer.is_empty() || inner == outer || inner.starts_with(&format!("{outer}/"))
+    }
+
+    /// Let the command read, list and execute beneath the Workspace. It must
+    /// be a directory, named without a final symbolic link: a link would
+    /// open whatever it points to, whose owner's modes the capability then
+    /// passes over.
+    fn allow_workspace(ruleset: &Ruleset, path: &str) -> Result<(), String> {
+        let name = CString::new(path).map_err(|_| format!("invalid path {path}"))?;
+        // SAFETY: name is NUL-terminated; O_PATH opens without access, and
+        // O_NOFOLLOW opens a final link itself rather than its target.
+        let fd = unsafe {
+            libc::open(
+                name.as_ptr(),
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ENOENT) {
+                return Err(format!("the Workspace {path} does not exist"));
+            }
+            return Err(format!("opening the Workspace {path}: {error}"));
+        }
+        let fd = Fd(fd);
+        let stat = landlock::fstat(fd.0).map_err(|error| format!("{path}: {error}"))?;
+        if landlock::kind(&stat) != libc::S_IFDIR {
+            return Err(format!(
+                "the Workspace {path} is not a directory (a symbolic link is refused)"
+            ));
+        }
+        landlock::add_rule(ruleset, fd.0, READ)
+            .map_err(|error| format!("allowing reads beneath the Workspace {path}: {error}"))
+    }
+
+    /// Let the command open the character device at `path` for writing (no
+    /// other write right: a device is neither created nor truncated). A
+    /// path that is missing or not a character device gets no rule.
+    fn allow_device_writes(ruleset: &Ruleset, path: &str) -> Result<(), String> {
+        let name = CString::new(path).map_err(|_| format!("invalid path {path}"))?;
+        // SAFETY: name is NUL-terminated; O_PATH opens without access.
+        let fd = unsafe {
+            libc::open(
+                name.as_ptr(),
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Ok(());
+        }
+        let fd = Fd(fd);
+        let stat = landlock::fstat(fd.0).map_err(|error| format!("{path}: {error}"))?;
+        if landlock::kind(&stat) != libc::S_IFCHR {
+            return Ok(());
+        }
+        landlock::add_rule(ruleset, fd.0, WRITE_FILE)
+            .map_err(|error| format!("allowing writes to {path}: {error}"))
     }
 
     /// Whether any user may read this file now.
@@ -1424,13 +1571,26 @@ mod helper_view {
         /// from setting aside the capability when the command asks whether
         /// it may read a path (`access`, as Git does for a repository's
         /// directories; `SECBIT_NO_SETUID_FIXUP`), so the answer is what an
-        /// `open` would get. Raw system calls only: they act on this one
-        /// thread, allocate nothing and are async-signal-safe.
+        /// `open` would get. First the command's own standard pipes, which
+        /// this supervisor (root) made for it, become the helper's, so that
+        /// it may open them again by path (`/dev/stdout`, `/dev/stderr`).
+        /// Raw system calls only: they act on this one thread, allocate
+        /// nothing and are async-signal-safe.
         pub(super) fn assume(self) -> io::Result<()> {
             let fail = || Err(io::Error::last_os_error());
             // SAFETY: plain system calls with scalar arguments, or pointers
             // to complete local structures, in the single-threaded child.
             unsafe {
+                for fd in 0..3 {
+                    let mut stat: libc::stat = std::mem::zeroed();
+                    if libc::fstat(fd, &mut stat) == 0
+                        && stat.st_mode & libc::S_IFMT == libc::S_IFIFO
+                        && stat.st_uid == 0
+                        && libc::fchown(fd, self.uid, self.gid) != 0
+                    {
+                        return fail();
+                    }
+                }
                 for cap in 0..64 as libc::c_ulong {
                     if cap != CAP_DAC_READ_SEARCH
                         && libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0) != 0
@@ -1562,6 +1722,102 @@ mod helper_view {
             assert_eq!(rights(&stat(libc::S_IFLNK, 0o777, 0)), 0);
         }
 
+        /// The shell writes no directory but its scratch directory, and only
+        /// these devices; the file tools only `/dev/null`.
+        #[test]
+        fn a_helper_may_write_only_discarding_devices() {
+            assert_eq!(
+                SHELL_DEVICES,
+                ["/dev/null", "/dev/zero", "/dev/tty", "/dev/urandom"]
+            );
+            assert_eq!(TOOL_DEVICES, ["/dev/null"]);
+            for device in SHELL_DEVICES.iter().chain(TOOL_DEVICES) {
+                assert!(device.starts_with("/dev/") && !device[5..].contains('/'));
+                assert!(!device.starts_with("/dev/shm"), "{device}");
+            }
+            assert!(within("/tmp/axocoatl-helper.x", "/tmp"));
+            assert!(within("/tmp/axocoatl-helper.x", "/tmp/"));
+            assert!(within("/tmp", "/tmp"));
+            assert!(within("/tmp/x", "/"));
+            assert!(!within("/tmp/axocoatl-helper.x", "/tmp/axo"));
+            assert!(!within("/tmp", "/tmp/axocoatl-helper.x"));
+        }
+
+        /// A kernel whose Landlock cannot refuse every write gets no helper
+        /// at all, and one that cannot refuse TCP no helper shell; the rest
+        /// handle reading and every write right, and the shell TCP too.
+        #[test]
+        fn a_kernel_without_the_needed_landlock_abi_launches_no_helper() {
+            let shell = WriteRestriction {
+                writable: vec!["/tmp".into()],
+                protected: vec!["/work/repo".into()],
+                deny_network: true,
+            };
+            for abi in [1, 2] {
+                let refused = handled(abi, None).unwrap_err();
+                assert!(
+                    refused.starts_with("helper view unavailable") && refused.contains("Linux 6.2"),
+                    "{refused}"
+                );
+                let refused = handled(abi, Some(&shell)).unwrap_err();
+                assert!(
+                    refused.starts_with("write restriction unavailable"),
+                    "{refused}"
+                );
+            }
+            let refused = handled(3, Some(&shell)).unwrap_err();
+            assert!(
+                refused.starts_with("write restriction unavailable")
+                    && refused.contains("Linux 6.7"),
+                "{refused}"
+            );
+            for abi in [3, 4, 5, 6, 7] {
+                let tools = handled(abi, None).unwrap();
+                let writes = landlock::handled_access(abi, false).unwrap();
+                assert_eq!(tools.fs, writes.fs | READ);
+                assert_eq!(tools.fs & WRITE_FILE, WRITE_FILE);
+                assert_eq!(tools.net, 0);
+            }
+            for abi in [4, 5, 6, 7] {
+                let restricted = handled(abi, Some(&shell)).unwrap();
+                assert_eq!(restricted.fs, handled(abi, None).unwrap().fs);
+                assert_eq!(
+                    restricted.net,
+                    landlock::handled_access(abi, true).unwrap().net
+                );
+                assert_ne!(restricted.net, 0);
+            }
+        }
+
+        /// A helper's launch without `--harden` is refused before any
+        /// request is read, never run without its view.
+        #[test]
+        fn a_helper_launch_is_always_hardened() {
+            let view = HelperView {
+                helper: (1001, 1001),
+                writer: (1000, 1000),
+                workspace: "/work/repo".into(),
+            };
+            let unhardened = crate::supervisor::ServeOptions {
+                harden: false,
+                helper: Some(view.clone()),
+            };
+            assert!(unhardened.validate().unwrap_err().contains("--harden"));
+            for options in [
+                crate::supervisor::ServeOptions {
+                    harden: true,
+                    helper: Some(view),
+                },
+                crate::supervisor::ServeOptions {
+                    harden: true,
+                    helper: None,
+                },
+                crate::supervisor::ServeOptions::default(),
+            ] {
+                assert!(options.validate().is_ok(), "{options:?}");
+            }
+        }
+
         /// No process's own `/proc/<pid>`, `/proc/self` included, is among
         /// what a helper may read outside the Workspace, and neither is any
         /// home, `/tmp`, `/run` or `/root`.
@@ -1603,7 +1859,7 @@ mod landlock {
     const CREATE_RULESET_VERSION: u32 = 1;
     const RULE_PATH_BENEATH: libc::c_int = 1;
     pub(super) const EXECUTE: u64 = 1 << 0;
-    const WRITE_FILE: u64 = 1 << 1;
+    pub(super) const WRITE_FILE: u64 = 1 << 1;
     pub(super) const READ_FILE: u64 = 1 << 2;
     pub(super) const READ_DIR: u64 = 1 << 3;
     /// Opening a file to read it, listing a directory, executing a file.
@@ -1782,7 +2038,7 @@ mod landlock {
 
     /// Allow `rights` (the handled write rights) beneath each of the
     /// restriction's writable roots that exists, `$HOME` being `home`.
-    pub(super) fn allow_writes(
+    fn allow_writes(
         ruleset: &Ruleset,
         restriction: &WriteRestriction,
         home: Option<&str>,

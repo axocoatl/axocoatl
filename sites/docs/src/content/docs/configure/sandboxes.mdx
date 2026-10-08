@@ -295,9 +295,10 @@ container:
     Axocoatl's own commands in the Workspace run as `writer_user`, with the home
     directory `/home/axocoatl`.
   - Every process of a read-only helper (`writes: []`), its file tools included, runs
-    as `helper_user`, through its read-only view of the Workspace (below), with a home
-    and temporary directory of its own (`HOME` and `TMPDIR`), removed when the command
-    ends.
+    as `helper_user`, through its read-only view of the Workspace (below). Each of its
+    shell commands gets a home and temporary directory of its own (`HOME` and
+    `TMPDIR`), removed when the command ends; its file tools write nothing and get
+    none.
   - Readiness provisioning runs as root.
 
 In a hardened container:
@@ -311,19 +312,38 @@ In a hardened container:
   capability, so a repository only its owner may enter (one made by `mktemp -d` or
   under `umask 077`, mode `0700`, with `0600` files) is as readable to it as to the
   writer. The command runs in a Landlock domain that lets it open, list and execute
-  files beneath the Workspace and beneath its own temporary directory, and elsewhere
-  only what any user may read when the command starts: the system directories (`/usr`,
-  `/bin`, `/sbin`, `/lib`, `/opt`, `/etc`, `/proc/sys`, `/sys/devices/system/cpu`),
-  checked entry by entry so that a private file such as `/etc/shadow` stays closed, a
-  few devices and the kernel's global `/proc` files. It cannot read the writer's home,
-  other users' files in `/tmp`, root's directories or any process's `/proc` entries,
+  files beneath the Workspace (and its shell, beneath its own temporary directory),
+  and elsewhere only what any user may read when the command starts: the system
+  directories (`/usr`, `/bin`, `/sbin`, `/lib`, `/opt`, `/etc`, `/proc/sys`,
+  `/sys/devices/system/cpu`), checked entry by entry so that a private file such as
+  `/etc/shadow` stays closed, a few devices and the kernel's global `/proc` files. It
+  reads nothing in the writer's home, `/home`, `/root`, `/run`, `/tmp`, `/var/tmp` or
+  `/dev/shm` (but its own temporary directory), or in any process's `/proc` entries,
   its own included, so `ps` and `pgrep` do not work in a helper. Its seccomp filter
-  also refuses Unix sockets (only stream socket pairs, which child processes' pipes
-  use, remain) and `inotify` watches, which the capability would otherwise reach
-  through directories it could not enter before. The capability grants no write: a
-  helper cannot change the writer's files, and its shell cannot write anywhere beneath
-  the Workspace. It cannot run a file only its owner may execute; run such a script
-  with its interpreter (`sh script.sh`).
+  also refuses Unix sockets (only connected socket pairs remain, stream and
+  sequenced-packet, which child processes' pipes and Rust's process spawning use),
+  `inotify` and `fanotify` watches and changes of extended attributes, which the
+  capability would otherwise reach through directories it could not enter before, and
+  System V IPC (shared memory, semaphores and message queues) and POSIX message
+  queues, which no file permission or Landlock rule covers and which every user of the
+  container shares, so a helper can neither use a writer's nor leave one behind.
+- A helper writes almost nowhere. The capability grants no write, and the same
+  Landlock domain refuses writing, creating, truncating, renaming, linking and
+  removing files everywhere but where noted here. Its file tools (`read_file`, `grep`,
+  `glob`, `list_dir`) write nothing: they may only open `/dev/null` to discard output,
+  and their seccomp filter also refuses changing a file's mode, owner or times, and
+  opening any socket, so they reach no network address. Its
+  shell writes only beneath its own temporary directory and to `/dev/null`,
+  `/dev/zero`, `/dev/tty` and `/dev/urandom`; not to `/tmp`, `/var/tmp`, `/dev/shm` or
+  `/dev` themselves, the Workspace, or a directory any user may change inside another
+  user's private one, which the capability would otherwise reach. Git, grep, Python,
+  Perl, Node and npm work there, and so does `cargo check` with `CARGO_TARGET_DIR` and
+  `CARGO_HOME` under `$TMPDIR`. A program that writes to a fixed
+  path in `/tmp` or `/dev/shm` instead of `$TMPDIR` fails; Python's `multiprocessing`
+  locks (POSIX semaphores in `/dev/shm`), for example, do not work in a helper, and
+  neither does a program that needs System V IPC or POSIX message queues. It
+  cannot run a file only its owner may execute; run such a script with its
+  interpreter (`sh script.sh`).
 - A helper cannot read the environment of a writer's processes under `/proc`, so it
   cannot borrow a writer's proxy credential, and it cannot signal a writer's processes.
 - The commands Axocoatl runs through its execution supervisor also get a seccomp
@@ -332,8 +352,10 @@ In a hardened container:
   `ptrace`, `process_vm_readv` and `process_vm_writev`, `pidfd_getfd`, `userfaultfd`,
   `perf_event_open`, `bpf`, kernel keyrings, loading kernel modules, `mount` and the
   other mount calls, `setns`, `open_by_handle_at`, new user namespaces, and packet,
-  `vsock`, Bluetooth and key sockets with `EPERM`; a helper's also refuses Unix sockets
-  and `inotify` watches. `clone3` and the `io_uring` calls get `ENOSYS`, so the C
+  `vsock`, Bluetooth and key sockets with `EPERM`; a helper's also refuses Unix sockets,
+  `inotify` and `fanotify` watches, extended attribute changes, System V IPC and POSIX
+  message queues, and its file tools' also changes of a file's mode, owner or times and
+  every socket. `clone3` and the `io_uring` calls get `ENOSYS`, so the C
   library and libuv fall back to older calls. Each such command also runs in a
   Landlock domain of its own: it cannot trace a process it did not start, or read that
   process's memory or environment, another writer's command included. Debuggers,
@@ -343,7 +365,8 @@ In a hardened container:
 - Under `network: egress` the only proxy socket in the container is the proxy's
   identity socket, in a directory only root can enter. The users reach the proxy only
   through `127.0.0.1:3128`, with a credential; a helper's shell cannot open TCP
-  connections at all, and no helper command can open a Unix socket. The container's first process, which serves that address,
+  connections at all, its file tools cannot open any socket, and no helper command can
+  open a Unix socket. The container's first process, which serves that address,
   starts each connection with the identity of the program that opened it, which it
   reads from `/proc`: the program's path, the SHA-256 of its file, its user and group,
   and the paths of its parent programs. The proxy accepts no connection on that
@@ -383,9 +406,10 @@ What it does not cover:
   unknown program. The record names programs; allow entries and routes cannot yet be limited
   to programs. The browser's connections come from its own container and name no
   program.
-- The seccomp filter and a helper's view need Landlock (Linux 5.13 or later, which
-  Podman machine has); without it, the commands that would get them do not run, and a
-  helper's shell also needs Linux 6.7 for its network restriction. A hardened Session
+- The seccomp filter needs Landlock (Linux 5.13 or later, which Podman machine has), a
+  helper's view needs Landlock ABI 3 (Linux 6.2 or later) to refuse every write, and a
+  helper's shell needs Linux 6.7 for its network restriction; without them, the
+  commands that would get them do not run. A hardened Session
   container started by an earlier build lacks root's `CAP_DAC_READ_SEARCH`, so its
   helpers' commands do not run until the Session restarts. Readiness provisioning runs
   as root without the filter, and under `egress` root's commands keep `CAP_SYS_PTRACE`
@@ -398,22 +422,22 @@ What it does not cover:
   while the command runs, and in a system directory anyone may change (the Rust
   image's `/usr/local/cargo`, for instance) or one the writer owns, the command can
   list what is added while it runs but not open it. Landlock does not cover passing
-  through a directory, so a helper can still learn the size, times, owner and link
-  target (`stat`, `readlink`) of a path it names in a directory it could not enter
-  before, such as the writer's home, though it cannot list or open anything there.
-- A helper reads back only what it writes in its own temporary directory (`TMPDIR`),
-  which most tools use: a file it writes to `/tmp` or `/dev/shm` by a fixed path it
-  cannot open again, so Python's `multiprocessing` locks, for example, do not work in a
-  helper.
+  through a directory, so a helper can still learn the size, times, owner, link
+  target and extended attributes (`stat`, `readlink`, `getxattr`) of a path it names
+  in a directory it could not enter before, such as the writer's home, though it
+  cannot list, open or watch anything there.
+- Landlock does not cover a file's times. Like any user, a helper's shell can set to
+  the current time the times of a file whose mode lets any user write it (`0666`), in
+  the Workspace or in a directory it passes through; its file tools cannot.
 - Only files whose owner the container maps are readable whatever their modes: those
   of a repository your own user owns. Of one another user owns, a helper reads what
   any user may. A [loadout run](/configure/loadouts/) with read-only Agents launches a
   probe through the helper's view in its Session container and ends with exit code 5
   before its first turn when that view cannot enter and list the repository, or the
   container or kernel cannot give it, naming why. On macOS the Podman machine's
-  shared folder reports every Workspace file as owned by whoever asks: a helper's shell
-  still cannot write, create, rename or delete Workspace files there, but it can change
-  their permission bits and timestamps.
+  shared folder reports every Workspace file as owned by whoever asks: a helper's file
+  tools still change nothing there, and its shell cannot write, create, rename or
+  delete Workspace files, but it can change their permission bits and timestamps.
 - It needs rootless Podman. Under rootful Podman, `auto` falls back to `image` and
   `doctor` warns, and `hardened` refuses to start a Session. E2B refuses `hardened`.
 - The first start of an image takes longer while Podman prepares it for the user
