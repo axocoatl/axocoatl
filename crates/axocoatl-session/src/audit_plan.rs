@@ -15,7 +15,10 @@
 //! `major`)
 //! and refuse what they cannot read with an error the host can quote back.
 //! They never drop a finding silently: entries beyond a bound are reported
-//! (as a `NOT_REACHED` entry for a worker, as an error for the integrator).
+//! (counted in [`AreaReport::left_out`] for a worker, which the audit lists
+//! as not covered; as an error for the integrator). A worker's
+//! `NOT_REACHED` list is its own account, which the audit keeps as notes:
+//! the host decides coverage from the files the worker read.
 //!
 //! Owner: workstream `audit`.
 
@@ -40,8 +43,8 @@ pub const MAX_SCOPE_BYTES: usize = 4 * 1024;
 /// Most paths one area may name, and the longest path, in bytes.
 pub const MAX_AREA_PATHS: usize = 32;
 pub const MAX_AREA_PATH_BYTES: usize = 256;
-/// Most findings one area worker's report may carry; more are reported as
-/// not reached.
+/// Most findings one area worker's report may carry; more are counted as
+/// left out.
 pub const MAX_AREA_FINDINGS: usize = 200;
 /// Most findings the integrator's answer may carry; more is an error.
 pub const MAX_INTEGRATED_FINDINGS: usize = 1000;
@@ -81,7 +84,10 @@ pub struct AuditPlan {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AreaReport {
     pub findings: Vec<Finding>,
+    /// What the worker says it did not reach, in its own words.
     pub not_reached: Vec<String>,
+    /// Findings beyond [`MAX_AREA_FINDINGS`], left out of the report.
+    pub left_out: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -258,11 +264,7 @@ pub fn parse_area_report(answer: &str, area: &str) -> Result<AreaReport, AuditPl
     let mut report = AreaReport::default();
     for (index, entry) in entries.iter().enumerate() {
         if report.findings.len() == MAX_AREA_FINDINGS {
-            report.not_reached.push(format!(
-                "{} more finding{} beyond the first {MAX_AREA_FINDINGS} (left out of this report)",
-                entries.len() - index,
-                if entries.len() - index == 1 { "" } else { "s" }
-            ));
+            report.left_out = entries.len() - index;
             break;
         }
         if let Some(mut finding) = finding_from(entry, FindingSource::AuditWorker)? {
@@ -1093,7 +1095,7 @@ mod tests {
     }
 
     #[test]
-    fn findings_beyond_the_bound_are_reported_as_not_reached() {
+    fn findings_beyond_the_bound_are_counted_as_left_out() {
         let entries: Vec<Value> = (0..MAX_AREA_FINDINGS + 3)
             .map(|n| serde_json::json!({"title": format!("defect {n}")}))
             .collect();
@@ -1103,12 +1105,8 @@ mod tests {
         );
         let report = parse_area_report(&answer, "db").unwrap();
         assert_eq!(report.findings.len(), MAX_AREA_FINDINGS);
-        assert_eq!(report.not_reached.len(), 1);
-        assert!(
-            report.not_reached[0].starts_with("3 more findings"),
-            "{:?}",
-            report.not_reached
-        );
+        assert_eq!(report.left_out, 3);
+        assert!(report.not_reached.is_empty(), "{:?}", report.not_reached);
         let long = "x".repeat(MAX_DETAIL_BYTES * 2);
         let answer = format!(
             "FINDINGS\n```json\n[{}]\n```",

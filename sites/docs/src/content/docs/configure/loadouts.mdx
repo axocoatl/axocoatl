@@ -17,7 +17,7 @@ Three loadouts are built in:
 | --- | --- | --- |
 | `fix` | One writer, the repository's check command as a required check, and a required review by another model for up to 3 rounds. The writer answers every finding with accept or reject and a reason. | `writer_model`, `reviewer_model` (both required) |
 | `qa` | One browser explorer. Every finding needs a Playwright reproduction, which the host re-runs on the build under test and, when given, a clean reference build. Areas it did not reach are listed as not covered. | `explorer_model` (required), `target_url` (default `http://localhost:3000`), `reference_url` |
-| `audit` | Opt-in: runs only when named. A planner splits the scope into 2 to 8 areas, one read-only worker per area runs in parallel with a fresh context, and an integrator merges the findings. | `planner_model`, `worker_model`, `integrator_model` (all required) |
+| `audit` | Opt-in: runs only when named. A planner splits the scope into 2 to 8 areas, the host gives every file of the repository to one area, one read-only worker per area reads its files in parallel with a fresh context (a worker that leaves files unread is asked again, up to twice), and an integrator merges the findings. | `planner_model`, `worker_model`, `integrator_model` (all required) |
 
 [Fix, QA and audit runs](/workbench/fix-qa-audit/) describes each one. The built-in
 ids `fix`, `qa` and `audit` are reserved: a user loadout cannot use them.

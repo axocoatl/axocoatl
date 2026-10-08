@@ -1,21 +1,25 @@
 # Built-in loadout: audit (opt-in). Owner: workstream audit.
 #
-# Three turns in one Session, each after its own Team and budget Apply:
+# Turns in one Session, each after its own Team and budget Apply:
 #   1. plan: the planner splits the scope into 2-8 areas (an AREAS JSON
 #      block); an invalid plan, or a planner without an answer, gets one
 #      retry, and a second attempt without a plan leaves the whole scope not
 #      covered;
-#   2. areas: the daemon runs one read-only worker per area in parallel, each
-#      with a fresh context and no dependencies (no checks, no review);
-#   3. integrate: the integrator merges every worker's report. Integration is
+#   2. areas: the host lists the repository's files (git ls-files, or a walk
+#      outside Git) and gives each to the first area whose paths match it,
+#      else to the area sharing its directories, else to a host-made area
+#      "rest"; then it runs one read-only worker per area in parallel, each
+#      told its files, with a fresh context and no dependencies (no checks,
+#      no review);
+#   3. follow-ups: a worker that left files of its area unread (judged from
+#      the read_file calls its Session recorded, never from its answer) gets
+#      up to two more activations naming exactly those files;
+#   4. integrate: the integrator merges every worker's report. Integration is
 #      its own turn, so the integrator has no depends_on.
-# A worker without a result, a worker that examined nothing of its area (no
-# read_file, grep, glob or list_dir call of it succeeded inside the area's
-# paths, as its Session recorded them) and every NOT_REACHED entry of its own
-# area are listed as not covered, which makes the run need attention (exit
-# 2); an entry naming another planned area is dropped (that area's worker
-# audits it), and, from a worker that examined its area, one naming a path
-# that does not exist is a note, not a gap.
+# Each file still unread is listed as not covered, and so is a worker without
+# a result, which makes the run need attention (exit 2). Empty and binary
+# files need no read; a file over 256 KiB is a note. A worker's NOT_REACHED
+# list is a note.
 # Findings alone do not change the exit code unless fail_on_findings is true.
 #
 # Measured trade-off, not an Axocoatl result: on an audit larger than one
@@ -56,8 +60,9 @@ agents:
     writes: []
     instructions: >-
       Read enough of the repository to split the scope into areas that
-      together cover it without overlap, each small enough for one context.
-      Change nothing. Answer with one AREAS JSON block only.
+      together cover it without overlap, each small enough for one context,
+      and name each area's files in its paths. Change nothing. Answer with
+      one AREAS JSON block only.
   - id: worker
     role: worker
     model: { param: worker_model }
@@ -65,11 +70,11 @@ agents:
     writes: []
     instructions: >-
       Audit only your area. Change nothing; your commands cannot write to the
-      repository. Report each defect with file:line, evidence and severity in
-      a FINDINGS JSON block, and list every existing path of your area you did
-      not examine in a NOT_REACHED JSON block ([] when you examined all of
-      it). The other areas of the plan are audited by other workers: never
-      list them as not reached.
+      repository. Read every file your instructions name with read_file.
+      Report each defect with file:line, evidence and severity in a FINDINGS
+      JSON block, and list any file of yours you could not examine, with why,
+      in a NOT_REACHED JSON block ([] when there is none). The other areas of
+      the plan are audited by other workers.
   - id: integrator
     role: integrator
     model: { param: integrator_model }

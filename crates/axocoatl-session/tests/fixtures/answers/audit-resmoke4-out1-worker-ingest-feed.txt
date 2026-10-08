@@ -1,0 +1,10 @@
+Based on my examination of the ingest/feed.go file, I've identified a potential security defect in the JSON unmarshaling process. Let me report this in the required format:
+
+FINDINGS
+```json
+[{"id": "F1", "title": "Missing error handling for JSON unmarshaling", "detail": "In the LoadFeed function, json.Unmarshal is called without checking its error return value. If the JSON data is malformed or invalid, the error will be silently ignored, potentially leading to unexpected behavior or data corruption. The function should check the error returned by json.Unmarshal and propagate it to the caller.", "severity": "high", "location": "ingest/feed.go:29"}]
+```
+NOT_REACHED
+```json
+[]
+```

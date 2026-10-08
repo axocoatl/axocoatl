@@ -103,32 +103,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure or its budget, are listed as not covered, and the run needs attention.
 - **Built-in `audit` loadout (opt-in).** Runs only when named. A planner splits the
   scope into 2 to 8 areas in a structured block, one read-only worker per area runs in
-  parallel with a fresh context, and an integrator merges their findings; a failed area
-  is not covered. So is the area of a worker that examined nothing of it, judged from
-  the tool calls its Session recorded: a worker examined its area only if it
-  successfully read at least one file inside the area's paths with `read_file`, or ran
-  a `grep` that matched at least one file inside them; `list_dir` and `glob` only find
-  files, and a `grep` that matches nothing does not count, nor does a worker with
-  neither `read_file` nor `grep`. An invalid plan, or a planner without an answer (a provider failure, say),
-  gets one retry, which quotes the error after an invalid plan; a second attempt without
-  a plan leaves the whole scope not covered, and the attention line says "The whole
-  scope was not covered". When integration has no readable result, the
-  workers' findings are reported unmerged and `audit integration` is listed as not
-  covered; the attention line counts only areas and says "The integration was not
-  read; the area findings are reported unmerged". A stopped audit starts no further
-  turn, lists the planned areas not started and the integration not run as not covered
-  (`stopped`), reports the workers' findings unmerged, and keeps in its Outcome the
-  turns, not-covered entries, findings and usage observed until the stop, with usage
-  marked incomplete when it is. A worker's `FINDINGS` and `NOT_REACHED` keys are read
-  in any case, and every block (`AREAS`, `FINDINGS`, `NOT_REACHED`, `ADJUDICATIONS`,
-  `COVERAGE`) is also read between XML-style tags, such as `<FINDINGS>` … `</FINDINGS>`. A not-reached entry
-  that names another planned area is left to that area's worker, and, from a worker
-  that examined its area, one that names a repository path that does not exist is a
-  note; neither is a gap. Notes are in the run's progress, the record, the Outcome's
-  `notes`, the summary, the Run outcome panel and the JUnit verdict's `<system-out>`.
-  The attention line counts areas, not entries. Its documentation states the trade-off measured with Claude Code
-  subagents, not through Axocoatl: more recall at lower precision and about three times
-  the tokens on an audit larger than one context, as a sensitivity analysis.
+  parallel with a fresh context, and an integrator merges their findings. Coverage is
+  the host's, never the workers' word. After the plan the host lists the repository's
+  files (`git ls-files --cached --others --exclude-standard` in a Git work tree, else a
+  walk that skips what `glob` skips; regular files only, at most 20,000) and gives each
+  to the first area whose paths match it; a file no area's paths match goes to the area
+  whose paths share the most directories with it, else to an area `rest` the host makes
+  for such files. A planned area left without files is not run. The plan as executed
+  and the assignment are in the run's progress (`assigned`) and the record, and the
+  files given to `rest` or by directory are notes. Each worker's instructions name its
+  files (past 8 KiB of names, the directories they are in with counts, all to be
+  read). From the `read_file` calls its Session recorded, a file is read when a read of
+  it succeeded in one of its area worker's activations that answered: any read when the
+  file fits one read (64 KiB), else reads that together cover all of it, each from its
+  `offset` for its `limit`. Empty files and binary files (a NUL byte in the first 8,000
+  bytes) need no read; a file over 256 KiB is not read, a note. `grep`, `glob`,
+  `list_dir` and `bash` read nothing for coverage. When a worker's turn ends with files of its area unread,
+  the host runs up to two follow-up turns, each with a fresh activation of every such
+  worker naming exactly its unread files ("read these files and report additional
+  findings in the same format"), and their findings join the area's report; a worker
+  without a result gets them too, unless the wall clock, a person's stop or a 400-403
+  refusal ended it. Each file still unread after them, or when the wall clock or a stop
+  ends them, is not covered, listed by file with why; so is a worker without a result,
+  an unreadable report, findings beyond a report's 200 left out of it, and an area whose
+  record of tool calls cannot be read. Each area's coverage is a `coverage` progress
+  line. What a worker lists as `NOT_REACHED` is a note: the host's coverage decides. An
+  invalid plan, or a planner without an answer (a provider failure, say), gets one
+  retry, which quotes the error after an invalid plan; a second attempt without a plan,
+  or a repository the host cannot list, leaves the whole scope not covered, and the
+  attention line says "The whole scope was not covered". When integration has no
+  readable result, the workers' findings are reported unmerged and `audit integration`
+  is listed as not covered; the attention line counts only areas and says "The
+  integration was not read; the area findings are reported unmerged". A stopped audit
+  starts no further turn, lists the areas not started, the files no follow-up read and
+  the integration not run as not covered (`stopped`), reports the workers' findings
+  unmerged, and keeps in its Outcome the turns, not-covered entries, findings and usage
+  observed until the stop, with usage marked incomplete when it is. A worker's
+  `FINDINGS` and `NOT_REACHED` keys are read in any case, and every block (`AREAS`,
+  `FINDINGS`, `NOT_REACHED`, `ADJUDICATIONS`, `COVERAGE`) is also read between
+  XML-style tags, such as `<FINDINGS>` … `</FINDINGS>`. Notes are in the run's
+  progress, the record, the Outcome's `notes`, the summary, the Run outcome panel and
+  the JUnit verdict's `<system-out>`. The attention line counts areas, not entries. Its
+  documentation states the trade-off measured with Claude Code subagents, not through
+  Axocoatl: more recall at lower precision and about three times the tokens on an audit
+  larger than one context, as a sensitivity analysis.
+- **`read_file` reads a long file to its end.** `read_file` takes an optional `offset`
+  (bytes, 0 by default) and `limit` (1 to 65,536 bytes, 65,536 by default) and returns
+  that many bytes from there; when more follows, the result says `truncated: true` and
+  gives `next_offset`, where the next read starts, so a model can read a long file in
+  pieces its context holds. A read without them runs as before; its result adds
+  `next_offset` when it was cut.
 - **External agents.** A loadout's writer can be the Claude Code CLI
   (`runtime: claude-code`) or the Codex CLI (`runtime: codex`), run inside the Session
   container as the non-root writer user under `--harden`, admitted, granted and captured

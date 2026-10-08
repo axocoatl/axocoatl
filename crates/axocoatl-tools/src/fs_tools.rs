@@ -40,6 +40,12 @@ const EDIT_OLD_MAX_BYTES: usize = 1024 * 1024;
 /// Maximum text returned in one structured tool field. This bounds the JSON
 /// passed back to the model even when the sandbox command emitted much more.
 const TOOL_TEXT_OUTPUT_MAX_BYTES: usize = 64 * 1024;
+/// The most bytes of a file one `read_file` call reads: the window from its
+/// `offset` (0 by default), or `limit` bytes when smaller. A longer file is
+/// read to its end across calls, each at the previous call's `next_offset`.
+/// The audit's host-checked coverage counts each succeeded call as reading
+/// its window.
+pub const READ_FILE_WINDOW_BYTES: usize = TOOL_TEXT_OUTPUT_MAX_BYTES;
 /// `bash` has two independently useful streams; split the overall text budget
 /// between them so one result still remains bounded.
 const SHELL_STREAM_OUTPUT_MAX_BYTES: usize = TOOL_TEXT_OUTPUT_MAX_BYTES / 2;
@@ -444,39 +450,92 @@ pub struct ReadFileTool {
 #[async_trait::async_trait]
 impl BuiltinTool for ReadFileTool {
     fn description(&self) -> &str {
-        "Read up to 64 KiB from the start of a file in the session directory. The result reports when more content was truncated."
+        "Read up to 64 KiB of a file in the session directory, from its start or from byte \
+         `offset`, or fewer bytes with `limit`. When more of the file follows, the result says \
+         `truncated: true` and gives `next_offset`: read the rest of a longer file with further \
+         calls at each `next_offset` until `truncated` is false."
     }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "File path to read (maximum 4 KiB)" }
+                "path": { "type": "string", "description": "File path to read (maximum 4 KiB)" },
+                "offset": { "type": "integer", "minimum": 0, "description": "Byte of the file to start at (default 0); the previous result's next_offset reads on" },
+                "limit": { "type": "integer", "minimum": 1, "maximum": TOOL_TEXT_OUTPUT_MAX_BYTES, "description": "Most bytes to read (default and maximum 65536); a smaller limit keeps a long file's pieces small" }
             },
             "required": ["path"]
         })
     }
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let path = bounded_str_arg(&args, "path", "read_file", PATH_ARG_MAX_BYTES)?;
+        let offset = read_number(&args, "offset")?.unwrap_or(0);
+        let limit = match read_number(&args, "limit")? {
+            None => TOOL_TEXT_OUTPUT_MAX_BYTES,
+            Some(limit) if (1..=READ_FILE_WINDOW_BYTES as u64).contains(&limit) => limit as usize,
+            Some(_) => {
+                return Err(ToolError::InvalidArgs {
+                    tool: "read_file".to_string(),
+                    reason: format!(
+                        "field 'limit' must be between 1 and {READ_FILE_WINDOW_BYTES} bytes"
+                    ),
+                })
+            }
+        };
         let path = confine(self.sandbox.root(), path, "read_file")?;
         // Bound the command's stdout before it reaches the sandbox transport.
         // One extra byte lets the JSON result state truncation honestly.
-        let capture_bytes = (TOOL_TEXT_OUTPUT_MAX_BYTES + 1).to_string();
-        let r = self
-            .sandbox
-            .exec(&["head", "-c", &capture_bytes, "--", path], FS_TIMEOUT)
-            .await
-            .map_err(|e| exec_err("read_file", e))?;
+        let r = if offset == 0 {
+            let capture_bytes = (limit + 1).to_string();
+            self.sandbox
+                .exec(&["head", "-c", &capture_bytes, "--", path], FS_TIMEOUT)
+                .await
+                .map_err(|e| exec_err("read_file", e))?
+        } else {
+            // `tail -c +N` starts at byte N, counted from 1.
+            let start = format!("+{}", offset.saturating_add(1));
+            exec_bounded_stdout(
+                self.sandbox.as_ref(),
+                &["tail", "-c", &start, "--", path],
+                FS_TIMEOUT,
+                "read_file",
+                limit,
+            )
+            .await?
+        };
         let r = require_ok("read_file", r)?;
-        let (content, truncated, captured_bytes) =
-            bounded_text_fields(r.stdout, TOOL_TEXT_OUTPUT_MAX_BYTES);
+        let (content, truncated, captured_bytes) = bounded_text_fields(r.stdout, limit);
         let returned_bytes = content.len();
-        Ok(serde_json::json!({
+        let mut result = serde_json::json!({
             "content": content,
             "truncated": truncated,
             "returned_bytes": returned_bytes,
             "captured_bytes": captured_bytes,
-            "output_limit_bytes": TOOL_TEXT_OUTPUT_MAX_BYTES,
-        }))
+            "output_limit_bytes": limit,
+        });
+        if offset > 0 {
+            result["offset"] = offset.into();
+        }
+        if truncated {
+            result["next_offset"] = offset.saturating_add(limit as u64).into();
+        }
+        Ok(result)
+    }
+}
+
+/// `read_file`'s optional `offset` or `limit`: a byte count, as an integer
+/// or a string of digits; `None` when absent.
+fn read_number(args: &serde_json::Value, key: &str) -> Result<Option<u64>, ToolError> {
+    let invalid = || ToolError::InvalidArgs {
+        tool: "read_file".to_string(),
+        reason: format!("field '{key}' must be a whole number of bytes"),
+    };
+    match args.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Number(number)) => number.as_u64().map(Some).ok_or_else(invalid),
+        Some(serde_json::Value::String(text)) => {
+            text.trim().parse().map(Some).map_err(|_| invalid())
+        }
+        Some(_) => Err(invalid()),
     }
 }
 
@@ -767,8 +826,10 @@ const GLOB_PATTERN_MAX_BYTES: usize = 1024;
 /// Well inside the repository port's stream bound.
 const GLOB_CANDIDATE_MAX_BYTES: usize = 512 * 1024;
 /// Directories a glob does not descend into unless its pattern names one of
-/// them: version-control internals, dependency trees and build output.
-const GLOB_SKIPPED_DIRECTORIES: &[&str] = &[
+/// them: version-control internals, dependency trees and build output. The
+/// audit's host listing of a repository that is not a Git work tree skips
+/// the same directories.
+pub const GLOB_SKIPPED_DIRECTORIES: &[&str] = &[
     ".git",
     ".hg",
     ".svn",
@@ -2048,6 +2109,109 @@ mod tests {
             })
         }
         async fn stop(&self) {}
+    }
+
+    /// A file longer than one read is read to its end across calls, each at
+    /// the previous result's `next_offset`, in windows of up to 64 KiB or of
+    /// `limit` bytes; a read at the start keeps its shape, and an offset or
+    /// limit that is not a whole number of bytes in range is refused.
+    #[tokio::test]
+    async fn read_file_reads_a_long_file_to_its_end_from_offsets() {
+        let root = tempfile_dir("axocoatl-read-offset");
+        let window = super::READ_FILE_WINDOW_BYTES;
+        let text: String = (0..window * 2 + 100)
+            .map(|index| char::from(b'a' + (index % 26) as u8))
+            .collect();
+        std::fs::write(root.join("long.txt"), &text).unwrap();
+        std::fs::write(root.join("short.txt"), "one line\n").unwrap();
+        let tool = ReadFileTool {
+            sandbox: Arc::new(HostDirSandbox { root: root.clone() }),
+        };
+
+        let first = tool.execute(json!({"path": "long.txt"})).await.unwrap();
+        assert_eq!(first["content"].as_str().unwrap(), &text[..window]);
+        assert_eq!(first["truncated"], true);
+        assert_eq!(first["next_offset"], window as u64);
+        assert!(first.get("offset").is_none());
+        let second = tool
+            .execute(json!({"path": "long.txt", "offset": first["next_offset"]}))
+            .await
+            .unwrap();
+        assert_eq!(
+            second["content"].as_str().unwrap(),
+            &text[window..window * 2]
+        );
+        assert_eq!(second["offset"], window as u64);
+        assert_eq!(second["next_offset"], (window * 2) as u64);
+        // A string of digits is read as the number the model meant.
+        let last = tool
+            .execute(json!({"path": "long.txt", "offset": (window * 2).to_string()}))
+            .await
+            .unwrap();
+        assert_eq!(last["content"].as_str().unwrap(), &text[window * 2..]);
+        assert_eq!(last["truncated"], false);
+        assert!(last.get("next_offset").is_none());
+        let past = tool
+            .execute(json!({"path": "short.txt", "offset": 4096}))
+            .await
+            .unwrap();
+        assert_eq!(past["content"], "");
+        assert_eq!(past["truncated"], false);
+        let whole = tool.execute(json!({"path": "short.txt"})).await.unwrap();
+        assert_eq!(
+            whole,
+            json!({"content": "one line\n", "truncated": false, "returned_bytes": 9,
+                "captured_bytes": 9, "output_limit_bytes": window})
+        );
+        // A limit reads a smaller window, and the next one starts after it.
+        let piece = tool
+            .execute(json!({"path": "long.txt", "offset": 10, "limit": 100}))
+            .await
+            .unwrap();
+        assert_eq!(piece["content"].as_str().unwrap(), &text[10..110]);
+        assert_eq!(piece["truncated"], true);
+        assert_eq!(piece["next_offset"], 110);
+        assert_eq!(piece["output_limit_bytes"], 100);
+        let start = tool
+            .execute(json!({"path": "long.txt", "limit": "4096"}))
+            .await
+            .unwrap();
+        assert_eq!(start["content"].as_str().unwrap(), &text[..4096]);
+        assert_eq!(start["next_offset"], 4096);
+        for offset in [json!(-1), json!(1.5), json!("ten"), json!([1])] {
+            assert!(matches!(
+                tool.execute(json!({"path": "long.txt", "offset": offset}))
+                    .await
+                    .unwrap_err(),
+                super::ToolError::InvalidArgs { .. }
+            ));
+        }
+        for limit in [json!(0), json!(window + 1), json!(-5), json!("all")] {
+            assert!(matches!(
+                tool.execute(json!({"path": "long.txt", "limit": limit}))
+                    .await
+                    .unwrap_err(),
+                super::ToolError::InvalidArgs { .. }
+            ));
+        }
+        assert!(tool
+            .execute(json!({"path": "missing.txt", "offset": 10}))
+            .await
+            .is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn tempfile_dir(prefix: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
     }
 
     /// 1.0 ran `find . -name PATTERN`, so every pattern with a `/` matched

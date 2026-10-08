@@ -1,0 +1,17 @@
+I examined my area.
+
+<FINDINGS>
+[
+  {
+    "id": "F1",
+    "title": "Signature compared with != instead of a constant-time comparison",
+    "detail": "is_valid compares the HMAC with !=, which leaks timing; use hmac.compare_digest.",
+    "severity": "high",
+    "location": "auth/tokens.py:19"
+  }
+]
+</FINDINGS>
+
+<NOT_REACHED>
+[]
+</NOT_REACHED>

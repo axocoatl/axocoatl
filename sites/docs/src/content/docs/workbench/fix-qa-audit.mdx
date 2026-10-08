@@ -197,7 +197,9 @@ axocoatl run audit --task "Security-relevant defects in the request parsing code
 ```
 
 `audit` is opt-in: it is listed with the others but runs only when you name it. It runs
-three turns in one Session, each with its own Team and budget:
+its turns in one Session, each with its own Team and budget. Whether an area was
+covered is decided by Axocoatl from the files it listed and the files each worker read,
+never from what a worker says:
 
 1. **Plan.** The planner, alone and read-only, splits the scope into 2 to 8 areas in one
    `AREAS` JSON block: each area's name, its scope and the paths it covers. An invalid
@@ -206,41 +208,70 @@ three turns in one Session, each with its own Team and budget:
    clock or by you, or refused by its provider (HTTP 400 to 403), gets none. A second
    attempt without a plan ends the run needing attention: "The whole scope was not
    covered".
-2. **Areas.** One worker per area, made from the `worker` Agent: read-only (`writes: []`,
+2. **Files.** Axocoatl lists the repository's files: in a Git work tree with
+   `git ls-files --cached --others --exclude-standard` (tracked and untracked files, not
+   ignored ones), elsewhere by walking the directory, skipping what `glob` skips
+   (`.git`, `node_modules`, `target` and similar). Links and anything inside `.git` are
+   left out, and at most 20,000 files are listed; past that, the rest are not covered.
+   Each file goes to the first area whose paths match it. A file no area's paths match
+   goes to the area whose paths share the most directories with it (`auth/__init__.py`
+   goes to an area named by `auth/tokens.py`), and a file that shares none, such as a
+   `README.md` at the root, goes to an area `rest` that Axocoatl makes for them. A
+   planned area that ends up with no files is not run. The progress lines (`assigned`)
+   and the record show the plan as executed and every area's files; the files given to
+   `rest` or by directory are notes.
+3. **Areas.** One worker per area, made from the `worker` Agent: read-only (`writes: []`,
    its `bash` under Landlock with no repository writes and no TCP, which needs Linux 6.7
    or later; [without it](/configure/agents/#limit-which-files-an-agent-may-change) its
    `bash` does not run), each in a fresh conversation, with no dependencies between them,
-   so the controller starts them together. Each reports `FINDINGS` and what it did
-   `NOT_REACHED`. A failed worker makes its area not covered, with its failure class.
-   So does a worker that examined nothing of its area, judged from the tool calls its
-   Session recorded, not from its answer. A worker examined its area only if it
-   successfully read at least one file inside the area's paths with `read_file`, or ran
-   a `grep` that matched at least one file inside them (for an area without paths, any
-   file). `list_dir` and `glob` only find files, and a `grep` that matches nothing reads
-   nothing, so neither counts. A `worker` Agent with neither `read_file` nor `grep`
-   examines nothing (reads through `bash` are not checked, so they do not count). A not-reached entry that names another
-   planned area is left to that area's worker, and, from a worker that examined its
-   area, one that names a repository path that does not exist is a note; neither makes
-   the area not covered. From a worker that examined nothing, such an entry is a gap.
-   Notes are in the progress lines, the summary, the Outcome's `notes`, the Run outcome
-   panel, the JUnit verdict's `<system-out>` and the record.
-3. **Integrate.** The integrator gets every accepted worker report (each up to 24 KiB,
-   with a note when cut) and the list of areas not covered, and answers with one merged
-   `FINDINGS` block.
+   so the controller starts them together. Each worker is told the files of its area
+   (past 8 KiB of names, the directories they are in, with counts, and to read all of
+   them) and reports `FINDINGS` and what it did `NOT_REACHED`.
+4. **Follow-ups.** From the tool calls each worker's Session recorded, a file counts as
+   read only when a `read_file` of it succeeded: any read for a file of up to 64 KiB, and
+   reads that together cover all of a longer one (`read_file` returns 64 KiB from its
+   `offset`, or fewer bytes with `limit`, and says where the next read starts; a model
+   whose context cannot hold 64 KiB of text reads a long file in smaller pieces). Reading through `grep`, `glob`,
+   `list_dir` or `bash` does not count. Empty files and binary files (a NUL byte in the
+   first 8,000 bytes) need no read; a file over 256 KiB is not read, and is a note. When a
+   worker's turn ends with files of its area unread, Axocoatl runs a follow-up turn with
+   a fresh activation of that worker naming exactly those files: "read these files and
+   report additional findings in the same format". Each worker gets at most two, and a
+   worker without a result gets them too, unless the wall clock, your stop or its
+   provider's refusal of the request (HTTP 400 to 403) ended it. A follow-up's findings
+   join its area's report.
+
+   What stays not covered, each with its reason: every file still unread after the
+   follow-ups (or when the wall clock or your stop ended them), listed by file, such as
+   a file whose mode closes it to other users, which the read-only
+   [helper user](/configure/sandboxes/) cannot read; a worker
+   without a result; a report that could not be read; findings beyond a report's first
+   200; and an area whose worker's tool calls could not be read. A worker's own
+   `NOT_REACHED` list is a note, never a gap. Each area's coverage is a `coverage`
+   progress line: how many of its files were examined, read, empty, binary or too large,
+   and which are unread. Notes are in the progress lines, the summary, the Outcome's
+   `notes`, the Run outcome panel, the JUnit verdict's `<system-out>` and the record.
+5. **Integrate.** The integrator gets every accepted worker report (each up to 24 KiB,
+   with a note when cut) and the list of what is not covered, and answers with one
+   merged `FINDINGS` block.
 
 Audit turns have no required checks and no review. Findings do not fail the run by
 default (`fail_on_findings: false`); anything not covered does. Each worker gets the
-`worker` Agent's `budget`, or `budgets.agent` without one, and the wall clock bounds all
-three turns. When integration gives no readable result, the workers' findings are
-reported unmerged and `audit integration` is listed as not covered. The attention line
-counts only areas and names the integration apart: "The integration was not read; the
-area findings are reported unmerged".
+`worker` Agent's `budget`, or `budgets.agent` without one, for each turn it is in, and
+the wall clock bounds every turn. Every file must be read, so an area with more files
+than its worker can read within that budget in its turn and two follow-ups ends
+needing attention; plan smaller areas or raise the budget. When integration gives no
+readable result, the workers' findings are reported unmerged and `audit integration`
+is listed as not covered. The attention line counts only areas and names the
+integration apart: "The integration was not read; the area findings are reported
+unmerged".
 
-When you stop an audit, no further turn starts: areas planned but not started, and an
-integration that did not run, are not covered (`stopped`), and the workers' findings
-are reported unmerged. The Outcome keeps the turns, the not-covered entries, the
-findings and the usage observed until the stop; usage is marked incomplete
-(`usage.complete: false`) when a stopped turn's usage was not all reported.
+When you stop an audit, no further turn starts: areas planned but not started, files no
+follow-up read, and an integration that did not run, are not covered (`stopped`), and
+the workers' findings are reported unmerged. The Outcome keeps the turns, the
+not-covered entries, the findings and the usage observed until the stop; usage is
+marked incomplete (`usage.complete: false`) when a stopped turn's usage was not all
+reported.
 
 Workers start together and their model calls overlap, but they share one Session
 container and one checkout, and a local model server may answer one request at a time.

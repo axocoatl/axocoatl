@@ -1,0 +1,16 @@
+FINDINGS
+```json
+[
+  {
+    "id": "F1",
+    "title": "Potential timing attack vulnerability in token validation",
+    "detail": "The is_valid function performs a direct string comparison between the provided signature and the expected signature using '!=' operator. This can be vulnerable to timing attacks where an attacker could potentially determine if the signature is valid by measuring the time taken for the comparison. The function should use a constant-time comparison method to prevent this vulnerability.",
+    "severity": "medium",
+    "location": "auth/tokens.py:16"
+  }
+]
+```
+NOT_REACHED
+```json
+[]
+```

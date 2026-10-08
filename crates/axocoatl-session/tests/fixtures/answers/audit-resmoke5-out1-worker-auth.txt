@@ -1,0 +1,16 @@
+Based on my examination of the auth module, I found a security defect in the token validation implementation. Here's my analysis:
+
+FINDINGS
+```json
+[{
+  "id": "F1", 
+  "title": "Timing Attack Vulnerability in Token Signature Comparison",
+  "detail": "The is_valid function uses a simple string comparison (signature != expected) which is vulnerable to timing attacks. An attacker could potentially determine the correct signature by measuring response times. The function should use hmac.compare_digest() for constant-time comparison to prevent this vulnerability.",
+  "severity": "high",
+  "location": "auth/tokens.py:15"
+}]
+```
+NOT_REACHED
+```json
+["auth/__init__.py"]
+```
