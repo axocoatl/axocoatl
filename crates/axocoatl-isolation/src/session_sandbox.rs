@@ -7272,13 +7272,12 @@ mod tests {
         for mode in [0o311, 0o644, 0o000] {
             std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(mode)).unwrap();
             let denied = probe(&workspace);
+            // Only the exit code is the contract: shells word the refusal
+            // differently (bash and zsh say "Permission denied", dash says
+            // "can't cd to").
             assert_eq!(
                 denied.status.code(),
                 Some(HELPER_WORKSPACE_DENIED),
-                "mode {mode:o}: {denied:?}"
-            );
-            assert!(
-                String::from_utf8_lossy(&denied.stderr).contains("ermission denied"),
                 "mode {mode:o}: {denied:?}"
             );
         }
