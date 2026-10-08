@@ -84,6 +84,7 @@ workbench uses.
 | Stop appears ineffective | The current tool may be reaching a safe boundary; inspect active turn and History |
 | Close, Delete, Reopen or creating a Session answers `409` `workspace_busy` | Another Session's turn or another operation of the Workspace (named in the error) holds it; lifecycle actions never wait for another Session's work. Try again once it has ended, or stop that turn |
 | Podman lists many `axo-egr-`, `axo-egi-`, `axo-svc-` or `axo-ca-` volumes | Sessions closed by Axocoatl 1.2, or a daemon that stopped before Close, left them. Restart the daemon: at start it removes its own whose Session is closed, deleted or unknown, and `axocoatl doctor` says how many. Another daemon's (another data root's) are left alone; remove those with that daemon |
+| Podman lists many `axo-ses-<id>-node-modules` volumes | Each is a Node project Session's dependency volume, which Close keeps for Reopen and Delete removes. Delete the closed Sessions you no longer need (a loadout run's too). One whose Session was deleted, or whose data root was removed, is removed when its daemon restarts; `axocoatl doctor` says how many. One made before 1.3.0 has no owner label and goes only when its own data root shows it deleted that Session; another daemon's are left alone |
 | Retry is unavailable | The historical turn used immutable attached context; attach it again and send a new turn |
 
 ## Ways and Git

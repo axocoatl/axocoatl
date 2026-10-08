@@ -82,8 +82,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model's `context_length`) plus the output bound and the reasoning allowance of its
   effort, never the whole context window; for an external writer's model in Axocoatl's
   pinned table, the most one call of the program can use (400,000 tokens for Codex
-  0.160.1's models, the model's window for Claude Code's). An external writer whose
-  model the table does not list is not checked, and the run warns
+  0.160.1's models, the model's window for Claude Code's). For Claude Code the table
+  pins each Claude API model that has not retired (from Anthropic's model overview,
+  model pages and deprecations page), Claude Mythos Preview aside, whose window they do
+  not state, and Claude Code 2.1.292's aliases as the model each runs, read from the
+  model catalog bundled in that build: `opus` (`claude-opus-5-5`), `sonnet`
+  (`claude-sonnet-5-5`), `haiku` (`claude-haiku-4-5`), `fable` and `best`
+  (`claude-fable-5-1`; `best` runs `claude-opus-5-5` for an account without Fable) and
+  `opusplan` (`claude-sonnet-5-5`, `claude-opus-5-5` in plan mode), and `[1m]` on a
+  model or alias whose window is already 1M tokens. An external writer whose model the
+  table does not list (a retired or newer model, `default`, whose model is the
+  account's, or `[1m]` on a 200K-token model) is not checked, and the run warns
   (`external_model_not_pinned`).
   When a required check failed, the JUnit verdict's message names that check first. The API is `POST /api/runs`,
   `GET /api/runs`, `GET /api/runs/{run_id}`, `/events`, `/stop`, `/junit` and `/record`;
@@ -184,7 +193,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model, else at the list price Axocoatl pins for each model Codex 0.160.1 lists for API
   use (OpenAI's Standard prices of 2026-10-08), and the run settles to it, marked as
   computed in the work log and the Outcome. A Codex model with neither has no known cost,
-  and its activation reserves only an equal share of the cost left. Each route
+  and its activation reserves only an equal share of the cost left. A Claude Code
+  writer's model may be one of Claude Code's aliases (`haiku`, `sonnet`, `opus`, …),
+  which admission checks as the model the alias runs. Each route
   allows only the program's model calls, since every allowed request gets the
   credential; Claude Code's requests for its account's policy limits and remote
   settings are refused and recorded, and it runs without them. A refused request's 403
@@ -496,16 +507,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behind.** Closing a Session left its `axo-egr-`, `axo-egi-`, `axo-svc-` and `axo-ca-`
   Podman volumes behind, hundreds after many runs. Close now removes them: their sockets
   and trust files are filled again when the Session starts. The Node dependency volume
-  still stays until the Session is deleted, so Reopen reuses the installed dependencies.
-  Volumes that Sessions closed by 1.2, a daemon that stopped before Close, or a removed
-  data root left behind are removed when the daemon starts (or, when Podman is not
-  running then, before the first local Session starts): each carries the runtime
-  authority label of the data root whose daemon made it, and a daemon removes only its
-  own whose Session is closed, deleted or unknown to its data root. It keeps an open
-  Session's and never touches another daemon's. The log says how many it removed and
-  kept, and `axocoatl doctor` shows it ("Runtime volumes: the daemon removed …"). The
-  browser test harness deletes its fixture daemon's Sessions when a test ends, so the
-  browser gate leaves no container or volume behind.
+  (`axo-ses-<id>-node-modules`) still stays until the Session is deleted, so Reopen
+  reuses the installed dependencies. Volumes that Sessions closed by 1.2, a daemon that
+  stopped before Close, or a removed data root left behind are removed when the daemon
+  starts (or, when Podman is not running then, before the first local Session starts):
+  each carries the runtime authority label of the data root whose daemon made it, and a
+  daemon removes only its own whose Session is closed, deleted or unknown to its data
+  root. It keeps an open Session's and never touches another daemon's. A Node dependency
+  volume now carries that label too, and the daemon also removes its own whose Session
+  is deleted or unknown to its data root (a removed data root, or a cleanup that was cut
+  short, leaves one), keeping an open or closed Session's. One made before 1.3.0 has no
+  label: it is removed only when its Session is one its data root created and deleted
+  (the data root still holds that Session's native History), so a Session another data
+  root made is never touched. The log says how many it removed and kept, and `axocoatl
+  doctor` shows it ("Session volumes: the daemon removed …"). The browser test harness
+  deletes its fixture daemon's Sessions when a test ends, so the browser gate leaves no
+  container or volume behind.
 - **`GET /api/sessions/{id}/export` exports native Sessions.** Without
   `history_version` it answered `400` for a Session whose History holds native
   execution, such as every loadout run's. It now exports such a Session in the

@@ -313,6 +313,14 @@ impl UpgradedFormatOwnership {
         Ok(session)
     }
 
+    /// Whether this data root holds native History for `session_id`: a
+    /// Session it created, open, closed or deleted (Delete keeps the
+    /// Session's native journals). `false` for any id it never created, and
+    /// whenever the store cannot be verified.
+    pub fn holds_session_history(&self, session_id: &str) -> bool {
+        self.existing_session_directory(session_id).is_ok()
+    }
+
     /// `backups/before-segments` under the held root, where a Session's
     /// directory is copied before its journals are first converted to segment
     /// logs. Created on first use; each entry is synced before it is returned.

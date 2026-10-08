@@ -18,9 +18,16 @@
 //!   is OpenAI's promotional price, which its page says runs at least
 //!   through 2026-11-21. `codex exec` sends no service tier, so a run is
 //!   billed at Standard rates.
-//! - Anthropic's model overview: each Claude model's context window (input
+//! - Anthropic's model overview, model pages and model deprecations page
+//!   (`https://platform.claude.com/docs/en/about-claude/models/overview`):
+//!   each Claude API model that has not retired (Claude Mythos Preview
+//!   aside: they do not state its window), with its context window (input
 //!   and output) and output limit. Claude Code reports its own cost
 //!   (`total_cost_usd`), so no Claude price is pinned.
+//! - Claude Code 2.1.292's bundled model catalog (`model-catalog.json`,
+//!   read as text from the `@anthropic-ai/claude-code-linux-arm64` build's
+//!   binary, never run): the model each of its aliases names on the Claude
+//!   API ([`CLAUDE_CODE_ALIASES`]).
 //!
 //! A model the table does not list runs as before: admission warns that its
 //! context is not checked and that its cost is computed only from a
@@ -201,7 +208,7 @@ const fn claude(model: &'static str, window: u64, output: u64) -> PinnedModel {
 
 /// The table. Prices are `usd(dollars, thousandths of a dollar)` per
 /// million tokens: input, cached input, cache writes, output.
-pub const PINNED_MODELS: [PinnedModel; 20] = [
+pub const PINNED_MODELS: [PinnedModel; 24] = [
     // Codex 0.160.1's API models, OpenAI Standard prices.
     codex(
         "gpt-6-astra",
@@ -236,29 +243,144 @@ pub const PINNED_MODELS: [PinnedModel; 20] = [
         "gpt-5.5",
         openai(usd(5, 0), usd(0, 500), usd(5, 0), usd(30, 0)),
     ),
-    // Claude Code 2.1.292's models: it reports its own cost.
+    // The Claude API's models that have not retired, for Claude Code
+    // 2.1.292, which reports its own cost. Claude Mythos is for Project Glasswing
+    // accounts only; Claude Sonnet 4.5 is deprecated and retires on
+    // 2026-11-30.
     claude("claude-fable-5-1", 1_000_000, 128_000),
+    claude("claude-mythos-5-1", 1_000_000, 128_000),
     claude("claude-fable-5", 1_000_000, 128_000),
+    claude("claude-mythos-5", 1_000_000, 128_000),
     claude("claude-opus-5-5", 1_000_000, 128_000),
     claude("claude-opus-5", 1_000_000, 128_000),
     claude("claude-opus-4-8", 1_000_000, 128_000),
     claude("claude-opus-4-7", 1_000_000, 128_000),
     claude("claude-opus-4-6", 1_000_000, 128_000),
+    claude("claude-opus-4-5", 200_000, 64_000),
     claude("claude-sonnet-5-5", 1_000_000, 128_000),
     claude("claude-sonnet-5", 1_000_000, 128_000),
     claude("claude-sonnet-4-6", 1_000_000, 128_000),
+    claude("claude-sonnet-4-5", 200_000, 64_000),
     claude("claude-haiku-5-5", 1_000_000, 128_000),
     claude("claude-haiku-4-5", 200_000, 64_000),
 ];
 
-/// The pinned entry of `runtime`'s `model`: the same model id, a snapshot
-/// date or `-latest` left out ([`axocoatl_core::same_model`]).
-pub fn pinned_model(runtime: AgentRuntime, model: &str) -> Option<&'static PinnedModel> {
+/// One of Claude Code's model aliases: a name `--model` takes that Claude
+/// Code turns into a Claude API model id before it calls the API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClaudeCodeAlias {
+    pub alias: &'static str,
+    /// The model the alias runs, in [`PINNED_MODELS`].
+    pub model: &'static str,
+    /// How the pinned version resolves the alias, when it is not always
+    /// [`Self::model`]: every model it can run has the same window and
+    /// output limit as [`Self::model`].
+    pub resolves: Option<&'static str>,
+}
+
+const fn alias(alias: &'static str, model: &'static str) -> ClaudeCodeAlias {
+    ClaudeCodeAlias {
+        alias,
+        model,
+        resolves: None,
+    }
+}
+
+/// Claude Code 2.1.292's model aliases and the Claude API model each runs:
+/// the `aliases` of the model catalog bundled in the pinned build, which it
+/// resolves them by for the Claude API when no `ANTHROPIC_DEFAULT_*_MODEL`
+/// variable is set (a run sets none) and the API served it no model list of
+/// its own (its route allows only `POST /v1/messages`). A trailing `[1m]`
+/// (`sonnet[1m]`, `opus[1m]`, `fable[1m]`) asks for the 1M-token window;
+/// [`pinned_model`] reads it only where the model's window already is that.
+/// `default` is not here: what it runs is the account's or organization's
+/// default model, which admission cannot know.
+pub const CLAUDE_CODE_ALIASES: [ClaudeCodeAlias; 6] = [
+    alias("opus", "claude-opus-5-5"),
+    alias("sonnet", "claude-sonnet-5-5"),
+    alias("haiku", "claude-haiku-4-5"),
+    alias("fable", "claude-fable-5-1"),
+    ClaudeCodeAlias {
+        alias: "best",
+        model: "claude-fable-5-1",
+        resolves: Some("claude-fable-5-1, or claude-opus-5-5 for an account without Fable"),
+    },
+    ClaudeCodeAlias {
+        alias: "opusplan",
+        model: "claude-sonnet-5-5",
+        resolves: Some("claude-sonnet-5-5, and claude-opus-5-5 in plan mode"),
+    },
+];
+
+/// The suffix with which Claude Code asks for a model's 1M-token window.
+const ONE_MILLION_SUFFIX: &str = "[1m]";
+
+/// The table's entry for `runtime`'s `model`, and the Claude Code alias it
+/// was named by, if any (see [`pinned_model`]).
+fn resolve(
+    runtime: AgentRuntime,
+    model: &str,
+) -> Option<(&'static PinnedModel, Option<&'static ClaudeCodeAlias>)> {
     let provider = runtime.model_provider()?;
-    PINNED_MODELS.iter().find(|entry| {
-        entry.runtime == runtime
-            && axocoatl_core::same_model(provider, entry.model, provider, model)
-    })
+    let entry = |name: &str| {
+        PINNED_MODELS.iter().find(|entry| {
+            entry.runtime == runtime
+                && axocoatl_core::same_model(provider, entry.model, provider, name)
+        })
+    };
+    if let Some(found) = entry(model) {
+        return Some((found, None));
+    }
+    if runtime != AgentRuntime::ClaudeCode {
+        return None;
+    }
+    let model = model.trim();
+    let split = model.len().checked_sub(ONE_MILLION_SUFFIX.len());
+    let (base, one_million) = match split {
+        Some(at)
+            if model.is_char_boundary(at)
+                && model[at..].eq_ignore_ascii_case(ONE_MILLION_SUFFIX) =>
+        {
+            (model[..at].trim(), true)
+        }
+        _ => (model, false),
+    };
+    let named = CLAUDE_CODE_ALIASES
+        .iter()
+        .find(|alias| alias.alias.eq_ignore_ascii_case(base));
+    let found = match named {
+        Some(alias) => entry(alias.model)?,
+        None if one_million => entry(base)?,
+        None => return None,
+    };
+    // `[1m]` on a model whose window is smaller asks for more than the
+    // model's documented window: not pinned.
+    (!one_million || found.window_tokens >= 1_000_000).then_some((found, named))
+}
+
+/// The pinned entry of `runtime`'s `model`: the same model id, a snapshot
+/// date or `-latest` left out ([`axocoatl_core::same_model`]), or for
+/// Claude Code one of its aliases ([`CLAUDE_CODE_ALIASES`]), or a model or
+/// alias with `[1m]` whose window is already 1M tokens.
+pub fn pinned_model(runtime: AgentRuntime, model: &str) -> Option<&'static PinnedModel> {
+    resolve(runtime, model).map(|(entry, _)| entry)
+}
+
+/// The most tokens one model call of `runtime` on `model` can use
+/// ([`PinnedModel::call_tokens`]) and those words for the admission
+/// refusal, which name the model a Claude Code alias runs. `None` when
+/// `model` is not pinned.
+pub fn pinned_call(runtime: AgentRuntime, model: &str) -> Option<(u64, String)> {
+    let (entry, alias) = resolve(runtime, model)?;
+    let mut words = entry.call_words();
+    if let Some(alias) = alias {
+        words.push_str(&format!(
+            " ({}'s {model} runs {})",
+            program_name(runtime),
+            alias.resolves.unwrap_or(alias.model)
+        ));
+    }
+    Some((entry.call_tokens(), words))
 }
 
 /// Where a computed cost's price came from.
@@ -543,9 +665,118 @@ mod tests {
             .unwrap()
             .ends_with("at the configuration's `pricing` entry for it."));
         assert_eq!(
-            unpinned_warning(AgentRuntime::ClaudeCode, "sonnet", false).unwrap(),
-            "Claude Code 2.1.292's model sonnet is not in Axocoatl's pinned model table, so \
-             admission did not check that its tokens budget holds one model call."
+            unpinned_warning(AgentRuntime::ClaudeCode, "claude-opus-9", false).unwrap(),
+            "Claude Code 2.1.292's model claude-opus-9 is not in Axocoatl's pinned model table, \
+             so admission did not check that its tokens budget holds one model call."
         );
+        // An alias whose model depends on the account, and retired models.
+        for model in [
+            "default",
+            "claude-opus-4-1",
+            "claude-sonnet-4-0",
+            "claude-3-7-sonnet",
+        ] {
+            assert!(
+                unpinned_warning(AgentRuntime::ClaudeCode, model, false).is_some(),
+                "{model}"
+            );
+        }
+    }
+
+    /// Claude Code's aliases are pinned as the model each runs, so a run on
+    /// one is checked and carries no warning; `[1m]` is read only where the
+    /// model's window already is 1M tokens.
+    #[test]
+    fn claude_codes_aliases_are_the_models_they_run() {
+        let model = |name: &str| {
+            pinned_model(AgentRuntime::ClaudeCode, name)
+                .map(|entry| (entry.model, entry.window_tokens))
+        };
+        for (name, expected) in [
+            ("haiku", ("claude-haiku-4-5", 200_000)),
+            ("HAIKU", ("claude-haiku-4-5", 200_000)),
+            ("sonnet", ("claude-sonnet-5-5", 1_000_000)),
+            ("opus", ("claude-opus-5-5", 1_000_000)),
+            ("fable", ("claude-fable-5-1", 1_000_000)),
+            ("best", ("claude-fable-5-1", 1_000_000)),
+            ("opusplan", ("claude-sonnet-5-5", 1_000_000)),
+            ("sonnet[1m]", ("claude-sonnet-5-5", 1_000_000)),
+            ("opus[1M]", ("claude-opus-5-5", 1_000_000)),
+            ("fable[1m]", ("claude-fable-5-1", 1_000_000)),
+            ("claude-opus-4-6[1m]", ("claude-opus-4-6", 1_000_000)),
+            ("claude-sonnet-4-5-20250929", ("claude-sonnet-4-5", 200_000)),
+            ("claude-opus-4-5", ("claude-opus-4-5", 200_000)),
+            ("claude-mythos-5-1", ("claude-mythos-5-1", 1_000_000)),
+        ] {
+            assert_eq!(model(name), Some(expected), "{name}");
+            assert_eq!(
+                unpinned_warning(AgentRuntime::ClaudeCode, name, false),
+                None,
+                "{name}"
+            );
+        }
+        // Each alias names a model of the table, and every other model it
+        // can run makes the same call.
+        for alias in &CLAUDE_CODE_ALIASES {
+            let entry = pinned_model(AgentRuntime::ClaudeCode, alias.model).unwrap();
+            assert_eq!(entry.model, alias.model);
+            assert_eq!(model(alias.alias), Some((entry.model, entry.window_tokens)));
+            let others = alias
+                .resolves
+                .unwrap_or_default()
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                .filter(|word| word.starts_with("claude-"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                others.is_empty(),
+                alias.resolves.is_none(),
+                "{}",
+                alias.alias
+            );
+            for other in others {
+                let other = pinned_model(AgentRuntime::ClaudeCode, other).unwrap();
+                assert_eq!(
+                    (
+                        other.window_tokens,
+                        other.max_output_tokens,
+                        other.call_tokens()
+                    ),
+                    (
+                        entry.window_tokens,
+                        entry.max_output_tokens,
+                        entry.call_tokens()
+                    ),
+                    "{}: {}",
+                    alias.alias,
+                    other.model
+                );
+            }
+        }
+        // A 200K-token model asked for 1M tokens, the account's default, a
+        // name that only looks like an alias, and Codex: not pinned.
+        for name in [
+            "haiku[1m]",
+            "claude-haiku-4-5[1m]",
+            "claude-sonnet-4-5[1m]",
+            "default",
+            "sonnet-5",
+            "[1m]",
+            "x[1m]",
+        ] {
+            assert_eq!(model(name), None, "{name}");
+        }
+        assert!(pinned_model(AgentRuntime::Codex, "sonnet").is_none());
+        assert!(pinned_model(AgentRuntime::Codex, "gpt-5.5[1m]").is_none());
+        // The refusal names the model an alias runs.
+        let (tokens, words) = pinned_call(AgentRuntime::ClaudeCode, "opusplan").unwrap();
+        assert_eq!(tokens, 1_000_000);
+        assert_eq!(
+            words,
+            "claude-sonnet-5-5's whole 1000000-token context window, input and output, which \
+             one call of Claude Code 2.1.292 can fill (Claude Code 2.1.292's opusplan runs \
+             claude-sonnet-5-5, and claude-opus-5-5 in plan mode)"
+        );
+        let (_, words) = pinned_call(AgentRuntime::ClaudeCode, "claude-haiku-4-5").unwrap();
+        assert!(words.ends_with("can fill"), "{words}");
     }
 }

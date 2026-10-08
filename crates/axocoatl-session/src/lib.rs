@@ -850,6 +850,32 @@ impl SessionStore {
         self.sessions.get(id).cloned()
     }
 
+    /// The id of every Session record this store holds on disk, loaded or
+    /// not: a record that could not be loaded, or one bootstrap hid
+    /// ([`Self::quarantine_loaded`]), is still that Session's. [`Self::remove`]
+    /// deletes the record.
+    pub fn record_ids(&self) -> Result<Vec<String>, SessionError> {
+        let mut ids = Vec::new();
+        for entry in self.secure_dir.entries()? {
+            if entry.file_type != SecureEntryType::File {
+                continue;
+            }
+            let path = std::path::Path::new(&entry.name);
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            if let Some(id) = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .filter(|id| is_canonical_persisted_id(id, "ses-"))
+            {
+                ids.push(id.to_string());
+            }
+        }
+        ids.sort();
+        Ok(ids)
+    }
+
     /// All sessions, newest first.
     pub fn list(&self) -> Vec<Session> {
         let mut v: Vec<Session> = self.sessions.values().cloned().collect();
@@ -1609,6 +1635,44 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("exceeds"));
         assert!(store.is_empty());
+    }
+
+    /// A Session hidden at bootstrap keeps its record, so it still counts as
+    /// one of the store's; a removed Session does not.
+    #[test]
+    fn record_ids_name_every_session_on_disk_hidden_or_not() {
+        let data = tempdir().unwrap();
+        let work = tempdir().unwrap();
+        let mut store = SessionStore::new(data.path().join("sessions")).unwrap();
+        let mut create = |name: &str| {
+            store
+                .create(
+                    name,
+                    "wsp-records",
+                    work.path(),
+                    SessionMode::SingleAgent {
+                        agent_id: "coder".into(),
+                    },
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                )
+                .unwrap()
+                .id
+        };
+        let (kept, hidden, removed) = (create("kept"), create("hidden"), create("removed"));
+        assert!(store.quarantine_loaded(&hidden).is_some());
+        store.remove(&removed).unwrap();
+        std::fs::write(data.path().join("sessions").join("notes.txt"), "x").unwrap();
+        std::fs::write(
+            data.path().join("sessions").join("not-a-session.json"),
+            "{}",
+        )
+        .unwrap();
+        assert_eq!(store.list().len(), 1);
+        let mut expected = vec![kept, hidden];
+        expected.sort();
+        assert_eq!(store.record_ids().unwrap(), expected);
     }
 
     #[test]

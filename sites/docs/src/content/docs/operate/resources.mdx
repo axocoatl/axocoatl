@@ -67,17 +67,22 @@ own model memory.
 Account for:
 
 - Podman images and writable layers;
-- Session- and Attempt-owned root `node_modules` volumes for Node projects. Closing a
-  Session keeps its volume so Reopen reuses the installed dependencies; deleting the
-  Session removes it. Close removes the volumes a Session's runtime fills again when it
-  starts (`axo-egr-`, `axo-egi-` and `axo-svc-` sockets and the `axo-ca-` trust files),
-  so a closed Session leaves only its dependency volume. If Podman cannot remove one
-  because another container still uses it, the Close still succeeds and the daemon log
-  names the volume. Volumes like these that Sessions closed by Axocoatl 1.2, a daemon
-  that stopped before Close, or a removed data root left behind are removed when the
-  daemon next starts: it removes only its own (each carries the runtime authority label
-  of the data root whose daemon made it) whose Session is closed, deleted or unknown,
-  keeps an open Session's, and never touches another daemon's. `axocoatl doctor` shows
+- Session- and Attempt-owned root `node_modules` volumes for Node projects
+  (`axo-ses-<id>-node-modules`). Closing a Session keeps its volume so Reopen reuses the
+  installed dependencies; deleting the Session removes it. Close removes the volumes a
+  Session's runtime fills again when it starts (`axo-egr-`, `axo-egi-` and `axo-svc-`
+  sockets and the `axo-ca-` trust files), so a closed Session leaves only its dependency
+  volume. If Podman cannot remove one because another container still uses it, the
+  Close still succeeds and the daemon log names the volume. Volumes like these that
+  Sessions closed by Axocoatl 1.2, a daemon that stopped before Close, or a removed data
+  root left behind are removed when the daemon next starts: it removes only its own
+  (each carries the runtime authority label of the data root whose daemon made it), the
+  runtime volumes of a Session that is closed, deleted or unknown and the dependency
+  volume of one that is deleted or unknown. It keeps an open Session's runtime volumes
+  and an open or closed Session's dependency volume, and never touches another daemon's.
+  A dependency volume made before 1.3.0 has no label and is removed only when its
+  Session is one this data root created and deleted. A closed Session's dependency volume
+  stays until you delete the Session, including a loadout run's. `axocoatl doctor` shows
   how many it removed and kept;
 - every Workspace repository and its build artifacts;
 - `.axo-variants/` clones and manifests during unresolved Attempts;

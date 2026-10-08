@@ -120,10 +120,11 @@ pub fn call_floor(
     observed: &AdmissionObservations,
 ) -> Option<CallFloor> {
     if budget.runtime != AgentRuntime::Native {
-        let pinned = crate::external_agent::models::pinned_model(budget.runtime, &model.model)?;
+        let (tokens, words) =
+            crate::external_agent::models::pinned_call(budget.runtime, &model.model)?;
         return Some(CallFloor {
-            tokens: pinned.call_tokens(),
-            words: pinned.call_words(),
+            tokens,
+            words,
             lower: None,
         });
     }
@@ -642,8 +643,27 @@ mod tests {
             ),
             "{message}"
         );
+        // Claude Code's alias is checked as the model it runs.
+        params.insert("writer_model".into(), "anthropic:haiku".into());
+        let mut resolved = resolve_loadout(&claude, &params, "fix it", "/repo").unwrap();
+        resolved.loadout.file.budgets.agent.tokens = 199_999;
+        let Err(RunError::Usage(message)) = refuse_budgets_below_one_call(&resolved, &observed)
+        else {
+            panic!("admitted")
+        };
+        assert!(
+            message.contains(
+                "one model call of Agent writer (anthropic:haiku) needs: claude-haiku-4-5's whole \
+                 200000-token context window, input and output, which one call of Claude Code \
+                 2.1.292 can fill (Claude Code 2.1.292's haiku runs claude-haiku-4-5), at least \
+                 200000 tokens"
+            ),
+            "{message}"
+        );
+        resolved.loadout.file.budgets.agent.tokens = 200_000;
+        assert!(refuse_budgets_below_one_call(&resolved, &observed).is_ok());
         // Not pinned: not checked.
-        params.insert("writer_model".into(), "anthropic:sonnet".into());
+        params.insert("writer_model".into(), "anthropic:claude-opus-9".into());
         let mut resolved = resolve_loadout(&claude, &params, "fix it", "/repo").unwrap();
         resolved.loadout.file.budgets.agent.tokens = 1;
         assert!(refuse_budgets_below_one_call(&resolved, &observed).is_ok());
