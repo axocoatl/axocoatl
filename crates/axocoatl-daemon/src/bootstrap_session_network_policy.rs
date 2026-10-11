@@ -117,6 +117,9 @@ pub(crate) struct SessionEgressPoints {
     /// Session, and the Workspaces credentials stay out of.
     upstream: Arc<crate::egress_broker::UpstreamConnector>,
     workspaces: WorkspaceRoots,
+    /// Credentials the daemon keeps current itself: the ChatGPT sign-in
+    /// stored as `codex-chatgpt` in the data root, refreshed by its broker.
+    managed: StdMutex<Arc<crate::egress_broker::rules::ManagedCredentials>>,
     /// What each loadout Session adds to the lists in force (its loadout's
     /// hosts and routes), applied whenever its decision point opens or the
     /// lists reload. Other Sessions never see these entries.
@@ -148,6 +151,9 @@ impl SessionEgressPoints {
         sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>>,
         workspaces: WorkspaceRoots,
     ) -> Self {
+        let managed = Arc::new(crate::external_agent::codex_chatgpt::managed_credentials(
+            data_root.path(),
+        ));
         Self {
             lifecycles,
             points,
@@ -157,6 +163,7 @@ impl SessionEgressPoints {
             sandboxes,
             upstream: Arc::new(crate::egress_broker::UpstreamConnector::new()),
             workspaces,
+            managed: StdMutex::new(managed),
             overlays: StdMutex::new(HashMap::new()),
             #[cfg(test)]
             test_upstreams: StdMutex::new(None),
@@ -170,6 +177,26 @@ impl SessionEgressPoints {
             .test_upstreams
             .lock()
             .unwrap_or_else(|poison| poison.into_inner()) = Some(upstreams);
+    }
+
+    /// Use `managed` for decision points opened from now on (tests: a
+    /// ChatGPT sign-in broker refreshing at a local fake token endpoint).
+    #[cfg(test)]
+    pub(crate) fn use_test_managed(
+        &self,
+        managed: crate::egress_broker::rules::ManagedCredentials,
+    ) {
+        *self
+            .managed
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Arc::new(managed);
+    }
+
+    fn managed(&self) -> Arc<crate::egress_broker::rules::ManagedCredentials> {
+        self.managed
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
     }
 
     /// Remember what a loadout Session adds to the lists in force. Set
@@ -262,6 +289,7 @@ impl SessionEgressPoints {
                     upstream: test.upstream,
                     workspaces: self.workspaces.roots(),
                     timeouts: Default::default(),
+                    managed: self.managed(),
                 },
             )
             .await
@@ -287,6 +315,7 @@ impl SessionEgressPoints {
                 upstream: self.upstream.clone(),
                 workspaces: self.workspaces.roots(),
                 timeouts: Default::default(),
+                managed: self.managed(),
             },
         )
         .await

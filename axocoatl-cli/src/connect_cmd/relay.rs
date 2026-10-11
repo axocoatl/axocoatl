@@ -1,8 +1,8 @@
-//! Running `claude setup-token` in a pseudo-terminal as large as the user's
-//! terminal (and resized with it on `SIGWINCH`): the user's terminal in raw
-//! mode for the duration (always restored), keystrokes relayed to the
-//! program until it exits, and its output relayed back through
-//! [`TokenFilter`].
+//! Running `claude setup-token` (or `codex login`) in a pseudo-terminal as
+//! large as the user's terminal (and resized with it on `SIGWINCH`): the
+//! user's terminal in raw mode for the duration (always restored),
+//! keystrokes relayed to the program until it exits, and its output relayed
+//! back through the token filters ([`FilterChain`]).
 
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
@@ -18,7 +18,7 @@ use rustix::event::{
 use rustix::termios::{self, OptionalActions, SpecialCodeIndex, Termios};
 use zeroize::{Zeroize, Zeroizing};
 
-use super::redact::{Found, TokenFilter};
+use super::redact::{FilterChain, Found};
 
 /// The size used when the user's terminal does not report one.
 const FALLBACK_SIZE: (u16, u16) = (80, 24);
@@ -120,7 +120,7 @@ impl Drop for RawMode<'_> {
     }
 }
 
-/// How `claude setup-token` ended, and the tokens its output held.
+/// How the program ended, and the tokens its output held.
 pub(crate) struct SetupRun {
     pub(crate) found: Vec<Found>,
     /// Its exit code, when it exited on its own.
@@ -157,6 +157,46 @@ pub(crate) fn run_setup_token(
     stop: &AtomicBool,
     resized: &AtomicBool,
 ) -> Result<SetupRun, String> {
+    let current = std::env::current_dir().ok();
+    run_program(
+        &Program {
+            path: claude,
+            args: &["setup-token"],
+            cwd: current.as_deref(),
+            set_env: &[],
+            remove_env: &[],
+            filters: FilterChain::claude,
+        },
+        input,
+        output,
+        stop,
+        resized,
+    )
+}
+
+/// A program to run in the pseudo-terminal.
+pub(crate) struct Program<'a> {
+    /// Its absolute path.
+    pub(crate) path: &'a Path,
+    pub(crate) args: &'a [&'a str],
+    /// Where it runs (the parent's directory when `None`).
+    pub(crate) cwd: Option<&'a Path>,
+    /// Variables set for it, and variables removed from what it inherits.
+    pub(crate) set_env: &'a [(&'a str, &'a std::ffi::OsStr)],
+    pub(crate) remove_env: &'a [&'a str],
+    /// The filters its output goes through, for a terminal of a size.
+    pub(crate) filters: fn(u16, u16) -> FilterChain,
+}
+
+/// Run `program` as [`run_setup_token`] runs `claude setup-token`.
+pub(crate) fn run_program(
+    program: &Program<'_>,
+    input: BorrowedFd<'_>,
+    output: &mut dyn Write,
+    stop: &AtomicBool,
+    resized: &AtomicBool,
+) -> Result<SetupRun, String> {
+    let path = program.path;
     // A resize before the start is read with the size below.
     resized.store(false, Ordering::SeqCst);
     let (cols, rows) = program_size(terminal_size(input));
@@ -179,15 +219,21 @@ pub(crate) fn run_setup_token(
         .master
         .take_writer()
         .map_err(|error| format!("could not write the pseudo-terminal: {error}"))?;
-    let mut command = CommandBuilder::new(claude);
-    command.arg("setup-token");
-    if let Ok(directory) = std::env::current_dir() {
+    let mut command = CommandBuilder::new(path);
+    command.args(program.args);
+    if let Some(directory) = program.cwd {
         command.cwd(directory);
     }
     // The program asks the terminal for its size, which follows resizes; a
     // `COLUMNS` or `LINES` inherited from a shell would not.
     command.env_remove("COLUMNS");
     command.env_remove("LINES");
+    for name in program.remove_env {
+        command.env_remove(name);
+    }
+    for (name, value) in program.set_env {
+        command.env(name, value);
+    }
     // Raw before the program starts, so nothing it reads is cooked first;
     // every return below drops it, which restores the terminal.
     let raw = RawMode::enter(input)
@@ -195,7 +241,7 @@ pub(crate) fn run_setup_token(
     let child = pair
         .slave
         .spawn_command(command)
-        .map_err(|error| format!("could not start {}: {error}", claude.display()))?;
+        .map_err(|error| format!("could not start {}: {error}", path.display()))?;
     // Only the child holds the terminal's other end now, so its output ends
     // when it (and anything it started) exits.
     drop(pair.slave);
@@ -231,6 +277,7 @@ pub(crate) fn run_setup_token(
         output,
         (cols, rows),
         stop,
+        program.filters,
     );
     relay_stop.store(true, Ordering::SeqCst);
     if result.is_err() {
@@ -389,6 +436,7 @@ fn show(output: &mut dyn Write, shown: &mut Vec<u8>) {
 
 /// Filter the program's output to `output` until it has exited and its
 /// output ended (or [`DRAIN`] passed), or until `stop`.
+#[allow(clippy::too_many_arguments)]
 fn pump_output(
     chunks: &mpsc::Receiver<Zeroizing<Vec<u8>>>,
     exited: &mpsc::Receiver<Option<u32>>,
@@ -397,8 +445,9 @@ fn pump_output(
     output: &mut dyn Write,
     size: (u16, u16),
     stop: &AtomicBool,
+    filters: fn(u16, u16) -> FilterChain,
 ) -> Result<SetupRun, String> {
-    let mut filter = TokenFilter::new(size.0, size.1);
+    let mut filter = filters(size.0, size.1);
     let mut size = size;
     let mut shown = Vec::with_capacity(8192);
     let mut last_output = Instant::now();
@@ -461,7 +510,7 @@ fn pump_output(
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    return Err("could not wait for claude".into());
+                    return Err("could not wait for the program".into());
                 }
             }
         }

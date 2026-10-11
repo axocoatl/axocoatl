@@ -15,6 +15,20 @@
 //! (`--dangerously-bypass-approvals-and-sandbox`): the Session container,
 //! its hardened writer user and the egress routes are the boundary.
 //!
+//! With a ChatGPT sign-in (`credential: codex-chatgpt`, [`chatgpt_argv`])
+//! the provider is the same but aimed at the ChatGPT backend Codex itself
+//! uses for a ChatGPT sign-in (`https://chatgpt.com/backend-api/codex`, the
+//! Responses API at `/backend-api/codex/responses`), with a placeholder in
+//! [`CHATGPT_TOKEN_PLACEHOLDER_ENV`]. Codex then holds no sign-in of its own:
+//! the container has no `auth.json`, and a provider with an `env_key` sends
+//! that variable's value as its bearer token and nothing else
+//! (`resolve_provider_auth` in `codex-rs/model-provider/src/auth.rs`), so the
+//! program has no refresh token to refresh, revoke or send anywhere; the
+//! route to `chatgpt.com` adds the access token and the account id, which
+//! the daemon keeps current ([`super::codex_chatgpt`]). Being named `axocoatl` and not `OpenAI`, the
+//! provider uses none of Codex's ChatGPT-backend extras (workspace routing,
+//! cloud configuration, the model list).
+//!
 //! The parser also reads the Codex app-server notifications that the
 //! adapter removed in b922287 recorded (`fixtures/codex-0.153.4-*`).
 
@@ -32,8 +46,23 @@ pub const CODEX_PACKAGE: &str = "@openai/codex";
 pub const CODEX_VERSION: &str = "0.160.1";
 /// Secret name for the OpenAI API key.
 pub const CODEX_SECRET: &str = "codex-openai";
+/// Secret name for the ChatGPT sign-in `axocoatl connect codex` stores.
+pub const CODEX_CHATGPT_SECRET: &str = super::codex_chatgpt::CODEX_CHATGPT_SECRET;
 /// The definition provider of a Codex writer.
 pub const PROVIDER: &str = "codex";
+/// The definition provider of a Codex writer signed in with ChatGPT
+/// (`credential: codex-chatgpt`): the same runtime, another route.
+pub const CHATGPT_PROVIDER: &str = "codex-chatgpt";
+/// The ChatGPT backend host a ChatGPT sign-in's route serves.
+pub const CHATGPT_HOST: &str = "chatgpt.com";
+/// The ChatGPT backend's Codex API, as Codex 0.160.1 names it
+/// (`CHATGPT_CODEX_BASE_URL`).
+pub const CHATGPT_BASE_PATH: &str = "/backend-api/codex";
+/// The variable the ChatGPT route sets to its placeholder: the provider's
+/// `env_key`. Not one Codex 0.160.1 reads by itself (`CODEX_ACCESS_TOKEN`
+/// would make it check a personal access token with `auth.openai.com`), and
+/// not an `AXOCOATL_` one, which a route may not set.
+pub const CHATGPT_TOKEN_PLACEHOLDER_ENV: &str = "CODEX_CHATGPT_ACCESS_TOKEN";
 /// The provider of the model API the program calls, as a loadout names its
 /// model (`{provider: openai, model: …}`) and the Outcome records it.
 pub const MODEL_PROVIDER: &str = "openai";
@@ -45,8 +74,34 @@ pub const TOKEN_PLACEHOLDER_ENV: &str = "OPENAI_API_KEY";
 /// Fixed environment of every run.
 pub const ENV: &[(&str, &str)] = &[("NO_COLOR", "1")];
 
-/// The argv that runs one activation (the prompt comes on stdin, `-`).
+/// The argv that runs one activation with an OpenAI API key (the prompt
+/// comes on stdin, `-`).
 pub fn argv(model: &str) -> Result<Vec<String>, ExternalAgentError> {
+    provider_argv(
+        model,
+        &format!("https://{API_HOST}/v1"),
+        TOKEN_PLACEHOLDER_ENV,
+    )
+}
+
+/// The argv that runs one activation with a ChatGPT sign-in: the same
+/// program and provider, aimed at the ChatGPT backend, its key in
+/// [`CHATGPT_TOKEN_PLACEHOLDER_ENV`].
+pub fn chatgpt_argv(model: &str) -> Result<Vec<String>, ExternalAgentError> {
+    provider_argv(
+        model,
+        &format!("https://{CHATGPT_HOST}{CHATGPT_BASE_PATH}"),
+        CHATGPT_TOKEN_PLACEHOLDER_ENV,
+    )
+}
+
+/// `codex exec` with Axocoatl's own HTTP provider at `base_url`, its key
+/// from `env_key`.
+fn provider_argv(
+    model: &str,
+    base_url: &str,
+    env_key: &str,
+) -> Result<Vec<String>, ExternalAgentError> {
     super::validate_model(model)?;
     let mut argv: Vec<String> = [
         "codex",
@@ -79,10 +134,10 @@ pub fn argv(model: &str) -> Result<Vec<String>, ExternalAgentError> {
         "analytics.enabled=false".to_string(),
         "model_provider=\"axocoatl\"".to_string(),
         "model_providers.axocoatl.name=\"axocoatl\"".to_string(),
-        format!("model_providers.axocoatl.base_url=\"https://{API_HOST}/v1\""),
+        format!("model_providers.axocoatl.base_url=\"{base_url}\""),
         "model_providers.axocoatl.wire_api=\"responses\"".to_string(),
         "model_providers.axocoatl.supports_websockets=false".to_string(),
-        format!("model_providers.axocoatl.env_key=\"{TOKEN_PLACEHOLDER_ENV}\""),
+        format!("model_providers.axocoatl.env_key=\"{env_key}\""),
     ] {
         argv.push("-c".into());
         argv.push(setting);

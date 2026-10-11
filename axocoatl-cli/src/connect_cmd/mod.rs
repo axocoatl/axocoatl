@@ -17,7 +17,12 @@
 //! The token is held in zeroizing buffers and never reaches an argv, a
 //! child's environment, a log, a panic, a `Debug` string, a temporary file
 //! or an error message.
+//!
+//! `axocoatl connect codex` ([`codex`]) runs the official `codex login` the
+//! same way, with a private temporary `CODEX_HOME`, and stores the ChatGPT
+//! sign-in Codex writes there.
 
+mod codex;
 mod redact;
 mod relay;
 mod screen;
@@ -59,6 +64,8 @@ pub(crate) mod exit {
     pub(crate) const UNVERIFIED: i32 = 4;
     /// The data directory, the secret store or the pseudo-terminal failed.
     pub(crate) const FAILURE: i32 = 5;
+    // `connect codex` uses CONNECTED, NO_TOKEN (no ChatGPT sign-in was
+    // stored by `codex login`), USAGE, FAILURE and INTERRUPTED.
     /// A signal stopped the command; nothing was stored.
     pub(crate) const INTERRUPTED: i32 = 6;
 }
@@ -81,6 +88,22 @@ pub enum ConnectCommands {
         /// ~/.local/bin/claude)
         #[arg(long, value_name = "PATH")]
         claude: Option<PathBuf>,
+    },
+    /// Run the official `codex login` with a private temporary CODEX_HOME,
+    /// and store the ChatGPT sign-in it makes (never shown) as the secret
+    /// codex-chatgpt, for Codex writers with `credential: codex-chatgpt`
+    Codex {
+        /// Path to config file (selects the data directory)
+        #[arg(short, long, default_value_os_t = crate::default_config_path_for_clap())]
+        config: PathBuf,
+        /// Sign in with a code shown here instead of a browser on this
+        /// computer (`codex login --device-auth`)
+        #[arg(long)]
+        device_auth: bool,
+        /// Path to the codex CLI (default: the first `codex` on PATH, then
+        /// ~/.local/bin/codex)
+        #[arg(long, value_name = "PATH")]
+        codex: Option<PathBuf>,
     },
 }
 
@@ -193,6 +216,41 @@ pub(crate) fn find_claude(
     path: Option<&std::ffi::OsStr>,
     home: Option<&Path>,
 ) -> Result<PathBuf, String> {
+    find_program(
+        "claude",
+        explicit,
+        path,
+        home,
+        "the Claude Code CLI (`claude`) was not found on PATH or in ~/.local/bin. Install it \
+         (https://docs.anthropic.com/en/docs/claude-code/setup) or pass its path with --claude",
+    )
+}
+
+/// The `codex` CLI, found as [`find_claude`] finds `claude`.
+pub(crate) fn find_codex(
+    explicit: Option<&Path>,
+    path: Option<&std::ffi::OsStr>,
+    home: Option<&Path>,
+) -> Result<PathBuf, String> {
+    find_program(
+        "codex",
+        explicit,
+        path,
+        home,
+        "the Codex CLI (`codex`) was not found on PATH or in ~/.local/bin. Install it \
+         (`npm install -g @openai/codex`) or pass its path with --codex",
+    )
+}
+
+/// `name`: `explicit`, else the first `name` on `path`, else
+/// `home/.local/bin/<name>`, as an absolute path; `missing` when none is.
+fn find_program(
+    name: &str,
+    explicit: Option<&Path>,
+    path: Option<&std::ffi::OsStr>,
+    home: Option<&Path>,
+    missing: &str,
+) -> Result<PathBuf, String> {
     let absolute = |candidate: PathBuf| -> PathBuf {
         if candidate.is_absolute() {
             candidate
@@ -207,7 +265,7 @@ pub(crate) fn find_claude(
             Ok(absolute(explicit.to_path_buf()))
         } else {
             Err(format!(
-                "--claude {} is not an executable file",
+                "--{name} {} is not an executable file",
                 explicit.display()
             ))
         };
@@ -217,22 +275,18 @@ pub(crate) fn find_claude(
         .into_iter()
         .flatten()
         .filter(|directory| directory.is_absolute())
-        .map(|directory| directory.join("claude"))
+        .map(|directory| directory.join(name))
         .find(|candidate| is_executable(candidate));
     if let Some(found) = on_path {
         return Ok(found);
     }
     if let Some(home) = home {
-        let local = home.join(".local/bin/claude");
+        let local = home.join(".local/bin").join(name);
         if is_executable(&local) {
             return Ok(absolute(local));
         }
     }
-    Err(
-        "the Claude Code CLI (`claude`) was not found on PATH or in ~/.local/bin. Install it \
-         (https://docs.anthropic.com/en/docs/claude-code/setup) or pass its path with --claude"
-            .into(),
-    )
+    Err(missing.to_string())
 }
 
 /// The line printed once the token is stored, with the next step.
@@ -395,12 +449,19 @@ fn needs_terminal() -> String {
 
 /// Returns the process exit code.
 pub async fn cmd_connect(command: ConnectCommands) -> i32 {
-    let ConnectCommands::ClaudeCode {
-        config,
-        secret,
-        no_verify,
-        claude,
-    } = command;
+    let (config, secret, no_verify, claude) = match command {
+        ConnectCommands::ClaudeCode {
+            config,
+            secret,
+            no_verify,
+            claude,
+        } => (config, secret, no_verify, claude),
+        ConnectCommands::Codex {
+            config,
+            device_auth,
+            codex: path,
+        } => return cmd_connect_codex(config, device_auth, path).await,
+    };
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         eprintln!("✗ {}", needs_terminal());
         return exit::USAGE;
@@ -467,6 +528,86 @@ pub async fn cmd_connect(command: ConnectCommands) -> i32 {
             secret,
             data_dir,
             verifier,
+        },
+        input,
+        Box::new(std::io::stdout()),
+        &interrupt,
+        &resized,
+    )
+    .await;
+    for listener in listeners {
+        listener.abort();
+    }
+    match result {
+        Ok(message) => {
+            println!("\n✓ {message}");
+            exit::CONNECTED
+        }
+        Err(Failure { code, message }) => {
+            eprintln!("\n✗ {message}");
+            code
+        }
+    }
+}
+
+/// `axocoatl connect codex`. Returns the process exit code.
+async fn cmd_connect_codex(config: PathBuf, device_auth: bool, explicit: Option<PathBuf>) -> i32 {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        eprintln!("✗ {}", codex::needs_terminal());
+        return exit::USAGE;
+    }
+    let data_dir = match crate::secret_cmd::data_dir(&config) {
+        Ok(data_dir) => data_dir,
+        Err(error) => {
+            eprintln!("✗ {error}");
+            return exit::FAILURE;
+        }
+    };
+    let secret = axocoatl_daemon::external_agent::codex_chatgpt::CODEX_CHATGPT_SECRET;
+    if let Err(error) = secret_store::check_can_store(&data_dir, secret) {
+        eprintln!("✗ {error}; `codex login` was not run, so no sign-in was made");
+        return exit::FAILURE;
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let path = match find_codex(
+        explicit.as_deref(),
+        std::env::var_os("PATH").as_deref(),
+        home.as_deref(),
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("✗ {error}");
+            return exit::USAGE;
+        }
+    };
+    let input = match relay::owned_stdin() {
+        Ok(input) => input,
+        Err(error) => {
+            eprintln!("✗ could not read the terminal: {error}");
+            return exit::FAILURE;
+        }
+    };
+    eprintln!(
+        "Running `{} login{}` with a private temporary CODEX_HOME. {} Axocoatl reads the \
+         sign-in Codex stores there, never shows it, stores it as secret {secret} and then \
+         erases the temporary CODEX_HOME. Your own ~/.codex is not touched.\n",
+        path.display(),
+        if device_auth { " --device-auth" } else { "" },
+        if device_auth {
+            "Enter the code it shows at the address it gives, on any device."
+        } else {
+            "Sign in in the browser it opens."
+        },
+    );
+    let interrupt = Interrupt::default();
+    let mut listeners = interrupt.listen();
+    let resized = Resized::default();
+    listeners.extend(resized.listen());
+    let result = codex::connect(
+        codex::ConnectCodex {
+            codex: path,
+            data_dir,
+            device_auth,
         },
         input,
         Box::new(std::io::stdout()),

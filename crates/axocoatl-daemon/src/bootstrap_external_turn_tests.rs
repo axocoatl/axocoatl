@@ -413,11 +413,13 @@ struct ApiRequest {
     /// Path and query, as sent.
     target: String,
     authorization: Vec<String>,
+    /// `ChatGPT-Account-ID`, as sent.
+    account: Vec<String>,
     body: serde_json::Value,
 }
 
-/// A local HTTPS model API for `api.anthropic.com` or `api.openai.com`
-/// with its own authority. It plays the model for one tool round: a request
+/// A local HTTPS model API for `api.anthropic.com`, `api.openai.com` or
+/// the ChatGPT backend at `chatgpt.com` with its own authority. It plays the model for one tool round: a request
 /// that offers tools and holds no tool result gets one shell call
 /// ([`PROGRAM_COMMAND`]); a request with the call's result gets the final
 /// text; any other request gets a short text.
@@ -627,6 +629,12 @@ impl FakeModelApi {
                                     .iter()
                                     .map(|value| String::from_utf8_lossy(value.as_bytes()).into())
                                     .collect();
+                                let account = request
+                                    .headers()
+                                    .get_all("chatgpt-account-id")
+                                    .iter()
+                                    .map(|value| String::from_utf8_lossy(value.as_bytes()).into())
+                                    .collect();
                                 let method = request.method().to_string();
                                 let target = request
                                     .uri()
@@ -644,7 +652,12 @@ impl FakeModelApi {
                                     serde_json::from_slice(&bytes).unwrap_or_default();
                                 let rejected = rejects
                                     && method == "POST"
-                                    && matches!(path.as_str(), "/v1/messages" | "/v1/responses");
+                                    && matches!(
+                                        path.as_str(),
+                                        "/v1/messages"
+                                            | "/v1/responses"
+                                            | "/backend-api/codex/responses"
+                                    );
                                 let answer = match (method.as_str(), path.as_str()) {
                                     _ if rejected => Some((
                                         serde_json::json!({"type": "error", "error": {
@@ -654,13 +667,16 @@ impl FakeModelApi {
                                         "application/json",
                                     )),
                                     ("POST", "/v1/messages") => Some(anthropic_answer(&body)),
-                                    ("POST", "/v1/responses") => Some(openai_answer(&body)),
+                                    ("POST", "/v1/responses" | "/backend-api/codex/responses") => {
+                                        Some(openai_answer(&body))
+                                    }
                                     _ => None,
                                 };
                                 recorded.lock().unwrap().push(ApiRequest {
                                     method,
                                     target,
                                     authorization,
+                                    account,
                                     body,
                                 });
                                 let (text, kind) = answer.unwrap_or_else(|| {
@@ -926,24 +942,41 @@ fn git(repo: &std::path::Path, args: &[&str]) {
 /// request `401`: the run needs attention, and its not-covered reason says
 /// the stored credential was rejected and how to store it again.
 async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_rejects: bool) {
+    pinned_run(runtime, reviewed, api_rejects, false).await
+}
+
+/// [`pinned_run_child_body`]; with `chatgpt`, the Codex writer names
+/// `credential: codex-chatgpt`: its program calls the ChatGPT backend at
+/// `chatgpt.com` through the route, with a stored ChatGPT sign-in whose
+/// access token expires within the refresh window, so the daemon's broker
+/// refreshes it (at a fake OpenAI token endpoint) on the first model call
+/// and every call carries the refreshed token and the account id.
+async fn pinned_run(runtime: AgentRuntime, reviewed: bool, api_rejects: bool, chatgpt: bool) {
     use axocoatl_session::network_record::{Decision, NetworkEvent};
     use axocoatl_session::run_outcome::{RunVerdict, TurnState};
-    let (recipe, host, credential, placeholder, answer) = match runtime {
-        AgentRuntime::ClaudeCode => (
+    let (recipe, host, credential, placeholder, answer) = match (runtime, chatgpt) {
+        (AgentRuntime::ClaudeCode, _) => (
             "claude-code",
             "api.anthropic.com",
             "claude-code-oauth",
             "CLAUDE_CODE_OAUTH_TOKEN",
             CLAUDE_ANSWER,
         ),
-        AgentRuntime::Codex => (
+        (AgentRuntime::Codex, false) => (
             "codex",
             "api.openai.com",
             "codex-openai",
             "OPENAI_API_KEY",
             CODEX_ANSWER,
         ),
-        AgentRuntime::Native => unreachable!("an external runtime"),
+        (AgentRuntime::Codex, true) => (
+            "codex",
+            "chatgpt.com",
+            "codex-chatgpt",
+            "CODEX_CHATGPT_ACCESS_TOKEN",
+            CODEX_ANSWER,
+        ),
+        (AgentRuntime::Native, _) => unreachable!("an external runtime"),
     };
     let image = axocoatl_isolation::recipes::image_name(&[recipe.to_string()]).unwrap();
     let inspected = std::process::Command::new("podman")
@@ -977,6 +1010,14 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_reject
         )
     } else {
         (format!("external-{recipe}"), external_loadout(runtime))
+    };
+    let loadout_text = if chatgpt {
+        loadout_text.replace(
+            "    runtime: codex\n",
+            "    runtime: codex\n    credential: codex-chatgpt\n",
+        )
+    } else {
+        loadout_text
     };
     std::fs::write(
         home.path().join(format!("loadouts/{loadout_id}.yaml")),
@@ -1015,8 +1056,65 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_reject
         "sk-axocoatl-test-{recipe}-{}",
         uuid::Uuid::new_v4().simple()
     );
-    crate::secret_store::set_secret(daemon.data_root.path(), credential, secret.as_bytes())
+    // Values that must never reach the container, the record or the API
+    // (with `chatgpt`: the sign-in's first access token and both refresh
+    // tokens), besides `secret`.
+    let mut hidden: Vec<String> = Vec::new();
+    let mut token_endpoint = None;
+    let secret = if chatgpt {
+        use crate::external_agent::codex_chatgpt::{self, tests as fixtures};
+        // `axocoatl connect codex`, as it stores the sign-in: an access
+        // token that expires within the refresh window.
+        let (first, refresh) = (
+            fixtures::access_token("acct-turn", 60),
+            fixtures::refresh_token(),
+        );
+        let sign_in = codex_chatgpt::ChatgptSignIn::from_codex_auth_json(
+            fixtures::codex_auth_json(&first, &refresh, "acct-turn").as_bytes(),
+            0,
+        )
         .unwrap();
+        crate::secret_store::set_secret(
+            daemon.data_root.path(),
+            credential,
+            &sign_in.encode().unwrap(),
+        )
+        .unwrap();
+        // The OpenAI token endpoint, faked: one refresh, rotating.
+        let (refreshed, rotated) = (
+            fixtures::access_token("acct-turn", 3600),
+            fixtures::refresh_token(),
+        );
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/oauth/token"))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "client_id": codex_chatgpt::CLIENT_ID,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh,
+            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "access_token": refreshed, "refresh_token": rotated,
+                    "token_type": "Bearer", "expires_in": 3600})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut managed = crate::egress_broker::rules::ManagedCredentials::default();
+        managed.add(Arc::new(codex_chatgpt::ChatgptBroker::new(
+            daemon.data_root.path(),
+            codex_chatgpt::TokenEndpoint::for_test(&format!("{}/oauth/token", server.uri())),
+        )));
+        daemon.egress_points.use_test_managed(managed);
+        hidden.extend([first, refresh, rotated.clone()]);
+        token_endpoint = Some((server, rotated));
+        refreshed
+    } else {
+        crate::secret_store::set_secret(daemon.data_root.path(), credential, secret.as_bytes())
+            .unwrap();
+        secret
+    };
 
     // The repository, outside the data root.
     let outside = tempfile::Builder::new()
@@ -1095,21 +1193,26 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_reject
     let program_env = read("/tmp/axocoatl-program-env.txt").await;
     let program_home = read("/tmp/axocoatl-program-home.txt").await;
     let program_identity = read("/tmp/axocoatl-program-identity.txt").await;
-    let found = sandbox
-        .exec(
-            &[
-                "sh",
-                "-c",
-                "grep -rIl -F -e \"$1\" /etc /tmp /home \"$2\" 2>/dev/null; true",
-                "sh",
-                &secret,
-                &sandbox.root().display().to_string(),
-            ],
-            Duration::from_secs(60),
-        )
-        .await
-        .map(|result| result.stdout)
-        .unwrap_or_else(|error| error.to_string());
+    let mut found = String::new();
+    for value in std::iter::once(&secret).chain(hidden.iter()) {
+        found.push_str(
+            &sandbox
+                .exec(
+                    &[
+                        "sh",
+                        "-c",
+                        "grep -rIl -F -e \"$1\" /etc /tmp /home \"$2\" 2>/dev/null; true",
+                        "sh",
+                        value,
+                        &sandbox.root().display().to_string(),
+                    ],
+                    Duration::from_secs(60),
+                )
+                .await
+                .map(|result| result.stdout)
+                .unwrap_or_else(|error| error.to_string()),
+        );
+    }
     let inspected: Vec<String> = [
         format!("axo-ses-{session_id}"),
         format!("axo-egr-{session_id}"),
@@ -1315,8 +1418,9 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_reject
         .collect();
     assert_eq!(calls.len(), 2 * activations, "{context}");
     assert_eq!(calls.len(), seen.len(), "{context}");
-    let path = match runtime {
-        AgentRuntime::ClaudeCode => "/v1/messages",
+    let path = match (runtime, chatgpt) {
+        (AgentRuntime::ClaudeCode, _) => "/v1/messages",
+        (_, true) => "/backend-api/codex/responses",
         _ => "/v1/responses",
     };
     for call in &calls {
@@ -1331,6 +1435,22 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_reject
             [format!("Bearer {secret}")],
             "{context}"
         );
+        // The ChatGPT sign-in's account, from the daemon's broker; no other
+        // route sends one.
+        let account: &[&str] = if chatgpt { &["acct-turn"] } else { &[] };
+        assert_eq!(call.account, account, "{context}");
+    }
+    if let Some((server, rotated)) = &token_endpoint {
+        // Refreshed once, on this computer, and the rotated sign-in stored.
+        server.verify().await;
+        let stored = std::fs::read(crate::secret_store::secret_path(
+            daemon.data_root.path(),
+            credential,
+        ))
+        .unwrap();
+        let stored = crate::external_agent::codex_chatgpt::ChatgptSignIn::decode(&stored).unwrap();
+        assert_eq!(stored.access_token(), secret, "{context}");
+        assert_eq!(stored.refresh_token(), rotated, "{context}");
     }
     // The program saw only the placeholder; the secret is nowhere in the
     // container or its configuration.
@@ -1356,14 +1476,19 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_reject
             && program_identity.contains("CapEff:\t0000000000000000"),
         "{program_identity}"
     );
-    assert!(!program_env.contains(&secret), "{context}");
-    assert_eq!(found.trim(), "", "{context}");
-    for inspect in &inspected {
-        assert!(
-            !inspect.is_empty() && !inspect.contains(&secret),
-            "{context}"
-        );
+    for value in std::iter::once(&secret).chain(hidden.iter()) {
+        assert!(!program_env.contains(value.as_str()), "{context}");
+        for inspect in &inspected {
+            assert!(
+                !inspect.is_empty() && !inspect.contains(value.as_str()),
+                "{context}"
+            );
+        }
+        for call in &calls {
+            assert!(!call.body.to_string().contains(value.as_str()), "{context}");
+        }
     }
+    assert_eq!(found.trim(), "", "{context}");
     let refused: Vec<String> = events
         .iter()
         .filter_map(|event| match event {
@@ -1397,10 +1522,10 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_reject
     // Every model call is in the Session's network record, allowed by the
     // route with the credential's name, never its value.
     for event in &events {
-        assert!(
-            !serde_json::to_string(event).unwrap().contains(&secret),
-            "{context}"
-        );
+        let text = serde_json::to_string(event).unwrap();
+        for value in std::iter::once(&secret).chain(hidden.iter()) {
+            assert!(!text.contains(value.as_str()), "{context}");
+        }
     }
     let recorded = events
         .iter()
@@ -1546,6 +1671,24 @@ async fn actual_loadout_run_with_the_pinned_codex() {
         return;
     }
     run_child("actual_loadout_run_with_the_pinned_codex", None, true).await;
+}
+
+/// Codex 0.160.1 from its recipe image with a ChatGPT sign-in
+/// (`credential: codex-chatgpt`), as `axocoatl run` runs it, against a fake
+/// ChatGPT backend and a fake OpenAI token endpoint (see [`pinned_run`]).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
+async fn actual_loadout_run_with_the_pinned_codex_signed_in_with_chatgpt() {
+    if std::env::var_os(CHILD).is_some() {
+        pinned_run(AgentRuntime::Codex, false, false, true).await;
+        return;
+    }
+    run_child(
+        "actual_loadout_run_with_the_pinned_codex_signed_in_with_chatgpt",
+        None,
+        true,
+    )
+    .await;
 }
 
 /// A fix run with the pinned Claude Code as its writer and a native

@@ -94,11 +94,21 @@ fn external_routes(
     let mut routes = Vec::new();
     let mut seen = Vec::new();
     for agent in &resolved.loadout.file.agents {
-        if agent.runtime == AgentRuntime::Native || seen.contains(&agent.runtime) {
+        if agent.runtime == AgentRuntime::Native {
             continue;
         }
-        seen.push(agent.runtime);
-        let needed = crate::external_agent::routes_for(agent.runtime)
+        // The credential the writer names picks its route: Codex's API key
+        // goes to api.openai.com, its ChatGPT sign-in to chatgpt.com.
+        let credential = crate::external_agent::ExternalCredential::named(
+            agent.runtime,
+            agent.credential.as_deref(),
+        )
+        .map_err(|error| RunError::Usage(format!("agents.{}.credential: {error}", agent.id)))?;
+        if seen.contains(&(agent.runtime, credential)) {
+            continue;
+        }
+        seen.push((agent.runtime, credential));
+        let needed = crate::external_agent::routes_for_credential(agent.runtime, credential)
             .map_err(|error| RunError::Infrastructure(error.to_string()))?;
         let origin = RouteOrigin::ExternalWriter {
             runtime: crate::external_agent::runtime_provider(agent.runtime)
@@ -340,6 +350,91 @@ prompt: "{task}"
             loadout_policy(&EgressPolicyConfig::default(), &resolved(&own), data.path()).unwrap();
         assert_eq!(policy.routes.len(), 1);
         assert_eq!(policy.route_origins, [RouteOrigin::Loadout]);
+    }
+
+    /// A Codex writer names the credential its route sends: the API key
+    /// (the default) goes to api.openai.com, the ChatGPT sign-in to
+    /// chatgpt.com. Admission refuses a run whose credential is not stored,
+    /// saying how to store it, exactly as for the API key.
+    #[test]
+    fn a_codex_writers_credential_picks_its_route_and_must_be_stored() {
+        let codex = |credential: &str| {
+            CUSTOM
+                .replace(
+                    "    model: { provider: openrouter, model: qwen/qwen3-coder }\n    tools: [read_file, write_file]\n",
+                    &format!("    model: {{ provider: openai, model: gpt-5.5 }}\n    runtime: codex\n{credential}"),
+                )
+                .replace("routes:\n  - host: api.example.com\n    credential: example-token\n    inject: { header: Authorization, format: \"Bearer {}\" }\n    access: read-only\n", "")
+        };
+        let data = tempfile::tempdir().unwrap();
+        for (credential, _host, name, how) in [
+            (
+                "",
+                "api.openai.com",
+                "codex-openai",
+                "axocoatl secret set codex-openai",
+            ),
+            (
+                "    credential: codex-openai\n",
+                "api.openai.com",
+                "codex-openai",
+                "axocoatl secret set codex-openai",
+            ),
+            (
+                "    credential: codex-chatgpt\n",
+                "chatgpt.com",
+                "codex-chatgpt",
+                "axocoatl connect codex",
+            ),
+        ] {
+            let resolved = resolved(&codex(credential));
+            let refused = loadout_policy(&EgressPolicyConfig::default(), &resolved, data.path())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                refused.contains(&format!("credential \"{name}\"")),
+                "{refused}"
+            );
+            assert!(refused.contains(how), "{refused}");
+        }
+        for name in ["codex-openai", "codex-chatgpt"] {
+            let secret = crate::secret_store::secret_path(data.path(), name);
+            std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
+            std::fs::write(&secret, "value").unwrap();
+        }
+        for (credential, host, name) in [
+            ("", "api.openai.com", "codex-openai"),
+            (
+                "    credential: codex-chatgpt\n",
+                "chatgpt.com",
+                "codex-chatgpt",
+            ),
+        ] {
+            let resolved = resolved(&codex(credential));
+            let policy =
+                loadout_policy(&EgressPolicyConfig::default(), &resolved, data.path()).unwrap();
+            let hosts: Vec<&str> = policy
+                .routes
+                .iter()
+                .map(|route| route.host.as_str())
+                .collect();
+            assert_eq!(hosts, [host]);
+            assert_eq!(policy.routes[0].credential.as_deref(), Some(name));
+            assert_eq!(
+                policy.credentials[name].file.as_deref(),
+                Some(
+                    crate::secret_store::secret_path(data.path(), name)
+                        .to_str()
+                        .unwrap()
+                )
+            );
+            assert_eq!(
+                policy.route_origins,
+                [RouteOrigin::ExternalWriter {
+                    runtime: "codex".into()
+                }]
+            );
+        }
     }
 
     #[test]

@@ -5,6 +5,52 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - Unreleased
+
+### Added
+- **`axocoatl connect codex`: Codex with your ChatGPT plan, without handling a key.** The
+  command runs the official `codex login` (or `codex login --device-auth` with
+  `--device-auth`) with a private temporary `CODEX_HOME` (`0700`) in the data root, never
+  your `~/.codex`, with file storage forced, in that directory, and without Codex's other
+  credential and endpoint variables. You approve the sign-in in the browser or enter the
+  code Codex shows. Its output reaches your terminal through the same masking relay as
+  `connect claude-code`, which here also hides OpenAI API keys and JWTs. Axocoatl reads
+  the sign-in from the `auth.json` Codex writes there, never from the screen, stores the
+  access token, refresh token and ChatGPT account id as the secret `codex-chatgpt`
+  (`0600`, replaced atomically, as `axocoatl secret set` stores one), and then overwrites
+  every file of the temporary home with zeros and removes it, also on an error or a
+  signal. Exit codes: 0 stored, 2 no ChatGPT sign-in, 3 usage, 5 failure, 6 interrupted.
+- **A Codex writer can run with that sign-in: `credential: codex-chatgpt`.** A loadout
+  Agent's new `credential` field names the stored credential its route sends: for
+  `runtime: codex`, `codex-openai` (the default, an OpenAI API key, to `api.openai.com`) or
+  `codex-chatgpt` (to `chatgpt.com`); for `claude-code`, only `claude-code-oauth`. A run
+  whose credential is not stored is refused before it starts with how to store it, as for
+  the API key. Codex then runs with its HTTP provider aimed at the ChatGPT backend
+  (`https://chatgpt.com/backend-api/codex`) and a placeholder in
+  `CODEX_CHATGPT_ACCESS_TOKEN`; the route allows only
+  `POST /backend-api/codex/responses` and adds the access token and the
+  `ChatGPT-Account-ID` header on your computer. The tokens never enter the Session
+  container, and nothing there can reach `auth.openai.com`.
+- **The daemon keeps that sign-in current.** Before a request, when the access token
+  expires within five minutes (or, without an expiry, was obtained more than eight days
+  ago), and after a `401` for the current token, the daemon refreshes it at OpenAI's token
+  endpoint the way Codex 0.160.1 does, stores the rotated tokens atomically, remembers a
+  final refusal instead of retrying it, and never logs a token. The `401` itself still
+  reaches Codex; the run's not-covered reason says to run again, then to connect again.
+  The stored sign-in is refused by any other route, so its refresh token is sent only to
+  OpenAI's token endpoint.
+
+### Changed
+- `axocoatl secret set codex-chatgpt` warns when the value is not a sign-in
+  `connect codex` stored, and a missing `codex-chatgpt` names `axocoatl connect codex`.
+
+### Not measured
+- The ChatGPT mode has run with the pinned Codex 0.160.1 through a whole loadout run on
+  Podman, against a fake ChatGPT backend and a fake token endpoint only. Whether OpenAI's
+  backend accepts requests from Codex's HTTP provider in this shape has not been measured
+  against OpenAI's service. OpenAI recommends API keys for automation and documents no
+  process other than Codex refreshing a Codex sign-in; check your plan's terms.
+
 ## [1.3.0] - 2026-10-07
 
 ### Added

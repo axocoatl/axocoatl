@@ -195,6 +195,7 @@ Unknown fields are refused everywhere in the file.
 | `role` | `writer`, `explorer`, `planner`, `worker` or `integrator`. |
 | `model` | `{provider, model}`, or `{param: name}` naming a `model` parameter. An external program's model names the provider whose API it calls: `anthropic` for `claude-code`, `openai` for `codex`; any other is refused. |
 | `runtime` | `native` (the default), `claude-code` or `codex`. An external program runs only as the writer; see [External agents](/configure/external-agents/). |
+| `credential` | External writers only: the stored credential its route sends. For `codex`, `codex-openai` (the default, an OpenAI API key) or `codex-chatgpt` (your ChatGPT sign-in, from `axocoatl connect codex`); for `claude-code`, only `claude-code-oauth`. Any other name, or one on a native Agent, is refused. See [Codex with a ChatGPT sign-in](/configure/external-agents/#codex-with-a-chatgpt-sign-in). |
 | `tools` | Required for a native Agent; the exact tool list. Ignored for an external program. |
 | `writes` | Paths the Agent may change. Left out, every path, which only a writer may do. `[]` is read-only; planners, workers and integrators must be `[]`. |
 | `instructions`, `max_output_tokens`, `reasoning_effort` | As for an [Agent template](/configure/agents/#define-an-agent). |

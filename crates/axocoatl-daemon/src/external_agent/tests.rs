@@ -577,3 +577,115 @@ fn an_external_programs_provider_is_the_api_its_route_serves() {
     );
     assert_eq!(definition_identity("ollama", "qwen3:32b").runtime, "native");
 }
+
+/// A Codex writer with `credential: codex-chatgpt` runs the same program
+/// with its HTTP provider aimed at the ChatGPT backend, its route goes to
+/// `chatgpt.com` with the stored sign-in, and its retained definition names
+/// the provider `codex-chatgpt` of the runtime `codex`.
+#[test]
+fn a_codex_writer_signed_in_with_chatgpt_gets_the_chatgpt_route_and_provider() {
+    let chatgpt = ExternalCredential::named(AgentRuntime::Codex, Some("codex-chatgpt")).unwrap();
+    assert_eq!(chatgpt, ExternalCredential::CodexChatgpt);
+    assert_eq!(
+        ExternalCredential::named(AgentRuntime::Codex, Some("codex-openai")).unwrap(),
+        ExternalCredential::Default
+    );
+    assert_eq!(
+        ExternalCredential::named(AgentRuntime::Codex, None).unwrap(),
+        ExternalCredential::Default
+    );
+    assert!(ExternalCredential::named(AgentRuntime::ClaudeCode, Some("codex-chatgpt")).is_err());
+    assert!(ExternalCredential::named(AgentRuntime::Codex, Some("other")).is_err());
+
+    let routes = routes_for_credential(AgentRuntime::Codex, chatgpt).unwrap();
+    assert_eq!(routes.len(), 1);
+    let route = &routes[0];
+    assert_eq!(route.host, "chatgpt.com");
+    assert_eq!(route.credential.as_deref(), Some("codex-chatgpt"));
+    assert_eq!(
+        route.inject.as_ref().unwrap().format.as_deref(),
+        Some("Bearer {}")
+    );
+    assert_eq!(route.env_placeholders, ["CODEX_CHATGPT_ACCESS_TOKEN"]);
+    assert_eq!(route.rules.len(), 1);
+    assert_eq!(route.rules[0].methods, ["POST"]);
+    assert_eq!(route.rules[0].path, "/backend-api/codex/responses");
+    // Claude Code has one credential; the ChatGPT choice changes nothing.
+    assert_eq!(
+        routes_for_credential(AgentRuntime::ClaudeCode, chatgpt).unwrap(),
+        routes_for(AgentRuntime::ClaudeCode).unwrap()
+    );
+    let mut config = axocoatl_config::AxocoatlConfig::default();
+    config.sandbox.network = "egress".into();
+    config.credentials.insert(
+        "codex-chatgpt".into(),
+        axocoatl_config::CredentialSourceYaml {
+            env: None,
+            file: Some("/var/empty/secret".into()),
+        },
+    );
+    config.sandbox.egress = Some(axocoatl_config::EgressConfigYaml {
+        routes: routes.clone(),
+        ..Default::default()
+    });
+    axocoatl_config::validate_egress_routes(&config).unwrap();
+
+    let codex = program_argv_with(AgentRuntime::Codex, chatgpt, "gpt-5.5").unwrap();
+    assert!(codex.contains(
+        &"model_providers.axocoatl.base_url=\"https://chatgpt.com/backend-api/codex\"".to_string()
+    ));
+    assert!(codex
+        .contains(&"model_providers.axocoatl.env_key=\"CODEX_CHATGPT_ACCESS_TOKEN\"".to_string()));
+    assert!(codex.contains(&"model_providers.axocoatl.supports_websockets=false".to_string()));
+    assert!(codex.contains(&"model_provider=\"axocoatl\"".to_string()));
+    // Nothing that would make Codex sign in, or check a token, itself.
+    assert!(!codex.iter().any(|arg| arg.contains("requires_openai_auth")
+        || arg.contains("CODEX_ACCESS_TOKEN")
+        || arg.contains("chatgpt_base_url")));
+    // Only the provider differs from the API-key argv.
+    let api = program_argv(AgentRuntime::Codex, "gpt-5.5").unwrap();
+    assert_eq!(api.len(), codex.len());
+    let differ: Vec<(&String, &String)> = api.iter().zip(&codex).filter(|(a, b)| a != b).collect();
+    assert_eq!(differ.len(), 2, "{differ:?}");
+    assert_eq!(
+        command_argv_with(AgentRuntime::Codex, chatgpt, "gpt-5.5").unwrap()[6..],
+        codex[..]
+    );
+
+    let external = external_agent_config_with(
+        axocoatl_core::AgentConfig::default(),
+        AgentRuntime::Codex,
+        chatgpt,
+        "gpt-5.5",
+    )
+    .unwrap();
+    assert_eq!(external.provider, "codex-chatgpt");
+    assert_eq!(
+        validate_external_config(&external).unwrap(),
+        AgentRuntime::Codex
+    );
+    assert_eq!(
+        runtime_for_provider("codex-chatgpt"),
+        Some(AgentRuntime::Codex)
+    );
+    assert_eq!(ExternalCredential::for_provider("codex-chatgpt"), chatgpt);
+    assert_eq!(
+        ExternalCredential::for_provider("codex"),
+        ExternalCredential::Default
+    );
+    // Named as the loadout names its writer: openai's model, runtime codex.
+    let identity = definition_identity("codex-chatgpt", "gpt-5.5");
+    assert_eq!(
+        (identity.provider.as_str(), identity.runtime.as_str()),
+        ("openai", "codex")
+    );
+    // The config crate's list and the daemon's names agree.
+    assert_eq!(
+        AgentRuntime::Codex.credentials(),
+        [codex::CODEX_SECRET, codex::CODEX_CHATGPT_SECRET]
+    );
+    assert_eq!(
+        AgentRuntime::ClaudeCode.credentials(),
+        [claude_code::CLAUDE_CODE_SECRET]
+    );
+}

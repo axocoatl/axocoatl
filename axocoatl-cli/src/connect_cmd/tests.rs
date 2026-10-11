@@ -970,7 +970,10 @@ fn the_command_line_takes_no_token() {
         no_verify,
         claude,
         ..
-    } = parsed.command;
+    } = parsed.command
+    else {
+        panic!("claude-code")
+    };
     assert_eq!(secret, "claude-code-oauth");
     assert!(!no_verify);
     assert!(claude.is_none());
@@ -991,7 +994,10 @@ fn the_command_line_takes_no_token() {
         no_verify,
         claude,
         config,
-    } = parsed.command;
+    } = parsed.command
+    else {
+        panic!("claude-code")
+    };
     assert_eq!(secret, "work-claude");
     assert!(no_verify);
     assert_eq!(claude.as_deref(), Some(Path::new("/opt/claude")));
@@ -1014,4 +1020,455 @@ fn the_confirmation_names_the_secret_and_the_next_step() {
     let message = connected_message("work-claude");
     assert!(message.contains("name work-claude as a route's `credential`"));
     assert!(needs_terminal().contains("--from-env"));
+}
+
+// ------------------------------------------------------------ connect codex
+
+const FAKE_CODEX: &str = include_str!("../../tests/fixtures/fake-codex.sh");
+/// What the fake `codex` shows when it waits for the sign-in.
+const CODEX_PROMPT: &str = "Press Enter once you have signed in";
+
+/// A JWT-shaped token unique to the test (the CLI never decodes one).
+fn fake_jwt() -> String {
+    let part = || uuid::Uuid::new_v4().simple().to_string();
+    format!(
+        "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ{}{}.{}_{}",
+        part(),
+        part(),
+        part(),
+        part()
+    )
+}
+
+/// A private directory for one `connect codex` test: `bin/codex` (the
+/// fake, with its `mode`, the `auth` it writes and the `screen` lines it
+/// prints), `data/` (the data root) and `home/`.
+struct CodexFixture {
+    directory: tempfile::TempDir,
+    root: PathBuf,
+    access: String,
+    refresh: String,
+    /// What the fake prints on screen: an API key and a JWT.
+    shown_key: String,
+    shown_jwt: String,
+}
+
+impl CodexFixture {
+    fn new(mode: &str) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let bin = root.join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::write(bin.join("codex"), FAKE_CODEX).unwrap();
+        std::fs::set_permissions(bin.join("codex"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::fs::write(bin.join("mode"), mode).unwrap();
+        let (access, refresh) = (fake_jwt(), format!("rt_{}", uuid::Uuid::new_v4().simple()));
+        let auth = serde_json::json!({
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "id_token": fake_jwt(),
+                "access_token": access,
+                "refresh_token": refresh,
+                "account_id": "acct-fixture",
+            },
+            "last_refresh": "2026-10-11T12:00:00Z",
+        });
+        std::fs::write(
+            bin.join("auth"),
+            serde_json::to_string_pretty(&auth).unwrap(),
+        )
+        .unwrap();
+        let shown_key = format!("sk-proj-{}", uuid::Uuid::new_v4().simple());
+        let shown_jwt = fake_jwt();
+        std::fs::write(bin.join("screen"), format!("{shown_key}\n{shown_jwt}\n")).unwrap();
+        let data = root.join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::create_dir(root.join("home")).unwrap();
+        Self {
+            directory,
+            root,
+            access,
+            refresh,
+            shown_key,
+            shown_jwt,
+        }
+    }
+
+    fn data(&self) -> PathBuf {
+        self.root.join("data")
+    }
+
+    fn request(&self, device_auth: bool) -> codex::ConnectCodex {
+        codex::ConnectCodex {
+            codex: self.root.join("bin/codex"),
+            data_dir: self.data(),
+            device_auth,
+        }
+    }
+
+    fn stored(&self) -> Option<Vec<u8>> {
+        std::fs::read(secret_store::secret_path(
+            &self.data(),
+            axocoatl_daemon::external_agent::codex_chatgpt::CODEX_CHATGPT_SECRET,
+        ))
+        .ok()
+    }
+
+    /// What the fake saw: `name=value` lines.
+    fn seen(&self) -> String {
+        std::fs::read_to_string(self.root.join("bin/seen")).unwrap_or_default()
+    }
+
+    /// The data root holds nothing but the secret store (no temporary
+    /// CODEX_HOME is left).
+    fn assert_no_home_left(&self) {
+        let mut entries: Vec<String> = std::fs::read_dir(self.data())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.starts_with(codex::TEMP_HOME_PREFIX))
+            .collect();
+        entries.sort();
+        assert!(entries.is_empty(), "{entries:?}");
+    }
+}
+
+/// Run `connect codex` on a fresh user terminal; its result and what it
+/// showed.
+async fn run_connect_codex(
+    fixture: &CodexFixture,
+    device_auth: bool,
+    interrupt_at_prompt: bool,
+) -> (Result<String, Failure>, Screen) {
+    let terminal = user_terminal();
+    terminal.set_size(SIZE);
+    let before = modes(&terminal.slave);
+    let screen = Screen::default();
+    let interrupt = Interrupt::default();
+    let typing = typist(
+        &terminal,
+        &screen,
+        CODEX_PROMPT,
+        interrupt_at_prompt.then(|| interrupt.clone()),
+    );
+    let result = finish_within(
+        codex::connect(
+            fixture.request(device_auth),
+            terminal.slave.try_clone().unwrap(),
+            Box::new(screen.clone()),
+            &interrupt,
+            &Resized::default(),
+        ),
+        &interrupt,
+    )
+    .await;
+    assert!(
+        typing.join().unwrap(),
+        "the terminal was raw while codex ran"
+    );
+    assert_eq!(modes(&terminal.slave), before);
+    (result, screen)
+}
+
+/// The tokens Codex wrote are stored exactly, as one sign-in; none of them,
+/// nor the key and JWT the fake printed, is shown; the login URL is shown
+/// whole; the temporary CODEX_HOME (where the fake also left a log and a
+/// copy of auth.json) is gone; and no token is in any other file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_codex_stores_the_sign_in_codex_wrote_and_erases_its_home() {
+    use axocoatl_daemon::external_agent::codex_chatgpt::ChatgptSignIn;
+    let since = SystemTime::now();
+    let fixture = CodexFixture::new("ok");
+    let (result, screen) = run_connect_codex(&fixture, false, false).await;
+    let message = result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert!(
+        message.starts_with("Connected Codex: stored your ChatGPT sign-in as secret codex-chatgpt")
+    );
+    assert!(message.contains("credential: codex-chatgpt"), "{message}");
+    // Stored exactly, 0600, in the secret store.
+    let stored = fixture.stored().expect("the sign-in is stored");
+    let sign_in = ChatgptSignIn::decode(&stored).unwrap();
+    assert_eq!(sign_in.access_token(), fixture.access);
+    assert_eq!(sign_in.refresh_token(), fixture.refresh);
+    assert_eq!(sign_in.account_id(), Some("acct-fixture"));
+    let path = secret_store::secret_path(&fixture.data(), "codex-chatgpt");
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    // Codex ran with a private temporary home in the data root, there.
+    let seen = fixture.seen();
+    let home = seen
+        .lines()
+        .find_map(|line| line.strip_prefix("codex_home="))
+        .unwrap();
+    assert!(
+        home.starts_with(&format!(
+            "{}/{}",
+            fixture.data().display(),
+            codex::TEMP_HOME_PREFIX
+        )),
+        "{seen}"
+    );
+    assert!(seen.contains(&format!("pwd={home}\n")), "{seen}");
+    assert!(seen.contains("home_mode=700\n"), "{seen}");
+    assert!(seen.contains("device=no\n"), "{seen}");
+    assert!(!Path::new(home).exists(), "{home} was not removed");
+    fixture.assert_no_home_left();
+    // Nothing secret on screen; the URL and Codex's own lines are.
+    for secret in [
+        &fixture.access,
+        &fixture.refresh,
+        &fixture.shown_key,
+        &fixture.shown_jwt,
+    ] {
+        assert_not_shown(&screen, secret);
+    }
+    let shown = String::from_utf8_lossy(&screen.bytes()).into_owned();
+    assert!(shown.contains("Successfully logged in"), "{shown}");
+    assert!(shown.contains(MASK), "{shown}");
+    let url = "state=Qsk-pLkJhGfDsAeyJ0x&originator=codex_cli_rs";
+    let flat: String = shown.split(['\r', '\n']).collect();
+    assert!(flat.contains(url), "{shown}");
+    // The tokens are in the fake's own file and the secret, nowhere else.
+    for secret in [&fixture.access, &fixture.refresh] {
+        let mut hits = Vec::new();
+        files_containing(&fixture.root, secret.as_bytes(), 8, None, &[], &mut hits);
+        hits.sort();
+        let mut expected = vec![fixture.root.join("bin/auth"), path.clone()];
+        expected.sort();
+        assert_eq!(hits, expected);
+        let mut elsewhere = Vec::new();
+        files_containing(
+            &std::env::temp_dir(),
+            secret.as_bytes(),
+            4,
+            Some(since),
+            &[fixture.root.clone(), fixture.directory.path().to_path_buf()],
+            &mut elsewhere,
+        );
+        assert!(elsewhere.is_empty(), "{elsewhere:?}");
+    }
+}
+
+/// `--device-auth` runs `codex login --device-auth`, whose code is shown.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_codex_with_device_auth_shows_the_code() {
+    let fixture = CodexFixture::new("ok");
+    let (result, screen) = run_connect_codex(&fixture, true, false).await;
+    result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert!(fixture.seen().contains("device=yes\n"));
+    assert!(screen.contains("WXYZ-1234"));
+    assert!(screen.contains("https://auth.openai.com/codex/device"));
+    assert!(fixture.stored().is_some());
+    fixture.assert_no_home_left();
+}
+
+/// No ChatGPT sign-in, an API key instead, or an auth.json that is a link:
+/// nothing is stored, the temporary home is erased (never what a link in it
+/// points to), and the message says why without a value.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_codex_without_a_chatgpt_sign_in_stores_nothing() {
+    for (mode, code, said) in [
+        ("none", exit::NO_TOKEN, "without storing a sign-in"),
+        ("apikey", exit::NO_TOKEN, "not a ChatGPT sign-in"),
+        ("linked", exit::FAILURE, "auth.json cannot be opened"),
+    ] {
+        let fixture = CodexFixture::new(mode);
+        let auth = std::fs::read(fixture.root.join("bin/auth")).unwrap();
+        let (result, screen) = run_connect_codex(&fixture, false, false).await;
+        let failure = result
+            .err()
+            .unwrap_or_else(|| panic!("{mode} stored something"));
+        assert_eq!(failure.code, code, "{mode}: {}", failure.message);
+        assert!(
+            failure.message.contains(said),
+            "{mode}: {}",
+            failure.message
+        );
+        assert!(failure.message.contains("nothing was stored") || code == exit::FAILURE);
+        for secret in [&fixture.access, &fixture.refresh] {
+            assert!(!failure.message.contains(secret.as_str()));
+            assert_not_shown(&screen, secret);
+        }
+        assert!(!failure.message.contains("sk-proj-"));
+        assert!(fixture.stored().is_none(), "{mode}");
+        fixture.assert_no_home_left();
+        assert_eq!(std::fs::read(fixture.root.join("bin/auth")).unwrap(), auth);
+    }
+}
+
+/// A signal while Codex waits: nothing is stored and the home is erased.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_codex_interrupted_stores_nothing_and_erases_its_home() {
+    let fixture = CodexFixture::new("ok");
+    let (result, _) = run_connect_codex(&fixture, false, true).await;
+    let failure = result.err().unwrap();
+    assert_eq!(failure.code, exit::INTERRUPTED);
+    assert!(failure.message.contains("erased"), "{}", failure.message);
+    assert!(fixture.stored().is_none());
+    fixture.assert_no_home_left();
+}
+
+/// A temporary home an earlier, killed `connect codex` left is erased
+/// first; the erasure overwrites files before removing them and never
+/// follows a link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_codex_erases_what_a_killed_run_left() {
+    let fixture = CodexFixture::new("ok");
+    let left = fixture
+        .data()
+        .join(format!("{}old", codex::TEMP_HOME_PREFIX));
+    std::fs::create_dir_all(left.join("log")).unwrap();
+    std::fs::write(left.join("auth.json"), "left-behind-secret").unwrap();
+    let outside = fixture.root.join("outside");
+    std::fs::write(&outside, "keep me").unwrap();
+    std::os::unix::fs::symlink(&outside, left.join("log/link")).unwrap();
+    // One a run going on now would have: too new to be erased.
+    let current = fixture
+        .data()
+        .join(format!("{}now", codex::TEMP_HOME_PREFIX));
+    std::fs::create_dir(&current).unwrap();
+    let old = SystemTime::now() - codex::LEFTOVER_AGE - Duration::from_secs(60);
+    std::fs::File::open(&left)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let (result, _) = run_connect_codex(&fixture, false, false).await;
+    result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert!(!left.exists());
+    assert!(current.exists());
+    std::fs::remove_dir(&current).unwrap();
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep me");
+    fixture.assert_no_home_left();
+
+    // `erase_dir` on its own: the bytes are overwritten before removal.
+    let directory = tempfile::tempdir().unwrap();
+    let target = directory.path().join("home");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(target.join("auth.json"), "secret-bytes").unwrap();
+    let file = std::fs::File::open(target.join("auth.json")).unwrap();
+    codex::erase_dir(&target);
+    assert!(!target.exists());
+    // The open handle still reads the (now zeroed) contents.
+    let mut contents = Vec::new();
+    std::io::Read::read_to_end(&mut &file, &mut contents).unwrap();
+    assert_eq!(contents, vec![0u8; "secret-bytes".len()]);
+}
+
+#[test]
+fn connect_codex_runs_codex_login_with_file_storage_and_no_other_credentials() {
+    assert_eq!(
+        codex::login_args(false),
+        ["-c", "cli_auth_credentials_store=\"file\"", "login"]
+    );
+    assert_eq!(
+        codex::login_args(true),
+        [
+            "-c",
+            "cli_auth_credentials_store=\"file\"",
+            "login",
+            "--device-auth"
+        ]
+    );
+    for variable in [
+        "CODEX_API_KEY",
+        "OPENAI_API_KEY",
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+        "CODEX_SQLITE_HOME",
+    ] {
+        assert!(codex::REMOVED_ENV.contains(&variable), "{variable}");
+    }
+    assert!(codex::needs_terminal().contains("codex login"));
+    assert!(codex::needs_terminal().contains("--device-auth"));
+    use clap::Parser;
+    #[derive(Parser)]
+    struct Cli {
+        #[command(subcommand)]
+        command: ConnectCommands,
+    }
+    let parsed = Cli::try_parse_from(["x", "codex"]).unwrap();
+    let ConnectCommands::Codex {
+        device_auth, codex, ..
+    } = parsed.command
+    else {
+        panic!("codex")
+    };
+    assert!(!device_auth);
+    assert!(codex.is_none());
+    let parsed = Cli::try_parse_from([
+        "x",
+        "codex",
+        "--device-auth",
+        "--codex",
+        "/opt/codex",
+        "-c",
+        "/tmp/a.yaml",
+    ])
+    .unwrap();
+    let ConnectCommands::Codex {
+        device_auth,
+        codex,
+        config,
+    } = parsed.command
+    else {
+        panic!("codex")
+    };
+    assert!(device_auth);
+    assert_eq!(codex.as_deref(), Some(Path::new("/opt/codex")));
+    assert_eq!(config, Path::new("/tmp/a.yaml"));
+    for argv in [
+        &["x", "codex", "eyJhbGciOi.value.sig"][..],
+        &["x", "codex", "--secret", "other"],
+        &["x", "codex", "--token", "value"],
+    ] {
+        assert!(Cli::try_parse_from(argv).is_err(), "{argv:?}");
+    }
+    let root = tempfile::tempdir().unwrap();
+    let error = find_codex(None, None, Some(root.path())).unwrap_err();
+    assert!(error.contains("--codex"), "{error}");
+    let local = root.path().join(".local/bin/codex");
+    std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+    std::fs::write(&local, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&local, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(find_codex(None, None, Some(root.path())).unwrap(), local);
+}
+
+/// The `connect codex` filters hide an OpenAI key and a whole JWT at the
+/// start of a word, as `connect claude-code`'s hides an Anthropic token, and
+/// leave the same letters inside a word (a URL's parameters) alone.
+#[test]
+fn the_codex_filters_hide_keys_and_jwts_and_leave_words_alone() {
+    let key = format!("sk-proj-{}", uuid::Uuid::new_v4().simple());
+    let jwt = fake_jwt();
+    let anthropic = fresh_token();
+    let text = format!(
+        "key: {key}\r\ntoken {jwt}.\r\n{anthropic}\r\nhttps://x.test/?a=Qsk-abc&b=xeyJdef ok\r\n"
+    );
+    let mut chain = redact::FilterChain::codex(100, 30);
+    let mut shown = Vec::new();
+    for chunk in text.as_bytes().chunks(7) {
+        chain.push(chunk, &mut shown);
+    }
+    chain.finish(&mut shown);
+    for secret in [&key, &jwt, &anthropic] {
+        let leaks = leaked_positions(&shown, secret);
+        assert!(leaks.is_empty(), "{secret}: {leaks:?}");
+    }
+    let shown = String::from_utf8_lossy(&shown).into_owned();
+    assert!(shown.contains("a=Qsk-abc&b=xeyJdef ok"), "{shown}");
+    assert!(shown.contains("key: [token hidden"), "{shown}");
+    assert!(shown.contains("token [token hidden"), "{shown}");
+    // The Claude Code chain is the one filter it always was.
+    let mut claude = redact::FilterChain::claude(100, 30);
+    let mut shown = Vec::new();
+    claude.push(format!("{key} {anthropic}\r\n").as_bytes(), &mut shown);
+    claude.finish(&mut shown);
+    let shown = String::from_utf8_lossy(&shown).into_owned();
+    assert!(shown.contains(&key), "{shown}");
+    assert!(leaked_positions(shown.as_bytes(), &anthropic).is_empty());
 }

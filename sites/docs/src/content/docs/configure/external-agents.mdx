@@ -21,7 +21,9 @@ rules as any loadout Session:
 
 The program's credential never enters the container. The container holds a placeholder
 in the variable the program reads, and the daemon adds the real value on your computer,
-on the route, to each request the route's rules allow.
+on the route, to each request the route's rules allow. Codex can use either an OpenAI API
+key or the sign-in of your ChatGPT plan (`axocoatl connect codex`); for the sign-in, the
+daemon also keeps the access token current on your computer.
 
 ## Build the image
 
@@ -109,6 +111,60 @@ single token printed, 3 usage (no terminal, a bad name, no `claude`), 4 not chec
 (network), 5 the data directory or the secret store failed, 6 interrupted by a signal.
 Run it again whenever the token expires or is revoked.
 
+### Codex with a ChatGPT plan: `axocoatl connect codex`
+
+```sh
+axocoatl connect codex                 # signs in in your browser
+axocoatl connect codex --device-auth   # shows a code to enter on another device
+```
+
+This runs the official `codex login` for you and stores the ChatGPT sign-in it makes as
+the secret `codex-chatgpt`. You approve the sign-in in the browser (or, with
+`--device-auth`, enter the code Codex shows at the address it gives); you never see, copy,
+paste or type a token:
+
+- It makes a private temporary `CODEX_HOME` in the data root (`connect-codex-<random>`,
+  `0700`) and runs `codex -c cli_auth_credentials_store="file" login` there, with
+  `CODEX_HOME` set to it and that directory as its working directory, so the sign-in is
+  written to a file in it, never to your system keyring, and no repository's
+  `.codex/config.toml` applies. Your own `~/.codex` is not read or written by Axocoatl,
+  and Codex is told to use the temporary home instead. Codex 0.160.1 first signs out of
+  the sign-in its home holds, revoking it; the temporary home holds none, so your other
+  Codex sign-ins are not touched. Codex runs without `CODEX_API_KEY`, `OPENAI_API_KEY`,
+  `CODEX_ACCESS_TOKEN`, `OPENAI_BASE_URL`, `CODEX_SQLITE_HOME` and the variables that
+  move where it signs in, refreshes or revokes (`CODEX_REFRESH_TOKEN_URL_OVERRIDE`,
+  `CODEX_REVOKE_TOKEN_URL_OVERRIDE`, `CODEX_APP_SERVER_LOGIN_CLIENT_ID`,
+  `CODEX_AUTHAPI_BASE_URL`, `CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL`,
+  `CODEX_AGENT_IDENTITY_JWKS_BASE_URL`).
+- `codex login` runs in the same pseudo-terminal as `claude setup-token` above, and its
+  output reaches your terminal through the same filter, which here also hides OpenAI API
+  keys (`sk-…`) and JWTs (`eyJ…`, all three parts), each at the start of a word, as
+  `[token hidden by axocoatl]`, and drops clipboard writes. Codex 0.160.1 prints no token:
+  it shows the sign-in address (or the device code) and writes the tokens to `auth.json`.
+- Axocoatl reads the tokens from that file, never from the screen: `auth.json` must be a
+  regular file (a link is refused) of at most 64 KiB holding a ChatGPT sign-in, with an
+  access token and a refresh token; an API-key sign-in is refused. It stores the access
+  token, the refresh token, your ChatGPT account id (from the file, or the id token's
+  `chatgpt_account_id`) and the time, as one line, the way `axocoatl secret set` stores
+  a value (`secrets/codex-chatgpt` in the data root, `0600`, replaced atomically). The id
+  token, and an API key Codex may have obtained with the sign-in, are not kept.
+- Then every file in the temporary home (Codex also writes a log and other state there)
+  is overwritten with zeros and removed, and so is the directory: also when the sign-in
+  fails, is refused or is interrupted. A temporary home a killed run left is erased by
+  the next run once it is 30 minutes old (a sign-in in progress elsewhere keeps its own). On an SSD or a copy-on-write file system an overwrite does
+  not guarantee that the old blocks are gone; the data root is readable only by you.
+- The tokens are not checked with OpenAI before they are stored: they are the ones
+  Codex just obtained, and the first run uses them.
+
+It needs an interactive terminal and the `codex` CLI: the first `codex` on `PATH`, then
+`~/.local/bin/codex`, or the path given with `--codex PATH`. The secret is always named
+`codex-chatgpt`, because that is the one the daemon refreshes. Like `recipe build`, it
+uses the data root of `--config` or `AXOCOATL_DATA_DIR`. Exit codes: 0 stored, 2 `codex
+login` stored no ChatGPT sign-in, 3 usage (no terminal, no `codex`), 5 the data directory,
+the secret store, the pseudo-terminal or `auth.json` failed (also when `auth.json` is a
+link), 6 interrupted by a signal. Nothing is stored unless it exits 0. Run it again when a
+run says the sign-in was refused.
+
 ### Other credentials: `axocoatl secret set`
 
 `axocoatl secret set <name>` reads a value from standard input, or with
@@ -137,19 +193,24 @@ redirect it. A route sends the value exactly as stored, so `secret set` warns on
 error, and still stores it, when the value has whitespace inside it, starts with
 `Bearer ` (the route adds that itself), looks like JSON or holds several tokens, and, for
 `claude-code-oauth` (the secret Claude Code's route sends), when it does not start with
-`sk-ant-oat01-`, as the token `claude setup-token` prints does. The warning never shows
-the value. When the model API rejects a stored credential (`401` through the route), the
-run's not-covered reason names the credential and says how to store it again: for
-Claude Code, `axocoatl connect claude-code`; for others, `axocoatl secret set <name>`,
-piping in only the token.
+`sk-ant-oat01-`, as the token `claude setup-token` prints does, and, for `codex-chatgpt`,
+when it is not a sign-in `axocoatl connect codex` stored (the ChatGPT route refuses
+anything else). The warning never shows the value. When the model API rejects a stored
+credential (`401` through the route), the run's not-covered reason names the credential
+and says how to store it again: for Claude Code, `axocoatl connect claude-code`; for the
+ChatGPT sign-in, run again (the daemon asks OpenAI for a new access token after the
+rejection) and, if it is rejected again, `axocoatl connect codex`; for others,
+`axocoatl secret set <name>`, piping in only the token.
 `axocoatl secret list` prints the stored names, never values, and
 `axocoatl secret remove <name>` deletes one. A route's `credential` resolves to a
 `credentials` entry in the configuration first, then to a stored secret of that name; a
 name found in neither refuses the run (exit code 3).
 
 You supply the credential, for your own account. `axocoatl connect claude-code` obtains
-the Claude Code token through `claude setup-token` when you run it; Axocoatl never
-refreshes a credential by itself.
+the Claude Code token through `claude setup-token` when you run it, and
+`axocoatl connect codex` your ChatGPT sign-in through `codex login`. The only credential
+Axocoatl refreshes by itself is that ChatGPT sign-in (see
+[Codex with a ChatGPT sign-in](#codex-with-a-chatgpt-sign-in)).
 
 ## Name the program in a loadout
 
@@ -188,8 +249,33 @@ axocoatl run fix-claude-code --task "…" \
   --model writer=anthropic:<model> --model reviewer=ollama:gpt-oss:120b
 ```
 
+For Codex, the writer's `credential` says which stored credential its route sends:
+`codex-openai` (the default: an OpenAI API key, to `api.openai.com`) or `codex-chatgpt`
+(your ChatGPT sign-in from `axocoatl connect codex`, to `chatgpt.com`). Both run the same
+program from the same `codex` image:
+
+```yaml
+agents:
+  - id: writer
+    role: writer
+    runtime: codex
+    credential: codex-chatgpt   # or codex-openai, the default
+    model: { param: writer_model }
+environment:
+  recipes: [codex]
+```
+
+```sh
+axocoatl run fix-codex --task "…" --model writer=openai:gpt-5.5 --model reviewer=ollama:gpt-oss:120b
+```
+
+A run whose credential is not stored is refused before it starts (exit code 3), with how
+to store it: `axocoatl secret set codex-openai` for the API key, `axocoatl connect codex`
+for the sign-in. Claude Code's only credential is `claude-code-oauth`, and a native Agent
+names none; `axocoatl loadouts validate` refuses any other name.
+
 For Claude Code the model is `{provider: anthropic, model: …}`, for Codex
-`{provider: openai, model: …}`: the provider whose API the program calls through the route
+`{provider: openai, model: …}` with either credential: the provider whose API the program calls through the route
 Axocoatl adds for it, and the model name the program itself takes. Any other provider is
 refused: `axocoatl loadouts validate` refuses a literal model such as
 `{provider: openrouter, model: openai/gpt-5.5}` on a Codex writer, and a run refuses
@@ -219,6 +305,7 @@ You do not list these routes; the run adds them to its Session's egress policy.
 | --- | --- | --- | --- | --- | --- |
 | `claude-code` | `api.anthropic.com` | `POST /v1/messages` | `claude-code-oauth` | `Authorization: Bearer <value>` | `CLAUDE_CODE_OAUTH_TOKEN` |
 | `codex` | `api.openai.com` | `POST /v1/responses` | `codex-openai` | `Authorization: Bearer <value>` | `OPENAI_API_KEY` |
+| `codex` with `credential: codex-chatgpt` | `chatgpt.com` | `POST /backend-api/codex/responses` | `codex-chatgpt` | `Authorization: Bearer <access token>` and `ChatGPT-Account-ID: <account id>` | `CODEX_CHATGPT_ACCESS_TOKEN` |
 
 Each route refuses every other request. Claude Code 2.1.292 also asks the route for its
 account's policy limits and remote settings (`GET /api/claude_code/policy_limits` and
@@ -240,6 +327,71 @@ certificate authority, which signs the route's TLS on your computer, is trusted 
 `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE`. How routes check and record requests is in
 [Credentials and routes](/configure/credentials/).
 
+## Codex with a ChatGPT sign-in
+
+A Codex writer with `credential: codex-chatgpt` runs `codex exec` with the same HTTP
+provider as with an API key, aimed at the ChatGPT backend Codex itself uses for a ChatGPT
+sign-in (`https://chatgpt.com/backend-api/codex`, its key in `CODEX_CHATGPT_ACCESS_TOKEN`,
+which holds the route's placeholder). Codex in the container has no sign-in of its own:
+there is no `auth.json` in the container, and its provider sends that variable's value as
+its bearer token and nothing else. So it has no refresh token to refresh, revoke or send;
+in Axocoatl's Podman run of the pinned version it made no request but its model calls.
+
+The route to `chatgpt.com` allows only `POST /backend-api/codex/responses`. For each
+request it allows, it asks the daemon for the current access token and sends it as
+`Authorization: Bearer …`, with your account id as `ChatGPT-Account-ID`, replacing any
+`Authorization` or `ChatGPT-Account-ID` (or `ChatGPT_Account_ID`) the program sent. The
+daemon keeps the token current on your computer, the way Codex 0.160.1 does:
+
+- **Before a request**, when the access token expires within five minutes (read from its
+  JWT `exp`; for a token without one, when it was obtained more than eight days ago), it
+  refreshes: one `POST https://auth.openai.com/oauth/token` with
+  `{"client_id": <Codex's client id>, "grant_type": "refresh_token", "refresh_token": …}`.
+  OpenAI's answer replaces the access token, and the refresh token when it sends a new one
+  (it rotates them, and refuses one that was already used); the account id is taken from
+  the new id token or access token when one names it. The new sign-in is written back atomically
+  (`0600`). Refreshes are serialized; if `axocoatl connect codex` stored a new sign-in
+  while one was under way, the new sign-in is kept.
+- **After a `401`** to a request sent with the current token, it refreshes the same way,
+  so the next request carries the new token. The `401` itself goes back to Codex: the
+  route does not send the request again. When Codex ends with that error, the run's
+  not-covered reason names `codex-chatgpt` and says to run again, then to connect again.
+- **When OpenAI refuses the refresh for good** (`401`, `invalid_grant`, or a refresh token
+  expired, reused or invalidated), the daemon remembers it for that refresh token and does
+  not send it again, stores nothing, and refuses the route's requests once the access token
+  has expired, saying to run `axocoatl connect codex`. When a refresh fails otherwise (no
+  answer, another error), an access token that has not expired yet is still sent, as Codex
+  does.
+- Refresh tokens and access tokens are never written to a log, a record or a message.
+
+From the container nothing reaches the token endpoint: no route serves `auth.openai.com`,
+so a refresh the program attempted would be refused where the Session's connections are
+decided, and recorded in the network record, and any request to `chatgpt.com` other than
+`POST /backend-api/codex/responses` is refused by the route and recorded. The stored
+sign-in is sent only by this route's broker: any other route naming `codex-chatgpt` refuses
+to send it, so its refresh token never leaves your computer except to OpenAI's token
+endpoint.
+
+<Aside type="caution">
+What Axocoatl's tests show and what they do not. A Podman test runs the pinned Codex
+0.160.1 from the `codex` recipe image through a whole loadout run in this mode, against a
+fake ChatGPT backend at `chatgpt.com` and a fake OpenAI token endpoint: the program's
+requests reach the backend with the refreshed token and the account id, the rotated
+sign-in is stored, and no token is in the container, its configuration, the network record
+or the program's requests. Whether OpenAI's own backend accepts requests in this shape
+(Codex's HTTP provider named `axocoatl` instead of its built-in OpenAI provider) has not
+been measured against OpenAI's service: try one run before you rely on it.
+
+OpenAI's documentation recommends API keys for automation, and describes ChatGPT sign-in
+on CI runners only for trusted private machines, with one copy of the sign-in per machine
+or serialized job stream, kept between runs
+([CI/CD authentication](https://learn.chatgpt.com/docs/auth/ci-cd-auth)). Axocoatl keeps
+the only copy in the daemon's data root and serializes its refreshes. OpenAI's
+documentation does not describe a process other than Codex refreshing a Codex sign-in, as
+the daemon does here with Codex's own client id and refresh request. Check your plan's
+terms before you use it, and use an API key (`codex-openai`) where they do not allow it.
+</Aside>
+
 ## What is recorded
 
 - **Every model call.** Each request the program makes on its route is written to the
@@ -257,7 +409,10 @@ certificate authority, which signs the route's TLS on your computer, is trusted 
 Claude Code reports what its run cost (`total_cost_usd`, its own computation from list
 prices), and the run settles to that.
 
-Codex reports tokens but no cost. Axocoatl computes the cost from the tokens Codex reports,
+Codex reports tokens but no cost. Axocoatl computes the cost from the tokens Codex reports
+(with either credential; with a ChatGPT sign-in, the run counts against your plan's usage
+limits, and the computed cost is what those tokens would cost at API list prices, not a
+charge),
 each part at its rate: uncached input, input read from the prompt cache, input written to
 the prompt cache, and output, reasoning included. The rate is the configuration's
 [`pricing`](/reference/config/#attempt-pricing) entry for exactly that model name when
@@ -336,7 +491,7 @@ warning `external_model_not_pinned`, which also says whether its cost will be kn
 | --- | --- |
 | Where it runs | Enforced: inside the Session container, as the non-root writer user, under `--harden`. |
 | What it can reach | Enforced: only the route to its model API and the hosts the loadout and your configuration allow. |
-| Its credential | Enforced: added on your computer; the container holds a placeholder. A token the API returns in a response body would reach the container, as on any route. |
+| Its credential | Enforced: added on your computer; the container holds a placeholder. A token the API returns in a response body would reach the container, as on any route. A ChatGPT sign-in is refreshed by the daemon, on your computer; the container never holds its refresh token. |
 | Its time | Enforced: the activation's wall-clock timeout, and the run's wall clock. |
 | Its spend | Bounded, not per call. The activation reserves what its grant still allows before the program starts: all of its tokens and, when its cost will be known, all of its cost. Each request on the route counts against the grant's invocations, and the host stops the program when they run out. Claude Code also gets its own spending stop, `--max-budget-usd`, at what the grant still allows. The program's own usage report settles the reservation; without one, usage is marked incomplete and the reservation stays charged. How the cost is known is in [What a run costs](#what-a-run-costs). |
 | Its tool calls | Recorded, not admitted. The program's own tool calls are evidence in the record; Axocoatl does not approve or refuse them one by one. They run as the writer user inside the container, like a writer's `bash`. |

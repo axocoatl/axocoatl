@@ -142,6 +142,38 @@ impl AgentRuntime {
         }
     }
 
+    /// The stored credentials the route Axocoatl adds for this external
+    /// program can send, the default first: `claude-code-oauth` for Claude
+    /// Code; `codex-openai` (an OpenAI API key, sent to `api.openai.com`) or
+    /// `codex-chatgpt` (a ChatGPT sign-in from `axocoatl connect codex`,
+    /// sent to `chatgpt.com`) for Codex. A loadout's writer chooses one with
+    /// `credential`. Empty for a native Agent.
+    pub fn credentials(self) -> &'static [&'static str] {
+        match self {
+            AgentRuntime::Native => &[],
+            AgentRuntime::ClaudeCode => &["claude-code-oauth"],
+            AgentRuntime::Codex => &["codex-openai", "codex-chatgpt"],
+        }
+    }
+
+    /// Why `credential` cannot be this program's: a native Agent names none,
+    /// and an external one names one of [`Self::credentials`].
+    pub fn credential_refusal(self, credential: &str) -> Option<String> {
+        let names = self.credentials();
+        if names.is_empty() {
+            return Some(
+                "only an external writer (runtime claude-code or codex) names a credential".into(),
+            );
+        }
+        (!names.contains(&credential)).then(|| {
+            format!(
+                "a {} writer's route sends {}; {credential:?} is not one of them",
+                self.id(),
+                names.join(" or ")
+            )
+        })
+    }
+
     /// Why `model` cannot be this external program's model: it names
     /// another provider than the one whose API the program calls.
     pub fn model_refusal(self, model: &ModelSpec) -> Option<String> {
@@ -273,6 +305,12 @@ pub struct LoadoutAgent {
     pub model: ParamOr<ModelSpec>,
     #[serde(default)]
     pub runtime: AgentRuntime,
+    /// The stored credential an external writer's route sends, one of
+    /// [`AgentRuntime::credentials`]; absent is the runtime's default
+    /// (`claude-code-oauth`, `codex-openai`). `codex-chatgpt` runs Codex
+    /// with a ChatGPT sign-in instead of an API key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
     /// Tool names (native runtime). Required for native Agents.
     #[serde(default)]
     pub tools: Vec<String>,
@@ -894,6 +932,11 @@ pub fn validate_loadout(file: &LoadoutFile) -> Result<Vec<LoadoutWarning>, Loado
         if let ParamOr::Value(model) = &agent.model {
             if let Some(reason) = agent.runtime.model_refusal(model) {
                 return Err(invalid(format!("{field}.model"), reason));
+            }
+        }
+        if let Some(credential) = &agent.credential {
+            if let Some(reason) = agent.runtime.credential_refusal(credential) {
+                return Err(invalid(format!("{field}.credential"), reason));
             }
         }
         if agent.runtime == AgentRuntime::Native && agent.tools.is_empty() {
@@ -1812,6 +1855,66 @@ mod tests {
         let mut file = builtin("audit").file.clone();
         file.agents[1].runtime = AgentRuntime::Codex;
         assert!(validate_loadout(&file).is_err());
+    }
+
+    /// An external writer names the credential its route sends: Codex an
+    /// API key (the default) or a ChatGPT sign-in, Claude Code only its
+    /// OAuth token, and a native Agent none.
+    #[test]
+    fn an_external_writer_names_one_of_its_runtimes_credentials() {
+        let mut file = builtin("fix").file.clone();
+        file.agents[0].runtime = AgentRuntime::Codex;
+        file.agents[0].tools.clear();
+        if let ParamOr::Value(model) = &mut file.agents[0].model {
+            model.provider = "openai".into();
+        }
+        for name in ["codex-openai", "codex-chatgpt"] {
+            file.agents[0].credential = Some(name.into());
+            validate_loadout(&file).unwrap();
+        }
+        file.agents[0].credential = Some("claude-code-oauth".into());
+        let error = validate_loadout(&file).unwrap_err().to_string();
+        assert!(error.contains("agents.writer.credential"), "{error}");
+        assert!(error.contains("codex-openai or codex-chatgpt"), "{error}");
+        file.agents[0].runtime = AgentRuntime::ClaudeCode;
+        if let ParamOr::Value(model) = &mut file.agents[0].model {
+            model.provider = "anthropic".into();
+        }
+        validate_loadout(&file).unwrap();
+        file.agents[0].credential = Some("codex-chatgpt".into());
+        assert!(validate_loadout(&file).is_err());
+        let mut file = builtin("fix").file.clone();
+        file.agents[0].credential = Some("codex-openai".into());
+        let error = validate_loadout(&file).unwrap_err().to_string();
+        assert!(error.contains("only an external writer"), "{error}");
+        assert_eq!(AgentRuntime::Codex.credentials()[0], "codex-openai");
+        assert_eq!(
+            AgentRuntime::ClaudeCode.credentials(),
+            ["claude-code-oauth"]
+        );
+        // The YAML field.
+        let text = r#"
+schema: axocoatl.loadout/1
+id: codex-plan
+version: 1
+name: Codex on a ChatGPT plan
+kind: custom
+agents:
+  - id: writer
+    role: writer
+    runtime: codex
+    credential: codex-chatgpt
+    model: { provider: openai, model: gpt-5.5 }
+budgets:
+  agent: { activations: 1, invocations: 20, tokens: 400000, cost_usd: 1 }
+  wall_clock: 10m
+prompt: "{task}"
+"#;
+        let loadout = parse_loadout(text, LoadoutSource::Builtin).unwrap();
+        assert_eq!(
+            loadout.file.agents[0].credential.as_deref(),
+            Some("codex-chatgpt")
+        );
     }
 
     /// An external writer's model is the model its program calls through

@@ -31,7 +31,7 @@ use tokio::sync::{mpsc, oneshot};
 use zeroize::Zeroizing;
 
 use super::ca::SessionCa;
-use super::rules::{canonicalize, Injection, Route, RuleDecision};
+use super::rules::{canonicalize, Injection, ManagedCredentials, Route, RuleDecision};
 use super::scan::ReflectionScanner;
 use super::upstream::{UpstreamBody, UpstreamConnector};
 use super::{BoxError, BrokerRecordSink};
@@ -157,6 +157,8 @@ pub struct SessionBroker {
     upstream: Arc<UpstreamConnector>,
     workspaces: WorkspaceRoots,
     timeouts: BrokerTimeouts,
+    /// Credentials the daemon keeps current itself, by the file they manage.
+    managed: Arc<ManagedCredentials>,
 }
 
 impl std::fmt::Debug for SessionBroker {
@@ -224,11 +226,19 @@ impl SessionBroker {
             upstream,
             workspaces,
             timeouts: BrokerTimeouts::default(),
+            managed: Arc::default(),
         }
     }
 
     pub fn with_timeouts(mut self, timeouts: BrokerTimeouts) -> Self {
         self.timeouts = timeouts;
+        self
+    }
+
+    /// Ask `managed` for the value of a route credential whose file one of
+    /// them manages, instead of reading the file.
+    pub fn with_managed(mut self, managed: Arc<ManagedCredentials>) -> Self {
+        self.managed = managed;
         self
     }
 
@@ -333,6 +343,7 @@ impl SessionBroker {
             recorder: recorder.clone(),
             upstream: self.upstream.clone(),
             workspaces: self.workspaces.clone(),
+            managed: self.managed.clone(),
             timeouts: self.timeouts,
             sender: tokio::sync::Mutex::new(None),
             seq: AtomicU64::new(0),
@@ -441,6 +452,7 @@ struct Connection {
     recorder: Recorder,
     upstream: Arc<UpstreamConnector>,
     workspaces: WorkspaceRoots,
+    managed: Arc<ManagedCredentials>,
     timeouts: BrokerTimeouts,
     sender: tokio::sync::Mutex<Option<hyper::client::conn::http1::SendRequest<UpstreamBody>>>,
     seq: AtomicU64,
@@ -876,9 +888,38 @@ impl Connection {
                 ),
             );
         }
-        let secret = match &route.credential {
-            None => None,
-            Some(credential) => {
+        // A credential the daemon keeps current itself (a sign-in it
+        // refreshes) gives its value, and any headers that go with it.
+        let managed = route
+            .credential
+            .as_ref()
+            .and_then(|credential| self.managed.find(&credential.source));
+        let mut managed_headers = Vec::new();
+        let secret = match (&route.credential, &managed) {
+            (None, _) => None,
+            (Some(credential), Some(managed)) => match managed.current().await {
+                Ok(value) => {
+                    managed_headers = value.headers;
+                    Some((credential, value.secret))
+                }
+                Err(reason) => {
+                    tracing::warn!(session = %self.ctx.session, conn = %self.ctx.conn, credential = %credential.name, %reason, "managed route credential unavailable");
+                    return self.refuse(
+                        &facts,
+                        refusal(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "credential_unavailable",
+                            format!(
+                                "the daemon has no current value of credential {}: {reason}",
+                                credential.name
+                            ),
+                            "The daemon keeps this sign-in current itself; connect it again on the computer running Axocoatl.",
+                            false,
+                        ),
+                    );
+                }
+            },
+            (Some(credential), None) => {
                 let workspaces = (self.workspaces)();
                 match credential.source.read(&credential.name, &workspaces) {
                     Ok(secret) => Some((credential, secret)),
@@ -899,6 +940,15 @@ impl Connection {
             }
         };
 
+        // What a managed credential is told when the upstream answers 401:
+        // the value this request sent.
+        let sent = match (&managed, &secret) {
+            (Some(managed), Some((_, secret))) => Some((
+                managed.clone(),
+                SecretString::from(secret.expose_secret().to_string()),
+            )),
+            _ => None,
+        };
         // The credential's header and scanner are built before the request is
         // recorded as allowed, so a credential that cannot be sent is refused
         // with nothing recorded but the refusal.
@@ -996,6 +1046,12 @@ impl Connection {
             // server that maps both spellings to one variable cannot read the
             // client's value in place of the one the route sets.
             let dashed_name = dashed(lower);
+            if managed_headers
+                .iter()
+                .any(|(managed, _)| dashed(managed.as_str()) == dashed_name)
+            {
+                continue;
+            }
             if credentialed
                 && (name == header::AUTHORIZATION
                     || inject_name
@@ -1018,6 +1074,10 @@ impl Connection {
         };
         if let Ok(value) = HeaderValue::from_str(&host_value) {
             headers.insert(header::HOST, value);
+        }
+        for (name, mut value) in managed_headers {
+            value.set_sensitive(true);
+            headers.insert(name, value);
         }
         let mut scanner = None;
         if let Some((name, value, needles)) = injected {
@@ -1115,6 +1175,13 @@ impl Connection {
             }
         };
         let (mut head, upstream_body) = response.into_parts();
+        if head.status == StatusCode::UNAUTHORIZED {
+            if let Some((managed, sent)) = sent {
+                // The next request gets a refreshed value, when one can be
+                // had; this one's 401 goes to the client as it came.
+                managed.rejected(&sent).await;
+            }
+        }
         if credentialed && !route.allow_encoded_responses && encoded(&head.headers) {
             return fail(
                 StatusCode::BAD_GATEWAY,

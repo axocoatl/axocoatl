@@ -59,9 +59,22 @@ pub struct CredentialError {
     pub reason: String,
 }
 
+/// How a value that only a [`ManagedCredential`] sends begins: a sign-in
+/// the daemon keeps current itself (`{"format":"axocoatl.…`), such as the
+/// ChatGPT sign-in `axocoatl connect codex` stores. Read as a plain
+/// credential, it is refused: it holds a refresh token, never sent upstream.
+pub const MANAGED_VALUE_PREFIX: &str = "{\"format\":\"axocoatl.";
+
 fn valid_secret(value: &str) -> Result<(), String> {
     if value.is_empty() {
         return Err("it is empty".into());
+    }
+    if value.starts_with(MANAGED_VALUE_PREFIX) {
+        return Err(
+            "it is a sign-in that only the route Axocoatl adds for it sends (for codex-chatgpt, \
+             the route to chatgpt.com of a Codex writer with credential: codex-chatgpt)"
+                .into(),
+        );
     }
     if value.len() > MAX_SECRET_BYTES {
         return Err(format!("it is longer than {MAX_SECRET_BYTES} bytes"));
@@ -128,7 +141,10 @@ impl CredentialSource {
 /// Open `path` without following a symbolic link and read it, after checking
 /// that it is a regular file owned by this user that only its owner can read
 /// or write.
-fn read_owner_only(path: &Path, max_bytes: u64) -> Result<zeroize::Zeroizing<String>, String> {
+pub(crate) fn read_owner_only(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<zeroize::Zeroizing<String>, String> {
     check_owner_only_file(path, max_bytes)?;
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -166,6 +182,72 @@ fn read_owner_only(path: &Path, max_bytes: u64) -> Result<zeroize::Zeroizing<Str
         .read_to_string(&mut text)
         .map_err(|error| format!("{} cannot be read as text: {error}", path.display()))?;
     Ok(text)
+}
+
+/// What a [`ManagedCredential`] adds to one request.
+pub struct ManagedValue {
+    /// The value the route's injection carries (an access token).
+    pub secret: SecretString,
+    /// Further headers the upstream needs with it, such as an account id:
+    /// set by the route in place of any the client sent.
+    pub headers: Vec<(HeaderName, hyper::header::HeaderValue)>,
+}
+
+/// A credential the daemon keeps current itself: a sign-in whose access
+/// token it refreshes (`external_agent::codex_chatgpt::ChatgptBroker`). A
+/// route whose credential is read from the file one manages asks it for the
+/// value of each request instead of reading the file.
+#[async_trait::async_trait]
+pub trait ManagedCredential: Send + Sync {
+    /// The file it manages, as a route's `File` credential names it.
+    fn file(&self) -> &Path;
+    /// The value to send now, refreshed first when it is about to expire.
+    /// The error never holds a value.
+    async fn current(&self) -> Result<ManagedValue, String>;
+    /// The upstream answered `401` to a request sent with `sent`: refresh,
+    /// unless that has happened since.
+    async fn rejected(&self, sent: &SecretString);
+}
+
+/// The credentials the daemon manages, found by the file a route names.
+#[derive(Clone, Default)]
+pub struct ManagedCredentials {
+    entries: Vec<Arc<dyn ManagedCredential>>,
+}
+
+impl std::fmt::Debug for ManagedCredentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_list()
+            .entries(
+                self.entries
+                    .iter()
+                    .map(|entry| entry.file().display().to_string()),
+            )
+            .finish()
+    }
+}
+
+impl ManagedCredentials {
+    pub fn add(&mut self, credential: Arc<dyn ManagedCredential>) {
+        self.entries.push(credential);
+    }
+
+    /// The managed credential a route reading `source` uses, if any: one
+    /// that manages exactly that file.
+    pub fn find(&self, source: &CredentialSource) -> Option<Arc<dyn ManagedCredential>> {
+        let CredentialSource::File(path) = source else {
+            return None;
+        };
+        let canonical = std::fs::canonicalize(path).ok();
+        self.entries
+            .iter()
+            .find(|entry| {
+                entry.file() == path
+                    || canonical.is_some() && std::fs::canonicalize(entry.file()).ok() == canonical
+            })
+            .cloned()
+    }
 }
 
 /// How a route adds its credential.

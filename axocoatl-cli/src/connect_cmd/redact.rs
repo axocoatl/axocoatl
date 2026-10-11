@@ -73,6 +73,11 @@ use super::screen::{Cell, Print, Rendition, Screen, Step, StringKind};
 pub(crate) const MASK: &str = "[token hidden by axocoatl]";
 /// Every Anthropic credential starts with this; all of them are hidden.
 const PREFIX: &[u8] = b"sk-ant-";
+/// What `axocoatl connect codex` also hides, each at the start of a word:
+/// OpenAI API keys (`sk-…`, `sk-proj-…`), and JWTs (`eyJ…`, base64url of
+/// `{"`), such as an access or id token, whose `.`-joined parts are hidden
+/// as one token. The flag says whether `.` is a token character.
+pub(crate) const OPENAI_PREFIXES: [(&[u8], bool); 2] = [(b"sk-", false), (b"eyJ", true)];
 /// The prefix of the long-lived OAuth token `claude setup-token` prints.
 pub(crate) const OAUTH_PREFIX: &str = "sk-ant-oat01-";
 /// The fewest characters after [`OAUTH_PREFIX`] a token is taken to have
@@ -87,6 +92,12 @@ const MAX_STRING: usize = 16 * 1024;
 
 fn is_token_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'
+}
+
+/// [`is_token_char`], and `.` too when `dots` (a JWT's parts are joined by
+/// `.`).
+fn is_token_char_with(ch: char, dots: bool) -> bool {
+    is_token_char(ch) || (dots && ch == '.')
 }
 
 /// Box drawing, block elements and `|`: what frames a wrapped token.
@@ -185,6 +196,14 @@ enum Close {
 
 /// The streaming redaction filter. See the module documentation.
 pub(crate) struct TokenFilter {
+    /// What a token starts with ([`PREFIX`] unless made with
+    /// [`Self::with_prefix`]).
+    prefix: &'static [u8],
+    /// A token starts only at the start of a word: not right after a token
+    /// character on its row.
+    word_start: bool,
+    /// `.` is a token character (a JWT's).
+    dots: bool,
     screen: Screen,
     /// The bytes of the escape sequence or character in progress.
     unit: Zeroizing<Vec<u8>>,
@@ -203,7 +222,23 @@ pub(crate) struct TokenFilter {
 impl TokenFilter {
     /// A filter for a program whose terminal is `cols` by `rows`.
     pub(crate) fn new(cols: u16, rows: u16) -> Self {
+        Self::with_prefix(cols, rows, PREFIX, false, false)
+    }
+
+    /// A filter that hides tokens starting with `prefix` (at the start of a
+    /// word only, with `word_start`; with `.` as a token character, with
+    /// `dots`).
+    pub(crate) fn with_prefix(
+        cols: u16,
+        rows: u16,
+        prefix: &'static [u8],
+        word_start: bool,
+        dots: bool,
+    ) -> Self {
         Self {
+            prefix,
+            word_start,
+            dots,
             screen: Screen::new(cols, rows),
             unit: Zeroizing::new(Vec::with_capacity(128)),
             string: Zeroizing::new(Vec::with_capacity(MAX_STRING)),
@@ -358,7 +393,7 @@ impl TokenFilter {
             None => Decision::Afresh,
             Some(run) => {
                 let (_, last_row) = run.last;
-                if is_token_char(print.ch) {
+                if is_token_char_with(print.ch, self.dots) {
                     match self.continues(run, &print) {
                         Some((from, attached)) => Decision::Extend(from, attached),
                         None => Decision::Close(self.close_reason(&print)),
@@ -388,7 +423,8 @@ impl TokenFilter {
             Decision::Close(reason) => self.close(reason, shown),
             Decision::Afresh => {}
         }
-        if print.ch == char::from(PREFIX[0]) {
+        if print.ch == char::from(self.prefix[0]) && (!self.word_start || self.word_starts(&print))
+        {
             self.start(print, bytes);
             return;
         }
@@ -424,7 +460,7 @@ impl TokenFilter {
             let skipped = (last_x + 1..print.x).all(|x| {
                 self.screen
                     .cell(x, last_row)
-                    .is_some_and(|cell| cell.secret && is_token_char(cell.ch))
+                    .is_some_and(|cell| cell.secret && is_token_char_with(cell.ch, self.dots))
             });
             return (run.token && print.x > last_x + 1 && skipped).then_some((last_x + 1, true));
         }
@@ -440,7 +476,7 @@ impl TokenFilter {
                 && self
                     .screen
                     .cell(start - 1, print.row)
-                    .is_some_and(|cell| cell.secret && is_token_char(cell.ch))
+                    .is_some_and(|cell| cell.secret && is_token_char_with(cell.ch, self.dots))
             {
                 start -= 1;
             }
@@ -478,7 +514,7 @@ impl TokenFilter {
             .take_while(|column| {
                 self.screen
                     .cell(*column, row)
-                    .is_some_and(|cell| cell.secret && is_token_char(cell.ch))
+                    .is_some_and(|cell| cell.secret && is_token_char_with(cell.ch, self.dots))
             })
             .count()
     }
@@ -516,8 +552,9 @@ impl TokenFilter {
         bytes: &[u8],
         shown: &mut Vec<u8>,
     ) -> bool {
+        let prefix = self.prefix;
         let mismatch = self.run.as_ref().is_some_and(|run| {
-            !run.token && PREFIX.get(run.index).map(|byte| char::from(*byte)) != Some(print.ch)
+            !run.token && prefix.get(run.index).map(|byte| char::from(*byte)) != Some(print.ch)
         });
         if mismatch {
             self.close(Close::Other, shown);
@@ -562,7 +599,7 @@ impl TokenFilter {
         run.held_chars.push((self.held.len(), run.index));
         run.prefix_cells.push((print.x, print.row));
         run.push(print.ch);
-        let complete = run.index == PREFIX.len();
+        let complete = run.index == prefix.len();
         self.held.extend_from_slice(bytes);
         if complete {
             self.complete_prefix(shown);
@@ -613,6 +650,22 @@ impl TokenFilter {
             self.screen.mark_secret(x, row);
         }
         run.suspect |= self.resizing;
+    }
+
+    /// Whether `print` begins a word: no token character in the cell
+    /// before it, on its row, or, when autowrap carried it to this row, at
+    /// the end of the row above.
+    fn word_starts(&self, print: &Print) -> bool {
+        let before = match (print.wrapped_from, print.x) {
+            (Some((x, row)), _) => Some((x, row)),
+            (None, 0) => None,
+            (None, x) => Some((x - 1, print.row)),
+        };
+        before.is_none_or(|(x, row)| {
+            self.screen
+                .cell(x, row)
+                .is_none_or(|cell| cell.tail || !is_token_char_with(cell.ch, self.dots))
+        })
     }
 
     fn close_reason(&self, print: &Print) -> Close {
@@ -680,13 +733,14 @@ impl TokenFilter {
         if value.is_empty() {
             return;
         }
+        let prefix = self.prefix;
         let mut starts: Vec<usize> = vec![0];
         starts.extend(
-            (1..value.len()).filter(|index| value.as_bytes()[*index..].starts_with(PREFIX)),
+            (1..value.len()).filter(|index| value.as_bytes()[*index..].starts_with(prefix)),
         );
         for (number, start) in starts.iter().enumerate() {
             let piece_text = &value[*start..starts.get(number + 1).copied().unwrap_or(value.len())];
-            if number == 0 && !whole_first && !piece_text.as_bytes().starts_with(PREFIX) {
+            if number == 0 && !whole_first && !piece_text.as_bytes().starts_with(prefix) {
                 continue;
             }
             let mut piece = Zeroizing::new(String::with_capacity(piece_text.len()));
@@ -739,17 +793,19 @@ impl TokenFilter {
 
     /// Capture every token in a control string; whether there was one.
     fn capture_in_string(&mut self, string: &[u8]) -> bool {
+        let prefix = self.prefix;
+        let dots = self.dots;
         let mut any = false;
         let mut index = 0;
         while let Some(offset) = string[index..]
-            .windows(PREFIX.len())
-            .position(|window| window == PREFIX)
+            .windows(prefix.len())
+            .position(|window| window == prefix)
         {
             any = true;
             let start = index + offset;
             let length = string[start..]
                 .iter()
-                .take_while(|byte| is_token_char(char::from(**byte)))
+                .take_while(|byte| is_token_char_with(char::from(**byte), dots))
                 .count();
             let overlong = length > MAX_TOKEN_CHARS;
             let mut value = Zeroizing::new(String::with_capacity(MAX_TOKEN_CHARS));
@@ -761,7 +817,7 @@ impl TokenFilter {
                 overlong,
                 suspect: false,
             });
-            index = start + length.max(PREFIX.len());
+            index = start + length.max(prefix.len());
         }
         any
     }
@@ -798,6 +854,88 @@ fn is_clipboard(kind: StringKind, string: &[u8]) -> bool {
             .iter()
             .any(|needle| contains(needle)),
         StringKind::Other => false,
+    }
+}
+
+/// Several [`TokenFilter`]s in a row, each with its own prefix and its own
+/// model of the terminal: what one shows is what the next one reads, so a
+/// token any of them hides is hidden on screen.
+pub(crate) struct FilterChain {
+    filters: Vec<TokenFilter>,
+}
+
+impl FilterChain {
+    /// The `claude setup-token` filter alone (`sk-ant-`).
+    pub(crate) fn claude(cols: u16, rows: u16) -> Self {
+        Self {
+            filters: vec![TokenFilter::new(cols, rows)],
+        }
+    }
+
+    /// The `codex login` filters: `sk-ant-` as for Claude Code, then each of
+    /// [`OPENAI_PREFIXES`] at the start of a word.
+    pub(crate) fn codex(cols: u16, rows: u16) -> Self {
+        let mut filters = vec![TokenFilter::new(cols, rows)];
+        filters.extend(
+            OPENAI_PREFIXES
+                .iter()
+                .map(|(prefix, dots)| TokenFilter::with_prefix(cols, rows, prefix, true, *dots)),
+        );
+        Self { filters }
+    }
+
+    /// Run `input`, which filter `from` produced (or the program, for 0),
+    /// through filters `from..`, appending what may be shown to `shown`.
+    fn pass_from(&mut self, from: usize, input: &[u8], shown: &mut Vec<u8>) {
+        let mut current = Zeroizing::new(input.to_vec());
+        for filter in &mut self.filters[from..] {
+            let mut next = Zeroizing::new(Vec::with_capacity(current.len() + 64));
+            filter.push(&current, &mut next);
+            current = next;
+        }
+        shown.extend_from_slice(&current);
+    }
+
+    pub(crate) fn push(&mut self, input: &[u8], shown: &mut Vec<u8>) {
+        self.pass_from(0, input, shown);
+    }
+
+    pub(crate) fn resize(&mut self, cols: u16, rows: u16) {
+        for filter in &mut self.filters {
+            filter.resize(cols, rows);
+        }
+    }
+
+    pub(crate) fn flush_idle(&mut self, shown: &mut Vec<u8>) {
+        for index in 0..self.filters.len() {
+            let mut released = Zeroizing::new(Vec::new());
+            self.filters[index].flush_idle(&mut released);
+            self.pass_from(index + 1, &released, shown);
+        }
+    }
+
+    pub(crate) fn finish(&mut self, shown: &mut Vec<u8>) {
+        for index in 0..self.filters.len() {
+            let mut released = Zeroizing::new(Vec::new());
+            self.filters[index].finish(&mut released);
+            self.pass_from(index + 1, &released, shown);
+        }
+    }
+
+    /// The first filter's: it read the program's own output.
+    pub(crate) fn reset_sequence(&self) -> Vec<u8> {
+        self.filters
+            .first()
+            .map(TokenFilter::reset_sequence)
+            .unwrap_or_default()
+    }
+
+    /// Every token hidden, the first filter's first.
+    pub(crate) fn into_found(self) -> Vec<Found> {
+        self.filters
+            .into_iter()
+            .flat_map(TokenFilter::into_found)
+            .collect()
     }
 }
 

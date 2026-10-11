@@ -43,6 +43,7 @@
 
 pub mod claude_code;
 pub mod codex;
+pub mod codex_chatgpt;
 pub mod models;
 pub mod recipe_images;
 
@@ -177,6 +178,60 @@ pub const MAX_PROMPT_BYTES: usize = 4 * 1024 * 1024;
 /// The marker line the wrapper prints in place of output it left out.
 pub const TRUNCATED_MARKER_TYPE: &str = "axocoatl_truncated";
 
+/// Which stored credential an external writer's route sends, as its
+/// loadout names it (`credential`, [`AgentRuntime::credentials`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExternalCredential {
+    /// The runtime's default: Claude Code's OAuth token
+    /// (`claude-code-oauth`), Codex's OpenAI API key (`codex-openai`).
+    #[default]
+    Default,
+    /// Codex with a ChatGPT sign-in (`codex-chatgpt`), sent to the ChatGPT
+    /// backend by a route whose value the daemon keeps current.
+    CodexChatgpt,
+}
+
+impl ExternalCredential {
+    /// The credential `runtime`'s writer names (`None`: the default).
+    pub fn named(runtime: AgentRuntime, name: Option<&str>) -> Result<Self, ExternalAgentError> {
+        let Some(name) = name else {
+            return Ok(Self::Default);
+        };
+        if let Some(reason) = runtime.credential_refusal(name) {
+            return Err(ExternalAgentError::Invalid(reason));
+        }
+        Ok(
+            if runtime == AgentRuntime::Codex && name == codex::CODEX_CHATGPT_SECRET {
+                Self::CodexChatgpt
+            } else {
+                Self::Default
+            },
+        )
+    }
+
+    /// The credential a retained definition's `provider` runs with.
+    pub fn for_provider(provider: &str) -> Self {
+        if provider == codex::CHATGPT_PROVIDER {
+            Self::CodexChatgpt
+        } else {
+            Self::Default
+        }
+    }
+}
+
+/// The definition `provider` of an external writer of `runtime` sending
+/// `credential`: the runtime id, or `codex-chatgpt` for Codex with a ChatGPT
+/// sign-in.
+pub fn definition_provider(
+    runtime: AgentRuntime,
+    credential: ExternalCredential,
+) -> Option<&'static str> {
+    match (runtime, credential) {
+        (AgentRuntime::Codex, ExternalCredential::CodexChatgpt) => Some(codex::CHATGPT_PROVIDER),
+        _ => runtime_provider(runtime),
+    }
+}
+
 /// The definition `provider` that names an external runtime.
 pub fn runtime_provider(runtime: AgentRuntime) -> Option<&'static str> {
     match runtime {
@@ -249,7 +304,7 @@ pub fn cost_reservation(cost_known: bool, cost_microunits: u64, activations_left
 pub fn runtime_for_provider(provider: &str) -> Option<AgentRuntime> {
     match provider {
         claude_code::PROVIDER => Some(AgentRuntime::ClaudeCode),
-        codex::PROVIDER => Some(AgentRuntime::Codex),
+        codex::PROVIDER | codex::CHATGPT_PROVIDER => Some(AgentRuntime::Codex),
         _ => None,
     }
 }
@@ -279,11 +334,22 @@ pub fn validate_model(model: &str) -> Result<(), ExternalAgentError> {
 /// Core calls this from its inline-definition path for an Agent whose
 /// `runtime` is not `native`.
 pub fn external_agent_config(
-    mut config: AgentConfig,
+    config: AgentConfig,
     runtime: AgentRuntime,
     model: &str,
 ) -> Result<AgentConfig, ExternalAgentError> {
-    let provider = runtime_provider(runtime).ok_or_else(|| {
+    external_agent_config_with(config, runtime, ExternalCredential::Default, model)
+}
+
+/// [`external_agent_config`] for a writer whose route sends `credential`:
+/// its `provider` is [`definition_provider`].
+pub fn external_agent_config_with(
+    mut config: AgentConfig,
+    runtime: AgentRuntime,
+    credential: ExternalCredential,
+    model: &str,
+) -> Result<AgentConfig, ExternalAgentError> {
+    let provider = definition_provider(runtime, credential).ok_or_else(|| {
         ExternalAgentError::Invalid("a native Agent is not an external agent".into())
     })?;
     validate_model(model)?;
@@ -380,15 +446,37 @@ impl ExternalRuntimeProfile {
 /// for `GET /api/claude_code/policy_limits` and `/api/claude_code/settings`
 /// and goes on without them when they are refused.
 pub fn routes_for(runtime: AgentRuntime) -> Result<Vec<EgressRouteYaml>, ExternalAgentError> {
-    let (host, credential, placeholder, path) = match runtime {
-        AgentRuntime::Native => return Ok(Vec::new()),
-        AgentRuntime::ClaudeCode => (
+    routes_for_credential(runtime, ExternalCredential::Default)
+}
+
+/// [`routes_for`] a writer whose route sends `credential`. Codex with a
+/// ChatGPT sign-in gets the route to the ChatGPT backend instead
+/// (`chatgpt.com`, `POST /backend-api/codex/responses`, credential
+/// `codex-chatgpt`, placeholder `CODEX_CHATGPT_ACCESS_TOKEN`); its value
+/// comes from the daemon's broker, which keeps the access token current and
+/// adds the account id ([`codex_chatgpt`]). Nothing routes `auth.openai.com`:
+/// a refresh from the container is refused where the connection is decided,
+/// and recorded.
+pub fn routes_for_credential(
+    runtime: AgentRuntime,
+    credential: ExternalCredential,
+) -> Result<Vec<EgressRouteYaml>, ExternalAgentError> {
+    let chatgpt_path = format!("{}/responses", codex::CHATGPT_BASE_PATH);
+    let (host, credential, placeholder, path) = match (runtime, credential) {
+        (AgentRuntime::Native, _) => return Ok(Vec::new()),
+        (AgentRuntime::Codex, ExternalCredential::CodexChatgpt) => (
+            codex::CHATGPT_HOST,
+            codex::CODEX_CHATGPT_SECRET,
+            codex::CHATGPT_TOKEN_PLACEHOLDER_ENV,
+            chatgpt_path.as_str(),
+        ),
+        (AgentRuntime::ClaudeCode, _) => (
             claude_code::API_HOST,
             claude_code::CLAUDE_CODE_SECRET,
             claude_code::TOKEN_PLACEHOLDER_ENV,
             "/v1/messages",
         ),
-        AgentRuntime::Codex => (
+        (AgentRuntime::Codex, ExternalCredential::Default) => (
             codex::API_HOST,
             codex::CODEX_SECRET,
             codex::TOKEN_PLACEHOLDER_ENV,
@@ -424,14 +512,26 @@ pub fn routes_for(runtime: AgentRuntime) -> Result<Vec<EgressRouteYaml>, Externa
 /// runtime's fixed variables, then the program reading its prompt from
 /// stdin.
 pub fn program_argv(runtime: AgentRuntime, model: &str) -> Result<Vec<String>, ExternalAgentError> {
-    let (env, argv): (&[(&str, &str)], Vec<String>) = match runtime {
-        AgentRuntime::Native => {
+    program_argv_with(runtime, ExternalCredential::Default, model)
+}
+
+/// [`program_argv`] for a writer whose route sends `credential`.
+pub fn program_argv_with(
+    runtime: AgentRuntime,
+    credential: ExternalCredential,
+    model: &str,
+) -> Result<Vec<String>, ExternalAgentError> {
+    let (env, argv): (&[(&str, &str)], Vec<String>) = match (runtime, credential) {
+        (AgentRuntime::Native, _) => {
             return Err(ExternalAgentError::Invalid(
                 "a native Agent runs no program".into(),
             ))
         }
-        AgentRuntime::ClaudeCode => (claude_code::ENV, claude_code::argv(model)?),
-        AgentRuntime::Codex => (codex::ENV, codex::argv(model)?),
+        (AgentRuntime::ClaudeCode, _) => (claude_code::ENV, claude_code::argv(model)?),
+        (AgentRuntime::Codex, ExternalCredential::Default) => (codex::ENV, codex::argv(model)?),
+        (AgentRuntime::Codex, ExternalCredential::CodexChatgpt) => {
+            (codex::ENV, codex::chatgpt_argv(model)?)
+        }
     };
     let mut command = vec!["env".to_string()];
     command.extend(env.iter().map(|(name, value)| format!("{name}={value}")));
@@ -485,6 +585,15 @@ fn output_wrapper() -> String {
 /// The full argv one activation runs through the supervisor: the bounded
 /// output wrapper around [`program_argv`].
 pub fn command_argv(runtime: AgentRuntime, model: &str) -> Result<Vec<String>, ExternalAgentError> {
+    command_argv_with(runtime, ExternalCredential::Default, model)
+}
+
+/// [`command_argv`] for a writer whose route sends `credential`.
+pub fn command_argv_with(
+    runtime: AgentRuntime,
+    credential: ExternalCredential,
+    model: &str,
+) -> Result<Vec<String>, ExternalAgentError> {
     let mut argv = vec![
         "sh".to_string(),
         "-c".to_string(),
@@ -493,7 +602,7 @@ pub fn command_argv(runtime: AgentRuntime, model: &str) -> Result<Vec<String>, E
         MAX_OUTPUT_FILE_BYTES.to_string(),
         MAX_READ_BACK_BYTES.to_string(),
     ];
-    argv.extend(program_argv(runtime, model)?);
+    argv.extend(program_argv_with(runtime, credential, model)?);
     Ok(argv)
 }
 

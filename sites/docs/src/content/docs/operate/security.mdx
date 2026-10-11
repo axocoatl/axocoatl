@@ -532,8 +532,12 @@ this contract, and Axocoatl cannot change or always detect those settings.
   `--from-env VAR`, from an environment variable, never from an argument, so the value
   is not in the process list. `axocoatl connect claude-code` stores the Claude Code
   token the same way, read from `claude setup-token`'s output in memory and hidden on
-  screen, so it is never shown, copied or typed. A route adds it on your computer; it never enters a
-  container, a record or a log. It is not encrypted at rest, and a backup of the data
+  screen, so it is never shown, copied or typed. `axocoatl connect codex` stores a
+  ChatGPT sign-in (access token, refresh token and account id) the same way, read from
+  the `auth.json` that `codex login` writes in a private temporary `CODEX_HOME`, which is
+  then overwritten and removed; the daemon refreshes that sign-in itself, on your
+  computer, at OpenAI's token endpoint, and writes the new tokens back to the same file.
+  A route adds it on your computer; it never enters a container, a record or a log. It is not encrypted at rest, and a backup of the data
   root includes it.
 - Scope E2B Git tokens, MCP credentials, webhook headers, API keys, and bearer
   tokens to the smallest usable authority. The E2B Git token is an environment

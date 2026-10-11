@@ -259,6 +259,9 @@ pub struct RouteSettings {
     pub upstream: Arc<UpstreamConnector>,
     pub workspaces: WorkspaceRoots,
     pub timeouts: BrokerTimeouts,
+    /// Credentials the daemon keeps current itself (the ChatGPT sign-in a
+    /// Codex writer's route sends), by the file they manage.
+    pub managed: Arc<crate::egress_broker::rules::ManagedCredentials>,
 }
 
 impl Default for RouteSettings {
@@ -269,6 +272,7 @@ impl Default for RouteSettings {
             upstream: Arc::new(UpstreamConnector::new()),
             workspaces: Arc::new(Vec::new),
             timeouts: BrokerTimeouts::default(),
+            managed: Arc::default(),
         }
     }
 }
@@ -301,7 +305,8 @@ impl RouteBroker {
                     settings.upstream.clone(),
                     settings.workspaces.clone(),
                 )
-                .with_timeouts(settings.timeouts),
+                .with_timeouts(settings.timeouts)
+                .with_managed(settings.managed.clone()),
             ),
             trust: None,
         })

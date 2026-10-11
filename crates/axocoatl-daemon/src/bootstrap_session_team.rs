@@ -92,6 +92,11 @@ pub struct InlineAgentDefinition {
     /// the program's model as its model; the program brings its own tools.
     #[serde(default, skip_serializing_if = "is_native_runtime")]
     pub runtime: axocoatl_config::loadout::AgentRuntime,
+    /// The stored credential an external runtime's route sends, as the
+    /// loadout names it (`codex-chatgpt` runs Codex with a ChatGPT sign-in);
+    /// absent is the runtime's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<axocoatl_core::ReasoningEffort>,
 }
@@ -1599,9 +1604,15 @@ impl AxocoatlDaemon {
                 // An external program's retained definition: the runtime as
                 // its provider, the program's model, the autonomous writer
                 // with bash, and no per-call limits (the grant bounds it).
-                config = crate::external_agent::external_agent_config(
+                let credential = crate::external_agent::ExternalCredential::named(
+                    definition.runtime,
+                    definition.credential.as_deref(),
+                )
+                .map_err(|error| team_error(error.to_string()))?;
+                config = crate::external_agent::external_agent_config_with(
                     config,
                     definition.runtime,
+                    credential,
                     &proposed.model,
                 )
                 .map_err(|error| team_error(error.to_string()))?;

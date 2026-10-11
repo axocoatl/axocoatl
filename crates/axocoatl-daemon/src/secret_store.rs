@@ -300,12 +300,24 @@ fn connect_command(name: &str) -> String {
     }
 }
 
+/// The ChatGPT sign-in `axocoatl connect codex` stores.
+fn is_codex_chatgpt_secret(name: &str) -> bool {
+    name == crate::external_agent::codex::CODEX_CHATGPT_SECRET
+}
+
 /// How to store secret `name` again. For a Claude Code secret: run
 /// `axocoatl connect claude-code`, which obtains and stores a new token
-/// without anyone seeing it; otherwise pipe in only the token. For the
-/// refusal of a credential a model API rejected and for `secret set`'s
-/// warnings.
+/// without anyone seeing it; for the ChatGPT sign-in, run again (the daemon
+/// asks for a new access token after a rejection) or `axocoatl connect
+/// codex`; otherwise pipe in only the token. For the refusal of a credential
+/// a model API rejected and for `secret set`'s warnings.
 pub fn store_again_hint(name: &str) -> String {
+    if is_codex_chatgpt_secret(name) {
+        return "the daemon asks OpenAI for a new access token after a rejection, so run \
+                again; if the sign-in is rejected again, connect again with `axocoatl connect \
+                codex`, which runs `codex login` and stores the new sign-in without showing it"
+            .to_string();
+    }
     if is_claude_code_secret(name) {
         return format!(
             "connect again with `{}`, which runs `claude setup-token` and stores the new \
@@ -325,6 +337,11 @@ pub fn store_again_hint(name: &str) -> String {
 
 /// How to store secret `name` when a route names it and it is missing.
 pub fn how_to_store(name: &str) -> String {
+    if is_codex_chatgpt_secret(name) {
+        return "run `axocoatl connect codex` (it runs `codex login` with a private temporary \
+                CODEX_HOME and stores your ChatGPT sign-in without showing it)"
+            .to_string();
+    }
     if is_claude_code_secret(name) {
         format!(
             "run `{}` (it runs `claude setup-token` and stores the token without showing it)",
@@ -381,6 +398,15 @@ pub fn value_warnings(name: &str, value: &[u8]) -> Vec<String> {
         warnings.push(format!(
             "it looks like {} tokens or words, not one",
             parts.max(prefixes)
+        ));
+    }
+    if is_codex_chatgpt_secret(name)
+        && !text.starts_with(crate::egress_broker::rules::MANAGED_VALUE_PREFIX)
+    {
+        warnings.push(format!(
+            "the route of a Codex writer with credential: {name} sends a ChatGPT sign-in that \
+             `axocoatl connect codex` stores, and this value is not one, so that route will \
+             refuse it; run `axocoatl connect codex` instead"
         ));
     }
     if is_claude_code_secret(name) && !text.starts_with(CLAUDE_CODE_TOKEN_PREFIX) {
@@ -759,6 +785,16 @@ mod tests {
         assert!(how_to_store("claude-code-oauth").starts_with("run `axocoatl connect claude-code`"));
         assert!(how_to_store("example-token")
             .starts_with("pipe the value into `axocoatl secret set example-token`"));
+        assert!(how_to_store("codex-chatgpt").starts_with("run `axocoatl connect codex`"));
+        let again = store_again_hint("codex-chatgpt");
+        assert!(
+            again.contains("asks OpenAI for a new access token"),
+            "{again}"
+        );
+        assert!(again.contains("`axocoatl connect codex`"), "{again}");
+        let warned = value_warnings("codex-chatgpt", b"eyJhbGciOi.eyJleHAiOjF9.c2ln");
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        assert!(warned[0].contains("axocoatl connect codex"), "{warned:?}");
     }
 
     /// `check_can_store` refuses, without writing, every store `set_secret`

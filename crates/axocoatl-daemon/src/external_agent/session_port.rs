@@ -792,7 +792,7 @@ impl SessionDispatchController {
         timeout_ms: Option<u64>,
         settings: &ExternalSettings,
     ) -> Result<ExternalOutcome> {
-        let reserved = {
+        let (reserved, credential) = {
             let state = self.lock()?;
             let bound = state
                 .bound
@@ -806,6 +806,9 @@ impl SessionDispatchController {
                     "the external program differs from the activation's admitted definition",
                 ));
             }
+            // Which credential the admitted definition's route sends (Codex:
+            // an API key, or a ChatGPT sign-in).
+            let credential = external::ExternalCredential::for_provider(&bound.profile.provider);
             // The run's one admitted model call holds the reservation: what
             // the grant allowed when the call was admitted.
             if state
@@ -824,11 +827,14 @@ impl SessionDispatchController {
                 .largest_provider_reservation(activation)
                 .map_err(error)?
                 .ok_or_else(|| error("the activation's model call has no reservation"))?;
-            ProviderExecutionBounds {
-                token_limit: reservation.tokens,
-                cost_microunits: reservation.cost_microunits,
-                response_bytes: RESPONSE_BYTES,
-            }
+            (
+                ProviderExecutionBounds {
+                    token_limit: reservation.tokens,
+                    cost_microunits: reservation.cost_microunits,
+                    response_bytes: RESPONSE_BYTES,
+                },
+                credential,
+            )
         };
         if prompt.len() > external::MAX_PROMPT_BYTES {
             return Err(error(format!(
@@ -837,7 +843,7 @@ impl SessionDispatchController {
                 external::MAX_PROMPT_BYTES
             )));
         }
-        let mut argv = external::command_argv(runtime, model).map_err(error)?;
+        let mut argv = external::command_argv_with(runtime, credential, model).map_err(error)?;
         if runtime == AgentRuntime::ClaudeCode && reserved.cost_microunits > 0 {
             // The program's own spending stop, at what the grant still allows.
             argv.extend(external::claude_code::budget_args(reserved.cost_microunits));

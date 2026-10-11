@@ -423,6 +423,7 @@ pub fn team_edit(
                 source: source(resolved, &format!("agent {}", agent.id)),
                 tools: agent.tools.clone(),
                 runtime: agent.runtime,
+                credential: agent.credential.clone(),
                 reasoning_effort: agent.reasoning_effort,
             }),
         });
@@ -464,6 +465,7 @@ pub fn team_edit(
                             source: source(resolved, "review"),
                             tools: review.tools.clone(),
                             runtime: AgentRuntime::Native,
+                            credential: None,
                             reasoning_effort: None,
                         },
                     }),
