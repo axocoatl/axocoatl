@@ -72,10 +72,14 @@ pub(crate) struct TempHome {
 }
 
 impl TempHome {
-    /// A new `0700` directory in `data_dir`.
+    /// A new `0700` directory in `data_dir`, as an absolute path: Codex
+    /// runs in it and reads a relative `CODEX_HOME` from there, so a
+    /// relative data root (`./data` beside the configuration file, or
+    /// `AXOCOATL_DATA_DIR=data`) would point it at a directory that does
+    /// not exist.
     pub(crate) fn create(data_dir: &Path) -> std::io::Result<Self> {
         use std::os::unix::fs::DirBuilderExt;
-        let path = data_dir.join(format!(
+        let path = std::path::absolute(data_dir)?.join(format!(
             "{TEMP_HOME_PREFIX}{}",
             uuid::Uuid::new_v4().simple()
         ));

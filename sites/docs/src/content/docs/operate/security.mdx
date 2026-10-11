@@ -537,6 +537,9 @@ this contract, and Axocoatl cannot change or always detect those settings.
   the `auth.json` that `codex login` writes in a private temporary `CODEX_HOME`, which is
   then overwritten and removed; the daemon refreshes that sign-in itself, on your
   computer, at OpenAI's token endpoint, and writes the new tokens back to the same file.
+  Its access token goes only on a route to `chatgpt.com`; a request on a route to another
+  host that names it is refused, and its refresh token goes only to OpenAI's token
+  endpoint.
   A route adds it on your computer; it never enters a container, a record or a log. It is not encrypted at rest, and a backup of the data
   root includes it.
 - Scope E2B Git tokens, MCP credentials, webhook headers, API keys, and bearer

@@ -125,7 +125,8 @@ paste or type a token:
 
 - It makes a private temporary `CODEX_HOME` in the data root (`connect-codex-<random>`,
   `0700`) and runs `codex -c cli_auth_credentials_store="file" login` there, with
-  `CODEX_HOME` set to it and that directory as its working directory, so the sign-in is
+  `CODEX_HOME` set to it (as an absolute path, also when the data root is relative) and
+  that directory as its working directory, so the sign-in is
   written to a file in it, never to your system keyring, and no repository's
   `.codex/config.toml` applies. Your own `~/.codex` is not read or written by Axocoatl,
   and Codex is told to use the temporary home instead. Codex 0.160.1 first signs out of
@@ -350,8 +351,16 @@ daemon keeps the token current on your computer, the way Codex 0.160.1 does:
   OpenAI's answer replaces the access token, and the refresh token when it sends a new one
   (it rotates them, and refuses one that was already used); the account id is taken from
   the new id token or access token when one names it. The new sign-in is written back atomically
-  (`0600`). Refreshes are serialized; if `axocoatl connect codex` stored a new sign-in
-  while one was under way, the new sign-in is kept.
+  (`0600`). Refreshes are serialized, and the daemon writes the new sign-in while holding
+  the lock that `axocoatl connect codex`, `axocoatl secret set` and
+  `axocoatl secret remove` take on the data root's `secrets` directory, after reading the
+  file again: if `axocoatl connect codex` stored a new sign-in while a refresh was under
+  way, the new sign-in is kept; if the sign-in was removed (or replaced by another value),
+  it stays that way, and the refreshed token is sent with that one request only. When the
+  new sign-in cannot be written, the daemon keeps it in memory, uses it and tries to write
+  it again on each request for as long as the file still holds the sign-in it replaced,
+  so the refresh token OpenAI already rotated is not sent again; a daemon restarted before
+  it was written has only the old one, which OpenAI may refuse as reused; then connect again.
 - **After a `401`** to a request sent with the current token, it refreshes the same way,
   so the next request carries the new token. The `401` itself goes back to Codex: the
   route does not send the request again. When Codex ends with that error, the run's
@@ -359,7 +368,8 @@ daemon keeps the token current on your computer, the way Codex 0.160.1 does:
 - **When OpenAI refuses the refresh for good** (`401`, `invalid_grant`, or a refresh token
   expired, reused or invalidated), the daemon remembers it for that refresh token and does
   not send it again, stores nothing, and refuses the route's requests once the access token
-  has expired, saying to run `axocoatl connect codex`. When a refresh fails otherwise (no
+  has expired (`503 credential_unavailable`), saying to run `axocoatl connect codex`; why
+  is in the daemon's log, not in the answer to the container. When a refresh fails otherwise (no
   answer, another error), an access token that has not expired yet is still sent, as Codex
   does.
 - Refresh tokens and access tokens are never written to a log, a record or a message.
@@ -367,10 +377,15 @@ daemon keeps the token current on your computer, the way Codex 0.160.1 does:
 From the container nothing reaches the token endpoint: no route serves `auth.openai.com`,
 so a refresh the program attempted would be refused where the Session's connections are
 decided, and recorded in the network record, and any request to `chatgpt.com` other than
-`POST /backend-api/codex/responses` is refused by the route and recorded. The stored
-sign-in is sent only by this route's broker: any other route naming `codex-chatgpt` refuses
-to send it, so its refresh token never leaves your computer except to OpenAI's token
-endpoint.
+`POST /backend-api/codex/responses` is refused by the route and recorded. The daemon sends
+the access token and account id only on a route to `chatgpt.com` whose credential is the
+stored `codex-chatgpt`: this one, or a route to `chatgpt.com` that a loadout lists in its
+`routes` in place of this one (or the configuration lists), with whatever requests its
+rules allow. A route to any other host whose credential is `codex-chatgpt` reads the
+secret as a plain credential, which refuses the stored sign-in, and answers
+`503 credential_unavailable` without sending anything. The refresh token is never sent
+on any route: it leaves your computer only in the daemon's refresh request to OpenAI's
+token endpoint.
 
 <Aside type="caution">
 What Axocoatl's tests show and what they do not. A Podman test runs the pinned Codex

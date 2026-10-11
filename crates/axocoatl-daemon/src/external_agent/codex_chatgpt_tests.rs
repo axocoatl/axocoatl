@@ -430,22 +430,259 @@ fn a_stored_sign_in_is_never_read_as_a_plain_credential() {
         .read(CODEX_CHATGPT_SECRET, &[])
         .unwrap_err()
         .to_string();
-    assert!(error.contains("only the route Axocoatl adds"), "{error}");
+    assert!(error.contains("only on a route to its own host"), "{error}");
     assert!(
         !error.contains(&refresh) && !error.contains(&access),
         "{error}"
     );
-    // The broker manages exactly that file.
+    // The broker manages exactly that file, for chatgpt.com only: a route
+    // to any other host naming it reads the file, which is refused above.
     let managed = managed_credentials(root.path());
-    assert!(managed.find(&source).is_some());
+    assert!(managed.find(&source, "chatgpt.com").is_some());
+    for host in [
+        "evil.test",
+        "api.openai.com",
+        "auth.openai.com",
+        "chatgpt.com.evil.test",
+    ] {
+        assert!(managed.find(&source, host).is_none(), "{host}");
+    }
     let other = crate::egress_broker::CredentialSource::File(crate::secret_store::secret_path(
         root.path(),
         "codex-openai",
     ));
-    assert!(managed.find(&other).is_none());
+    assert!(managed.find(&other, "chatgpt.com").is_none());
     assert!(managed
-        .find(&crate::egress_broker::CredentialSource::Env("X".into()))
+        .find(
+            &crate::egress_broker::CredentialSource::Env("X".into()),
+            "chatgpt.com"
+        )
         .is_none());
+}
+
+/// A sign-in removed while a refresh was under way (`axocoatl secret remove
+/// codex-chatgpt`) stays removed: the refreshed tokens go with that one
+/// request and are not stored, and the next request is refused.
+#[tokio::test]
+async fn a_sign_in_removed_during_a_refresh_stays_removed() {
+    let root = data_root();
+    let (access, refresh) = (access_token("acct-1", 60), refresh_token());
+    store(root.path(), &sign_in(&access, &refresh, "acct-1"));
+    let refreshed_access = access_token("acct-1", 3600);
+    let server = MockServer::start().await;
+    {
+        let root = root.path().to_path_buf();
+        let refreshed_access = refreshed_access.clone();
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(move |_: &wiremock::Request| {
+                assert!(crate::secret_store::remove_secret(&root, CODEX_CHATGPT_SECRET).unwrap());
+                refreshed(&refreshed_access, Some("rt_rotated"))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let broker = broker(root.path(), &server);
+    let value = broker.current().await.unwrap();
+    assert_eq!(value.secret.expose_secret(), refreshed_access);
+    let file = crate::secret_store::secret_path(root.path(), CODEX_CHATGPT_SECRET);
+    assert!(!file.exists());
+    let error = broker.current().await.err().unwrap();
+    assert!(error.contains("cannot be read"), "{error}");
+    assert!(!file.exists());
+    server.verify().await;
+
+    // Replaced meanwhile by a value that is not a sign-in: kept as it is.
+    let root = data_root();
+    store(root.path(), &sign_in(&access, &refresh, "acct-1"));
+    let server = MockServer::start().await;
+    {
+        let root = root.path().to_path_buf();
+        let refreshed_access = refreshed_access.clone();
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(move |_: &wiremock::Request| {
+                crate::secret_store::set_secret(&root, CODEX_CHATGPT_SECRET, b"something-else")
+                    .unwrap();
+                refreshed(&refreshed_access, Some("rt_rotated"))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    broker_current(root.path(), &server).await.unwrap();
+    assert_eq!(
+        std::fs::read(crate::secret_store::secret_path(
+            root.path(),
+            CODEX_CHATGPT_SECRET
+        ))
+        .unwrap(),
+        b"something-else"
+    );
+}
+
+/// A refreshed sign-in that cannot be stored is kept in memory and used
+/// while the file still holds the sign-in it replaced, so the refresh token
+/// OpenAI already rotated is not sent again; it is stored on a later
+/// request.
+#[tokio::test]
+async fn a_refreshed_sign_in_that_cannot_be_stored_is_kept_and_stored_later() {
+    let root = data_root();
+    let (access, refresh) = (access_token("acct-1", 60), refresh_token());
+    store(root.path(), &sign_in(&access, &refresh, "acct-1"));
+    let (new_access, new_refresh) = (access_token("acct-1", 3600), refresh_token());
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_json(refresh_request(&refresh)))
+        .respond_with(refreshed(&new_access, Some(&new_refresh)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let broker = broker(root.path(), &server);
+    broker
+        .fail_stores
+        .store(2, std::sync::atomic::Ordering::SeqCst);
+    // 1: refreshed; the write fails.
+    let value = broker.current().await.unwrap();
+    assert_eq!(value.secret.expose_secret(), new_access);
+    assert_eq!(stored(root.path()).refresh_token(), refresh);
+    // 2: the kept sign-in, no second refresh; the write fails again.
+    let value = broker.current().await.unwrap();
+    assert_eq!(value.secret.expose_secret(), new_access);
+    assert_eq!(stored(root.path()).refresh_token(), refresh);
+    // 3: stored now.
+    let value = broker.current().await.unwrap();
+    assert_eq!(value.secret.expose_secret(), new_access);
+    assert_eq!(stored(root.path()).refresh_token(), new_refresh);
+    assert_eq!(stored(root.path()).access_token(), new_access);
+    server.verify().await;
+
+    // Kept, but a new sign-in is stored meanwhile: the new one is used.
+    let root = data_root();
+    store(root.path(), &sign_in(&access, &refresh, "acct-1"));
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(refreshed(&new_access, Some(&new_refresh)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let broker = broker_for(root.path(), &server);
+    broker
+        .fail_stores
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    broker.current().await.unwrap();
+    let reconnected = (access_token("acct-2", 3600), refresh_token());
+    store(
+        root.path(),
+        &sign_in(&reconnected.0, &reconnected.1, "acct-2"),
+    );
+    let value = broker.current().await.unwrap();
+    assert_eq!(value.secret.expose_secret(), reconnected.0);
+    assert_eq!(stored(root.path()).refresh_token(), reconnected.1);
+    // Kept, then removed: refused, and not stored again.
+    let root = data_root();
+    store(root.path(), &sign_in(&access, &refresh, "acct-1"));
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(refreshed(&new_access, Some(&new_refresh)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let broker = broker_for(root.path(), &server);
+    broker
+        .fail_stores
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    broker.current().await.unwrap();
+    crate::secret_store::remove_secret(root.path(), CODEX_CHATGPT_SECRET).unwrap();
+    assert!(broker.current().await.is_err());
+    assert!(!crate::secret_store::secret_path(root.path(), CODEX_CHATGPT_SECRET).exists());
+}
+
+/// [`broker`], for a test whose local `broker` hides that function.
+fn broker_for(root: &Path, server: &MockServer) -> ChatgptBroker {
+    broker(root, server)
+}
+
+/// The broker reads the sign-in again and writes the refreshed one under
+/// the secret store's lock, which `axocoatl connect codex` (`set_secret`)
+/// and `axocoatl secret remove` take too: a sign-in stored while the lock was
+/// held elsewhere is read and kept, never overwritten.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_broker_writes_under_the_secret_stores_lock() {
+    let root = data_root();
+    let (access, refresh) = (access_token("acct-1", 60), refresh_token());
+    store(root.path(), &sign_in(&access, &refresh, "acct-1"));
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(refreshed(&access_token("acct-1", 3600), Some("rt_rotated")))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let lock = crate::secret_store::lock_secrets(root.path(), false)
+        .unwrap()
+        .unwrap();
+    let broker = Arc::new(broker(root.path(), &server));
+    let refreshing = tokio::spawn({
+        let broker = broker.clone();
+        async move { broker.current().await.map(|value| value.secret) }
+    });
+    // The refresh is answered, and the broker waits for the lock.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .is_empty()
+    {
+        assert!(std::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!refreshing.is_finished());
+    // What `connect codex` stores while holding the lock.
+    let reconnected = (access_token("acct-2", 3600), refresh_token());
+    lock.set(
+        CODEX_CHATGPT_SECRET,
+        &sign_in(&reconnected.0, &reconnected.1, "acct-2")
+            .encode()
+            .unwrap(),
+    )
+    .unwrap();
+    drop(lock);
+    let sent = refreshing.await.unwrap().unwrap();
+    assert_eq!(sent.expose_secret(), reconnected.0);
+    assert_eq!(stored(root.path()).refresh_token(), reconnected.1);
+    server.verify().await;
+}
+
+/// `set_secret` and `remove_secret` wait for the store's lock.
+#[test]
+fn storing_and_removing_a_secret_wait_for_the_lock() {
+    let root = data_root();
+    store(
+        root.path(),
+        &sign_in(&access_token("acct-1", 3600), &refresh_token(), "acct-1"),
+    );
+    let lock = crate::secret_store::lock_secrets(root.path(), false)
+        .unwrap()
+        .unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let path = root.path().to_path_buf();
+    let remover = std::thread::spawn(move || {
+        let removed = crate::secret_store::remove_secret(&path, CODEX_CHATGPT_SECRET).unwrap();
+        done_tx.send(removed).unwrap();
+    });
+    assert!(done_rx.recv_timeout(Duration::from_millis(300)).is_err());
+    assert!(crate::secret_store::secret_path(root.path(), CODEX_CHATGPT_SECRET).exists());
+    drop(lock);
+    assert!(done_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+    remover.join().unwrap();
+    assert!(!crate::secret_store::secret_path(root.path(), CODEX_CHATGPT_SECRET).exists());
 }
 
 #[path = "codex_chatgpt_route_tests.rs"]

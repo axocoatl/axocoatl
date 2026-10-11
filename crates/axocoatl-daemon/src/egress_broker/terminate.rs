@@ -889,11 +889,10 @@ impl Connection {
             );
         }
         // A credential the daemon keeps current itself (a sign-in it
-        // refreshes) gives its value, and any headers that go with it.
-        let managed = route
-            .credential
-            .as_ref()
-            .and_then(|credential| self.managed.find(&credential.source));
+        // refreshes) gives its value, and any headers that go with it, on a
+        // route to its own host only; any other route reads its file as a
+        // plain credential, which refuses it.
+        let managed = self.managed.for_route(&route);
         let mut managed_headers = Vec::new();
         let secret = match (&route.credential, &managed) {
             (None, _) => None,
@@ -903,6 +902,8 @@ impl Connection {
                     Some((credential, value.secret))
                 }
                 Err(reason) => {
+                    // Why is in the daemon's log only: it may name paths on
+                    // this computer, which the client is not told.
                     tracing::warn!(session = %self.ctx.session, conn = %self.ctx.conn, credential = %credential.name, %reason, "managed route credential unavailable");
                     return self.refuse(
                         &facts,
@@ -910,10 +911,10 @@ impl Connection {
                             StatusCode::SERVICE_UNAVAILABLE,
                             "credential_unavailable",
                             format!(
-                                "the daemon has no current value of credential {}: {reason}",
+                                "the daemon has no current value of credential {}",
                                 credential.name
                             ),
-                            "The daemon keeps this sign-in current itself; connect it again on the computer running Axocoatl.",
+                            "The daemon keeps this sign-in current itself and logs why it has none; on the computer running Axocoatl, connect it again (for codex-chatgpt, axocoatl connect codex).",
                             false,
                         ),
                     );

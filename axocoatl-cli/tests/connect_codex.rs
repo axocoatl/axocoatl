@@ -48,6 +48,18 @@ fn tree(directory: &Path, out: &mut Vec<PathBuf>) {
 
 #[test]
 fn connect_codex_signs_in_with_a_private_codex_home_and_stores_the_sign_in() {
+    connect_codex_with_data_root(false);
+}
+
+/// A relative data root (`AXOCOATL_DATA_DIR=data`, or `./data` beside the
+/// configuration file): Codex runs in its temporary home and reads a
+/// relative `CODEX_HOME` from there, so it must get an absolute one.
+#[test]
+fn connect_codex_works_with_a_relative_data_root() {
+    connect_codex_with_data_root(true);
+}
+
+fn connect_codex_with_data_root(relative: bool) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -91,7 +103,11 @@ fn connect_codex_signs_in_with_a_private_codex_home_and_stores_the_sign_in() {
     axocoatl.arg("-c");
     axocoatl.arg(root.join("axocoatl.yaml"));
     axocoatl.cwd(&root);
-    axocoatl.env("AXOCOATL_DATA_DIR", root.join("data"));
+    if relative {
+        axocoatl.env("AXOCOATL_DATA_DIR", "data");
+    } else {
+        axocoatl.env("AXOCOATL_DATA_DIR", root.join("data"));
+    }
     axocoatl.env("HOME", &home);
     axocoatl.env_remove("RUST_LOG");
     for variable in [
@@ -168,7 +184,10 @@ fn connect_codex_signs_in_with_a_private_codex_home_and_stores_the_sign_in() {
         .lines()
         .find_map(|line| line.strip_prefix("codex_home="))
         .unwrap();
-    assert!(codex_home.starts_with(&root.join("data").display().to_string()));
+    assert!(
+        codex_home.starts_with(&root.join("data").display().to_string()),
+        "{seen}"
+    );
     // Stored as one secret; the data root holds nothing else new, the
     // temporary home is gone and the user's ~/.codex is as it was.
     let secret = root.join("data/secrets/codex-chatgpt");

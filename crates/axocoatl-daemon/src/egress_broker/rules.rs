@@ -71,8 +71,9 @@ fn valid_secret(value: &str) -> Result<(), String> {
     }
     if value.starts_with(MANAGED_VALUE_PREFIX) {
         return Err(
-            "it is a sign-in that only the route Axocoatl adds for it sends (for codex-chatgpt, \
-             the route to chatgpt.com of a Codex writer with credential: codex-chatgpt)"
+            "it is a sign-in that the daemon sends only on a route to its own host (for \
+             codex-chatgpt, a route to chatgpt.com, such as the one Axocoatl adds for a Codex \
+             writer with credential: codex-chatgpt)"
                 .into(),
         );
     }
@@ -195,12 +196,17 @@ pub struct ManagedValue {
 
 /// A credential the daemon keeps current itself: a sign-in whose access
 /// token it refreshes (`external_agent::codex_chatgpt::ChatgptBroker`). A
-/// route whose credential is read from the file one manages asks it for the
-/// value of each request instead of reading the file.
+/// route to its host whose credential is read from the file one manages
+/// asks it for the value of each request instead of reading the file; a
+/// route to any other host reads the file as a plain credential, which
+/// refuses the stored sign-in ([`MANAGED_VALUE_PREFIX`]).
 #[async_trait::async_trait]
 pub trait ManagedCredential: Send + Sync {
     /// The file it manages, as a route's `File` credential names it.
     fn file(&self) -> &Path;
+    /// The only host its value is sent to (lowercase, as a route's host):
+    /// for the ChatGPT sign-in, `chatgpt.com`.
+    fn host(&self) -> &str;
     /// The value to send now, refreshed first when it is about to expire.
     /// The error never holds a value.
     async fn current(&self) -> Result<ManagedValue, String>;
@@ -233,9 +239,15 @@ impl ManagedCredentials {
         self.entries.push(credential);
     }
 
-    /// The managed credential a route reading `source` uses, if any: one
-    /// that manages exactly that file.
-    pub fn find(&self, source: &CredentialSource) -> Option<Arc<dyn ManagedCredential>> {
+    /// The managed credential a route to `host` (over TLS) reading `source`
+    /// uses, if any: one that manages exactly that file and is sent to that
+    /// host. A route to another host gets none, so it reads the file as a
+    /// plain credential, which refuses a managed value.
+    pub fn find(
+        &self,
+        source: &CredentialSource,
+        host: &str,
+    ) -> Option<Arc<dyn ManagedCredential>> {
         let CredentialSource::File(path) = source else {
             return None;
         };
@@ -243,10 +255,22 @@ impl ManagedCredentials {
         self.entries
             .iter()
             .find(|entry| {
-                entry.file() == path
-                    || canonical.is_some() && std::fs::canonicalize(entry.file()).ok() == canonical
+                entry.host() == host
+                    && (entry.file() == path
+                        || canonical.is_some()
+                            && std::fs::canonicalize(entry.file()).ok() == canonical)
             })
             .cloned()
+    }
+
+    /// The managed credential `route` uses, if any: [`Self::find`] for its
+    /// credential and host, when it reaches that host over TLS.
+    pub fn for_route(&self, route: &Route) -> Option<Arc<dyn ManagedCredential>> {
+        if route.upstream != RouteUpstream::Tls {
+            return None;
+        }
+        let credential = route.credential.as_ref()?;
+        self.find(&credential.source, &route.host)
     }
 }
 

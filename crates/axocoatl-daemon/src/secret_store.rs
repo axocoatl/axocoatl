@@ -7,7 +7,8 @@
 //! Every operation goes through [`SecureDir`]: no symbolic link is followed,
 //! the directory is `0700` and each file `0600`, and a value is replaced
 //! atomically (a temporary file in the same directory, renamed over the old
-//! one). Names follow the egress route credential rule
+//! one). A change holds an exclusive lock on the directory ([`SecretsLock`]).
+//! Names follow the egress route credential rule
 //! ([`is_valid_credential_name`]); values follow the broker's: 1 to
 //! [`MAX_SECRET_BYTES`] bytes of UTF-8 without control characters, after one
 //! trailing line break is removed. Nothing here formats a value into an
@@ -144,17 +145,79 @@ fn secrets_dir(data_dir: &Path, create: bool) -> Result<Option<SecureDir>, Secre
     Ok(Some(directory))
 }
 
-/// Store `value` as secret `name` (0600, atomic replace). `value` is
-/// normalized first ([`normalize_secret_value`]).
+/// How long a change to the store waits for another one to finish.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The secrets directory, locked for one change: an exclusive `flock` on
+/// the directory, released when this is dropped. [`set_secret`] and
+/// [`remove_secret`] take it, and the daemon's ChatGPT sign-in broker holds
+/// it while it reads the stored sign-in again and writes a refreshed one, so
+/// a sign-in stored or removed meanwhile (`axocoatl connect codex`,
+/// `axocoatl secret remove`) is never undone by the refresh.
+pub struct SecretsLock {
+    directory: SecureDir,
+}
+
+/// Lock the secrets directory ([`SecretsLock`]), creating it `0700` when
+/// `create` is set. `Ok(None)` when it does not exist and `create` is not
+/// set.
+pub fn lock_secrets(
+    data_dir: &Path,
+    create: bool,
+) -> Result<Option<SecretsLock>, SecretStoreError> {
+    let Some(directory) = secrets_dir(data_dir, create)? else {
+        return Ok(None);
+    };
+    #[cfg(unix)]
+    directory
+        .lock_exclusive_waiting(LOCK_WAIT)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                SecretStoreError::Invalid(format!(
+                    "another process kept the secrets directory locked for more than {} \
+                     seconds; try again",
+                    LOCK_WAIT.as_secs()
+                ))
+            } else {
+                SecretStoreError::Io(error)
+            }
+        })?;
+    Ok(Some(SecretsLock { directory }))
+}
+
+impl SecretsLock {
+    /// Store `value` as secret `name` (0600, atomic replace), normalized
+    /// first ([`normalize_secret_value`]).
+    pub fn set(&self, name: &str, value: &[u8]) -> Result<(), SecretStoreError> {
+        check_name(name)?;
+        let value = normalize_secret_value(value)?;
+        check_room(&self.directory, name)?;
+        self.directory.atomic_write_with_mode(name, &value, 0o600)?;
+        Ok(())
+    }
+
+    /// Remove secret `name`. `Ok(false)` when there was none.
+    pub fn remove(&self, name: &str) -> Result<bool, SecretStoreError> {
+        check_name(name)?;
+        if !self.directory.has_exact_file(name)? {
+            return Ok(false);
+        }
+        self.directory.remove_file(name)?;
+        self.directory.sync_all()?;
+        Ok(true)
+    }
+}
+
+/// Store `value` as secret `name` (0600, atomic replace), holding the
+/// store's lock ([`SecretsLock`]). `value` is normalized first
+/// ([`normalize_secret_value`]).
 pub fn set_secret(data_dir: &Path, name: &str, value: &[u8]) -> Result<(), SecretStoreError> {
     check_name(name)?;
     let value = normalize_secret_value(value)?;
-    let directory = secrets_dir(data_dir, true)?.ok_or_else(|| {
+    let lock = lock_secrets(data_dir, true)?.ok_or_else(|| {
         SecretStoreError::Invalid("the secrets directory could not be created".into())
     })?;
-    check_room(&directory, name)?;
-    directory.atomic_write_with_mode(name, &value, 0o600)?;
-    Ok(())
+    lock.set(name, &value)
 }
 
 /// Check, without writing anything, that [`set_secret`] could store a
@@ -204,18 +267,14 @@ pub fn list_secrets(data_dir: &Path) -> Result<Vec<String>, SecretStoreError> {
     }
 }
 
-/// Remove secret `name`. `Ok(false)` when there was none.
+/// Remove secret `name`, holding the store's lock ([`SecretsLock`]).
+/// `Ok(false)` when there was none.
 pub fn remove_secret(data_dir: &Path, name: &str) -> Result<bool, SecretStoreError> {
     check_name(name)?;
-    let Some(directory) = secrets_dir(data_dir, false)? else {
-        return Ok(false);
-    };
-    if !directory.has_exact_file(name)? {
-        return Ok(false);
+    match lock_secrets(data_dir, false)? {
+        Some(lock) => lock.remove(name),
+        None => Ok(false),
     }
-    directory.remove_file(name)?;
-    directory.sync_all()?;
-    Ok(true)
 }
 
 /// Whether secret `name` is stored (a regular file; never read here).

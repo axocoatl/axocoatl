@@ -39,9 +39,20 @@
 //! `refresh_token_invalidated` codes) is remembered for that refresh token,
 //! so it is not sent again; the sign-in must then be connected again. When a
 //! refresh fails, a token that has not expired yet is still sent, as Codex
-//! does. Refreshes are serialized; before writing, the broker reads the file
-//! again and keeps a sign-in someone else stored meanwhile (a new
-//! `axocoatl connect codex`).
+//! does. Refreshes are serialized. The new sign-in is written under the
+//! secret store's lock (`secret_store::SecretsLock`, which `axocoatl connect
+//! codex` and `axocoatl secret remove` also take), after reading the file again:
+//! a sign-in someone else stored meanwhile is kept and sent instead, and a
+//! sign-in removed meanwhile (or replaced by a value that is not one) stays
+//! removed, the refreshed tokens being sent with that one request only. When
+//! the new sign-in cannot be written, the broker keeps it in memory and uses
+//! it (trying to store it again on each request) for as long as the file
+//! still holds the refresh token it replaced, so the used refresh token is
+//! not sent again.
+//!
+//! Only a route to [`codex::CHATGPT_HOST`](super::codex::CHATGPT_HOST) over
+//! TLS asks the broker for a value; a route to any other host naming
+//! `codex-chatgpt` reads the file as a plain credential, which refuses it.
 //!
 //! No value is ever formatted into an error, a log line or a `Debug` string;
 //! buffers that held one are zeroized when they are dropped.
@@ -206,6 +217,7 @@ struct Stored {
 }
 
 /// A ChatGPT sign-in: the tokens Codex obtained and the account they are for.
+#[derive(Clone)]
 pub struct ChatgptSignIn {
     access_token: Zeroizing<String>,
     refresh_token: Zeroizing<String>,
@@ -466,6 +478,99 @@ const FINAL_CODES: [&str; 4] = [
 struct BrokerState {
     /// SHA-256 of the refresh token OpenAI refused for good, and why.
     refused: Option<([u8; 32], String)>,
+    /// A refreshed sign-in that could not be stored.
+    pending: Option<Pending>,
+}
+
+/// A refreshed sign-in the broker could not store: used in place of the
+/// stored one, and stored again, while the file still holds the refresh
+/// token it replaced (OpenAI refuses that one as reused).
+struct Pending {
+    /// SHA-256 of the refresh token it replaced.
+    replaced: [u8; 32],
+    sign_in: ChatgptSignIn,
+}
+
+/// What writing a refreshed sign-in came to.
+enum Settled {
+    /// Stored; or a sign-in someone else stored meanwhile, used instead.
+    Current(ChatgptSignIn),
+    /// The secret was removed, or replaced by a value that is not a
+    /// sign-in, meanwhile: the refreshed sign-in goes with this request
+    /// only and is not stored.
+    Removed(ChatgptSignIn),
+    /// The refreshed sign-in could not be written: it is sent, and kept.
+    Unstored(ChatgptSignIn),
+}
+
+/// The stored sign-in in `file`, read now (owner-only file, no link
+/// followed). The error names no value.
+fn load_sign_in(file: &Path) -> Result<ChatgptSignIn, String> {
+    let text = crate::egress_broker::rules::read_owner_only(
+        file,
+        axocoatl_config::egress_routes::MAX_SECRET_FILE_BYTES,
+    )
+    .map_err(|reason| {
+        format!("the ChatGPT sign-in {CODEX_CHATGPT_SECRET} cannot be read: {reason}")
+    })?;
+    ChatgptSignIn::decode(text.as_bytes()).map_err(|reason| {
+        format!("the secret {CODEX_CHATGPT_SECRET} cannot be used: {reason}; {CONNECT_AGAIN}")
+    })
+}
+
+/// Write `refreshed`, which replaces the sign-in whose refresh token has
+/// digest `used`, holding the secret store's lock: only when the file still
+/// holds that sign-in. `fail` makes the write fail (tests).
+fn settle_refreshed(
+    file: &Path,
+    data_dir: &Path,
+    used: [u8; 32],
+    refreshed: ChatgptSignIn,
+    fail: bool,
+) -> Settled {
+    let lock = match crate::secret_store::lock_secrets(data_dir, false) {
+        Ok(Some(lock)) => lock,
+        Ok(None) => return Settled::Removed(refreshed),
+        Err(error) => {
+            tracing::warn!(%error, "could not lock the secret store to store the refreshed ChatGPT sign-in");
+            return Settled::Unstored(refreshed);
+        }
+    };
+    match load_sign_in(file) {
+        Ok(stored) if digest(stored.refresh_token()) != used => {
+            // Someone else (a new `axocoatl connect codex`) stored a
+            // sign-in while this one was refreshed: theirs is kept.
+            return Settled::Current(stored);
+        }
+        Ok(_) => {}
+        Err(_) => {
+            tracing::warn!(
+                "the ChatGPT sign-in was removed or replaced while it was refreshed; the \
+                 refreshed sign-in is not stored"
+            );
+            return Settled::Removed(refreshed);
+        }
+    }
+    let written = if fail {
+        Err("the write failed (test)".to_string())
+    } else {
+        refreshed.encode().and_then(|encoded| {
+            lock.set(CODEX_CHATGPT_SECRET, &encoded)
+                .map_err(|error| error.to_string())
+        })
+    };
+    match written {
+        Ok(()) => {
+            tracing::info!("refreshed the ChatGPT sign-in");
+            Settled::Current(refreshed)
+        }
+        Err(reason) => {
+            // The refresh token just used may no longer be accepted, and the
+            // new one is only in memory: kept there until it is stored.
+            tracing::warn!(%reason, "could not store the refreshed ChatGPT sign-in; kept in memory");
+            Settled::Unstored(refreshed)
+        }
+    }
 }
 
 fn digest(value: &str) -> [u8; 32] {
@@ -484,6 +589,9 @@ pub struct ChatgptBroker {
     data_dir: PathBuf,
     endpoint: TokenEndpoint,
     state: tokio::sync::Mutex<BrokerState>,
+    /// How many of the next writes fail (tests).
+    #[cfg(test)]
+    pub(crate) fail_stores: std::sync::atomic::AtomicUsize,
 }
 
 impl ChatgptBroker {
@@ -495,6 +603,8 @@ impl ChatgptBroker {
             data_dir: data_dir.to_path_buf(),
             endpoint,
             state: tokio::sync::Mutex::new(BrokerState::default()),
+            #[cfg(test)]
+            fail_stores: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -504,25 +614,65 @@ impl ChatgptBroker {
         Ok(Self::new(data_dir, TokenEndpoint::openai()?))
     }
 
-    /// The stored sign-in, read now (owner-only file, no link followed).
-    fn load(&self) -> Result<ChatgptSignIn, String> {
-        let text = crate::egress_broker::rules::read_owner_only(
-            &self.file,
-            axocoatl_config::egress_routes::MAX_SECRET_FILE_BYTES,
-        )
-        .map_err(|reason| {
-            format!("the ChatGPT sign-in {CODEX_CHATGPT_SECRET} cannot be read: {reason}")
-        })?;
-        ChatgptSignIn::decode(text.as_bytes()).map_err(|reason| {
-            format!("the secret {CODEX_CHATGPT_SECRET} cannot be used: {reason}; {CONNECT_AGAIN}")
-        })
+    /// Whether the next write is to fail (tests).
+    fn fail_store(&self) -> bool {
+        #[cfg(test)]
+        {
+            use std::sync::atomic::Ordering;
+            self.fail_stores
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok()
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
     }
 
-    /// Store `sign_in` (atomically, `0600`).
-    fn store(&self, sign_in: &ChatgptSignIn) -> Result<(), String> {
-        let encoded = sign_in.encode()?;
-        crate::secret_store::set_secret(&self.data_dir, CODEX_CHATGPT_SECRET, &encoded)
-            .map_err(|error| error.to_string())
+    /// Write `refreshed` (see [`settle_refreshed`]) and remember it when it
+    /// could not be written. The sign-in to send.
+    async fn settle(
+        &self,
+        state: &mut BrokerState,
+        used: [u8; 32],
+        refreshed: ChatgptSignIn,
+    ) -> ChatgptSignIn {
+        let (file, data_dir, fail) = (self.file.clone(), self.data_dir.clone(), self.fail_store());
+        let fallback = refreshed.clone();
+        let settled = tokio::task::spawn_blocking(move || {
+            settle_refreshed(&file, &data_dir, used, refreshed, fail)
+        })
+        .await
+        .unwrap_or(Settled::Unstored(fallback));
+        state.pending = None;
+        match settled {
+            Settled::Current(sign_in) | Settled::Removed(sign_in) => sign_in,
+            Settled::Unstored(sign_in) => {
+                state.pending = Some(Pending {
+                    replaced: used,
+                    sign_in: sign_in.clone(),
+                });
+                sign_in
+            }
+        }
+    }
+
+    /// The sign-in in force: the stored one, or a refreshed one not stored
+    /// yet ([`Pending`]) while the file still holds the sign-in it replaced,
+    /// which is then stored again.
+    async fn signed_in(&self, state: &mut BrokerState) -> Result<ChatgptSignIn, String> {
+        let stored = load_sign_in(&self.file);
+        let Some(pending) = state.pending.take() else {
+            return stored;
+        };
+        // Removed, or replaced by something else: the pending one is dropped.
+        let stored = stored?;
+        if digest(stored.refresh_token()) != pending.replaced {
+            return Ok(stored);
+        }
+        Ok(self.settle(state, pending.replaced, pending.sign_in).await)
     }
 
     /// The JSON body of a refresh, in a zeroizing buffer.
@@ -638,21 +788,7 @@ impl ChatgptBroker {
                 return Refreshed::Failed(format!("the token endpoint's answer: {reason}"))
             }
         };
-        // Someone else (a new `axocoatl connect codex`) may have stored a
-        // sign-in while this one was refreshed: theirs is kept.
-        if let Ok(stored) = self.load() {
-            if digest(stored.refresh_token()) != used {
-                return Refreshed::SignIn(stored);
-            }
-        }
-        if let Err(reason) = self.store(&refreshed) {
-            // The refresh token just used may no longer be accepted, and the
-            // new one is only in memory: this request still goes out.
-            tracing::warn!(%reason, "could not store the refreshed ChatGPT sign-in");
-        } else {
-            tracing::info!("refreshed the ChatGPT sign-in");
-        }
-        Refreshed::SignIn(refreshed)
+        Refreshed::SignIn(self.settle(state, used, refreshed).await)
     }
 
     fn value(sign_in: &ChatgptSignIn) -> Result<ManagedValue, String> {
@@ -693,9 +829,13 @@ impl ManagedCredential for ChatgptBroker {
         &self.file
     }
 
+    fn host(&self) -> &str {
+        super::codex::CHATGPT_HOST
+    }
+
     async fn current(&self) -> Result<ManagedValue, String> {
         let mut state = self.state.lock().await;
-        let sign_in = self.load()?;
+        let sign_in = self.signed_in(&mut state).await?;
         let now = now_ms();
         if !sign_in.refresh_due(now) {
             return Self::value(&sign_in);
@@ -716,7 +856,7 @@ impl ManagedCredential for ChatgptBroker {
 
     async fn rejected(&self, sent: &SecretString) {
         let mut state = self.state.lock().await;
-        let Ok(sign_in) = self.load() else {
+        let Ok(sign_in) = self.signed_in(&mut state).await else {
             return;
         };
         // Refreshed since that request was sent: nothing to do.

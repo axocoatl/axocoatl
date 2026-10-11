@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`axocoatl connect codex`: Codex with your ChatGPT plan, without handling a key.** The
   command runs the official `codex login` (or `codex login --device-auth` with
   `--device-auth`) with a private temporary `CODEX_HOME` (`0700`) in the data root, never
-  your `~/.codex`, with file storage forced, in that directory, and without Codex's other
+  your `~/.codex`, with file storage forced, in that directory (given to Codex as an
+  absolute path, also when the data root is relative), and without Codex's other
   credential and endpoint variables. You approve the sign-in in the browser or enter the
   code Codex shows. Its output reaches your terminal through the same masking relay as
   `connect claude-code`, which here also hides OpenAI API keys and JWTs. Axocoatl reads
@@ -35,14 +36,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expires within five minutes (or, without an expiry, was obtained more than eight days
   ago), and after a `401` for the current token, the daemon refreshes it at OpenAI's token
   endpoint the way Codex 0.160.1 does, stores the rotated tokens atomically, remembers a
-  final refusal instead of retrying it, and never logs a token. The `401` itself still
-  reaches Codex; the run's not-covered reason says to run again, then to connect again.
-  The stored sign-in is refused by any other route, so its refresh token is sent only to
-  OpenAI's token endpoint.
+  final refusal instead of retrying it, and never logs a token. It writes the rotated
+  tokens under the secret store's lock after reading the file again: a sign-in that
+  `axocoatl connect codex` stored meanwhile is kept, and one that `axocoatl secret remove`
+  removed meanwhile stays removed (the refreshed token goes with that one request only).
+  Rotated tokens that cannot be written are kept in memory, used and written again on
+  the next request, so the refresh token OpenAI already rotated is not sent again. The
+  `401` itself still reaches Codex; the run's not-covered reason says to run again, then
+  to connect again. When the daemon has no current token, the route's refusal says to
+  connect again and the reason is in the daemon's log, not in the answer to the
+  container.
+- **The sign-in goes to `chatgpt.com` only.** The daemon sends the access token and
+  account id only on a route to `chatgpt.com` whose credential is that secret: the one
+  Axocoatl adds, or one that a loadout or the configuration lists for that host, with the
+  requests its rules allow. A route to any other host whose credential is that secret
+  reads it as a plain credential, which refuses the stored sign-in, and answers `503`.
+  The refresh token is sent only to OpenAI's token endpoint.
 
 ### Changed
 - `axocoatl secret set codex-chatgpt` warns when the value is not a sign-in
   `connect codex` stored, and a missing `codex-chatgpt` names `axocoatl connect codex`.
+- `axocoatl secret set`, `axocoatl secret remove` and the `connect` commands store and
+  remove a secret while holding an exclusive lock on the data root's `secrets` directory
+  (waiting up to five seconds for another holder), the lock the daemon takes to write a
+  refreshed ChatGPT sign-in.
 
 ### Not measured
 - The ChatGPT mode has run with the pinned Codex 0.160.1 through a whole loadout run on
