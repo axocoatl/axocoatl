@@ -569,12 +569,7 @@ async fn cmd_connect_codex(config: PathBuf, device_auth: bool, explicit: Option<
         eprintln!("✗ {error}; `codex login` was not run, so no sign-in was made");
         return exit::FAILURE;
     }
-    let how = if device_auth {
-        "Enter the code it shows at the address it gives, on any device."
-    } else {
-        "Sign in in the browser it opens, or open the address it prints in a browser on this \
-         computer."
-    };
+    let how = codex::sign_in_how(device_auth, explicit.is_none());
     let (runner, intro) = match explicit {
         Some(explicit) => {
             let path = match host_codex(&explicit) {
@@ -594,11 +589,7 @@ async fn cmd_connect_codex(config: PathBuf, device_auth: bool, explicit: Option<
             (codex::Runner::Host { codex: path }, intro)
         }
         None => {
-            let home = std::env::var_os("HOME").map(PathBuf::from);
-            let podman = match codex_container::find_podman(
-                std::env::var_os("PATH").as_deref(),
-                home.as_deref(),
-            ) {
+            let podman = match codex_container::find_podman(std::env::var_os("PATH").as_deref()) {
                 Ok(podman) => podman,
                 Err(error) => {
                     eprintln!("✗ {error}");

@@ -136,10 +136,13 @@ throwaway container.
   memory, and Codex runs `codex -c cli_auth_credentials_store="file" login`, so the
   sign-in is written to a file there, never to a keyring. Your own `~/.codex` and your
   environment (no `CODEX_API_KEY`, `OPENAI_API_KEY` or other variable of yours) do not
-  reach it. It is on Podman's default bridge network, not on Axocoatl's egress routes:
-  `codex login` reaches `auth.openai.com` directly, as it would on your computer. It holds
-  no Axocoatl secret, and Podman stops and removes it after 30 minutes at most, even if
-  Axocoatl is killed.
+  reach it, nor do the proxy variables Podman would otherwise copy in (`http_proxy`,
+  `https_proxy`, `ftp_proxy`, `no_proxy`, in either case; it runs with
+  `--http-proxy=false`). It is on Podman's default bridge network, not on Axocoatl's
+  egress routes: `codex login` reaches `auth.openai.com` directly, without a proxy. Where
+  that needs a proxy, sign in with `--codex PATH` instead, which keeps your proxy
+  variables. It holds no Axocoatl secret, and Podman stops and removes it after 30
+  minutes at most, even if Axocoatl is killed.
 - **The browser sign-in** returns to `http://localhost:1455/auth/callback`, the address
   Codex prints. The container publishes that one port on your computer's loopback only
   (`127.0.0.1:1455`); inside it, a small forwarder passes each connection to Codex's
@@ -154,7 +157,10 @@ throwaway container.
   parts), each at the start of a word, as `[token hidden by axocoatl]`, and drops
   clipboard writes. Codex 0.160.1 prints no token: it shows the sign-in address (or the
   device code) and writes the tokens to `auth.json`. Ctrl-C goes to Codex, as it would
-  on your computer.
+  on your computer. Once Codex has exited, Ctrl-C (or closing the terminal) reaches
+  Axocoatl, which catches it; the `podman` commands that start the container, read the
+  sign-in and remove the container run in a process group of their own, so it does not
+  stop them.
 - Axocoatl reads the tokens from that file, never from the screen: `podman exec` prints
   `auth.json` (a regular file, a link is refused, of at most 64 KiB) straight into
   Axocoatl's memory, and Axocoatl never writes it to disk; the only other copy is
@@ -196,11 +202,11 @@ Podman is needed:
   the next run once it is 30 minutes old (a sign-in in progress elsewhere keeps its own). On an SSD or a copy-on-write file system an overwrite does
   not guarantee that the old blocks are gone; the data root is readable only by you.
 
-It needs an interactive terminal, and Podman (the first `podman` on `PATH`, then
-`~/.local/bin/podman`) unless `--codex PATH` names an executable Codex CLI. The secret is
+It needs an interactive terminal, and Podman (the first `podman` on `PATH`) unless
+`--codex PATH` names an executable Codex CLI. The secret is
 always named `codex-chatgpt`, because that is the one the daemon refreshes. Like `recipe
 build`, it uses the data root of `--config` or `AXOCOATL_DATA_DIR`. Exit codes: 0 stored,
-2 `codex login` stored no ChatGPT sign-in, 3 usage (no terminal, no Podman, a `--codex`
+2 `codex login` stored no ChatGPT sign-in, 3 usage (no terminal, no Podman on `PATH`, a `--codex`
 that is not an executable, or port 1455 in use), 5 the data directory, the secret store,
 Podman, the image build, the pseudo-terminal or `auth.json` failed (also when
 `auth.json` is a link), 6 interrupted by a signal. Nothing is stored unless it exits 0.

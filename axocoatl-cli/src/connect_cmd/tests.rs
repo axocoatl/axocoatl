@@ -1558,8 +1558,116 @@ fn the_login_container_publishes_only_the_callback_on_loopback_and_mounts_nothin
             name.as_str()
         ]
     );
-    let missing = find_podman(None, None).unwrap_err();
+    let missing = find_podman(None).unwrap_err();
     assert!(missing.contains("--codex PATH"), "{missing}");
+    // Podman's proxy variables do not reach the container either.
+    for args in [&browser, &device] {
+        let image_at = args.iter().position(|arg| arg == image).unwrap();
+        let proxy: Vec<&String> = args[..image_at]
+            .iter()
+            .filter(|arg| arg.starts_with("--http-proxy"))
+            .collect();
+        assert_eq!(proxy, ["--http-proxy=false"]);
+    }
+}
+
+/// Podman is looked for on PATH only: the recipe image is built with the
+/// `podman` on PATH, so a `~/.local/bin/podman` that is not on it is not
+/// taken (it would start the sign-in and then fail building the image).
+#[test]
+fn podman_is_looked_for_on_path_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let local = directory.path().join(".local/bin");
+    std::fs::create_dir_all(&local).unwrap();
+    let podman = local.join("podman");
+    std::fs::write(&podman, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let elsewhere = std::ffi::OsString::from("/nonexistent-axocoatl-path");
+    let missing = codex_container::find_podman(Some(&elsewhere)).unwrap_err();
+    assert!(missing.contains("not found on PATH."), "{missing}");
+    assert!(!missing.contains(".local"), "{missing}");
+    let on_path = std::env::join_paths([&local]).unwrap();
+    assert_eq!(
+        codex_container::find_podman(Some(&on_path)).unwrap(),
+        podman
+    );
+}
+
+/// The intro says what to do: Codex in the login container cannot open a
+/// browser on this computer, so it says to open the address it prints.
+#[test]
+fn the_container_intro_does_not_promise_a_browser_codex_cannot_open() {
+    let container = codex::sign_in_how(false, true);
+    assert_eq!(
+        container,
+        "Open the address it prints in a browser on this computer."
+    );
+    assert!(!container.contains("it opens"));
+    assert!(codex::sign_in_how(false, false).contains("browser it opens"));
+    for in_container in [false, true] {
+        assert!(codex::sign_in_how(true, in_container).contains("Enter the code"));
+    }
+}
+
+/// The `podman` commands that start the login container, read the sign-in
+/// from it and remove it each run in a process group of their own, so a
+/// Ctrl-C, Ctrl-\ or hangup sent to Axocoatl's group once Codex has exited
+/// (Axocoatl catches it) cannot kill them and leave the container, and the
+/// sign-in in it, behind.
+#[test]
+fn the_login_containers_podman_commands_run_in_their_own_process_group() {
+    let directory = tempfile::tempdir().unwrap();
+    let log = directory.path().join("log");
+    let podman = directory.path().join("podman");
+    std::fs::write(
+        &podman,
+        format!(
+            "#!/bin/sh\nprintf '%s %s %s\\n' \"$1\" \"$$\" \"$(ps -o pgid= -p $$ | tr -d ' ')\" \
+             >> '{}'\n[ \"$1\" = exec ] && exit 3\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Wait out a "text file busy" while another test's fork still holds
+    // the file open for writing.
+    for _ in 0..100 {
+        match std::process::Command::new(&podman).arg("probe").status() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            other => {
+                other.unwrap();
+                break;
+            }
+        }
+    }
+    let container = codex_container::Container::start(&podman, "image-id", true).unwrap();
+    assert!(container.read_auth_file().unwrap().is_none());
+    drop(container);
+    let ours = std::process::Command::new("ps")
+        .args(["-o", "pgid=", "-p", &std::process::id().to_string()])
+        .output()
+        .unwrap();
+    let ours = String::from_utf8_lossy(&ours.stdout).trim().to_string();
+    assert!(!ours.is_empty());
+    let log = std::fs::read_to_string(&log).unwrap();
+    let ran: Vec<Vec<&str>> = log
+        .lines()
+        .map(|line| line.split(' ').collect())
+        .filter(|fields: &Vec<&str>| fields[0] != "probe")
+        .collect();
+    assert_eq!(
+        ran.iter().map(|fields| fields[0]).collect::<Vec<_>>(),
+        ["run", "exec", "rm"],
+        "{log}"
+    );
+    for fields in &ran {
+        assert_eq!(fields.len(), 3, "{log}");
+        // Its own group (the group id is its process id), not Axocoatl's.
+        assert_eq!(fields[1], fields[2], "{log}");
+        assert_ne!(fields[2], ours, "{log}");
+    }
 }
 
 /// A taken callback port is refused before anything runs, with the device

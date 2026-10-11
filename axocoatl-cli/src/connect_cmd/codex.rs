@@ -415,6 +415,19 @@ async fn connect_host(
     Ok(connected_message(false))
 }
 
+/// What to do to sign in, for the intro. A Codex on this computer may open
+/// the browser itself; Codex in the login container cannot open one here.
+pub(crate) fn sign_in_how(device_auth: bool, in_container: bool) -> &'static str {
+    if device_auth {
+        "Enter the code it shows at the address it gives, on any device."
+    } else if in_container {
+        "Open the address it prints in a browser on this computer."
+    } else {
+        "Sign in in the browser it opens, or open the address it prints in a browser on this \
+         computer."
+    }
+}
+
 /// The message when standard input or output is not a terminal.
 pub(crate) fn needs_terminal() -> String {
     "axocoatl connect codex needs an interactive terminal: it runs `codex login`, which signs \

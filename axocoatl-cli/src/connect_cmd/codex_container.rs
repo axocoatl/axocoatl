@@ -12,8 +12,9 @@
 //!   removes it (`podman rm --force`) on every path ([`Container`]);
 //! - has a private `CODEX_HOME` on a `0700` tmpfs ([`CONTAINER_HOME`]), file
 //!   credential storage forced, a read-only root file system, no
-//!   capabilities, no new privileges, a non-root user, no log driver and no
-//!   host mount of any kind;
+//!   capabilities, no new privileges, a non-root user, no log driver, no
+//!   host mount of any kind and no host variable (`--http-proxy=false`: not
+//!   even Podman's proxy variables);
 //! - is on Podman's default bridge network, not Axocoatl's egress routes:
 //!   `codex login` reaches `auth.openai.com` directly, the way it would on
 //!   the host. It holds no Axocoatl secret;
@@ -31,9 +32,16 @@
 //! then read with `podman exec … head` straight into a zeroizing buffer in
 //! this process: Axocoatl never writes `auth.json` to disk, and the only
 //! other copy, Codex's own on the tmpfs, goes with the container.
+//!
+//! The `podman` commands that start, read and remove the container
+//! ([`podman_command`]) each run in a process group of their own (the
+//! `podman exec` of `codex login` runs in the relay's own session), so a
+//! Ctrl-C, Ctrl-\ or terminal hangup, which Axocoatl catches, cannot stop
+//! them.
 
 use std::io::Read;
 use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -105,6 +113,9 @@ pub(crate) fn run_args(name: &str, image: &str, device_auth: bool) -> Vec<String
         "--security-opt=no-new-privileges",
         "--log-driver=none",
         "--pids-limit=256",
+        // Podman would otherwise copy its own `http_proxy`, `https_proxy`,
+        // `ftp_proxy` and `no_proxy` (either case) into the container.
+        "--http-proxy=false",
     ]
     .iter()
     .map(|arg| (*arg).to_string())
@@ -199,20 +210,31 @@ pub(crate) fn check_callback_port(port: u16) -> Result<(), String> {
     }
 }
 
-/// The `podman` to run, as an absolute path.
-pub(crate) fn find_podman(
-    path: Option<&std::ffi::OsStr>,
-    home: Option<&Path>,
-) -> Result<PathBuf, String> {
+/// The `podman` to run: the first on `path`, as an absolute path. Only
+/// `PATH` is searched, because building the recipe image runs the `podman`
+/// on `PATH` too.
+pub(crate) fn find_podman(path: Option<&std::ffi::OsStr>) -> Result<PathBuf, String> {
     super::find_program(
         "podman",
         None,
         path,
-        home,
-        "Podman (`podman`) was not found on PATH or in ~/.local/bin. `axocoatl connect codex` \
-         runs the pinned Codex in a container through Podman (https://podman.io); install it, \
-         or pass a Codex CLI on this computer with --codex PATH",
+        None,
+        "Podman (`podman`) was not found on PATH. `axocoatl connect codex` runs the pinned \
+         Codex in a container through Podman (https://podman.io); install it (or add it to \
+         PATH), or pass a Codex CLI on this computer with --codex PATH",
     )
+}
+
+/// A `podman` command in its own process group. Once the relay gives the
+/// terminal back, a Ctrl-C, Ctrl-\ or the hangup when the terminal closes
+/// goes to Axocoatl's process group, where Axocoatl catches it and goes on
+/// to remove the container; in that group it would kill these commands,
+/// above all the `podman rm` that removes the container and the sign-in in
+/// it. None of them uses the terminal.
+pub(crate) fn podman_command(podman: &Path) -> Command {
+    let mut command = Command::new(podman);
+    command.process_group(0);
+    command
 }
 
 /// The image id of the `codex` recipe image recorded in `data_dir` that
@@ -266,7 +288,7 @@ impl Container {
             podman: podman.to_path_buf(),
             name,
         };
-        let output = Command::new(podman)
+        let output = podman_command(podman)
             .args(run_args(&container.name, image, device_auth))
             .stdin(Stdio::null())
             .output()
@@ -296,7 +318,7 @@ impl Container {
     /// zeroizing buffer of at most [`MAX_AUTH_FILE_BYTES`] bytes. `None`
     /// when Codex wrote none.
     pub(crate) fn read_auth_file(&self) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
-        let mut child = Command::new(&self.podman)
+        let mut child = podman_command(&self.podman)
             .args(read_args(&self.name))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -332,7 +354,7 @@ impl Container {
 
 impl Drop for Container {
     fn drop(&mut self) {
-        let _ = Command::new(&self.podman)
+        let _ = podman_command(&self.podman)
             .args(remove_args(&self.name))
             .stdin(Stdio::null())
             .stdout(Stdio::null())

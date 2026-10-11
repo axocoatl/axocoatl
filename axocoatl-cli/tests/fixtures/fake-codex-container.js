@@ -15,7 +15,8 @@
 //         that it signed in, and prints an OpenAI API key and a JWT from
 //         `screen`, which must be hidden
 //   none  writes no auth.json and exits 1
-// It prints one `fake-seen` line with what it ran with (never a token), and
+// It prints one `fake-seen` line with what it ran with (never a token; for
+// the proxy variables, whether any of them is set), and
 // writes nowhere but $CODEX_HOME.
 'use strict';
 const fs = require('fs');
@@ -47,10 +48,16 @@ try {
   rootWritable = 'yes';
 } catch (_) {}
 const unset = (name) => (process.env[name] === undefined ? 'unset' : 'set');
+const proxies = ['http_proxy', 'https_proxy', 'ftp_proxy', 'no_proxy'].flatMap((name) => [
+  name,
+  name.toUpperCase(),
+]);
+const proxy = proxies.some((name) => process.env[name] !== undefined) ? 'set' : 'unset';
 console.log(
   `fake-seen device=${device ? 'yes' : 'no'} codex_home=${home} home_mode=${homeMode} ` +
     `uid=${process.getuid()} root_writable=${rootWritable} ` +
-    `OPENAI_API_KEY=${unset('OPENAI_API_KEY')} CODEX_API_KEY=${unset('CODEX_API_KEY')}`
+    `OPENAI_API_KEY=${unset('OPENAI_API_KEY')} CODEX_API_KEY=${unset('CODEX_API_KEY')} ` +
+    `proxy=${proxy}`
 );
 
 function finish() {

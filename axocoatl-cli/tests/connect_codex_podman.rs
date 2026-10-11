@@ -278,6 +278,10 @@ impl Run {
         // Must not reach the container.
         command.env("OPENAI_API_KEY", "sk-proj-set-by-the-test-on-the-host");
         command.env("CODEX_API_KEY", "set-by-the-test-on-the-host");
+        // Nor must a proxy variable (Podman copies its own unless told not
+        // to). Unreachable, so a proxy that is used fails the run.
+        command.env("https_proxy", "http://127.0.0.1:9");
+        command.env("HTTPS_PROXY", "http://127.0.0.1:9");
         let child = pair.slave.spawn_command(command).unwrap();
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().unwrap();
@@ -334,6 +338,18 @@ impl Run {
             .status()
             .unwrap();
         assert!(status.success());
+    }
+
+    /// Type `text` every 15 ms until it exits (writes after the terminal
+    /// closed are ignored).
+    fn keep_typing_until_exit(&mut self, text: &[u8]) {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while self.child.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "no exit:\n{}", self.shown());
+            let _ = self.writer.write_all(text);
+            let _ = self.writer.flush();
+            std::thread::sleep(Duration::from_millis(15));
+        }
     }
 
     /// Its exit code, and everything it showed.
@@ -531,7 +547,7 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
         assert!(
             flat.contains(
                 "fake-seen device=no codex_home=/codex-home home_mode=700 uid=1000 \
-                 root_writable=no OPENAI_API_KEY=unset CODEX_API_KEY=unset"
+                 root_writable=no OPENAI_API_KEY=unset CODEX_API_KEY=unset proxy=unset"
             ),
             "{text}"
         );
@@ -544,6 +560,13 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
             "{text}"
         );
         assert!(text.contains("Successfully logged in"), "{text}");
+        // Codex in the container cannot open a browser here: the intro
+        // says to open the address.
+        assert!(
+            text.contains("Open the address it prints in a browser on this computer."),
+            "{text}"
+        );
+        assert!(!text.contains("browser it opens"), "{text}");
         assert_nothing_shown(&shown, &ok);
         let stored = std::fs::read(Run::secret(&root)).unwrap();
         let sign_in = ChatgptSignIn::decode(&stored).unwrap();
@@ -644,6 +667,64 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
         assert!(text.contains("--device-auth"), "{text}");
         assert!(login_containers().is_empty());
         drop(taken);
+    }
+
+    // 7. Ctrl-C typed again and again once Codex has signed in and exited:
+    //    the terminal is no longer raw, so each one is a SIGINT to
+    //    Axocoatl's process group, which Axocoatl catches. The podman
+    //    commands that read the sign-in and remove the container are in
+    //    their own group: the container (and the tokens in it) still goes.
+    {
+        let root = scratch_path.join("ctrl-c-after-sign-in");
+        let mut run = Run::start(&root, &path_dir, &ok, true);
+        run.wait_for("WXYZ-1234");
+        run.type_text(b"\r");
+        run.wait_for("Successfully logged in");
+        run.keep_typing_until_exit(b"\x03");
+        let (code, shown) = run.finish();
+        let text = String::from_utf8_lossy(&shown).into_owned();
+        assert!(!text.contains("could not be read"), "{text}");
+        match code {
+            // Read and stored before Axocoatl saw the signal.
+            0 => {
+                let sign_in =
+                    ChatgptSignIn::decode(&std::fs::read(Run::secret(&root)).unwrap()).unwrap();
+                assert_eq!(sign_in.access_token(), ok.access);
+            }
+            // Seen while the relay was still draining: nothing stored.
+            6 => {
+                assert!(text.contains("the login container was removed"), "{text}");
+                assert!(!Run::secret(&root).exists());
+            }
+            _ => panic!("exit {code}: {text}"),
+        }
+        assert_nothing_shown(&shown, &ok);
+        assert_cleaned_up(&volumes_before);
+    }
+
+    // 8. Ctrl-C pressed again and again to abort the browser sign-in: the
+    //    first stops Codex, the others reach Axocoatl. Nothing is stored,
+    //    the container goes and 1455 is free for the next sign-in.
+    {
+        let root = scratch_path.join("ctrl-c-abort");
+        let mut run = Run::start(&root, &path_dir, &ok, false);
+        run.wait_for("originator=codex_cli_rs");
+        assert_eq!(login_containers().len(), 1);
+        run.keep_typing_until_exit(b"\x03");
+        let (code, shown) = run.finish();
+        let text = String::from_utf8_lossy(&shown).into_owned();
+        assert!(code == 2 || code == 6, "exit {code}: {text}");
+        assert!(!Run::secret(&root).exists());
+        assert_cleaned_up(&volumes_before);
+        let root = scratch_path.join("after-abort");
+        let mut run = Run::start(&root, &path_dir, &ok, false);
+        run.wait_for("originator=codex_cli_rs");
+        let response = callback();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let (code, shown) = run.finish();
+        let text = String::from_utf8_lossy(&shown).into_owned();
+        assert_eq!(code, 0, "{text}");
+        assert_cleaned_up(&volumes_before);
     }
     drop(ok);
     drop(none);

@@ -17,9 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recorded, by image id, built and recorded first when there is none), through the
   configured Podman connection, as a non-root user with a read-only root, no
   capabilities, no host mount, no log, a `0700` tmpfs as `CODEX_HOME`, none of your
-  environment, and Podman's default bridge network (not Axocoatl's egress routes) to
-  reach `auth.openai.com`. The browser sign-in publishes one port, `127.0.0.1:1455`, on
-  your computer's loopback only, to Codex's login server in the container; when that port
+  environment (not even the proxy variables Podman would copy in), and Podman's default
+  bridge network (not Axocoatl's egress routes) to reach `auth.openai.com` without a
+  proxy. Podman is the first `podman` on `PATH`. The browser sign-in publishes one port,
+  `127.0.0.1:1455`, on your computer's loopback only, to Codex's login server in the
+  container, and the command says to open the address Codex prints; when that port
   is in use the command stops before starting anything and suggests `--device-auth`,
   which publishes none. With `--codex PATH`, that Codex CLI on your computer runs
   instead, with a temporary `0700` `CODEX_HOME` in the data root (given to Codex as an
@@ -31,9 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memory, never to disk), stores the access token, refresh token and ChatGPT account id
   as the secret `codex-chatgpt` (`0600`, replaced atomically, as `axocoatl secret set`
   stores one), and then removes the container, or overwrites every file of the temporary
-  home with zeros and removes it, also on an error or a signal; Podman removes a login
-  container after 30 minutes at most even if Axocoatl is killed. Exit codes: 0 stored,
-  2 no ChatGPT sign-in, 3 usage (also no Podman, or port 1455 in use), 5 failure,
+  home with zeros and removes it, also on an error or a signal (the `podman` commands
+  that start, read and remove the container run in a process group of their own, so a
+  Ctrl-C typed after Codex exits does not stop them); Podman removes a login container
+  after 30 minutes at most even if Axocoatl is killed. Exit codes: 0 stored, 2 no
+  ChatGPT sign-in, 3 usage (also no Podman on `PATH`, or port 1455 in use), 5 failure,
   6 interrupted.
 - **A Codex writer can run with that sign-in: `credential: codex-chatgpt`.** A loadout
   Agent's new `credential` field names the stored credential its route sends: for
