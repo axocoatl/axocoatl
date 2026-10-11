@@ -1104,7 +1104,9 @@ impl CodexFixture {
 
     fn request(&self, device_auth: bool) -> codex::ConnectCodex {
         codex::ConnectCodex {
-            codex: self.root.join("bin/codex"),
+            runner: codex::Runner::Host {
+                codex: self.root.join("bin/codex"),
+            },
             data_dir: self.data(),
             device_auth,
         }
@@ -1428,14 +1430,148 @@ fn connect_codex_runs_codex_login_with_file_storage_and_no_other_credentials() {
     ] {
         assert!(Cli::try_parse_from(argv).is_err(), "{argv:?}");
     }
+    // `--codex PATH` must name an executable file; no `codex` on PATH or in
+    // ~/.local/bin is used without it.
     let root = tempfile::tempdir().unwrap();
-    let error = find_codex(None, None, Some(root.path())).unwrap_err();
+    let local = root.path().join("codex");
+    let error = host_codex(&local).unwrap_err();
     assert!(error.contains("--codex"), "{error}");
-    let local = root.path().join(".local/bin/codex");
-    std::fs::create_dir_all(local.parent().unwrap()).unwrap();
     std::fs::write(&local, "#!/bin/sh\n").unwrap();
+    assert!(host_codex(&local).is_err());
     std::fs::set_permissions(&local, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(find_codex(None, None, Some(root.path())).unwrap(), local);
+    assert_eq!(host_codex(&local).unwrap(), local);
+}
+
+/// The login container: the pinned image by id, never pulled; a private
+/// `0700` tmpfs `CODEX_HOME` and nothing from this computer mounted; no
+/// capabilities, a read-only root, a non-root user, no log; stopped and
+/// removed by Podman after at most [`codex_container::MAX_LIFETIME_SECS`];
+/// for the browser sign-in exactly one port published, on this computer's
+/// loopback only, and with `--device-auth` none.
+#[test]
+fn the_login_container_publishes_only_the_callback_on_loopback_and_mounts_nothing() {
+    use codex_container::*;
+    let image = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let name = container_name();
+    assert!(name.starts_with(NAME_PREFIX));
+    assert_ne!(name, container_name());
+    let browser = run_args(&name, image, false);
+    let device = run_args(&name, image, true);
+    for args in [&browser, &device] {
+        assert_eq!(
+            &args[..5],
+            ["run", "--detach", "--rm", "--name", name.as_str()]
+        );
+        for expected in [
+            "--pull=never",
+            "--network=bridge",
+            "--read-only",
+            "--cap-drop=all",
+            "--security-opt=no-new-privileges",
+            "--log-driver=none",
+            "--user=1000:1000",
+            "--timeout=1800",
+            "--env=CODEX_HOME=/codex-home",
+            "--env=HOME=/codex-home",
+            "--workdir=/codex-home",
+            "--mount=type=tmpfs,destination=/codex-home,tmpfs-mode=0700,tmpfs-size=16m,U=true",
+            ROLE_LABEL,
+        ] {
+            assert!(
+                args.iter().any(|arg| arg == expected),
+                "{expected}: {args:?}"
+            );
+        }
+        // No host path is mounted, no host variable passed through.
+        for arg in args.iter() {
+            assert!(
+                !arg.starts_with("-v")
+                    && !arg.starts_with("--volume")
+                    && !arg.contains("type=bind")
+                    && !arg.starts_with("--env-host")
+                    && !arg.starts_with("--env-file"),
+                "{arg}"
+            );
+        }
+        let mounts: Vec<&String> = args
+            .iter()
+            .filter(|arg| arg.starts_with("--mount") || arg.starts_with("--tmpfs"))
+            .collect();
+        assert_eq!(mounts.len(), 2, "{mounts:?}");
+        assert!(mounts.iter().all(|mount| mount.contains("tmpfs")));
+        let image_at = args.iter().position(|arg| arg == image).unwrap();
+        assert!(args[..image_at].iter().all(|arg| !arg.contains("OPENAI")));
+    }
+    let published: Vec<&String> = browser
+        .iter()
+        .filter(|arg| arg.starts_with("--publish") || arg.starts_with("-p"))
+        .collect();
+    assert_eq!(published, ["--publish=127.0.0.1:1455:14550/tcp"]);
+    assert!(browser.ends_with(&[
+        "--entrypoint=node".to_string(),
+        image.to_string(),
+        "-e".to_string(),
+        FORWARDER.to_string()
+    ]));
+    assert!(FORWARDER.contains("net.connect(1455, '127.0.0.1')"));
+    assert!(FORWARDER.contains(".listen(14550, '0.0.0.0')"));
+    assert!(!device
+        .iter()
+        .any(|arg| arg.starts_with("--publish") || arg.starts_with("-p")));
+    assert!(device.ends_with(&[
+        "--entrypoint=sleep".to_string(),
+        image.to_string(),
+        "infinity".to_string()
+    ]));
+    assert_eq!(
+        login_exec_args(&name, true),
+        [
+            "exec",
+            "--interactive",
+            "--tty",
+            name.as_str(),
+            "codex",
+            "-c",
+            "cli_auth_credentials_store=\"file\"",
+            "login",
+            "--device-auth"
+        ]
+    );
+    let read = read_args(&name);
+    assert_eq!(&read[..4], ["exec", name.as_str(), "sh", "-c"]);
+    assert!(read[4].contains("head -c 65537"), "{}", read[4]);
+    assert_eq!(
+        read.last().map(String::as_str),
+        Some("/codex-home/auth.json")
+    );
+    assert!(!read
+        .iter()
+        .any(|arg| arg == "--tty" || arg == "--interactive"));
+    assert_eq!(
+        remove_args(&name),
+        [
+            "rm",
+            "--force",
+            "--time=0",
+            "--volumes",
+            "--ignore",
+            name.as_str()
+        ]
+    );
+    let missing = find_podman(None, None).unwrap_err();
+    assert!(missing.contains("--codex PATH"), "{missing}");
+}
+
+/// A taken callback port is refused before anything runs, with the device
+/// sign-in as the way out.
+#[test]
+fn a_taken_callback_port_is_refused_with_the_device_sign_in_as_the_way_out() {
+    let taken = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = taken.local_addr().unwrap().port();
+    let error = codex_container::check_callback_port(port).unwrap_err();
+    assert!(error.contains("--device-auth"), "{error}");
+    drop(taken);
+    codex_container::check_callback_port(port).unwrap();
 }
 
 /// The `connect codex` filters hide an OpenAI key and a whole JWT at the

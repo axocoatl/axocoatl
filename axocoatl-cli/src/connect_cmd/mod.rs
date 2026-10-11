@@ -19,10 +19,12 @@
 //! or an error message.
 //!
 //! `axocoatl connect codex` ([`codex`]) runs the official `codex login` the
-//! same way, with a private temporary `CODEX_HOME`, and stores the ChatGPT
-//! sign-in Codex writes there.
+//! same way, with a private `CODEX_HOME`, and stores the ChatGPT sign-in
+//! Codex writes there: by default the pinned Codex in a throwaway container
+//! ([`codex_container`]), or a Codex CLI on this computer with `--codex`.
 
 mod codex;
+mod codex_container;
 mod redact;
 mod relay;
 mod screen;
@@ -57,7 +59,9 @@ pub(crate) mod exit {
     /// `claude setup-token` ended without printing exactly one token;
     /// nothing was stored.
     pub(crate) const NO_TOKEN: i32 = 2;
-    /// Usage: no interactive terminal, a bad secret name, no `claude` CLI.
+    /// Usage: no interactive terminal, a bad secret name, no `claude` CLI
+    /// (for `connect codex`: no Podman, a `--codex` that is not an
+    /// executable, or port 1455 on this computer in use).
     pub(crate) const USAGE: i32 = 3;
     /// The token could not be checked (network error or an unexpected
     /// answer); nothing was stored.
@@ -89,19 +93,20 @@ pub enum ConnectCommands {
         #[arg(long, value_name = "PATH")]
         claude: Option<PathBuf>,
     },
-    /// Run the official `codex login` with a private temporary CODEX_HOME,
-    /// and store the ChatGPT sign-in it makes (never shown) as the secret
-    /// codex-chatgpt, for Codex writers with `credential: codex-chatgpt`
+    /// Run the official `codex login` (the pinned Codex, in a throwaway
+    /// container through Podman) with a private CODEX_HOME, and store the
+    /// ChatGPT sign-in it makes (never shown) as the secret codex-chatgpt,
+    /// for Codex writers with `credential: codex-chatgpt`
     Codex {
         /// Path to config file (selects the data directory)
         #[arg(short, long, default_value_os_t = crate::default_config_path_for_clap())]
         config: PathBuf,
         /// Sign in with a code shown here instead of a browser on this
-        /// computer (`codex login --device-auth`)
+        /// computer (`codex login --device-auth`; no port is published)
         #[arg(long)]
         device_auth: bool,
-        /// Path to the codex CLI (default: the first `codex` on PATH, then
-        /// ~/.local/bin/codex)
+        /// Run this Codex CLI on this computer instead of the pinned Codex in
+        /// a container (no Podman needed then)
         #[arg(long, value_name = "PATH")]
         codex: Option<PathBuf>,
     },
@@ -226,25 +231,21 @@ pub(crate) fn find_claude(
     )
 }
 
-/// The `codex` CLI, found as [`find_claude`] finds `claude`.
-pub(crate) fn find_codex(
-    explicit: Option<&Path>,
-    path: Option<&std::ffi::OsStr>,
-    home: Option<&Path>,
-) -> Result<PathBuf, String> {
+/// The Codex CLI given with `--codex PATH`, as an absolute path: an
+/// executable file. Without `--codex`, no `codex` on this computer is used.
+pub(crate) fn host_codex(explicit: &Path) -> Result<PathBuf, String> {
     find_program(
         "codex",
-        explicit,
-        path,
-        home,
-        "the Codex CLI (`codex`) was not found on PATH or in ~/.local/bin. Install it \
-         (`npm install -g @openai/codex`) or pass its path with --codex",
+        Some(explicit),
+        None,
+        None,
+        "the Codex CLI given with --codex was not found",
     )
 }
 
 /// `name`: `explicit`, else the first `name` on `path`, else
 /// `home/.local/bin/<name>`, as an absolute path; `missing` when none is.
-fn find_program(
+pub(crate) fn find_program(
     name: &str,
     explicit: Option<&Path>,
     path: Option<&std::ffi::OsStr>,
@@ -568,16 +569,76 @@ async fn cmd_connect_codex(config: PathBuf, device_auth: bool, explicit: Option<
         eprintln!("✗ {error}; `codex login` was not run, so no sign-in was made");
         return exit::FAILURE;
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let path = match find_codex(
-        explicit.as_deref(),
-        std::env::var_os("PATH").as_deref(),
-        home.as_deref(),
-    ) {
-        Ok(path) => path,
-        Err(error) => {
-            eprintln!("✗ {error}");
-            return exit::USAGE;
+    let how = if device_auth {
+        "Enter the code it shows at the address it gives, on any device."
+    } else {
+        "Sign in in the browser it opens, or open the address it prints in a browser on this \
+         computer."
+    };
+    let (runner, intro) = match explicit {
+        Some(explicit) => {
+            let path = match host_codex(&explicit) {
+                Ok(path) => path,
+                Err(error) => {
+                    eprintln!("✗ {error}");
+                    return exit::USAGE;
+                }
+            };
+            let intro = format!(
+                "Running `{} login{}` with a private temporary CODEX_HOME. {how} Axocoatl reads \
+                 the sign-in Codex stores there, never shows it, stores it as secret {secret} \
+                 and then erases the temporary CODEX_HOME. Your own ~/.codex is not touched.\n",
+                path.display(),
+                if device_auth { " --device-auth" } else { "" },
+            );
+            (codex::Runner::Host { codex: path }, intro)
+        }
+        None => {
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            let podman = match codex_container::find_podman(
+                std::env::var_os("PATH").as_deref(),
+                home.as_deref(),
+            ) {
+                Ok(podman) => podman,
+                Err(error) => {
+                    eprintln!("✗ {error}");
+                    return exit::USAGE;
+                }
+            };
+            if !device_auth {
+                if let Err(error) =
+                    codex_container::check_callback_port(codex_container::CALLBACK_PORT)
+                {
+                    eprintln!("✗ {error}");
+                    return exit::USAGE;
+                }
+            }
+            let image = match codex_container::recipe_image(&data_dir).await {
+                Ok(image) => image,
+                Err(Failure { code, message }) => {
+                    eprintln!("✗ {message}");
+                    return code;
+                }
+            };
+            let returns = if device_auth {
+                String::new()
+            } else {
+                format!(
+                    " The browser sign-in returns to 127.0.0.1:{}, published from the container \
+                     on this computer's loopback only.",
+                    codex_container::CALLBACK_PORT
+                )
+            };
+            let intro = format!(
+                "Running `codex login{}` (Codex {}) in a throwaway container of the codex recipe \
+                 image ({}), with a private CODEX_HOME in its memory. {how}{returns} Axocoatl \
+                 reads the sign-in Codex stores there, never shows it, stores it as secret \
+                 {secret} and then removes the container. Your own ~/.codex is not touched.\n",
+                if device_auth { " --device-auth" } else { "" },
+                axocoatl_daemon::external_agent::codex::CODEX_VERSION,
+                &image[..12.min(image.len())],
+            );
+            (codex::Runner::Container { podman, image }, intro)
         }
     };
     let input = match relay::owned_stdin() {
@@ -587,25 +648,14 @@ async fn cmd_connect_codex(config: PathBuf, device_auth: bool, explicit: Option<
             return exit::FAILURE;
         }
     };
-    eprintln!(
-        "Running `{} login{}` with a private temporary CODEX_HOME. {} Axocoatl reads the \
-         sign-in Codex stores there, never shows it, stores it as secret {secret} and then \
-         erases the temporary CODEX_HOME. Your own ~/.codex is not touched.\n",
-        path.display(),
-        if device_auth { " --device-auth" } else { "" },
-        if device_auth {
-            "Enter the code it shows at the address it gives, on any device."
-        } else {
-            "Sign in in the browser it opens."
-        },
-    );
+    eprintln!("{intro}");
     let interrupt = Interrupt::default();
     let mut listeners = interrupt.listen();
     let resized = Resized::default();
     listeners.extend(resized.listen());
     let result = codex::connect(
         codex::ConnectCodex {
-            codex: path,
+            runner,
             data_dir,
             device_auth,
         },

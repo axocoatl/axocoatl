@@ -99,8 +99,9 @@ branch with host git and, opt-in, opens a pull request with gh; it never force-p
 and never pushes to the default branch. The Claude Code CLI or Codex CLI can be a
 loadout's writer inside the Session container, with its credential stored by
 `axocoatl connect claude-code` (which runs `claude setup-token` and stores the token
-without showing it), `axocoatl connect codex` (which runs `codex login` with a private
-temporary CODEX_HOME and stores the ChatGPT sign-in without showing it; the daemon
+without showing it), `axocoatl connect codex` (which runs the pinned `codex login` in a throwaway Podman
+container with a private in-memory CODEX_HOME, or a host Codex with `--codex PATH`, and
+stores the ChatGPT sign-in without showing it; the daemon
 refreshes its access token on the host, for a Codex writer with
 `credential: codex-chatgpt`) or `axocoatl secret set` (stdin or `--from-env`, never argv)
 and added on the host by an egress route, so the container sees a placeholder; tester-army/e2e can run as a required check.

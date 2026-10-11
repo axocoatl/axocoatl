@@ -10,17 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **`axocoatl connect codex`: Codex with your ChatGPT plan, without handling a key.** The
   command runs the official `codex login` (or `codex login --device-auth` with
-  `--device-auth`) with a private temporary `CODEX_HOME` (`0700`) in the data root, never
-  your `~/.codex`, with file storage forced, in that directory (given to Codex as an
-  absolute path, also when the data root is relative), and without Codex's other
-  credential and endpoint variables. You approve the sign-in in the browser or enter the
-  code Codex shows. Its output reaches your terminal through the same masking relay as
-  `connect claude-code`, which here also hides OpenAI API keys and JWTs. Axocoatl reads
-  the sign-in from the `auth.json` Codex writes there, never from the screen, stores the
-  access token, refresh token and ChatGPT account id as the secret `codex-chatgpt`
-  (`0600`, replaced atomically, as `axocoatl secret set` stores one), and then overwrites
-  every file of the temporary home with zeros and removes it, also on an error or a
-  signal. Exit codes: 0 stored, 2 no ChatGPT sign-in, 3 usage, 5 failure, 6 interrupted.
+  `--device-auth`) with file storage forced and a private `CODEX_HOME`, never your
+  `~/.codex`. You approve the sign-in in the browser or enter the code Codex shows. By
+  default nothing but Podman is needed on your computer: the pinned Codex 0.160.1 runs in
+  a throwaway container of the `codex` recipe image (the one `axocoatl recipe build codex`
+  recorded, by image id, built and recorded first when there is none), through the
+  configured Podman connection, as a non-root user with a read-only root, no
+  capabilities, no host mount, no log, a `0700` tmpfs as `CODEX_HOME`, none of your
+  environment, and Podman's default bridge network (not Axocoatl's egress routes) to
+  reach `auth.openai.com`. The browser sign-in publishes one port, `127.0.0.1:1455`, on
+  your computer's loopback only, to Codex's login server in the container; when that port
+  is in use the command stops before starting anything and suggests `--device-auth`,
+  which publishes none. With `--codex PATH`, that Codex CLI on your computer runs
+  instead, with a temporary `0700` `CODEX_HOME` in the data root (given to Codex as an
+  absolute path, also when the data root is relative) as its working directory, and
+  without Codex's other credential and endpoint variables. Either way its output reaches
+  your terminal through the same masking relay as `connect claude-code`, which here also
+  hides OpenAI API keys and JWTs. Axocoatl reads the sign-in from the `auth.json` Codex
+  writes, never from the screen (from the container with `podman exec`, straight into
+  memory, never to disk), stores the access token, refresh token and ChatGPT account id
+  as the secret `codex-chatgpt` (`0600`, replaced atomically, as `axocoatl secret set`
+  stores one), and then removes the container, or overwrites every file of the temporary
+  home with zeros and removes it, also on an error or a signal; Podman removes a login
+  container after 30 minutes at most even if Axocoatl is killed. Exit codes: 0 stored,
+  2 no ChatGPT sign-in, 3 usage (also no Podman, or port 1455 in use), 5 failure,
+  6 interrupted.
 - **A Codex writer can run with that sign-in: `credential: codex-chatgpt`.** A loadout
   Agent's new `credential` field names the stored credential its route sends: for
   `runtime: codex`, `codex-openai` (the default, an OpenAI API key, to `api.openai.com`) or

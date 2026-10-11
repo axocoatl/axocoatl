@@ -1,24 +1,31 @@
 //! `axocoatl connect codex`: sign in to ChatGPT with the official Codex CLI
 //! and store the sign-in, without anyone seeing, copying or typing a token.
 //!
-//! The command makes a private, temporary `CODEX_HOME` (`0700`) in the data
-//! root and runs `codex -c cli_auth_credentials_store="file" login` there
-//! (`--device-auth` with `--device-auth`), in the same pseudo-terminal relay
+//! By default nothing needs to be installed on this computer but Podman:
+//! the pinned Codex runs `codex login` in a throwaway container of the
+//! `codex` recipe image, with a private `CODEX_HOME` in memory
+//! ([`super::codex_container`]). With `--codex PATH` a Codex CLI on this
+//! computer runs it instead, as described below.
+//!
+//! Either way `codex -c cli_auth_credentials_store="file" login` runs
+//! (`--device-auth` with `--device-auth`) in the same pseudo-terminal relay
 //! as `connect claude-code` ([`super::relay`]): the user signs in in the
 //! browser, or enters the code Codex shows. Its output reaches the user's
 //! terminal through the same filters, which also hide OpenAI API keys and
 //! JWTs ([`super::redact::FilterChain::codex`]); Codex 0.160.1 prints
 //! neither, it writes the tokens to `auth.json`. Axocoatl reads them from
 //! that file, never from the screen
-//! (`axocoatl_daemon::external_agent::codex_chatgpt::ChatgptSignIn`),
+//! (`axocoatl_daemon::external_agent::codex_chatgpt::ChatgptSignIn`), and
 //! stores the access token, refresh token and account id as the secret
 //! `codex-chatgpt` (same store and rules as `axocoatl secret set`: `0600`,
-//! replaced atomically), and then overwrites every file in the temporary
-//! home with zeros and removes it, also on an error or a signal (a release
-//! build aborts on a panic, and a killed or aborted run leaves the home for
-//! the next run to erase, [`erase_leftovers`]).
+//! replaced atomically).
 //!
-//! Codex runs with that `CODEX_HOME`, in that directory (so no repository's
+//! With `--codex PATH`, the command makes a private, temporary `CODEX_HOME`
+//! (`0700`) in the data root, and after the sign-in overwrites every file in
+//! it with zeros and removes it, also on an error or a signal (a release
+//! build aborts on a panic, and a killed or aborted run leaves the home for
+//! the next run to erase, [`erase_leftovers`]). Codex runs with that
+//! `CODEX_HOME`, in that directory (so no repository's
 //! `.codex/config.toml` applies), with file storage forced (never the
 //! system keyring) and without the variables that would change where it
 //! signs in or what it uses instead (`CODEX_API_KEY`, `OPENAI_API_KEY`,
@@ -58,9 +65,19 @@ pub(crate) const REMOVED_ENV: [&str; 11] = [
     "CODEX_SQLITE_HOME",
 ];
 
+/// Where `codex login` runs.
+pub(crate) enum Runner {
+    /// A `codex` on this computer (`--codex PATH`), with a temporary
+    /// `CODEX_HOME` in the data root.
+    Host { codex: PathBuf },
+    /// The pinned Codex in a throwaway container of the `codex` recipe
+    /// image (its image id), through `podman` ([`super::codex_container`]).
+    Container { podman: PathBuf, image: String },
+}
+
 /// What `connect codex` needs besides the terminal.
 pub(crate) struct ConnectCodex {
-    pub(crate) codex: PathBuf,
+    pub(crate) runner: Runner,
     pub(crate) data_dir: PathBuf,
     pub(crate) device_auth: bool,
 }
@@ -221,10 +238,16 @@ pub(crate) fn login_args(device_auth: bool) -> Vec<&'static str> {
 }
 
 /// The line printed once the sign-in is stored, with the next step.
-pub(crate) fn connected_message() -> String {
+/// `container`: Codex ran in a login container, not on this computer.
+pub(crate) fn connected_message(container: bool) -> String {
+    let removed = if container {
+        "the login container was removed"
+    } else {
+        "the temporary CODEX_HOME was erased"
+    };
     format!(
         "Connected Codex: stored your ChatGPT sign-in as secret {CODEX_CHATGPT_SECRET} (no token \
-         was shown, and the temporary CODEX_HOME was erased)\n  Next: build the Session image \
+         was shown, and {removed})\n  Next: build the Session image \
          with `axocoatl recipe build codex`, then run a loadout whose writer has `runtime: \
          codex` and `credential: {CODEX_CHATGPT_SECRET}`, for example `axocoatl run <loadout> \
          --task \"…\" --model writer=openai:<model>`. The daemon refreshes the access token on \
@@ -232,9 +255,65 @@ pub(crate) fn connected_message() -> String {
     )
 }
 
-/// Run `codex login` with a private temporary `CODEX_HOME` on the terminal
-/// `input`/`output`, read the sign-in Codex stored there, store it and
-/// erase the temporary home. Returns the confirmation to print.
+/// How `codex login` ended, for the messages.
+pub(crate) struct Ended(String);
+
+impl Ended {
+    pub(crate) fn from_exit_code(code: Option<u32>) -> Self {
+        Self(match code {
+            Some(0) => "finished".to_string(),
+            Some(code) => format!("exited with status {code}"),
+            None => "ended".to_string(),
+        })
+    }
+}
+
+/// What to do after a failed sign-in.
+const AGAIN: &str = "Run `axocoatl connect codex` again and finish the sign-in it opens (add \
+                     --device-auth on a computer without a browser).";
+
+/// Parse the `auth.json` Codex wrote (`None`: it wrote none), zeroize it,
+/// and store the sign-in as [`CODEX_CHATGPT_SECRET`].
+pub(crate) fn store_sign_in(
+    data_dir: &Path,
+    bytes: Option<Zeroizing<Vec<u8>>>,
+    ended: &Ended,
+) -> Result<(), Failure> {
+    let Some(mut bytes) = bytes else {
+        return Err(failure(
+            exit::NO_TOKEN,
+            format!(
+                "codex login {} without storing a sign-in in its CODEX_HOME; nothing was \
+                 stored. {AGAIN}",
+                ended.0
+            ),
+        ));
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64);
+    let sign_in = ChatgptSignIn::from_codex_auth_json(&bytes, now);
+    bytes.zeroize();
+    let sign_in = sign_in.map_err(|reason| {
+        failure(
+            exit::NO_TOKEN,
+            format!("{reason}; nothing was stored. {AGAIN}"),
+        )
+    })?;
+    let encoded = sign_in
+        .encode()
+        .map_err(|reason| failure(exit::FAILURE, format!("{reason}; nothing was stored")))?;
+    drop(sign_in);
+    secret_store::set_secret(data_dir, CODEX_CHATGPT_SECRET, &encoded)
+        .map_err(|error| failure(exit::FAILURE, format!("storing the sign-in: {error}")))?;
+    drop(encoded);
+    Ok(())
+}
+
+/// Run `codex login` with a private `CODEX_HOME` (on this computer or in a
+/// login container) on the terminal `input`/`output`, read the sign-in
+/// Codex stored there, store it and erase the `CODEX_HOME`. Returns the
+/// confirmation to print.
 pub(crate) async fn connect(
     request: ConnectCodex,
     input: OwnedFd,
@@ -243,10 +322,50 @@ pub(crate) async fn connect(
     resized: &Resized,
 ) -> Result<String, Failure> {
     let ConnectCodex {
-        codex,
+        runner,
         data_dir,
         device_auth,
     } = request;
+    match runner {
+        Runner::Host { codex } => {
+            connect_host(
+                codex,
+                data_dir,
+                device_auth,
+                input,
+                output,
+                interrupt,
+                resized,
+            )
+            .await
+        }
+        Runner::Container { podman, image } => {
+            super::codex_container::connect(
+                podman,
+                image,
+                data_dir,
+                device_auth,
+                input,
+                output,
+                interrupt,
+                resized,
+            )
+            .await
+        }
+    }
+}
+
+/// [`connect`] with a `codex` on this computer.
+#[allow(clippy::too_many_arguments)]
+async fn connect_host(
+    codex: PathBuf,
+    data_dir: PathBuf,
+    device_auth: bool,
+    input: OwnedFd,
+    output: Box<dyn std::io::Write + Send>,
+    interrupt: &Interrupt,
+    resized: &Resized,
+) -> Result<String, Failure> {
     erase_leftovers(&data_dir);
     let home = TempHome::create(&data_dir).map_err(|error| {
         failure(
@@ -286,49 +405,14 @@ pub(crate) async fn connect(
              CODEX_HOME was erased",
         ));
     }
-    let ended = match run.exit_code {
-        Some(0) => "finished".to_string(),
-        Some(code) => format!("exited with status {code}"),
-        None => "ended".to_string(),
-    };
+    let ended = Ended::from_exit_code(run.exit_code);
     // Whatever the filters hid on screen is not used: the sign-in is read
     // from the file Codex wrote.
     drop(run);
-    let again = "Run `axocoatl connect codex` again and finish the sign-in it opens (add \
-                 --device-auth on a computer without a browser).";
-    let mut bytes = match read_auth_file(home.path()) {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => {
-            return Err(failure(
-                exit::NO_TOKEN,
-                format!(
-                    "codex login {ended} without storing a sign-in in the temporary CODEX_HOME; \
-                     nothing was stored. {again}"
-                ),
-            ))
-        }
-        Err(error) => return Err(failure(exit::FAILURE, error)),
-    };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis() as u64);
-    let sign_in = ChatgptSignIn::from_codex_auth_json(&bytes, now);
-    bytes.zeroize();
-    let sign_in = sign_in.map_err(|reason| {
-        failure(
-            exit::NO_TOKEN,
-            format!("{reason}; nothing was stored. {again}"),
-        )
-    })?;
-    let encoded = sign_in
-        .encode()
-        .map_err(|reason| failure(exit::FAILURE, format!("{reason}; nothing was stored")))?;
-    drop(sign_in);
-    secret_store::set_secret(&data_dir, CODEX_CHATGPT_SECRET, &encoded)
-        .map_err(|error| failure(exit::FAILURE, format!("storing the sign-in: {error}")))?;
-    drop(encoded);
+    let bytes = read_auth_file(home.path()).map_err(|error| failure(exit::FAILURE, error))?;
+    store_sign_in(&data_dir, bytes, &ended)?;
     drop(home);
-    Ok(connected_message())
+    Ok(connected_message(false))
 }
 
 /// The message when standard input or output is not a terminal.

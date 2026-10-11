@@ -121,7 +121,58 @@ axocoatl connect codex --device-auth   # shows a code to enter on another device
 This runs the official `codex login` for you and stores the ChatGPT sign-in it makes as
 the secret `codex-chatgpt`. You approve the sign-in in the browser (or, with
 `--device-auth`, enter the code Codex shows at the address it gives); you never see, copy,
-paste or type a token:
+paste or type a token. Nothing but Podman needs to be installed on your computer: by
+default the pinned Codex 0.160.1, the one the `codex` recipe installs, runs in a
+throwaway container.
+
+- **The image.** It is the `codex` recipe image recorded in the data root by
+  `axocoatl recipe build codex`, used by its exact image id. When none is recorded (or
+  Podman no longer has it), the command builds and records it first, as
+  `axocoatl recipe build codex` would, through the same Podman connection
+  (`CONTAINER_CONNECTION` and the rest of Podman's own configuration apply).
+- **The container.** It runs as a non-root user with a read-only root file system, no
+  capabilities, no new privileges, no log driver and nothing from your computer mounted.
+  Its `CODEX_HOME` (also its home and working directory) is a private `0700` tmpfs, in
+  memory, and Codex runs `codex -c cli_auth_credentials_store="file" login`, so the
+  sign-in is written to a file there, never to a keyring. Your own `~/.codex` and your
+  environment (no `CODEX_API_KEY`, `OPENAI_API_KEY` or other variable of yours) do not
+  reach it. It is on Podman's default bridge network, not on Axocoatl's egress routes:
+  `codex login` reaches `auth.openai.com` directly, as it would on your computer. It holds
+  no Axocoatl secret, and Podman stops and removes it after 30 minutes at most, even if
+  Axocoatl is killed.
+- **The browser sign-in** returns to `http://localhost:1455/auth/callback`, the address
+  Codex prints. The container publishes that one port on your computer's loopback only
+  (`127.0.0.1:1455`); inside it, a small forwarder passes each connection to Codex's
+  login server, which listens on the container's own `127.0.0.1:1455` (nothing else
+  holds that port there, so Codex never moves to another). Open the address Codex prints
+  in a browser on this computer. When `127.0.0.1:1455` (or `[::1]:1455`) is already in
+  use on your computer, the command stops before starting anything and suggests
+  `--device-auth`. **The device sign-in** (`--device-auth`) publishes no port.
+- `codex login` runs with `podman exec --interactive --tty` in the same pseudo-terminal as
+  `claude setup-token` above, and its output reaches your terminal through the same
+  filter, which here also hides OpenAI API keys (`sk-…`) and JWTs (`eyJ…`, all three
+  parts), each at the start of a word, as `[token hidden by axocoatl]`, and drops
+  clipboard writes. Codex 0.160.1 prints no token: it shows the sign-in address (or the
+  device code) and writes the tokens to `auth.json`. Ctrl-C goes to Codex, as it would
+  on your computer.
+- Axocoatl reads the tokens from that file, never from the screen: `podman exec` prints
+  `auth.json` (a regular file, a link is refused, of at most 64 KiB) straight into
+  Axocoatl's memory, and Axocoatl never writes it to disk; the only other copy is
+  Codex's own, in the container's tmpfs, which goes with the container. It must hold a
+  ChatGPT sign-in, with an access token and a refresh token; an API-key sign-in is
+  refused. Axocoatl stores the access token, the refresh token, your ChatGPT account id
+  (from the file, or the id token's `chatgpt_account_id`) and the time, as one line, the
+  way `axocoatl secret set` stores a value (`secrets/codex-chatgpt` in the data root,
+  `0600`, replaced atomically). The id token, and an API key Codex may have obtained with
+  the sign-in, are not kept.
+- Then the container is removed (`podman rm --force`), and with it its in-memory
+  `CODEX_HOME`: after a sign-in, and also when the sign-in fails, is refused or is
+  interrupted.
+- The tokens are not checked with OpenAI before they are stored: they are the ones
+  Codex just obtained, and the first run uses them.
+
+With `--codex PATH`, the Codex CLI at that path on your computer runs instead, and no
+Podman is needed:
 
 - It makes a private temporary `CODEX_HOME` in the data root (`connect-codex-<random>`,
   `0700`) and runs `codex -c cli_auth_credentials_store="file" login` there, with
@@ -137,34 +188,23 @@ paste or type a token:
   `CODEX_REVOKE_TOKEN_URL_OVERRIDE`, `CODEX_APP_SERVER_LOGIN_CLIENT_ID`,
   `CODEX_AUTHAPI_BASE_URL`, `CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL`,
   `CODEX_AGENT_IDENTITY_JWKS_BASE_URL`).
-- `codex login` runs in the same pseudo-terminal as `claude setup-token` above, and its
-  output reaches your terminal through the same filter, which here also hides OpenAI API
-  keys (`sk-…`) and JWTs (`eyJ…`, all three parts), each at the start of a word, as
-  `[token hidden by axocoatl]`, and drops clipboard writes. Codex 0.160.1 prints no token:
-  it shows the sign-in address (or the device code) and writes the tokens to `auth.json`.
-- Axocoatl reads the tokens from that file, never from the screen: `auth.json` must be a
-  regular file (a link is refused) of at most 64 KiB holding a ChatGPT sign-in, with an
-  access token and a refresh token; an API-key sign-in is refused. It stores the access
-  token, the refresh token, your ChatGPT account id (from the file, or the id token's
-  `chatgpt_account_id`) and the time, as one line, the way `axocoatl secret set` stores
-  a value (`secrets/codex-chatgpt` in the data root, `0600`, replaced atomically). The id
-  token, and an API key Codex may have obtained with the sign-in, are not kept.
+- Its output is relayed and filtered the same way, and the sign-in is read from the
+  `auth.json` it writes there (opened without following a link) and stored the same way.
 - Then every file in the temporary home (Codex also writes a log and other state there)
   is overwritten with zeros and removed, and so is the directory: also when the sign-in
   fails, is refused or is interrupted. A temporary home a killed run left is erased by
   the next run once it is 30 minutes old (a sign-in in progress elsewhere keeps its own). On an SSD or a copy-on-write file system an overwrite does
   not guarantee that the old blocks are gone; the data root is readable only by you.
-- The tokens are not checked with OpenAI before they are stored: they are the ones
-  Codex just obtained, and the first run uses them.
 
-It needs an interactive terminal and the `codex` CLI: the first `codex` on `PATH`, then
-`~/.local/bin/codex`, or the path given with `--codex PATH`. The secret is always named
-`codex-chatgpt`, because that is the one the daemon refreshes. Like `recipe build`, it
-uses the data root of `--config` or `AXOCOATL_DATA_DIR`. Exit codes: 0 stored, 2 `codex
-login` stored no ChatGPT sign-in, 3 usage (no terminal, no `codex`), 5 the data directory,
-the secret store, the pseudo-terminal or `auth.json` failed (also when `auth.json` is a
-link), 6 interrupted by a signal. Nothing is stored unless it exits 0. Run it again when a
-run says the sign-in was refused.
+It needs an interactive terminal, and Podman (the first `podman` on `PATH`, then
+`~/.local/bin/podman`) unless `--codex PATH` names an executable Codex CLI. The secret is
+always named `codex-chatgpt`, because that is the one the daemon refreshes. Like `recipe
+build`, it uses the data root of `--config` or `AXOCOATL_DATA_DIR`. Exit codes: 0 stored,
+2 `codex login` stored no ChatGPT sign-in, 3 usage (no terminal, no Podman, a `--codex`
+that is not an executable, or port 1455 in use), 5 the data directory, the secret store,
+Podman, the image build, the pseudo-terminal or `auth.json` failed (also when
+`auth.json` is a link), 6 interrupted by a signal. Nothing is stored unless it exits 0.
+Run it again when a run says the sign-in was refused.
 
 ### Other credentials: `axocoatl secret set`
 
