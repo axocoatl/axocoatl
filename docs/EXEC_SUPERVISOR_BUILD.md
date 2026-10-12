@@ -112,7 +112,18 @@ the run to it. The read-only and network-denying tests need Landlock in the kern
 User-mode emulation such as qemu-user provides no Landlock, so in an image of a foreign
 architecture the supervisor refuses those two restricted commands (as it does on any
 kernel without Landlock) and the two tests fail. Run each architecture on a Linux kernel
-of that architecture; a Podman machine on Apple silicon is aarch64.
+of that architecture; a Podman machine on Apple silicon is aarch64. A virtual machine
+that emulates the other architecture as a whole computer (QEMU without hardware
+acceleration, booting a Linux kernel of that architecture) does provide Landlock: the
+1.3.1 x86_64 supervisor passed all eight tests that way on an Apple silicon Mac, in an
+x86_64 Alpine 3.22 virtual machine (Linux 6.12) with Podman installed in it, running a
+test binary cross-built for `x86_64-unknown-linux-musl`.
+
+Keep the test's temporary directory (`TMPDIR`, where each test's Workspace is created)
+outside `/tmp`, `/dev` and `$HOME`. The test mounts the Workspace in the container at
+its own path, and a write restriction drops every writable root that contains the
+Workspace, so with the Workspace under `/tmp` the restricted command cannot write its
+scratch files there and the read-only test fails.
 
 After validation, replace the two payloads and their matching manifests together,
 and update the embedded descriptor's pinned identities. The installer and normal

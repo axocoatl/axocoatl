@@ -158,10 +158,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Measured
 - On 2026-10-12 the rebuilt aarch64 supervisor passed all eight protocol and
   process-lifecycle tests in the Alpine and Debian aarch64 images, as root and as a
-  non-root user, on a Linux 7.1 aarch64 kernel. The rebuilt x86_64 supervisor, run in the
-  four x86_64 images under qemu-user emulation on that kernel, passed the six tests that
-  need no Landlock; qemu-user provides no Landlock, so the supervisor refused the
-  read-only and network-denying commands there, and those two tests need an x86_64 kernel.
+  non-root user, on a Linux 7.1 aarch64 kernel with rootless Podman. The rebuilt x86_64
+  supervisor passed all eight in the four x86_64 images on an x86_64 Linux 6.12 kernel
+  (Alpine's, with Landlock, in a QEMU virtual machine emulating an x86_64 computer),
+  with rootless Podman and with Podman as root: 64 of 64.
 - On 2026-10-11 a `fix` run of the pinned Codex 0.160.1 (`gpt-6-luna`) with a ChatGPT
   plan passed through Axocoatl 1.3.1-rc2 against OpenAI's service: Codex's 6 requests to
   `chatgpt.com/backend-api/codex/responses` went through the route with the sign-in the
