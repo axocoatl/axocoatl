@@ -116,6 +116,7 @@ Run it again whenever the token expires or is revoked.
 ```sh
 axocoatl connect codex                 # signs in in your browser
 axocoatl connect codex --device-auth   # shows a code to enter on another device
+axocoatl connect codex --no-browser    # does not open the sign-in page for you
 ```
 
 This runs the official `codex login` for you and stores the ChatGPT sign-in it makes as
@@ -142,15 +143,30 @@ throwaway container.
   egress routes: `codex login` reaches `auth.openai.com` directly, without a proxy. Where
   that needs a proxy, sign in with `--codex PATH` instead, which keeps your proxy
   variables. It holds no Axocoatl secret, and Podman stops and removes it after 30
-  minutes at most, even if Axocoatl is killed.
+  minutes at most, even if Axocoatl is killed. The command says so when the sign-in
+  starts (`You have 30 minutes to finish signing in.`). When the 30 minutes run out
+  first, it says
+  ``The Codex sign-in was not completed within 30 minutes; nothing was stored. Run
+  `axocoatl connect codex` again.`` and exits with code 2.
 - **The browser sign-in** returns to `http://localhost:1455/auth/callback`, the address
   Codex prints. The container publishes that one port on your computer's loopback only
   (`127.0.0.1:1455`); inside it, a small forwarder passes each connection to Codex's
   login server, which listens on the container's own `127.0.0.1:1455` (nothing else
-  holds that port there, so Codex never moves to another). Open the address Codex prints
-  in a browser on this computer. When `127.0.0.1:1455` (or `[::1]:1455`) is already in
-  use on your computer, the command stops before starting anything and suggests
-  `--device-auth`. **The device sign-in** (`--device-auth`) publishes no port.
+  holds that port there, so Codex never moves to another). When `127.0.0.1:1455` (or
+  `[::1]:1455`) is already in use on your computer, the command stops before starting
+  anything and suggests `--device-auth`. **The device sign-in** (`--device-auth`)
+  publishes no port.
+- **Opening the sign-in page.** Codex cannot open a browser on your computer from the
+  container, so Axocoatl opens the address Codex prints, once: with `open` on macOS or
+  `xdg-open` elsewhere (the first on `PATH`), the address as its only argument, without
+  a shell. It then prints `Opened the sign-in page in your browser.` It opens only an
+  address shown on screen that is exactly `https://auth.openai.com/oauth/authorize?…`
+  (with `--device-auth`, exactly the device page `https://auth.openai.com/codex/device`,
+  where you enter the code Codex shows): no other host, look-alike, scheme, port or path,
+  and no hyperlink's hidden target. The address is not secret (Codex's PKCE verifier
+  never leaves the container), and Axocoatl writes it to no file or log. With
+  `--no-browser`, or when there is no opener or it fails, nothing is opened: open the
+  address Codex prints in a browser on this computer yourself.
 - `codex login` runs with `podman exec --interactive --tty` in the same pseudo-terminal as
   `claude setup-token` above, and its output reaches your terminal through the same
   filter, which here also hides OpenAI API keys (`sk-…`) and JWTs (`eyJ…`, all three
@@ -196,6 +212,8 @@ Podman is needed:
   `CODEX_AGENT_IDENTITY_JWKS_BASE_URL`).
 - Its output is relayed and filtered the same way, and the sign-in is read from the
   `auth.json` it writes there (opened without following a link) and stored the same way.
+  Codex opens the browser sign-in itself, so Axocoatl opens nothing (`--no-browser` does
+  not apply).
 - Then every file in the temporary home (Codex also writes a log and other state there)
   is overwritten with zeros and removed, and so is the directory: also when the sign-in
   fails, is refused or is interrupted. A temporary home a killed run left is erased by
@@ -206,10 +224,12 @@ It needs an interactive terminal, and Podman (the first `podman` on `PATH`) unle
 `--codex PATH` names an executable Codex CLI. The secret is
 always named `codex-chatgpt`, because that is the one the daemon refreshes. Like `recipe
 build`, it uses the data root of `--config` or `AXOCOATL_DATA_DIR`. Exit codes: 0 stored,
-2 `codex login` stored no ChatGPT sign-in, 3 usage (no terminal, no Podman on `PATH`, a `--codex`
+2 `codex login` stored no ChatGPT sign-in (also when the sign-in was not completed within
+the login container's 30 minutes), 3 usage (no terminal, no Podman on `PATH`, a `--codex`
 that is not an executable, or port 1455 in use), 5 the data directory, the secret store,
 Podman, the image build, the pseudo-terminal or `auth.json` failed (also when
-`auth.json` is a link), 6 interrupted by a signal. Nothing is stored unless it exits 0.
+`auth.json` is a link, or the login container stopped before its 30 minutes and before
+the sign-in was read), 6 interrupted by a signal. Nothing is stored unless it exits 0.
 Run it again when a run says the sign-in was refused.
 
 ### Other credentials: `axocoatl secret set`

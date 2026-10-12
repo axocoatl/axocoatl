@@ -28,10 +28,16 @@
 //!   `--device-auth` no port is published.
 //!
 //! `codex login` runs with `podman exec --interactive --tty` in the same
-//! pseudo-terminal relay and filters as the host program. The sign-in is
+//! pseudo-terminal relay and filters as the host program. Codex cannot open
+//! a browser on this computer from the container, so unless `--no-browser`
+//! the relay opens the sign-in page it prints here, once
+//! ([`super::browser`]). The sign-in is
 //! then read with `podman exec … head` straight into a zeroizing buffer in
 //! this process: Axocoatl never writes `auth.json` to disk, and the only
-//! other copy, Codex's own on the tmpfs, goes with the container.
+//! other copy, Codex's own on the tmpfs, goes with the container. When the
+//! sign-in cannot be read because the container has ended after its
+//! lifetime, the user is told the sign-in was not completed in time
+//! ([`timed_out`]).
 //!
 //! The `podman` commands that start, read and remove the container
 //! ([`podman_command`]) each run in a process group of their own (the
@@ -44,6 +50,7 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant, SystemTime};
 
 use axocoatl_daemon::external_agent::codex::CODEX_VERSION;
 use axocoatl_daemon::external_agent::codex_chatgpt::MAX_AUTH_FILE_BYTES;
@@ -51,6 +58,7 @@ use axocoatl_daemon::external_agent::recipe_images;
 use axocoatl_isolation::recipes;
 use zeroize::Zeroizing;
 
+use super::browser::{Opener, SignInPage};
 use super::codex::{login_args, store_sign_in, Ended};
 use super::{exit, failure, relay, Failure, Interrupt, Resized};
 
@@ -72,6 +80,8 @@ pub(crate) const NAME_PREFIX: &str = "axocoatl-connect-codex-";
 /// starts, whatever happens to Axocoatl: longer than a sign-in takes (a
 /// device code expires after 15 minutes).
 pub(crate) const MAX_LIFETIME_SECS: u64 = 30 * 60;
+/// [`MAX_LIFETIME_SECS`] as a duration.
+pub(crate) const MAX_LIFETIME: Duration = Duration::from_secs(MAX_LIFETIME_SECS);
 /// The user the container runs as (`node` in the recipe image's base).
 pub(crate) const CONTAINER_USER: &str = "1000:1000";
 
@@ -96,8 +106,14 @@ pub(crate) fn container_name() -> String {
 }
 
 /// The `podman run` arguments that start the login container `name` from
-/// `image` (pure).
-pub(crate) fn run_args(name: &str, image: &str, device_auth: bool) -> Vec<String> {
+/// `image`, stopped by Podman after `lifetime` (at least a second: Podman
+/// reads `--timeout=0` as none) (pure).
+pub(crate) fn run_args(
+    name: &str,
+    image: &str,
+    device_auth: bool,
+    lifetime: Duration,
+) -> Vec<String> {
     let mut args: Vec<String> = [
         "run",
         "--detach",
@@ -120,7 +136,7 @@ pub(crate) fn run_args(name: &str, image: &str, device_auth: bool) -> Vec<String
     .iter()
     .map(|arg| (*arg).to_string())
     .collect();
-    args.push(format!("--timeout={MAX_LIFETIME_SECS}"));
+    args.push(format!("--timeout={}", lifetime.as_secs().max(1)));
     args.push(format!("--user={CONTAINER_USER}"));
     args.push(format!(
         "--mount=type=tmpfs,destination={CONTAINER_HOME},tmpfs-mode=0700,tmpfs-size=16m,U=true"
@@ -184,6 +200,64 @@ pub(crate) fn remove_args(name: &str) -> Vec<String> {
         .iter()
         .map(|arg| (*arg).to_string())
         .collect()
+}
+
+/// The `podman` arguments that tell whether `name` still exists: exit
+/// status 0 when it does, 1 when it does not (pure).
+pub(crate) fn exists_args(name: &str) -> Vec<String> {
+    ["container", "exists", name]
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect()
+}
+
+/// The `podman` arguments that print whether `name` is running: `true` or
+/// `false` (pure).
+pub(crate) fn running_args(name: &str) -> Vec<String> {
+    [
+        "container",
+        "inspect",
+        "--format",
+        "{{.State.Running}}",
+        name,
+    ]
+    .iter()
+    .map(|arg| (*arg).to_string())
+    .collect()
+}
+
+/// `lifetime` in words: whole minutes, else seconds.
+fn in_words(lifetime: Duration) -> String {
+    let seconds = lifetime.as_secs();
+    let (count, unit) = if seconds >= 60 && seconds.is_multiple_of(60) {
+        (seconds / 60, "minute")
+    } else {
+        (seconds, "second")
+    };
+    format!("{count} {unit}{}", if count == 1 { "" } else { "s" })
+}
+
+/// The intro's line on how long the sign-in may take.
+pub(crate) fn time_to_sign_in(lifetime: Duration) -> String {
+    format!("You have {} to finish signing in.", in_words(lifetime))
+}
+
+/// The message when the login container ended after `lifetime` (Podman's
+/// `--timeout`) before Codex's sign-in was read.
+pub(crate) fn timed_out(lifetime: Duration) -> String {
+    format!(
+        "The Codex sign-in was not completed within {}; nothing was stored. Run `axocoatl \
+         connect codex` again.",
+        in_words(lifetime)
+    )
+}
+
+/// The message when the login container ended before its lifetime and
+/// before Codex's sign-in was read.
+pub(crate) fn ended_early() -> String {
+    "The login container stopped before Codex's sign-in could be read (it was removed, or \
+     Podman stopped it); nothing was stored. Run `axocoatl connect codex` again."
+        .to_string()
 }
 
 /// The message when this computer's `127.0.0.1:1455` (or `[::1]:1455`) is
@@ -272,24 +346,70 @@ pub(crate) async fn recipe_image(data_dir: &Path) -> Result<String, Failure> {
     Ok(record.image_id)
 }
 
+/// What `connect codex` runs `codex login` with in a login container.
+pub(crate) struct Login {
+    pub(crate) podman: PathBuf,
+    /// The `codex` recipe image's id.
+    pub(crate) image: String,
+    /// How long Podman lets the container live ([`MAX_LIFETIME`]).
+    pub(crate) lifetime: Duration,
+    /// What opens the sign-in page on this computer (`None` with
+    /// `--no-browser`, or when there is no opener).
+    pub(crate) opener: Option<Opener>,
+}
+
+impl Login {
+    pub(crate) fn new(podman: PathBuf, image: String, opener: Option<Opener>) -> Self {
+        Self {
+            podman,
+            image,
+            lifetime: MAX_LIFETIME,
+            opener,
+        }
+    }
+}
+
+/// Whether a login container is still there to read from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum State {
+    Running,
+    /// Stopped, or removed (with `--rm`, Podman removes it once it stops).
+    Ended,
+    /// Podman could not say.
+    Unknown,
+}
+
 /// A started login container: removed (with `podman rm --force`) when
 /// dropped.
 pub(crate) struct Container {
     podman: PathBuf,
     name: String,
+    /// When `podman run` was started, before the container was: Podman
+    /// stops it `lifetime` after this at the earliest.
+    started: Instant,
+    started_at: SystemTime,
+    lifetime: Duration,
 }
 
 impl Container {
-    /// Start the login container from `image`.
-    pub(crate) fn start(podman: &Path, image: &str, device_auth: bool) -> Result<Self, Failure> {
+    /// Start the login container from `image`, for at most `lifetime`.
+    pub(crate) fn start(
+        podman: &Path,
+        image: &str,
+        device_auth: bool,
+        lifetime: Duration,
+    ) -> Result<Self, Failure> {
         let name = container_name();
         // Removed from here on, also if `podman run` failed half way.
         let container = Self {
             podman: podman.to_path_buf(),
             name,
+            started: Instant::now(),
+            started_at: SystemTime::now(),
+            lifetime,
         };
         let output = podman_command(podman)
-            .args(run_args(&container.name, image, device_auth))
+            .args(run_args(&container.name, image, device_auth, lifetime))
             .stdin(Stdio::null())
             .output()
             .map_err(|error| failure(exit::FAILURE, format!("running podman: {error}")))?;
@@ -312,6 +432,59 @@ impl Container {
 
     pub(crate) fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Whether the container's lifetime has passed, so Podman has stopped
+    /// it: by the monotonic clock, or by the wall clock, which also counts
+    /// time this computer slept.
+    pub(crate) fn outlived(&self) -> bool {
+        self.started.elapsed() >= self.lifetime
+            || self
+                .started_at
+                .elapsed()
+                .is_ok_and(|elapsed| elapsed >= self.lifetime)
+    }
+
+    /// Whether the container is still running, has ended, or Podman cannot
+    /// say.
+    pub(crate) fn state(&self) -> State {
+        let exists = podman_command(&self.podman)
+            .args(exists_args(&self.name))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match exists.ok().and_then(|status| status.code()) {
+            Some(0) => {}
+            Some(1) => return State::Ended,
+            _ => return State::Unknown,
+        }
+        let running = podman_command(&self.podman)
+            .args(running_args(&self.name))
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output();
+        match running {
+            Ok(output) if output.status.success() => {
+                match String::from_utf8_lossy(&output.stdout).trim() {
+                    "true" => State::Running,
+                    "false" => State::Ended,
+                    _ => State::Unknown,
+                }
+            }
+            _ => State::Unknown,
+        }
+    }
+
+    /// Why `auth.json` could not be read (`message`): the lifetime ran out
+    /// ([`timed_out`], exit code [`exit::NO_TOKEN`]), the container ended
+    /// before that ([`ended_early`]), or `message` itself.
+    pub(crate) fn read_failure(&self, message: String) -> Failure {
+        match self.state() {
+            State::Ended if self.outlived() => failure(exit::NO_TOKEN, timed_out(self.lifetime)),
+            State::Ended => failure(exit::FAILURE, ended_early()),
+            State::Running | State::Unknown => failure(exit::FAILURE, message),
+        }
     }
 
     /// `auth.json` from the container's `CODEX_HOME`, read straight into a
@@ -363,13 +536,12 @@ impl Drop for Container {
     }
 }
 
-/// Run `codex login` in a login container of `image` on the terminal
-/// `input`/`output`, read the sign-in Codex stored in its `CODEX_HOME`,
-/// store it, and remove the container (on every path).
-#[allow(clippy::too_many_arguments)]
+/// Run `codex login` in a login container (`login`) on the terminal
+/// `input`/`output`, opening the sign-in page it prints on this computer
+/// once (when `login` has an opener), read the sign-in Codex stored in its
+/// `CODEX_HOME`, store it, and remove the container (on every path).
 pub(crate) async fn connect(
-    podman: PathBuf,
-    image: String,
+    login: Login,
     data_dir: PathBuf,
     device_auth: bool,
     input: OwnedFd,
@@ -377,11 +549,19 @@ pub(crate) async fn connect(
     interrupt: &Interrupt,
     resized: &Resized,
 ) -> Result<String, Failure> {
+    let Login {
+        podman,
+        image,
+        lifetime,
+        opener,
+    } = login;
     let container = {
         let podman = podman.clone();
-        tokio::task::spawn_blocking(move || Container::start(&podman, &image, device_auth))
-            .await
-            .map_err(|_| failure(exit::FAILURE, "starting the login container failed"))??
+        tokio::task::spawn_blocking(move || {
+            Container::start(&podman, &image, device_auth, lifetime)
+        })
+        .await
+        .map_err(|_| failure(exit::FAILURE, "starting the login container failed"))??
     };
     let flag = interrupt.flag.clone();
     let resized = resized.0.clone();
@@ -397,6 +577,9 @@ pub(crate) async fn connect(
                 set_env: &[],
                 remove_env: &[],
                 filters: super::redact::FilterChain::codex,
+                open_sign_in: opener
+                    .as_ref()
+                    .map(|opener| (SignInPage::for_sign_in(device_auth), opener)),
             },
             input.as_fd(),
             &mut *output,
@@ -420,13 +603,14 @@ pub(crate) async fn connect(
     // from the file Codex wrote.
     drop(run);
     let bytes = tokio::task::spawn_blocking(move || {
-        let read = container.read_auth_file();
+        let read = container
+            .read_auth_file()
+            .map_err(|message| container.read_failure(message));
         drop(container);
         read
     })
     .await
-    .map_err(|_| failure(exit::FAILURE, "reading Codex's auth.json failed"))?
-    .map_err(|error| failure(exit::FAILURE, error))?;
+    .map_err(|_| failure(exit::FAILURE, "reading Codex's auth.json failed"))??;
     store_sign_in(&data_dir, bytes, &ended)?;
     Ok(super::codex::connected_message(true))
 }

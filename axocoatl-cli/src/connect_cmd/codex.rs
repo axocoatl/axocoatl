@@ -71,8 +71,8 @@ pub(crate) enum Runner {
     /// `CODEX_HOME` in the data root.
     Host { codex: PathBuf },
     /// The pinned Codex in a throwaway container of the `codex` recipe
-    /// image (its image id), through `podman` ([`super::codex_container`]).
-    Container { podman: PathBuf, image: String },
+    /// image, through Podman ([`super::codex_container`]).
+    Container(super::codex_container::Login),
 }
 
 /// What `connect codex` needs besides the terminal.
@@ -339,10 +339,9 @@ pub(crate) async fn connect(
             )
             .await
         }
-        Runner::Container { podman, image } => {
+        Runner::Container(login) => {
             super::codex_container::connect(
-                podman,
-                image,
+                login,
                 data_dir,
                 device_auth,
                 input,
@@ -388,6 +387,8 @@ async fn connect_host(
                 set_env: &set_env,
                 remove_env: &REMOVED_ENV,
                 filters: super::redact::FilterChain::codex,
+                // Codex on this computer opens the browser sign-in itself.
+                open_sign_in: None,
             },
             input.as_fd(),
             &mut *output,
@@ -416,15 +417,27 @@ async fn connect_host(
 }
 
 /// What to do to sign in, for the intro. A Codex on this computer may open
-/// the browser itself; Codex in the login container cannot open one here.
-pub(crate) fn sign_in_how(device_auth: bool, in_container: bool) -> &'static str {
-    if device_auth {
-        "Enter the code it shows at the address it gives, on any device."
-    } else if in_container {
-        "Open the address it prints in a browser on this computer."
-    } else {
-        "Sign in in the browser it opens, or open the address it prints in a browser on this \
-         computer."
+/// the browser itself; Codex in the login container cannot open one here,
+/// so Axocoatl opens the page it prints when `opens` (an opener was found
+/// and `--no-browser` was not given).
+pub(crate) fn sign_in_how(device_auth: bool, in_container: bool, opens: bool) -> &'static str {
+    match (device_auth, in_container && opens) {
+        (true, true) => {
+            "Axocoatl opens the address it gives in your browser; enter the code it shows \
+             there (or at that address on any device)."
+        }
+        (true, false) => "Enter the code it shows at the address it gives, on any device.",
+        (false, true) => {
+            "Axocoatl opens the address it prints in your browser; if no browser opens, open \
+             that address in a browser on this computer."
+        }
+        (false, false) if in_container => {
+            "Open the address it prints in a browser on this computer."
+        }
+        (false, false) => {
+            "Sign in in the browser it opens, or open the address it prints in a browser on \
+             this computer."
+        }
     }
 }
 

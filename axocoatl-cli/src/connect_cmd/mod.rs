@@ -21,8 +21,13 @@
 //! `axocoatl connect codex` ([`codex`]) runs the official `codex login` the
 //! same way, with a private `CODEX_HOME`, and stores the ChatGPT sign-in
 //! Codex writes there: by default the pinned Codex in a throwaway container
-//! ([`codex_container`]), or a Codex CLI on this computer with `--codex`.
+//! ([`codex_container`]), whose sign-in page Axocoatl opens on this computer
+//! ([`browser`]), or a Codex CLI on this computer with `--codex`.
+//! `claude setup-token` opens the browser itself (Claude Code 2.1.271's
+//! bundle starts its OAuth flow without `skipBrowserOpen`), so nothing is
+//! opened for it.
 
+mod browser;
 mod codex;
 mod codex_container;
 mod redact;
@@ -69,7 +74,9 @@ pub(crate) mod exit {
     /// The data directory, the secret store or the pseudo-terminal failed.
     pub(crate) const FAILURE: i32 = 5;
     // `connect codex` uses CONNECTED, NO_TOKEN (no ChatGPT sign-in was
-    // stored by `codex login`), USAGE, FAILURE and INTERRUPTED.
+    // stored by `codex login`, also when the sign-in was not completed
+    // within the login container's 30 minutes), USAGE, FAILURE and
+    // INTERRUPTED.
     /// A signal stopped the command; nothing was stored.
     pub(crate) const INTERRUPTED: i32 = 6;
 }
@@ -109,6 +116,11 @@ pub enum ConnectCommands {
         /// a container (no Podman needed then)
         #[arg(long, value_name = "PATH")]
         codex: Option<PathBuf>,
+        /// Do not open the sign-in page in this computer's browser (the
+        /// pinned Codex in the container cannot open it, so Axocoatl does,
+        /// with `open` or `xdg-open`); open the address Codex prints yourself
+        #[arg(long)]
+        no_browser: bool,
     },
 }
 
@@ -461,7 +473,8 @@ pub async fn cmd_connect(command: ConnectCommands) -> i32 {
             config,
             device_auth,
             codex: path,
-        } => return cmd_connect_codex(config, device_auth, path).await,
+            no_browser,
+        } => return cmd_connect_codex(config, device_auth, path, no_browser).await,
     };
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         eprintln!("✗ {}", needs_terminal());
@@ -552,7 +565,12 @@ pub async fn cmd_connect(command: ConnectCommands) -> i32 {
 }
 
 /// `axocoatl connect codex`. Returns the process exit code.
-async fn cmd_connect_codex(config: PathBuf, device_auth: bool, explicit: Option<PathBuf>) -> i32 {
+async fn cmd_connect_codex(
+    config: PathBuf,
+    device_auth: bool,
+    explicit: Option<PathBuf>,
+    no_browser: bool,
+) -> i32 {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         eprintln!("✗ {}", codex::needs_terminal());
         return exit::USAGE;
@@ -569,7 +587,14 @@ async fn cmd_connect_codex(config: PathBuf, device_auth: bool, explicit: Option<
         eprintln!("✗ {error}; `codex login` was not run, so no sign-in was made");
         return exit::FAILURE;
     }
-    let how = codex::sign_in_how(device_auth, explicit.is_none());
+    // Only for the container: a Codex on this computer opens the browser
+    // sign-in itself.
+    let opener = if no_browser || explicit.is_some() {
+        None
+    } else {
+        browser::Opener::find(std::env::var_os("PATH").as_deref())
+    };
+    let how = codex::sign_in_how(device_auth, explicit.is_none(), opener.is_some());
     let (runner, intro) = match explicit {
         Some(explicit) => {
             let path = match host_codex(&explicit) {
@@ -620,16 +645,19 @@ async fn cmd_connect_codex(config: PathBuf, device_auth: bool, explicit: Option<
                     codex_container::CALLBACK_PORT
                 )
             };
+            let login = codex_container::Login::new(podman, image, opener);
             let intro = format!(
                 "Running `codex login{}` (Codex {}) in a throwaway container of the codex recipe \
-                 image ({}), with a private CODEX_HOME in its memory. {how}{returns} Axocoatl \
-                 reads the sign-in Codex stores there, never shows it, stores it as secret \
-                 {secret} and then removes the container. Your own ~/.codex is not touched.\n",
+                 image ({}), with a private CODEX_HOME in its memory. {how}{returns} {} \
+                 Axocoatl reads the sign-in Codex stores there, never shows it, stores it as \
+                 secret {secret} and then removes the container. Your own ~/.codex is not \
+                 touched.\n",
                 if device_auth { " --device-auth" } else { "" },
                 axocoatl_daemon::external_agent::codex::CODEX_VERSION,
-                &image[..12.min(image.len())],
+                &login.image[..12.min(login.image.len())],
+                codex_container::time_to_sign_in(login.lifetime),
             );
-            (codex::Runner::Container { podman, image }, intro)
+            (codex::Runner::Container(login), intro)
         }
     };
     let input = match relay::owned_stdin() {

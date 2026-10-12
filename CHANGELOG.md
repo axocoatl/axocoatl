@@ -21,12 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bridge network (not Axocoatl's egress routes) to reach `auth.openai.com` without a
   proxy. Podman is the first `podman` on `PATH`. The browser sign-in publishes one port,
   `127.0.0.1:1455`, on your computer's loopback only, to Codex's login server in the
-  container, and the command says to open the address Codex prints; when that port
-  is in use the command stops before starting anything and suggests `--device-auth`,
-  which publishes none. With `--codex PATH`, that Codex CLI on your computer runs
-  instead, with a temporary `0700` `CODEX_HOME` in the data root (given to Codex as an
-  absolute path, also when the data root is relative) as its working directory, and
-  without Codex's other credential and endpoint variables. Either way its output reaches
+  container; when that port is in use the command stops before starting anything and
+  suggests `--device-auth`, which publishes none. Codex cannot open a browser on your
+  computer from the container, so Axocoatl opens the address it prints, once, with
+  `open` on macOS or `xdg-open` elsewhere (the first on `PATH`; the address as the only
+  argument, no shell) and prints `Opened the sign-in page in your browser.` It opens only
+  an address shown on screen that is exactly `https://auth.openai.com/oauth/authorize?…`,
+  or with `--device-auth` exactly `https://auth.openai.com/codex/device`, and writes it
+  to no file or log. `--no-browser` opens nothing, and without a working opener nothing
+  is opened either: you open the printed address yourself. With `--codex PATH`, that
+  Codex CLI on your computer runs instead (and opens the browser sign-in itself), with a
+  temporary `0700` `CODEX_HOME` in the data root (given to Codex as an absolute path,
+  also when the data root is relative) as its working directory, and without Codex's
+  other credential and endpoint variables. Either way its output reaches
   your terminal through the same masking relay as `connect claude-code`, which here also
   hides OpenAI API keys and JWTs. Axocoatl reads the sign-in from the `auth.json` Codex
   writes, never from the screen (from the container with `podman exec`, straight into
@@ -36,8 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   home with zeros and removes it, also on an error or a signal (the `podman` commands
   that start, read and remove the container run in a process group of their own, so a
   Ctrl-C typed after Codex exits does not stop them); Podman removes a login container
-  after 30 minutes at most even if Axocoatl is killed. Exit codes: 0 stored, 2 no
-  ChatGPT sign-in, 3 usage (also no Podman on `PATH`, or port 1455 in use), 5 failure,
+  after 30 minutes at most even if Axocoatl is killed. The command says when the sign-in
+  starts that you have 30 minutes, and when they run out first it says
+  ``The Codex sign-in was not completed within 30 minutes; nothing was stored. Run
+  `axocoatl connect codex` again.`` instead of saying that `auth.json` could not be read
+  from the container. Exit codes: 0 stored, 2 no ChatGPT sign-in (also when the 30
+  minutes ran out), 3 usage (also no Podman on `PATH`, or port 1455 in use), 5 failure,
   6 interrupted.
 - **A Codex writer can run with that sign-in: `credential: codex-chatgpt`.** A loadout
   Agent's new `credential` field names the stored credential its route sends: for

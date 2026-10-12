@@ -1395,13 +1395,17 @@ fn connect_codex_runs_codex_login_with_file_storage_and_no_other_credentials() {
     }
     let parsed = Cli::try_parse_from(["x", "codex"]).unwrap();
     let ConnectCommands::Codex {
-        device_auth, codex, ..
+        device_auth,
+        codex,
+        no_browser,
+        ..
     } = parsed.command
     else {
         panic!("codex")
     };
     assert!(!device_auth);
     assert!(codex.is_none());
+    assert!(!no_browser);
     let parsed = Cli::try_parse_from([
         "x",
         "codex",
@@ -1416,10 +1420,12 @@ fn connect_codex_runs_codex_login_with_file_storage_and_no_other_credentials() {
         device_auth,
         codex,
         config,
+        no_browser,
     } = parsed.command
     else {
         panic!("codex")
     };
+    assert!(!no_browser);
     assert!(device_auth);
     assert_eq!(codex.as_deref(), Some(Path::new("/opt/codex")));
     assert_eq!(config, Path::new("/tmp/a.yaml"));
@@ -1455,8 +1461,8 @@ fn the_login_container_publishes_only_the_callback_on_loopback_and_mounts_nothin
     let name = container_name();
     assert!(name.starts_with(NAME_PREFIX));
     assert_ne!(name, container_name());
-    let browser = run_args(&name, image, false);
-    let device = run_args(&name, image, true);
+    let browser = run_args(&name, image, false, MAX_LIFETIME);
+    let device = run_args(&name, image, true, MAX_LIFETIME);
     for args in [&browser, &device] {
         assert_eq!(
             &args[..5],
@@ -1594,19 +1600,36 @@ fn podman_is_looked_for_on_path_only() {
 }
 
 /// The intro says what to do: Codex in the login container cannot open a
-/// browser on this computer, so it says to open the address it prints.
+/// browser on this computer, so Axocoatl opens the address it prints when
+/// it has an opener (and no --no-browser), and otherwise the intro says to
+/// open it; a Codex on this computer opens it itself. The container's
+/// intro also says how long the sign-in may take.
 #[test]
 fn the_container_intro_does_not_promise_a_browser_codex_cannot_open() {
-    let container = codex::sign_in_how(false, true);
+    let container = codex::sign_in_how(false, true, false);
     assert_eq!(
         container,
         "Open the address it prints in a browser on this computer."
     );
     assert!(!container.contains("it opens"));
-    assert!(codex::sign_in_how(false, false).contains("browser it opens"));
-    for in_container in [false, true] {
-        assert!(codex::sign_in_how(true, in_container).contains("Enter the code"));
+    let opened = codex::sign_in_how(false, true, true);
+    assert!(opened.starts_with("Axocoatl opens the address it prints in your browser"));
+    assert!(opened.contains("open that address in a browser on this computer"));
+    for opens in [false, true] {
+        assert!(codex::sign_in_how(false, false, opens).contains("browser it opens"));
+        assert!(codex::sign_in_how(true, false, opens).contains("Enter the code"));
     }
+    assert!(codex::sign_in_how(true, true, false).starts_with("Enter the code"));
+    let device = codex::sign_in_how(true, true, true);
+    assert!(
+        device.starts_with("Axocoatl opens the address it gives"),
+        "{device}"
+    );
+    assert!(device.contains("enter the code it shows"), "{device}");
+    assert_eq!(
+        codex_container::time_to_sign_in(codex_container::MAX_LIFETIME),
+        "You have 30 minutes to finish signing in."
+    );
 }
 
 /// The `podman` commands that start the login container, read the sign-in
@@ -1642,7 +1665,9 @@ fn the_login_containers_podman_commands_run_in_their_own_process_group() {
             }
         }
     }
-    let container = codex_container::Container::start(&podman, "image-id", true).unwrap();
+    let container =
+        codex_container::Container::start(&podman, "image-id", true, codex_container::MAX_LIFETIME)
+            .unwrap();
     assert!(container.read_auth_file().unwrap().is_none());
     drop(container);
     let ours = std::process::Command::new("ps")
@@ -1715,4 +1740,555 @@ fn the_codex_filters_hide_keys_and_jwts_and_leave_words_alone() {
     let shown = String::from_utf8_lossy(&shown).into_owned();
     assert!(shown.contains(&key), "{shown}");
     assert!(leaked_positions(shown.as_bytes(), &anthropic).is_empty());
+}
+
+// ------------------------- connect codex: the sign-in page and the lifetime
+
+const FAKE_PODMAN: &str = include_str!("../../tests/fixtures/fake-podman.sh");
+/// The browser sign-in's address the fake `podman` prints (after
+/// look-alikes, and before another address of the same form).
+const SIGN_IN_ADDRESS: &str = "https://auth.openai.com/oauth/authorize?response_type=code&\
+client_id=app_fake&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&\
+code_challenge=AbCdEfGhIjKlMnOp-qr_stUVwxyz0123456789ABCDE&code_challenge_method=S256&\
+state=Qsk-pLkJhGfDsAeyJ0x&scope=openid+profile+email+offline_access&originator=codex_cli_rs";
+const DEVICE_PAGE: &str = "https://auth.openai.com/codex/device";
+
+/// Write an executable script, and run it with `probe` (which it answers
+/// at once, without doing anything) until it is not "text file busy",
+/// which it is while another test's fork still holds a file it was writing.
+fn install_script(path: &Path, contents: &str) {
+    std::fs::write(path, contents).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for _ in 0..100 {
+        match std::process::Command::new(path).arg("probe").status() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            other => {
+                assert!(other.unwrap().success());
+                return;
+            }
+        }
+    }
+    panic!("{} stayed busy", path.display());
+}
+
+/// A fake opener (`open` or `xdg-open`, as this computer's would be named)
+/// alone in a directory: it appends how many arguments it got and each one
+/// to `opened` beside it, and exits with `status`. Its directory, to use as
+/// `PATH`, and the `opened` file.
+fn fake_opener(root: &Path, status: u8) -> (PathBuf, PathBuf) {
+    let directory = root.join("opener-bin");
+    std::fs::create_dir_all(&directory).unwrap();
+    let opened = root.join("opened");
+    install_script(
+        &directory.join(browser::Opener::name()),
+        &format!(
+            "#!/bin/sh\n[ \"$*\" = probe ] && exit 0\n{{ printf 'argc=%s\\n' \"$#\"; for a in \
+             \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; }} >> '{}'\nexit {status}\n",
+            opened.display()
+        ),
+    );
+    (directory, opened)
+}
+
+/// What the fake opener was run with, one `argc=`/`arg=` line each.
+fn opened(file: &Path) -> String {
+    std::fs::read_to_string(file).unwrap_or_default()
+}
+
+/// Wait up to five seconds for the opener's answer.
+fn opener_answer(receiver: std::sync::mpsc::Receiver<bool>) -> bool {
+    receiver.recv_timeout(Duration::from_secs(5)).unwrap()
+}
+
+/// Only the exact page is accepted: `https://auth.openai.com` (no other
+/// host, look-alike, scheme, port, user part or case), the authorize path
+/// with a form-encoded query, or exactly the device page.
+#[test]
+fn only_the_exact_sign_in_page_is_accepted() {
+    use browser::SignInPage::{Authorize, Device};
+    assert_eq!(browser::SignInPage::for_sign_in(false), Authorize);
+    assert_eq!(browser::SignInPage::for_sign_in(true), Device);
+    assert!(Authorize.accepts(SIGN_IN_ADDRESS));
+    assert!(Authorize.accepts("https://auth.openai.com/oauth/authorize?state=a%2Fb&x=1+2*3~"));
+    assert!(Device.accepts(DEVICE_PAGE));
+    for refused in [
+        "http://auth.openai.com/oauth/authorize?state=a",
+        "HTTPS://auth.openai.com/oauth/authorize?state=a",
+        "https://AUTH.OPENAI.COM/oauth/authorize?state=a",
+        "https://auth.openai.com.evil.test/oauth/authorize?state=a",
+        "https://auth.openai.com@evil.test/oauth/authorize?state=a",
+        "https://auth.openai.com:443/oauth/authorize?state=a",
+        "https://auth.openai.co/oauth/authorize?state=a",
+        "https://evil.test/https://auth.openai.com/oauth/authorize?state=a",
+        "https://xauth.openai.com/oauth/authorize?state=a",
+        "https://auth.openai.com/oauth/authorize",
+        "https://auth.openai.com/oauth/authorize?",
+        "https://auth.openai.com/oauth/authorizex?state=a",
+        "https://auth.openai.com/oauth/authorize/?state=a",
+        "https://auth.openai.com/oauth/authorize/../../evil?state=a",
+        "https://auth.openai.com//oauth/authorize?state=a",
+        "https://auth.openai.com/oauth/authorize?state=a#fragment",
+        "https://auth.openai.com/oauth/authorize?state=a%2",
+        "https://auth.openai.com/oauth/authorize?state=a%zz",
+        "https://auth.openai.com/oauth/authorize?state=a;b",
+        "https://auth.openai.com/oauth/authorize?state=$(touch x)",
+        "https://auth.openai.com/oauth/authorize?next=https://evil.test/",
+        "https://auth.openai.com/codex/device",
+        " https://auth.openai.com/oauth/authorize?state=a",
+    ] {
+        assert!(!Authorize.accepts(refused), "{refused}");
+    }
+    for refused in [
+        "http://auth.openai.com/codex/device",
+        "https://auth.openai.com.evil.test/codex/device",
+        "https://auth.openai.com/codex/devices",
+        "https://auth.openai.com/codex/device/",
+        "https://auth.openai.com/codex/device?user_code=X",
+        "https://auth.openai.com/codex/device#x",
+        "https://auth.openai.com/codex/device.",
+        "https://auth.openai.com/oauth/authorize?state=a",
+    ] {
+        assert!(!Device.accepts(refused), "{refused}");
+    }
+    let long = format!(
+        "https://auth.openai.com/oauth/authorize?state={}",
+        "a".repeat(5000)
+    );
+    assert!(!Authorize.accepts(&long));
+}
+
+/// The watcher finds the page as it is shown, however the output is cut
+/// into writes: color changes do not split it, a hyperlink's hidden target
+/// is not read, look-alikes and other words are passed over, and the first
+/// address is returned once, never another one after it.
+#[test]
+fn the_watcher_finds_the_shown_address_once() {
+    use browser::{LinkWatcher, SignInPage};
+    let browser_screen = format!(
+        "Starting local login server on http://localhost:1455.\r\n\
+         http://auth.openai.com/oauth/authorize?state=plain-http\r\n\
+         https://auth.openai.com.evil.test/oauth/authorize?state=look-alike\r\n\
+         \x1b]8;;https://auth.openai.com/oauth/authorize?state=hidden-target\x1b\\https://evil.test/\x1b]8;;\x1b\\\r\n\
+         see:https://auth.openai.com/oauth/authorize?state=glued\r\n\
+         https://auth.openai.com/oauth/authorize?state=moved\x1b[3Cx\r\n\
+         \x1b[1m{}\x1b[0m\r\n\r\nhttps://auth.openai.com/oauth/authorize?state=printed-again\r\n",
+        SIGN_IN_ADDRESS.replacen("state=", "st\x1b[32mate=", 1)
+    );
+    for chunk_size in [1, 2, 7, 64, browser_screen.len()] {
+        let mut watcher = LinkWatcher::new(SignInPage::Authorize);
+        let found: Vec<String> = browser_screen
+            .as_bytes()
+            .chunks(chunk_size)
+            .filter_map(|chunk| watcher.push(chunk))
+            .collect();
+        assert_eq!(found, [SIGN_IN_ADDRESS], "chunks of {chunk_size}");
+    }
+    // A cursor movement or an erase right after an address drops it (the
+    // program may have cut it there), and neither part is taken; one
+    // before an address leaves it whole.
+    let mut watcher = LinkWatcher::new(SignInPage::Authorize);
+    assert_eq!(
+        watcher.push(b"https://auth.openai.com/oauth/authorize?state=a\x1b[2Cb\r\n"),
+        None
+    );
+    assert_eq!(
+        watcher.push(b"https://auth.openai.com/oauth/authorize?state=b\x1b[K\r\n"),
+        None
+    );
+    assert_eq!(
+        watcher.push(b"x\x1b[2C\x1b[2Khttps://auth.openai.com/oauth/authorize?state=c\r\n"),
+        Some("https://auth.openai.com/oauth/authorize?state=c".to_string())
+    );
+    // The device page, in Codex's colors; the authorize address is not it.
+    let device_screen = format!(
+        "   https://auth.openai.com/codex/devices\r\n   {SIGN_IN_ADDRESS}\r\n\
+         1. Open this link\r\n   \x1b[94m{DEVICE_PAGE}\x1b[0m\r\n   \x1b[94m{DEVICE_PAGE}\x1b[0m\r\n"
+    );
+    let mut watcher = LinkWatcher::new(SignInPage::Device);
+    let found: Vec<String> = device_screen
+        .as_bytes()
+        .chunks(3)
+        .filter_map(|chunk| watcher.push(chunk))
+        .collect();
+    assert_eq!(found, [DEVICE_PAGE]);
+    // An address that never ends (no character after it) is not taken,
+    // and one too long to be Codex's is not either.
+    let mut watcher = LinkWatcher::new(SignInPage::Device);
+    assert_eq!(watcher.push(DEVICE_PAGE.as_bytes()), None);
+    let mut watcher = LinkWatcher::new(SignInPage::Authorize);
+    let long = format!(
+        "https://auth.openai.com/oauth/authorize?state={}\r\n",
+        "a".repeat(5000)
+    );
+    assert_eq!(watcher.push(long.as_bytes()), None);
+}
+
+/// The opener is the first `open` (macOS) or `xdg-open` on PATH, run with
+/// the address as its one argument and no shell (`&`, `$(…)`, `;` and
+/// spaces reach it as they are, and nothing runs); an opener that fails
+/// says so, and with none on PATH there is no opener.
+#[test]
+fn the_opener_gets_the_address_as_its_one_argument_without_a_shell() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let (bin, log) = fake_opener(root, 0);
+    let opener = browser::Opener::find(Some(bin.as_os_str())).expect("the fake opener");
+    let marker = root.join("ran-a-shell");
+    let address = format!(
+        "https://auth.openai.com/oauth/authorize?a=1&b=$(touch {})&c=2;d e",
+        marker.display()
+    );
+    assert!(opener_answer(opener.open(&address)));
+    assert_eq!(opened(&log), format!("argc=1\narg={address}\n"));
+    assert!(!marker.exists());
+
+    let failing = tempfile::tempdir().unwrap();
+    let (bin, log) = fake_opener(failing.path(), 3);
+    let opener = browser::Opener::find(Some(bin.as_os_str())).unwrap();
+    assert!(!opener_answer(opener.open(DEVICE_PAGE)));
+    assert_eq!(opened(&log), format!("argc=1\narg={DEVICE_PAGE}\n"));
+
+    let empty = tempfile::tempdir().unwrap();
+    assert!(browser::Opener::find(Some(empty.path().as_os_str())).is_none());
+    assert!(browser::Opener::find(None).is_none());
+}
+
+/// A private directory for one login-container test: `bin/podman` (the
+/// fake, with its `mode`, the `auth` it prints and the `calls` it records)
+/// and `data/` (the data root).
+struct ContainerFixture {
+    _directory: tempfile::TempDir,
+    root: PathBuf,
+    access: String,
+}
+
+impl ContainerFixture {
+    fn new(mode: &str) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let bin = root.join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::write(bin.join("mode"), mode).unwrap();
+        let access = fake_jwt();
+        let auth = serde_json::json!({
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "id_token": fake_jwt(),
+                "access_token": access,
+                "refresh_token": format!("rt_{}", uuid::Uuid::new_v4().simple()),
+                "account_id": "acct-fixture",
+            },
+            "last_refresh": "2026-10-11T12:00:00Z",
+        });
+        std::fs::write(bin.join("auth"), auth.to_string()).unwrap();
+        install_script(&bin.join("podman"), FAKE_PODMAN);
+        let data = root.join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        Self {
+            _directory: directory,
+            root,
+            access,
+        }
+    }
+
+    fn login(&self, opener: Option<browser::Opener>, lifetime: Duration) -> codex_container::Login {
+        let mut login = codex_container::Login::new(
+            self.root.join("bin/podman"),
+            "0123456789abcdef".to_string(),
+            opener,
+        );
+        login.lifetime = lifetime;
+        login
+    }
+
+    fn calls(&self) -> String {
+        std::fs::read_to_string(self.root.join("bin/calls")).unwrap_or_default()
+    }
+
+    fn stored(&self) -> Option<Vec<u8>> {
+        std::fs::read(secret_store::secret_path(
+            &self.root.join("data"),
+            axocoatl_daemon::external_agent::codex_chatgpt::CODEX_CHATGPT_SECRET,
+        ))
+        .ok()
+    }
+}
+
+/// Run `connect codex` with the login container (the fake `podman`) on a
+/// fresh user terminal, typing Enter once `ready` is shown; its result and
+/// what it showed.
+async fn run_container_login(
+    fixture: &ContainerFixture,
+    login: codex_container::Login,
+    device_auth: bool,
+    ready: &'static str,
+) -> (Result<String, Failure>, Screen) {
+    let terminal = user_terminal();
+    terminal.set_size(SIZE);
+    let before = modes(&terminal.slave);
+    let screen = Screen::default();
+    let interrupt = Interrupt::default();
+    let typing = typist(&terminal, &screen, ready, None);
+    let result = finish_within(
+        codex_container::connect(
+            login,
+            fixture.root.join("data"),
+            device_auth,
+            terminal.slave.try_clone().unwrap(),
+            Box::new(screen.clone()),
+            &interrupt,
+            &Resized::default(),
+        ),
+        &interrupt,
+    )
+    .await;
+    assert!(
+        typing.join().unwrap(),
+        "the terminal was raw while codex ran"
+    );
+    assert_eq!(modes(&terminal.slave), before);
+    (result, screen)
+}
+
+/// With the pinned Codex in the login container, the sign-in page it
+/// prints is opened on this computer once, with exactly that address (not
+/// a look-alike before it, nor the address printed after it), and the
+/// terminal says so; the sign-in is then stored and the container removed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_container_sign_in_page_is_opened_once_on_this_computer() {
+    let fixture = ContainerFixture::new("ok");
+    let (bin, log) = fake_opener(&fixture.root, 0);
+    let opener = browser::Opener::find(Some(bin.as_os_str())).unwrap();
+    let login = fixture.login(Some(opener), codex_container::MAX_LIFETIME);
+    let (result, screen) = run_container_login(&fixture, login, false, browser::OPENED).await;
+    let message = result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert!(
+        message.contains("the login container was removed"),
+        "{message}"
+    );
+    assert_eq!(opened(&log), format!("argc=1\narg={SIGN_IN_ADDRESS}\n"));
+    let shown = String::from_utf8_lossy(&screen.bytes()).into_owned();
+    assert_eq!(shown.matches(browser::OPENED).count(), 1, "{shown}");
+    // The note is a line of its own, after the address.
+    assert!(
+        shown.contains(&format!("\r\n{}\r\n", browser::OPENED)),
+        "{shown}"
+    );
+    let flat: String = shown.split(['\r', '\n']).collect();
+    assert!(flat.contains(SIGN_IN_ADDRESS), "{shown}");
+    assert_not_shown(&screen, &fixture.access);
+    assert!(fixture.stored().is_some());
+    let calls = fixture.calls();
+    assert!(calls.contains("--timeout=1800\n"), "{calls}");
+    assert!(calls.contains("exec --interactive\n"), "{calls}");
+    assert!(calls.trim_end().ends_with("rm --force"), "{calls}");
+    // The address is in no file but the fake `podman` that prints it and
+    // the fake opener's record of it (none in the data root).
+    let mut hits = Vec::new();
+    files_containing(
+        &fixture.root,
+        b"state=Qsk-pLkJhGfDsAeyJ0x",
+        6,
+        None,
+        &[],
+        &mut hits,
+    );
+    hits.sort();
+    let mut expected = vec![fixture.root.join("bin/podman"), log];
+    expected.sort();
+    assert_eq!(hits, expected);
+}
+
+/// With `--device-auth` the device page is the one opened, once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_device_page_is_opened_once_with_device_auth() {
+    let fixture = ContainerFixture::new("ok");
+    let (bin, log) = fake_opener(&fixture.root, 0);
+    let opener = browser::Opener::find(Some(bin.as_os_str())).unwrap();
+    let login = fixture.login(Some(opener), codex_container::MAX_LIFETIME);
+    let (result, screen) = run_container_login(&fixture, login, true, browser::OPENED).await;
+    result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert_eq!(opened(&log), format!("argc=1\narg={DEVICE_PAGE}\n"));
+    assert!(screen.contains("WXYZ-1234"));
+    assert!(fixture.stored().is_some());
+}
+
+/// `--no-browser` (no opener given to the login) opens nothing and says
+/// nothing about a browser; the address stays on screen to open by hand.
+/// An opener that fails is not mentioned either.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_browser_or_a_failing_opener_leaves_the_printed_address() {
+    use clap::Parser;
+    #[derive(Parser)]
+    struct Cli {
+        #[command(subcommand)]
+        command: ConnectCommands,
+    }
+    let parsed = Cli::try_parse_from(["x", "codex", "--no-browser"]).unwrap();
+    assert!(matches!(
+        parsed.command,
+        ConnectCommands::Codex {
+            no_browser: true,
+            ..
+        }
+    ));
+    assert!(Cli::try_parse_from(["x", "claude-code", "--no-browser"]).is_err());
+
+    let fixture = ContainerFixture::new("ok");
+    let (_, log) = fake_opener(&fixture.root, 0);
+    let login = fixture.login(None, codex_container::MAX_LIFETIME);
+    let (result, screen) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
+    result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert_eq!(opened(&log), "");
+    assert!(!screen.contains(browser::OPENED));
+    let flat: String = String::from_utf8_lossy(&screen.bytes())
+        .split(['\r', '\n'])
+        .collect();
+    assert!(flat.contains(SIGN_IN_ADDRESS));
+
+    let fixture = ContainerFixture::new("ok");
+    let (bin, log) = fake_opener(&fixture.root, 1);
+    let opener = browser::Opener::find(Some(bin.as_os_str())).unwrap();
+    let login = fixture.login(Some(opener), codex_container::MAX_LIFETIME);
+    let (result, screen) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
+    result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    // Wait out the opener's answer, then the relay has nothing to say.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while opened(&log).is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(opened(&log), format!("argc=1\narg={SIGN_IN_ADDRESS}\n"));
+    assert!(!screen.contains(browser::OPENED));
+}
+
+/// When the login container's lifetime ends the sign-in (Podman stops it
+/// under `podman exec`, and the read finds no container), the message says
+/// the sign-in was not completed in time, with exit code 2; a container
+/// that ended before its lifetime, or a read that failed while it still
+/// runs, says so instead. Nothing is stored either way.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sign_in_the_container_outlived_says_it_was_not_completed_in_time() {
+    assert_eq!(
+        codex_container::timed_out(codex_container::MAX_LIFETIME),
+        "The Codex sign-in was not completed within 30 minutes; nothing was stored. Run \
+         `axocoatl connect codex` again."
+    );
+    assert_eq!(
+        codex_container::timed_out(Duration::from_secs(1)),
+        "The Codex sign-in was not completed within 1 second; nothing was stored. Run \
+         `axocoatl connect codex` again."
+    );
+
+    let fixture = ContainerFixture::new("timeout");
+    let login = fixture.login(None, Duration::from_secs(1));
+    let (result, screen) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
+    let failure = result.expect_err("nothing is stored");
+    assert_eq!(failure.code, exit::NO_TOKEN, "{}", failure.message);
+    assert_eq!(
+        failure.message,
+        codex_container::timed_out(Duration::from_secs(1))
+    );
+    assert!(screen.contains("no exec session"));
+    assert!(fixture.stored().is_none());
+    let calls = fixture.calls();
+    assert!(calls.contains("--timeout=1\n"), "{calls}");
+    assert!(calls.contains("container exists\n"), "{calls}");
+    assert!(calls.trim_end().ends_with("rm --force"), "{calls}");
+
+    let fixture = ContainerFixture::new("timeout");
+    let login = fixture.login(None, codex_container::MAX_LIFETIME);
+    let (result, _) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
+    let failure = result.expect_err("nothing is stored");
+    assert_eq!(failure.code, exit::FAILURE);
+    assert_eq!(failure.message, codex_container::ended_early());
+    assert!(fixture.stored().is_none());
+
+    let fixture = ContainerFixture::new("readfail");
+    let login = fixture.login(None, Duration::from_secs(1));
+    let (result, _) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
+    let failure = result.expect_err("nothing is stored");
+    assert_eq!(failure.code, exit::FAILURE);
+    assert!(
+        failure
+            .message
+            .starts_with("Codex's auth.json could not be read from the login container"),
+        "{}",
+        failure.message
+    );
+    assert!(fixture.stored().is_none());
+
+    assert_eq!(
+        codex_container::exists_args("n"),
+        ["container", "exists", "n"]
+    );
+    assert_eq!(
+        codex_container::running_args("n"),
+        [
+            "container",
+            "inspect",
+            "--format",
+            "{{.State.Running}}",
+            "n"
+        ]
+    );
+    // Podman reads `--timeout=0` as no timeout: never passed.
+    let args = codex_container::run_args("n", "i", true, Duration::ZERO);
+    assert!(args.iter().any(|arg| arg == "--timeout=1"), "{args:?}");
+}
+
+/// The relay's part: the page is opened once however often its address is
+/// shown; once the opener has opened it, the note is one line (after a line
+/// break when the cursor is not at the start of one), shown once; when the
+/// opener fails, nothing is said.
+#[test]
+fn the_note_is_shown_once_and_only_when_the_page_opened() {
+    fn answer(open_once: &mut browser::OpenOnce<'_>) -> Option<Vec<u8>> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while open_once.waiting() {
+            if let Some(note) = open_once.note() {
+                return Some(note);
+            }
+            assert!(Instant::now() < deadline, "the opener never answered");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        None
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let (bin, log) = fake_opener(directory.path(), 0);
+    let opener = browser::Opener::find(Some(bin.as_os_str())).unwrap();
+    let mut open_once = browser::OpenOnce::new(browser::SignInPage::Device, &opener);
+    assert!(open_once.note().is_none());
+    open_once.watch(format!("   {DEVICE_PAGE}\r\n").as_bytes());
+    assert_eq!(
+        answer(&mut open_once),
+        Some(format!("{}\r\n", browser::OPENED).into_bytes())
+    );
+    open_once.watch(format!("{DEVICE_PAGE}\r\nPress Enter").as_bytes());
+    assert!(!open_once.waiting());
+    assert!(open_once.note().is_none());
+    assert_eq!(opened(&log), format!("argc=1\narg={DEVICE_PAGE}\n"));
+
+    let directory = tempfile::tempdir().unwrap();
+    let (bin, _) = fake_opener(directory.path(), 0);
+    let opener = browser::Opener::find(Some(bin.as_os_str())).unwrap();
+    let mut open_once = browser::OpenOnce::new(browser::SignInPage::Device, &opener);
+    open_once.watch(format!("{DEVICE_PAGE}\r\nPress Enter").as_bytes());
+    assert_eq!(
+        answer(&mut open_once),
+        Some(format!("\r\n{}\r\n", browser::OPENED).into_bytes())
+    );
+
+    let directory = tempfile::tempdir().unwrap();
+    let (bin, log) = fake_opener(directory.path(), 1);
+    let opener = browser::Opener::find(Some(bin.as_os_str())).unwrap();
+    let mut open_once = browser::OpenOnce::new(browser::SignInPage::Device, &opener);
+    open_once.watch(format!("{DEVICE_PAGE}\r\n").as_bytes());
+    assert!(open_once.waiting());
+    assert_eq!(answer(&mut open_once), None);
+    assert!(open_once.note().is_none());
+    assert_eq!(opened(&log), format!("argc=1\narg={DEVICE_PAGE}\n"));
 }

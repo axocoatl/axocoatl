@@ -2,7 +2,10 @@
 //! large as the user's terminal (and resized with it on `SIGWINCH`): the
 //! user's terminal in raw mode for the duration (always restored),
 //! keystrokes relayed to the program until it exits, and its output relayed
-//! back through the token filters ([`FilterChain`]).
+//! back through the token filters ([`FilterChain`]). For `connect codex` in
+//! the login container, what is shown is also watched for the sign-in
+//! page's address, which is opened once on this computer
+//! ([`super::browser`]).
 
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
@@ -18,6 +21,7 @@ use rustix::event::{
 use rustix::termios::{self, OptionalActions, SpecialCodeIndex, Termios};
 use zeroize::{Zeroize, Zeroizing};
 
+use super::browser::{OpenOnce, Opener, SignInPage};
 use super::redact::{FilterChain, Found};
 
 /// The size used when the user's terminal does not report one.
@@ -166,6 +170,7 @@ pub(crate) fn run_setup_token(
             set_env: &[],
             remove_env: &[],
             filters: FilterChain::claude,
+            open_sign_in: None,
         },
         input,
         output,
@@ -186,6 +191,9 @@ pub(crate) struct Program<'a> {
     pub(crate) remove_env: &'a [&'a str],
     /// The filters its output goes through, for a terminal of a size.
     pub(crate) filters: fn(u16, u16) -> FilterChain,
+    /// The sign-in page to open once on this computer when its address is
+    /// shown, and the opener to open it with (`None`: nothing is opened).
+    pub(crate) open_sign_in: Option<(SignInPage, &'a Opener)>,
 }
 
 /// Run `program` as [`run_setup_token`] runs `claude setup-token`.
@@ -269,6 +277,9 @@ pub(crate) fn run_program(
         master: &*pair.master,
         resized,
     };
+    let open_once = program
+        .open_sign_in
+        .map(|(page, opener)| OpenOnce::new(page, opener));
     let result = pump_output(
         &chunks,
         &exited,
@@ -278,6 +289,7 @@ pub(crate) fn run_program(
         (cols, rows),
         stop,
         program.filters,
+        open_once,
     );
     relay_stop.store(true, Ordering::SeqCst);
     if result.is_err() {
@@ -426,8 +438,13 @@ fn relay_keystrokes(input: OwnedFd, mut writer: Box<dyn Write + Send>, stop: &At
     buffer.zeroize();
 }
 
-fn show(output: &mut dyn Write, shown: &mut Vec<u8>) {
+/// Show `shown` (watched for the sign-in page's address first, when one is
+/// to be opened).
+fn show(output: &mut dyn Write, shown: &mut Vec<u8>, open_once: &mut Option<OpenOnce<'_>>) {
     if !shown.is_empty() {
+        if let Some(open_once) = open_once {
+            open_once.watch(shown);
+        }
         let _ = output.write_all(shown);
         let _ = output.flush();
         shown.clear();
@@ -446,6 +463,7 @@ fn pump_output(
     size: (u16, u16),
     stop: &AtomicBool,
     filters: fn(u16, u16) -> FilterChain,
+    mut open_once: Option<OpenOnce<'_>>,
 ) -> Result<SetupRun, String> {
     let mut filter = filters(size.0, size.1);
     let mut size = size;
@@ -470,7 +488,7 @@ fn pump_output(
                 while let Ok(chunk) = chunks.try_recv() {
                     filter.push(&chunk, &mut shown);
                 }
-                show(output, &mut shown);
+                show(output, &mut shown, &mut open_once);
                 let _ = terminal.master.resize(PtySize {
                     rows: new_size.1,
                     cols: new_size.0,
@@ -481,18 +499,25 @@ fn pump_output(
                 size = new_size;
             }
         }
+        // Said once the opener has opened the page: written straight to the
+        // user's terminal, never through the filters, whose model of the
+        // terminal follows the program's output alone.
+        if let Some(note) = open_once.as_mut().and_then(OpenOnce::note) {
+            let _ = output.write_all(&note);
+            let _ = output.flush();
+        }
         if !output_ended {
             match chunks.recv_timeout(POLL) {
                 Ok(chunk) => {
                     filter.push(&chunk, &mut shown);
-                    show(output, &mut shown);
+                    show(output, &mut shown, &mut open_once);
                     last_output = Instant::now();
                     flushed_idle = false;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if !flushed_idle && last_output.elapsed() >= IDLE_FLUSH {
                         filter.flush_idle(&mut shown);
-                        show(output, &mut shown);
+                        show(output, &mut shown, &mut open_once);
                         flushed_idle = true;
                     }
                 }
@@ -527,7 +552,8 @@ fn pump_output(
     filter.finish(&mut shown);
     // Modes the program left set (it was stopped, or did not clean up).
     shown.extend_from_slice(&filter.reset_sequence());
-    show(output, &mut shown);
+    // The program has ended: nothing is opened for it any more.
+    show(output, &mut shown, &mut None);
     if interrupted {
         for _ in 0..20 {
             if exited.try_recv().is_ok() {
