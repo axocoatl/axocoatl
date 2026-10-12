@@ -51,6 +51,12 @@ bytes = "1.9"
 # `axocoatl connect codex --refresh` and `--status`: times in local time.
 chrono = { workspace = true }
 
+[features]
+default = []
+# Verification only, off by default, never in a release binary: the
+# daemon's stale-access switch (see axocoatl-daemon's `live-verify`).
+live-verify = ["axocoatl-daemon/live-verify"]
+
 [dev-dependencies]
 tempfile = "3.27"
 # Unsigned JWTs for the fake ChatGPT sign-ins `connect codex --refresh`

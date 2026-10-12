@@ -44,6 +44,9 @@ cargo clippy --locked --workspace --all-targets --all-features --jobs 1 -- -D wa
 cargo test --locked --workspace --jobs 1 -- --test-threads=1
 cargo test --locked --doc --workspace --jobs 1
 cargo build --locked --release -p axocoatl-cli --jobs 1
+release_target_dir=$(cargo metadata --locked --offline --format-version 1 --no-deps \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+./scripts/check-no-live-verify.sh "$release_target_dir/release/axocoatl"
 ./scripts/test-server-package.sh
 
 echo 'Native release gate: PASS'

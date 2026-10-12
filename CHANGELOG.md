@@ -104,6 +104,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requests its rules allow. A route to any other host whose credential is that secret
   reads it as a plain credential, which refuses the stored sign-in, and answers `503`.
   The refresh token is sent only to OpenAI's token endpoint.
+- **A verification-only build that sends one stale access token, to test the refresh
+  after a `401` against OpenAI's service.** `axocoatl-daemon` and `axocoatl-cli` have a
+  cargo feature `live-verify`, off by default. Only a binary built with it
+  (`cargo build --release -p axocoatl-cli --features live-verify`) reads
+  `AXOCOATL_VERIFY_STALE_ACCESS_ONCE` as the daemon starts. With `1`, the daemon logs at
+  `WARN` that the switch is active, and the first request of the process to
+  `chatgpt.com` carries a fixed invalid access token (an unsigned JWT that expired in
+  1970) instead of the stored one; when the upstream answers it `401`, the daemon
+  refreshes the stored sign-in once (OpenAI rotates its tokens), and the next request
+  carries the refreshed token. The `401` reaches Codex as any other does. The switch
+  fires once per process and logs at `WARN` when it fires. No release binary has it: the
+  release workflow's build job, `scripts/verify-native-gate.sh` and
+  `scripts/verify-cross-linux-gate.sh` run the new `scripts/check-no-live-verify.sh` on
+  the binaries they build, and `scripts/check-workflow-contracts.rb` refuses a manifest,
+  workflow or script that would turn the feature on (CI's `cargo check` and
+  `cargo clippy --all-features` type-check and lint it without building a binary). A
+  Podman test runs the pinned Codex 0.160.1 with the switch against a fake ChatGPT
+  backend and token endpoint: its first model call is answered `401`, the daemon
+  refreshes once, Codex sends the call again with the refreshed token, and the run
+  passes.
 
 ### Changed
 - A command line `axocoatl connect …` does not take (an unknown flag, a value out of

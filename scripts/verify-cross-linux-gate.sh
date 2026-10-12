@@ -30,6 +30,10 @@ case "$mode" in
     cargo build --locked --release -p axocoatl-cli \
       --target aarch64-unknown-linux-gnu \
       --config target.aarch64-unknown-linux-gnu.linker=\"aarch64-linux-gnu-gcc\"
+    release_target_dir=$(cargo metadata --locked --offline --format-version 1 --no-deps \
+      | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+    ./scripts/check-no-live-verify.sh \
+      "$release_target_dir/aarch64-unknown-linux-gnu/release/axocoatl"
     ;;
   prove-unchanged)
     [[ $# -eq 2 ]] || usage

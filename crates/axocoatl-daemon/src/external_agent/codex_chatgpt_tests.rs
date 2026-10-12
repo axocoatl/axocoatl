@@ -685,6 +685,96 @@ fn storing_and_removing_a_secret_wait_for_the_lock() {
     assert!(!crate::secret_store::secret_path(root.path(), CODEX_CHATGPT_SECRET).exists());
 }
 
+/// Verification only: the stale-access switch is on for exactly `1`, fires
+/// for one request, and lets exactly one `401` to its own invalid token
+/// through.
+#[test]
+fn the_stale_access_switch_is_on_for_one_and_fires_once() {
+    use std::ffi::OsStr;
+    use verify::{from_env_value, STALE_ACCESS_TOKEN};
+    assert!(from_env_value(None).is_none());
+    for off in ["", "0", "true", "yes", " 1", "1 "] {
+        assert!(from_env_value(Some(OsStr::new(off))).is_none(), "{off:?}");
+    }
+    let switch = from_env_value(Some(OsStr::new("1"))).unwrap();
+    // No 401 to handle before the invalid token was sent.
+    assert!(!switch.take_rejection(STALE_ACCESS_TOKEN));
+    assert!(switch.take_first());
+    assert!(!switch.take_first());
+    // Only a 401 to the invalid token itself, once.
+    assert!(!switch.take_rejection("another-token"));
+    assert!(switch.take_rejection(STALE_ACCESS_TOKEN));
+    assert!(!switch.take_rejection(STALE_ACCESS_TOKEN));
+    assert!(!switch.take_first());
+    // The invalid token: an unsigned JWT that expired in 1970, which a
+    // header can carry.
+    let claims = jwt_claims(STALE_ACCESS_TOKEN).unwrap();
+    assert_eq!(claims["exp"], 1);
+    assert_eq!(jwt_expiry_ms(STALE_ACCESS_TOKEN), Some(1000));
+    assert!(HeaderValue::from_str(&format!("Bearer {STALE_ACCESS_TOKEN}")).is_ok());
+}
+
+/// Without the switch (no `live-verify` feature, or the variable not `1`),
+/// the broker sends the stored token, and a `401` to the switch's token
+/// refreshes nothing.
+#[tokio::test]
+async fn without_the_stale_access_switch_the_stored_token_is_sent() {
+    use verify::STALE_ACCESS_TOKEN;
+    let root = data_root();
+    let (access, refresh) = (access_token("acct-1", 3600), refresh_token());
+    store(root.path(), &sign_in(&access, &refresh, "acct-1"));
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    for broker in [
+        broker(root.path(), &server),
+        broker(root.path(), &server).with_stale_access(None),
+    ] {
+        for _ in 0..2 {
+            assert_eq!(
+                broker.current().await.unwrap().secret.expose_secret(),
+                access
+            );
+        }
+        broker
+            .rejected(&SecretString::from(STALE_ACCESS_TOKEN.to_string()))
+            .await;
+    }
+    assert_eq!(stored(root.path()).access_token(), access);
+    server.verify().await;
+}
+
+/// Without the `live-verify` feature the daemon's broker has no switch,
+/// whatever the environment holds; with it, the process's switch is the one
+/// the variable called for when it was first read. (The variable itself is
+/// set only in `tests/live_verify_switch.rs`, a process of its own.)
+#[test]
+fn the_daemons_broker_has_a_switch_only_in_a_live_verify_build() {
+    let root = data_root();
+    let managed = managed_credentials(root.path());
+    let source = crate::egress_broker::CredentialSource::File(crate::secret_store::secret_path(
+        root.path(),
+        CODEX_CHATGPT_SECRET,
+    ));
+    assert!(managed.find(&source, "chatgpt.com").is_some());
+    #[cfg(not(feature = "live-verify"))]
+    {
+        let broker = ChatgptBroker::for_data_root(root.path()).unwrap();
+        assert!(broker.stale_access.is_none());
+    }
+    #[cfg(feature = "live-verify")]
+    {
+        assert_eq!(
+            verify::for_process().is_some(),
+            std::env::var_os(verify::STALE_ACCESS_ENV).as_deref()
+                == Some(std::ffi::OsStr::new("1"))
+        );
+    }
+}
+
 #[path = "codex_chatgpt_route_tests.rs"]
 mod route;
 
