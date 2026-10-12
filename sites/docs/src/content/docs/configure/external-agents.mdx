@@ -429,8 +429,10 @@ daemon keeps the token current on your computer, the way Codex 0.160.1 does:
   it was written has only the old one, which OpenAI may refuse as reused; then connect again.
 - **After a `401`** to a request sent with the current token, it refreshes the same way,
   so the next request carries the new token. The `401` itself goes back to Codex: the
-  route does not send the request again. When Codex ends with that error, the run's
-  not-covered reason names `codex-chatgpt` and says to run again, then to connect again.
+  route does not send the request again. In Axocoatl's Podman test, the pinned Codex
+  0.160.1 sent a model call answered `401` again, and that retry carried the new token.
+  When Codex ends with that error, the run's not-covered reason names `codex-chatgpt` and
+  says to run again, then to connect again.
 - **When OpenAI refuses the refresh for good** (`401`, `invalid_grant`, or a refresh token
   expired, reused or invalidated), the daemon remembers it for that refresh token and does
   not send it again, stores nothing, and refuses the route's requests once the access token

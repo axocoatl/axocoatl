@@ -218,6 +218,39 @@ cargo test -p axocoatl-server
 cargo test -p axocoatl-isolation
 ```
 
+## 9. Verification-only build: a stale ChatGPT access token
+
+The daemon refreshes a Codex ChatGPT sign-in after a `401`. To exercise that path
+against OpenAI's service instead of a fake, build a verification binary with the
+`live-verify` cargo feature (off by default; never use it for a release):
+
+```bash
+cargo build --release -p axocoatl-cli --features live-verify
+```
+
+Start that binary's daemon with `AXOCOATL_VERIFY_STALE_ACCESS_ONCE=1` in its
+environment. The daemon logs at `WARN` that the verification switch is active. The
+first request of the process to `chatgpt.com` (a Codex writer's first model call with
+`credential: codex-chatgpt`) then carries a fixed invalid access token instead of the
+stored one, and the daemon logs that at `WARN` too. When the upstream answers `401`,
+the daemon logs `WARN` that the `401` to the invalid token arrived, refreshes the
+stored sign-in once at OpenAI's token endpoint (`refreshed the ChatGPT sign-in` at
+`INFO`; OpenAI rotates the tokens, which are written back to `secrets/codex-chatgpt`),
+and the next request carries the refreshed token. In Axocoatl's Podman test
+(`the_pinned_codex_retries_a_401_after_the_stale_access_switch_and_the_run_passes`),
+the pinned Codex 0.160.1 sends the call again after the `401` and the run passes.
+The switch fires once per process. Without the variable, or with any value but `1`, it
+stays off; a binary built without the feature never reads the variable.
+
+Release builds must not have the feature: `./scripts/check-no-live-verify.sh BINARY`
+refuses a binary that does, and the native, cross-Linux and release gates run it.
+
+```bash
+cargo test -p axocoatl-daemon --features live-verify --test live_verify_switch
+CONTAINER_CONNECTION=<connection> cargo test -p axocoatl-daemon --lib \
+  turn_tests::the_pinned_codex_retries -- --ignored
+```
+
 ## Quick reference
 
 | Action | Command |

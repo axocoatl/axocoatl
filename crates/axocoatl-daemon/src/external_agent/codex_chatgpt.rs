@@ -56,6 +56,9 @@
 //!
 //! No value is ever formatted into an error, a log line or a `Debug` string;
 //! buffers that held one are zeroized when they are dropped.
+//!
+//! A build with the verification-only `live-verify` feature also has the
+//! stale-access switch ([`verify`]): it is never in a release build.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -71,6 +74,12 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::egress_broker::rules::{ManagedCredential, ManagedValue};
+
+/// Verification only: the stale-access switch (`live-verify` builds, and
+/// tests).
+#[cfg(any(test, feature = "live-verify"))]
+#[path = "codex_chatgpt_verify.rs"]
+pub mod verify;
 
 /// The secret `axocoatl connect codex` stores the sign-in as, and the
 /// credential the ChatGPT route names.
@@ -592,6 +601,9 @@ pub struct ChatgptBroker {
     /// How many of the next writes fail (tests).
     #[cfg(test)]
     pub(crate) fail_stores: std::sync::atomic::AtomicUsize,
+    /// Verification only: the stale-access switch, when it is on.
+    #[cfg(any(test, feature = "live-verify"))]
+    stale_access: Option<Arc<verify::StaleAccessOnce>>,
 }
 
 impl ChatgptBroker {
@@ -605,7 +617,59 @@ impl ChatgptBroker {
             state: tokio::sync::Mutex::new(BrokerState::default()),
             #[cfg(test)]
             fail_stores: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(any(test, feature = "live-verify"))]
+            stale_access: None,
         }
+    }
+
+    /// Verification only: the broker with the stale-access `switch`.
+    #[cfg(any(test, feature = "live-verify"))]
+    pub(crate) fn with_stale_access(
+        mut self,
+        switch: Option<Arc<verify::StaleAccessOnce>>,
+    ) -> Self {
+        self.stale_access = switch;
+        self
+    }
+
+    /// Verification only: [`verify::STALE_ACCESS_TOKEN`] in place of
+    /// `value`'s access token, when this is the switch's request.
+    fn stale_access_first(&self, value: ManagedValue) -> ManagedValue {
+        #[cfg(any(test, feature = "live-verify"))]
+        if self
+            .stale_access
+            .as_ref()
+            .is_some_and(|switch| switch.take_first())
+        {
+            tracing::warn!(
+                "VERIFICATION SWITCH: this request to chatgpt.com carries an invalid access \
+                 token in place of the stored ChatGPT sign-in's"
+            );
+            return ManagedValue {
+                secret: SecretString::from(verify::STALE_ACCESS_TOKEN),
+                headers: value.headers,
+            };
+        }
+        value
+    }
+
+    /// Verification only: whether `sent` is the switch's invalid token, its
+    /// `401` not handled yet.
+    fn stale_access_rejected(&self, sent: &SecretString) -> bool {
+        #[cfg(any(test, feature = "live-verify"))]
+        if self
+            .stale_access
+            .as_ref()
+            .is_some_and(|switch| switch.take_rejection(sent.expose_secret()))
+        {
+            tracing::warn!(
+                "VERIFICATION SWITCH: the upstream answered 401 to the invalid access token; \
+                 refreshing the ChatGPT sign-in"
+            );
+            return true;
+        }
+        let _ = sent;
+        false
     }
 
     /// The broker of the sign-in stored under `data_dir`, refreshing at
@@ -838,17 +902,19 @@ impl ManagedCredential for ChatgptBroker {
         let sign_in = self.signed_in(&mut state).await?;
         let now = now_ms();
         if !sign_in.refresh_due(now) {
-            return Self::value(&sign_in);
+            return Self::value(&sign_in).map(|value| self.stale_access_first(value));
         }
         match self.refresh(&mut state, &sign_in).await {
-            Refreshed::SignIn(refreshed) => Self::value(&refreshed),
+            Refreshed::SignIn(refreshed) => {
+                Self::value(&refreshed).map(|value| self.stale_access_first(value))
+            }
             Refreshed::Refused(reason) | Refreshed::Failed(reason) => {
                 if sign_in.expired(now) {
                     Err(format!("the ChatGPT access token expired and {reason}"))
                 } else {
                     // Still valid: sent, as Codex sends it after a failed
                     // early refresh.
-                    Self::value(&sign_in)
+                    Self::value(&sign_in).map(|value| self.stale_access_first(value))
                 }
             }
         }
@@ -859,8 +925,10 @@ impl ManagedCredential for ChatgptBroker {
         let Ok(sign_in) = self.signed_in(&mut state).await else {
             return;
         };
-        // Refreshed since that request was sent: nothing to do.
-        if sign_in.access_token() != sent.expose_secret() {
+        // Refreshed since that request was sent: nothing to do. (A `401`
+        // to the verification switch's invalid token is one to the current
+        // sign-in: that token stood in for it.)
+        if sign_in.access_token() != sent.expose_secret() && !self.stale_access_rejected(sent) {
             return;
         }
         match self.refresh(&mut state, &sign_in).await {
@@ -875,9 +943,17 @@ impl ManagedCredential for ChatgptBroker {
 /// The daemon's managed credentials: the ChatGPT sign-in's broker for the
 /// secret store under `data_dir`. Without HTTPS (which cannot happen on a
 /// supported platform) there is none, and the route refuses its requests.
+///
+/// In a build with the verification-only `live-verify` feature, the broker
+/// also has the process's stale-access switch ([`verify`]), which is on when
+/// `AXOCOATL_VERIFY_STALE_ACCESS_ONCE=1` as the daemon starts. Without the
+/// feature, that variable is never read.
 pub fn managed_credentials(data_dir: &Path) -> crate::egress_broker::rules::ManagedCredentials {
     let mut managed = crate::egress_broker::rules::ManagedCredentials::default();
     match ChatgptBroker::for_data_root(data_dir) {
+        #[cfg(feature = "live-verify")]
+        Ok(broker) => managed.add(Arc::new(broker.with_stale_access(verify::for_process()))),
+        #[cfg(not(feature = "live-verify"))]
         Ok(broker) => managed.add(Arc::new(broker)),
         Err(error) => {
             tracing::warn!(%error, "the ChatGPT sign-in broker is unavailable");

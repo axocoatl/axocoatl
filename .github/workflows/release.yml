@@ -195,6 +195,8 @@ jobs:
         env:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_min }}
         run: cargo build --locked --release -p axocoatl-cli --target ${{ matrix.target }}
+      - name: Prove the release binary has no verification switch
+        run: ./scripts/check-no-live-verify.sh target/${{ matrix.target }}/release/axocoatl
       - name: Prove the declared Linux glibc floor
         if: matrix.glibc_max != ''
         env:

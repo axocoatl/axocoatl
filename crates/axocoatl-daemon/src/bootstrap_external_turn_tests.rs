@@ -427,6 +427,9 @@ struct FakeModelApi {
     port: u16,
     ca: crate::egress_broker::SessionCa,
     seen: Arc<StdMutex<Vec<ApiRequest>>>,
+    /// Bearer tokens whose model requests it answers `401`, as a service
+    /// answers a token it does not accept.
+    refused_tokens: Arc<StdMutex<Vec<String>>>,
 }
 
 const CLAUDE_ANSWER: &str = "FIXED-BY-CLAUDE-CODE";
@@ -610,20 +613,21 @@ impl FakeModelApi {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let seen = Arc::new(StdMutex::new(Vec::new()));
-        let recorded = seen.clone();
+        let refused_tokens: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+        let (recorded, refused) = (seen.clone(), refused_tokens.clone());
         tokio::spawn(async move {
             while let Ok((tcp, _)) = listener.accept().await {
                 let acceptor = acceptor.clone();
-                let recorded = recorded.clone();
+                let (recorded, refused) = (recorded.clone(), refused.clone());
                 tokio::spawn(async move {
                     let Ok(tls) = acceptor.accept(tcp).await else {
                         return;
                     };
                     let service =
                         hyper::service::service_fn(move |request: hyper::Request<Incoming>| {
-                            let recorded = recorded.clone();
+                            let (recorded, refused) = (recorded.clone(), refused.clone());
                             async move {
-                                let authorization = request
+                                let authorization: Vec<String> = request
                                     .headers()
                                     .get_all(hyper::header::AUTHORIZATION)
                                     .iter()
@@ -650,7 +654,12 @@ impl FakeModelApi {
                                     .unwrap_or_default();
                                 let body: serde_json::Value =
                                     serde_json::from_slice(&bytes).unwrap_or_default();
-                                let rejected = rejects
+                                let refused_token = refused
+                                    .lock()
+                                    .unwrap()
+                                    .iter()
+                                    .any(|token| authorization == [format!("Bearer {token}")]);
+                                let rejected = (rejects || refused_token)
                                     && method == "POST"
                                     && matches!(
                                         path.as_str(),
@@ -702,7 +711,17 @@ impl FakeModelApi {
                 });
             }
         });
-        Self { port, ca, seen }
+        Self {
+            port,
+            ca,
+            seen,
+            refused_tokens,
+        }
+    }
+
+    /// Answer every model request that carries `token` `401`.
+    fn refuse_token(&self, token: &str) {
+        self.refused_tokens.lock().unwrap().push(token.to_string());
     }
 
     fn seen(&self) -> Vec<ApiRequest> {
@@ -942,7 +961,7 @@ fn git(repo: &std::path::Path, args: &[&str]) {
 /// request `401`: the run needs attention, and its not-covered reason says
 /// the stored credential was rejected and how to store it again.
 async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_rejects: bool) {
-    pinned_run(runtime, reviewed, api_rejects, false).await
+    pinned_run(runtime, reviewed, api_rejects, false, false).await
 }
 
 /// [`pinned_run_child_body`]; with `chatgpt`, the Codex writer names
@@ -951,7 +970,20 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_reject
 /// access token expires within the refresh window, so the daemon's broker
 /// refreshes it (at a fake OpenAI token endpoint) on the first model call
 /// and every call carries the refreshed token and the account id.
-async fn pinned_run(runtime: AgentRuntime, reviewed: bool, api_rejects: bool, chatgpt: bool) {
+///
+/// With `stale_access` (and `chatgpt`), the broker has the verification-only
+/// stale-access switch (`codex_chatgpt::verify`) and the stored access token
+/// does not expire soon: the program's first model call carries the
+/// switch's invalid token, which the fake backend answers `401`; the broker
+/// refreshes once after that `401`, and every later call carries the
+/// refreshed token.
+async fn pinned_run(
+    runtime: AgentRuntime,
+    reviewed: bool,
+    api_rejects: bool,
+    chatgpt: bool,
+    stale_access: bool,
+) {
     use axocoatl_session::network_record::{Decision, NetworkEvent};
     use axocoatl_session::run_outcome::{RunVerdict, TurnState};
     let (recipe, host, credential, placeholder, answer) = match (runtime, chatgpt) {
@@ -1032,6 +1064,9 @@ async fn pinned_run(runtime: AgentRuntime, reviewed: bool, api_rejects: bool, ch
     // route: the broker resolves the host to the fake and trusts its
     // authority. Everything else is production's.
     let api = FakeModelApi::start(host, api_rejects).await;
+    if stale_access {
+        api.refuse_token(crate::external_agent::codex_chatgpt::verify::STALE_ACCESS_TOKEN);
+    }
     daemon
         .egress_points
         .use_test_upstreams(super::session_network_policy::TestUpstreams {
@@ -1064,9 +1099,10 @@ async fn pinned_run(runtime: AgentRuntime, reviewed: bool, api_rejects: bool, ch
     let secret = if chatgpt {
         use crate::external_agent::codex_chatgpt::{self, tests as fixtures};
         // `axocoatl connect codex`, as it stores the sign-in: an access
-        // token that expires within the refresh window.
+        // token that expires within the refresh window (with
+        // `stale_access`, in an hour: the 401 is what refreshes it).
         let (first, refresh) = (
-            fixtures::access_token("acct-turn", 60),
+            fixtures::access_token("acct-turn", if stale_access { 3600 } else { 60 }),
             fixtures::refresh_token(),
         );
         let sign_in = codex_chatgpt::ChatgptSignIn::from_codex_auth_json(
@@ -1102,10 +1138,15 @@ async fn pinned_run(runtime: AgentRuntime, reviewed: bool, api_rejects: bool, ch
             .mount(&server)
             .await;
         let mut managed = crate::egress_broker::rules::ManagedCredentials::default();
-        managed.add(Arc::new(codex_chatgpt::ChatgptBroker::new(
-            daemon.data_root.path(),
-            codex_chatgpt::TokenEndpoint::for_test(&format!("{}/oauth/token", server.uri())),
-        )));
+        managed.add(Arc::new(
+            codex_chatgpt::ChatgptBroker::new(
+                daemon.data_root.path(),
+                codex_chatgpt::TokenEndpoint::for_test(&format!("{}/oauth/token", server.uri())),
+            )
+            .with_stale_access(
+                stale_access.then(|| Arc::new(codex_chatgpt::verify::StaleAccessOnce::armed())),
+            ),
+        ));
         daemon.egress_points.use_test_managed(managed);
         hidden.extend([first, refresh, rotated.clone()]);
         token_endpoint = Some((server, rotated));
@@ -1416,7 +1457,10 @@ async fn pinned_run(runtime: AgentRuntime, reviewed: bool, api_rejects: bool, ch
         .iter()
         .filter(|request| request.method == "POST")
         .collect();
-    assert_eq!(calls.len(), 2 * activations, "{context}");
+    // With `stale_access`, one call more: the first, carrying the switch's
+    // invalid token and answered 401, which the program sent again.
+    let stale_calls = usize::from(stale_access);
+    assert_eq!(calls.len(), 2 * activations + stale_calls, "{context}");
     assert_eq!(calls.len(), seen.len(), "{context}");
     let path = match (runtime, chatgpt) {
         (AgentRuntime::ClaudeCode, _) => "/v1/messages",
@@ -1429,16 +1473,39 @@ async fn pinned_run(runtime: AgentRuntime, reviewed: bool, api_rejects: bool, ch
             "{context}"
         );
     }
-    for call in &calls {
-        assert_eq!(
-            call.authorization,
-            [format!("Bearer {secret}")],
-            "{context}"
-        );
+    for (index, call) in calls.iter().enumerate() {
+        let sent = if index < stale_calls {
+            crate::external_agent::codex_chatgpt::verify::STALE_ACCESS_TOKEN
+        } else {
+            secret.as_str()
+        };
+        assert_eq!(call.authorization, [format!("Bearer {sent}")], "{context}");
         // The ChatGPT sign-in's account, from the daemon's broker; no other
         // route sends one.
         let account: &[&str] = if chatgpt { &["acct-turn"] } else { &[] };
         assert_eq!(call.account, account, "{context}");
+    }
+    if stale_access {
+        // The first call was answered 401, and the program sent it again
+        // with the refreshed token: the same turn and the same input (its
+        // metadata may say more the second time).
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, NetworkEvent::Response { status: 401, .. })),
+            "{context}"
+        );
+        assert_eq!(calls[0].body["input"], calls[1].body["input"], "{context}");
+        assert!(calls[0].body["input"].is_array(), "{context}");
+        assert_eq!(
+            calls[0].body["client_metadata"]["turn_id"],
+            calls[1].body["client_metadata"]["turn_id"],
+            "{context}"
+        );
+        assert!(
+            calls[0].body["client_metadata"]["turn_id"].is_string(),
+            "{context}"
+        );
     }
     if let Some((server, rotated)) = &token_endpoint {
         // Refreshed once, on this computer, and the rotated sign-in stored.
@@ -1573,8 +1640,9 @@ async fn pinned_run(runtime: AgentRuntime, reviewed: bool, api_rejects: bool, ch
     };
     for wanted in [
         format!(
-            "[external agent] {program}, model {}: exit 0, 2 model request(s)",
+            "[external agent] {program}, model {}: exit 0, {} model request(s)",
             program_model(runtime),
+            2 + stale_calls,
         ),
         tool.to_string(),
         usage.to_string(),
@@ -1680,11 +1748,31 @@ async fn actual_loadout_run_with_the_pinned_codex() {
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
 async fn actual_loadout_run_with_the_pinned_codex_signed_in_with_chatgpt() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run(AgentRuntime::Codex, false, false, true).await;
+        pinned_run(AgentRuntime::Codex, false, false, true, false).await;
         return;
     }
     run_child(
         "actual_loadout_run_with_the_pinned_codex_signed_in_with_chatgpt",
+        None,
+        true,
+    )
+    .await;
+}
+
+/// [`actual_loadout_run_with_the_pinned_codex_signed_in_with_chatgpt`] with
+/// the verification-only stale-access switch on (see [`pinned_run`]): the
+/// pinned Codex's first model call is answered `401`, the daemon refreshes
+/// the sign-in once, Codex sends the call again with the refreshed token, and
+/// the run passes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
+async fn the_pinned_codex_retries_a_401_after_the_stale_access_switch_and_the_run_passes() {
+    if std::env::var_os(CHILD).is_some() {
+        pinned_run(AgentRuntime::Codex, false, false, true, true).await;
+        return;
+    }
+    run_child(
+        "the_pinned_codex_retries_a_401_after_the_stale_access_switch_and_the_run_passes",
         None,
         true,
     )

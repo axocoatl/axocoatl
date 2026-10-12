@@ -108,6 +108,7 @@ contracts = {
     "./scripts/prove-release-crates.sh",
     "./scripts/release-plan.sh",
     "./scripts/verify-product-browser-gate.sh",
+    "./scripts/check-no-live-verify.sh target/${{ matrix.target }}/release/axocoatl",
   ],
   ".github/workflows/marketing-deploy.yml" => [
     "./scripts/verify-public-release.sh",
@@ -132,6 +133,10 @@ contracts = {
     "cargo test --locked --workspace --jobs 1",
     "cargo test --locked --doc --workspace --jobs 1",
     "cargo build --locked --release -p axocoatl-cli --jobs 1",
+    './scripts/check-no-live-verify.sh "$release_target_dir/release/axocoatl"',
+  ],
+  "scripts/verify-cross-linux-gate.sh" => [
+    "./scripts/check-no-live-verify.sh",
   ],
 }
 
@@ -166,6 +171,61 @@ forbidden.each do |relative, markers|
   source = ROOT.join(relative).read
   markers.each do |marker|
     errors << "#{relative}: duplicates shared gate implementation #{marker.inspect}" if source.include?(marker)
+  end
+end
+
+# The verification-only `live-verify` cargo feature (the ChatGPT broker's
+# stale-access switch) is declared by axocoatl-daemon and axocoatl-cli only,
+# is off by default, is turned on by no other manifest, and is named by no
+# workflow or script but the checks that refuse it. No build of a binary
+# turns on every feature either. (`cargo check` and `cargo clippy` with
+# `--all-features` type-check and lint it; they build no binary.)
+live_verify_declarations = {
+  "crates/axocoatl-daemon/Cargo.toml" => ["live-verify = []"],
+  "axocoatl-cli/Cargo.toml" => ['live-verify = ["axocoatl-daemon/live-verify"]'],
+}
+uncommented = lambda do |text|
+  text.lines.map { |line| line.sub(/#.*/, "").strip }.reject(&:empty?)
+end
+manifests = `git -C #{ROOT} ls-files --cached --others --exclude-standard -- 'Cargo.toml' '*/Cargo.toml'`
+            .lines.map(&:strip).reject(&:empty?).uniq.sort
+live_verify_declarations.each_key do |relative|
+  errors << "#{relative}: missing from the manifests checked for live-verify" unless manifests.include?(relative)
+end
+manifests.each do |relative|
+  lines = uncommented.call(ROOT.join(relative).read(encoding: "UTF-8"))
+  naming = lines.select { |line| line.include?("live-verify") }
+  expected = live_verify_declarations.fetch(relative, [])
+  unless naming == expected
+    errors << "#{relative}: names the verification-only live-verify feature as #{naming.inspect}, expected #{expected.inspect}"
+  end
+  default = lines.find { |line| line.match?(/\Adefault\s*=/) }
+  if expected.any? && default != "default = []"
+    errors << "#{relative}: default features must be empty (#{default.inspect}) so live-verify stays off"
+  end
+end
+build_sources = (Dir[WORKFLOW_DIR.join("*.{yml,yaml}")] + Dir[ROOT.join("scripts/*")]).sort
+build_sources.each do |path|
+  relative = Pathname.new(path).relative_path_from(ROOT).to_s
+  next if %w[scripts/check-workflow-contracts.rb scripts/check-no-live-verify.sh].include?(relative)
+  next unless File.file?(path)
+  text = File.read(path, encoding: "UTF-8")
+  if uncommented.call(text.gsub("check-no-live-verify.sh", "")).any? { |line| line.include?("live-verify") }
+    errors << "#{relative}: names the verification-only live-verify feature"
+  end
+  lines = text.lines
+  lines.each_with_index do |line, index|
+    next unless line.match?(/cargo\s+(?:\+\S+\s+)?(?:build|run|install|zigbuild)\b/)
+    # The command, with the flag lines that continue it.
+    command = line
+    following = index + 1
+    while command.rstrip.end_with?("\\") && lines[following].to_s.match?(/\A\s*-/)
+      command += lines[following]
+      following += 1
+    end
+    if command.include?("--all-features")
+      errors << "#{relative}: builds a binary with --all-features, which would include live-verify: #{line.strip}"
+    end
   end
 end
 

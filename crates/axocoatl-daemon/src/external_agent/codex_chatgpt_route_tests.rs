@@ -397,9 +397,26 @@ async fn the_chatgpt_route_sends_the_brokers_current_token_and_refreshes_after_a
 /// `auth`; the egress, its grant, the attached relay and its credential.
 async fn session_with(
     root: &Path,
-    mut route: axocoatl_config::EgressRouteYaml,
+    route: axocoatl_config::EgressRouteYaml,
     backend: &FakeBackend,
     auth: &MockServer,
+    record: Arc<FakeRecord>,
+    env_dir: &Path,
+) -> (
+    Arc<SessionEgress>,
+    axocoatl_isolation::egress::EgressGrant,
+    RelaySidecar,
+    String,
+) {
+    session_with_broker(root, route, backend, broker(root, auth), record, env_dir).await
+}
+
+/// [`session_with`], the route's sign-in kept current by `chatgpt`.
+async fn session_with_broker(
+    root: &Path,
+    mut route: axocoatl_config::EgressRouteYaml,
+    backend: &FakeBackend,
+    chatgpt: ChatgptBroker,
     record: Arc<FakeRecord>,
     env_dir: &Path,
 ) -> (
@@ -422,7 +439,7 @@ async fn session_with(
         },
     );
     let mut managed = crate::egress_broker::rules::ManagedCredentials::default();
-    managed.add(Arc::new(broker(root, auth)));
+    managed.add(Arc::new(chatgpt));
     let host = route.host.clone();
     let egress = SessionEgress::open_session(
         "ses-codex-chatgpt-host",
@@ -576,5 +593,123 @@ async fn a_refused_managed_credential_names_no_path_on_this_computer() {
         "{body}"
     );
     assert!(backend.seen.lock().unwrap().is_empty());
+    drop(grant);
+}
+
+/// Verification only (the `live-verify` switch): through the route to a
+/// fake ChatGPT backend, the first request of the process carries the
+/// switch's invalid access token in place of the stored one; the backend
+/// answers `401`, which reaches the client as it came; the broker refreshes
+/// once at the fake token endpoint and stores the rotated sign-in; the
+/// client's retry carries the refreshed token and is answered `200`; and the
+/// switch never fires again, neither for the same broker nor for another
+/// one sharing the process's switch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_stale_access_switch_makes_the_first_request_refresh_and_the_retry_succeed() {
+    use crate::external_agent::codex_chatgpt::verify::{StaleAccessOnce, STALE_ACCESS_TOKEN};
+    let root = data_root();
+    let (first, refresh) = (access_token("acct-1", 3600), refresh_token());
+    store(root.path(), &sign_in(&first, &refresh, "acct-1"));
+    let (second, rotated) = (access_token("acct-1", 3600), refresh_token());
+    let auth = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_json(refresh_request(&refresh)))
+        .respond_with(refreshed(&second, Some(&rotated)))
+        .expect(1)
+        .mount(&auth)
+        .await;
+    let backend = FakeBackend::start().await;
+    // Like OpenAI's service, the backend refuses the invalid token.
+    backend
+        .reject
+        .lock()
+        .unwrap()
+        .push(STALE_ACCESS_TOKEN.to_string());
+    let switch = Arc::new(StaleAccessOnce::armed());
+    let route = crate::external_agent::routes_for_credential(
+        AgentRuntime::Codex,
+        crate::external_agent::ExternalCredential::CodexChatgpt,
+    )
+    .unwrap()
+    .remove(0);
+    let record = Arc::new(FakeRecord::default());
+    let env_dir = tempfile::tempdir().unwrap();
+    let (egress, grant, sidecar, hash) = session_with_broker(
+        root.path(),
+        route,
+        &backend,
+        broker(root.path(), &auth).with_stale_access(Some(switch.clone())),
+        record.clone(),
+        env_dir.path(),
+    )
+    .await;
+    let placeholder = [("authorization", "Bearer axocoatl-route:chatgpt.com")];
+    let responses = "/backend-api/codex/responses";
+    let mut statuses = Vec::new();
+    for seq in 1..=3 {
+        let pipe = sidecar
+            .open(
+                seq,
+                RequestKind::Connect,
+                "chatgpt.com",
+                backend.port,
+                &hash,
+            )
+            .await
+            .unwrap();
+        statuses.push(send(&egress, pipe, backend.port, "POST", responses, &placeholder).await);
+        if seq == 1 {
+            // The 401 refreshed the sign-in before the client saw it.
+            assert_eq!(stored(root.path()).access_token(), second);
+            assert_eq!(stored(root.path()).refresh_token(), rotated);
+        }
+    }
+    // 1: the invalid token, answered 401; 2: the client's retry with the
+    // refreshed token; 3: the refreshed token again, the switch spent.
+    assert_eq!(statuses, [401, 200, 200]);
+    auth.verify().await;
+    let seen = backend.seen.lock().unwrap().clone();
+    let sent: Vec<&str> = seen
+        .iter()
+        .map(|request| request.authorization[0].as_str())
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            format!("Bearer {STALE_ACCESS_TOKEN}"),
+            format!("Bearer {second}"),
+            format!("Bearer {second}"),
+        ]
+    );
+    for request in &seen {
+        assert_eq!(request.account, ["acct-1"]);
+    }
+    // The stored token the switch stood in for was never sent.
+    assert!(seen
+        .iter()
+        .all(|request| !request.authorization[0].contains(&first)));
+    // Once per process: a second broker sharing the spent switch sends the
+    // stored token, and a 401 for the invalid token reported again (a
+    // second request in flight) refreshes nothing (the token endpoint
+    // expected exactly one refresh above).
+    let again = broker(root.path(), &auth).with_stale_access(Some(switch.clone()));
+    assert_eq!(
+        again.current().await.unwrap().secret.expose_secret(),
+        second
+    );
+    again
+        .rejected(&SecretString::from(STALE_ACCESS_TOKEN.to_string()))
+        .await;
+    assert_eq!(stored(root.path()).access_token(), second);
+    assert_eq!(stored(root.path()).refresh_token(), rotated);
+    auth.verify().await;
+    for event in record.events() {
+        let text = serde_json::to_string(&event).unwrap();
+        for value in [&first, &second, &refresh, &rotated] {
+            assert!(!text.contains(value.as_str()), "{text}");
+        }
+        assert!(!text.contains(STALE_ACCESS_TOKEN), "{text}");
+    }
     drop(grant);
 }

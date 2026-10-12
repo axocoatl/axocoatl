@@ -64,6 +64,18 @@ zeroize = "1"
 memchr = "2"
 libc = "0.2"
 
+[features]
+default = []
+# Verification only, off by default. No release build and no binary CI builds
+# turns it on (the release gates refuse a binary built with it; CI's
+# `cargo check`/`cargo clippy --all-features` only type-check and lint it).
+# With AXOCOATL_VERIFY_STALE_ACCESS_ONCE=1
+# as the daemon starts, the ChatGPT sign-in's broker sends a fixed invalid
+# access token with the first request of the process, so the real upstream
+# answers 401 and the broker's refresh after a 401 runs against the real
+# service (`external_agent::codex_chatgpt::verify`).
+live-verify = []
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 wiremock = { workspace = true }
