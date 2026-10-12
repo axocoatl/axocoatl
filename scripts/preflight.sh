@@ -63,6 +63,7 @@ trap 'rm -rf -- "$work_dir"' EXIT HUP INT TERM
 
 ./scripts/run-actionlint.sh
 ./scripts/check-workflow-contracts.rb
+./scripts/test-workflow-contracts.sh
 ./scripts/test-film-gate.sh
 ./scripts/test-public-release.sh
 node --test demo/one-app/films/*.test.mjs

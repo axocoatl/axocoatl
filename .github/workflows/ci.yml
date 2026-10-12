@@ -30,6 +30,8 @@ jobs:
         run: ./scripts/run-actionlint.sh
       - name: Verify workflow syntax, shell syntax, pinning, and shared gates
         run: ./scripts/check-workflow-contracts.rb
+      - name: Exercise the workflow contract's verification-feature rules
+        run: ./scripts/test-workflow-contracts.sh
       - name: Exercise film-gate release-candidate routing
         run: ./scripts/test-film-gate.sh
       - name: Exercise public release-state evaluation

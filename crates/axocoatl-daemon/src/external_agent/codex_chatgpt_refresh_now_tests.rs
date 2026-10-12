@@ -304,3 +304,21 @@ fn the_routes_managed_credential_is_the_broker_that_refreshes_on_request() {
         .find(&source, crate::external_agent::codex::CHATGPT_HOST)
         .is_none());
 }
+
+/// A daemon without a broker answers with one readable sentence: no run of
+/// spaces from a broken line continuation reaches the API, the log or the
+/// CLI.
+#[test]
+fn the_report_without_a_broker_is_one_readable_sentence() {
+    let report = RefreshReport::unavailable();
+    assert_eq!(report.outcome(), "unavailable");
+    let RefreshReport::Unavailable { message } = &report else {
+        panic!("{report:?}");
+    };
+    assert_eq!(
+        message,
+        "this daemon has no broker for the ChatGPT sign-in (HTTPS could not be set up; the \
+         daemon log says why)"
+    );
+    assert!(!message.contains("  "), "{message:?}");
+}

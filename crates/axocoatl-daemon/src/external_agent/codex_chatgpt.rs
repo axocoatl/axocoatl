@@ -615,6 +615,16 @@ impl RefreshReport {
             Self::Unavailable { .. } => "unavailable",
         }
     }
+
+    /// The report of a daemon that has no broker for the sign-in: HTTPS
+    /// could not be set up as it started, and its log says why.
+    pub fn unavailable() -> Self {
+        Self::Unavailable {
+            message: "this daemon has no broker for the ChatGPT sign-in (HTTPS could not be \
+                      set up; the daemon log says why)"
+                .to_string(),
+        }
+    }
 }
 
 /// The sign-in stored as [`CODEX_CHATGPT_SECRET`] under `data_dir`, read

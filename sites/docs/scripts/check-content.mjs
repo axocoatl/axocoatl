@@ -204,6 +204,9 @@ if (!claimsLedger) failures.push('docs/CLAIMS.md, the claims ledger, is missing'
 // Claims that were withdrawn because nothing measured them.
 const withdrawnClaims = [
   ['small local models as a first-class target', /first-class target/i],
+  // A ChatGPT sign-in refresh that timed out or broke off may already have
+  // reached OpenAI; only the stored sign-in is known to be unchanged.
+  ['a failed ChatGPT sign-in refresh changed nothing', /nor\s+a\s+refusal;\s+nothing\s+changed/i],
 ];
 // A measured number labeled with the harness it ran in.
 // Prose wraps, so words may be separated by any whitespace.

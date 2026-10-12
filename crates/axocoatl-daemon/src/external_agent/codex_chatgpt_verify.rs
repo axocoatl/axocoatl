@@ -6,9 +6,12 @@
 //! refuses a release binary that holds [`STALE_ACCESS_ENV`] (run by
 //! `scripts/verify-native-gate.sh`, `scripts/verify-cross-linux-gate.sh` and
 //! the release workflow's build job), and `scripts/check-workflow-contracts.rb`
-//! refuses a manifest, workflow or script that would turn it on. CI's
-//! `cargo check` and `cargo clippy` with `--all-features` type-check and lint
-//! it without building a binary.
+//! refuses another manifest that names it, a default feature set that is not
+//! empty, and a workflow, file under `scripts/` or shell script that names it
+//! or runs a cargo command other than `check`, `clippy` or `doc` with
+//! `--all-features` (`scripts/test-workflow-contracts.sh` checks the check).
+//! CI's `cargo check` and `cargo clippy` with `--all-features` type-check and
+//! lint it without building a binary.
 //!
 //! In a build with the feature, when [`STALE_ACCESS_ENV`] is `1` as the
 //! daemon starts, the broker sends [`STALE_ACCESS_TOKEN`] (a fixed JWT with

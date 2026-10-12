@@ -35,7 +35,9 @@ pub async fn refresh_codex_sign_in(
 }
 
 /// Refuse the request unless the daemon authenticates API requests
-/// (`authenticated`) and the peer is on a loopback address.
+/// (`authenticated`) and the peer is on a loopback address. An IPv4 peer on
+/// a dual-stack listener (`server.host: "[::]"`) arrives as an IPv4-mapped
+/// IPv6 address (`::ffff:127.0.0.1`), so the address is canonicalized first.
 pub async fn require_authenticated_loopback(
     authenticated: bool,
     request: axum::extract::Request,
@@ -53,7 +55,7 @@ pub async fn require_authenticated_loopback(
     let loopback = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .is_some_and(|peer| peer.0.ip().is_loopback());
+        .is_some_and(|peer| peer.0.ip().to_canonical().is_loopback());
     if !loopback {
         return err(
             StatusCode::FORBIDDEN,
@@ -161,18 +163,29 @@ mod tests {
     #[tokio::test]
     async fn only_an_authenticated_loopback_caller_is_served() {
         let local = SocketAddr::from(([127, 0, 0, 1], 50000));
-        for peer in [local, SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 50000))] {
+        // 127.0.0.1, ::1, and 127.0.0.1 as a dual-stack listener sees it.
+        let mapped = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST.to_ipv6_mapped(), 50000));
+        for peer in [
+            local,
+            SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 50000)),
+            mapped,
+        ] {
             let (status, body) = call(&guarded(true), Some(peer)).await;
             assert_eq!(status, StatusCode::OK, "{peer}");
             assert_eq!(body, "served");
         }
-        let lan = SocketAddr::from(([192, 168, 1, 20], 50000));
-        let (status, body) = call(&guarded(true), Some(lan)).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert!(
-            body["error"].as_str().unwrap().contains("loopback"),
-            "{body}"
-        );
+        let lan = std::net::Ipv4Addr::new(192, 168, 1, 20);
+        for peer in [
+            SocketAddr::from((lan, 50000)),
+            SocketAddr::from((lan.to_ipv6_mapped(), 50000)),
+        ] {
+            let (status, body) = call(&guarded(true), Some(peer)).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{peer}");
+            assert!(
+                body["error"].as_str().unwrap().contains("loopback"),
+                "{body}"
+            );
+        }
         let (status, _) = call(&guarded(true), None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         let (status, body) = call(&guarded(false), Some(local)).await;

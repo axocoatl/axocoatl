@@ -72,7 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   5 any other failure, 7 no daemon answers. The route answers only an authenticated
   request from a loopback address: `403` from a daemon that accepts unauthenticated API
   requests (`server.auth.allow_unauthenticated`) and for a request from any other
-  address.
+  address (an IPv4 loopback peer that a dual-stack listener reports as
+  `::ffff:127.0.0.1` counts as loopback).
 - **A Codex writer can run with that sign-in: `credential: codex-chatgpt`.** A loadout
   Agent's new `credential` field names the stored credential its route sends: for
   `runtime: codex`, `codex-openai` (the default, an OpenAI API key, to `api.openai.com`) or
@@ -117,9 +118,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fires once per process and logs at `WARN` when it fires. No release binary has it: the
   release workflow's build job, `scripts/verify-native-gate.sh` and
   `scripts/verify-cross-linux-gate.sh` run the new `scripts/check-no-live-verify.sh` on
-  the binaries they build, and `scripts/check-workflow-contracts.rb` refuses a manifest,
-  workflow or script that would turn the feature on (CI's `cargo check` and
-  `cargo clippy --all-features` type-check and lint it without building a binary). A
+  the binaries they build, and `scripts/check-workflow-contracts.rb` refuses a manifest
+  other than those two that names the feature, a default feature set that is not empty,
+  and a workflow, file under `scripts/` or shell script that names the feature or runs
+  any cargo command other than `check`, `clippy` or `doc` with `--all-features`
+  (`scripts/test-workflow-contracts.sh`, run by CI and `scripts/preflight.sh`, checks
+  that it does). CI's `cargo check` and `cargo clippy --all-features` type-check and
+  lint the feature without building a binary. A
   Podman test runs the pinned Codex 0.160.1 with the switch against a fake ChatGPT
   backend and token endpoint: its first model call is answered `401`, the daemon
   refreshes once, Codex sends the call again with the refreshed token, and the run

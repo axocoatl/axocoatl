@@ -177,9 +177,11 @@ end
 # The verification-only `live-verify` cargo feature (the ChatGPT broker's
 # stale-access switch) is declared by axocoatl-daemon and axocoatl-cli only,
 # is off by default, is turned on by no other manifest, and is named by no
-# workflow or script but the checks that refuse it. No build of a binary
-# turns on every feature either. (`cargo check` and `cargo clippy` with
-# `--all-features` type-check and lint it; they build no binary.)
+# workflow, file under scripts/ or shell script but the checks that refuse
+# it. None of those runs a cargo command that builds a binary (build, run,
+# install, test, bench, nextest, ...) with every feature either: only
+# `cargo check`, `cargo clippy` and `cargo doc`, which build no binary, may
+# use `--all-features`, to type-check and lint it.
 live_verify_declarations = {
   "crates/axocoatl-daemon/Cargo.toml" => ["live-verify = []"],
   "axocoatl-cli/Cargo.toml" => ['live-verify = ["axocoatl-daemon/live-verify"]'],
@@ -204,10 +206,15 @@ manifests.each do |relative|
     errors << "#{relative}: default features must be empty (#{default.inspect}) so live-verify stays off"
   end
 end
-build_sources = (Dir[WORKFLOW_DIR.join("*.{yml,yaml}")] + Dir[ROOT.join("scripts/*")]).sort
+tracked_shell_scripts = `git -C #{ROOT} ls-files --cached --others --exclude-standard -- '*.sh'`
+                        .lines.map(&:strip).reject(&:empty?).map { |relative| ROOT.join(relative).to_s }
+build_sources = (Dir[WORKFLOW_DIR.join("*.{yml,yaml}")] + Dir[ROOT.join("scripts/**/*")] +
+                 tracked_shell_scripts).uniq.sort
+all_features_allowed = %w[check clippy doc]
 build_sources.each do |path|
   relative = Pathname.new(path).relative_path_from(ROOT).to_s
-  next if %w[scripts/check-workflow-contracts.rb scripts/check-no-live-verify.sh].include?(relative)
+  next if %w[scripts/check-workflow-contracts.rb scripts/check-no-live-verify.sh
+             scripts/test-workflow-contracts.sh].include?(relative)
   next unless File.file?(path)
   text = File.read(path, encoding: "UTF-8")
   if uncommented.call(text.gsub("check-no-live-verify.sh", "")).any? { |line| line.include?("live-verify") }
@@ -215,7 +222,8 @@ build_sources.each do |path|
   end
   lines = text.lines
   lines.each_with_index do |line, index|
-    next unless line.match?(/cargo\s+(?:\+\S+\s+)?(?:build|run|install|zigbuild)\b/)
+    subcommand = line[/\bcargo\s+(?:\+\S+\s+)?([a-z][a-z0-9-]*)/, 1]
+    next if subcommand.nil? || all_features_allowed.include?(subcommand)
     # The command, with the flag lines that continue it.
     command = line
     following = index + 1
@@ -224,7 +232,7 @@ build_sources.each do |path|
       following += 1
     end
     if command.include?("--all-features")
-      errors << "#{relative}: builds a binary with --all-features, which would include live-verify: #{line.strip}"
+      errors << "#{relative}: runs cargo #{subcommand} with --all-features, which would build live-verify into a binary (only #{all_features_allowed.join(", ")} may): #{line.strip}"
     end
   end
 end

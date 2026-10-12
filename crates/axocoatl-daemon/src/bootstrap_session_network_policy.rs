@@ -183,24 +183,14 @@ impl SessionEgressPoints {
             .unwrap_or_else(|poison| poison.into_inner()) = Some(upstreams);
     }
 
-    /// Use `managed` for decision points opened from now on (tests: a
-    /// ChatGPT sign-in broker refreshing at a local fake token endpoint).
-    #[cfg(test)]
-    pub(crate) fn use_test_managed(
-        &self,
-        managed: crate::egress_broker::rules::ManagedCredentials,
-    ) {
-        *self
-            .managed
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) = Arc::new(managed);
-    }
-
     /// Use `broker` as the ChatGPT sign-in's broker from now on, for
     /// decision points opened from now on and for `axocoatl connect codex
-    /// --refresh` (tests: a broker refreshing at a local fake token
-    /// endpoint).
-    fn use_chatgpt_broker(&self, broker: Arc<crate::external_agent::codex_chatgpt::ChatgptBroker>) {
+    /// --refresh`, so both keep sharing one broker (tests: a broker
+    /// refreshing at a local fake token endpoint).
+    pub(crate) fn use_chatgpt_broker(
+        &self,
+        broker: Arc<crate::external_agent::codex_chatgpt::ChatgptBroker>,
+    ) {
         *self
             .managed
             .lock()
@@ -413,10 +403,14 @@ impl AxocoatlDaemon {
         match self.egress_points.chatgpt_broker() {
             Some(broker) => broker.refresh_now().await,
             None => {
-                let message = "this daemon has no broker for the ChatGPT sign-in (HTTPS could                                not be set up; the daemon log says why)"
-                    .to_string();
-                tracing::warn!(%message, "ChatGPT sign-in refresh on request refused");
-                crate::external_agent::codex_chatgpt::RefreshReport::Unavailable { message }
+                let report = crate::external_agent::codex_chatgpt::RefreshReport::unavailable();
+                if let crate::external_agent::codex_chatgpt::RefreshReport::Unavailable {
+                    message,
+                } = &report
+                {
+                    tracing::warn!(%message, "ChatGPT sign-in refresh on request refused");
+                }
+                report
             }
         }
     }

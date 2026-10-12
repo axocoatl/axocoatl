@@ -1137,8 +1137,7 @@ async fn pinned_run(
             .expect(1)
             .mount(&server)
             .await;
-        let mut managed = crate::egress_broker::rules::ManagedCredentials::default();
-        managed.add(Arc::new(
+        daemon.egress_points.use_chatgpt_broker(Arc::new(
             codex_chatgpt::ChatgptBroker::new(
                 daemon.data_root.path(),
                 codex_chatgpt::TokenEndpoint::for_test(&format!("{}/oauth/token", server.uri())),
@@ -1147,7 +1146,6 @@ async fn pinned_run(
                 stale_access.then(|| Arc::new(codex_chatgpt::verify::StaleAccessOnce::armed())),
             ),
         ));
-        daemon.egress_points.use_test_managed(managed);
         hidden.extend([first, refresh, rotated.clone()]);
         token_endpoint = Some((server, rotated));
         refreshed

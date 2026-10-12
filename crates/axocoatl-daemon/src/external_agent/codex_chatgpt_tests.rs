@@ -760,18 +760,30 @@ fn the_daemons_broker_has_a_switch_only_in_a_live_verify_build() {
         CODEX_CHATGPT_SECRET,
     ));
     assert!(managed.find(&source, "chatgpt.com").is_some());
+    // The daemon's Session decision points and `axocoatl connect codex
+    // --refresh` share the broker `broker_for_data_root` makes, so the
+    // switch must be attached there, not only in `managed_credentials`.
+    let daemons = broker_for_data_root(root.path()).expect("HTTPS is available");
     #[cfg(not(feature = "live-verify"))]
     {
         let broker = ChatgptBroker::for_data_root(root.path()).unwrap();
         assert!(broker.stale_access.is_none());
+        assert!(daemons.stale_access.is_none());
     }
     #[cfg(feature = "live-verify")]
     {
-        assert_eq!(
-            verify::for_process().is_some(),
-            std::env::var_os(verify::STALE_ACCESS_ENV).as_deref()
-                == Some(std::ffi::OsStr::new("1"))
-        );
+        let on = std::env::var_os(verify::STALE_ACCESS_ENV).as_deref()
+            == Some(std::ffi::OsStr::new("1"));
+        assert_eq!(verify::for_process().is_some(), on);
+        match (&daemons.stale_access, verify::for_process()) {
+            (Some(attached), Some(process)) => assert!(Arc::ptr_eq(attached, &process)),
+            (None, None) => {}
+            (attached, process) => panic!(
+                "the daemon's broker has {:?} but the process switch is {:?}",
+                attached.is_some(),
+                process.is_some()
+            ),
+        }
     }
 }
 
