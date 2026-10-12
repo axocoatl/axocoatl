@@ -459,9 +459,12 @@ What Axocoatl's tests show and what they do not. A Podman test runs the pinned C
 fake ChatGPT backend at `chatgpt.com` and a fake OpenAI token endpoint: the program's
 requests reach the backend with the refreshed token and the account id, the rotated
 sign-in is stored, and no token is in the container, its configuration, the network record
-or the program's requests. Whether OpenAI's own backend accepts requests in this shape
-(Codex's HTTP provider named `axocoatl` instead of its built-in OpenAI provider) has not
-been measured against OpenAI's service: try one run before you rely on it.
+or the program's requests. Against OpenAI's own service, on 2026-10-11, a fix run of the
+pinned Codex 0.160.1 (`gpt-6-luna`) with a ChatGPT plan passed through Axocoatl
+1.3.1-rc2: Codex's 6 requests to `chatgpt.com/backend-api/codex/responses` went through
+the route with the sign-in the daemon added and were answered `200`, the container held
+only the placeholder, and no token-shaped string appeared in the container, the daemon's
+log, the record, the JUnit report or the output. The run cost $0.0014.
 
 OpenAI's documentation recommends API keys for automation, and describes ChatGPT sign-in
 on CI runners only for trusted private machines, with one copy of the sign-in per machine

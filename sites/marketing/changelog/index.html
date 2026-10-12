@@ -116,6 +116,38 @@
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
 
       <article class="release">
+        <span class="release-tag">v1.3.1</span>
+        <span class="release-date">2026-10-11</span>
+        <h2>Codex runs with your ChatGPT plan, and the token stays on your computer.</h2>
+
+        <p><code>axocoatl connect codex</code> runs the official Codex sign-in in a throwaway
+          Podman container and stores the sign-in as the secret <code>codex-chatgpt</code>.
+          A loadout's Codex writer with <code>credential: codex-chatgpt</code> sends its
+          requests to <code>chatgpt.com</code> through a route that adds the sign-in on your
+          computer; the Session container holds only a placeholder.</p>
+
+        <h3>Added</h3>
+        <ul>
+          <li><code>axocoatl connect codex</code>, with the browser sign-in or
+              <code>--device-auth</code>, and <code>--codex PATH</code> for a Codex CLI on
+              your computer.</li>
+          <li>The <code>credential</code> field on a loadout Agent, naming the stored
+              credential its route sends.</li>
+          <li>The daemon refreshes the sign-in before it expires and after a
+              <code>401</code>, stores the rotated tokens and never logs a token.</li>
+        </ul>
+
+        <h3>Measured</h3>
+        <ul>
+          <li>On 2026-10-11 a <code>fix</code> run of the pinned Codex 0.160.1 with a ChatGPT
+              plan passed against OpenAI's service: its 6 requests were answered
+              <code>200</code>, and no token-shaped string appeared in the container, the
+              daemon's log, the record, the JUnit report or the output. The run cost
+              $0.0014.</li>
+        </ul>
+      </article>
+
+      <article class="release">
         <span class="release-tag">v1.3.0</span>
         <span class="release-date">2026-10-07</span>
         <h2>A whole run in one file, headless, with a record you can verify.</h2>

@@ -5,7 +5,7 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.1] - Unreleased
+## [1.3.1] - 2026-10-11
 
 ### Added
 - **`axocoatl connect codex`: Codex with your ChatGPT plan, without handling a key.** The
@@ -90,12 +90,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (waiting up to five seconds for another holder), the lock the daemon takes to write a
   refreshed ChatGPT sign-in.
 
-### Not measured
-- The ChatGPT mode has run with the pinned Codex 0.160.1 through a whole loadout run on
-  Podman, against a fake ChatGPT backend and a fake token endpoint only. Whether OpenAI's
-  backend accepts requests from Codex's HTTP provider in this shape has not been measured
-  against OpenAI's service. OpenAI recommends API keys for automation and documents no
-  process other than Codex refreshing a Codex sign-in; check your plan's terms.
+### Measured
+- On 2026-10-11 a `fix` run of the pinned Codex 0.160.1 (`gpt-6-luna`) with a ChatGPT
+  plan passed through Axocoatl 1.3.1-rc2 against OpenAI's service: Codex's 6 requests to
+  `chatgpt.com/backend-api/codex/responses` went through the route with the sign-in the
+  daemon added and were answered `200`, the container held only the placeholder, and no
+  token-shaped string appeared in the container, the daemon's log, the record, the JUnit
+  report or the output. The run cost $0.0014. OpenAI recommends API keys for automation
+  and documents no process other than Codex refreshing a Codex sign-in; check your plan's
+  terms.
 
 ## [1.3.0] - 2026-10-07
 
