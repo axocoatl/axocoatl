@@ -1026,7 +1026,7 @@ pub fn refuse_substitution(raw: &str) -> Result<(), ConfigError> {
     }
     // Aliases and flow styles: look at the parsed values too. A document
     // that only parses after substitution was covered by the line scan.
-    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(raw) else {
+    let Ok(value) = crate::yaml::from_str::<crate::yaml::Value>(raw) else {
         return Ok(());
     };
     if let Some(credentials) = value.get("credentials") {
@@ -1047,14 +1047,14 @@ pub fn refuse_substitution(raw: &str) -> Result<(), ConfigError> {
 }
 
 /// The first string holding `${` in a YAML value, keys included.
-fn find_substitution(value: &serde_yaml::Value) -> Option<String> {
+fn find_substitution(value: &crate::yaml::Value) -> Option<String> {
     match value {
-        serde_yaml::Value::String(text) if text.contains("${") => Some(text.clone()),
-        serde_yaml::Value::Sequence(items) => items.iter().find_map(find_substitution),
-        serde_yaml::Value::Mapping(map) => map
+        crate::yaml::Value::String(text) if text.contains("${") => Some(text.clone()),
+        crate::yaml::Value::Sequence(items) => items.iter().find_map(find_substitution),
+        crate::yaml::Value::Mapping(map) => map
             .iter()
             .find_map(|(key, item)| find_substitution(key).or_else(|| find_substitution(item))),
-        serde_yaml::Value::Tagged(tagged) => find_substitution(&tagged.value),
+        crate::yaml::Value::Tagged(_, value) => find_substitution(value),
         _ => None,
     }
 }

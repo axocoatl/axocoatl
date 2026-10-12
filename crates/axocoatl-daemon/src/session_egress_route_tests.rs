@@ -462,7 +462,7 @@ pub(crate) async fn send(
 // ---------------------------------------------------------------- fixture
 
 pub(crate) fn route_yaml(port: u16, extra: &str) -> EgressRouteYaml {
-    serde_yaml::from_str(&format!(
+    axocoatl_config::yaml::from_str(&format!(
         "{{host: {HOST}, ports: [{port}], credential: test, \
           inject: {{header: Authorization, format: 'Bearer {{}}'}}, \
           for: [agent, setup], env_placeholders: [API_TOKEN], \
@@ -1063,7 +1063,7 @@ prompt: "{{task}}"
     std::fs::create_dir_all(stored.parent().unwrap()).unwrap();
     std::fs::write(&stored, "sk-test").unwrap();
     let configured: EgressRouteYaml =
-        serde_yaml::from_str("{host: configured.test, access: read-only}").unwrap();
+        axocoatl_config::yaml::from_str("{host: configured.test, access: read-only}").unwrap();
     let base = EgressPolicyConfig {
         routes: vec![configured],
         credentials: credentials(),

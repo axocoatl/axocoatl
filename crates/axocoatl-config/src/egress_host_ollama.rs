@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn the_setting_parses_from_yaml_and_refuses_unknown_fields() {
         let parsed: EgressConfigYaml =
-            serde_yaml::from_str("host_ollama: {port: 11434, for: [agent, terminal]}").unwrap();
+            crate::yaml::from_str("host_ollama: {port: 11434, for: [agent, terminal]}").unwrap();
         assert_eq!(
             parsed.host_ollama,
             Some(HostOllamaRouteYaml {
@@ -252,7 +252,7 @@ mod tests {
                 bindings: Some(vec![RouteForYaml::Agent, RouteForYaml::Terminal]),
             })
         );
-        assert!(serde_yaml::from_str::<EgressConfigYaml>(
+        assert!(crate::yaml::from_str::<EgressConfigYaml>(
             "host_ollama: {port: 11434, host: 10.0.0.1}"
         )
         .is_err());

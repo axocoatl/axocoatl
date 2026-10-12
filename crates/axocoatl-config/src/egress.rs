@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn yaml_entries_parse_into_their_variants() {
-        let allow: Vec<EgressAllowYaml> = serde_yaml::from_str(
+        let allow: Vec<EgressAllowYaml> = crate::yaml::from_str(
             "- npm\n- host: api.example.com\n- host: '*.example.org'\n  ports: [80, 443]\n- cidr: 203.0.113.0/24\n",
         )
         .unwrap();
@@ -554,11 +554,11 @@ mod tests {
             ]
         );
         let error =
-            serde_yaml::from_str::<Vec<EgressAllowYaml>>("- host: a.example\n  port: 443\n")
+            crate::yaml::from_str::<Vec<EgressAllowYaml>>("- host: a.example\n  port: 443\n")
                 .unwrap_err()
                 .to_string();
         assert!(error.contains("a preset name such as npm"), "{error}");
-        assert!(serde_yaml::from_str::<Vec<EgressAllowYaml>>(
+        assert!(crate::yaml::from_str::<Vec<EgressAllowYaml>>(
             "- {host: a.example, cidr: 10.0.0.0/8}\n"
         )
         .is_err());

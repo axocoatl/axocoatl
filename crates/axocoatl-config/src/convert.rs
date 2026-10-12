@@ -180,14 +180,14 @@ mod tests {
     #[test]
     fn reasoning_effort_parses_known_levels_and_refuses_others() {
         let parsed: SamplingConfigYaml =
-            serde_yaml::from_str("max_tokens: 4096\nreasoning_effort: xhigh\n").unwrap();
+            crate::yaml::from_str("max_tokens: 4096\nreasoning_effort: xhigh\n").unwrap();
         assert_eq!(
             parsed.to_core().reasoning_effort,
             Some(axocoatl_core::ReasoningEffort::Xhigh)
         );
-        let unset: SamplingConfigYaml = serde_yaml::from_str("max_tokens: 4096\n").unwrap();
+        let unset: SamplingConfigYaml = crate::yaml::from_str("max_tokens: 4096\n").unwrap();
         assert_eq!(unset.to_core().reasoning_effort, None);
-        let error = serde_yaml::from_str::<SamplingConfigYaml>("reasoning_effort: ultra\n")
+        let error = crate::yaml::from_str::<SamplingConfigYaml>("reasoning_effort: ultra\n")
             .unwrap_err()
             .to_string();
         assert!(error.contains("unknown variant `ultra`"), "{error}");
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn summarize_alias_deserializes() {
         // Old configs that set `overflow_policy: summarize` must still parse.
-        let parsed: OverflowPolicyYaml = serde_yaml::from_str("summarize").unwrap();
+        let parsed: OverflowPolicyYaml = crate::yaml::from_str("summarize").unwrap();
         assert!(matches!(parsed, OverflowPolicyYaml::Summarize));
     }
 
@@ -247,13 +247,13 @@ mod tests {
     #[test]
     fn core_memory_config_defaults_and_override() {
         // Omitted `core` → default block set (persona + human + project).
-        let yaml: MemoryConfigYaml = serde_yaml::from_str("max_session_messages: 100").unwrap();
+        let yaml: MemoryConfigYaml = crate::yaml::from_str("max_session_messages: 100").unwrap();
         let core = yaml.to_core();
         let labels: Vec<&str> = core.core.blocks.iter().map(|b| b.label.as_str()).collect();
         assert_eq!(labels, ["persona", "human", "project"]);
 
         // Explicit blocks replace the defaults.
-        let yaml: MemoryConfigYaml = serde_yaml::from_str(
+        let yaml: MemoryConfigYaml = crate::yaml::from_str(
             "core:\n  blocks:\n    - label: notes\n      limit: 500\n      shared: true",
         )
         .unwrap();
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn recall_config_defaults_when_absent() {
         // Existing YAML with no `recall:` block keeps working — defaults applied.
-        let yaml: MemoryConfigYaml = serde_yaml::from_str("max_session_messages: 100").unwrap();
+        let yaml: MemoryConfigYaml = crate::yaml::from_str("max_session_messages: 100").unwrap();
         let core = yaml.to_core();
         assert!(core.recall.passive_inject);
         assert_eq!(core.recall.top_k, 5);
@@ -276,9 +276,10 @@ mod tests {
 
     #[test]
     fn recall_config_parsed_and_mapped() {
-        let yaml: MemoryConfigYaml =
-            serde_yaml::from_str("recall:\n  passive_inject: false\n  top_k: 12\n  min_score: 0.3")
-                .unwrap();
+        let yaml: MemoryConfigYaml = crate::yaml::from_str(
+            "recall:\n  passive_inject: false\n  top_k: 12\n  min_score: 0.3",
+        )
+        .unwrap();
         let core = yaml.to_core();
         assert!(!core.recall.passive_inject);
         assert_eq!(core.recall.top_k, 12);
@@ -288,13 +289,13 @@ mod tests {
     #[test]
     fn consolidation_config_defaults_and_override() {
         // Omitted → enabled, with defaults.
-        let cfg: AxocoatlConfig = serde_yaml::from_str("agents: []").unwrap();
+        let cfg: AxocoatlConfig = crate::yaml::from_str("agents: []").unwrap();
         assert!(cfg.consolidation.enabled);
         assert_eq!(cfg.consolidation.idle_threshold_secs, 120);
         assert_eq!(cfg.consolidation.interval_secs, 1800);
 
         // Explicit override.
-        let cfg: AxocoatlConfig = serde_yaml::from_str(
+        let cfg: AxocoatlConfig = crate::yaml::from_str(
             "consolidation:\n  enabled: false\n  idle_threshold_secs: 30\n  interval_secs: 600",
         )
         .unwrap();
@@ -307,7 +308,7 @@ mod tests {
     fn provider_base_url_and_mcp_env_parse() {
         // OpenAI-compatible servers: base_url on the provider, and stdio MCP
         // servers carry their env (e.g. an API key) through config.
-        let cfg: AxocoatlConfig = serde_yaml::from_str(
+        let cfg: AxocoatlConfig = crate::yaml::from_str(
             "providers:\n  openai:\n    api_key: sk-x\n    base_url: http://127.0.0.1:8000/v1\n\
              mcp_servers:\n  - name: brave\n    transport: stdio\n    command: npx\n    env:\n      BRAVE_API_KEY: abc123",
         )

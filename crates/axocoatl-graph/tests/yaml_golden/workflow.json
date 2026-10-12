@@ -1,0 +1,147 @@
+{
+  "edges": [
+    {
+      "condition": null,
+      "edge_type": "Sequential",
+      "label": null,
+      "source": "start",
+      "target": "writer"
+    },
+    {
+      "condition": null,
+      "edge_type": "Parallel",
+      "label": "check",
+      "source": "writer",
+      "target": "lint"
+    },
+    {
+      "condition": null,
+      "edge_type": "Parallel",
+      "label": "on",
+      "source": "writer",
+      "target": "route"
+    },
+    {
+      "condition": "result == 'pass'",
+      "edge_type": "Conditional",
+      "label": "ok",
+      "source": "route",
+      "target": "join"
+    },
+    {
+      "condition": "",
+      "edge_type": "Sequential",
+      "label": null,
+      "source": "lint",
+      "target": "join"
+    },
+    {
+      "condition": null,
+      "edge_type": "Sequential",
+      "label": "null",
+      "source": "join",
+      "target": "end"
+    }
+  ],
+  "nodes": [
+    {
+      "config": {},
+      "id": "start",
+      "label": "Start",
+      "node_type": "Entry"
+    },
+    {
+      "config": {
+        "enabled": true,
+        "max_tokens": 4096,
+        "model": "gpt-4o",
+        "negative": -3,
+        "nested": {
+          "empty_list": [],
+          "empty_map": {},
+          "list": [
+            1,
+            2.5,
+            false,
+            {
+              "deep": [
+                "x"
+              ]
+            }
+          ]
+        },
+        "nothing": null,
+        "prompt": "You are a reviewer.\nCheck the diff.\n\nReply with findings.\n",
+        "strings": [
+          "yes",
+          "no",
+          "on",
+          "off",
+          "true",
+          "null",
+          "~",
+          "",
+          "017",
+          "0x1F",
+          "1e3",
+          ".inf",
+          "1_000",
+          "12:30",
+          "- dash",
+          "a: b",
+          "# hash",
+          "'quoted'",
+          "\"dq\"",
+          " lead",
+          "trail ",
+          "!tag",
+          "&anchor",
+          "*alias",
+          "%pct",
+          "@at",
+          "`tick",
+          "{brace}",
+          "[bracket]",
+          "multi\nline\n",
+          "tab\there",
+          "é ü ö",
+          "😀"
+        ],
+        "temperature": 0.7
+      },
+      "id": "writer",
+      "label": "Writer: drafts",
+      "node_type": "Agent"
+    },
+    {
+      "config": {
+        "command": "cargo clippy -- -D warnings"
+      },
+      "id": "lint",
+      "label": "lint",
+      "node_type": "Tool"
+    },
+    {
+      "config": null,
+      "id": "route",
+      "label": "yes",
+      "node_type": "Decision"
+    },
+    {
+      "config": [
+        1,
+        "two",
+        null
+      ],
+      "id": "join",
+      "label": "017",
+      "node_type": "Join"
+    },
+    {
+      "config": "done",
+      "id": "end",
+      "label": "",
+      "node_type": "Exit"
+    }
+  ]
+}

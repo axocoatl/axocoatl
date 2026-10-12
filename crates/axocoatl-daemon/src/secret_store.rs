@@ -655,7 +655,7 @@ mod tests {
         .unwrap();
         let upstream = Upstream::start("api.anthropic.test").await;
         let port = upstream.addr.port();
-        let route: axocoatl_config::EgressRouteYaml = serde_yaml::from_str(&format!(
+        let route: axocoatl_config::EgressRouteYaml = axocoatl_config::yaml::from_str(&format!(
             "{{host: api.anthropic.test, ports: [{port}], credential: claude-code-oauth, \
               inject: {{header: Authorization, format: 'Bearer {{}}'}}, \
               env_placeholders: [CLAUDE_CODE_OAUTH_TOKEN], \

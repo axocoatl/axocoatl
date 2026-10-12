@@ -43,6 +43,34 @@ handling.
 substitution: those blocks name where a credential lives, and substitution would
 copy its value into the configuration. See [Credentials](#credentials).
 
+## How YAML is read
+
+Configuration files and loadouts are read as YAML 1.2, one document per file.
+A value means what the field it fills expects:
+
+- A text field takes the value as written: `model: 017`, `name: yes` and
+  `label: ~` are the strings `017`, `yes` and `~`, and an empty `key:` is the
+  empty string (so an unset `${NAME}` leaves an empty string). A field that
+  also takes another form, such as a loadout value that may be
+  `{param: name}`, reads a plain number, `true`, `false` or `null` as that
+  type: quote text that looks like one.
+- A true/false field takes only `true`, `True`, `TRUE`, `false`, `False` or
+  `FALSE`. YAML 1.1's `yes`, `no`, `on` and `off` are refused there, not
+  guessed.
+- A number field takes a plain number: decimal, `0x` hexadecimal, `0o` octal
+  or `0b` binary. A leading zero (`017`), underscores (`1_000`) and a quoted
+  number (`"8080"`) are not numbers.
+- An optional field is unset by `null`, `Null`, `NULL`, `~` or an empty value.
+- Anchors (`&name`) and aliases (`*name`) work. `<<` is an ordinary key: merge
+  keys are not expanded.
+- A field given twice in the same mapping is an error. Where the keys are names
+  you choose, a repeated name keeps its last value.
+
+A file that does not parse, or a value of the wrong type, is reported with the
+file, the line and column, and for a wrong type the path of the value, such as
+`agents[0].token_budget.per_call: invalid type: string "many", expected usize
+at line 9 column 17`.
+
 ## Process data root
 
 The control-plane data root is process configuration, not a YAML key.

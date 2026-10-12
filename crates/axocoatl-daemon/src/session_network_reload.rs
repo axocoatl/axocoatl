@@ -517,7 +517,7 @@ mod tests {
     }
 
     fn route(yaml: &str) -> EgressRouteYaml {
-        serde_yaml::from_str(yaml).unwrap()
+        axocoatl_config::yaml::from_str(yaml).unwrap()
     }
 
     /// Routes and credentials reload like the allowlists: they need no

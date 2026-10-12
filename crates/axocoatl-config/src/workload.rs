@@ -167,7 +167,7 @@ mod tests {
     use super::*;
 
     fn sandbox(yaml: &str) -> SandboxConfigYaml {
-        serde_yaml::from_str(yaml).unwrap()
+        crate::yaml::from_str(yaml).unwrap()
     }
 
     fn reason(error: ConfigError) -> String {
@@ -262,7 +262,7 @@ mod tests {
             let error = workload_settings(&sandbox(yaml)).unwrap_err();
             assert!(reason(error).contains(expected), "{yaml}");
         }
-        assert!(serde_yaml::from_str::<SandboxConfigYaml>("workload: {users: 1}").is_err());
+        assert!(crate::yaml::from_str::<SandboxConfigYaml>("workload: {users: 1}").is_err());
     }
 
     #[test]

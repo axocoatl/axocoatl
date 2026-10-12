@@ -1,0 +1,116 @@
+nodes:
+- id: start
+  node_type: Entry
+  label: Start
+  config: {}
+- id: writer
+  node_type: Agent
+  label: 'Writer: drafts'
+  config:
+    enabled: true
+    max_tokens: 4096
+    model: gpt-4o
+    negative: -3
+    nested:
+      empty_list: []
+      empty_map: {}
+      list:
+      - 1
+      - 2.5
+      - false
+      - deep:
+        - x
+    nothing: null
+    prompt: |
+      You are a reviewer.
+      Check the diff.
+
+      Reply with findings.
+    strings:
+    - yes
+    - no
+    - on
+    - off
+    - 'true'
+    - 'null'
+    - '~'
+    - ''
+    - '017'
+    - '0x1F'
+    - '1e3'
+    - '.inf'
+    - 1_000
+    - 12:30
+    - '- dash'
+    - 'a: b'
+    - '# hash'
+    - '''quoted'''
+    - '"dq"'
+    - ' lead'
+    - 'trail '
+    - '!tag'
+    - '&anchor'
+    - '*alias'
+    - '%pct'
+    - '@at'
+    - '`tick'
+    - '{brace}'
+    - '[bracket]'
+    - |
+      multi
+      line
+    - "tab\there"
+    - é ü ö
+    - 😀
+    temperature: 0.7
+- id: lint
+  node_type: Tool
+  label: lint
+  config:
+    command: cargo clippy -- -D warnings
+- id: route
+  node_type: Decision
+  label: yes
+  config: null
+- id: join
+  node_type: Join
+  label: '017'
+  config:
+  - 1
+  - two
+  - null
+- id: end
+  node_type: Exit
+  label: ''
+  config: done
+edges:
+- source: start
+  target: writer
+  edge_type: Sequential
+  label: null
+  condition: null
+- source: writer
+  target: lint
+  edge_type: Parallel
+  label: check
+  condition: null
+- source: writer
+  target: route
+  edge_type: Parallel
+  label: on
+  condition: null
+- source: route
+  target: join
+  edge_type: Conditional
+  label: ok
+  condition: result == 'pass'
+- source: lint
+  target: join
+  edge_type: Sequential
+  label: null
+  condition: ''
+- source: join
+  target: end
+  edge_type: Sequential
+  label: 'null'
+  condition: null
