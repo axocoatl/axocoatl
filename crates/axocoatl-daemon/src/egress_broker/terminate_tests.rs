@@ -289,7 +289,7 @@ struct Harness {
 }
 
 fn route(yaml: &str) -> Arc<Route> {
-    let parsed: EgressRouteYaml = serde_yaml::from_str(yaml).unwrap();
+    let parsed: EgressRouteYaml = axocoatl_config::yaml::from_str(yaml).unwrap();
     let mut credentials = BTreeMap::new();
     credentials.insert(
         "test".to_string(),

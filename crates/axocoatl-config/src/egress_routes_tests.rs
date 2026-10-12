@@ -85,7 +85,7 @@ sandbox:
     // Serializing skips empty route and credential blocks, so a config
     // without them round-trips unchanged.
     let plain = parse("sandbox:\n  network: egress\n  egress:\n    allow: [npm]\n").unwrap();
-    let text = serde_yaml::to_string(&plain).unwrap();
+    let text = crate::yaml::to_string(&plain).unwrap();
     assert!(
         !text.contains("routes") && !text.contains("credentials"),
         "{text}"

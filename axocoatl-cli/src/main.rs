@@ -4386,6 +4386,68 @@ mod tests {
         assert!(!yaml.contains("llama3.2"));
     }
 
+    /// The onboarding writers quote what the user typed as JSON strings,
+    /// which YAML reads back exactly, whatever the text looks like.
+    #[test]
+    fn onboarding_writers_read_back_exactly_what_was_typed() {
+        let awkward = [
+            "qwen3-coder:30b",
+            "yes",
+            "017",
+            "null",
+            "~",
+            "a: b",
+            "# not a comment",
+            "- dash",
+            "'single'",
+            "\"double\"",
+            "back\\slash",
+            "tab\there",
+            "é 😀",
+            "!tag",
+            "&anchor *alias",
+            "[x]{y}",
+            " spaced ",
+            "",
+        ];
+        for text in awkward {
+            let local = local_onboarding_configuration(
+                text,
+                &ollama_setup::TeamModels {
+                    lead: text.to_string(),
+                    reviewer: format!("{text}-reviewer"),
+                },
+            );
+            let config: axocoatl_config::AxocoatlConfig = axocoatl_config::yaml::from_str(&local)
+                .unwrap_or_else(|error| panic!("{text:?}: {error}\n{local}"));
+            assert_eq!(config.providers.ollama.unwrap().base_url, text);
+            assert!(config.agents.iter().any(|agent| agent.model == text));
+            assert!(config
+                .agents
+                .iter()
+                .any(|agent| agent.model == format!("{text}-reviewer")));
+
+            let hosted = hosted_onboarding_configuration(
+                "OpenRouter",
+                "openrouter",
+                text,
+                &config_secret(text, "OPENROUTER_API_KEY"),
+                16000,
+                "warn",
+            );
+            let config: axocoatl_config::AxocoatlConfig = axocoatl_config::yaml::from_str(&hosted)
+                .unwrap_or_else(|error| panic!("{text:?}: {error}\n{hosted}"));
+            assert!(config.agents.iter().all(|agent| agent.model == text));
+            let key = config.providers.openrouter.unwrap().api_key;
+            if text.is_empty() {
+                // A blank key leaves `${OPENROUTER_API_KEY}` for the environment.
+                assert_eq!(key.expose_secret(), "${OPENROUTER_API_KEY}");
+            } else {
+                assert_eq!(key.expose_secret(), text);
+            }
+        }
+    }
+
     #[test]
     fn service_install_reports_the_recorded_environment_and_log() {
         let environment = axocoatl_service::ServiceEnvironment::from_lookup(

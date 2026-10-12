@@ -4,7 +4,7 @@ use super::*;
 use secrecy::ExposeSecret;
 
 fn route_from(index: usize, yaml: &str) -> Route {
-    let parsed: EgressRouteYaml = serde_yaml::from_str(yaml).unwrap();
+    let parsed: EgressRouteYaml = axocoatl_config::yaml::from_str(yaml).unwrap();
     let mut credentials = BTreeMap::new();
     credentials.insert(
         "github".to_string(),
@@ -284,7 +284,7 @@ fn routes_compile_with_their_defaults_and_are_found_by_host_and_port() {
     assert_eq!(ro.bindings, vec![BindingKind::Agent]);
     assert!(ro.credential.is_none());
 
-    let header: EgressRouteYaml = serde_yaml::from_str(
+    let header: EgressRouteYaml = axocoatl_config::yaml::from_str(
         "{host: a.example, credential: github, inject: {header: X-Api-Key, format: 'Token {} v1'}, access: read-only}",
     )
     .unwrap();
@@ -312,11 +312,12 @@ fn routes_compile_with_their_defaults_and_are_found_by_host_and_port() {
     );
 
     let routes = vec![
-        serde_yaml::from_str::<EgressRouteYaml>(
+        axocoatl_config::yaml::from_str::<EgressRouteYaml>(
             "{host: a.example, ports: [443, 8443], access: read-only}",
         )
         .unwrap(),
-        serde_yaml::from_str::<EgressRouteYaml>("{host: b.example, access: full}").unwrap(),
+        axocoatl_config::yaml::from_str::<EgressRouteYaml>("{host: b.example, access: full}")
+            .unwrap(),
     ];
     let table = RouteTable::compile(&routes, &BTreeMap::new(), &[]).unwrap();
     assert_eq!(table.routes().len(), 2);
@@ -459,7 +460,7 @@ fn an_upstream_ca_is_read_when_the_route_compiles() {
         "{{host: registry.internal.example, access: read-only, upstream_ca: '{}'}}",
         path.display()
     );
-    let route: EgressRouteYaml = serde_yaml::from_str(&yaml).unwrap();
+    let route: EgressRouteYaml = axocoatl_config::yaml::from_str(&yaml).unwrap();
     let compiled = Route::compile(0, &route, &BTreeMap::new(), &[]).unwrap();
     assert_eq!(compiled.upstream_roots, vec![ca.der().clone()]);
     assert!(compiled.upstream_roots_id.is_some());

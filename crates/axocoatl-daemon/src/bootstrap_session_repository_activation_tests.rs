@@ -1713,7 +1713,7 @@ async fn actual_egress_route_ends_tls_in_the_daemon_and_adds_the_credential() {
     let ca_file = ca_dir.path().join("upstream-ca.pem");
     std::fs::write(&ca_file, upstream.ca.pem()).unwrap();
     std::fs::set_permissions(&ca_file, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let route: axocoatl_config::EgressRouteYaml = serde_yaml::from_str(&format!(
+    let route: axocoatl_config::EgressRouteYaml = axocoatl_config::yaml::from_str(&format!(
         "{{host: git.test, ports: [{port}], credential: test, \
           inject: {{basic: {{username: x-access-token}}}}, upstream_ca: '{}', \
           env_placeholders: [API_TOKEN], \

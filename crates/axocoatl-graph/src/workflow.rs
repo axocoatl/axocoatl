@@ -133,13 +133,13 @@ impl WorkflowGraph {
 
     /// Serialize to YAML.
     pub fn to_yaml(&self) -> Result<String, GraphError> {
-        serde_yaml::to_string(self).map_err(|e| GraphError::Serialization(e.to_string()))
+        axocoatl_config::yaml::to_string(self).map_err(|e| GraphError::Serialization(e.to_string()))
     }
 
     /// Deserialize from YAML.
     pub fn from_yaml(yaml: &str) -> Result<Self, GraphError> {
-        let mut graph: WorkflowGraph =
-            serde_yaml::from_str(yaml).map_err(|e| GraphError::Serialization(e.to_string()))?;
+        let mut graph: WorkflowGraph = axocoatl_config::yaml::from_str(yaml)
+            .map_err(|e| GraphError::Serialization(e.to_string()))?;
 
         // Rebuild the petgraph from serialized nodes/edges
         graph.graph = StableGraph::new();

@@ -321,7 +321,7 @@ prompt: "{task}"
         let external = resolved(&text);
         let mut base = EgressPolicyConfig::default();
         let configured: EgressRouteYaml =
-            serde_yaml::from_str("{host: configured.test, access: read-only}").unwrap();
+            axocoatl_config::yaml::from_str("{host: configured.test, access: read-only}").unwrap();
         base.routes.push(configured);
         let policy = loadout_policy(&base, &external, data.path()).unwrap();
         let hosts: Vec<&str> = policy

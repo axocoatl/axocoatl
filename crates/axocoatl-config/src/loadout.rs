@@ -587,7 +587,7 @@ pub fn parse_loadout(text: &str, source: LoadoutSource) -> Result<Loadout, Loado
             reason: format!("the file is larger than {MAX_LOADOUT_BYTES} bytes"),
         });
     }
-    let file: LoadoutFile = serde_yaml::from_str(text).map_err(|error| LoadoutError::Parse {
+    let file: LoadoutFile = crate::yaml::from_str(text).map_err(|error| LoadoutError::Parse {
         source_name: source_name.clone(),
         reason: error.to_string(),
     })?;

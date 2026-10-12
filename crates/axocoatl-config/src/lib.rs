@@ -11,6 +11,7 @@ pub mod secret;
 pub mod types;
 pub mod web;
 pub mod workload;
+pub mod yaml;
 
 pub use automation::*;
 pub use browser::{validate_browser, DEFAULT_BROWSER_IMAGE};
@@ -140,7 +141,7 @@ pub fn parse_config(yaml: &str, source_path: &Path) -> Result<AxocoatlConfig, Co
     let interpolated = interpolate_env_vars(yaml);
 
     let config: AxocoatlConfig =
-        serde_yaml::from_str(&interpolated).map_err(|e| ConfigError::ParseError {
+        crate::yaml::from_str(&interpolated).map_err(|e| ConfigError::ParseError {
             path: source_path.to_path_buf(),
             reason: e.to_string(),
             suggestion: generate_parse_suggestion(&e.to_string()),
@@ -824,7 +825,7 @@ agents:
         assert_eq!(config.agents[1].to_core().writes, config.agents[1].writes);
         assert_eq!(config.agents[2].to_core().writes, Some(vec![]));
         // An Agent without the key writes back without it.
-        let written = serde_yaml::to_string(&config.agents[0]).unwrap();
+        let written = crate::yaml::to_string(&config.agents[0]).unwrap();
         assert!(!written.contains("writes"), "{written}");
 
         for bad in [
@@ -866,7 +867,7 @@ agents:
         assert_eq!(config.agents[0].to_core().max_tool_rounds, None);
         assert_eq!(config.agents[1].to_core().max_tool_rounds, Some(300));
         // An Agent without the key writes back without it.
-        let written = serde_yaml::to_string(&config.agents[0]).unwrap();
+        let written = crate::yaml::to_string(&config.agents[0]).unwrap();
         assert!(!written.contains("max_tool_rounds"), "{written}");
 
         for bad in [0, axocoatl_core::MAX_TOOL_ROUNDS + 1] {
@@ -1871,6 +1872,61 @@ agents:
             }
             _ => panic!("Expected ParseError"),
         }
+    }
+
+    /// The errors docs/reference/config.mdx shows: the file, the line and
+    /// column, and for a value of the wrong type its path.
+    #[test]
+    fn parse_errors_name_the_file_line_column_and_path() {
+        let yaml = "\
+agents:
+  - id: lead
+    name: Lead
+    provider: ollama
+    model: llama3
+    token_budget:
+      per_execution: 20000
+      overflow_policy: warn
+      per_call: many
+";
+        let err = parse_config(yaml, &PathBuf::from("config.yaml")).unwrap_err();
+        assert!(matches!(err, ConfigError::ParseError { .. }), "{err:?}");
+        let shown = err.to_string();
+        assert!(
+            shown.starts_with(
+                "Config parse error in \"config.yaml\": agents[0].token_budget.per_call: \
+                 invalid type: string \"many\", expected usize at line 9 column 17\n"
+            ),
+            "{shown}"
+        );
+
+        let err = parse_config(
+            "server:\n  host: 127.0.0.1\n  port: [8080\n",
+            &PathBuf::from("config.yaml"),
+        )
+        .unwrap_err();
+        let shown = err.to_string();
+        assert!(
+            regex::Regex::new(
+                r#"^Config parse error in "config.yaml": .+ at line \d+ column \d+\n"#
+            )
+            .unwrap()
+            .is_match(&shown),
+            "{shown}"
+        );
+
+        let err = crate::loadout::parse_loadout(
+            "loadout: 1\nid: [x\n",
+            crate::loadout::LoadoutSource::User {
+                path: PathBuf::from("/loadouts/mine.yaml"),
+            },
+        )
+        .unwrap_err();
+        let shown = err.to_string();
+        assert!(
+            shown.starts_with("loadout /loadouts/mine.yaml: ") && shown.contains(" at line "),
+            "{shown}"
+        );
     }
 
     #[test]

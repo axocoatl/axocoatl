@@ -156,6 +156,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receives the embedded payload of its architecture.
 
 ### Security
+- **YAML is read without `unsafe-libyaml`.** RUSTSEC-2024-0449 marks `unsafe-libyaml`
+  0.2.11 unmaintained: a machine translation of libyaml into unsafe Rust whose repository
+  is archived, so `cargo audit -D warnings` failed. It came in through `serde_yaml` 0.9
+  (itself deprecated), which read every configuration, loadout, egress route and workflow
+  graph. Axocoatl now parses YAML with `granit-parser` 1.3, a YAML 1.2 parser that
+  forbids unsafe code and limits how deeply collections nest (its dependencies
+  `arraydeque` and `smallvec` do use unsafe code), and reads the parser's events into Rust
+  values with its own serde layer, `axocoatl_config::yaml`, which follows `serde_yaml`
+  0.9's rules. Neither `serde_yaml` nor `unsafe-libyaml` is in `Cargo.lock` any more, and
+  `cargo audit -D warnings` passes with no new exception. The advisory suggests
+  `serde-saphyr`; it was not used because its 1.2 and 1.3 releases need Rust 1.89 (Axocoatl
+  supports 1.88), and 1.1 read an empty `key:` into a text field as an error instead of
+  `""`, `017` as the number 17 where any type fits, and a quoted `"5"` into a number
+  field as 5. `noyalib` had a resource-limit advisory (RUSTSEC-2026-0333) on 2026-10-06,
+  `serde_yml` is unsound (RUSTSEC-2025-0068), and `serde_norway` and `serde_yaml_ng` still
+  use a translation of libyaml.
+
+  YAML reads to the same values as before. A differential test reads 2,281 documents
+  again and compares 5,566 results with what `serde_yaml` made of them when it was
+  replaced, and the positions of 27,896 nodes in the 2,252 valid ones: every YAML file
+  in the repository, every `yaml` block of the documentation, every document a full
+  workspace test run handed to the parser, and a table of YAML 1.1/1.2 pitfalls. `yes`, `no`, `on` and
+  `off` are still strings, `017` is still the string `017` and not octal, `0o17` is 15,
+  `1_000` and `190:20:30` are strings, `~`, `null` and an empty value are null, a text
+  field still takes `017`, `true` or `~` as written and an empty `key:` as `""`, a quoted
+  number is not a number, `<<` is still an ordinary key (no merge), and more than one
+  document in a file is still refused. To keep that, three things libyaml did and
+  `granit-parser` does not are kept: a continuation line of a multi-line quoted string
+  may be indented less than YAML 1.2 asks, a literal or folded block that ends the file
+  without a line break has no final line break, and an empty value is the empty string.
+  What differs:
+  - Now read: a file holding only `...`, a block mapping entry with an empty key
+    (`: value`), and a tag followed directly by `]` or `}` (`[!x]`). They are valid YAML
+    1.2 that libyaml refused.
+  - Now refused: more than 255 block sequences or mappings inside one another, or more
+    than 255 flow ones (`[...]`, `{...}`), anywhere in a file. Before, nesting deeper
+    than 128 levels was refused when read and accepted only inside a field that is
+    ignored.
+  - A file that does not parse is reported in `granit-parser`'s words, such as `while
+    parsing a block mapping, did not find expected key at line 3 column 2`, still with
+    the file, line and column. Every error with a position now shows it, also at line 1,
+    column 1, where `serde_yaml` left it out, and a second document in a file is reported
+    at its line and column.
+  - `WorkflowGraph::to_yaml` indents a sequence under its key and escapes the NEL, LINE
+    SEPARATOR and PARAGRAPH SEPARATOR characters. Workflow YAML written before 1.3.1 reads
+    back to the same graph, and so does YAML written now; `axocoatl-graph` now depends on
+    `axocoatl-config` for it.
 - Update `quinn-proto` in `Cargo.lock` to 0.11.18 for RUSTSEC-2026-0338,
   RUSTSEC-2026-0340 and RUSTSEC-2026-0343 (a remote peer or a sender's own datagrams
   can make it panic). It is listed in the lockfile through `reqwest`'s optional HTTP/3
