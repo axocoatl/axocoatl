@@ -39,7 +39,9 @@
 //! other copy, Codex's own on the tmpfs, goes with the container. When the
 //! sign-in cannot be read because the container has ended after its
 //! lifetime, the user is told the sign-in was not completed in time
-//! ([`timed_out`]).
+//! ([`timed_out`]), and the error `podman exec` printed about the exec
+//! session it lost with the container ([`lost_exec_session`]), held back by
+//! the relay as its last line, is not shown.
 //!
 //! The `podman` commands that start, read and remove the container
 //! ([`podman_command`]) each run in a process group of their own (the
@@ -47,7 +49,7 @@
 //! Ctrl-C, Ctrl-\ or terminal hangup, which Axocoatl catches, cannot stop
 //! them.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -268,6 +270,28 @@ pub(crate) fn timed_out(lifetime: Duration) -> String {
     )
 }
 
+/// Whether `line` is what `podman exec` prints when the container its
+/// session ran in has gone under it (Podman stops and removes the login
+/// container at its `--timeout`): one line of plain text, `Error:
+/// retrieving exec session ID from container ID: … no such container` (or
+/// `… no such exec session`), or `Error: no exec session with ID ID found`,
+/// with or without Podman's `: no such exec session` after it (pure).
+pub(crate) fn lost_exec_session(line: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(line) else {
+        return false;
+    };
+    let text = text.trim_end_matches(['\r', '\n']);
+    if text.chars().any(char::is_control) {
+        return false;
+    }
+    let Some(said) = text.strip_prefix("Error: ") else {
+        return false;
+    };
+    let gone = said.ends_with(": no such container") || said.ends_with(": no such exec session");
+    (said.starts_with("retrieving exec session ") && gone)
+        || (said.starts_with("no exec session with ID ") && (gone || said.ends_with(" found")))
+}
+
 /// The message when the login container ended before its lifetime and
 /// before Codex's sign-in was read.
 pub(crate) fn ended_early() -> String {
@@ -390,6 +414,13 @@ impl Login {
     }
 }
 
+/// Why Codex's sign-in could not be read from a login container.
+pub(crate) struct ReadFailure {
+    pub(crate) failure: Failure,
+    /// Whether the container had ended after its lifetime ([`timed_out`]).
+    pub(crate) timed_out: bool,
+}
+
 /// Whether a login container is still there to read from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
@@ -500,12 +531,15 @@ impl Container {
     /// Why `auth.json` could not be read (`message`): the lifetime ran out
     /// ([`timed_out`], exit code [`exit::NO_TOKEN`]), the container ended
     /// before that ([`ended_early`]), or `message` itself.
-    pub(crate) fn read_failure(&self, message: String) -> Failure {
-        match self.state() {
-            State::Ended if self.outlived() => failure(exit::NO_TOKEN, timed_out(self.lifetime)),
-            State::Ended => failure(exit::FAILURE, ended_early()),
-            State::Running | State::Unknown => failure(exit::FAILURE, message),
-        }
+    pub(crate) fn read_failure(&self, message: String) -> ReadFailure {
+        let (failure, timed_out) = match self.state() {
+            State::Ended if self.outlived() => {
+                (failure(exit::NO_TOKEN, timed_out(self.lifetime)), true)
+            }
+            State::Ended => (failure(exit::FAILURE, ended_early()), false),
+            State::Running | State::Unknown => (failure(exit::FAILURE, message), false),
+        };
+        ReadFailure { failure, timed_out }
     }
 
     /// `auth.json` from the container's `CODEX_HOME`, read straight into a
@@ -587,10 +621,10 @@ pub(crate) async fn connect(
     let flag = interrupt.flag.clone();
     let resized = resized.0.clone();
     let args = login_exec_args(container.name(), device_auth);
-    let run = tokio::task::spawn_blocking(move || {
+    let (run, mut output) = tokio::task::spawn_blocking(move || {
         let mut output = output;
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        relay::run_program(
+        let run = relay::run_program(
             &relay::Program {
                 path: &podman,
                 args: &args,
@@ -601,16 +635,19 @@ pub(crate) async fn connect(
                 open_sign_in: opener
                     .as_ref()
                     .map(|opener| (SignInPage::for_sign_in(device_auth), opener)),
+                // Podman's own error is the last line `podman exec` prints.
+                hold_error_line: true,
             },
             input.as_fd(),
             &mut *output,
             &flag,
             &resized,
-        )
+        );
+        (run, output)
     })
     .await
-    .map_err(|_| failure(exit::FAILURE, "running codex login failed"))?
-    .map_err(|error| failure(exit::FAILURE, error))?;
+    .map_err(|_| failure(exit::FAILURE, "running codex login failed"))?;
+    let mut run = run.map_err(|error| failure(exit::FAILURE, error))?;
     if run.interrupted {
         drop(container);
         return Err(failure(
@@ -620,10 +657,11 @@ pub(crate) async fn connect(
         ));
     }
     let ended = Ended::from_exit_code(run.exit_code);
+    let held_line = std::mem::take(&mut run.held_line);
     // Whatever the filters hid on screen is not used: the sign-in is read
     // from the file Codex wrote.
     drop(run);
-    let bytes = tokio::task::spawn_blocking(move || {
+    let read = tokio::task::spawn_blocking(move || {
         let read = container
             .read_auth_file()
             .map_err(|message| container.read_failure(message));
@@ -631,7 +669,23 @@ pub(crate) async fn connect(
         read
     })
     .await
-    .map_err(|_| failure(exit::FAILURE, "reading Codex's auth.json failed"))??;
+    .map_err(|_| failure(exit::FAILURE, "reading Codex's auth.json failed"))?;
+    // `podman exec`'s own error about the session the container's lifetime
+    // ended is not shown: the message says what happened. Any other last
+    // line is.
+    let timed_out = matches!(
+        &read,
+        Err(ReadFailure {
+            timed_out: true,
+            ..
+        })
+    );
+    if !(timed_out && lost_exec_session(&held_line)) {
+        let _ = output.write_all(&held_line);
+        let _ = output.flush();
+    }
+    drop(output);
+    let bytes = read.map_err(|read| read.failure)?;
     store_sign_in(&data_dir, bytes, &ended)?;
     Ok(super::codex::connected_message(true))
 }

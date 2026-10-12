@@ -751,6 +751,10 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
     // 9. `--sign-in-timeout 1`: the intro says one minute, Podman stops
     //    the container after 60 seconds, and then the sign-in was not
     //    completed in time (exit 2): nothing stored, the container gone.
+    //    The error `podman exec` may print when the container goes under
+    //    it (`Error: retrieving exec session … no such container`, when
+    //    Podman has removed the container before it asks for the session's
+    //    exit code) is not shown; Codex's output is.
     {
         let root = scratch_path.join("sign-in-timeout");
         let started = Instant::now();
@@ -770,6 +774,10 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
             ),
             "{text}"
         );
+        assert!(text.contains("WXYZ-1234"), "{text}");
+        assert!(!text.contains("Error: "), "{text}");
+        assert!(!text.contains("exec session"), "{text}");
+        assert!(!text.contains("no such container"), "{text}");
         assert!(!Run::secret(&root).exists());
         assert_nothing_shown(&shown, &ok);
         assert_cleaned_up(&volumes_before);

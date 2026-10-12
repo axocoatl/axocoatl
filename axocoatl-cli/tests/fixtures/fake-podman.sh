@@ -10,8 +10,12 @@
 #             0; the read (`exec NAME sh -c …`) prints the file `auth`
 #   timeout   the login waits for Enter, then after 2 seconds (longer than
 #             the lifetime the test gives the container) says what Podman
-#             says when the container is stopped under `podman exec` and
-#             exits 125; the read and `container exists` find no container
+#             says when the container is stopped under `podman exec` (no
+#             exec session with that ID) and exits 125; the read and
+#             `container exists` find no container
+#   timeout-retrieving   the same, with Podman's other message for it (it
+#             cannot retrieve the exec session: no such container)
+#   timeout-other        the same, with another Podman error instead
 #   readfail  the read exits 125 while the container is still running
 # `probe` exits at once (the tests run it until the file is not busy).
 set -u
@@ -34,7 +38,7 @@ case "${1:-}" in
   container)
     case "${2:-}" in
       exists)
-        [ "$mode" = timeout ] && exit 1
+        case "$mode" in timeout*) exit 1 ;; esac
         exit 0
         ;;
       inspect)
@@ -68,11 +72,23 @@ case "${1:-}" in
       fi
       printf 'Press Enter once you have signed in\n'
       IFS= read -r _ || exit 70
-      if [ "$mode" = timeout ]; then
-        sleep 2
-        printf 'Error: no exec session with ID 0123abcd found\n' >&2
-        exit 125
-      fi
+      case "$mode" in
+        timeout*)
+          sleep 2
+          case "$mode" in
+            timeout)
+              printf 'Error: no exec session with ID 0123abcd found\n' >&2
+              ;;
+            timeout-retrieving)
+              printf 'Error: retrieving exec session 0123abcd from container 4567ef: no container with ID 4567ef found in database: no such container\n' >&2
+              ;;
+            *)
+              printf 'Error: read unixpacket @->/proc/self/fd/7/attach: read: connection reset by peer\n' >&2
+              ;;
+          esac
+          exit 125
+          ;;
+      esac
       printf 'Successfully logged in\n'
       exit 0
     fi
@@ -81,7 +97,7 @@ case "${1:-}" in
         cat "$here/auth"
         exit 0
         ;;
-      timeout)
+      timeout*)
         printf 'Error: no container with name or ID "%s" found: no such container\n' "${2:-}" >&2
         exit 125
         ;;

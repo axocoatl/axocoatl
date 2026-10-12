@@ -389,6 +389,7 @@ async fn connect_host(
                 filters: super::redact::FilterChain::codex,
                 // Codex on this computer opens the browser sign-in itself.
                 open_sign_in: None,
+                hold_error_line: false,
             },
             input.as_fd(),
             &mut *output,

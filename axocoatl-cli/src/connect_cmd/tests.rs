@@ -2171,7 +2171,8 @@ async fn no_browser_or_a_failing_opener_leaves_the_printed_address() {
 
 /// When the login container's lifetime ends the sign-in (Podman stops it
 /// under `podman exec`, and the read finds no container), the message says
-/// the sign-in was not completed in time, with exit code 2; a container
+/// the sign-in was not completed in time, with exit code 2, and Podman's
+/// own error about the exec session it lost is not shown; a container
 /// that ended before its lifetime, or a read that failed while it still
 /// runs, says so instead. Nothing is stored either way.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2196,7 +2197,8 @@ async fn a_sign_in_the_container_outlived_says_it_was_not_completed_in_time() {
         failure.message,
         codex_container::timed_out(Duration::from_secs(1))
     );
-    assert!(screen.contains("no exec session"));
+    assert!(screen.contains(CODEX_PROMPT));
+    assert!(!screen.contains("no exec session"));
     assert!(fixture.stored().is_none());
     let calls = fixture.calls();
     assert!(calls.contains("--timeout=1\n"), "{calls}");
@@ -2205,10 +2207,12 @@ async fn a_sign_in_the_container_outlived_says_it_was_not_completed_in_time() {
 
     let fixture = ContainerFixture::new("timeout");
     let login = fixture.login(None, codex_container::DEFAULT_LIFETIME);
-    let (result, _) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
+    let (result, screen) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
     let failure = result.expect_err("nothing is stored");
     assert_eq!(failure.code, exit::FAILURE);
     assert_eq!(failure.message, codex_container::ended_early());
+    // Not the lifetime: Podman's error is shown.
+    assert!(screen.contains("Error: no exec session with ID 0123abcd found\r\n"));
     assert!(fixture.stored().is_none());
 
     let fixture = ContainerFixture::new("readfail");
@@ -2242,6 +2246,223 @@ async fn a_sign_in_the_container_outlived_says_it_was_not_completed_in_time() {
     // Podman reads `--timeout=0` as no timeout: never passed.
     let args = codex_container::run_args("n", "i", true, Duration::ZERO);
     assert!(args.iter().any(|arg| arg == "--timeout=1"), "{args:?}");
+}
+
+/// Podman's two errors about an exec session the container's lifetime
+/// ended under it are not shown, after Codex's whole output; the same
+/// errors are shown when the container ended before its lifetime, and
+/// another Podman error is shown when the lifetime ended the container.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_podmans_lost_exec_session_error_after_the_lifetime_is_not_shown() {
+    const NO_SESSION: &str = "Error: no exec session with ID 0123abcd found\r\n";
+    const NOT_RETRIEVED: &str = "Error: retrieving exec session 0123abcd from container \
+        4567ef: no container with ID 4567ef found in database: no such container\r\n";
+    const OTHER: &str =
+        "Error: read unixpacket @->/proc/self/fd/7/attach: read: connection reset by peer\r\n";
+    let second = Duration::from_secs(1);
+    let fixtures = [
+        ("timeout", second),
+        ("timeout-retrieving", second),
+        ("timeout-other", second),
+        ("timeout-retrieving", codex_container::DEFAULT_LIFETIME),
+    ]
+    .map(|(mode, lifetime)| (ContainerFixture::new(mode), lifetime));
+    let run = |index: usize| {
+        let (fixture, lifetime) = &fixtures[index];
+        run_container_login(fixture, fixture.login(None, *lifetime), false, CODEX_PROMPT)
+    };
+    let (no_session, not_retrieved, other, early) = tokio::join!(run(0), run(1), run(2), run(3));
+    for (name, (result, screen)) in [("no session", no_session), ("not retrieved", not_retrieved)] {
+        let failure = result.expect_err(name);
+        assert_eq!(failure.code, exit::NO_TOKEN, "{name}");
+        assert_eq!(
+            failure.message,
+            codex_container::timed_out(second),
+            "{name}"
+        );
+        let shown = String::from_utf8_lossy(&screen.bytes()).into_owned();
+        assert!(!shown.contains("Error:"), "{name}: {shown}");
+        assert!(!shown.contains("exec session"), "{name}: {shown}");
+        // Codex's output is all there.
+        assert!(
+            shown.contains(&format!("{CODEX_PROMPT}\r\n")),
+            "{name}: {shown}"
+        );
+        let flat: String = shown.split(['\r', '\n']).collect();
+        assert!(flat.contains(SIGN_IN_ADDRESS), "{name}: {shown}");
+    }
+    let (result, screen) = other;
+    let failure = result.expect_err("other");
+    assert_eq!(failure.message, codex_container::timed_out(second));
+    assert!(screen.contains(OTHER));
+    let (result, screen) = early;
+    let failure = result.expect_err("early");
+    assert_eq!(failure.message, codex_container::ended_early());
+    assert!(screen.contains(NOT_RETRIEVED));
+    for (fixture, _) in &fixtures {
+        assert!(fixture.stored().is_none());
+    }
+
+    for lost in [NO_SESSION, NOT_RETRIEVED] {
+        assert!(
+            codex_container::lost_exec_session(lost.as_bytes()),
+            "{lost}"
+        );
+        assert!(codex_container::lost_exec_session(
+            lost.trim_end().as_bytes()
+        ));
+        assert!(codex_container::lost_exec_session(
+            lost.replace("\r\n", "\n").as_bytes()
+        ));
+    }
+    for lost in [
+        "Error: no exec session with ID 0123 found: no such exec session\n",
+        "Error: no exec session with ID 0123 found in container 4567: no such exec session\n",
+        "Error: retrieving exec session 0123 from container 4567: no exec session with ID \
+         0123 found in container 4567: no such exec session\n",
+    ] {
+        assert!(
+            codex_container::lost_exec_session(lost.as_bytes()),
+            "{lost}"
+        );
+    }
+    for kept in [
+        OTHER,
+        "",
+        "\r\n",
+        "Error: no such container\n",
+        "Error: no container with name or ID \"x\" found: no such container\n",
+        "Error: retrieving exec session 0123 from container 4567: connection refused\n",
+        "no exec session with ID 0123 found\n",
+        "Error logging in: no exec session with ID 0123 found\n",
+        " Error: no exec session with ID 0123 found\n",
+        "\x1b[31mError: no exec session with ID 0123 found\x1b[0m\n",
+        "Error: no exec session with ID 0123 found\r\nmore\r\n",
+        "Error: no exec session with ID 0123 found, retrying\n",
+    ] {
+        assert!(
+            !codex_container::lost_exec_session(kept.as_bytes()),
+            "{kept:?}"
+        );
+    }
+    assert!(!codex_container::lost_exec_session(
+        b"Error: no exec session with ID \xff found"
+    ));
+}
+
+/// Where the relay starts holding back a last line that may be Podman's
+/// error: only plain text from a line's start that starts with `Error: `
+/// (or may still, while no line break ends it), followed by line breaks
+/// alone.
+#[test]
+fn only_a_last_plain_line_starting_like_podmans_error_is_held() {
+    use relay::held_from;
+    let long = format!("x\r\nError: {}\r\n", "a".repeat(5000));
+    for (bytes, line_start, held) in [
+        (&b"Press Enter\r\nError: gone\r\n"[..], false, Some(13)),
+        (b"Press Enter\nError: gone\n", false, Some(12)),
+        (b"Press Enter\rError: gone", false, Some(12)),
+        (b"Press Enter\r\nError: gone\r\n\r\n", false, Some(13)),
+        (b"Error: gone\r\n", true, Some(0)),
+        (b"Error: gone\r\n", false, None),
+        (b"x\r\nErr", false, Some(3)),
+        (b"x\r\nError:", false, Some(3)),
+        (b"E", true, Some(0)),
+        (b"x\r\nErr\r\n", false, None),
+        (b"x\r\nError\r\n", false, None),
+        (b"x\r\nEnter the code", false, None),
+        (b"x\r\nError: gone\r\nmore", false, None),
+        (b"x\r\nError: gone\r\n\x1b[?25h", false, None),
+        (b"x\r\n\x1b[31mError: gone\x1b[0m\r\n", false, None),
+        (b"x\r\nError:\tgone\r\n", false, None),
+        (b"x\r\n  Error: gone\r\n", false, None),
+        (b"x Error: gone\r\n", false, None),
+        (b"", true, None),
+        (b"\r\n", true, None),
+        (long.as_bytes(), false, None),
+    ] {
+        assert_eq!(
+            held_from(bytes, line_start),
+            held,
+            "{:?}",
+            String::from_utf8_lossy(bytes)
+        );
+    }
+}
+
+/// The relay holds a last line that may be Podman's error back only when
+/// asked to, and keeps it for the caller only when the program ends with
+/// an error: it is shown when the program exits 0, when more output follows
+/// it, and after a while when the program runs on.
+#[test]
+fn a_held_line_is_kept_only_when_the_program_ends_with_an_error() {
+    fn start(script: &str, hold: bool) -> (std::thread::JoinHandle<relay::SetupRun>, Screen) {
+        let screen = Screen::default();
+        let mut output = screen.clone();
+        let script = script.to_string();
+        let running = std::thread::spawn(move || {
+            let terminal = user_terminal();
+            terminal.set_size(SIZE);
+            let args = ["-c", script.as_str()];
+            relay::run_program(
+                &relay::Program {
+                    path: Path::new("/bin/sh"),
+                    args: &args,
+                    cwd: None,
+                    set_env: &[],
+                    remove_env: &[],
+                    filters: redact::FilterChain::codex,
+                    open_sign_in: None,
+                    hold_error_line: hold,
+                },
+                terminal.slave.as_fd(),
+                &mut output,
+                &std::sync::atomic::AtomicBool::new(false),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap()
+        });
+        (running, screen)
+    }
+    let last = "printf 'Codex said this\\nError: last words\\n'; exit";
+    let (running, screen) = start(&format!("{last} 3"), true);
+    let run = running.join().unwrap();
+    assert_eq!(run.exit_code, Some(3));
+    assert_eq!(run.held_line, b"Error: last words\r\n");
+    assert!(screen.contains("Codex said this\r\n"));
+    assert!(!screen.contains("last words"));
+
+    for (script, hold) in [
+        (format!("{last} 0"), true),
+        (format!("{last} 3"), false),
+        (
+            "printf 'Error: first words\\nlast words\\n'; exit 3".to_string(),
+            true,
+        ),
+    ] {
+        let (running, screen) = start(&script, hold);
+        let run = running.join().unwrap();
+        assert!(run.held_line.is_empty(), "{script}");
+        assert!(screen.contains("Error: "), "{script}");
+        assert!(screen.contains("last words\r\n"), "{script}");
+    }
+
+    // A program that runs on after it: shown while it runs.
+    let (running, screen) = start("printf 'Error: and then\\n'; sleep 5; exit 3", true);
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while !screen.contains("Error: and then\r\n") {
+        assert!(Instant::now() < deadline, "not shown while it ran");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!running.is_finished());
+    let run = running.join().unwrap();
+    assert!(run.held_line.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&screen.bytes())
+            .matches("and then")
+            .count(),
+        1
+    );
 }
 
 /// The relay's part: the page is opened once however often its address is

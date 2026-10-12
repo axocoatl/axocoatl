@@ -49,9 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signing in.`), and when the time runs out first it says
   ``The Codex sign-in was not completed within 30 minutes; nothing was stored. Run
   `axocoatl connect codex` again.`` (both with the time chosen) instead of saying that
-  `auth.json` could not be read from the container. Exit codes: 0 stored, 2 no ChatGPT
-  sign-in (also when the sign-in time ran out), 3 usage (also no Podman on `PATH`, port
-  1455 in use, or a command line it does not take), 5 failure, 6 interrupted.
+  `auth.json` could not be read from the container, and without the error Podman may
+  print about the `podman exec` session the stopped container took with it
+  (`Error: retrieving exec session …: no such container`). Exit codes: 0 stored, 2 no
+  ChatGPT sign-in (also when the sign-in time ran out), 3 usage (also no Podman on
+  `PATH`, port 1455 in use, or a command line it does not take), 5 failure, 6
+  interrupted.
 - **`axocoatl connect codex --status` and `--refresh`.** `--status` reads the stored
   sign-in from the data root, without the daemon, and shows whether one is stored, its
   ChatGPT account id by its last four characters, when its access token expires (its JWT

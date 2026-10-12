@@ -5,7 +5,8 @@
 //! back through the token filters ([`FilterChain`]). For `connect codex` in
 //! the login container, what is shown is also watched for the sign-in
 //! page's address, which is opened once on this computer
-//! ([`super::browser`]).
+//! ([`super::browser`]), and a last line that may be Podman's own error is
+//! held back for the caller ([`Program::hold_error_line`]).
 
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
@@ -43,6 +44,14 @@ const IDLE_FLUSH: Duration = Duration::from_millis(250);
 /// long.
 const DRAIN: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_millis(50);
+/// What Podman starts each error it prints with.
+const PODMAN_ERROR: &[u8] = b"Error: ";
+/// How long a last line that may be Podman's error is held back while the
+/// program runs on ([`Program::hold_error_line`]): Podman exits as soon as
+/// it has printed one.
+const HOLD_LIMIT: Duration = Duration::from_secs(2);
+/// The longest line held back; a longer one is not Podman's error.
+const MAX_HELD: usize = 4096;
 
 /// A terminal in raw mode: its descriptor, its settings before, and the
 /// thread that made it raw.
@@ -130,6 +139,11 @@ pub(crate) struct SetupRun {
     /// Its exit code, when it exited on its own.
     pub(crate) exit_code: Option<u32>,
     pub(crate) interrupted: bool,
+    /// Its last line of output, not shown, when it may be Podman's own
+    /// error and the program ended with an error (not 0, not interrupted)
+    /// ([`Program::hold_error_line`]); empty otherwise. The caller shows it,
+    /// or not.
+    pub(crate) held_line: Vec<u8>,
 }
 
 /// The columns and rows of the user's terminal (80 by 24 when it reports
@@ -171,6 +185,7 @@ pub(crate) fn run_setup_token(
             remove_env: &[],
             filters: FilterChain::claude,
             open_sign_in: None,
+            hold_error_line: false,
         },
         input,
         output,
@@ -194,6 +209,13 @@ pub(crate) struct Program<'a> {
     /// The sign-in page to open once on this computer when its address is
     /// shown, and the opener to open it with (`None`: nothing is opened).
     pub(crate) open_sign_in: Option<(SignInPage, &'a Opener)>,
+    /// Whether a last line that may be Podman's own error ([`held_from`])
+    /// is held back: until more output follows it (then it is shown), for
+    /// at most [`HOLD_LIMIT`] while the program runs, and when the program
+    /// ends with an error, for the caller ([`SetupRun::held_line`]). For
+    /// `podman exec`, whose own error when the container went away under it
+    /// is not the program's output.
+    pub(crate) hold_error_line: bool,
 }
 
 /// Run `program` as [`run_setup_token`] runs `claude setup-token`.
@@ -277,19 +299,22 @@ pub(crate) fn run_program(
         master: &*pair.master,
         resized,
     };
-    let open_once = program
-        .open_sign_in
-        .map(|(page, opener)| OpenOnce::new(page, opener));
+    let display = Display::new(
+        output,
+        program
+            .open_sign_in
+            .map(|(page, opener)| OpenOnce::new(page, opener)),
+        program.hold_error_line,
+    );
     let result = pump_output(
         &chunks,
         &exited,
         &kill,
         &terminal,
-        output,
+        display,
         (cols, rows),
         stop,
         program.filters,
-        open_once,
     );
     relay_stop.store(true, Ordering::SeqCst);
     if result.is_err() {
@@ -438,16 +463,144 @@ fn relay_keystrokes(input: OwnedFd, mut writer: Box<dyn Write + Send>, stop: &At
     buffer.zeroize();
 }
 
-/// Show `shown` (watched for the sign-in page's address first, when one is
-/// to be opened).
-fn show(output: &mut dyn Write, shown: &mut Vec<u8>, open_once: &mut Option<OpenOnce<'_>>) {
-    if !shown.is_empty() {
-        if let Some(open_once) = open_once {
-            open_once.watch(shown);
+/// Where the last line of `bytes` starts when it may be Podman's own error,
+/// to be held back: a line (after a CR or LF, or at the start of `bytes`
+/// when `line_start`) of at most [`MAX_HELD`] bytes of plain text (no
+/// control character, so no color) that starts with [`PODMAN_ERROR`] and
+/// is followed by nothing but line breaks; or, while no line break ends it,
+/// the start of such a line. `None` when there is none (pure).
+pub(crate) fn held_from(bytes: &[u8], line_start: bool) -> Option<usize> {
+    let is_break = |byte: &u8| matches!(byte, b'\r' | b'\n');
+    let end = bytes
+        .iter()
+        .rposition(|byte| !is_break(byte))
+        .map_or(0, |last| last + 1);
+    let start = bytes[..end]
+        .iter()
+        .rposition(is_break)
+        .map_or(0, |at| at + 1);
+    let text = &bytes[start..end];
+    if (start == 0 && !line_start)
+        || text.is_empty()
+        || bytes.len() - start > MAX_HELD
+        || text.iter().any(u8::is_ascii_control)
+    {
+        return None;
+    }
+    let ended = end < bytes.len();
+    (text.starts_with(PODMAN_ERROR) || (!ended && PODMAN_ERROR.starts_with(text))).then_some(start)
+}
+
+/// The user's terminal as the relay writes to it: what the filters let
+/// through, watched for the sign-in page's address when one is to be
+/// opened, except a last line held back ([`Program::hold_error_line`]).
+struct Display<'w, 'o> {
+    output: &'w mut dyn Write,
+    open_once: Option<OpenOnce<'o>>,
+    hold: bool,
+    /// Output not shown yet: a last line that may be Podman's error.
+    held: Vec<u8>,
+    /// Since when the line in `held` has been held.
+    held_since: Instant,
+    /// Whether what was shown ends at the start of a line.
+    line_start: bool,
+}
+
+impl<'w, 'o> Display<'w, 'o> {
+    fn new(output: &'w mut dyn Write, open_once: Option<OpenOnce<'o>>, hold: bool) -> Self {
+        Self {
+            output,
+            open_once,
+            hold,
+            held: Vec::new(),
+            held_since: Instant::now(),
+            line_start: true,
         }
-        let _ = output.write_all(shown);
-        let _ = output.flush();
-        shown.clear();
+    }
+
+    /// Show `shown` after what is held, holding back a last line that may
+    /// be Podman's error.
+    fn show(&mut self, shown: &mut Vec<u8>) {
+        if !self.hold {
+            self.write(shown);
+            shown.clear();
+            return;
+        }
+        let held_before = !self.held.is_empty();
+        self.held.append(shown);
+        match held_from(&self.held, self.line_start) {
+            Some(0) if held_before => {}
+            Some(start) => {
+                let line = self.held.split_off(start);
+                let now = std::mem::replace(&mut self.held, line);
+                self.write(&now);
+                self.held_since = Instant::now();
+            }
+            None => {
+                let now = std::mem::take(&mut self.held);
+                self.write(&now);
+            }
+        }
+    }
+
+    /// Show the held line once it has been held for [`HOLD_LIMIT`]: the
+    /// program runs on after it.
+    fn show_overdue(&mut self) {
+        if !self.held.is_empty() && self.held_since.elapsed() >= HOLD_LIMIT {
+            let held = std::mem::take(&mut self.held);
+            self.write(&held);
+        }
+    }
+
+    /// The opener's note, once it has opened the page: written straight to
+    /// the user's terminal, never through the filters, whose model of the
+    /// terminal follows the program's output alone. It is a line of its
+    /// own, before a held one.
+    fn note(&mut self) {
+        if let Some(note) = self.open_once.as_mut().and_then(OpenOnce::note) {
+            let _ = self.output.write_all(&note);
+            let _ = self.output.flush();
+            self.line_start = true;
+        }
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        if let Some(open_once) = &mut self.open_once {
+            open_once.watch(bytes);
+        }
+        let _ = self.output.write_all(bytes);
+        let _ = self.output.flush();
+        self.line_start = matches!(bytes.last(), Some(b'\r' | b'\n'));
+    }
+
+    /// Show the last of the output (`shown`) and then `reset`, keeping back
+    /// the held line when `keep_held` (returned) and showing it otherwise.
+    /// The program has ended: nothing is opened for it any more.
+    fn finish(mut self, shown: &mut Vec<u8>, reset: &[u8], keep_held: bool) -> Vec<u8> {
+        self.open_once = None;
+        self.show(shown);
+        let held = std::mem::take(&mut self.held);
+        if !keep_held {
+            self.write(&held);
+        }
+        let _ = self.output.write_all(reset);
+        let _ = self.output.flush();
+        if keep_held {
+            held
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+impl Drop for Display<'_, '_> {
+    /// A line still held when the relay fails is shown.
+    fn drop(&mut self) {
+        let held = std::mem::take(&mut self.held);
+        self.write(&held);
     }
 }
 
@@ -459,11 +612,10 @@ fn pump_output(
     exited: &mpsc::Receiver<Option<u32>>,
     kill: &AtomicBool,
     terminal: &Terminal<'_, '_>,
-    output: &mut dyn Write,
+    mut display: Display<'_, '_>,
     size: (u16, u16),
     stop: &AtomicBool,
     filters: fn(u16, u16) -> FilterChain,
-    mut open_once: Option<OpenOnce<'_>>,
 ) -> Result<SetupRun, String> {
     let mut filter = filters(size.0, size.1);
     let mut size = size;
@@ -488,7 +640,7 @@ fn pump_output(
                 while let Ok(chunk) = chunks.try_recv() {
                     filter.push(&chunk, &mut shown);
                 }
-                show(output, &mut shown, &mut open_once);
+                display.show(&mut shown);
                 let _ = terminal.master.resize(PtySize {
                     rows: new_size.1,
                     cols: new_size.0,
@@ -499,25 +651,19 @@ fn pump_output(
                 size = new_size;
             }
         }
-        // Said once the opener has opened the page: written straight to the
-        // user's terminal, never through the filters, whose model of the
-        // terminal follows the program's output alone.
-        if let Some(note) = open_once.as_mut().and_then(OpenOnce::note) {
-            let _ = output.write_all(&note);
-            let _ = output.flush();
-        }
+        display.note();
         if !output_ended {
             match chunks.recv_timeout(POLL) {
                 Ok(chunk) => {
                     filter.push(&chunk, &mut shown);
-                    show(output, &mut shown, &mut open_once);
+                    display.show(&mut shown);
                     last_output = Instant::now();
                     flushed_idle = false;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if !flushed_idle && last_output.elapsed() >= IDLE_FLUSH {
                         filter.flush_idle(&mut shown);
-                        show(output, &mut shown, &mut open_once);
+                        display.show(&mut shown);
                         flushed_idle = true;
                     }
                 }
@@ -527,6 +673,7 @@ fn pump_output(
             std::thread::sleep(POLL);
         }
         if !has_exited {
+            display.show_overdue();
             match exited.try_recv() {
                 Ok(code) => {
                     has_exited = true;
@@ -550,10 +697,14 @@ fn pump_output(
         filter.push(&chunk, &mut shown);
     }
     filter.finish(&mut shown);
-    // Modes the program left set (it was stopped, or did not clean up).
-    shown.extend_from_slice(&filter.reset_sequence());
-    // The program has ended: nothing is opened for it any more.
-    show(output, &mut shown, &mut None);
+    // Then the modes the program left set (it was stopped, or did not clean
+    // up) are reset; a held line is kept for the caller when the program
+    // ended with an error.
+    let held_line = display.finish(
+        &mut shown,
+        &filter.reset_sequence(),
+        !interrupted && exit_code != Some(0),
+    );
     if interrupted {
         for _ in 0..20 {
             if exited.try_recv().is_ok() {
@@ -567,6 +718,7 @@ fn pump_output(
         found,
         exit_code,
         interrupted,
+        held_line,
     })
 }
 
