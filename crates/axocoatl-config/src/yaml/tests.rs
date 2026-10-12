@@ -309,6 +309,257 @@ fn block_scalars_and_quoted_continuations() {
     assert_eq!(fields("s: 'it''s'").s.as_deref(), Some("it's"));
 }
 
+/// A configuration's agent with a prompt, for the cases below: the values
+/// are those serde_yaml 0.9.34 read.
+fn prompt(text: &str) -> String {
+    from_str::<BTreeMap<String, BTreeMap<String, String>>>(text)
+        .unwrap_or_else(|error| panic!("{text:?}: {error}"))["a"]["system_prompt"]
+        .clone()
+}
+
+#[test]
+fn quoted_continuations_libyaml_took_still_read() {
+    // A continuation line indented with a tab.
+    assert_eq!(prompt("a:\n  system_prompt: \"x\n\ty\"\n"), "x y");
+    assert_eq!(json("k: \"x\n\ty\""), json!({"k": "x y"}));
+    // More than 256 lines at column 0, in one string or several.
+    let lines = |count: usize| {
+        (0..count)
+            .map(|line| format!("Rule {line}."))
+            .collect::<Vec<_>>()
+    };
+    let text = format!("a:\n  system_prompt: \"{}\"\n", lines(300).join("\n"));
+    assert_eq!(prompt(&text), lines(300).join(" "));
+    let text = format!(
+        "a:\n  system_prompt: \"{}\"\nb:\n  system_prompt: \"{}\"\n",
+        lines(150).join("\n"),
+        lines(150).join("\n")
+    );
+    assert_eq!(
+        from_str::<BTreeMap<String, BTreeMap<String, String>>>(&text).unwrap()["b"]
+            ["system_prompt"],
+        lines(150).join(" ")
+    );
+    // Thousands of such strings in one file read in one pass.
+    let many: String = (0..4000)
+        .map(|key| format!("k{key}:\n  sub: \"first {key}\nsecond\n  third\"\n"))
+        .collect();
+    let read = from_str::<BTreeMap<String, BTreeMap<String, String>>>(&many).unwrap();
+    assert_eq!(read.len(), 4000);
+    assert_eq!(read["k3999"]["sub"], "first 3999 second third");
+    // CR and mixed line breaks count as the parser counts them.
+    assert_eq!(json("k: \"a\rb\""), json!({"k": "a b"}));
+    assert_eq!(json("x: 1\rk: \"a\nb\"\n"), json!({"x": 1, "k": "a b"}));
+    // A document marker at the start of a continuation line is refused, as
+    // libyaml refused it.
+    assert!(error::<Json>("k: \"a\n--- b\"").contains("line 2 column 1"));
+    assert_eq!(json("k: \"a\n---\""), json!({"k": "a ---"}));
+    // A later error is reported where it is in the text as written.
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Pair {
+        a: String,
+        b: u8,
+    }
+    assert_eq!(
+        error::<BTreeMap<String, Pair>>("s:\n  a: \"x\n\ty\nz\"\n  b: x"),
+        "s.b: invalid type: string \"x\", expected u8 at line 5 column 6"
+    );
+}
+
+#[test]
+fn a_lone_dash_in_a_flow_collection_is_text() {
+    #[derive(Debug, Deserialize)]
+    struct Args {
+        args: Vec<String>,
+    }
+    let args = |text: &str| from_str::<Args>(text).unwrap().args;
+    assert_eq!(args("args: [--input, -]"), ["--input", "-"]);
+    assert_eq!(args("args: [-]"), ["-"]);
+    assert_eq!(args("args: [-, -, x, -]"), ["-", "-", "x", "-"]);
+    assert_eq!(json("{k: -}"), json!({"k": "-"}));
+    // It is plain text, as it was: `-` is no number and no null.
+    assert_eq!(fields("map: {k: -}").map["k"], "-");
+    // Positions after it are where they are in the text as written.
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Pair {
+        a: String,
+        b: u8,
+    }
+    assert_eq!(
+        error::<BTreeMap<String, Pair>>("s: {a: -, b: x}\n"),
+        "s.b: invalid type: string \"x\", expected u8 at line 1 column 14"
+    );
+    let refused = from_str::<BTreeMap<String, Pair>>("s: {a: -, b: x}\n").unwrap_err();
+    assert_eq!(refused.location().map(|at| at.index()), Some(13));
+    // A dash followed by a blank is a block indicator, refused in a flow.
+    assert!(error::<Json>("[- a]").contains("line 1 column 2"));
+}
+
+#[test]
+fn a_block_ending_the_input_keeps_its_line_break_before_a_blank_last_line() {
+    // A last line indented less than the block, without a line break: the
+    // block's own line break stays.
+    for (text, value) in [
+        ("k: |\n  foo\n ", "foo\n"),
+        ("a:\n  k: |\n    foo\n  ", "foo\n"),
+        ("k: |\n    a\n   ", "a\n"),
+        ("k: >\n  a\n  b\n ", "a b\n"),
+        ("k: |+\n  foo\n\n ", "foo\n\n"),
+        ("k: |2\n    foo\n ", "  foo\n"),
+        ("k: |\n  foo\r ", "foo\n"),
+        // Ending inside the last line: no line break.
+        ("k: |\n a", "a"),
+        ("k: >\n  a\n  b", "a b"),
+        // A blank last line as indented as the block, or more.
+        ("k: |\n  foo\n  ", "foo\n"),
+        ("k: |\n  foo\n   ", "foo\n "),
+    ] {
+        let read = from_str::<BTreeMap<String, Json>>(text).unwrap();
+        let read = read.values().next().unwrap();
+        let read = read.get("k").unwrap_or(read);
+        assert_eq!(read, &json!(value), "{text:?}");
+    }
+    let text = "a:\n  system_prompt: |\n      You are helpful.\n    ";
+    assert_eq!(prompt(text), "You are helpful.\n");
+}
+
+#[test]
+fn nel_line_and_paragraph_separators_break_lines_as_libyaml_read_them() {
+    // NEL is a line break, as in YAML 1.1.
+    assert_eq!(json("k: \"Wait\u{85} then\""), json!({"k": "Wait then"}));
+    assert_eq!(json("k: x\u{85}j: y"), json!({"k": "x", "j": "y"}));
+    assert_eq!(json("- a\u{85}- b"), json!(["a", "b"]));
+    // LINE and PARAGRAPH SEPARATOR end a line, a value or a comment.
+    assert_eq!(json("model: llama3\u{2028}"), json!({"model": "llama3"}));
+    assert_eq!(json("k: v # c\u{2028}j: w"), json!({"k": "v", "j": "w"}));
+    assert_eq!(json("k: v\u{2029}j: w"), json!({"k": "v", "j": "w"}));
+    // Inside a value libyaml kept them as characters of their own: refused,
+    // with the position, rather than read differently.
+    for (text, at) in [
+        ("k: \"a \u{2028} b\"", "line 1 column 7"),
+        ("k: 'a\u{2029}b'", "line 1 column 6"),
+        ("k: |\n  a\u{2028}  b\n", "line 2 column 4"),
+        ("k: a\u{2028}  b", "line 1 column 5"),
+    ] {
+        let message = error::<Json>(text);
+        assert!(
+            message.starts_with("a LINE SEPARATOR (U+2028) or PARAGRAPH SEPARATOR (U+2029)")
+                && message.ends_with(at),
+            "{text:?}: {message}"
+        );
+    }
+    // Between a CR and a LF it is a line break of its own, as each of them.
+    assert_eq!(
+        json("k: \"a\r\u{85}\nb\"\nj: w"),
+        json!({"k": "a\n\nb", "j": "w"})
+    );
+    assert_eq!(
+        error::<BTreeMap<String, u8>>("a: 1\r\u{85}\n\nb: x"),
+        "b: invalid type: string \"x\", expected u8 at line 5 column 4"
+    );
+    // Positions count them as line breaks.
+    assert_eq!(
+        error::<BTreeMap<String, u8>>("a: 1\u{85}b: x"),
+        "b: invalid type: string \"x\", expected u8 at line 2 column 4"
+    );
+}
+
+#[test]
+fn byte_order_marks_after_the_start_are_refused() {
+    assert_eq!(json("\u{feff}k: v"), json!({"k": "v"}));
+    assert_eq!(
+        error::<Json>("\u{feff}\u{feff}k: v"),
+        "a second byte order mark (U+FEFF) at the start of the input at line 1 column 2"
+    );
+    assert!(error::<Json>("model: \u{feff}llama3").ends_with("line 1 column 8"));
+    // Inside text it is a character like any other, as it was.
+    assert_eq!(json("k: a\u{feff}b"), json!({"k": "a\u{feff}b"}));
+}
+
+#[test]
+fn what_yaml_1_1_and_1_2_lex_differently_is_refused() {
+    // libyaml ended a name at `:`, `?`, `%` and other characters.
+    for (text, at) in [
+        ("&a: v", "line 1 column 1"),
+        ("*a: v", "line 1 column 1"),
+        ("m:\n  &a: v", "line 2 column 3"),
+        ("x: 1\n&x: [a]\n", "line 2 column 1"),
+    ] {
+        let message = error::<Json>(text);
+        assert!(
+            message.starts_with("an anchor or alias name may hold only letters, digits")
+                && message.ends_with(at),
+            "{text:?}: {message}"
+        );
+    }
+    assert_eq!(json("a: &x-y_1 1\nb: *x-y_1"), json!({"a": 1, "b": 1}));
+    // libyaml took `?` and `:` directly followed by text in a flow
+    // collection as indicators.
+    for text in ["[?a]", "{?a: v}", "[a, ?b]", "{!: :a}", "[:8080]"] {
+        assert!(
+            error::<Json>(text).contains("inside `[...]` or `{...}`: write"),
+            "{text:?}"
+        );
+    }
+    assert_eq!(json("[? a]"), json!([{"a": null}]));
+    assert_eq!(json("[a?b, a:b]"), json!(["a?b", "a:b"]));
+    // An indicator needs a blank after it.
+    assert!(error::<Json>("- ?").ends_with("line 1 column 4"));
+    assert!(error::<Json>("k: |#c\n  a").ends_with("line 1 column 5"));
+    assert!(error::<Json>("[#, x]").contains("line 1 column 2"));
+}
+
+#[test]
+fn a_redefined_anchor_names_its_latest_node() {
+    // serde_yaml 0.9 numbered anchors by how many names it had seen and read
+    // `d` as 3 here; YAML says an alias names the latest node.
+    assert_eq!(
+        json("a: &x 1\nb: &x 2\nc: &y 3\nd: *x"),
+        json!({"a": 1, "b": 2, "c": 3, "d": 2})
+    );
+    assert_eq!(
+        json("a: &x 1\nb: *x\nc: &x 2\nd: *x"),
+        json!({"a": 1, "b": 1, "c": 2, "d": 2})
+    );
+}
+
+#[test]
+fn errors_at_the_root_start_at_its_anchor_or_tag() {
+    assert_eq!(
+        error::<String>("&a [x]"),
+        "invalid type: sequence, expected a string at line 1 column 1"
+    );
+    assert_eq!(
+        error::<String>("# c\n&a [x]"),
+        "invalid type: sequence, expected a string at line 2 column 1"
+    );
+    assert_eq!(
+        error::<u64>("!t x"),
+        "invalid type: string \"x\", expected u64 at line 1 column 1"
+    );
+    assert_eq!(error::<Json>("k: *a"), "unknown anchor at line 1 column 4");
+    assert_eq!(error::<Json>("*a"), "unknown anchor at line 1 column 1");
+}
+
+#[test]
+fn reading_stays_linear() {
+    use std::time::{Duration, Instant};
+    // Each took seconds or minutes when the reader searched back to the
+    // start of the line for every node, or compared every key with every
+    // earlier one.
+    let tagged = format!("k: [{}]", vec!["!t x"; 400_000].join(", "));
+    let started = Instant::now();
+    assert!(from_str::<Value>(&tagged).is_ok());
+    let keys: String = (0..100_000)
+        .map(|key| format!("key{key}: value{key}\n"))
+        .collect();
+    assert!(from_str::<Value>(&keys).is_ok());
+    let elapsed = started.elapsed();
+    assert!(elapsed < Duration::from_secs(60), "took {elapsed:?}");
+}
+
 #[test]
 fn deep_nesting_is_refused_with_a_position() {
     let nested = |depth: usize| format!("a: {}{}\n", "[".repeat(depth), "]".repeat(depth));

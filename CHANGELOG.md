@@ -194,32 +194,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `serde_yml` is unsound (RUSTSEC-2025-0068), and `serde_norway` and `serde_yaml_ng` still
   use a translation of libyaml.
 
-  YAML reads to the same values as before. A differential test reads 2,281 documents
-  again and compares 5,566 results with what `serde_yaml` made of them when it was
-  replaced, and the positions of 27,896 nodes in the 2,252 valid ones: every YAML file
-  in the repository, every `yaml` block of the documentation, every document a full
-  workspace test run handed to the parser, and a table of YAML 1.1/1.2 pitfalls. `yes`, `no`, `on` and
-  `off` are still strings, `017` is still the string `017` and not octal, `0o17` is 15,
-  `1_000` and `190:20:30` are strings, `~`, `null` and an empty value are null, a text
-  field still takes `017`, `true` or `~` as written and an empty `key:` as `""`, a quoted
-  number is not a number, `<<` is still an ordinary key (no merge), and more than one
-  document in a file is still refused. To keep that, three things libyaml did and
-  `granit-parser` does not are kept: a continuation line of a multi-line quoted string
-  may be indented less than YAML 1.2 asks, a literal or folded block that ends the file
-  without a line break has no final line break, and an empty value is the empty string.
-  What differs:
-  - Now read: a file holding only `...`, a block mapping entry with an empty key
-    (`: value`), and a tag followed directly by `]` or `}` (`[!x]`). They are valid YAML
-    1.2 that libyaml refused.
-  - Now refused: more than 255 block sequences or mappings inside one another, or more
-    than 255 flow ones (`[...]`, `{...}`), anywhere in a file. Before, nesting deeper
-    than 128 levels was refused when read and accepted only inside a field that is
-    ignored.
+  YAML files written for earlier versions read to the same values, or are refused
+  with the line and column where they would read differently; none reads to a
+  different value except where an anchor is defined twice (below). A differential test
+  reads 2,281 documents again and compares 5,566 results with what `serde_yaml` made of
+  them when it was replaced, and the positions of 27,896 nodes in the 2,252 valid ones:
+  every YAML file in the repository, every `yaml` block of the documentation, every
+  document a full workspace test run handed to the parser, and a table of YAML 1.1/1.2
+  pitfalls. A second one compares 6,241 more documents with what `serde_yaml` 0.9.34
+  made of them, recorded outside the workspace: 2,831 edge cases of block scalars, tags,
+  anchors, byte order marks, line breaks, tabs, flow collections, documents and nesting,
+  and 3,410 generated documents. `yes`, `no`, `on` and `off` are still strings, `017` is
+  still the string `017` and not octal, `0o17` is 15, `1_000` and `190:20:30` are
+  strings, `~`, `null` and an empty value are null, a text field still takes `017`,
+  `true` or `~` as written and an empty `key:` as `""`, a quoted number is not a number,
+  `<<` is still an ordinary key (no merge), and more than one document in a file is
+  still refused. To keep that, what libyaml did and `granit-parser` does not is kept: a
+  NEL (U+0085) is a line break, and so are a LINE SEPARATOR (U+2028) and a PARAGRAPH
+  SEPARATOR (U+2029) outside a value; a continuation line of a multi-line quoted string
+  may be indented less than YAML 1.2 asks, also with a tab, however many such lines a
+  file has; a lone `-` in `[...]` or `{...}` (`args: [--input, -]`) is the string `-`;
+  a literal or folded block that ends the file inside its last line has no final line
+  break, and one followed by a blank last line indented less than the block keeps it;
+  and an empty value is the empty string. Files with CR or mixed line endings read as
+  before. Error positions are libyaml's, in the file as written. What differs:
+  - Refused now, with the line and column, where `serde_yaml` read a value: a LINE or
+    PARAGRAPH SEPARATOR inside a value (write `\L` or `\P` in a double-quoted string);
+    a byte order mark (U+FEFF) at the start of a value, or at the start of a line once
+    the document's content has begun, or a second one at the start of the file; an anchor or alias name with a character
+    other than a letter, digit, `-` or `_` (libyaml read `&a: v` as an anchor on an
+    empty key); text starting with `?` or `:` inside `[...]` or `{...}` (libyaml took
+    `[?a]` and `{k: :a}` as a key and a value); a comment whose `#` follows the text
+    before it without a blank (`[a]#c`, `[a,# c`, `|#c`); `- ?`; and more than 255 block sequences or mappings
+    inside one another, or more than 255 flow ones, anywhere in a file (before, nesting
+    deeper than 128 levels was refused when read and accepted only inside a field that
+    is ignored).
+  - Read differently: an alias after an anchor defined again and then a new anchor.
+    `serde_yaml` numbered anchors by how many names it had seen, so in
+    `a: &x 1`, `b: &x 2`, `c: &y 3`, `d: *x` it read `d` as 3; it is 2 now, as YAML
+    says.
+  - Read now, valid YAML 1.2 that libyaml refused: a file holding only `...`; an empty
+    key or value (`: value`, `- :`, `[:]`, `[a:]`); a tag followed directly by `]` or
+    `}` (`[!x]`); a tab as separation, on a blank or comment line, or ending the file
+    after a block; a byte order mark before `---` or a directive, or after `...`;
+    `%YAML 1.3` and unknown directives, which are ignored; and a non-ASCII implicit key
+    of up to 1,024 characters (libyaml counted its limit in bytes).
   - A file that does not parse is reported in `granit-parser`'s words, such as `while
     parsing a block mapping, did not find expected key at line 3 column 2`, still with
     the file, line and column. Every error with a position now shows it, also at line 1,
     column 1, where `serde_yaml` left it out, and a second document in a file is reported
-    at its line and column.
+    at its line and column. An unknown alias is reported as `unknown anchor at line …
+    column …`, as before.
+  - Large files read fast: in a release build on an Apple silicon Mac, a document of
+    160,000 tagged values on one line read in 0.15 seconds, a configuration with 100,000
+    keys in 0.1 seconds, and one with 20,000 quoted strings whose continuation lines are
+    indented too little in 0.09 seconds.
   - `WorkflowGraph::to_yaml` indents a sequence under its key and escapes the NEL, LINE
     SEPARATOR and PARAGRAPH SEPARATOR characters. Workflow YAML written before 1.3.1 reads
     back to the same graph, and so does YAML written now; `axocoatl-graph` now depends on

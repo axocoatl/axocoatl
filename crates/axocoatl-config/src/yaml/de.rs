@@ -40,8 +40,8 @@ pub(crate) const TAG_FLOAT: &str = "tag:yaml.org,2002:float";
 /// A stream with more than one document is refused, as is a document that
 /// does not parse, also after the part `T` needed.
 pub fn from_str<T: DeserializeOwned>(input: &str) -> Result<T> {
-    let source = super::load::lenient_source(input);
-    let mut loader = Loader::new(&source);
+    let prepared = super::load::prepare(input);
+    let mut loader = Loader::new(&prepared);
     let document = match loader.next_document() {
         Some(document) => document,
         None => return Err(error::new(ErrorImpl::EndOfStream)),

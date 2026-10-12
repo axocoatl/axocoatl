@@ -22,7 +22,9 @@
 //! - `<<` is an ordinary key: merge keys are not expanded.
 //! - Anchors and aliases are followed, with serde_yaml's limit on how often
 //!   (100 times the number of events in the document) against alias bombs,
-//!   and nesting is limited to 128 levels.
+//!   and nesting is limited to 128 levels. An alias names the latest node
+//!   with its anchor (serde_yaml 0.9 could name a later one when an anchor
+//!   was defined again).
 //! - A duplicate key is refused by a struct and by [`Value`]; a map type
 //!   such as `HashMap` keeps the last value, as it did.
 //! - An enum variant with data is written with a local tag, `!Variant value`;
@@ -30,13 +32,24 @@
 //! - More than one document in a stream is refused.
 //!
 //! Where libyaml (under serde_yaml) and granit-parser disagree, this module
-//! keeps libyaml's reading: an empty value is `""` rather than `~`, a block
-//! scalar that ends the input without a line break has none, and a quoted
-//! string's continuation lines may be indented less than YAML 1.2 asks. The
-//! few documents that still read differently, all of which libyaml refused
-//! or nested deeper than 255 collections, are listed in
-//! `tests/yaml_differential.rs`, which checks every YAML document of the
-//! repository against serde_yaml's recorded results.
+//! keeps libyaml's reading: NEL is a line break, and so are LINE SEPARATOR
+//! and PARAGRAPH SEPARATOR outside a value; a quoted string's continuation
+//! lines may be indented less than YAML 1.2 asks, also with a tab; a lone
+//! `-` in a flow collection is the string `-`; an empty value is `""`
+//! rather than `~`; a block scalar that ends the input inside its last line
+//! has no final line break. Where the two would read a document to
+//! different values and libyaml's reading cannot be kept, the document is
+//! refused with the line and column, never read differently: a LINE or
+//! PARAGRAPH SEPARATOR inside a value; a byte order mark at the start of a
+//! value, or of a line once the document's content has begun, or a second
+//! one at the start of the input; an anchor or alias name with a character other than a letter,
+//! digit, `-` or `_`; and text starting with `?` or `:` inside `[...]` or
+//! `{...}`. A few other documents libyaml read are refused too: more than
+//! 255 nested collections, a comment whose `#` follows the text before it
+//! without a blank (`[a]#c`, `|#c`), and `- ?`. Some documents libyaml refused are valid
+//! YAML 1.2 and read now. `tests/yaml_differential.rs` checks every YAML document of the
+//! repository, and the cases of the reader's review, against serde_yaml's
+//! recorded results, and lists each difference with its reason.
 //!
 //! Errors name the line and column of the input (`at line 3 column 7`) and,
 //! for a value of the wrong type, its path (`agents[0].model: ...`).

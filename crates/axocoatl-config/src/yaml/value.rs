@@ -6,6 +6,7 @@
 //! Apache-2.0, used here under Apache-2.0), so the checks that walk a
 //! configuration this way see what they saw before.
 
+use std::collections::HashSet;
 use std::fmt;
 
 use serde::de::{
@@ -151,9 +152,21 @@ impl<'de> Deserialize<'de> for Value {
 
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
                 let mut entries: Vec<(Value, Value)> = Vec::new();
+                // Text keys, the usual kind, are looked up by hash; other
+                // keys (numbers, which may be NaN, and collections) by
+                // comparison.
+                let mut text_keys = HashSet::new();
+                let mut other_keys: Vec<usize> = Vec::new();
                 while let Some(key) = map.next_key::<Value>()? {
-                    if entries.iter().any(|(existing, _)| *existing == key) {
+                    let duplicate = match &key {
+                        Value::String(text) => !text_keys.insert(text.clone()),
+                        _ => other_keys.iter().any(|&at| entries[at].0 == key),
+                    };
+                    if duplicate {
                         return Err(de::Error::custom(duplicate_key(&key)));
+                    }
+                    if !matches!(key, Value::String(_)) {
+                        other_keys.push(entries.len());
                     }
                     let value = map.next_value()?;
                     entries.push((key, value));

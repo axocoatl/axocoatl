@@ -25,6 +25,11 @@
 //! and column, except where `accepted_now` lists it, and a document libyaml
 //! parsed must still parse, except where `refused_now` lists it.
 //!
+//! `tests/yaml_golden/review_cases.json` holds the cases the reader's review
+//! tried, with what serde_yaml 0.9.34 made of each (recorded with serde_yaml
+//! outside the workspace) and, where the reader differs, how and why:
+//! [`yaml_reads_the_review_cases_as_recorded`] checks them.
+//!
 //! The corpus was recorded with serde_yaml while it was still a dependency
 //! (the node positions by the same walk, run against serde_yaml outside the
 //! workspace). It cannot be recorded again. When a configuration type
@@ -586,4 +591,141 @@ fn written_yaml_reads_back_for_every_recorded_document() {
     }
     assert!(checked > 1000, "only {checked} documents were written back");
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// What `tests/yaml_golden/review_cases.json` says of one document now, next
+/// to what serde_yaml 0.9.34 made of it.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ReviewNow {
+    /// The same value, or an error with a line and column where serde_yaml
+    /// gave an error too.
+    Same(String),
+    /// serde_yaml read it; it is refused now, with its position, rather than
+    /// read differently.
+    Refused { refused: String },
+    /// libyaml refused it; it is valid YAML 1.2 and reads now.
+    Accepted { accepted: String, value: Json },
+    /// serde_yaml read it wrongly; it reads as YAML says now.
+    Corrected { corrected: String, value: Json },
+}
+
+#[derive(Deserialize)]
+struct ReviewCase {
+    input: String,
+    serde_yaml: Json,
+    now: ReviewNow,
+}
+
+/// The message fragment each kind of refusal names.
+fn refusal_message(kind: &str) -> &'static str {
+    match kind {
+        // libyaml ended a name at a character other than a letter, digit,
+        // `-` or `_` (so `&a: v` was an anchor `a` on an empty key);
+        // granit-parser reads `a:` as the name.
+        "anchor-name" => "an anchor or alias name may hold only letters, digits, `-` and `_`",
+        // libyaml took `?` or `:` directly followed by text inside `[...]`
+        // or `{...}` as a key or value indicator; YAML 1.2 reads text.
+        "flow-indicator" => "inside `[...]` or `{...}`: write",
+        // libyaml kept the separator in the value as a line break of its
+        // own; YAML 1.2 does not break the line there.
+        "separator-in-value" => {
+            "a LINE SEPARATOR (U+2028) or PARAGRAPH SEPARATOR (U+2029) inside a value"
+        }
+        // libyaml read a second byte order mark into the first key.
+        "second-bom" => "a second byte order mark (U+FEFF) at the start of the input",
+        // libyaml skipped a byte order mark at the start of a line, or read
+        // one at the start of a value into the text.
+        "bom-inside" => "a BOM must not appear inside a document",
+        // libyaml took a `#` directly after `[`, `]`, `,`, `|` or another
+        // token as the start of a comment; YAML 1.2 needs a blank before
+        // it.
+        "comment-unseparated" => "comments must be separated from other tokens by whitespace",
+        // libyaml took `- ?` as an entry holding an empty key.
+        "indicator-unseparated" => "expected whitespace",
+        other => panic!("unknown refusal kind {other}"),
+    }
+}
+
+/// Whether `kind` is a known kind of document libyaml refused that YAML 1.2
+/// reads.
+fn known_acceptance(kind: &str) -> bool {
+    matches!(
+        kind,
+        // A tab as separation, on a blank or comment line, or ending the
+        // input after a block.
+        "tab"
+            // A byte order mark before `---` or a directive, or after `...`.
+            | "bom"
+            // `%YAML 1.3` and unknown directives, which are ignored.
+            | "directive"
+            // A non-ASCII implicit key of up to 1,024 characters (libyaml
+            // counted its limit in bytes).
+            | "long-key"
+            // An empty key or value: `: v`, `- :`, `[:]`, `[a:]`.
+            | "empty-key-or-value"
+            // A stream holding only `...`.
+            | "document-end"
+    )
+}
+
+/// Every case the review of the YAML reader tried, with what serde_yaml
+/// 0.9.34 made of each (recorded with serde_yaml outside the workspace):
+/// edge cases of block scalars, tags, anchors, byte order marks, line
+/// breaks, tabs, flow collections, documents and nesting, and a sample of
+/// generated documents. Each reads as serde_yaml read it, or differs in the
+/// way recorded with it.
+#[test]
+fn yaml_reads_the_review_cases_as_recorded() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/yaml_golden/review_cases.json");
+    let text = std::fs::read_to_string(path).expect("review cases");
+    let cases: Vec<ReviewCase> = serde_json::from_str(&text).expect("review cases parse");
+    let mut failures = Vec::new();
+    let mut same = 0usize;
+    for case in &cases {
+        let input = case.input.as_str();
+        let now = yaml::from_str::<Json>(input).map_err(|error| error.to_string());
+        let ok = match (&case.now, &now) {
+            (ReviewNow::Same(word), _) if word != "same" => false,
+            (ReviewNow::Same(_), Ok(value)) => {
+                same += 1;
+                case.serde_yaml.get("ok") == Some(value)
+            }
+            (ReviewNow::Same(_), Err(message)) => {
+                same += 1;
+                case.serde_yaml.get("err").is_some() && has_position(message)
+            }
+            (ReviewNow::Refused { refused }, Err(message)) => {
+                case.serde_yaml.get("ok").is_some()
+                    && message.contains(refusal_message(refused))
+                    && has_position(message)
+            }
+            (ReviewNow::Accepted { accepted, value }, Ok(now)) => {
+                known_acceptance(accepted) && case.serde_yaml.get("err").is_some() && value == now
+            }
+            // serde_yaml numbered anchors by how many names it had seen, so
+            // an alias after a redefined anchor and a new one named the new
+            // one.
+            (ReviewNow::Corrected { corrected, value }, Ok(now)) => {
+                corrected == "redefined-anchor"
+                    && case.serde_yaml.get("ok").is_some_and(|old| old != value)
+                    && value == now
+            }
+            _ => false,
+        };
+        if !ok {
+            failures.push(format!(
+                "input: {input:?}\nserde_yaml: {}\nnow: {now:?}",
+                case.serde_yaml
+            ));
+        }
+    }
+    assert!(same > 5000, "only {same} cases read as serde_yaml did");
+    assert!(
+        failures.is_empty(),
+        "{} of {} review cases differ from the record:\n\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n\n")
+    );
 }

@@ -110,14 +110,6 @@ impl Error {
             column: mark.column,
         })
     }
-
-    pub(crate) fn shared(self) -> Arc<ErrorImpl> {
-        if let ErrorImpl::Shared(err) = *self.0 {
-            err
-        } else {
-            Arc::from(self.0)
-        }
-    }
 }
 
 impl ErrorImpl {
