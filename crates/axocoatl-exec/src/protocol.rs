@@ -46,12 +46,16 @@ pub struct ExecRequest {
     pub write_restriction: Option<WriteRestriction>,
 }
 
-/// Writes are allowed only beneath `writable`; everything else, including the
-/// repository, is read-only. A writable entry equal to, inside, or containing
-/// a `protected` path is dropped, so a scratch or home directory can never
-/// reopen the protected tree. Reads and execution are unaffected. A
-/// read-only helper's command ([`HelperView`]) gets none of `writable`: only
-/// its own scratch directory and a few devices.
+/// Writes are allowed only beneath `writable` and beneath a scratch directory
+/// the supervisor makes for the command (its `TMPDIR`: `0700`, the command's
+/// user's, outside every `protected` path, removed when the command ends);
+/// everything else, including the repository, is read-only. A writable entry
+/// equal to, inside, or containing a `protected` path is dropped, so a
+/// scratch or home directory can never reopen the protected tree, and a
+/// repository under `/tmp` keeps `/tmp` itself read-only. Reads and
+/// execution are unaffected. A read-only helper's command ([`HelperView`])
+/// gets none of `writable`: only its own scratch directory and a few
+/// devices.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WriteRestriction {

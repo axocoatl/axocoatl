@@ -321,6 +321,14 @@ async fn ready_does_not_dispatch_and_prelaunch_cancel_returns_exact_settlement()
     .await;
 }
 
+/// A read-only command writes nothing in its repository, wherever that is,
+/// and writes its own scratch directory, `$TMPDIR`, which the supervisor
+/// makes for it (`0700`, the command's user's, outside the repository) and
+/// removes when it ends. With the repository under `/tmp`, `/tmp` itself
+/// stays read-only to it; with the repository elsewhere, `/tmp` is one of
+/// its writable roots. The Workspace is mounted at its host path, which may
+/// or may not lie under `/tmp`, so the second command protects a repository
+/// made under the container's `/tmp`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires an explicit prepared Podman image, expected USER uid, and configured connection"]
 async fn a_read_only_command_cannot_write_the_repository_but_keeps_scratch() {
@@ -328,21 +336,78 @@ async fn a_read_only_command_cannot_write_the_repository_but_keeps_scratch() {
         let sandbox = fixture.start().await;
         std::fs::write(fixture.workspace.join("owned.js"), "before").unwrap();
         let root = sandbox.root().to_string_lossy().into_owned();
-        let mut input = request(
-            "read-only-route",
-            "printf changed > owned.js; mkdir created; ln -s /etc/passwd link; \
-             printf ok > /tmp/scratch-ok; cat /tmp/scratch-ok; cat owned.js",
-            30_000,
-        );
-        input.write_restriction = Some(axocoatl_exec::protocol::WriteRestriction {
-            writable: vec!["/tmp".into(), "/dev".into(), "$HOME".into()],
-            protected: vec![root],
-            deny_network: false,
-        });
-        let prepared = sandbox.prepare_supervised_command(input).await.unwrap();
-        let execution = prepared.dispatch().unwrap().finish().await.unwrap();
-        let (stdout, _) = finished(&execution, &ProcessOutcome::Exited { code: 0 }, true);
-        assert_eq!(stdout.retained_bytes(4096).unwrap(), b"okbefore");
+        let in_tmp = format!("/tmp/axo-repository-{}", std::process::id());
+        let made = sandbox
+            .exec(
+                &["sh", "-c", &format!("mkdir {in_tmp} && printf before > {in_tmp}/owned.js")],
+                COMMAND_TIMEOUT,
+            )
+            .await
+            .unwrap();
+        assert_eq!(made.exit_code, 0, "{}", made.stderr);
+        for (index, repository) in [root.clone(), in_tmp.clone()].into_iter().enumerate() {
+            let tmp_writable = !repository.starts_with("/tmp/");
+            let mut input = request(
+                &format!("read-only-route-{index}"),
+                &format!(
+                    "cd {repository} || exit 9; \
+                     printf changed > owned.js; mkdir created; ln -s /etc/passwd link; \
+                     echo \"tmpdir=$TMPDIR\"; stat -c 'mode=%a uid=%u' \"$TMPDIR\"; \
+                     printf ok > \"$TMPDIR/scratch-ok\"; echo \"scratch=$(cat \"$TMPDIR/scratch-ok\")\"; \
+                     (printf x > /tmp/axo-probe-{index}) 2>/dev/null; echo \"tmp=$?\"; \
+                     rm -f /tmp/axo-probe-{index}; echo \"owned=$(cat owned.js)\""
+                ),
+                30_000,
+            );
+            input.write_restriction = Some(axocoatl_exec::protocol::WriteRestriction {
+                writable: vec!["/tmp".into(), "/dev".into(), "$HOME".into()],
+                protected: vec![repository.clone()],
+                deny_network: false,
+            });
+            let prepared = sandbox.prepare_supervised_command(input).await.unwrap();
+            let execution = prepared.dispatch().unwrap().finish().await.unwrap();
+            let (stdout, _) = finished(&execution, &ProcessOutcome::Exited { code: 0 }, true);
+            let stdout = String::from_utf8(stdout.retained_bytes(4096).unwrap()).unwrap();
+            let lines: Vec<&str> = stdout.lines().collect();
+            let scratch = lines
+                .iter()
+                .find_map(|line| line.strip_prefix("tmpdir="))
+                .unwrap_or_else(|| panic!("{stdout}"));
+            assert!(
+                scratch.starts_with("/tmp/axocoatl-scratch."),
+                "{repository}: {stdout}"
+            );
+            for expected in [
+                format!("mode=700 uid={}", fixture.expected_uid),
+                "scratch=ok".into(),
+                "owned=before".into(),
+            ] {
+                assert!(lines.contains(&expected.as_str()), "{repository}: {expected}: {stdout}");
+            }
+            let probe = lines
+                .iter()
+                .find(|line| line.starts_with("tmp="))
+                .unwrap_or_else(|| panic!("{stdout}"));
+            assert_eq!(*probe == "tmp=0", tmp_writable, "{repository}: {stdout}");
+            let after = sandbox
+                .exec(
+                    &[
+                        "sh",
+                        "-c",
+                        &format!(
+                            "cat {repository}/owned.js; for p in created link; do \
+                               test -e {repository}/$p || test -L {repository}/$p && echo \" $p\"; done; \
+                             test -e {scratch} && echo ' scratch-left'; \
+                             test -e /tmp/axo-probe-{index} && echo ' probe-left'; true"
+                        ),
+                    ],
+                    COMMAND_TIMEOUT,
+                )
+                .await
+                .unwrap();
+            assert_eq!(after.exit_code, 0, "{}", after.stderr);
+            assert_eq!(after.stdout, "before", "{repository}");
+        }
         assert_eq!(
             std::fs::read_to_string(fixture.workspace.join("owned.js")).unwrap(),
             "before"

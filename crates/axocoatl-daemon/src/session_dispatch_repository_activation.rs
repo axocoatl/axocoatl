@@ -899,8 +899,9 @@ fn restriction_unavailable(request: &ExecRequest, outcome: &ProcessOutcome) -> b
             && message.starts_with("write restriction unavailable"))
 }
 
-/// Runs `"$@"` with a fresh home directory of its own under `$TMPDIR` (a
-/// hardened container's helper gets one of its own from the supervisor, the
+/// Runs `"$@"` with a fresh home directory of its own under `$TMPDIR` (the
+/// supervisor gives every restricted command a scratch directory of its own
+/// there, outside the repository, and for a hardened container's helper the
 /// only temporary directory it may read back) or `/tmp`, removed when it
 /// ends, in place of the Session's shared one.
 const SCRATCH_HOME: &str = "home=$(mktemp -d \"${TMPDIR:-/tmp}/axocoatl-home.XXXXXX\") || exit 125
