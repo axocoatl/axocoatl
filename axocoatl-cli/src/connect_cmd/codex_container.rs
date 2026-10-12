@@ -7,9 +7,11 @@
 //! root, by its exact image id; when there is none (or Podman no longer has
 //! it), it is built with the same recipe machinery first. The container:
 //!
-//! - runs detached with `--rm` and `--timeout` [`MAX_LIFETIME_SECS`], so
-//!   Podman stops and removes it even when Axocoatl is killed, and Axocoatl
-//!   removes it (`podman rm --force`) on every path ([`Container`]);
+//! - runs detached with `--rm` and `--timeout` set to the sign-in time
+//!   (`--sign-in-timeout`, 1 to [`MAX_SIGN_IN_MINUTES`] minutes,
+//!   [`DEFAULT_SIGN_IN_MINUTES`] by default), so Podman stops and removes it
+//!   even when Axocoatl is killed, and Axocoatl removes it (`podman rm
+//!   --force`) on every path ([`Container`]);
 //! - has a private `CODEX_HOME` on a `0700` tmpfs ([`CONTAINER_HOME`]), file
 //!   credential storage forced, a read-only root file system, no
 //!   capabilities, no new privileges, a non-root user, no log driver, no
@@ -76,12 +78,26 @@ pub(crate) const CONTAINER_HOME: &str = "/codex-home";
 pub(crate) const ROLE_LABEL: &str = "io.axocoatl.role=connect-codex";
 /// Login containers' names: this, then a random part.
 pub(crate) const NAME_PREFIX: &str = "axocoatl-connect-codex-";
-/// Podman stops (and so removes) a login container this long after it
-/// starts, whatever happens to Axocoatl: longer than a sign-in takes (a
-/// device code expires after 15 minutes).
-pub(crate) const MAX_LIFETIME_SECS: u64 = 30 * 60;
-/// [`MAX_LIFETIME_SECS`] as a duration.
-pub(crate) const MAX_LIFETIME: Duration = Duration::from_secs(MAX_LIFETIME_SECS);
+/// Without `--sign-in-timeout`, Podman stops (and so removes) a login
+/// container this many minutes after it starts, whatever happens to
+/// Axocoatl: longer than a sign-in takes (a device code expires after 15
+/// minutes).
+pub(crate) const DEFAULT_SIGN_IN_MINUTES: u64 = 30;
+/// The longest `--sign-in-timeout`, in minutes.
+pub(crate) const MAX_SIGN_IN_MINUTES: u64 = 60;
+/// [`DEFAULT_SIGN_IN_MINUTES`] in seconds.
+pub(crate) const DEFAULT_LIFETIME_SECS: u64 = DEFAULT_SIGN_IN_MINUTES * 60;
+/// [`DEFAULT_LIFETIME_SECS`] as a duration.
+pub(crate) const DEFAULT_LIFETIME: Duration = Duration::from_secs(DEFAULT_LIFETIME_SECS);
+
+/// The login container's lifetime for `--sign-in-timeout minutes` (1 to
+/// [`MAX_SIGN_IN_MINUTES`]; clap refuses any other value first), or the
+/// default without it.
+pub(crate) fn sign_in_lifetime(minutes: Option<u64>) -> Duration {
+    minutes.map_or(DEFAULT_LIFETIME, |minutes| {
+        Duration::from_secs(minutes.clamp(1, MAX_SIGN_IN_MINUTES) * 60)
+    })
+}
 /// The user the container runs as (`node` in the recipe image's base).
 pub(crate) const CONTAINER_USER: &str = "1000:1000";
 
@@ -351,7 +367,7 @@ pub(crate) struct Login {
     pub(crate) podman: PathBuf,
     /// The `codex` recipe image's id.
     pub(crate) image: String,
-    /// How long Podman lets the container live ([`MAX_LIFETIME`]).
+    /// How long Podman lets the container live ([`sign_in_lifetime`]).
     pub(crate) lifetime: Duration,
     /// What opens the sign-in page on this computer (`None` with
     /// `--no-browser`, or when there is no opener).
@@ -359,11 +375,16 @@ pub(crate) struct Login {
 }
 
 impl Login {
-    pub(crate) fn new(podman: PathBuf, image: String, opener: Option<Opener>) -> Self {
+    pub(crate) fn new(
+        podman: PathBuf,
+        image: String,
+        lifetime: Duration,
+        opener: Option<Opener>,
+    ) -> Self {
         Self {
             podman,
             image,
-            lifetime: MAX_LIFETIME,
+            lifetime,
             opener,
         }
     }

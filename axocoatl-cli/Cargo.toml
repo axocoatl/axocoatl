@@ -48,9 +48,17 @@ rustix = { version = "1.1.4", features = ["termios", "event", "fs"] }
 unicode-width = "0.2"
 zeroize = "1"
 bytes = "1.9"
+# `axocoatl connect codex --refresh` and `--status`: times in local time.
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.27"
+# Unsigned JWTs for the fake ChatGPT sign-ins `connect codex --refresh`
+# and `--status` are tested with.
+base64 = { workspace = true }
+# `connect codex --refresh`'s end-to-end test serves the daemon's API router
+# in the test process.
+axum = { workspace = true }
 wiremock = { workspace = true }
 # The fake HTTPS endpoint `connect claude-code`'s tests verify against, and
 # the pseudo-terminal that stands in for the user's terminal.

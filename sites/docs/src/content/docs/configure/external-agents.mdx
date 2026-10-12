@@ -117,6 +117,9 @@ Run it again whenever the token expires or is revoked.
 axocoatl connect codex                 # signs in in your browser
 axocoatl connect codex --device-auth   # shows a code to enter on another device
 axocoatl connect codex --no-browser    # does not open the sign-in page for you
+axocoatl connect codex --sign-in-timeout 10   # gives the sign-in 10 minutes, not 30
+axocoatl connect codex --status        # shows the stored sign-in, never a token
+axocoatl connect codex --refresh       # asks the running daemon to refresh it now
 ```
 
 This runs the official `codex login` for you and stores the ChatGPT sign-in it makes as
@@ -142,12 +145,14 @@ throwaway container.
   `--http-proxy=false`). It is on Podman's default bridge network, not on Axocoatl's
   egress routes: `codex login` reaches `auth.openai.com` directly, without a proxy. Where
   that needs a proxy, sign in with `--codex PATH` instead, which keeps your proxy
-  variables. It holds no Axocoatl secret, and Podman stops and removes it after 30
-  minutes at most, even if Axocoatl is killed. The command says so when the sign-in
-  starts (`You have 30 minutes to finish signing in.`). When the 30 minutes run out
-  first, it says
+  variables. It holds no Axocoatl secret, and Podman stops and removes it when the sign-in time
+  has passed, even if Axocoatl is killed: 30 minutes, or 1 to 60 minutes with
+  `--sign-in-timeout MINUTES` (it goes to the container's `podman run --timeout`; it
+  does not go with `--codex PATH`, where no container runs). The command says so when the
+  sign-in starts (`You have 30 minutes to finish signing in.`, with the time chosen).
+  When the time runs out first, it says
   ``The Codex sign-in was not completed within 30 minutes; nothing was stored. Run
-  `axocoatl connect codex` again.`` and exits with code 2.
+  `axocoatl connect codex` again.`` (again with the time chosen) and exits with code 2.
 - **The browser sign-in** returns to `http://localhost:1455/auth/callback`, the address
   Codex prints. The container publishes that one port on your computer's loopback only
   (`127.0.0.1:1455`); inside it, a small forwarder passes each connection to Codex's
@@ -225,12 +230,52 @@ It needs an interactive terminal, and Podman (the first `podman` on `PATH`) unle
 always named `codex-chatgpt`, because that is the one the daemon refreshes. Like `recipe
 build`, it uses the data root of `--config` or `AXOCOATL_DATA_DIR`. Exit codes: 0 stored,
 2 `codex login` stored no ChatGPT sign-in (also when the sign-in was not completed within
-the login container's 30 minutes), 3 usage (no terminal, no Podman on `PATH`, a `--codex`
-that is not an executable, or port 1455 in use), 5 the data directory, the secret store,
-Podman, the image build, the pseudo-terminal or `auth.json` failed (also when
-`auth.json` is a link, or the login container stopped before its 30 minutes and before
-the sign-in was read), 6 interrupted by a signal. Nothing is stored unless it exits 0.
-Run it again when a run says the sign-in was refused.
+the sign-in time), 3 usage (no terminal, no Podman on `PATH`, a `--codex` that is not an
+executable, port 1455 in use, or a command line `axocoatl connect` does not take, such
+as `--sign-in-timeout 0`), 5 the data directory, the secret store, Podman, the image
+build, the pseudo-terminal or `auth.json` failed (also when `auth.json` is a link, or
+the login container stopped before the sign-in time was up and before the sign-in was
+read), 6 interrupted by a signal. Nothing is stored unless it exits 0. Run it again when
+a run says the sign-in was refused.
+
+#### Check and refresh the sign-in
+
+`axocoatl connect codex --status` reads the stored sign-in from the data root (the
+daemon need not run) and prints whether one is stored, its ChatGPT account id by its
+last four characters only (`…4d2f`), when its access token expires (the token's JWT
+`exp`, in your computer's time zone, or that it has expired) and when its tokens were
+last refreshed or, when there has been no refresh since, signed in. It never prints a
+token. Exit codes: 0 a sign-in is stored, 2 none is, 5 the stored value cannot be read
+or is not a sign-in `connect codex` stored.
+
+`axocoatl connect codex --refresh` asks the running daemon to refresh the sign-in now,
+even when it is not due. It reaches the daemon the way `axocoatl run` does: at `--url`,
+`AXOCOATL_URL` or the server address in `--config`, with `AXOCOATL_TOKEN` or the local
+API token in the data root. The daemon refreshes through `POST
+/api/connect/codex/refresh` with the same broker that refreshes the sign-in before a
+request (below): the same request to OpenAI, the same rotation and atomic write under
+the secret store's lock, the same remembered refusal, one refresh at a time with the
+route's own. The command never sends a refresh token itself. The daemon records the
+refresh asked for and how it ended in its log, without a value. The command prints, for
+example,
+
+```text
+✓ Refreshed the ChatGPT sign-in at 2026-10-12 16:03:00 +02:00 and stored it as secret codex-chatgpt (no token was shown). The new access token expires at 2026-10-22 16:03:00 +02:00 (in 10 days).
+```
+
+Exit codes: 0 refreshed (also when a sign-in that `axocoatl connect codex` stored while
+the refresh ran is kept instead of the new tokens, which the command says), 1 OpenAI
+refused the refresh for good (sign in again with `axocoatl connect codex`; asked again,
+the daemon does not send that refresh token again and says so), 2 no sign-in is stored,
+3 usage, 4 the refresh could not be completed (the token endpoint could not be reached,
+did not answer in time, or gave an answer that is neither new tokens nor a refusal; the
+stored sign-in is unchanged), 5 anything else (the stored value is not a sign-in, the
+daemon refused the API token, the new tokens could not be written, which the daemon
+then keeps in memory and writes again on their next use, or a daemon older than 1.3.1),
+7 no daemon answers at that address (start it with `axocoatl serve`). The route answers
+only an authenticated request from this computer: a daemon that accepts API requests
+without authentication (`server.auth.allow_unauthenticated`) refuses it with `403`, and
+so does any daemon for a request from an address that is not a loopback address.
 
 ### Other credentials: `axocoatl secret set`
 
@@ -427,6 +472,8 @@ daemon keeps the token current on your computer, the way Codex 0.160.1 does:
   it again on each request for as long as the file still holds the sign-in it replaced,
   so the refresh token OpenAI already rotated is not sent again; a daemon restarted before
   it was written has only the old one, which OpenAI may refuse as reused; then connect again.
+- **On request**, with `axocoatl connect codex --refresh` (above), it refreshes the same
+  way, whether or not the token is due.
 - **After a `401`** to a request sent with the current token, it refreshes the same way,
   so the next request carries the new token. The `401` itself goes back to Codex: the
   route does not send the request again. When Codex ends with that error, the run's

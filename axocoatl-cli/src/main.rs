@@ -380,9 +380,31 @@ enum TokenCommands {
     },
 }
 
+/// clap's own usage errors exit with code 2, which `axocoatl connect` uses
+/// for "no token" (claude-code) and "no sign-in" (codex): a usage error of
+/// `connect` exits with its usage code, 3, instead. Help and the version
+/// still exit 0.
+fn exit_for_parse_error(error: clap::Error, first_argument: Option<&std::ffi::OsStr>) -> ! {
+    use clap::error::ErrorKind;
+    let connect = first_argument.is_some_and(|argument| argument == "connect");
+    if connect
+        && !matches!(
+            error.kind(),
+            ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+        )
+    {
+        let _ = error.print();
+        std::process::exit(connect_cmd::exit::USAGE);
+    }
+    error.exit()
+}
+
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => exit_for_parse_error(error, std::env::args_os().nth(1).as_deref()),
+    };
 
     // Initialize tracing. Logs go to stderr so they never collide with a
     // command's stdout output — in particular `mcp serve`, whose stdout is the

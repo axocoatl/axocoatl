@@ -135,6 +135,10 @@
               credential its route sends.</li>
           <li>The daemon refreshes the sign-in before it expires and after a
               <code>401</code>, stores the rotated tokens and never logs a token.</li>
+          <li><code>axocoatl connect codex --status</code> shows the stored sign-in, and
+              <code>--refresh</code> asks the running daemon to refresh it now; neither shows
+              a token. <code>--sign-in-timeout</code> gives the sign-in 1 to 60 minutes
+              (30 by default).</li>
         </ul>
 
         <h3>Measured</h3>

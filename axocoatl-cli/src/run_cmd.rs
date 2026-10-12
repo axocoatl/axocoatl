@@ -323,7 +323,22 @@ impl Daemon {
         })
     }
 
-    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+    /// A daemon at `base` with `token` (tests).
+    #[cfg(test)]
+    pub(crate) fn for_test(base: &str, token: Option<&str>) -> Self {
+        Self {
+            base: base.trim_end_matches('/').to_string(),
+            token: token.map(str::to_string),
+            client: reqwest::Client::new(),
+        }
+    }
+
+    /// The daemon's URL, without a trailing `/`.
+    pub(crate) fn base(&self) -> &str {
+        &self.base
+    }
+
+    pub(crate) fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         let builder = self.client.request(method, format!("{}{path}", self.base));
         match &self.token {
             Some(token) => builder.bearer_auth(token),
