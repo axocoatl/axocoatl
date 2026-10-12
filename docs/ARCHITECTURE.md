@@ -1478,7 +1478,10 @@ restriction below and `write_file` and `edit_file` are withheld.
   `TMPDIR` (a helper's shell also as `HOME`): `0700`, owned by the user the command runs
   as, in the first of `/tmp`, `/var/tmp` and `/dev/shm` that does not lie inside the
   repository (judged by name and by where links lead), and removed when the command tree
-  has ended, with any directory in it the command left without rights for its owner.
+  has ended, also when the command left directories in it (up to 256 levels deep) without
+  rights for its owner. A command that may write the directory holding its scratch
+  directory (such as `/tmp` when the repository is elsewhere) can move it aside first;
+  what it moves stays, as any file it writes there would.
   When none of the three can hold it, the supervisor refuses to launch the command. A
   repository under `/tmp` therefore keeps `/tmp` itself read-only to the command, which
   still writes its temporary files. Every TCP bind and connect is refused on any address, loopback included (Landlock network

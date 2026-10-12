@@ -288,7 +288,8 @@ not `/tmp`) and a temporary directory of the command's own are writable; with
 `/dev/null`, `/dev/zero`, `/dev/tty` and `/dev/urandom`. The temporary directory is the
 command's `TMPDIR`: Axocoatl's execution supervisor makes it for each command, private to
 the user the command runs as and outside the repository, and removes it when the command
-ends. Landlock does not cover a file's permission bits, owner or
+ends (a command that may write the directory holding it, such as `/tmp` when the
+repository is elsewhere, can move it aside first, as it can leave any file there). Landlock does not cover a file's permission bits, owner or
 timestamps. A helper that runs as root, as under `sandbox.workload.mode: image` with an
 image whose user is root, can change them; on macOS, where the Podman machine's shared
 folder reports every file as the caller's, any helper's shell can change permission

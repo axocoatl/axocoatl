@@ -114,11 +114,11 @@ architecture the supervisor refuses those two restricted commands (as it does on
 kernel without Landlock) and the two tests fail. Run each architecture on a Linux kernel
 of that architecture; a Podman machine on Apple silicon is aarch64. A virtual machine
 that emulates the other architecture as a whole computer (QEMU without hardware
-acceleration, booting a Linux kernel of that architecture) does provide Landlock: an
-x86_64 supervisor of 1.3.1's development, built before restricted commands got a scratch
-directory of their own, passed all eight tests that way on an Apple silicon Mac, in an
-x86_64 Alpine 3.22 virtual machine (Linux 6.12) with Podman installed in it, running a
-test binary cross-built for `x86_64-unknown-linux-musl`.
+acceleration, booting a Linux kernel of that architecture) does provide Landlock: the
+1.3.1 x86_64 supervisor passed all eight tests that way on an Apple silicon Mac, in an
+x86_64 Alpine 3.22 virtual machine (Linux 6.12) with Podman 5.6 installed in it, in each
+x86_64 image with rootless Podman and with Podman as root, running a test binary
+cross-built for `x86_64-unknown-linux-musl`.
 
 The test's temporary directory (`TMPDIR`, where each test's Workspace is created) may be
 anywhere, `/tmp` included. The test mounts the Workspace in the container at its own path,

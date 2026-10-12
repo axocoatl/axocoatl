@@ -166,10 +166,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TMPDIR`: `0700`, owned by the user the command runs as, in the first of `/tmp`,
   `/var/tmp` and `/dev/shm` that does not lie inside the repository (judged by name and
   by where links lead), writable to the command whatever its restriction's writable
-  roots, and removed when the command tree has ended, with any directory in it the
-  command left without rights for its owner. `/tmp` itself stays read-only to the command
-  when it contains the repository (a program that writes a fixed path there instead of
-  `$TMPDIR` still fails), and the repository stays read-only wherever it is. A
+  roots, and removed when the command tree has ended, also when the command left
+  directories in it (up to 256 levels deep) without rights for its owner; a command that
+  may write the directory holding it (such as `/tmp` when the repository is elsewhere) can
+  move it aside first, and what it moves stays, as any file it writes there would. `/tmp`
+  itself stays read-only to the command when it contains the repository (a program that
+  writes a fixed path there instead of `$TMPDIR` still fails), and the repository stays
+  read-only wherever it is. A
   read-only helper's shell in a hardened container already had such a directory in
   `/tmp` (its `HOME` and `TMPDIR`); it now gets it the same way, so a Workspace that is
   `/tmp` itself puts it in `/var/tmp` instead of refusing the launch. A supervisor that
@@ -259,14 +262,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   support, which no Axocoatl crate turns on, so no Axocoatl build compiled it.
 
 ### Measured
-- On 2026-10-12 the rebuilt aarch64 supervisor, with each restricted command's own
-  scratch directory, passed all eight protocol and process-lifecycle tests in the Alpine
-  and Debian aarch64 images, as root and as a non-root user, on a Linux 7.1 aarch64
-  kernel with rootless Podman: 32 of 32. Its read-only test protects the Workspace and
-  then a repository under the container's `/tmp`. The same day an x86_64 supervisor
-  built before that change passed all eight in the four x86_64 images on an x86_64 Linux
-  6.12 kernel (Alpine's, with Landlock, in a QEMU virtual machine emulating an x86_64
-  computer), with rootless Podman and with Podman as root: 64 of 64.
+- On 2026-10-12 both rebuilt supervisors, with each restricted command's own scratch
+  directory, passed all eight protocol and process-lifecycle tests in the Alpine and
+  Debian images of their architecture, as root and as a non-root user: the aarch64 one on
+  a Linux 7.1 aarch64 kernel with rootless Podman (32 of 32), and the x86_64 one on an
+  x86_64 Linux 6.12 kernel (Alpine's, with Landlock, in a QEMU virtual machine emulating
+  an x86_64 computer on an Apple silicon Mac) with rootless Podman and with Podman as root
+  (64 of 64). The read-only test protects the Workspace and then a repository under the
+  container's `/tmp`.
 - On 2026-10-11 a `fix` run of the pinned Codex 0.160.1 (`gpt-6-luna`) with a ChatGPT
   plan passed through Axocoatl 1.3.1-rc2 against OpenAI's service: Codex's 6 requests to
   `chatgpt.com/backend-api/codex/responses` went through the route with the sign-in the
