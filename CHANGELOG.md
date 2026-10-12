@@ -155,6 +155,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supervisor's protocol and process-lifecycle tests in each, checking that every image
   receives the embedded payload of its architecture.
 
+### Security
+- Update `quinn-proto` in `Cargo.lock` to 0.11.18 for RUSTSEC-2026-0338,
+  RUSTSEC-2026-0340 and RUSTSEC-2026-0343 (a remote peer or a sender's own datagrams
+  can make it panic). It is listed in the lockfile through `reqwest`'s optional HTTP/3
+  support, which no Axocoatl crate turns on, so no Axocoatl build compiled it.
+
 ### Measured
 - On 2026-10-12 the rebuilt aarch64 supervisor passed all eight protocol and
   process-lifecycle tests in the Alpine and Debian aarch64 images, as root and as a
