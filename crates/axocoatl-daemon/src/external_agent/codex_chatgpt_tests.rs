@@ -687,3 +687,6 @@ fn storing_and_removing_a_secret_wait_for_the_lock() {
 
 #[path = "codex_chatgpt_route_tests.rs"]
 mod route;
+
+#[path = "codex_chatgpt_refresh_now_tests.rs"]
+mod refresh_now;

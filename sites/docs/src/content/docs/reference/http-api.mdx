@@ -211,6 +211,19 @@ A Session that a run created carries `loadout`:
 `{run_id, loadout: {id, version, kind, digest, builtin}, network, workload}`. Every other
 Session has no `loadout` field, and its behavior is unchanged.
 
+## The ChatGPT sign-in
+
+The ChatGPT sign-in [`axocoatl connect codex`](/configure/external-agents/#codex-with-a-chatgpt-plan-axocoatl-connect-codex)
+stores, which [`axocoatl connect codex --refresh`](/configure/external-agents/#check-and-refresh-the-sign-in)
+asks the daemon to refresh. The route answers only an authenticated request from a
+loopback address: `403` with `{"error": "…"}` when the daemon accepts API requests
+without authentication (`server.auth.allow_unauthenticated`), and for a request from any
+other address.
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| POST | `/api/connect/codex/refresh` | No body. Refresh the stored sign-in now, whether or not it is due, with the broker that refreshes it before a request (the same request to OpenAI, rotation, atomic write under the secret store's lock and remembered refusal, one refresh at a time). Returns `{outcome, …}`, never a token: `refreshed` (`200`, `{refreshed_at_ms, expires_at_ms}`; `expires_at_ms` is the new access token's JWT `exp` in milliseconds, `null` without one), `replaced` (`200`, the same fields for a sign-in `axocoatl connect codex` stored while the refresh ran, kept instead of the new tokens), `not_stored` (`500`, the times and `message`: the new tokens could not be written; the daemon uses them from memory and writes them again on their next use), `no_sign_in` (`404`, `message`), `unusable` (`422`, `message`: the stored value cannot be read or is not a sign-in), `refused` (`409`, `{message, sent}`: OpenAI refused the refresh token for good; `sent` is false when it had already refused it and it was not sent again), `failed` (`502`, `message`: the token endpoint could not be reached, did not answer in time, or gave an answer that is neither new tokens nor a refusal; nothing changed), `unavailable` (`503`, `message`: the daemon has no broker for the sign-in). The daemon logs the request and its outcome without a value |
+
 ## MCP, configured Skills, and event projections
 
 | Method | Path | Request / behavior |

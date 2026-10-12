@@ -120,6 +120,9 @@ pub(crate) struct SessionEgressPoints {
     /// Credentials the daemon keeps current itself: the ChatGPT sign-in
     /// stored as `codex-chatgpt` in the data root, refreshed by its broker.
     managed: StdMutex<Arc<crate::egress_broker::rules::ManagedCredentials>>,
+    /// The ChatGPT sign-in's broker in `managed`, which `axocoatl connect
+    /// codex --refresh` asks to refresh now (`None` without HTTPS).
+    chatgpt: StdMutex<Option<Arc<crate::external_agent::codex_chatgpt::ChatgptBroker>>>,
     /// What each loadout Session adds to the lists in force (its loadout's
     /// hosts and routes), applied whenever its decision point opens or the
     /// lists reload. Other Sessions never see these entries.
@@ -151,9 +154,9 @@ impl SessionEgressPoints {
         sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>>,
         workspaces: WorkspaceRoots,
     ) -> Self {
-        let managed = Arc::new(crate::external_agent::codex_chatgpt::managed_credentials(
-            data_root.path(),
-        ));
+        let chatgpt = crate::external_agent::codex_chatgpt::broker_for_data_root(data_root.path());
+        let managed =
+            Arc::new(crate::external_agent::codex_chatgpt::managed_credentials_of(chatgpt.clone()));
         Self {
             lifecycles,
             points,
@@ -164,6 +167,7 @@ impl SessionEgressPoints {
             upstream: Arc::new(crate::egress_broker::UpstreamConnector::new()),
             workspaces,
             managed: StdMutex::new(managed),
+            chatgpt: StdMutex::new(chatgpt),
             overlays: StdMutex::new(HashMap::new()),
             #[cfg(test)]
             test_upstreams: StdMutex::new(None),
@@ -190,6 +194,31 @@ impl SessionEgressPoints {
             .managed
             .lock()
             .unwrap_or_else(|poison| poison.into_inner()) = Arc::new(managed);
+    }
+
+    /// Use `broker` as the ChatGPT sign-in's broker from now on, for
+    /// decision points opened from now on and for `axocoatl connect codex
+    /// --refresh` (tests: a broker refreshing at a local fake token
+    /// endpoint).
+    fn use_chatgpt_broker(&self, broker: Arc<crate::external_agent::codex_chatgpt::ChatgptBroker>) {
+        *self
+            .managed
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Arc::new(
+            crate::external_agent::codex_chatgpt::managed_credentials_of(Some(broker.clone())),
+        );
+        *self
+            .chatgpt
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(broker);
+    }
+
+    /// The ChatGPT sign-in's broker, when the daemon has one.
+    fn chatgpt_broker(&self) -> Option<Arc<crate::external_agent::codex_chatgpt::ChatgptBroker>> {
+        self.chatgpt
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
     }
 
     fn managed(&self) -> Arc<crate::egress_broker::rules::ManagedCredentials> {
@@ -374,6 +403,40 @@ fn proposal_target(proposal_id: &str) -> Result<(), DaemonError> {
 }
 
 impl AxocoatlDaemon {
+    /// Refresh the stored ChatGPT sign-in now (`POST
+    /// /api/connect/codex/refresh`, `axocoatl connect codex --refresh`),
+    /// through the same broker the `chatgpt.com` route uses
+    /// ([`crate::external_agent::codex_chatgpt::ChatgptBroker::refresh_now`]).
+    pub async fn refresh_codex_chatgpt_sign_in(
+        &self,
+    ) -> crate::external_agent::codex_chatgpt::RefreshReport {
+        match self.egress_points.chatgpt_broker() {
+            Some(broker) => broker.refresh_now().await,
+            None => {
+                let message = "this daemon has no broker for the ChatGPT sign-in (HTTPS could                                not be set up; the daemon log says why)"
+                    .to_string();
+                tracing::warn!(%message, "ChatGPT sign-in refresh on request refused");
+                crate::external_agent::codex_chatgpt::RefreshReport::Unavailable { message }
+            }
+        }
+    }
+
+    /// Refresh the ChatGPT sign-in at `url`, a fake token endpoint on this
+    /// computer's loopback, from now on: for tests that drive this daemon
+    /// through its API. Any other address is refused and changes nothing.
+    #[doc(hidden)]
+    pub fn use_chatgpt_token_endpoint_for_tests(&self, url: &str) -> Result<(), String> {
+        let endpoint =
+            crate::external_agent::codex_chatgpt::TokenEndpoint::loopback_for_tests(url)?;
+        self.egress_points.use_chatgpt_broker(Arc::new(
+            crate::external_agent::codex_chatgpt::ChatgptBroker::new(
+                self.egress_points.data_root.path(),
+                endpoint,
+            ),
+        ));
+        Ok(())
+    }
+
     /// Read the configuration file this daemon was started with again,
     /// validate all of it, and apply its allowlists and routes
     /// (`sandbox.egress.allow`, `sandbox.egress.private_destinations`,

@@ -1421,6 +1421,7 @@ fn connect_codex_runs_codex_login_with_file_storage_and_no_other_credentials() {
         codex,
         config,
         no_browser,
+        ..
     } = parsed.command
     else {
         panic!("codex")
@@ -1451,7 +1452,7 @@ fn connect_codex_runs_codex_login_with_file_storage_and_no_other_credentials() {
 /// The login container: the pinned image by id, never pulled; a private
 /// `0700` tmpfs `CODEX_HOME` and nothing from this computer mounted; no
 /// capabilities, a read-only root, a non-root user, no log; stopped and
-/// removed by Podman after at most [`codex_container::MAX_LIFETIME_SECS`];
+/// removed by Podman after at most [`codex_container::DEFAULT_LIFETIME_SECS`];
 /// for the browser sign-in exactly one port published, on this computer's
 /// loopback only, and with `--device-auth` none.
 #[test]
@@ -1461,8 +1462,8 @@ fn the_login_container_publishes_only_the_callback_on_loopback_and_mounts_nothin
     let name = container_name();
     assert!(name.starts_with(NAME_PREFIX));
     assert_ne!(name, container_name());
-    let browser = run_args(&name, image, false, MAX_LIFETIME);
-    let device = run_args(&name, image, true, MAX_LIFETIME);
+    let browser = run_args(&name, image, false, DEFAULT_LIFETIME);
+    let device = run_args(&name, image, true, DEFAULT_LIFETIME);
     for args in [&browser, &device] {
         assert_eq!(
             &args[..5],
@@ -1627,7 +1628,7 @@ fn the_container_intro_does_not_promise_a_browser_codex_cannot_open() {
     );
     assert!(device.contains("enter the code it shows"), "{device}");
     assert_eq!(
-        codex_container::time_to_sign_in(codex_container::MAX_LIFETIME),
+        codex_container::time_to_sign_in(codex_container::DEFAULT_LIFETIME),
         "You have 30 minutes to finish signing in."
     );
 }
@@ -1665,9 +1666,13 @@ fn the_login_containers_podman_commands_run_in_their_own_process_group() {
             }
         }
     }
-    let container =
-        codex_container::Container::start(&podman, "image-id", true, codex_container::MAX_LIFETIME)
-            .unwrap();
+    let container = codex_container::Container::start(
+        &podman,
+        "image-id",
+        true,
+        codex_container::DEFAULT_LIFETIME,
+    )
+    .unwrap();
     assert!(container.read_auth_file().unwrap().is_none());
     drop(container);
     let ours = std::process::Command::new("ps")
@@ -1996,13 +2001,12 @@ impl ContainerFixture {
     }
 
     fn login(&self, opener: Option<browser::Opener>, lifetime: Duration) -> codex_container::Login {
-        let mut login = codex_container::Login::new(
+        codex_container::Login::new(
             self.root.join("bin/podman"),
             "0123456789abcdef".to_string(),
+            lifetime,
             opener,
-        );
-        login.lifetime = lifetime;
-        login
+        )
     }
 
     fn calls(&self) -> String {
@@ -2063,7 +2067,7 @@ async fn the_container_sign_in_page_is_opened_once_on_this_computer() {
     let fixture = ContainerFixture::new("ok");
     let (bin, log) = fake_opener(&fixture.root, 0);
     let opener = browser::Opener::find(Some(bin.as_os_str())).unwrap();
-    let login = fixture.login(Some(opener), codex_container::MAX_LIFETIME);
+    let login = fixture.login(Some(opener), codex_container::DEFAULT_LIFETIME);
     let (result, screen) = run_container_login(&fixture, login, false, browser::OPENED).await;
     let message = result.unwrap_or_else(|failure| panic!("{}", failure.message));
     assert!(
@@ -2109,7 +2113,7 @@ async fn the_device_page_is_opened_once_with_device_auth() {
     let fixture = ContainerFixture::new("ok");
     let (bin, log) = fake_opener(&fixture.root, 0);
     let opener = browser::Opener::find(Some(bin.as_os_str())).unwrap();
-    let login = fixture.login(Some(opener), codex_container::MAX_LIFETIME);
+    let login = fixture.login(Some(opener), codex_container::DEFAULT_LIFETIME);
     let (result, screen) = run_container_login(&fixture, login, true, browser::OPENED).await;
     result.unwrap_or_else(|failure| panic!("{}", failure.message));
     assert_eq!(opened(&log), format!("argc=1\narg={DEVICE_PAGE}\n"));
@@ -2140,7 +2144,7 @@ async fn no_browser_or_a_failing_opener_leaves_the_printed_address() {
 
     let fixture = ContainerFixture::new("ok");
     let (_, log) = fake_opener(&fixture.root, 0);
-    let login = fixture.login(None, codex_container::MAX_LIFETIME);
+    let login = fixture.login(None, codex_container::DEFAULT_LIFETIME);
     let (result, screen) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
     result.unwrap_or_else(|failure| panic!("{}", failure.message));
     assert_eq!(opened(&log), "");
@@ -2153,7 +2157,7 @@ async fn no_browser_or_a_failing_opener_leaves_the_printed_address() {
     let fixture = ContainerFixture::new("ok");
     let (bin, log) = fake_opener(&fixture.root, 1);
     let opener = browser::Opener::find(Some(bin.as_os_str())).unwrap();
-    let login = fixture.login(Some(opener), codex_container::MAX_LIFETIME);
+    let login = fixture.login(Some(opener), codex_container::DEFAULT_LIFETIME);
     let (result, screen) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
     result.unwrap_or_else(|failure| panic!("{}", failure.message));
     // Wait out the opener's answer, then the relay has nothing to say.
@@ -2173,7 +2177,7 @@ async fn no_browser_or_a_failing_opener_leaves_the_printed_address() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_sign_in_the_container_outlived_says_it_was_not_completed_in_time() {
     assert_eq!(
-        codex_container::timed_out(codex_container::MAX_LIFETIME),
+        codex_container::timed_out(codex_container::DEFAULT_LIFETIME),
         "The Codex sign-in was not completed within 30 minutes; nothing was stored. Run \
          `axocoatl connect codex` again."
     );
@@ -2200,7 +2204,7 @@ async fn a_sign_in_the_container_outlived_says_it_was_not_completed_in_time() {
     assert!(calls.trim_end().ends_with("rm --force"), "{calls}");
 
     let fixture = ContainerFixture::new("timeout");
-    let login = fixture.login(None, codex_container::MAX_LIFETIME);
+    let login = fixture.login(None, codex_container::DEFAULT_LIFETIME);
     let (result, _) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
     let failure = result.expect_err("nothing is stored");
     assert_eq!(failure.code, exit::FAILURE);

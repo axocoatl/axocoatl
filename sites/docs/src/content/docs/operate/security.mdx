@@ -538,7 +538,9 @@ this contract, and Axocoatl cannot change or always detect those settings.
   in-memory one in a throwaway container of the pinned Codex (read straight into memory,
   then the container is removed), or with `--codex PATH` a temporary one in the data root
   (then overwritten and removed); the daemon refreshes that sign-in itself, on your
-  computer, at OpenAI's token endpoint, and writes the new tokens back to the same file.
+  computer, at OpenAI's token endpoint, and writes the new tokens back to the same file
+  (also when `axocoatl connect codex --refresh` asks it to, through an API route that
+  answers only an authenticated request from a loopback address and returns no token).
   Its access token goes only on a route to `chatgpt.com`; a request on a route to another
   host that names it is refused, and its refresh token goes only to OpenAI's token
   endpoint.

@@ -9929,6 +9929,9 @@ pub use session_grants::{
 #[path = "routes_keep_pr.rs"]
 mod keep_pr_routes;
 pub use keep_pr_routes::keep_pr;
+#[path = "routes_connect_codex.rs"]
+mod connect_codex_routes;
+pub use connect_codex_routes::{refresh_codex_sign_in, require_authenticated_loopback};
 #[path = "routes_loadouts.rs"]
 pub mod loadout_routes;
 pub use loadout_routes::{

@@ -66,9 +66,14 @@ fn login_containers() -> Vec<String> {
     .collect()
 }
 
+/// The anonymous volumes (named by 64 hexadecimal digits): the only kind a
+/// login container could leave, since it is given no named volume. Named
+/// volumes other tests on the same Podman connection make and remove
+/// meanwhile are not counted.
 fn volumes() -> BTreeSet<String> {
     podman_text(&["volume", "ls", "--quiet"])
         .lines()
+        .filter(|name| name.len() == 64 && name.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .map(str::to_string)
         .collect()
 }
@@ -244,6 +249,17 @@ struct Run {
 
 impl Run {
     fn start(root: &Path, path_dir: &Path, image: &FakeImage, device_auth: bool) -> Self {
+        Self::start_with(root, path_dir, image, device_auth, &[])
+    }
+
+    /// [`Run::start`] with `extra` arguments.
+    fn start_with(
+        root: &Path,
+        path_dir: &Path,
+        image: &FakeImage,
+        device_auth: bool,
+        extra: &[&str],
+    ) -> Self {
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::create_dir_all(root.join("tmp")).unwrap();
         std::fs::set_permissions(root.join("data"), std::fs::Permissions::from_mode(0o700))
@@ -270,6 +286,7 @@ impl Run {
         if device_auth {
             command.arg("--device-auth");
         }
+        command.args(extra);
         command.cwd(root);
         command.env("PATH", path_dir);
         command.env("TMPDIR", root.join("tmp"));
@@ -560,6 +577,10 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
             "{text}"
         );
         assert!(text.contains("Successfully logged in"), "{text}");
+        assert!(
+            text.contains("You have 30 minutes to finish signing in."),
+            "{text}"
+        );
         // Codex in the container cannot open a browser here: the intro
         // says to open the address.
         assert!(
@@ -591,6 +612,7 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
         let mut run = Run::start(&root, &path_dir, &ok, true);
         run.wait_for("WXYZ-1234");
         let container = the_login_container();
+        assert_eq!(inspect(&container, "{{.Config.Timeout}}"), "1800");
         let bindings = inspect(&container, "{{json .HostConfig.PortBindings}}");
         assert!(bindings == "{}" || bindings == "null", "{bindings}");
         assert!(port_free(), "the device sign-in published 1455");
@@ -724,6 +746,32 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
         let (code, shown) = run.finish();
         let text = String::from_utf8_lossy(&shown).into_owned();
         assert_eq!(code, 0, "{text}");
+        assert_cleaned_up(&volumes_before);
+    }
+    // 9. `--sign-in-timeout 1`: the intro says one minute, Podman stops
+    //    the container after 60 seconds, and then the sign-in was not
+    //    completed in time (exit 2): nothing stored, the container gone.
+    {
+        let root = scratch_path.join("sign-in-timeout");
+        let started = Instant::now();
+        let mut run = Run::start_with(&root, &path_dir, &ok, true, &["--sign-in-timeout", "1"]);
+        run.wait_for("You have 1 minute to finish signing in.");
+        run.wait_for("WXYZ-1234");
+        let container = the_login_container();
+        assert_eq!(inspect(&container, "{{.Config.Timeout}}"), "60");
+        let (code, shown) = run.finish();
+        let text = String::from_utf8_lossy(&shown).into_owned();
+        assert_eq!(code, 2, "{text}");
+        assert!(started.elapsed() >= Duration::from_secs(60), "{text}");
+        assert!(
+            text.contains(
+                "The Codex sign-in was not completed within 1 minute; nothing was stored. Run \
+                 `axocoatl connect codex` again."
+            ),
+            "{text}"
+        );
+        assert!(!Run::secret(&root).exists());
+        assert_nothing_shown(&shown, &ok);
         assert_cleaned_up(&volumes_before);
     }
     drop(ok);

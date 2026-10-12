@@ -29,6 +29,7 @@ pub fn build_router(
     rate_limiter: Arc<middleware::RateLimiter>,
 ) -> Router {
     let auth_for_mw = auth.clone();
+    let authenticated = auth.enabled;
     let cors_origins_for_auth = Arc::new(cors_origins.clone());
     let preview_state = state.clone();
     let shutdown_state = state.clone();
@@ -222,6 +223,16 @@ pub fn build_router(
             post(routes::reject_session_network_proposal),
         )
         .route("/api/network/reload", post(routes::reload_network_policy))
+        // Only for an authenticated caller on this computer (see
+        // `routes::refresh_codex_sign_in`).
+        .route(
+            "/api/connect/codex/refresh",
+            post(routes::refresh_codex_sign_in).layer(axum::middleware::from_fn(
+                move |req: axum::extract::Request, next: axum::middleware::Next| {
+                    routes::require_authenticated_loopback(authenticated, req, next)
+                },
+            )),
+        )
         .route(
             "/api/sessions/{id}/turns/{turn_id}/graph-edits/preview",
             post(routes::preview_session_graph_edit).layer(DefaultBodyLimit::max(

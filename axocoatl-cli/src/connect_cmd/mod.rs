@@ -25,11 +25,14 @@
 //! ([`browser`]), or a Codex CLI on this computer with `--codex`.
 //! `claude setup-token` opens the browser itself (Claude Code 2.1.271's
 //! bundle starts its OAuth flow without `skipBrowserOpen`), so nothing is
-//! opened for it.
+//! opened for it. `axocoatl connect codex --refresh` and `--status`
+//! ([`codex_sign_in`]) refresh the stored ChatGPT sign-in through the
+//! running daemon, and show what is stored, without a token.
 
 mod browser;
 mod codex;
 mod codex_container;
+mod codex_sign_in;
 mod redact;
 mod relay;
 mod screen;
@@ -66,7 +69,8 @@ pub(crate) mod exit {
     pub(crate) const NO_TOKEN: i32 = 2;
     /// Usage: no interactive terminal, a bad secret name, no `claude` CLI
     /// (for `connect codex`: no Podman, a `--codex` that is not an
-    /// executable, or port 1455 on this computer in use).
+    /// executable, or port 1455 on this computer in use), or a command line
+    /// `connect` does not take (clap's own usage errors exit 2 elsewhere).
     pub(crate) const USAGE: i32 = 3;
     /// The token could not be checked (network error or an unexpected
     /// answer); nothing was stored.
@@ -75,10 +79,19 @@ pub(crate) mod exit {
     pub(crate) const FAILURE: i32 = 5;
     // `connect codex` uses CONNECTED, NO_TOKEN (no ChatGPT sign-in was
     // stored by `codex login`, also when the sign-in was not completed
-    // within the login container's 30 minutes), USAGE, FAILURE and
-    // INTERRUPTED.
+    // within the sign-in time, `--sign-in-timeout`), USAGE, FAILURE and
+    // INTERRUPTED. `connect codex --refresh` uses CONNECTED (refreshed),
+    // REJECTED (OpenAI refused the refresh: sign in again), NO_TOKEN (no
+    // sign-in stored), USAGE, UNVERIFIED (the refresh could not be
+    // completed: the token endpoint could not be reached, did not answer in
+    // time, or gave an answer that is neither new tokens nor a refusal),
+    // FAILURE and DAEMON_NOT_RUNNING; `connect codex --status` uses
+    // CONNECTED (a sign-in is stored), NO_TOKEN (none is) and FAILURE.
     /// A signal stopped the command; nothing was stored.
     pub(crate) const INTERRUPTED: i32 = 6;
+    /// `connect codex --refresh`: no daemon answers at its address (start
+    /// it with `axocoatl serve`); nothing was refreshed.
+    pub(crate) const DAEMON_NOT_RUNNING: i32 = 7;
 }
 
 #[derive(Debug, Subcommand)]
@@ -121,6 +134,35 @@ pub enum ConnectCommands {
         /// with `open` or `xdg-open`); open the address Codex prints yourself
         #[arg(long)]
         no_browser: bool,
+        /// Minutes the sign-in may take, 1 to 60 (default 30): Podman stops
+        /// and removes the login container after this
+        #[arg(
+            long,
+            value_name = "MINUTES",
+            value_parser = clap::value_parser!(u64).range(1..=60),
+            conflicts_with = "codex"
+        )]
+        sign_in_timeout: Option<u64>,
+        /// Ask the running daemon to refresh the stored ChatGPT sign-in now,
+        /// the way it refreshes it before a request; prints when the new
+        /// access token expires, never a token
+        #[arg(
+            long,
+            conflicts_with_all = ["device_auth", "codex", "no_browser", "sign_in_timeout", "status"]
+        )]
+        refresh: bool,
+        /// Show whether a ChatGPT sign-in is stored, its account (last four
+        /// characters), when its access token expires and when it was last
+        /// refreshed or signed in, never a token
+        #[arg(
+            long,
+            conflicts_with_all = ["device_auth", "codex", "no_browser", "sign_in_timeout"]
+        )]
+        status: bool,
+        /// With --refresh: the daemon's URL (default: AXOCOATL_URL, then
+        /// the configured server address)
+        #[arg(long, requires = "refresh", conflicts_with = "status")]
+        url: Option<String>,
     },
 }
 
@@ -471,10 +513,25 @@ pub async fn cmd_connect(command: ConnectCommands) -> i32 {
         } => (config, secret, no_verify, claude),
         ConnectCommands::Codex {
             config,
+            refresh: true,
+            url,
+            ..
+        } => return codex_sign_in::cmd_refresh(url.as_deref(), &config).await,
+        ConnectCommands::Codex {
+            config,
+            status: true,
+            ..
+        } => return codex_sign_in::cmd_status(&config),
+        ConnectCommands::Codex {
+            config,
             device_auth,
             codex: path,
             no_browser,
-        } => return cmd_connect_codex(config, device_auth, path, no_browser).await,
+            sign_in_timeout,
+            ..
+        } => {
+            return cmd_connect_codex(config, device_auth, path, no_browser, sign_in_timeout).await
+        }
     };
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         eprintln!("✗ {}", needs_terminal());
@@ -570,6 +627,7 @@ async fn cmd_connect_codex(
     device_auth: bool,
     explicit: Option<PathBuf>,
     no_browser: bool,
+    sign_in_timeout: Option<u64>,
 ) -> i32 {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         eprintln!("✗ {}", codex::needs_terminal());
@@ -645,7 +703,12 @@ async fn cmd_connect_codex(
                     codex_container::CALLBACK_PORT
                 )
             };
-            let login = codex_container::Login::new(podman, image, opener);
+            let login = codex_container::Login::new(
+                podman,
+                image,
+                codex_container::sign_in_lifetime(sign_in_timeout),
+                opener,
+            );
             let intro = format!(
                 "Running `codex login{}` (Codex {}) in a throwaway container of the codex recipe \
                  image ({}), with a private CODEX_HOME in its memory. {how}{returns} {} \

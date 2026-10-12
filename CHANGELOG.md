@@ -43,13 +43,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   home with zeros and removes it, also on an error or a signal (the `podman` commands
   that start, read and remove the container run in a process group of their own, so a
   Ctrl-C typed after Codex exits does not stop them); Podman removes a login container
-  after 30 minutes at most even if Axocoatl is killed. The command says when the sign-in
-  starts that you have 30 minutes, and when they run out first it says
+  when the sign-in time has passed even if Axocoatl is killed: 30 minutes, or 1 to 60
+  with `--sign-in-timeout MINUTES` (Podman's `--timeout`; not with `--codex`). The
+  command says when the sign-in starts how long you have (`You have 30 minutes to finish
+  signing in.`), and when the time runs out first it says
   ``The Codex sign-in was not completed within 30 minutes; nothing was stored. Run
-  `axocoatl connect codex` again.`` instead of saying that `auth.json` could not be read
-  from the container. Exit codes: 0 stored, 2 no ChatGPT sign-in (also when the 30
-  minutes ran out), 3 usage (also no Podman on `PATH`, or port 1455 in use), 5 failure,
-  6 interrupted.
+  `axocoatl connect codex` again.`` (both with the time chosen) instead of saying that
+  `auth.json` could not be read from the container. Exit codes: 0 stored, 2 no ChatGPT
+  sign-in (also when the sign-in time ran out), 3 usage (also no Podman on `PATH`, port
+  1455 in use, or a command line it does not take), 5 failure, 6 interrupted.
+- **`axocoatl connect codex --status` and `--refresh`.** `--status` reads the stored
+  sign-in from the data root, without the daemon, and shows whether one is stored, its
+  ChatGPT account id by its last four characters, when its access token expires (its JWT
+  `exp`) and when its tokens were last refreshed or signed in, never a token (exit codes:
+  0 stored, 2 none, 5 it cannot be read or is not a sign-in). `--refresh` asks the
+  running daemon, found and authenticated the way `axocoatl run` finds it (`--url`,
+  `AXOCOATL_URL` or the configured address; `AXOCOATL_TOKEN` or the local API token), to
+  refresh the sign-in now, through the new `POST /api/connect/codex/refresh`. The daemon
+  refreshes with the broker that refreshes the sign-in before a request (the same request
+  to OpenAI, rotation, atomic write under the secret store's lock and remembered refusal,
+  one refresh at a time with the route's), even when it is not due, and records the
+  refresh and how it ended in its log without a value. The command prints when the new
+  access token expires and when it was refreshed, never a token. Exit codes: 0
+  refreshed, 1 OpenAI refused the refresh (sign in again; asked again, the daemon does not
+  send that refresh token again), 2 no sign-in stored, 3 usage, 4 the refresh could not
+  be completed (the token endpoint could not be reached, did not answer in time, or gave
+  an answer that is neither new tokens nor a refusal; the stored sign-in is unchanged),
+  5 any other failure, 7 no daemon answers. The route answers only an authenticated
+  request from a loopback address: `403` from a daemon that accepts unauthenticated API
+  requests (`server.auth.allow_unauthenticated`) and for a request from any other
+  address.
 - **A Codex writer can run with that sign-in: `credential: codex-chatgpt`.** A loadout
   Agent's new `credential` field names the stored credential its route sends: for
   `runtime: codex`, `codex-openai` (the default, an OpenAI API key, to `api.openai.com`) or
@@ -83,6 +106,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The refresh token is sent only to OpenAI's token endpoint.
 
 ### Changed
+- A command line `axocoatl connect …` does not take (an unknown flag, a value out of
+  bounds) exits with the `connect` commands' usage code 3 instead of clap's 2, which
+  `connect` uses for "no token printed" (`claude-code`) and "no sign-in" (`codex`).
 - `axocoatl secret set codex-chatgpt` warns when the value is not a sign-in
   `connect codex` stored, and a missing `codex-chatgpt` names `axocoatl connect codex`.
 - `axocoatl secret set`, `axocoatl secret remove` and the `connect` commands store and
