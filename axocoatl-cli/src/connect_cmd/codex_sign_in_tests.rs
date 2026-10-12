@@ -201,7 +201,8 @@ async fn no_daemon_running_has_its_own_exit_code() {
 #[test]
 fn status_shows_the_expiry_and_the_masked_account_without_a_token() {
     let data = Path::new("/data/root");
-    let now = now_ms();
+    // A whole second, as a JWT's `exp` is.
+    let now = now_ms() / 1000 * 1000;
     let access = jwt(now + HOUR_MS);
     let stored = sign_in(&access, Some("acct-0123-4567-wxyz"), now - 2 * HOUR_MS);
     let refresh_token = stored.refresh_token().to_string();
@@ -212,14 +213,10 @@ fn status_shows_the_expiry_and_the_masked_account_without_a_token() {
     );
     assert!(text.contains("Account: …wxyz\n"), "{text}");
     assert!(!text.contains("acct-0123"), "{text}");
-    let expires = (now + HOUR_MS) / 1000 * 1000;
     assert!(
         text.contains(&format!(
-            "Access token: expires at {} (in 59 minutes)",
-            local_time(expires)
-        )) || text.contains(&format!(
             "Access token: expires at {} (in 1 hour)",
-            local_time(expires)
+            local_time(now + HOUR_MS)
         )),
         "{text}"
     );
@@ -286,15 +283,91 @@ fn status_reads_the_sign_in_stored_in_the_data_root() {
     assert!(!failed.message.contains("other"), "{}", failed.message);
 }
 
+/// Relative times are in the two largest units, the smaller one rounded
+/// to the nearest and left out when it is 0, the same way before and after
+/// now; under a minute, in seconds.
 #[test]
 fn times_are_in_words() {
+    const SECOND: u64 = 1000;
+    const MINUTE: u64 = 60 * SECOND;
+    const DAY: u64 = 24 * HOUR_MS;
     let now = 1_000_000_000_000;
     assert_eq!(relative(now, now), "in 0 seconds");
-    assert_eq!(relative(now + 1000, now), "in 1 second");
-    assert_eq!(relative(now + 59 * 60_000, now), "in 59 minutes");
-    assert_eq!(relative(now - 3 * HOUR_MS, now), "3 hours ago");
-    assert_eq!(relative(now + 47 * HOUR_MS, now), "in 47 hours");
-    assert_eq!(relative(now - 72 * HOUR_MS, now), "3 days ago");
+    // Both ways: `(distance, in the future, in the past)`.
+    for (distance, future, past) in [
+        (499, "in 0 seconds", "0 seconds ago"),
+        (500, "in 1 second", "1 second ago"),
+        (SECOND, "in 1 second", "1 second ago"),
+        (59 * SECOND, "in 59 seconds", "59 seconds ago"),
+        (59 * SECOND + 499, "in 59 seconds", "59 seconds ago"),
+        (59 * SECOND + 500, "in 1 minute", "1 minute ago"),
+        (MINUTE, "in 1 minute", "1 minute ago"),
+        (
+            90 * SECOND,
+            "in 1 minute 30 seconds",
+            "1 minute 30 seconds ago",
+        ),
+        (59 * MINUTE, "in 59 minutes", "59 minutes ago"),
+        (
+            59 * MINUTE + 29 * SECOND,
+            "in 59 minutes 29 seconds",
+            "59 minutes 29 seconds ago",
+        ),
+        (59 * MINUTE + 30 * SECOND, "in 1 hour", "1 hour ago"),
+        (HOUR_MS - SECOND, "in 1 hour", "1 hour ago"),
+        (HOUR_MS, "in 1 hour", "1 hour ago"),
+        (HOUR_MS + 29 * SECOND, "in 1 hour", "1 hour ago"),
+        (
+            HOUR_MS + 30 * SECOND,
+            "in 1 hour 1 minute",
+            "1 hour 1 minute ago",
+        ),
+        (3 * HOUR_MS, "in 3 hours", "3 hours ago"),
+        (
+            23 * HOUR_MS + 29 * MINUTE,
+            "in 23 hours 29 minutes",
+            "23 hours 29 minutes ago",
+        ),
+        (23 * HOUR_MS + 30 * MINUTE, "in 1 day", "1 day ago"),
+        (DAY, "in 1 day", "1 day ago"),
+        (47 * HOUR_MS, "in 1 day 23 hours", "1 day 23 hours ago"),
+        (3 * DAY, "in 3 days", "3 days ago"),
+        (
+            10 * DAY - 31 * MINUTE,
+            "in 9 days 23 hours",
+            "9 days 23 hours ago",
+        ),
+        (10 * DAY - 30 * MINUTE, "in 10 days", "10 days ago"),
+        (10 * DAY - SECOND, "in 10 days", "10 days ago"),
+        (10 * DAY, "in 10 days", "10 days ago"),
+        (10 * DAY + SECOND, "in 10 days", "10 days ago"),
+        (
+            10 * DAY + HOUR_MS,
+            "in 10 days 1 hour",
+            "10 days 1 hour ago",
+        ),
+    ] {
+        assert_eq!(relative(now + distance, now), future, "{distance} ms");
+        assert_eq!(relative(now - distance, now), past, "{distance} ms");
+    }
+    // The documentation's example: a token that expires 10 days after the
+    // refresh, shown a moment after it.
+    let refreshed_at = now - 1500;
+    let message = refresh_outcome(
+        RefreshReport::Refreshed {
+            refreshed_at_ms: refreshed_at,
+            expires_at_ms: Some(refreshed_at + 10 * DAY),
+        },
+        now,
+    )
+    .unwrap();
+    assert!(
+        message.ends_with(&format!(
+            "The new access token expires at {} (in 10 days).",
+            local_time(refreshed_at + 10 * DAY)
+        )),
+        "{message}"
+    );
     assert_eq!(masked_account_id("acct-12345"), "…2345");
     assert_eq!(masked_account_id("12345"), "…2345");
     assert!(!masked_account_id("1234").contains("1234"));

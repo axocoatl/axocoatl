@@ -57,20 +57,44 @@ pub(crate) fn local_time(ms: u64) -> String {
         .unwrap_or_else(|| format!("{ms} ms after the Unix epoch"))
 }
 
-/// How far `ms` is from `now_ms`, in words: "in 59 minutes", "3 days ago".
+/// How far `ms` is from `now_ms`, in words, by one rule before and after
+/// it: in its two largest units (days and hours, hours and minutes, or
+/// minutes and seconds), the smaller one rounded to the nearest (a half
+/// up) and left out when that is 0, or in seconds under a minute: "in 10
+/// days", "in 9 days 23 hours", "1 hour 30 minutes ago", "in 59 seconds".
+/// The units are those of the rounded time: 23 hours 30 minutes is "1 day".
 pub(crate) fn relative(ms: u64, now_ms: u64) -> String {
-    let (seconds, future) = if ms >= now_ms {
-        ((ms - now_ms) / 1000, true)
+    const SECOND: u64 = 1000;
+    const MINUTE: u64 = 60 * SECOND;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    let (distance, future) = if ms >= now_ms {
+        (ms - now_ms, true)
     } else {
-        ((now_ms - ms) / 1000, false)
+        (now_ms - ms, false)
     };
-    let (count, unit) = match seconds {
-        0..=59 => (seconds, "second"),
-        60..=3599 => (seconds / 60, "minute"),
-        3600..=172_799 => (seconds / 3600, "hour"),
-        _ => (seconds / 86_400, "day"),
-    };
-    let amount = format!("{count} {unit}{}", if count == 1 { "" } else { "s" });
+    // `distance` in whole `unit`s, a half rounded up.
+    let rounded = |unit: u64| distance / unit + u64::from(distance % unit >= unit / 2);
+    let count =
+        |count: u64, unit: &str| format!("{count} {unit}{}", if count == 1 { "" } else { "s" });
+    let amount = [
+        (DAY, "day", HOUR, "hour"),
+        (HOUR, "hour", MINUTE, "minute"),
+        (MINUTE, "minute", SECOND, "second"),
+    ]
+    .into_iter()
+    .find_map(|(large, large_name, small, small_name)| {
+        let (smalls, per_large) = (rounded(small), large / small);
+        (smalls >= per_large).then(|| match smalls % per_large {
+            0 => count(smalls / per_large, large_name),
+            rest => format!(
+                "{} {}",
+                count(smalls / per_large, large_name),
+                count(rest, small_name)
+            ),
+        })
+    })
+    .unwrap_or_else(|| count(rounded(SECOND), "second"));
     if future {
         format!("in {amount}")
     } else {
