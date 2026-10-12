@@ -30,6 +30,14 @@ Cargo with `--locked --offline`, static musl linking, the repository release pro
 and one build job. It rejects compiler, release-profile, and wrapper environment
 overrides instead of silently recording a different build as the standard payload.
 
+The payload must not depend on where things are on the build machine. Panic locations
+embed the paths of the compiled source files, including the registry crates under the
+Cargo home, so the script remaps the checkout to `/axocoatl-source` and the Cargo home
+(`CARGO_HOME`, or `~/.cargo`) to `/cargo-home`, and refuses a payload that still contains
+the checkout, Cargo registry or target build directory it used. The checkout path, the
+Cargo home and `--target-dir` therefore do not change the bytes. The manifest records
+both remaps.
+
 From the repository root, choose new output directories and pass the installed
 linker by its actual path:
 
@@ -45,11 +53,66 @@ selects a separate Cargo build cache. Each output directory contains one Linux
 payload and a JSON manifest recording its SHA-256, ELF properties, compiler and
 linker identity, package and protocol versions, and source provenance.
 
+The checked-in payloads are built in a container of the Rust 1.95.0 Debian bookworm
+image for linux/arm64 (`docker.io/library/rust:1.95.0-bookworm`) with the two musl
+standard-library targets added (`rustup target add --toolchain 1.95.0
+aarch64-unknown-linux-musl x86_64-unknown-linux-musl`), without network, linking
+with that toolchain's bundled `rust-lld`. The locked crates come from a Cargo registry
+mounted as an overlay, so the build cannot change it. With that image tagged
+`localhost/axocoatl-supervisor-build:20260914`, from the repository root:
+
+```sh
+mkdir out
+podman run --rm --network none -v "$PWD:/src:ro" -v "$PWD/out:/out" \
+  -v "$HOME/.cargo/registry:/usr/local/cargo/registry:O" -w /src --entrypoint bash \
+  localhost/axocoatl-supervisor-build:20260914 -c '
+    set -e
+    lld=/usr/local/rustup/toolchains/1.95.0-aarch64-unknown-linux-gnu/lib/rustlib/aarch64-unknown-linux-gnu/bin/rust-lld
+    for arch in x86_64 aarch64; do
+      ./scripts/build-exec-supervisor.sh "$arch" "/out/$arch" --linker "$lld" --target-dir /tmp/target
+    done'
+```
+
+Build twice, and also with a different checkout path, Cargo home and target directory,
+and compare the SHA-256 of both payloads and manifests: they must be identical. The
+1.3.1 payloads were built five times in that image, once with the command above and
+four times with `CARGO_HOME` `/cargo-home` or `/usr/local/cargo`, the checkout at `/src`
+or `/work/checkout/axocoatl`, and two other target directories; all five gave
+byte-identical payloads and manifests.
+
 Before replacing the checked-in assets, run the real protocol and process-lifecycle
 tests for both architectures in Alpine and Debian containers. ELF inspection alone
 cannot prove cancellation, descendant cleanup, output handling, or protocol behavior.
 The artifact manifest deliberately records structural verification separately and
 does not claim container execution passed.
+
+`scripts/test-exec-supervisor-runtime.sh` runs those tests
+(`crates/axocoatl-isolation/tests/supervisor_runtime.rs`) with Podman:
+
+```sh
+./scripts/test-exec-supervisor-runtime.sh prepare   # build the test images
+./scripts/test-exec-supervisor-runtime.sh run       # run the suite once per image
+./scripts/test-exec-supervisor-runtime.sh remove    # remove the test images
+```
+
+`prepare` builds eight images from the Containerfiles in
+`crates/axocoatl-isolation/tests/fixtures/`: Alpine 3.20 and Debian bookworm-slim, for
+linux/amd64 and linux/arm64, each as root and with `USER 1024:1024`, from base images
+pinned by digest. It downloads those base images and the Alpine and Debian packages.
+The Debian images keep Debian's `/bin/sh` (dash), glibc and coreutils, but their `nc`
+and `wget` are Alpine's statically linked BusyBox, because the network test reads
+BusyBox messages and Debian bookworm's BusyBox `wget` crashes on a failed connection.
+`run` builds and pulls no image; a missing one is an error. For every image it checks
+the image's platform, runs the eight tests with the image's uid, and checks that the
+program installed in the container is the embedded payload for the image's
+architecture; it ends with one PASS or FAIL line per image.
+
+Name an architecture (`run aarch64`, `run x86_64`, and the same for `prepare`) to limit
+the run to it. The read-only and network-denying tests need Landlock in the kernel.
+User-mode emulation such as qemu-user provides no Landlock, so in an image of a foreign
+architecture the supervisor refuses those two restricted commands (as it does on any
+kernel without Landlock) and the two tests fail. Run each architecture on a Linux kernel
+of that architecture; a Podman machine on Apple silicon is aarch64.
 
 After validation, replace the two payloads and their matching manifests together,
 and update the embedded descriptor's pinned identities. The installer and normal

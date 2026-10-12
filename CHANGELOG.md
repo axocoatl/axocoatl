@@ -89,8 +89,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remove a secret while holding an exclusive lock on the data root's `secrets` directory
   (waiting up to five seconds for another holder), the lock the daemon takes to write a
   refreshed ChatGPT sign-in.
+- **The embedded execution supervisors build reproducibly.** Panic locations embed the
+  paths of the registry crates under the Cargo home, so a supervisor built with the Cargo
+  home at `/usr/local/cargo` was 64 bytes larger than one built at `/cargo-home`, and its
+  bytes depended on where the build's Cargo home was. `scripts/build-exec-supervisor.sh`
+  now remaps the Cargo home to `/cargo-home`, as it remaps the checkout to
+  `/axocoatl-source`, and refuses a payload that still contains the checkout, the Cargo
+  registry or the target build directory it used; the build manifest (schema 3) records
+  both remaps. Both embedded supervisors are rebuilt this way and re-pinned: five builds
+  with different Cargo homes, checkout paths and target directories gave byte-identical
+  payloads and manifests.
+- `scripts/test-exec-supervisor-runtime.sh` builds Alpine 3.20 and Debian bookworm test
+  images for linux/amd64 and linux/arm64, as root and as a non-root user, and runs the
+  supervisor's protocol and process-lifecycle tests in each, checking that every image
+  receives the embedded payload of its architecture.
 
 ### Measured
+- On 2026-10-12 the rebuilt aarch64 supervisor passed all eight protocol and
+  process-lifecycle tests in the Alpine and Debian aarch64 images, as root and as a
+  non-root user, on a Linux 7.1 aarch64 kernel. The rebuilt x86_64 supervisor, run in the
+  four x86_64 images under qemu-user emulation on that kernel, passed the six tests that
+  need no Landlock; qemu-user provides no Landlock, so the supervisor refused the
+  read-only and network-denying commands there, and those two tests need an x86_64 kernel.
 - On 2026-10-11 a `fix` run of the pinned Codex 0.160.1 (`gpt-6-luna`) with a ChatGPT
   plan passed through Axocoatl 1.3.1-rc2 against OpenAI's service: Codex's 6 requests to
   `chatgpt.com/backend-api/codex/responses` went through the route with the sign-in the
