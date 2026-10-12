@@ -155,6 +155,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supervisor's protocol and process-lifecycle tests in each, checking that every image
   receives the embedded payload of its architecture.
 
+### Fixed
+- **A read-only Agent's shell has a temporary directory of its own wherever the
+  repository is.** Its commands run under a write restriction that drops every writable
+  root containing the repository, so with the repository under `/tmp` the shell could not
+  write `/tmp`: outside a hardened container the scratch home Axocoatl makes for each of
+  its commands (under `$TMPDIR`, or `/tmp`) could not be made and the command did not run
+  (exit 125), and no temporary file could be written under `/tmp`. The execution
+  supervisor now makes a scratch directory for every restricted command and gives it as
+  `TMPDIR`: `0700`, owned by the user the command runs as, in the first of `/tmp`,
+  `/var/tmp` and `/dev/shm` that does not lie inside the repository (judged by name and
+  by where links lead), writable to the command whatever its restriction's writable
+  roots, and removed when the command tree has ended, with any directory in it the
+  command left without rights for its owner. `/tmp` itself stays read-only to the command
+  when it contains the repository (a program that writes a fixed path there instead of
+  `$TMPDIR` still fails), and the repository stays read-only wherever it is. A
+  read-only helper's shell in a hardened container already had such a directory in
+  `/tmp` (its `HOME` and `TMPDIR`); it now gets it the same way, so a Workspace that is
+  `/tmp` itself puts it in `/var/tmp` instead of refusing the launch. A supervisor that
+  can make no such directory refuses to launch the command (`scratch directory
+  unavailable`). Both embedded supervisors are rebuilt and re-pinned.
+
 ### Security
 - **YAML is read without `unsafe-libyaml`.** RUSTSEC-2024-0449 marks `unsafe-libyaml`
   0.2.11 unmaintained: a machine translation of libyaml into unsafe Rust whose repository
@@ -209,12 +230,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   support, which no Axocoatl crate turns on, so no Axocoatl build compiled it.
 
 ### Measured
-- On 2026-10-12 the rebuilt aarch64 supervisor passed all eight protocol and
-  process-lifecycle tests in the Alpine and Debian aarch64 images, as root and as a
-  non-root user, on a Linux 7.1 aarch64 kernel with rootless Podman. The rebuilt x86_64
-  supervisor passed all eight in the four x86_64 images on an x86_64 Linux 6.12 kernel
-  (Alpine's, with Landlock, in a QEMU virtual machine emulating an x86_64 computer),
-  with rootless Podman and with Podman as root: 64 of 64.
+- On 2026-10-12 the rebuilt aarch64 supervisor, with each restricted command's own
+  scratch directory, passed all eight protocol and process-lifecycle tests in the Alpine
+  and Debian aarch64 images, as root and as a non-root user, on a Linux 7.1 aarch64
+  kernel with rootless Podman: 32 of 32. Its read-only test protects the Workspace and
+  then a repository under the container's `/tmp`. The same day an x86_64 supervisor
+  built before that change passed all eight in the four x86_64 images on an x86_64 Linux
+  6.12 kernel (Alpine's, with Landlock, in a QEMU virtual machine emulating an x86_64
+  computer), with rootless Podman and with Podman as root: 64 of 64.
 - On 2026-10-11 a `fix` run of the pinned Codex 0.160.1 (`gpt-6-luna`) with a ChatGPT
   plan passed through Axocoatl 1.3.1-rc2 against OpenAI's service: Codex's 6 requests to
   `chatgpt.com/backend-api/codex/responses` went through the route with the sign-in the

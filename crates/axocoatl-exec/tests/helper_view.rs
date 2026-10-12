@@ -892,6 +892,60 @@ fn a_helper_shell_writes_only_its_scratch_directory_and_a_few_devices() {
     assert_unchanged(&fixture, &tag);
 }
 
+/// A helper's shell whose restriction protects `/tmp` itself (a repository
+/// that is `/tmp`) gets its scratch directory in `/var/tmp` instead: it
+/// still writes there, and the directory is removed when the command ends,
+/// even with a directory in it the helper left without any rights.
+#[test]
+fn a_helper_shell_gets_a_scratch_directory_outside_a_protected_tmp() {
+    require_launch!();
+    if landlock_abi() < 4 {
+        eprintln!("skipped: a helper's shell needs Landlock ABI 4");
+        return;
+    }
+    let fixture = Fixture::new();
+    let mut restriction = shell_restriction(&fixture.workspace);
+    restriction.protected.push("/tmp".into());
+    let ran = helper(
+        &fixture.workspace,
+        "echo HOME=$HOME TMPDIR=$TMPDIR; stat -c 'mode=%a uid=%u' \"$TMPDIR\"; \
+         echo scratch > \"$TMPDIR/f\" && cat \"$TMPDIR/f\"; \
+         mkdir -p \"$TMPDIR/locked/inner\" && chmod 0 \"$TMPDIR/locked\" && echo locked=ok; \
+         (echo x > /tmp/axo-helper-probe) 2>/dev/null; echo tmp=$?; cat README.md",
+        &[],
+        Some(restriction),
+    );
+    ran.exited();
+    let got = ran.lines();
+    let scratch = ran
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("HOME="))
+        .and_then(|rest| rest.split_once(" TMPDIR="))
+        .unwrap();
+    assert_eq!(scratch.0, scratch.1);
+    assert!(
+        scratch.0.starts_with("/var/tmp/axocoatl-helper."),
+        "{scratch:?}"
+    );
+    for expected in [
+        format!("mode=700 uid={}", HELPER.0),
+        "scratch".into(),
+        "locked=ok".into(),
+        "workspace-readme".into(),
+    ] {
+        assert!(
+            got.contains(&expected),
+            "{expected}: {}\n{}",
+            ran.stdout,
+            ran.stderr
+        );
+    }
+    assert!(!got.contains("tmp=0"), "{}", ran.stdout);
+    assert!(!Path::new("/tmp/axo-helper-probe").exists());
+    assert!(!Path::new(scratch.0).exists(), "{}", scratch.0);
+}
+
 /// Ordinary read-only work runs in a helper's shell, in a Workspace only
 /// the writer may enter: Git, grep, ripgrep when the image has it, Python
 /// with its temporary files, and `cargo check` with its target directory

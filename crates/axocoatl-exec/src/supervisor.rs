@@ -257,22 +257,23 @@ fn execute(
     // out of processes it did not start (ptrace access, which also guards
     // /proc/<pid>/mem, environ, maps and fd). A helper's also confines what
     // it reads (see [`helper_view`]).
+    // A restricted command also gets a scratch directory of its own (see
+    // [`scratch`]), kept until the command tree has ended.
     let prepared = match (
         options.helper.as_ref().filter(|_| options.harden),
         request.write_restriction.as_ref(),
         options.harden,
     ) {
         (Some(view), restriction, _) => helper_view::prepare(view, restriction)
-            .map(|(ruleset, launch)| (Some(ruleset), Some(launch))),
+            .map(|(ruleset, launch)| (Some(ruleset), Some(launch), None)),
         (None, Some(restriction), _) => landlock::prepare(restriction)
-            .map(|ruleset| (Some(ruleset), None))
-            .map_err(|message| format!("write restriction unavailable: {message}")),
+            .map(|(ruleset, scratch)| (Some(ruleset), None, Some(scratch))),
         (None, None, true) => landlock::prepare_domain()
-            .map(|ruleset| (Some(ruleset), None))
+            .map(|ruleset| (Some(ruleset), None, None))
             .map_err(|message| format!("hardening unavailable: {message}")),
-        (None, None, false) => Ok((None, None)),
+        (None, None, false) => Ok((None, None, None)),
     };
-    let (restriction, helper) = match prepared {
+    let (restriction, helper, scratch) = match prepared {
         Ok(prepared) => prepared,
         Err(message) => {
             return Terminal {
@@ -313,6 +314,9 @@ fn execute(
                     .env_remove("TMPDIR");
             }
         }
+    }
+    if let Some(scratch) = &scratch {
+        command.env("TMPDIR", scratch.path());
     }
     if restriction.is_some() || filter.is_some() {
         let fd = restriction.as_ref().map(landlock::Ruleset::fd);
@@ -935,8 +939,9 @@ mod helper_view {
     use super::landlock::{
         self, Fd, Handled, Ruleset, EXECUTE, READ, READ_DIR, READ_FILE, WRITE_FILE,
     };
+    use super::scratch::Scratch;
     use crate::protocol::{HelperView, WriteRestriction};
-    use std::ffi::{CStr, CString, OsStr};
+    use std::ffi::{CStr, CString};
     use std::io;
     use std::os::fd::RawFd;
     use std::os::unix::ffi::OsStrExt;
@@ -992,6 +997,9 @@ mod helper_view {
     /// discards what they drain there.
     pub(super) const TOOL_DEVICES: &[&str] = &["/dev/null"];
 
+    /// The name a helper's shell's scratch directory starts with.
+    const HELPER_SCRATCH: &str = "axocoatl-helper";
+
     /// `HOME` for a helper's file tools, which get no scratch directory: a
     /// path that does not exist, as for a system user without a home.
     pub(super) const NO_HOME: &str = "/nonexistent";
@@ -1034,20 +1042,17 @@ mod helper_view {
         })?;
         let handled = handled(abi, restriction)?;
         let scratch = match restriction {
-            Some(_) => Some(Scratch::create(view.helper).map_err(|error| {
-                unavailable(format!("creating its scratch directory in /tmp: {error}"))
-            })?),
+            Some(restriction) => {
+                let mut outside = vec![view.workspace.as_str()];
+                outside.extend(restriction.protected.iter().map(String::as_str));
+                Some(
+                    Scratch::create(HELPER_SCRATCH, Some(view.helper), &outside).map_err(
+                        |message| unavailable(format!("its scratch directory: {message}")),
+                    )?,
+                )
+            }
             None => None,
         };
-        if let Some(scratch) = &scratch {
-            if within(scratch.path_str(), &view.workspace) {
-                return Err(unavailable(format!(
-                    "its scratch directory {} would be inside the Workspace {}",
-                    scratch.path_str(),
-                    view.workspace
-                )));
-            }
-        }
         let ruleset = landlock::create(handled).map_err(unavailable)?;
         allow_workspace(&ruleset, &view.workspace).map_err(unavailable)?;
         let devices = match &scratch {
@@ -1430,7 +1435,7 @@ mod helper_view {
     }
 
     /// The names in the directory open at `fd`, without `.` and `..`.
-    fn entry_names(fd: RawFd) -> Result<Vec<CString>, String> {
+    pub(super) fn entry_names(fd: RawFd) -> Result<Vec<CString>, String> {
         let mut names = Vec::new();
         let mut buffer = vec![0u8; 32 * 1024];
         loop {
@@ -1466,60 +1471,6 @@ mod helper_view {
                 }
                 offset += length;
             }
-        }
-    }
-
-    /// The helper's own home and temporary directory, `0700` and the
-    /// helper's, removed (without following links) when it is dropped.
-    pub(super) struct Scratch {
-        path: PathBuf,
-        text: String,
-    }
-
-    impl Scratch {
-        fn create(owner: (u32, u32)) -> io::Result<Self> {
-            let mut template = *b"/tmp/axocoatl-helper.XXXXXX\0";
-            // SAFETY: template is a writable NUL-terminated mkdtemp pattern.
-            if unsafe { libc::mkdtemp(template.as_mut_ptr().cast()) }.is_null() {
-                return Err(io::Error::last_os_error());
-            }
-            let bytes = &template[..template.len() - 1];
-            let scratch = Self {
-                path: PathBuf::from(OsStr::from_bytes(bytes)),
-                text: String::from_utf8_lossy(bytes).into_owned(),
-            };
-            let name = CString::new(bytes).map_err(|_| io::ErrorKind::InvalidInput)?;
-            // SAFETY: name is NUL-terminated; the directory is opened, not
-            // followed through a link, and changed by descriptor.
-            let fd = unsafe {
-                libc::open(
-                    name.as_ptr(),
-                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                )
-            };
-            if fd < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let fd = Fd(fd);
-            // SAFETY: fd is the directory just made.
-            if unsafe { libc::fchown(fd.0, owner.0, owner.1) } != 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(scratch)
-        }
-
-        pub(super) fn path(&self) -> &Path {
-            &self.path
-        }
-
-        fn path_str(&self) -> &str {
-            &self.text
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
         }
     }
 
@@ -1845,12 +1796,257 @@ mod helper_view {
     }
 }
 
+/// A restricted command's own temporary directory: its `TMPDIR` (and a
+/// read-only helper's shell's `HOME`), made by the supervisor for that one
+/// command, `0700` and owned by the user the command runs as, and removed
+/// once the command tree has ended. The command may write beneath it
+/// whatever its restriction's `writable` roots name, and it lies outside
+/// every protected path: in the first of [`BASES`] that is not inside one,
+/// judged by name and by where links lead. So a command whose protected
+/// repository lies under `/tmp`, which keeps `/tmp` itself read-only to it,
+/// still has a place to write temporary files, and the repository stays
+/// read-only.
+mod scratch {
+    use super::helper_view::{entry_names, within};
+    use super::landlock::{fstat, kind, Fd};
+    use std::ffi::{CStr, CString, OsStr};
+    use std::io;
+    use std::os::fd::RawFd;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::{Path, PathBuf};
+
+    /// Where a scratch directory is made, in this order.
+    pub(super) const BASES: &[&str] = &["/tmp", "/var/tmp", "/dev/shm"];
+
+    /// How deep beneath a scratch directory its removal restores
+    /// directories' rights.
+    const RESTORE_DEPTH: usize = 256;
+
+    pub(super) struct Scratch {
+        path: PathBuf,
+        text: String,
+    }
+
+    impl Scratch {
+        /// Make `<base>/<name>.XXXXXX`, `0700`, given to `owner` when set
+        /// (the supervisor's own user otherwise), in the first of [`BASES`]
+        /// that is not inside any of `outside`, and whose new directory
+        /// neither is inside one nor contains one.
+        pub(super) fn create(
+            name: &str,
+            owner: Option<(u32, u32)>,
+            outside: &[&str],
+        ) -> Result<Self, String> {
+            let mut refused = Vec::new();
+            for base in BASES {
+                if let Some(protected) = overlap(base, outside, false) {
+                    refused.push(format!("{base} is inside {protected}"));
+                    continue;
+                }
+                match Self::make(base, name, owner) {
+                    Ok(scratch) => match overlap(&scratch.text, outside, true) {
+                        None => return Ok(scratch),
+                        // Dropping it removes it.
+                        Some(protected) => {
+                            refused.push(format!("{} overlaps {protected}", scratch.text))
+                        }
+                    },
+                    Err(error) => refused.push(format!("{base}: {error}")),
+                }
+            }
+            Err(format!(
+                "none could be made outside {} ({})",
+                outside.join(", "),
+                refused.join("; ")
+            ))
+        }
+
+        fn make(base: &str, name: &str, owner: Option<(u32, u32)>) -> io::Result<Self> {
+            let mut template = format!("{base}/{name}.XXXXXX\0").into_bytes();
+            // SAFETY: template is a writable NUL-terminated mkdtemp pattern.
+            if unsafe { libc::mkdtemp(template.as_mut_ptr().cast()) }.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            template.pop();
+            let scratch = Self {
+                path: PathBuf::from(OsStr::from_bytes(&template)),
+                text: String::from_utf8_lossy(&template).into_owned(),
+            };
+            let path = CString::new(template).map_err(|_| io::ErrorKind::InvalidInput)?;
+            // SAFETY: path is NUL-terminated; the directory is opened, not
+            // followed through a link, and changed by descriptor.
+            let fd = unsafe {
+                libc::open(
+                    path.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let fd = Fd(fd);
+            if let Some((uid, gid)) = owner {
+                // SAFETY: fd is the directory just made.
+                if unsafe { libc::fchown(fd.0, uid, gid) } != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            // mkdtemp's mode is 0700 less the umask.
+            // SAFETY: fd is the directory just made.
+            if unsafe { libc::fchmod(fd.0, 0o700) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(scratch)
+        }
+
+        pub(super) fn path(&self) -> &Path {
+            &self.path
+        }
+
+        pub(super) fn path_str(&self) -> &str {
+            &self.text
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            if std::fs::remove_dir_all(&self.path).is_ok() {
+                return;
+            }
+            // A directory the command left without write or search rights
+            // for its owner (a Go module cache's are read-only) keeps a
+            // supervisor that is not root from removing what is in it: give
+            // each directory back its owner's rights, by descriptor and
+            // without following a link, and remove again.
+            if let Ok(path) = CString::new(self.path.as_os_str().as_bytes()) {
+                if let Ok(directory) = open_restored(libc::AT_FDCWD, &path) {
+                    restore(&directory, 0);
+                }
+            }
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// The first of `outside` that `path` is inside (or, with `both`, that
+    /// is inside `path`), comparing their names and, where they exist, the
+    /// names links lead to.
+    pub(super) fn overlap<'a>(path: &str, outside: &[&'a str], both: bool) -> Option<&'a str> {
+        let forms = |path: &str| {
+            let mut forms = vec![path.to_owned()];
+            if let Ok(real) = std::fs::canonicalize(path) {
+                forms.extend(real.to_str().map(str::to_owned));
+            }
+            forms
+        };
+        let mine = forms(path);
+        outside.iter().copied().find(|protected| {
+            forms(protected).iter().any(|theirs| {
+                mine.iter()
+                    .any(|own| within(own, theirs) || (both && within(theirs, own)))
+            })
+        })
+    }
+
+    /// Open the directory `name` beneath `dir` to list it, without
+    /// following a final link, after giving it `0700`: allowed to its owner
+    /// and to root; anyone else's attempt fails and is ignored.
+    fn open_restored(dir: RawFd, name: &CStr) -> io::Result<Fd> {
+        // SAFETY: name is NUL-terminated; O_PATH opens without access and
+        // O_NOFOLLOW opens a final link itself.
+        let fd = unsafe {
+            libc::openat(
+                dir,
+                name.as_ptr(),
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let fd = Fd(fd);
+        if kind(&fstat(fd.0)?) != libc::S_IFDIR {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        // Through its descriptor's /proc entry, the directory just opened
+        // is changed and opened again, whatever has since taken its name.
+        let own = CString::new(format!("/proc/self/fd/{}", fd.0))
+            .map_err(|_| io::ErrorKind::InvalidInput)?;
+        // SAFETY: own is NUL-terminated and names an open descriptor.
+        unsafe {
+            libc::chmod(own.as_ptr(), 0o700);
+        }
+        // SAFETY: as above.
+        let opened = unsafe {
+            libc::open(
+                own.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if opened < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Fd(opened))
+    }
+
+    /// [`open_restored`] every directory beneath `directory`.
+    fn restore(directory: &Fd, depth: usize) {
+        if depth >= RESTORE_DEPTH {
+            return;
+        }
+        let Ok(names) = entry_names(directory.0) else {
+            return;
+        };
+        for name in names {
+            if let Ok(child) = open_restored(directory.0, &name) {
+                restore(&child, depth + 1);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A scratch directory never lies inside a protected path, nor
+        /// contains one; a base is skipped only when it is inside one.
+        #[test]
+        fn a_scratch_directory_lies_outside_every_protected_path() {
+            assert_eq!(BASES, ["/tmp", "/var/tmp", "/dev/shm"]);
+            assert_eq!(overlap("/tmp", &["/tmp/repo"], false), None);
+            assert_eq!(overlap("/tmp", &["/tmp"], false), Some("/tmp"));
+            assert_eq!(overlap("/tmp", &["/srv", "/"], false), Some("/"));
+            assert_eq!(
+                overlap("/tmp/axocoatl-scratch.x", &["/tmp/repo"], true),
+                None
+            );
+            assert_eq!(
+                overlap(
+                    "/tmp/axocoatl-scratch.x",
+                    &["/tmp/axocoatl-scratch.x/r"],
+                    true
+                ),
+                Some("/tmp/axocoatl-scratch.x/r")
+            );
+            assert_eq!(
+                overlap(
+                    "/tmp/axocoatl-scratch.x",
+                    &["/tmp/axocoatl-scratch.x/r"],
+                    false
+                ),
+                None
+            );
+        }
+    }
+}
+
 /// Kernel write restriction for a launched command tree (Landlock). Writes
-/// are refused everywhere except beneath the allowed roots and, when the
+/// are refused everywhere except beneath the allowed roots and the command's
+/// own scratch directory ([`super::scratch`]) and, when the
 /// restriction denies the network, so is every TCP bind and connect; reading
 /// and execution stay unrestricted, except for a read-only helper's command
 /// ([`super::helper_view`]). Inherited by every descendant.
 mod landlock {
+    use super::scratch::Scratch;
     use crate::protocol::WriteRestriction;
     use std::ffi::{CStr, CString};
     use std::io;
@@ -1880,6 +2076,8 @@ mod landlock {
     const SYS_CREATE_RULESET: libc::c_long = 444;
     const SYS_ADD_RULE: libc::c_long = 445;
     const SYS_RESTRICT_SELF: libc::c_long = 446;
+    /// The name a restricted command's scratch directory starts with.
+    const WRITER_SCRATCH: &str = "axocoatl-scratch";
 
     /// The ABI 4 layout. An older kernel accepts it while the network
     /// field is zero, and a nonzero one is only sent from ABI 4 on.
@@ -2023,17 +2221,26 @@ mod landlock {
         create(DOMAIN_ONLY)
     }
 
-    /// Create the ruleset in the supervisor. Fails when the kernel or the
-    /// container's seccomp policy does not offer Landlock, or offers only a
-    /// version that cannot refuse every write or, when the restriction
-    /// denies the network, every TCP bind and connect.
-    pub(super) fn prepare(restriction: &WriteRestriction) -> Result<Ruleset, String> {
-        restriction.validate()?;
-        let handled = handled_access(abi()?, restriction.deny_network)?;
-        let ruleset = create(handled)?;
+    /// Create the ruleset in the supervisor, with the command's own scratch
+    /// directory ([`Scratch`]). Fails, with a message that starts `write
+    /// restriction unavailable`, when the kernel or the container's seccomp
+    /// policy does not offer Landlock, or offers only a version that cannot
+    /// refuse every write or, when the restriction denies the network, every
+    /// TCP bind and connect; and fails when no scratch directory can be made
+    /// outside the protected paths.
+    pub(super) fn prepare(restriction: &WriteRestriction) -> Result<(Ruleset, Scratch), String> {
+        let unavailable = |message: String| format!("write restriction unavailable: {message}");
+        restriction.validate().map_err(unavailable)?;
+        let handled = handled_access(abi().map_err(unavailable)?, restriction.deny_network)
+            .map_err(unavailable)?;
+        let protected: Vec<&str> = restriction.protected.iter().map(String::as_str).collect();
+        let scratch = Scratch::create(WRITER_SCRATCH, None, &protected)
+            .map_err(|message| format!("scratch directory unavailable: {message}"))?;
+        let ruleset = create(handled).map_err(unavailable)?;
         let home = std::env::var("HOME").ok();
-        allow_writes(&ruleset, restriction, home.as_deref(), handled.fs)?;
-        Ok(ruleset)
+        allow_writes(&ruleset, restriction, home.as_deref(), handled.fs).map_err(unavailable)?;
+        allow_path(&ruleset, scratch.path_str(), handled.fs, 0).map_err(unavailable)?;
+        Ok((ruleset, scratch))
     }
 
     /// Allow `rights` (the handled write rights) beneath each of the

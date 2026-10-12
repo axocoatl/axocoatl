@@ -37,11 +37,11 @@ impl Helper {
     }
 
     fn launch(request: ExecRequest, stdin: Option<&[u8]>, fixture: Option<(&str, &Path)>) -> Self {
-        Self::launch_with(request, stdin, fixture, false)
+        Self::launch_with(request, stdin, fixture, false, None)
     }
 
     fn start_hardened(request: ExecRequest, fixture: Option<(&str, &Path)>) -> Self {
-        let helper = Self::launch_with(request, None, fixture, true);
+        let helper = Self::launch_with(request, None, fixture, true, None);
         let ready = helper.next();
         ready.validate_for(&helper.request).unwrap();
         assert!(matches!(ready, ServerMessage::Ready { .. }));
@@ -53,11 +53,16 @@ impl Helper {
         stdin: Option<&[u8]>,
         fixture: Option<(&str, &Path)>,
         harden: bool,
+        user: Option<(u32, u32)>,
     ) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_axocoatl-exec-supervisor"));
         command.arg("--serve");
         if harden {
             command.arg("--harden");
+        }
+        if let Some((uid, gid)) = user {
+            use std::os::unix::process::CommandExt;
+            command.uid(uid).gid(gid);
         }
         command
             .stdin(Stdio::piped())
@@ -309,6 +314,181 @@ fn a_write_restriction_blocks_the_protected_tree_or_refuses_to_launch() {
                 "ok\n",
                 "writes beneath an allowed root still work"
             );
+        }
+    }
+}
+
+/// A restricted command gets a scratch directory of its own as `TMPDIR`,
+/// made by the supervisor outside the protected repository (`0700`, owned
+/// by the user the command runs as) and removed when the command ends, even
+/// with directories in it the command left without write or search rights.
+/// It writes there wherever the repository is; it writes neither the
+/// repository nor `/tmp` when the repository lies under `/tmp`, and `/tmp`
+/// (a writable root here, as the daemon names it) when it lies elsewhere.
+/// A repository that is `/tmp` itself puts the scratch directory in
+/// `/var/tmp`. The supervisor runs as root and, when the test runs as root,
+/// also as an unprivileged user.
+#[test]
+fn a_restricted_command_writes_its_own_scratch_directory_wherever_the_repository_is() {
+    use axocoatl_exec::protocol::WriteRestriction;
+    use std::os::unix::fs::PermissionsExt;
+    let elsewhere_base = {
+        let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        if target.starts_with("/tmp") {
+            PathBuf::from("/var/tmp")
+        } else {
+            target
+        }
+    };
+    let under_tmp = tempfile::Builder::new()
+        .prefix("axo-repo-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let elsewhere = tempfile::Builder::new()
+        .prefix("axo-repo-")
+        .tempdir_in(&elsewhere_base)
+        .unwrap();
+    assert!(!elsewhere.path().starts_with("/tmp"));
+    for repository in [under_tmp.path(), elsewhere.path()] {
+        std::fs::write(repository.join("owned"), "before").unwrap();
+        std::fs::set_permissions(repository, std::fs::Permissions::from_mode(0o777)).unwrap();
+        std::fs::set_permissions(
+            repository.join("owned"),
+            std::fs::Permissions::from_mode(0o666),
+        )
+        .unwrap();
+    }
+    // SAFETY: geteuid has no arguments.
+    let root = unsafe { libc::geteuid() } == 0;
+    let users: Vec<Option<(u32, u32)>> = if root {
+        vec![None, Some((65534, 65534))]
+    } else {
+        vec![None]
+    };
+    let abi = landlock_abi();
+    let script = "s=$TMPDIR; echo \"tmpdir=$s\"; stat -c 'mode=%a uid=%u' \"$s\"; \
+                  echo scratch > \"$s/f\" && cat \"$s/f\"; \
+                  mkdir -p \"$s/locked/inner\" && echo x > \"$s/locked/inner/x\" \
+                    && chmod 0500 \"$s/locked/inner\" && chmod 0 \"$s/locked\" && echo locked=ok; \
+                  (echo changed > \"$1/owned\") 2>/dev/null; echo \"repo-write=$?\"; \
+                  (echo new > \"$1/new\") 2>/dev/null; echo \"repo-create=$?\"; \
+                  (echo x > \"/tmp/axo-probe-$2\") 2>/dev/null; echo \"tmp=$?\"; \
+                  rm -f \"/tmp/axo-probe-$2\"";
+    let cases = [
+        (
+            under_tmp.path(),
+            under_tmp.path(),
+            "/tmp/axocoatl-scratch.",
+            false,
+        ),
+        (
+            elsewhere.path(),
+            elsewhere.path(),
+            "/tmp/axocoatl-scratch.",
+            true,
+        ),
+        // The repository is /tmp itself (only named here: nothing is
+        // written to it but the probe, which must fail).
+        (
+            Path::new("/tmp"),
+            under_tmp.path(),
+            "/var/tmp/axocoatl-scratch.",
+            false,
+        ),
+    ];
+    for user in users {
+        for (index, (protected, repository, prefix, tmp_writable)) in cases.iter().enumerate() {
+            let tag = format!("{}-{index}-{}", std::process::id(), user.is_some());
+            let mut input = request(
+                vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    script.into(),
+                    "restricted".into(),
+                    repository.to_string_lossy().into_owned(),
+                    tag.clone(),
+                ],
+                10_000,
+            );
+            input.invocation_id = format!("scratch-{tag}");
+            input.write_restriction = Some(WriteRestriction {
+                writable: vec!["/tmp".into(), "/var/tmp".into(), "/dev".into()],
+                protected: vec![protected.to_string_lossy().into_owned()],
+                deny_network: false,
+            });
+            let mut helper = Helper::launch_with(input.clone(), None, None, false, user);
+            assert!(matches!(helper.next(), ServerMessage::Ready { .. }));
+            helper.control(Control::Dispatch);
+            let ServerMessage::Finished {
+                outcome,
+                launched,
+                stdout,
+                ..
+            } = helper.finished()
+            else {
+                panic!("terminal")
+            };
+            if abi < 3 {
+                let ProcessOutcome::LaunchFailed { message } = outcome else {
+                    panic!("Landlock ABI {abi} cannot apply this restriction: {outcome:?}");
+                };
+                assert!(!launched);
+                assert!(
+                    message.starts_with("write restriction unavailable"),
+                    "{message}"
+                );
+                continue;
+            }
+            assert_eq!(
+                outcome,
+                ProcessOutcome::Exited { code: 0 },
+                "{user:?} {protected:?}"
+            );
+            let stdout =
+                String::from_utf8(stdout.retained_bytes(input.stdout_bytes).unwrap()).unwrap();
+            let lines: Vec<&str> = stdout.lines().collect();
+            let scratch = lines
+                .iter()
+                .find_map(|line| line.strip_prefix("tmpdir="))
+                .unwrap_or_else(|| panic!("{stdout}"));
+            assert!(scratch.starts_with(prefix), "{protected:?}: {stdout}");
+            // SAFETY: geteuid has no arguments.
+            let uid = user.map_or_else(|| unsafe { libc::geteuid() }, |(uid, _)| uid);
+            for expected in [
+                format!("mode=700 uid={uid}"),
+                "scratch".into(),
+                "locked=ok".into(),
+            ] {
+                assert!(
+                    lines.contains(&expected.as_str()),
+                    "{user:?} {protected:?}: {expected}: {stdout}"
+                );
+            }
+            let status = |key: &str| -> i32 {
+                lines
+                    .iter()
+                    .find_map(|line| line.strip_prefix(&format!("{key}=")))
+                    .unwrap_or_else(|| panic!("{key}: {stdout}"))
+                    .parse()
+                    .unwrap()
+            };
+            assert_ne!(status("repo-write"), 0, "{user:?} {protected:?}: {stdout}");
+            assert_ne!(status("repo-create"), 0, "{user:?} {protected:?}: {stdout}");
+            assert_eq!(
+                status("tmp") == 0,
+                *tmp_writable,
+                "{user:?} {protected:?}: {stdout}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(repository.join("owned")).unwrap(),
+                "before"
+            );
+            assert!(!repository.join("new").exists());
+            assert!(
+                !Path::new(scratch).exists(),
+                "the scratch directory {scratch} is removed"
+            );
+            assert!(!Path::new(&format!("/tmp/axo-probe-{tag}")).exists());
         }
     }
 }

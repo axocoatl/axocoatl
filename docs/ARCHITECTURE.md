@@ -1470,17 +1470,24 @@ restriction below and `write_file` and `edit_file` are withheld.
 - A read-only Agent (`writes: []`), including a required reviewer with `bash`, is not
   offered `write_file` or `edit_file`. Its own `bash` commands run under a kernel
   restriction (Landlock, applied by the in-sandbox execution supervisor between fork and
-  exec): only `/tmp`, `/var/tmp` and `/dev` are writable (for a hardened container's
-  helper user, whose view the supervisor builds, only a scratch directory of the
-  command's own and `/dev/null`, `/dev/zero`, `/dev/tty` and `/dev/urandom`), never the
-  repository, and every
-  TCP bind and connect is refused on any address, loopback included (Landlock network
+  exec): only `/tmp`, `/var/tmp` and `/dev`, less any of them that contains the
+  repository, and a scratch directory of the command's own are writable (for a hardened
+  container's helper user, whose view the supervisor builds, only that scratch directory
+  and `/dev/null`, `/dev/zero`, `/dev/tty` and `/dev/urandom`), never the repository.
+  The supervisor makes the scratch directory for each restricted command and gives it as
+  `TMPDIR` (a helper's shell also as `HOME`): `0700`, owned by the user the command runs
+  as, in the first of `/tmp`, `/var/tmp` and `/dev/shm` that does not lie inside the
+  repository (judged by name and by where links lead), and removed when the command tree
+  has ended, with any directory in it the command left without rights for its owner.
+  When none of the three can hold it, the supervisor refuses to launch the command. A
+  repository under `/tmp` therefore keeps `/tmp` itself read-only to the command, which
+  still writes its temporary files. Every TCP bind and connect is refused on any address, loopback included (Landlock network
   rules with no allowed port). Landlock does not cover UDP, or `listen` on an unbound
   socket, which the kernel binds to an ephemeral port itself. The execution request names
   this as `WriteRestriction.deny_network`, a protocol 3 field omitted while false, so
   earlier requests keep their bytes and digest and an earlier supervisor rejects it
   rather than ignore it. `HOME` (and the XDG directories) point at a scratch directory
-  under `/tmp`, created for that command and removed when it ends, so the Session's
+  under its `TMPDIR`, created for that command and removed when it ends, so the Session's
   shared home stays unchanged. A supervisor that cannot apply all of it (Landlock below
   ABI 3, Linux 6.2, cannot refuse truncation; below ABI 4, Linux 6.7, cannot refuse TCP)
   refuses to launch that command, and the Agent is told to use its read-only file tools

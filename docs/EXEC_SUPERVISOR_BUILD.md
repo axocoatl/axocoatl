@@ -114,16 +114,21 @@ architecture the supervisor refuses those two restricted commands (as it does on
 kernel without Landlock) and the two tests fail. Run each architecture on a Linux kernel
 of that architecture; a Podman machine on Apple silicon is aarch64. A virtual machine
 that emulates the other architecture as a whole computer (QEMU without hardware
-acceleration, booting a Linux kernel of that architecture) does provide Landlock: the
-1.3.1 x86_64 supervisor passed all eight tests that way on an Apple silicon Mac, in an
+acceleration, booting a Linux kernel of that architecture) does provide Landlock: an
+x86_64 supervisor of 1.3.1's development, built before restricted commands got a scratch
+directory of their own, passed all eight tests that way on an Apple silicon Mac, in an
 x86_64 Alpine 3.22 virtual machine (Linux 6.12) with Podman installed in it, running a
 test binary cross-built for `x86_64-unknown-linux-musl`.
 
-Keep the test's temporary directory (`TMPDIR`, where each test's Workspace is created)
-outside `/tmp`, `/dev` and `$HOME`. The test mounts the Workspace in the container at
-its own path, and a write restriction drops every writable root that contains the
-Workspace, so with the Workspace under `/tmp` the restricted command cannot write its
-scratch files there and the read-only test fails.
+The test's temporary directory (`TMPDIR`, where each test's Workspace is created) may be
+anywhere, `/tmp` included. The test mounts the Workspace in the container at its own path,
+and a write restriction drops every writable root that contains the Workspace, so with the
+Workspace under `/tmp` a restricted command cannot write `/tmp` itself; it writes the
+scratch directory the supervisor makes for it outside the Workspace (its `TMPDIR`). The
+read-only test checks both: it protects the Workspace, and then a repository it makes
+under the container's `/tmp`, and checks that the command writes its `TMPDIR` (`0700`, its
+user's, removed afterwards) but neither repository, and `/tmp` only when the repository
+does not lie under it.
 
 After validation, replace the two payloads and their matching manifests together,
 and update the embedded descriptor's pinned identities. The installer and normal

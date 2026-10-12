@@ -282,9 +282,13 @@ has `bash` must have `writes: []`, so the same applies to it. It is not offered
 `write_file` or `edit_file`, and the host refuses them if it asks. Its own `bash`
 commands run under a Linux Landlock restriction: no file in the repository, including
 `.git`, can be written, created, renamed or deleted, and only `/tmp`, `/var/tmp` and
-`/dev` are writable; with [workload users](/configure/sandboxes/#workload-users), only a
-temporary directory of the command's own and `/dev/null`, `/dev/zero`, `/dev/tty` and
-`/dev/urandom`. Landlock does not cover a file's permission bits, owner or
+`/dev` (but any of them that contains the repository, so with the repository under `/tmp`
+not `/tmp`) and a temporary directory of the command's own are writable; with
+[workload users](/configure/sandboxes/#workload-users), only that temporary directory and
+`/dev/null`, `/dev/zero`, `/dev/tty` and `/dev/urandom`. The temporary directory is the
+command's `TMPDIR`: Axocoatl's execution supervisor makes it for each command, private to
+the user the command runs as and outside the repository, and removes it when the command
+ends. Landlock does not cover a file's permission bits, owner or
 timestamps. A helper that runs as root, as under `sandbox.workload.mode: image` with an
 image whose user is root, can change them; on macOS, where the Podman machine's shared
 folder reports every file as the caller's, any helper's shell can change permission
