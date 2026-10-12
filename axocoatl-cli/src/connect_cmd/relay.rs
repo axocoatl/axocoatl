@@ -6,7 +6,9 @@
 //! the login container, what is shown is also watched for the sign-in
 //! page's address, which is opened once on this computer
 //! ([`super::browser`]), and a last line that may be Podman's own error is
-//! held back for the caller ([`Program::hold_error_line`]).
+//! held back for the caller ([`Program::hold_error_line`]). What reaches
+//! the user's terminal can be followed ([`Lines`]), so that the message
+//! after it is set off by exactly one blank line.
 
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
@@ -24,6 +26,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use super::browser::{OpenOnce, Opener, SignInPage};
 use super::redact::{FilterChain, Found};
+use super::screen::{Screen, Step};
 
 /// The size used when the user's terminal does not report one.
 const FALLBACK_SIZE: (u16, u16) = (80, 24);
@@ -720,6 +723,103 @@ fn pump_output(
         interrupted,
         held_line,
     })
+}
+
+/// What the user's terminal shows at the end of what was written to it
+/// through [`Lines::follow`]: a [`Screen`] of its size, fed every byte that
+/// reached it (the program's output as shown, a held line shown after it or
+/// not, the modes reset), so that the message after it is set off by
+/// exactly one blank line ([`Lines::before_message`]) however the output
+/// ended. A blank line is one that shows nothing (spaces at most, such as
+/// a hidden token's padding wrapped onto it). Shared: the writer goes to
+/// the relay's thread.
+#[derive(Clone)]
+pub(crate) struct Lines(Arc<Mutex<Shown>>);
+
+struct Shown {
+    screen: Screen,
+    /// Whether the line above the first one written to is blank.
+    blank_above: bool,
+}
+
+impl Lines {
+    /// For a terminal of `size` (columns, rows) whose cursor is at the start
+    /// of a line, below a blank one when `blank_above`.
+    pub(crate) fn new((cols, rows): (u16, u16), blank_above: bool) -> Self {
+        Self(Arc::new(Mutex::new(Shown {
+            screen: Screen::new(cols, rows),
+            blank_above,
+        })))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Shown> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// `output`, with what is written to it fed to these lines.
+    pub(crate) fn follow<W: Write>(&self, output: W) -> FollowedOutput<W> {
+        FollowedOutput {
+            output,
+            lines: self.clone(),
+        }
+    }
+
+    /// `bytes` reached the terminal.
+    pub(crate) fn feed(&self, bytes: &[u8]) {
+        let screen = &mut self.lock().screen;
+        for byte in bytes {
+            if let Step::Repeat(count) = screen.feed(*byte).step {
+                for _ in 0..count {
+                    if screen.repeat_last().is_none() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The line breaks to write before a message (the terminal is no longer
+    /// raw, so `\n` also returns the cursor) for exactly one blank line
+    /// between it and the last line that is not: two on a line that is not
+    /// blank, one on a blank line below one that is not, none (or `\r`,
+    /// back to the line's start) on a blank line below a blank one (more
+    /// blank lines the output ended with stay).
+    pub(crate) fn before_message(&self) -> &'static str {
+        let shown = self.lock();
+        let screen = &shown.screen;
+        let (x, row) = screen.cursor();
+        let blank =
+            |row: Option<u64>| row.map_or(shown.blank_above, |row| screen.row_is_blank(row));
+        if !blank(Some(row)) {
+            "\n\n"
+        } else if !blank(row.checked_sub(1)) {
+            "\n"
+        } else if x > 0 {
+            "\r"
+        } else {
+            ""
+        }
+    }
+}
+
+/// A writer whose output is followed by [`Lines`].
+pub(crate) struct FollowedOutput<W> {
+    output: W,
+    lines: Lines,
+}
+
+impl<W: Write> Write for FollowedOutput<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.output.write(bytes)?;
+        self.lines.feed(&bytes[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.output.flush()
+    }
 }
 
 /// A duplicate of standard input that a blocking task can own.

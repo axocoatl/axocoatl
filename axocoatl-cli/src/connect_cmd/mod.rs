@@ -731,6 +731,10 @@ async fn cmd_connect_codex(
         }
     };
     eprintln!("{intro}");
+    // What is shown below the intro's blank line is followed, so that the
+    // outcome is set off from it by exactly one blank line however Codex's
+    // output ended.
+    let lines = relay::Lines::new(relay::terminal_size(std::io::stdout().as_fd()), true);
     let interrupt = Interrupt::default();
     let mut listeners = interrupt.listen();
     let resized = Resized::default();
@@ -742,7 +746,7 @@ async fn cmd_connect_codex(
             device_auth,
         },
         input,
-        Box::new(std::io::stdout()),
+        Box::new(lines.follow(std::io::stdout())),
         &interrupt,
         &resized,
     )
@@ -750,13 +754,14 @@ async fn cmd_connect_codex(
     for listener in listeners {
         listener.abort();
     }
+    let before = lines.before_message();
     match result {
         Ok(message) => {
-            println!("\n✓ {message}");
+            println!("{before}✓ {message}");
             exit::CONNECTED
         }
         Err(Failure { code, message }) => {
-            eprintln!("\n✗ {message}");
+            eprintln!("{before}✗ {message}");
             code
         }
     }

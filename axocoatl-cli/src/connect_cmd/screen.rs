@@ -420,6 +420,17 @@ impl Screen {
         line.get(x).copied()
     }
 
+    /// The cursor's column and row (numbered as [`Print::row`]).
+    pub(crate) fn cursor(&self) -> (usize, u64) {
+        (self.x, self.scrolled + self.y as u64)
+    }
+
+    /// Whether row `row` (see [`Print::row`]) shows nothing: each of its
+    /// cells is blank, or no longer kept.
+    pub(crate) fn row_is_blank(&self, row: u64) -> bool {
+        (0..self.cols).all(|x| self.cell(x, row).is_none_or(|cell| cell.is_blank()))
+    }
+
     /// Mark the cell at `x` of `row` as part of a token.
     pub(crate) fn mark_secret(&mut self, x: usize, row: u64) {
         if row >= self.scrolled {

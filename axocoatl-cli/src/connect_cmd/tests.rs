@@ -2058,6 +2058,23 @@ async fn run_container_login(
     (result, screen)
 }
 
+/// What the user's terminal shows once `connect codex` has shown `screen`
+/// (below the intro's blank line) and printed its outcome as
+/// `cmd_connect_codex` prints it: after the line breaks [`relay::Lines`]
+/// asks for, each `\n` written as the terminal, no longer raw, writes it.
+fn with_outcome(screen: &Screen, result: &Result<String, Failure>) -> String {
+    let lines = relay::Lines::new(SIZE, true);
+    let mut shown = screen.bytes();
+    lines.feed(&shown);
+    let (mark, message) = match result {
+        Ok(message) => ('✓', message.as_str()),
+        Err(failure) => ('✗', failure.message.as_str()),
+    };
+    let outcome = format!("{}{mark} {message}\n", lines.before_message());
+    shown.extend_from_slice(outcome.replace('\n', "\r\n").as_bytes());
+    String::from_utf8_lossy(&shown).into_owned()
+}
+
 /// With the pinned Codex in the login container, the sign-in page it
 /// prints is opened on this computer once, with exactly that address (not
 /// a look-alike before it, nor the address printed after it), and the
@@ -2146,9 +2163,18 @@ async fn no_browser_or_a_failing_opener_leaves_the_printed_address() {
     let (_, log) = fake_opener(&fixture.root, 0);
     let login = fixture.login(None, codex_container::DEFAULT_LIFETIME);
     let (result, screen) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
-    result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    let terminal = with_outcome(&screen, &result);
+    let message = result.unwrap_or_else(|failure| panic!("{}", failure.message));
     assert_eq!(opened(&log), "");
     assert!(!screen.contains(browser::OPENED));
+    // Exactly one blank line between Codex's last line and the outcome.
+    assert!(
+        terminal.ends_with(&format!(
+            "{CODEX_PROMPT}\r\n\r\nSuccessfully logged in\r\n\r\n✓ {}\r\n",
+            message.replace('\n', "\r\n")
+        )),
+        "{terminal:?}"
+    );
     let flat: String = String::from_utf8_lossy(&screen.bytes())
         .split(['\r', '\n'])
         .collect();
@@ -2252,6 +2278,8 @@ async fn a_sign_in_the_container_outlived_says_it_was_not_completed_in_time() {
 /// ended under it are not shown, after Codex's whole output; the same
 /// errors are shown when the container ended before its lifetime, and
 /// another Podman error is shown when the lifetime ended the container.
+/// Either way exactly one blank line separates the last line shown from
+/// the message.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn only_podmans_lost_exec_session_error_after_the_lifetime_is_not_shown() {
     const NO_SESSION: &str = "Error: no exec session with ID 0123abcd found\r\n";
@@ -2273,6 +2301,7 @@ async fn only_podmans_lost_exec_session_error_after_the_lifetime_is_not_shown() 
     };
     let (no_session, not_retrieved, other, early) = tokio::join!(run(0), run(1), run(2), run(3));
     for (name, (result, screen)) in [("no session", no_session), ("not retrieved", not_retrieved)] {
+        let terminal = with_outcome(&screen, &result);
         let failure = result.expect_err(name);
         assert_eq!(failure.code, exit::NO_TOKEN, "{name}");
         assert_eq!(
@@ -2290,15 +2319,37 @@ async fn only_podmans_lost_exec_session_error_after_the_lifetime_is_not_shown() 
         );
         let flat: String = shown.split(['\r', '\n']).collect();
         assert!(flat.contains(SIGN_IN_ADDRESS), "{name}: {shown}");
+        // Codex's last line, the Enter typed after it (a blank line), and
+        // the message: not another blank line for the line dropped.
+        assert!(
+            terminal.ends_with(&format!("{CODEX_PROMPT}\r\n\r\n✗ {}\r\n", failure.message)),
+            "{name}: {terminal:?}"
+        );
     }
     let (result, screen) = other;
+    let terminal = with_outcome(&screen, &result);
     let failure = result.expect_err("other");
     assert_eq!(failure.message, codex_container::timed_out(second));
     assert!(screen.contains(OTHER));
+    assert!(
+        terminal.ends_with(&format!(
+            "{CODEX_PROMPT}\r\n\r\n{OTHER}\r\n✗ {}\r\n",
+            failure.message
+        )),
+        "{terminal:?}"
+    );
     let (result, screen) = early;
+    let terminal = with_outcome(&screen, &result);
     let failure = result.expect_err("early");
     assert_eq!(failure.message, codex_container::ended_early());
     assert!(screen.contains(NOT_RETRIEVED));
+    assert!(
+        terminal.ends_with(&format!(
+            "{CODEX_PROMPT}\r\n\r\n{NOT_RETRIEVED}\r\n✗ {}\r\n",
+            failure.message
+        )),
+        "{terminal:?}"
+    );
     for (fixture, _) in &fixtures {
         assert!(fixture.stored().is_none());
     }
@@ -2463,6 +2514,160 @@ fn a_held_line_is_kept_only_when_the_program_ends_with_an_error() {
             .count(),
         1
     );
+}
+
+/// The outcome after the relayed output (as `cmd_connect_codex` prints
+/// it, after the line breaks [`relay::Lines`] asks for) is set off from the
+/// last line shown by exactly one blank line however the output ended:
+/// without a line break, with one, with a blank line, with a held line
+/// that is dropped or shown, with escapes, with a mode the relay resets, or
+/// with nothing at all (below the intro's blank line).
+#[test]
+fn the_outcome_follows_the_last_line_shown_after_exactly_one_blank_line() {
+    fn terminal(script: &str, show_held: bool, outcome: &str) -> String {
+        let terminal = user_terminal();
+        terminal.set_size(SIZE);
+        let screen = Screen::default();
+        let lines = relay::Lines::new(SIZE, true);
+        let mut output = lines.follow(screen.clone());
+        let args = ["-c", script];
+        let run = relay::run_program(
+            &relay::Program {
+                path: Path::new("/bin/sh"),
+                args: &args,
+                cwd: None,
+                set_env: &[],
+                remove_env: &[],
+                filters: redact::FilterChain::codex,
+                open_sign_in: None,
+                hold_error_line: true,
+            },
+            terminal.slave.as_fd(),
+            &mut output,
+            &std::sync::atomic::AtomicBool::new(false),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        if show_held {
+            output.write_all(&run.held_line).unwrap();
+        }
+        let mut shown = screen.bytes();
+        let outcome = format!("{}{outcome}\n", lines.before_message());
+        shown.extend_from_slice(outcome.replace('\n', "\r\n").as_bytes());
+        String::from_utf8(shown).unwrap()
+    }
+    let said = "Codex said this";
+    for (script, show_held, outcome, expected) in [
+        (
+            "printf 'Codex said this'; exit 3",
+            false,
+            "✗ x",
+            format!("{said}\r\n\r\n✗ x\r\n"),
+        ),
+        (
+            "printf 'Codex said this\\n'; exit 3",
+            false,
+            "✗ x",
+            format!("{said}\r\n\r\n✗ x\r\n"),
+        ),
+        (
+            "printf 'Codex said this\\n\\n'; exit 3",
+            false,
+            "✗ x",
+            format!("{said}\r\n\r\n✗ x\r\n"),
+        ),
+        (
+            "printf 'Codex said this\\r'; exit 3",
+            false,
+            "✗ x",
+            format!("{said}\r\r\n\r\n✗ x\r\n"),
+        ),
+        (
+            "printf 'Codex said this\\nError: gone\\n'; exit 3",
+            false,
+            "✗ x",
+            format!("{said}\r\n\r\n✗ x\r\n"),
+        ),
+        (
+            "printf 'Codex said this\\n\\nError: gone\\n'; exit 3",
+            false,
+            "✗ x",
+            format!("{said}\r\n\r\n✗ x\r\n"),
+        ),
+        (
+            "printf 'Codex said this\\nError: gone\\n'; exit 3",
+            true,
+            "✗ x",
+            format!("{said}\r\nError: gone\r\n\r\n✗ x\r\n"),
+        ),
+        (
+            "printf 'Codex said this\\n\\nError: gone\\n'; exit 3",
+            true,
+            "✗ x",
+            format!("{said}\r\n\r\nError: gone\r\n\r\n✗ x\r\n"),
+        ),
+        (
+            "printf 'Codex said this'; exit 0",
+            false,
+            "✓ x",
+            format!("{said}\r\n\r\n✓ x\r\n"),
+        ),
+        (
+            "printf 'Codex said this\\n'; exit 0",
+            false,
+            "✓ x",
+            format!("{said}\r\n\r\n✓ x\r\n"),
+        ),
+        (
+            "printf '\\033[1mCodex said this\\033[0m\\n\\n'; exit 0",
+            false,
+            "✓ x",
+            format!("\x1b[1m{said}\x1b[0m\r\n\r\n✓ x\r\n"),
+        ),
+        // Bold left on: the relay resets it, which shows nothing.
+        (
+            "printf '\\033[1mCodex said this\\n'; exit 3",
+            false,
+            "✗ x",
+            format!("\x1b[1m{said}\r\n\x1b[0m\r\n✗ x\r\n"),
+        ),
+        ("exit 3", false, "✗ x", "✗ x\r\n".to_string()),
+    ] {
+        assert_eq!(terminal(script, show_held, outcome), expected, "{script}");
+    }
+}
+
+/// The line breaks before the outcome, from what the terminal shows: the
+/// cursor's line and the one above it, after line feeds without a carriage
+/// return, lines of spaces, the alternate screen and scrolling.
+#[test]
+fn the_line_breaks_before_the_outcome_follow_the_cursor_and_the_line_above() {
+    let many: String = (0..40).map(|line| format!("line {line}\r\n")).collect();
+    for (shown, blank_above, before) in [
+        ("", true, ""),
+        ("", false, "\n"),
+        ("text", true, "\n\n"),
+        ("text\r", true, "\n\n"),
+        ("text\r\n", true, "\n"),
+        ("text\r\n\r\n", true, ""),
+        ("text\r\n\r\n\r\n", true, ""),
+        // Raw line feeds keep the column.
+        ("text\n", true, "\n"),
+        ("text\n\n", true, "\r"),
+        ("text\r\n   \r\n", true, ""),
+        ("text\r\n\x1b[31m\x1b[0m", true, "\n"),
+        (
+            "text\r\n\x1b[?1049h\x1b[2J\x1b[Hdrawn\r\n\x1b[?1049l",
+            true,
+            "\n",
+        ),
+        ("text\r\nmore\r\n\x1b[A", true, "\n\n"),
+        (&many, true, "\n"),
+    ] {
+        let lines = relay::Lines::new(SIZE, blank_above);
+        lines.feed(shown.as_bytes());
+        assert_eq!(lines.before_message(), before, "{shown:?}");
+    }
 }
 
 /// The relay's part: the page is opened once however often its address is

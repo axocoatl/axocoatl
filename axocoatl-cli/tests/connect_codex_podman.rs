@@ -754,7 +754,8 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
     //    The error `podman exec` may print when the container goes under
     //    it (`Error: retrieving exec session … no such container`, when
     //    Podman has removed the container before it asks for the session's
-    //    exit code) is not shown; Codex's output is.
+    //    exit code) is not shown; Codex's output is, and one blank line
+    //    separates its last line from the message.
     {
         let root = scratch_path.join("sign-in-timeout");
         let started = Instant::now();
@@ -775,6 +776,15 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
             "{text}"
         );
         assert!(text.contains("WXYZ-1234"), "{text}");
+        // Codex's last line, its own blank line after it, and the message:
+        // exactly one blank line, not another for the error not shown.
+        assert!(
+            text.contains(
+                "   \x1b[1mWXYZ-1234\x1b[0m\r\n\r\n✗ The Codex sign-in was not completed \
+                 within 1 minute"
+            ),
+            "{text:?}"
+        );
         assert!(!text.contains("Error: "), "{text}");
         assert!(!text.contains("exec session"), "{text}");
         assert!(!text.contains("no such container"), "{text}");

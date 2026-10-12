@@ -46,6 +46,25 @@ fn tree(directory: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The rows a terminal `cols` wide shows for `text` (lines ending in CR
+/// LF), each without its trailing spaces: a longer line wraps onto the next
+/// rows. Escapes are counted as characters, so only rows without them are
+/// exact.
+fn rows(text: &str, cols: usize) -> Vec<String> {
+    text.split("\r\n")
+        .flat_map(|line| {
+            let chars: Vec<char> = line.chars().collect();
+            if chars.is_empty() {
+                return vec![String::new()];
+            }
+            chars
+                .chunks(cols)
+                .map(|row| row.iter().collect::<String>().trim_end().to_string())
+                .collect()
+        })
+        .collect()
+}
+
 #[test]
 fn connect_codex_signs_in_with_a_private_codex_home_and_stores_the_sign_in() {
     connect_codex_with_data_root(false);
@@ -166,6 +185,16 @@ fn connect_codex_with_data_root(relative: bool) {
         text.contains("Connected Codex: stored your ChatGPT sign-in as secret codex-chatgpt"),
         "{text}"
     );
+    // Exactly one blank row between Codex's last line and the outcome: the
+    // spaces the hidden token is padded with wrap onto one, so no line
+    // break is added to it.
+    let before = &text[..text.find("✓ Connected Codex").unwrap()];
+    let rows = rows(before, 100);
+    let [.., last, blank, outcome] = rows.as_slice() else {
+        panic!("{text:?}");
+    };
+    assert!(last.starts_with("debug: token "), "{text:?}");
+    assert!(blank.is_empty() && outcome.is_empty(), "{text:?}");
     for secret in [&access, &refresh, &shown_key] {
         assert!(leaked_positions(&all, secret).is_empty(), "{text}");
     }
