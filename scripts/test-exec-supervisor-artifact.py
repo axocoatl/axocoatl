@@ -28,7 +28,9 @@ MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_MANIFEST_BYTES = 512 * 1024
 ARCHITECTURES = {"x86_64": 62, "aarch64": 183}
 TOOLCHAIN = "1.95.0"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+SOURCE_PREFIX = "/axocoatl-source"
+CARGO_HOME_PREFIX = "/cargo-home"
 
 
 class ArtifactError(ValueError):
@@ -301,10 +303,26 @@ def write_file(path: Path, data: bytes, mode: int) -> None:
         os.fsync(destination.fileno())
 
 
-def package(root: Path, snapshot_path: Path, binary: Path, architecture: str, output: Path, rustc_path: Path, linker: Path) -> None:
+def require_no_build_paths(payload: bytes, build_paths: list[str]) -> None:
+    # The build remaps the checkout and the Cargo home to fixed names, so the
+    # payload must not depend on where either was. A leftover machine path
+    # (for example a registry path in a panic location) makes the bytes vary.
+    # Each path is a distinctive build directory (the helper crate in the
+    # checkout, the Cargo registry, the target's build directory).
+    for path in build_paths:
+        require(path.startswith("/") and "\0" not in path, "build paths must be absolute")
+        path = path.rstrip("/")
+        if any(path == prefix or path.startswith(prefix + "/") for prefix in (SOURCE_PREFIX, CARGO_HOME_PREFIX)):
+            continue
+        require(path.encode() + b"/" not in payload, f"payload embeds a build-machine path: {path}")
+
+
+def package(root: Path, snapshot_path: Path, binary: Path, architecture: str, output: Path, rustc_path: Path, linker: Path,
+            build_paths: list[str] | None = None) -> None:
     before = json.loads(regular_bytes(snapshot_path, MAX_MANIFEST_BYTES))
     require(source_snapshot(root) == before, "source changed during supervisor build")
     payload = regular_bytes(binary, MAX_BINARY_BYTES)
+    require_no_build_paths(payload, build_paths or [])
     elf = inspect_elf(payload, architecture)
     rustc = regular_bytes(rustc_path, 4096).decode()
     require(re.search(r"^release: 1\.95\.0$", rustc, re.MULTILINE) is not None, "build did not use pinned Rust 1.95.0")
@@ -312,8 +330,8 @@ def package(root: Path, snapshot_path: Path, binary: Path, architecture: str, ou
     binary_name, manifest_name = names(architecture)
     manifest = {"schema_version": SCHEMA_VERSION, "package": "axocoatl-exec", "binary": "axocoatl-exec-supervisor", **before,
                 "build": {"toolchain": TOOLCHAIN, "rustc": rustc, "target": f"{architecture}-unknown-linux-musl", "profile": "release",
-                          "locked": True, "offline": True, "jobs": 1, "crt_static": True, "remap_source_prefix": "/axocoatl-source",
-                          "linker_name": linker.name, "linker_sha256": digest(linker_data)},
+                          "locked": True, "offline": True, "jobs": 1, "crt_static": True, "remap_source_prefix": SOURCE_PREFIX,
+                          "remap_cargo_home_prefix": CARGO_HOME_PREFIX, "linker_name": linker.name, "linker_sha256": digest(linker_data)},
                 "payload": {"name": binary_name, "bytes": len(payload), "sha256": digest(payload), "elf": elf},
                 "verification": {"elf_structure": True, "container_execution": False}}
     data = encoded(manifest)
@@ -367,10 +385,11 @@ def verify(output: Path, architecture: str, root: Path | None = None, *, shared_
     require(type(manifest["protocol_version"]) is int and manifest["protocol_version"] > 0, "invalid protocol version")
     require(isinstance(manifest["package_version"], str) and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?", manifest["package_version"]) is not None, "invalid package version")
     build = manifest["build"]
-    require(set(build) == {"toolchain", "rustc", "target", "profile", "locked", "offline", "jobs", "crt_static", "remap_source_prefix", "linker_name", "linker_sha256"}, "unexpected build manifest fields")
+    require(set(build) == {"toolchain", "rustc", "target", "profile", "locked", "offline", "jobs", "crt_static", "remap_source_prefix", "remap_cargo_home_prefix", "linker_name", "linker_sha256"}, "unexpected build manifest fields")
     require(build["toolchain"] == TOOLCHAIN and build["target"] == f"{architecture}-unknown-linux-musl"
             and build["profile"] == "release" and build["locked"] is True and build["offline"] is True
-            and build["crt_static"] is True and build["jobs"] == 1 and build["remap_source_prefix"] == "/axocoatl-source", "unsupported build contract")
+            and build["crt_static"] is True and build["jobs"] == 1 and build["remap_source_prefix"] == SOURCE_PREFIX
+            and build["remap_cargo_home_prefix"] == CARGO_HOME_PREFIX, "unsupported build contract")
     require(isinstance(build["rustc"], str) and len(build["rustc"]) <= 4096
             and re.search(r"^release: 1\.95\.0$", build["rustc"], re.MULTILINE) is not None, "unsupported compiler provenance")
     require(isinstance(build["linker_name"], str) and 0 < len(build["linker_name"]) <= 256
@@ -523,7 +542,8 @@ class ArtifactTests(unittest.TestCase):
                     "build_inputs": {"inputs": {"schema_version": 1}, "sha256": digest(encoded({"schema_version": 1}))},
                     "build": {"toolchain": TOOLCHAIN, "rustc": "release: 1.95.0\n", "target": "x86_64-unknown-linux-musl",
                               "profile": "release", "locked": True, "offline": True, "crt_static": True, "jobs": 1,
-                              "remap_source_prefix": "/axocoatl-source", "linker_name": "fixture-not-a-linker", "linker_sha256": digest(b"")},
+                              "remap_source_prefix": SOURCE_PREFIX, "remap_cargo_home_prefix": CARGO_HOME_PREFIX,
+                              "linker_name": "fixture-not-a-linker", "linker_sha256": digest(b"")},
                     "payload": {"name": binary_name, "bytes": len(payload), "sha256": digest(payload), "elf": inspect_elf(payload, "x86_64")},
                     "verification": {"elf_structure": True, "container_execution": False}}
         write_file(output / binary_name, payload, 0o755)
@@ -582,13 +602,29 @@ class ArtifactTests(unittest.TestCase):
                 with self.assertRaises(ArtifactError):
                     verify(output, "x86_64")
 
+    def test_a_payload_with_an_unremapped_build_path_is_refused(self):
+        registry = b"/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs"
+        remapped = b"/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs"
+        source = b"/axocoatl-source/crates/axocoatl-exec/src/main.rs"
+        with self.assertRaisesRegex(ArtifactError, "embeds a build-machine path"):
+            require_no_build_paths(b"\0" + registry + b"\0", ["/src/crates/axocoatl-exec", "/usr/local/cargo/registry"])
+        with self.assertRaisesRegex(ArtifactError, "embeds a build-machine path"):
+            require_no_build_paths(b"/work/axocoatl/crates/axocoatl-exec/src/main.rs", ["/work/axocoatl/crates/axocoatl-exec/"])
+        with self.assertRaisesRegex(ArtifactError, "must be absolute"):
+            require_no_build_paths(remapped, ["relative/cargo/registry"])
+        # The fixed names themselves, and paths that only share a suffix or prefix, are accepted.
+        require_no_build_paths(remapped + source, ["/cargo-home/registry", "/axocoatl-source/crates/axocoatl-exec",
+                                                   "/usr/local/cargo/registry", "/home/registry", "/source/crates/axocoatl-exec",
+                                                   "/target/aarch64-unknown-linux-musl"])
+
     def test_tampered_manifest_and_invented_execution_proof_are_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             manifest = self.write_fixture_artifact(output)
             original = encoded(manifest)
             for section, key, value in [("payload", "sha256", "0" * 64), ("verification", "container_execution", True),
-                                        ("build", "target", "aarch64-unknown-linux-musl"), ("build", "locked", False)]:
+                                        ("build", "target", "aarch64-unknown-linux-musl"), ("build", "locked", False),
+                                        ("build", "remap_cargo_home_prefix", "/usr/local/cargo")]:
                 altered = json.loads(original)
                 altered[section][key] = value
                 (output / names("x86_64")[1]).write_bytes(encoded(altered))
@@ -723,6 +759,8 @@ def main() -> None:
     package_command.add_argument("architecture", choices=ARCHITECTURES)
     for name in ("output", "rustc", "linker"):
         package_command.add_argument(name, type=Path)
+    package_command.add_argument("--build-path", action="append", default=[],
+                                 help="absolute checkout, Cargo home or target path the payload must not contain")
     verification = commands.add_parser("verify")
     verification.add_argument("output", type=Path)
     verification.add_argument("architecture", choices=ARCHITECTURES)
@@ -739,7 +777,8 @@ def main() -> None:
         if args.command == "snapshot":
             write_file(args.output, encoded(source_snapshot(args.root)), 0o600)
         elif args.command == "package":
-            package(args.root, args.snapshot, args.binary, args.architecture, args.output, args.rustc, args.linker)
+            package(args.root, args.snapshot, args.binary, args.architecture, args.output, args.rustc, args.linker,
+                    args.build_path)
         elif args.command == "verify":
             manifest = verify(args.output, args.architecture, args.source_root)
             print(f"Verified ELF structure and hashes: {manifest['payload']['name']} (protocol {manifest['protocol_version']}; execution not tested)")

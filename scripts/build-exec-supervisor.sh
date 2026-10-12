@@ -49,6 +49,14 @@ linker="$(command -v -- "$linker")" || fail 'the requested linker is not install
 [[ -f "$linker" && -x "$linker" ]] || fail 'linker must resolve to an executable file'
 linker="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$linker")"
 build_target_directory="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).absolute())' "$build_target_directory")"
+# Registry sources are compiled from the Cargo home, and their paths reach the
+# payload (panic locations). Pin the Cargo home Cargo uses to one absolute path
+# and remap it, as the checkout is remapped, so the bytes do not depend on where
+# either is.
+[[ -n "${CARGO_HOME:-}" || -n "${HOME:-}" ]] || fail 'set CARGO_HOME or HOME to locate the Cargo home'
+cargo_home="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).absolute())' "${CARGO_HOME:-$HOME/.cargo}")"
+[[ "$cargo_home" != "$source_root" ]] || fail 'the Cargo home cannot be the source checkout'
+export CARGO_HOME="$cargo_home"
 for setting in RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER; do
   [[ -z "${!setting-}" ]] || fail "unset $setting for this controlled build"
 done
@@ -64,9 +72,17 @@ rustup run "$toolchain" rustc -vV > "$temporary_directory/rustc.txt"
 linker_literal="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$linker")"
 echo "Building axocoatl-exec-supervisor for $target with installed Rust $toolchain"
 flag_separator=$'\x1f'
+source_remap="--remap-path-prefix=$source_root=/axocoatl-source"
+cargo_home_remap="--remap-path-prefix=$cargo_home=/cargo-home"
+# rustc applies the last matching remap; list the longer (more specific) prefix last.
+if (( ${#cargo_home} > ${#source_root} )); then
+  remaps="$source_remap$flag_separator$cargo_home_remap"
+else
+  remaps="$cargo_home_remap$flag_separator$source_remap"
+fi
 (
   cd -- "$source_root"
-  CARGO_ENCODED_RUSTFLAGS="-C${flag_separator}target-feature=+crt-static${flag_separator}--remap-path-prefix=$source_root=/axocoatl-source" \
+  CARGO_ENCODED_RUSTFLAGS="-C${flag_separator}target-feature=+crt-static${flag_separator}$remaps" \
     CARGO_INCREMENTAL=0 \
     rustup run "$toolchain" cargo build --locked --offline --release --jobs 1 \
       --manifest-path "$source_root/Cargo.toml" -p axocoatl-exec --bin axocoatl-exec-supervisor \
@@ -76,6 +92,8 @@ flag_separator=$'\x1f'
 )
 python3 "$validator" package "$source_root" "$temporary_directory/source.json" \
   "$build_target_directory/$target/release/axocoatl-exec-supervisor" \
-  "$architecture" "$output_directory" "$temporary_directory/rustc.txt" "$linker"
+  "$architecture" "$output_directory" "$temporary_directory/rustc.txt" "$linker" \
+  --build-path "$source_root/crates/axocoatl-exec" --build-path "$cargo_home/registry" \
+  --build-path "$build_target_directory/$target"
 python3 "$validator" verify "$output_directory" "$architecture" --source-root "$source_root"
 echo "Built and structurally verified $output_directory (container execution proof still required)"

@@ -45,7 +45,7 @@ impl EmbeddedSupervisor {
 const X86_64: EmbeddedSupervisor = EmbeddedSupervisor {
     architecture: "x86_64",
     bytes: include_bytes!("../assets/exec-supervisor/axocoatl-exec-supervisor-linux-x86_64"),
-    sha256: "8e1e611e22c5fc8d824130ed68fb2f676aa994a5c018991520c41a61a7578d64",
+    sha256: "6a6302c0b35550022e18ce55406b87fcd12a9fb0782f265d3b5257ea2a00f5bc",
     protocol_version: EMBEDDED_PROTOCOL_VERSION,
     package_version: EMBEDDED_PACKAGE_VERSION,
     source_sha256: EMBEDDED_SOURCE_SHA256,
@@ -54,7 +54,7 @@ const X86_64: EmbeddedSupervisor = EmbeddedSupervisor {
 const AARCH64: EmbeddedSupervisor = EmbeddedSupervisor {
     architecture: "aarch64",
     bytes: include_bytes!("../assets/exec-supervisor/axocoatl-exec-supervisor-linux-aarch64"),
-    sha256: "8537d08f4bc5c595f8f8067ecc5d015f780bbb448daa3ad5d2aee7eda6c7cfd6",
+    sha256: "be386938fbc7069093859cf15166e5092fde544d513c8ef97cbdaef6ff259f01",
     protocol_version: EMBEDDED_PROTOCOL_VERSION,
     package_version: EMBEDDED_PACKAGE_VERSION,
     source_sha256: EMBEDDED_SOURCE_SHA256,
@@ -87,7 +87,7 @@ mod tests {
         ] {
             assert!(manifest.len() <= 512 * 1024);
             let manifest: serde_json::Value = serde_json::from_str(manifest).unwrap();
-            assert_eq!(manifest["schema_version"], 2);
+            assert_eq!(manifest["schema_version"], 3);
             assert_eq!(manifest["package"], "axocoatl-exec");
             assert_eq!(manifest["binary"], "axocoatl-exec-supervisor");
             assert_eq!(manifest["package_version"], embedded.package_version);

@@ -2,7 +2,11 @@
 //! Run with an explicitly prepared AXO_SUPERVISOR_TEST_IMAGE and its numeric
 //! AXO_SUPERVISOR_TEST_EXPECTED_UID. Run the same suite for the ordinary image
 //! and the non-root fixture; the test never replaces the image's USER.
+//! AXO_SUPERVISOR_TEST_EXPECTED_PROGRAM_SHA256, when set, is the embedded
+//! payload the image's architecture must receive.
 //! CONTAINER_CONNECTION may select an already-configured Podman connection.
+//! `scripts/test-exec-supervisor-runtime.sh` runs this suite in Alpine and
+//! Debian images of both architectures, as root and as a non-root user.
 #![cfg(unix)]
 
 use std::future::Future;
@@ -103,6 +107,12 @@ impl RuntimeFixture {
 
     fn installed_program(&self, prepared: &PreparedSupervisedCommand) -> PathBuf {
         let hash = prepared.program_sha256();
+        if let Ok(expected) = std::env::var("AXO_SUPERVISOR_TEST_EXPECTED_PROGRAM_SHA256") {
+            assert_eq!(
+                hash, expected,
+                "the embedded payload for the image's architecture must be installed"
+            );
+        }
         let path = self
             .installation
             .path()
