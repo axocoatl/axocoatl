@@ -64,6 +64,7 @@ impl AxocoatlDaemon {
             };
             let results = record.keep_results(&request.run_id)?;
             let previous = crate::keep_pr::last_kept_branch(&results).cloned();
+            let receipt = crate::keep_pr::load_receipt(record, &request.run_id)?;
             crate::keep_pr::keep(KeepJob {
                 session_root: &session.working_dir,
                 control_root: &self.data_root,
@@ -73,6 +74,7 @@ impl AxocoatlDaemon {
                 attribution: &attribution,
                 outside: &outside,
                 previous: previous.as_ref(),
+                receipt: receipt.as_ref(),
                 tools,
             })
             .await

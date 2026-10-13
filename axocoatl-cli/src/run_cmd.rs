@@ -1046,6 +1046,12 @@ async fn keep_changes(
             if let Some(url) = kept["pull_request_url"].as_str() {
                 report(console, &format!("Pull request: {url}"));
             }
+            if let Some(receipt) = kept["receipt"].as_str() {
+                report(
+                    console,
+                    &format!("Receipt: {receipt} (the commit's Axocoatl-Receipt trailer)"),
+                );
+            }
             for warning in kept["warnings"]
                 .as_array()
                 .into_iter()

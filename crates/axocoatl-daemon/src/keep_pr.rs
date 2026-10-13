@@ -13,12 +13,20 @@
 //! Host `git` and `gh` run with the person's own credentials; Axocoatl reads
 //! none. Nothing a repository can configure runs: see `git_host`.
 //!
+//! When the run has a signed receipt (docs/design/1.4-receipts.md), Keep
+//! commits only what it covers: each path it is about to commit must have
+//! the content the receipt gives it (or, for a removed path, be absent). The
+//! commit carries the trailers `Axocoatl-Run` and `Axocoatl-Receipt`, and the
+//! pull request body a Receipt section and the receipt itself in an
+//! `<!-- axocoatl-receipt:v1 … -->` block that the body's cut never cuts.
+//!
 //! Owner: workstream `keep`.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use axocoatl_core::SecureDir;
+use axocoatl_session::receipt::{self as receipt_v1, OpenedReceipt};
 use axocoatl_session::run_outcome::{
     AdjudicationDecision, CheckState, FindingSource, KeepResult, ReproClassification,
     ReviewVerdictKind, RunOutcome, RunVerdict, Severity, RUN_OUTCOME_SCHEMA,
@@ -47,6 +55,13 @@ const MAX_LISTED_PATHS: usize = 200;
 const MAX_MESSAGE_CHARS: usize = 2048;
 const MAX_EXCLUDE_BYTES: u64 = 1024 * 1024;
 const MAX_BODY_CHARS: usize = 60_000;
+/// Largest receipt block a pull request body carries; a larger receipt is
+/// left to the run's record bundle, and the body says so.
+const MAX_RECEIPT_BLOCK_CHARS: usize = 40_000;
+/// The commit trailer that names the run.
+pub const RUN_TRAILER: &str = "Axocoatl-Run";
+/// The commit trailer that names the receipt's statement digest.
+pub const RECEIPT_TRAILER: &str = "Axocoatl-Receipt";
 const MAX_TABLE_ROWS: usize = 100;
 
 /// `POST /api/sessions/{id}/keep-pr`.
@@ -90,6 +105,10 @@ pub struct KeepPrResponse {
     /// What the person should know about this Keep.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// `sha256:<hex>` of the receipt's statement the commit names, when the
+    /// run has a receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<String>,
 }
 
 impl KeepPrResponse {
@@ -469,10 +488,103 @@ fn table_rows<T>(
     }
 }
 
-/// The pull request body for a run's Outcome: verdict, check results,
-/// review verdict and rounds, adjudications, findings, not-covered list,
-/// warnings, usage, and the record id with how to verify the record bundle.
-pub fn pr_body(outcome: &RunOutcome) -> Result<String, KeepPrError> {
+/// The Receipt section of a pull request body: what the receipt covers and
+/// how to verify it, or why there is none.
+fn receipt_section(outcome: &RunOutcome, receipt: Option<&OpenedReceipt>) -> String {
+    let mut section = String::from("\n### Receipt\n\n");
+    let Some(receipt) = receipt else {
+        let why = outcome
+            .warnings
+            .iter()
+            .find(|warning| warning.code == receipt_v1::RECEIPT_UNAVAILABLE)
+            .map(|warning| format!(" ({})", md(&warning.message, 300)))
+            .unwrap_or_default();
+        section.push_str(&format!(
+            "This run has no signed receipt{why}, so this pull request carries none.\n"
+        ));
+        return section;
+    };
+    let statement = &receipt.statement;
+    let predicate = &statement.predicate;
+    let checks = if predicate.checks.is_empty() {
+        "none required".to_string()
+    } else {
+        predicate
+            .checks
+            .iter()
+            .map(|check| format!("{} {}", md(&check.name, 60), md(&check.state.replace('_', " "), 20)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let review = match &predicate.review {
+        Some(review) => format!(
+            "{}: {}",
+            code(&format!("{}:{}", review.provider, review.model)),
+            md(&review.verdict, 40)
+        ),
+        None => "none required".into(),
+    };
+    let writers: Vec<String> = predicate
+        .agents
+        .iter()
+        .filter(|agent| agent.role == "writer")
+        .map(|agent| {
+            let program = match &agent.program_version {
+                Some(version) => format!("{} {version} ", md(&agent.runtime, 40)),
+                None if agent.runtime == "native" => String::new(),
+                None => format!("{} ", md(&agent.runtime, 40)),
+            };
+            format!(
+                "{program}{}",
+                code(&format!("{}:{}", agent.provider, agent.model))
+            )
+        })
+        .collect();
+    let source = match predicate.files.source.as_str() {
+        receipt_v1::source::JUDGED_CAPTURE => "as the required checks judged them",
+        receipt_v1::source::AFTER_CAPTURE => "as the last writer left them",
+        _ => "as read when the run finished",
+    };
+    section.push_str(&format!(
+        "- Signed by key {} ({})\n- Verdict: **{}** (exit code {})\n- Checks: {checks}\n- Review: {review}\n- Writer: {}\n- Files covered: {} ({}), removed: {}{}\n- Statement: {}\n",
+        code(&receipt_v1::short_key_id(&predicate.signer.key_id)),
+        code(&predicate.signer.key_id),
+        verdict_words(predicate.verdict),
+        predicate.exit_code,
+        if writers.is_empty() {
+            "—".to_string()
+        } else {
+            writers.join(", ")
+        },
+        statement.subject.len(),
+        source,
+        predicate.files.removed.len(),
+        if predicate.files.complete {
+            ""
+        } else {
+            "; the receipt does not cover every path the run changed"
+        },
+        code(&receipt.payload_digest()),
+    ));
+    section.push_str(
+        "\nThe receipt is the `axocoatl-receipt:v1` block at the end of this description. Save \
+         the description, check out this branch, and verify it against the keys you trust \
+         (lines `axocoatl receipt key` prints):\n\n```sh\naxocoatl receipt verify body.md \
+         --keys trusted-keys --repo .\n```\n\nA receipt proves which key signed these facts and \
+         that the covered files are the ones judged; it does not prove the change is correct.\n",
+    );
+    section
+}
+
+/// The pull request body for a run's Outcome: verdict, the Receipt section,
+/// check results, review verdict and rounds, adjudications, findings,
+/// not-covered list, warnings, usage, the record id with how to verify the
+/// record bundle, and at the end the receipt block, which the cut to
+/// [`MAX_BODY_CHARS`] never cuts.
+pub fn pr_body(
+    outcome: &RunOutcome,
+    receipt: Option<&OpenedReceipt>,
+) -> Result<String, KeepPrError> {
     if outcome.schema != RUN_OUTCOME_SCHEMA {
         return Err(refused(format!(
             "the run's Outcome has schema {:?}, not {RUN_OUTCOME_SCHEMA}",
@@ -511,6 +623,19 @@ pub fn pr_body(outcome: &RunOutcome) -> Result<String, KeepPrError> {
     }
     if let Some(error) = &outcome.error {
         body.push_str(&format!("- Error: {}\n", md(error, 300)));
+    }
+
+    body.push_str(&receipt_section(outcome, receipt));
+    let block = receipt
+        .map(|receipt| receipt_v1::pr_block(&receipt.envelope))
+        .filter(|block| block.chars().count() <= MAX_RECEIPT_BLOCK_CHARS);
+    if receipt.is_some() && block.is_none() {
+        body.push_str(&format!(
+            "\nThe receipt is larger than a pull request description holds, so it is not \
+             here: verify it from the run's record bundle (`axocoatl run … --receipt <file>` \
+             writes it; the daemon serves it at `GET /api/runs/{}/receipt`).\n",
+            outcome.run_id.replace('`', "'")
+        ));
     }
 
     body.push_str("\n### Record\n\n");
@@ -752,10 +877,16 @@ pub fn pr_body(outcome: &RunOutcome) -> Result<String, KeepPrError> {
     ));
     body.push_str("\n---\nKept with Axocoatl Keep as PR. Findings, reasons and the task are quoted from the run.\n");
 
-    if body.chars().count() > MAX_BODY_CHARS {
+    // The receipt block is never cut: the rest of the body makes room.
+    let room = MAX_BODY_CHARS.saturating_sub(
+        block
+            .as_ref()
+            .map_or(0, |block| block.chars().count() + 2),
+    );
+    if body.chars().count() > room {
         let cut = body
             .char_indices()
-            .nth(MAX_BODY_CHARS)
+            .nth(room)
             .map(|(index, _)| index)
             .unwrap_or(body.len());
         body.truncate(cut);
@@ -763,7 +894,65 @@ pub fn pr_body(outcome: &RunOutcome) -> Result<String, KeepPrError> {
             "\n\n…cut to fit a pull request body; the run record {run} has everything.\n"
         ));
     }
+    if let Some(block) = block {
+        body.push('\n');
+        body.push_str(&block);
+        body.push('\n');
+    }
     Ok(body)
+}
+
+/// The commit message's trailers: the run, and the receipt's statement
+/// digest when the run has one.
+pub fn commit_trailers(run_id: &str, receipt: Option<&OpenedReceipt>) -> String {
+    let mut trailers = format!("{RUN_TRAILER}: {run_id}");
+    if let Some(receipt) = receipt {
+        trailers.push_str(&format!("\n{RECEIPT_TRAILER}: {}", receipt.payload_digest()));
+    }
+    trailers
+}
+
+/// Each path Keep is about to commit, checked against the run's receipt:
+/// its content in the working tree must be the content the receipt covers
+/// (a removed path must be absent). Refused, naming each path, otherwise.
+fn check_against_receipt(
+    receipt: &OpenedReceipt,
+    root: &Path,
+    paths: &[String],
+) -> Result<(), KeepPrError> {
+    let statement = &receipt.statement;
+    let judged = match statement.predicate.files.source.as_str() {
+        receipt_v1::source::JUDGED_CAPTURE => "changed after the run's checks judged it",
+        receipt_v1::source::AFTER_CAPTURE => "changed after the run's last writer left it",
+        _ => "changed after the run finished",
+    };
+    let mut changed = Vec::new();
+    let mut uncovered = Vec::new();
+    for path in paths {
+        if let Some(mismatch) = receipt_v1::check_path(statement, root, path) {
+            if statement.subject.iter().any(|subject| subject.name == *path)
+                || statement.predicate.files.removed.contains(path)
+            {
+                changed.push(format!("{path} ({})", mismatch.problem));
+            } else {
+                uncovered.push(path.clone());
+            }
+        }
+    }
+    if !changed.is_empty() {
+        return Err(refused(format!(
+            "{} {judged}; Keep commits only what the receipt covers: {}",
+            if changed.len() == 1 { "a path" } else { "paths" },
+            listed(&changed)
+        )));
+    }
+    if !uncovered.is_empty() {
+        return Err(refused(format!(
+            "the run's receipt does not cover {}; Keep commits only what the receipt covers",
+            listed(&uncovered)
+        )));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -778,6 +967,10 @@ pub trait KeepRunRecord: Send + Sync {
     fn keep_results(&self, run_id: &str) -> Result<Vec<KeepResult>, KeepPrError>;
     /// Append one Keep result as `RunEvent::Phase("keep", …)`.
     fn record_keep(&self, run_id: &str, result: &KeepResult) -> Result<(), KeepPrError>;
+    /// The run's signed receipt as written, when it has one.
+    fn receipt(&self, _run_id: &str) -> Result<Option<Vec<u8>>, KeepPrError> {
+        Ok(None)
+    }
 }
 
 /// Map a run record error: a missing run is a refusal, an unfinished hook is
@@ -854,6 +1047,30 @@ impl KeepRunRecord for RunRecordStore {
             .map(|_| ())
             .map_err(record_error)
     }
+
+    fn receipt(&self, run_id: &str) -> Result<Option<Vec<u8>>, KeepPrError> {
+        RunRecordStore::receipt(self, run_id).map_err(record_error)
+    }
+}
+
+/// The run's receipt for Keep: `None` without one; a receipt that cannot be
+/// read, or that is not this run's, is refused rather than ignored.
+pub fn load_receipt(
+    record: &dyn KeepRunRecord,
+    run_id: &str,
+) -> Result<Option<OpenedReceipt>, KeepPrError> {
+    let Some(bytes) = record.receipt(run_id)? else {
+        return Ok(None);
+    };
+    let opened = receipt_v1::open_receipt(&bytes)
+        .map_err(|error| refused(format!("the run's receipt cannot be read: {error}")))?;
+    if opened.statement.predicate.run.run_id != run_id {
+        return Err(refused(format!(
+            "the receipt stored for run {run_id} is of run {}",
+            opened.statement.predicate.run.run_id
+        )));
+    }
+    Ok(Some(opened))
 }
 
 /// Load a run for Keep: it must be a run of `session_id`, finished, and its
@@ -957,6 +1174,8 @@ pub struct KeepJob<'a> {
     pub outside: &'a RunAttribution,
     /// The latest recorded Keep of this run that created its branch.
     pub previous: Option<&'a KeepResult>,
+    /// The run's signed receipt, when it has one ([`load_receipt`]).
+    pub receipt: Option<&'a OpenedReceipt>,
     pub tools: &'a HostTools,
 }
 
@@ -1483,6 +1702,10 @@ async fn build_commit(
             listed(&dirty)
         )));
     }
+    // With a receipt, each path's content must be the one it covers.
+    if let Some(receipt) = job.receipt {
+        check_against_receipt(receipt, &repo.root, &run_paths)?;
+    }
     // The run's checks and review judged the files as the run left them. A
     // run path whose file changed after the run ended (by its status-change
     // time, which no process can set back) holds work they never saw, such
@@ -1503,6 +1726,7 @@ async fn build_commit(
             if later.len() == 1 { "it" } else { "them" },
         )));
     }
+
     let not_committed: Vec<String> = changed
         .iter()
         .filter(|path| !attributed.contains(*path) && !was_dirty(path, &job.manifest.dirty_paths))
@@ -1574,6 +1798,7 @@ async fn build_commit(
         ));
     }
     let message = format!("Axocoatl run {}", job.outcome.run_id);
+    let trailers = commit_trailers(&job.outcome.run_id, job.receipt);
     let mut command = protected.command(
         tools,
         &[
@@ -1585,6 +1810,8 @@ async fn build_commit(
             title,
             "-m",
             &message,
+            "-m",
+            &trailers,
             &tree,
         ],
     );
@@ -1796,6 +2023,7 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
                     "An earlier Keep of this run already created {}; nothing new was created.",
                     previous.branch
                 )],
+                receipt: job.receipt.map(OpenedReceipt::payload_digest),
             });
         }
     }
@@ -1822,6 +2050,11 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
     };
 
     let mut warnings = job.attribution.notes.clone();
+    if job.receipt.is_none() {
+        warnings.push(
+            "The run has no signed receipt, so the commit and pull request carry none.".into(),
+        );
+    }
     let (commit, paths, not_committed) = match &reused {
         Some(commit) => (
             commit.clone(),
@@ -1848,6 +2081,7 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
         base: None,
         not_committed,
         warnings,
+        receipt: job.receipt.map(OpenedReceipt::payload_digest),
     };
     let Some(remote) = remote else {
         return Ok(response);
@@ -1891,7 +2125,8 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
     response.pushed_to = Some(format!("{}/{branch}", remote.name));
     response.base = Some(remote.default_branch.clone());
 
-    let body = pr_body(job.outcome).map_err(|error| after_branch(message_of(error)))?;
+    let body =
+        pr_body(job.outcome, job.receipt).map_err(|error| after_branch(message_of(error)))?;
     let body_file = protected
         .write("pull-request-body.md", body.as_bytes())
         .map_err(after_branch)?;
