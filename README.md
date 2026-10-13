@@ -68,7 +68,10 @@ run in, and its record.
 - **A sandbox with no direct network.** A loadout's Session always runs under network
   egress (or none) with non-root workload users; the container has no direct network
   access and reaches the outside only through the daemon's egress proxy and routes,
-  which decide and record every connection. Your global defaults do not change.
+  which decide and record every connection. By default a route to a model API reads
+  each model call before it leaves, and refuses and records one that asks the provider
+  to fetch a URL, search the web, run a tool itself or connect to an MCP server. Your
+  global defaults do not change.
 - **The host decides.** Required checks run on the exact final files, by the host. A
   reviewer on the writer's own model is warned about, not refused. A finding left
   unanswered, a check that did not run, or anything not covered makes the run need
