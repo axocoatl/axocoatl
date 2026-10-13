@@ -632,3 +632,84 @@ fn refusals_show_only_plain_names() {
     );
     assert_eq!(refusal.at, "$.input[0][?].image_url");
 }
+
+#[test]
+fn ollama_cloud_model_names_are_the_ones_ollama_0_20_6_sends_to_ollama_com() {
+    // Seen by running the Ollama 0.20.6 binary with its proxy pointed at a
+    // recorder: these went to ollama.com, the others stayed local.
+    for name in [
+        "kimi-k2.5:cloud",
+        "gpt-oss:120b-cloud",
+        "foo:CLOUD",
+        "foo:Cloud",
+        "foo:x-cloud",
+        "foo:x-Cloud",
+        "ns/foo:cloud",
+        "evil.example/ns/foo:cloud",
+        "registry.ollama.ai/library/foo:cloud",
+        "FOO:cloud",
+        " foo:cloud",
+        "foo:cloud ",
+    ] {
+        assert!(ollama_cloud_model(name), "{name:?}");
+    }
+    for name in [
+        "foo-cloud",
+        "foo:cloudy",
+        "foo:cloud-x",
+        "qwen3:8b",
+        "evil.example/ns/model:tag",
+        "host:8080/ns/model",
+        "",
+    ] {
+        assert!(!ollama_cloud_model(name), "{name:?}");
+    }
+}
+
+#[test]
+fn ollama_bodies_are_checked_by_ollamas_endpoints() {
+    passes_ollama(
+        "/api/chat",
+        r#"{"model":"qwen3:8b","messages":[{"role":"user","content":"hi","images":["iVBORw0KGgo="]}],
+            "format":{"properties":{"file_url":{"type":"string"}}},
+            "tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}"#,
+    );
+    passes_ollama("/api/tags", "");
+    let refusal = check_ollama(
+        "/api/chat",
+        br#"{"model":"gpt-oss:120b-cloud","messages":[]}"#,
+    )
+    .unwrap_err();
+    assert_eq!(refusal.at, "$.model");
+    assert_eq!(
+        refusal.construct,
+        "model gpt-oss:120b-cloud: a cloud model, which Ollama runs on ollama.com"
+    );
+    // Ollama's native tools are function tools only.
+    let refusal = check_ollama(
+        "/api/chat",
+        br#"{"model":"qwen3:8b","tools":[{"type":"web_search"}]}"#,
+    )
+    .unwrap_err();
+    assert_eq!(refusal.at, "$.tools[0]");
+    // The compatible endpoints get their formats' checks.
+    assert!(check_ollama(
+        "/v1/messages",
+        br#"{"model":"qwen3:8b","tools":[{"type":"web_search_20250305","name":"w"}]}"#
+    )
+    .is_err());
+    // An endpoint the route does not allow has no format here either.
+    assert!(check_ollama("/api/pull", br#"{"model":"x"}"#)
+        .unwrap_err()
+        .construct
+        .contains("Ollama endpoint the check does not know"));
+    // A web-searching model name means nothing to Ollama; only cloud ones
+    // are refused there.
+    passes_ollama("/api/chat", r#"{"model":"perplexity/sonar:online"}"#);
+}
+
+fn passes_ollama(path: &str, body: &str) {
+    if let Err(refused) = check_ollama(path, body.as_bytes()) {
+        panic!("{path} refused {body}: {refused:?}");
+    }
+}

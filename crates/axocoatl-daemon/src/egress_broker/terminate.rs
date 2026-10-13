@@ -900,8 +900,15 @@ impl Connection {
                 )),
             };
         let path = path.to_string();
+        // The route to Ollama on this computer is checked by Ollama's own
+        // endpoints and model names; any other route by the hosted APIs'.
+        let ollama = route.host_loopback_port().is_some();
         let checked = tokio::task::spawn_blocking(move || {
-            let result = provider_fetch::check(&path, &bytes);
+            let result = if ollama {
+                provider_fetch::check_ollama(&path, &bytes)
+            } else {
+                provider_fetch::check(&path, &bytes)
+            };
             (bytes, result)
         })
         .await;

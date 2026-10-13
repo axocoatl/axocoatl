@@ -59,6 +59,10 @@
 //! What a request asks for in its headers (such as `anthropic-beta`) or
 //! through settings stored with the provider (an account's default
 //! plugins, a preset) is not seen.
+//!
+//! The route to Ollama on this computer (`sandbox.egress.host_ollama`) is
+//! checked by [`check_ollama`] instead: Ollama's own endpoints, its
+//! compatible ones by their formats, and a cloud model in `model`.
 
 use super::strict_json::{self, Value};
 
@@ -84,6 +88,10 @@ pub enum Dialect {
     /// Gemini: `…/models/<model>:generateContent`,
     /// `:streamGenerateContent` and `:countTokens`.
     GenerateContent,
+    /// Ollama's own API: `/api/chat`, `/api/generate`, `/api/embed`,
+    /// `/api/embeddings` and `/api/show`, on the route to Ollama on this
+    /// computer only ([`check_ollama`]).
+    OllamaNative,
 }
 
 impl Dialect {
@@ -148,6 +156,50 @@ pub fn check(path: &str, body: &[u8]) -> Result<(), Refused> {
 
 /// [`check`] for a body of `dialect`.
 pub fn check_dialect(dialect: Dialect, body: &[u8]) -> Result<(), Refused> {
+    check_parsed(dialect, false, body)
+}
+
+/// Check a request body sent to `path` on the route to Ollama on this
+/// computer (`sandbox.egress.host_ollama`). An empty body passes.
+///
+/// Ollama 0.20.6 with its cloud features on (the default) sends a request
+/// for a cloud model to `ollama.com`, prompt and all, without a pull first:
+/// on `/api/chat`, `/api/generate`, `/api/embed`, `/api/show` and its
+/// OpenAI- and Anthropic-compatible endpoints, for any model whose tag
+/// (after the last `:` past the last `/`), trimmed and in any case, is
+/// `cloud` or ends in `-cloud` (`gpt-oss:120b-cloud`, `kimi-k2.5:cloud`),
+/// whatever host or namespace the name has (seen by running the 0.20.6
+/// binary with its proxy pointed at a recorder). Such a `model` is refused
+/// anywhere in the body. The compatible endpoints get the checks of their
+/// formats besides; Ollama 0.20.6 itself refuses image and file URLs there.
+/// A name with another registry host does not make an inference request
+/// fetch it (that takes `/api/pull` or `/api/create`, which the route does
+/// not allow).
+pub fn check_ollama(path: &str, body: &[u8]) -> Result<(), Refused> {
+    if body
+        .iter()
+        .all(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+    {
+        return Ok(());
+    }
+    let dialect = match path {
+        "/api/chat" | "/api/generate" | "/api/embed" | "/api/embeddings" | "/api/show" => {
+            Dialect::OllamaNative
+        }
+        "/v1/chat/completions" | "/v1/completions" | "/v1/embeddings" => Dialect::ChatCompletions,
+        "/v1/responses" => Dialect::Responses,
+        "/v1/messages" => Dialect::Messages,
+        _ => {
+            return Err(Refused {
+                construct: "a request body to an Ollama endpoint the check does not know".into(),
+                at: "$".into(),
+            })
+        }
+    };
+    check_parsed(dialect, true, body)
+}
+
+fn check_parsed(dialect: Dialect, ollama: bool, body: &[u8]) -> Result<(), Refused> {
     let value = strict_json::parse(body, MAX_CHECKED_DEPTH).map_err(|error| Refused {
         construct: format!(
             "a body the check cannot read as one JSON value ({error}), which the provider might \
@@ -157,9 +209,22 @@ pub fn check_dialect(dialect: Dialect, body: &[u8]) -> Result<(), Refused> {
     })?;
     let mut walk = Walk {
         dialect,
+        ollama,
         path: Vec::new(),
     };
     walk.value(&value)
+}
+
+/// Whether Ollama 0.20.6 runs `model` on `ollama.com`: its tag, trimmed
+/// and in any case, is `cloud` or ends in `-cloud`.
+pub fn ollama_cloud_model(model: &str) -> bool {
+    let name = model.trim();
+    let name = name.split('@').next().unwrap_or(name);
+    let last = name.rsplit('/').next().unwrap_or(name);
+    last.rsplit_once(':').is_some_and(|(_, tag)| {
+        let tag = tag.trim().to_ascii_lowercase();
+        tag == "cloud" || tag.ends_with("-cloud")
+    })
 }
 
 /// A tool type, plugin id or model name as a refusal shows it: only a
@@ -259,6 +324,9 @@ enum Step<'a> {
 
 struct Walk<'a> {
     dialect: Dialect,
+    /// The route to Ollama on this computer: `model` is checked for a cloud
+    /// model instead of a web-searching one.
+    ollama: bool,
     path: Vec<Step<'a>>,
 }
 
@@ -330,6 +398,8 @@ impl<'a> Walk<'a> {
         let nested = self.path.len() > 1;
         match key {
             _ if OPAQUE_KEYS.contains(&key) => Ok(()),
+            // Ollama's structured output: `"json"` or a JSON schema.
+            "format" if self.dialect == Dialect::OllamaNative => Ok(()),
             // The arguments the model wrote for a tool call.
             "input" if nested && kind.is_some_and(|kind| kind.ends_with("tool_use")) => Ok(()),
             "action" if nested && kind.is_some_and(|kind| kind.ends_with("shell_call")) => Ok(()),
@@ -414,6 +484,13 @@ impl<'a> Walk<'a> {
                     None => Ok(()),
                 }
             }
+            "model" if self.ollama => match child.as_str() {
+                Some(model) if ollama_cloud_model(model) => self.refuse(format!(
+                    "model {}: a cloud model, which Ollama runs on ollama.com",
+                    shown(model.trim())
+                )),
+                _ => self.value(child),
+            },
             "model" => match child.as_str().and_then(web_model) {
                 Some(why) => self.refuse(format!(
                     "model {}: {why}",
@@ -529,6 +606,7 @@ impl<'a> Walk<'a> {
                 }
             }
             (Dialect::ChatCompletions, Some("function" | "custom")) => Ok(()),
+            (Dialect::OllamaNative, Some("function")) => Ok(()),
             (Dialect::GenerateContent, None) => {
                 match fields.iter().find(|(name, _)| {
                     !matches!(

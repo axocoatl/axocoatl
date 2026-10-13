@@ -42,6 +42,35 @@ pub const MAX_SECRET_BYTES: usize = 8 * 1024;
 /// Largest request body on a host route, as a configured route's default.
 const HOST_ROUTE_MAX_REQUEST_BYTES: u64 = 1 << 30;
 
+/// What the route to Ollama on this computer allows: Ollama's inference and
+/// read-only model listing, natively and through its OpenAI- and
+/// Anthropic-compatible API, as the Ollama 0.20.6 server serves them.
+/// Everything else is refused, among it what makes Ollama reach other hosts
+/// or change its models: `/api/pull`, `/api/push`, `/api/create`,
+/// `/api/copy`, `/api/delete`, `/api/blobs/*`, the account endpoints
+/// (`/api/me`, `/api/signout`, `/api/user/keys/*`) and web search and fetch
+/// (`/api/experimental/web_search`, `/api/experimental/web_fetch`), which
+/// 0.20.6 sends to `ollama.com` or to the registry a model name names.
+pub const HOST_OLLAMA_RULES: [(&[&str], &str); 17] = [
+    (&["GET", "HEAD"], "/"),
+    (&["GET", "HEAD"], "/api/version"),
+    (&["GET", "HEAD"], "/api/tags"),
+    (&["GET", "HEAD"], "/api/ps"),
+    (&["GET", "HEAD"], "/api/status"),
+    (&["GET", "HEAD"], "/v1/models"),
+    (&["GET", "HEAD"], "/v1/models/*"),
+    (&["POST"], "/api/show"),
+    (&["POST"], "/api/chat"),
+    (&["POST"], "/api/generate"),
+    (&["POST"], "/api/embed"),
+    (&["POST"], "/api/embeddings"),
+    (&["POST"], "/v1/chat/completions"),
+    (&["POST"], "/v1/completions"),
+    (&["POST"], "/v1/embeddings"),
+    (&["POST"], "/v1/responses"),
+    (&["POST"], "/v1/messages"),
+];
+
 /// Where a route's credential value is read, each time a request needs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CredentialSource {
@@ -735,9 +764,10 @@ impl Route {
     }
 
     /// The route of `sandbox.egress.host_ollama`, after the `index` routes of
-    /// `sandbox.egress.routes`: every request but `CONNECT` on
+    /// `sandbox.egress.routes`: the requests [`HOST_OLLAMA_RULES`] lists on
     /// [`HOST_OLLAMA_ROUTE_HOST`] for the processes it lists, no credential,
-    /// to `127.0.0.1:<port>`.
+    /// to `127.0.0.1:<port>`, with bodies checked for cloud models
+    /// (`provider_fetch::check_ollama`).
     pub fn host_ollama(index: usize, route: &HostOllamaRouteYaml) -> Result<Self, String> {
         if route.port == 0 {
             return Err("sandbox.egress.host_ollama.port: 1-65535".into());
@@ -752,14 +782,25 @@ impl Route {
                 .map(binding_kind)
                 .collect(),
             credential: None,
-            rules: Rules::Access(RouteAccessYaml::Full),
+            rules: Rules::List(
+                HOST_OLLAMA_RULES
+                    .iter()
+                    .map(|(methods, path)| {
+                        Ok(CompiledRule {
+                            methods: methods.iter().map(|method| (*method).to_string()).collect(),
+                            path: parse_path_glob(path)?,
+                            query: Vec::new(),
+                        })
+                    })
+                    .collect::<Result<_, String>>()?,
+            ),
             upstream_roots: Vec::new(),
             upstream_roots_id: None,
             env_placeholders: Vec::new(),
             allow_encoded_responses: false,
             allow_set_cookie: false,
             max_request_bytes: HOST_ROUTE_MAX_REQUEST_BYTES,
-            provider_fetch: ProviderFetch::NotChecked,
+            provider_fetch: ProviderFetch::Refused,
             upstream: RouteUpstream::HostLoopback { port: route.port },
         })
     }
@@ -897,6 +938,13 @@ impl Route {
     /// the provider to reach other hosts or run tools itself.
     pub fn provider_fetch_hint(&self) -> String {
         let host = &self.host;
+        if self.upstream != RouteUpstream::Tls {
+            return "The route to Ollama on this computer refuses a cloud model (a tag that is \
+                    cloud or ends in -cloud), which Ollama runs on ollama.com, and a request that \
+                    asks for a tool or content the provider fetches itself. Use a model on this \
+                    computer."
+                .into();
+        }
         match &self.origin {
             RouteOrigin::ExternalWriter { runtime } => format!(
                 "This is the route Axocoatl adds for the loadout's {runtime} writer, which refuses \
@@ -952,7 +1000,14 @@ impl Route {
         let rule = format!("{{methods: [{method}], path: \"{shown}\"}}");
         let hint = match (&self.upstream, &self.origin) {
             (RouteUpstream::HostLoopback { .. }, _) => {
-                "The route to Ollama on this computer carries ordinary HTTP requests only.".into()
+                "The route to Ollama on this computer allows only Ollama's inference and model \
+                 listing (GET /api/tags, /api/ps, /api/version, /api/status and /v1/models; POST \
+                 /api/chat, /api/generate, /api/embed, /api/embeddings, /api/show and \
+                 /v1/chat/completions, /v1/completions, /v1/embeddings, /v1/responses and \
+                 /v1/messages). Pulling, pushing, creating, copying and deleting models, its \
+                 account endpoints and its web search and fetch are refused: run ollama pull \
+                 on this computer instead."
+                    .into()
             }
             (RouteUpstream::Tls, RouteOrigin::Configured) => format!(
                 "Add a rule to sandbox.egress.routes[{}] such as {rule}, \

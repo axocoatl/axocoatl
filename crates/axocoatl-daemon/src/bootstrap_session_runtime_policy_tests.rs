@@ -163,9 +163,14 @@ async fn actual_egress_reaches_host_ollama_only_through_its_route() {
     let sandbox = actual_egress_sandbox(&mut f, &upstream_label, egress.clone()).await;
     git_init(f._workspace.path());
     let r = run(&mut f, &["bash"], true);
+    // The image has no HTTP client but git, whose smart-HTTP request for a
+    // repository URL ending in `?` is GET /api/tags with git's suffix as the
+    // query: one of the requests the route allows. Its request for
+    // `/api/pull.git` is one the route refuses.
     let command = "echo \"ollama=$OLLAMA_HOST\"; \
-         git ls-remote https://ollama.host.axocoatl.internal/api/tags.git 2>&1 | tail -1; \
+         git ls-remote 'https://ollama.host.axocoatl.internal/api/tags?' 2>&1 | tail -1; \
          echo \"rc=$?\"; \
+         git ls-remote https://ollama.host.axocoatl.internal/api/pull.git 2>&1 | tail -1; \
          git ls-remote https://other.axocoatl.internal/x.git 2>&1 | tail -1; true";
     let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
     let result = tokio::time::timeout(Duration::from_secs(180), async {
@@ -196,12 +201,18 @@ async fn actual_egress_reaches_host_ollama_only_through_its_route() {
         "{shown:?}"
     );
 
-    // The stand-in saw git's request, sent to it as to itself.
+    // The stand-in saw git's allowed request, sent to it as to itself, and
+    // not the refused one.
     let seen = ollama.seen();
     assert!(
         seen.iter().any(|request| request.method == "GET"
-            && request.path == "/api/tags.git/info/refs"
+            && request.path == "/api/tags"
+            && request.target.starts_with("/api/tags?/info/refs")
             && request.host == format!("127.0.0.1:{port}")),
+        "{seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|request| request.path.contains("pull")),
         "{seen:?}"
     );
     assert!(resolver.queries().is_empty(), "{:?}", resolver.queries());
@@ -223,13 +234,21 @@ async fn actual_egress_reaches_host_ollama_only_through_its_route() {
             .iter()
             .any(|event| matches!(event, NetworkEvent::Request {
             decision: Recorded::Allow, rule: Some(rule), path, ..
-        } if rule == "host_ollama.access=full" && path == "/api/tags.git/info/refs")),
+        } if rule == "host_ollama.rules[2]" && path == "/api/tags")),
         "{events:#?}"
     );
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, NetworkEvent::Response { status: 404, .. })),
+            .any(|event| matches!(event, NetworkEvent::Response { status: 200, .. })),
+        "{events:#?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, NetworkEvent::Request {
+            decision: Recorded::Deny, reason: Some(reason), path, ..
+        } if reason == "route_denied" && path == "/api/pull.git/info/refs")),
         "{events:#?}"
     );
     assert!(
@@ -280,10 +299,12 @@ async fn actual_only_a_check_admitted_with_egress_reaches_the_sessions_route() {
     .unwrap();
     let sandbox = actual_egress_sandbox(&mut f, &upstream_label, egress.clone()).await;
     git_init(f._workspace.path());
-    // git's answer to the stand-in's 404 says the request got there; a
-    // refused connection says something else.
-    let probe = "out=$(git ls-remote https://ollama.host.axocoatl.internal/{path}.git 2>&1); \
-                 echo \"$out\"; case \"$out\" in *404*|*'not found'*) reached=yes;; *) reached=no;; esac";
+    // A URL ending in `?{path}` is GET /api/tags, which the route allows,
+    // with `{path}` and git's suffix as the query. git reads the stand-in's
+    // model list as an empty repository and exits 0; a refused connection
+    // fails.
+    let probe = "out=$(git ls-remote 'https://ollama.host.axocoatl.internal/api/tags?{path}' 2>&1); \
+                 rc=$?; echo \"rc=$rc $out\"; if [ \"$rc\" = 0 ]; then reached=yes; else reached=no; fi";
     let checks = vec![
         vec![
             "sh".into(),
@@ -352,11 +373,13 @@ async fn actual_only_a_check_admitted_with_egress_reaches_the_sessions_route() {
     let seen = ollama.seen();
     assert!(
         seen.iter()
-            .any(|request| request.path == "/with-egress.git/info/refs"),
+            .any(|request| request.target.starts_with("/api/tags?with-egress")),
         "{seen:?}"
     );
     assert!(
-        !seen.iter().any(|request| request.path.contains("without")),
+        !seen
+            .iter()
+            .any(|request| request.target.contains("without")),
         "{seen:?}"
     );
     let events = record.events();
@@ -365,7 +388,7 @@ async fn actual_only_a_check_admitted_with_egress_reaches_the_sessions_route() {
             .iter()
             .any(|event| matches!(event, NetworkEvent::Request {
             decision: Recorded::Allow, path, ..
-        } if path == "/with-egress.git/info/refs")),
+        } if path == "/api/tags")),
         "{events:#?}"
     );
     assert!(resolver.queries().is_empty(), "{:?}", resolver.queries());

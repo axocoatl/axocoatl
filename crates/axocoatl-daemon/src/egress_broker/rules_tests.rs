@@ -507,7 +507,10 @@ fn routes_to_model_apis_check_bodies_unless_they_allow_provider_fetches() {
     );
     assert_eq!(opted_in.provider_fetch, ProviderFetch::Refused);
     assert_eq!(opted_in.canonical()["provider_fetch"], "refuse");
-    // The route to Ollama on this computer reads no bodies.
+}
+
+#[test]
+fn the_route_to_ollama_allows_only_inference_and_model_listing() {
     let ollama = Route::host_ollama(
         0,
         &axocoatl_config::HostOllamaRouteYaml {
@@ -516,7 +519,76 @@ fn routes_to_model_apis_check_bodies_unless_they_allow_provider_fetches() {
         },
     )
     .unwrap();
-    assert_eq!(ollama.provider_fetch, ProviderFetch::NotChecked);
+    // Its bodies are checked, by Ollama's own rules (cloud models).
+    assert_eq!(ollama.provider_fetch, ProviderFetch::Refused);
+    assert_eq!(ollama.canonical()["provider_fetch"], "refuse");
+    assert_eq!(ollama.describe().len(), HOST_OLLAMA_RULES.len());
+    let allowed = |method: &str, target: &str| {
+        matches!(
+            ollama.check(method, &canonicalize(target).unwrap()),
+            RuleDecision::Allowed { .. }
+        )
+    };
+    for (method, target) in [
+        ("GET", "/"),
+        ("HEAD", "/"),
+        ("GET", "/api/version"),
+        ("GET", "/api/tags"),
+        ("HEAD", "/api/tags"),
+        ("GET", "/api/ps"),
+        ("GET", "/api/status"),
+        ("GET", "/v1/models"),
+        ("GET", "/v1/models/qwen3:8b"),
+        ("POST", "/api/show"),
+        ("POST", "/api/chat"),
+        ("POST", "/api/generate"),
+        ("POST", "/api/embed"),
+        ("POST", "/api/embeddings"),
+        ("POST", "/v1/chat/completions"),
+        ("POST", "/v1/completions"),
+        ("POST", "/v1/embeddings"),
+        ("POST", "/v1/responses"),
+        ("POST", "/v1/messages"),
+        // git's request for a repository URL ending in `?`, as the Podman
+        // test sends it.
+        ("GET", "/api/tags?/info/refs&service=git-upload-pack"),
+    ] {
+        assert!(allowed(method, target), "{method} {target}");
+    }
+    for (method, target) in [
+        ("POST", "/api/pull"),
+        ("POST", "/api/push"),
+        ("POST", "/api/create"),
+        ("POST", "/api/copy"),
+        ("DELETE", "/api/delete"),
+        ("HEAD", "/api/blobs/sha256:00"),
+        ("POST", "/api/blobs/sha256:00"),
+        ("POST", "/api/me"),
+        ("POST", "/api/signout"),
+        ("DELETE", "/api/user/keys/x"),
+        ("POST", "/api/experimental/web_search"),
+        ("POST", "/api/experimental/web_fetch"),
+        ("POST", "/api/web_search"),
+        ("POST", "/v1/images/generations"),
+        ("POST", "/v1/images/edits"),
+        ("POST", "/v1/audio/transcriptions"),
+        ("GET", "/api/chat"),
+        ("POST", "/api/tags"),
+        ("GET", "/v1/models/hf.co/x"),
+        ("GET", "/api/tags.git/info/refs"),
+        ("GET", "/nothing"),
+    ] {
+        assert!(!allowed(method, target), "{method} {target}");
+    }
+    let RuleDecision::Denied { hint, .. } =
+        ollama.check("POST", &canonicalize("/api/pull").unwrap())
+    else {
+        unreachable!()
+    };
+    assert!(hint.contains("ollama pull on this computer"), "{hint}");
+    assert!(ollama.policy_text().ends_with(
+        "(host_ollama to 127.0.0.1:11434: 17 rules, for agent, provider fetches refused)"
+    ));
 }
 
 #[test]
