@@ -2,8 +2,10 @@
 //! broker: a `CONNECT` to `ollama.host.axocoatl.internal:443` is answered
 //! with a relay without any name being resolved, TLS ends here with the
 //! Session's authority, and each request goes over plain HTTP to a fake
-//! Ollama server on a free loopback port, recorded before it leaves. The
-//! sidecar is the fake from the route tests; no real Ollama is used.
+//! Ollama server on a free loopback port, recorded before it leaves. Only
+//! Ollama's inference and model-listing endpoints pass, and a body naming a
+//! cloud model is refused. The sidecar is the fake from the route tests; no
+//! real Ollama is used.
 
 use super::route_tests::{grant, position, recorded, send, spec, tls_client, RelaySidecar};
 use super::tests::{FakeRecord, FakeResolver};
@@ -11,7 +13,7 @@ use super::*;
 use axocoatl_config::egress_host_ollama::HOST_OLLAMA_ROUTE_HOST as OLLAMA;
 use axocoatl_exec::egress::protocol::DaemonFrame;
 use bytes::Bytes;
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -24,7 +26,11 @@ use tokio::net::TcpListener;
 pub(crate) struct Seen {
     pub(crate) method: String,
     pub(crate) path: String,
+    /// The path and query, as sent.
+    pub(crate) target: String,
     pub(crate) host: String,
+    /// The body as it arrived.
+    pub(crate) body: Bytes,
 }
 
 /// A plain-HTTP server standing in for Ollama on a free loopback port.
@@ -46,25 +52,44 @@ impl FakeOllama {
                     let service = hyper::service::service_fn(move |request: Request<Incoming>| {
                         let seen = seen.clone();
                         async move {
+                            let method = request.method().to_string();
+                            let path = request.uri().path().to_string();
+                            let target = request
+                                .uri()
+                                .path_and_query()
+                                .map(|target| target.as_str().to_string())
+                                .unwrap_or_default();
+                            let host = request
+                                .headers()
+                                .get(hyper::header::HOST)
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or_default()
+                                .to_string();
+                            let body = request
+                                .into_body()
+                                .collect()
+                                .await
+                                .map(|body| body.to_bytes())
+                                .unwrap_or_default();
                             seen.lock().unwrap().push(Seen {
-                                method: request.method().to_string(),
-                                path: request.uri().path().to_string(),
-                                host: request
-                                    .headers()
-                                    .get(hyper::header::HOST)
-                                    .and_then(|value| value.to_str().ok())
-                                    .unwrap_or_default()
-                                    .to_string(),
+                                method,
+                                path: path.clone(),
+                                target,
+                                host,
+                                body,
                             });
-                            let body = if request.uri().path() == "/api/tags" {
-                                r#"{"models":[{"name":"fake:latest"}]}"#
-                            } else {
-                                r#"{"error":"not found"}"#
+                            let (status, body) = match path.as_str() {
+                                "/api/tags" => {
+                                    (StatusCode::OK, r#"{"models":[{"name":"fake:latest"}]}"#)
+                                }
+                                "/api/chat" => (
+                                    StatusCode::OK,
+                                    r#"{"message":{"role":"assistant","content":"ok"},"done":true}"#,
+                                ),
+                                _ => (StatusCode::NOT_FOUND, r#"{"error":"not found"}"#),
                             };
                             let mut response = Response::new(Full::new(Bytes::from(body)));
-                            if request.uri().path() != "/api/tags" {
-                                *response.status_mut() = StatusCode::NOT_FOUND;
-                            }
+                            *response.status_mut() = status;
                             Ok::<_, Infallible>(response)
                         }
                     });
@@ -153,8 +178,14 @@ async fn the_host_route_reaches_ollama_on_loopback_and_records_every_request() {
     let (status, body) = send(&mut sender, "/api/tags", OLLAMA, None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("fake:latest"), "{body}");
-    let (status, _) = send(&mut sender, "/api/missing", OLLAMA, None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    // Only Ollama's inference and model listing pass: anything else is
+    // refused at the route and never reaches Ollama.
+    let (status, body) = send(&mut sender, "/api/missing", OLLAMA, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body.contains("route_denied") && body.contains("ollama pull"),
+        "{body}"
+    );
     // The broker reads requests only for the route's own host.
     let (status, body) = send(&mut sender, "/api/tags", "localhost:11434", None).await;
     assert_eq!(status, StatusCode::MISDIRECTED_REQUEST, "{body}");
@@ -162,7 +193,7 @@ async fn the_host_route_reaches_ollama_on_loopback_and_records_every_request() {
     let _ = connection.await;
 
     let seen = ollama.seen();
-    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen.len(), 1, "{seen:?}");
     assert_eq!(
         (seen[0].method.as_str(), seen[0].path.as_str()),
         ("GET", "/api/tags")
@@ -184,7 +215,8 @@ async fn the_host_route_reaches_ollama_on_loopback_and_records_every_request() {
     let policy = position(&events, |event| {
         matches!(event, NetworkEvent::Policy { scope: EgressScope::Session, rules, .. }
         if rules.contains(&format!(
-            "{OLLAMA}:443 (host_ollama to 127.0.0.1:{port}: access full, for agent)"
+            "{OLLAMA}:443 (host_ollama to 127.0.0.1:{port}: 17 rules, for agent, provider \
+             fetches refused)"
         )))
     });
     let open = position(&events, |event| {
@@ -198,15 +230,17 @@ async fn the_host_route_reaches_ollama_on_loopback_and_records_every_request() {
             conn, seq_in_conn: 1, method, path, decision: RecordDecision::Allow,
             rule: Some(rule), credential: None, ..
         } if conn == "g1:1" && method == "GET" && path == "/api/tags"
-            && rule == "host_ollama.access=full")
+            && rule == "host_ollama.rules[2]")
     });
     let response = position(&events, |event| {
         matches!(event, NetworkEvent::Response { conn, seq_in_conn: 1, status: 200, .. }
             if conn == "g1:1")
     });
     let missing = position(&events, |event| {
-        matches!(event, NetworkEvent::Response { conn, seq_in_conn: 2, status: 404, .. }
-            if conn == "g1:1")
+        matches!(event, NetworkEvent::Request {
+            conn, seq_in_conn: 2, path, decision: RecordDecision::Deny, reason: Some(reason),
+            rule: None, ..
+        } if conn == "g1:1" && path == "/api/missing" && reason == "route_denied")
     });
     let close = position(
         &events,
@@ -358,6 +392,172 @@ async fn a_reload_turns_the_host_route_on_and_off() {
     assert!(f.record.events().iter().any(|event| matches!(event,
         NetworkEvent::Policy { source: PolicySource::ConfigReload, rules, .. }
             if rules.iter().any(|rule| rule.contains("host_ollama to 127.0.0.1")))));
+}
+
+/// Ollama's endpoints that reach other hosts or change its models, its
+/// account and web endpoints, and a body naming a cloud model (which Ollama
+/// 0.20.6 sends to ollama.com) are refused at the route, recorded with the
+/// reason and never reach Ollama; inference with a local model and model
+/// listing pass, the body byte for byte.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_host_route_allows_only_inference_and_listing_and_refuses_cloud_models() {
+    let ollama = FakeOllama::start().await;
+    let port = ollama.addr.port();
+    let f = fixture(host_ollama(port, None)).await;
+    let (_grant, hash, _env) = grant(&f.egress, spec(GrantKind::Agent, true)).await;
+    let sidecar = RelaySidecar::attach(&f.egress, 1).await;
+    let pipe = sidecar
+        .open(1, RequestKind::Connect, OLLAMA, 443, &hash)
+        .await
+        .unwrap();
+    let ca = f.egress.authority_der().unwrap();
+    let tls = tls_client(pipe, &ca, OLLAMA).await.unwrap();
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake::<_, Full<Bytes>>(TokioIo::new(tls))
+            .await
+            .unwrap();
+    tokio::spawn(connection);
+    let mut exchange = |method: &'static str, path: &'static str, body: &'static str| {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(hyper::header::HOST, OLLAMA)
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from_static(body.as_bytes())))
+            .unwrap();
+        let response = sender.send_request(request);
+        async move {
+            let response = response.await.unwrap();
+            let status = response.status();
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            (status, String::from_utf8_lossy(&body).into_owned())
+        }
+    };
+
+    // A local model's chat passes as it was sent.
+    const CHAT: &str = r#"{"model":"qwen3:8b","messages":[{"role":"user","content":"hi"}],"stream":false,"format":{"properties":{"image_url":{"type":"string"}}},"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}"#;
+    let (status, body) = exchange("POST", "/api/chat", CHAT).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = exchange("GET", "/v1/models", "").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "Ollama answered it");
+
+    // Refused at the route, by endpoint.
+    for (method, path) in [
+        ("POST", "/api/pull"),
+        ("POST", "/api/push"),
+        ("POST", "/api/create"),
+        ("POST", "/api/copy"),
+        ("DELETE", "/api/delete"),
+        ("POST", "/api/blobs/sha256:00"),
+        ("POST", "/api/me"),
+        ("POST", "/api/signout"),
+        ("POST", "/api/experimental/web_search"),
+        ("POST", "/api/experimental/web_fetch"),
+        ("POST", "/v1/images/generations"),
+        ("GET", "/api/chat"),
+    ] {
+        let (status, body) = exchange(method, path, r#"{"model":"evil.example/ns/m:tag"}"#).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {body}");
+        assert!(body.contains("\"route_denied\""), "{body}");
+    }
+    // Refused by body: a cloud model, on every inference endpoint.
+    for (path, body, model) in [
+        (
+            "/api/chat",
+            r#"{"model":"gpt-oss:120b-cloud","messages":[]}"#,
+            "gpt-oss:120b-cloud",
+        ),
+        (
+            "/api/generate",
+            r#"{"model":"kimi-k2.5:CLOUD","prompt":"hi"}"#,
+            "kimi-k2.5:CLOUD",
+        ),
+        (
+            "/api/show",
+            r#"{"model":"evil.example/ns/m:cloud"}"#,
+            "evil.example/ns/m:cloud",
+        ),
+        (
+            "/api/embed",
+            r#"{"model":" e:x-cloud ","input":"hi"}"#,
+            "e:x-cloud",
+        ),
+        (
+            "/v1/chat/completions",
+            r#"{"model":"kimi-k2.5:cloud","messages":[]}"#,
+            "kimi-k2.5:cloud",
+        ),
+        (
+            "/v1/responses",
+            r#"{"model":"kimi-k2.5:cloud","input":"hi"}"#,
+            "kimi-k2.5:cloud",
+        ),
+        (
+            "/v1/messages",
+            r#"{"model":"kimi-k2.5:cloud","max_tokens":1,"messages":[]}"#,
+            "kimi-k2.5:cloud",
+        ),
+    ] {
+        let (status, answer) = exchange("POST", path, body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}: {answer}");
+        let json: serde_json::Value = serde_json::from_str(&answer).unwrap();
+        assert_eq!(json["error"], "provider_fetch_refused", "{answer}");
+        assert_eq!(
+            json["construct"],
+            format!("model {model}: a cloud model, which Ollama runs on ollama.com")
+        );
+        assert_eq!(json["json_path"], "$.model");
+        assert!(
+            json["hint"].as_str().unwrap().contains("ollama.com"),
+            "{answer}"
+        );
+    }
+    // And a server tool on a compatible endpoint, as on a hosted API.
+    let (status, answer) = exchange(
+        "POST",
+        "/v1/responses",
+        r#"{"model":"qwen3:8b","input":"hi","tools":[{"type":"web_search"}]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+
+    // Only the local chat and the model list reached Ollama, the chat byte
+    // for byte.
+    let seen = ollama.seen();
+    let reached: Vec<(&str, &str)> = seen
+        .iter()
+        .map(|seen| (seen.method.as_str(), seen.path.as_str()))
+        .collect();
+    assert_eq!(reached, [("POST", "/api/chat"), ("GET", "/v1/models")]);
+    assert_eq!(seen[0].body, Bytes::from_static(CHAT.as_bytes()));
+    recorded(&f.record, |event| {
+        matches!(
+            event,
+            NetworkEvent::Request {
+                seq_in_conn: 22,
+                ..
+            }
+        )
+    })
+    .await;
+    let events = f.record.events();
+    let refusals: Vec<(&str, &str)> = events
+        .iter()
+        .filter_map(|event| match event {
+            NetworkEvent::Request {
+                path,
+                decision: RecordDecision::Deny,
+                reason: Some(reason),
+                ..
+            } => Some((path.as_str(), reason.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refusals.len(), 20, "{refusals:?}");
+    assert!(refusals.contains(&("/api/pull", "route_denied")));
+    assert!(refusals.contains(&("/api/experimental/web_search", "route_denied")));
+    assert!(refusals.contains(&("/api/chat", "provider_fetch_refused")));
+    assert!(refusals.contains(&("/v1/messages", "provider_fetch_refused")));
 }
 
 /// The route's policy entry is part of the Session policy's digest only

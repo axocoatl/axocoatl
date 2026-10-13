@@ -738,7 +738,20 @@ supervisor as the hardened writer user under `--harden`, with the activation's t
 stdout bounded to 16 MiB. Its JSON output becomes the activation's evidence and answer.
 Model traffic goes through routes from `external_agent::routes_for` with credentials from
 `credentials` or the secret store (`{data root}/secrets/<name>`, `0600`, written from stdin
-by `axocoatl secret set`); the container holds placeholders and trusts the Session CA. The
+by `axocoatl secret set`); the container holds placeholders and trusts the Session CA.
+Those routes set `provider_fetch: refuse`, as every route to a model API host does by
+default: the broker reads each request body (at most 64 MiB, strict JSON) before it adds
+the credential or writes the request event, and refuses with `403 provider_fetch_refused`,
+recorded with that reason, a body that offers a tool the provider runs (tools pass by
+client-run type only), names MCP servers or enabled plugins, asks the provider to fetch a
+URL, names a web-searching model or a stored prompt, or cannot be read
+(`egress_broker::provider_fetch`); an allowed body goes upstream byte for byte. While the
+route serving the program's model API refuses provider fetches (asked through
+`EgressAuthority::refuses_provider_fetch` when the activation runs), the program starts
+without its hosted tools (`external_agent::HostedTools`): Claude Code with
+`--disallowedTools WebSearch`, Codex with `web_search="disabled"` and
+`--disable image_generation`. A loadout route with `provider_fetch: allow` for the same
+host starts them as they are. The
 activation reserves its grant's limits up front, route requests count against its
 invocations, and the program's own usage report settles it: Claude Code reports its cost;
 Codex reports tokens only, and its cost is computed from them at the configuration's
@@ -776,7 +789,11 @@ lists it as not covered. `check_options[i].timeout_ms` (1 s to 30 min, 180 s by 
 reaches the admitted check definition and the condition permission's bound; 1.2 graphs
 still verify. `sandbox.egress.host_ollama` is an opt-in route from Session containers to a
 loopback Ollama port through `ollama.host.axocoatl.internal`, ended with the Session CA
-and recorded like any route.
+and recorded like any route. It allows only Ollama's inference and model listing
+(`egress_broker::rules::HOST_OLLAMA_RULES`), refusing pulls, pushes, creates, copies,
+deletes, blobs, the account endpoints and web search and fetch, and checks bodies with
+`provider_fetch::check_ollama`, which refuses a cloud model (a tag that is `cloud` or
+ends in `-cloud`) that Ollama would run on `ollama.com`.
 
 ## Automations
 
@@ -1297,7 +1314,12 @@ agent:**
   outbound connection; this also disables
   network-dependent setup and commands in that container. `sandbox.network: egress`
   gives the container only loopback and Axocoatl's egress proxy, which reaches only
-  the hosts under `sandbox.egress` and records each connection; see
+  the hosts under `sandbox.egress` and records each connection. A route to a model API
+  (`api.anthropic.com`, `api.openai.com`, `chatgpt.com`, `openrouter.ai`,
+  `generativelanguage.googleapis.com`, `api.mistral.ai`, `api.x.ai`,
+  `ai-gateway.vercel.sh`) also reads request bodies and refuses one that
+  asks the provider to reach other hosts or run tools itself, unless the route sets
+  `provider_fetch: allow`; settings stored with the provider account are not seen; see
   [Network egress](https://docs.axocoatl.ai/configure/sandboxes/#network-egress) and
   [the security guide](https://docs.axocoatl.ai/operate/security/#control-network-egress).
   Only `bridge`, `none` and `egress` are accepted; any other value fails config

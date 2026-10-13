@@ -7,7 +7,12 @@
 //! `CONNECT` with a relay, the route broker ends TLS with the Session's own
 //! certificate authority, records each request and response like any route,
 //! and forwards plain HTTP to `127.0.0.1:<port>`. Nothing else on this
-//! computer is reachable through it. It is off unless set; under `bridge`
+//! computer is reachable through it. It carries only Ollama's inference and
+//! model listing (the broker's `HOST_OLLAMA_RULES`): pulling, pushing,
+//! creating, copying and deleting models, the account endpoints and web
+//! search and fetch, which make Ollama reach other hosts, are refused, and so
+//! is a body naming a cloud model, which Ollama runs on `ollama.com`. It is
+//! off unless set; under `bridge`
 //! and `none` there is no decision point, so no Session reaches it (a
 //! warning says so, since a loadout Session always runs under `egress`).
 //!

@@ -913,10 +913,29 @@ pub struct EgressRouteYaml {
     /// Largest request body, in bytes. Defaults to 1 GiB.
     #[serde(default = "default_route_max_request_bytes")]
     pub max_request_bytes: u64,
+    /// Whether request bodies are read and refused when they ask the model
+    /// provider to reach other hosts or run tools itself (a server-side
+    /// tool, an MCP server, a URL to fetch). Unset, it is `refuse` on a
+    /// route to a model API host
+    /// ([`crate::egress_routes::MODEL_API_HOSTS`]) and off elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_fetch: Option<ProviderFetchYaml>,
 }
 
 fn default_route_max_request_bytes() -> u64 {
     1 << 30
+}
+
+/// A route's `provider_fetch`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderFetchYaml {
+    /// Request bodies pass unread: the provider may reach the hosts a
+    /// request names.
+    Allow,
+    /// Request bodies are read, and one that asks the provider to reach
+    /// other hosts or run tools itself is refused.
+    Refuse,
 }
 
 /// How a route adds its credential.

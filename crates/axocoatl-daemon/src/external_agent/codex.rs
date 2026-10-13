@@ -11,7 +11,11 @@
 //! the Responses API, no WebSockets, the key from `OPENAI_API_KEY`) and turns
 //! off the apps, plugins, update check and analytics. The only requests are
 //! then `POST /v1/responses` with `Authorization: Bearer <key>`, which the
-//! route replaces. Codex's own sandbox is disabled inside the container
+//! route replaces. It also turns off OpenAI's hosted `web_search` (which
+//! 0.160.1 otherwise offers on every request, with live access) and hosted
+//! image generation: tools OpenAI runs itself, which the route refuses
+//! (`egress_broker::provider_fetch`). Its own tools are then function and
+//! custom tools and a `tool_search` it executes itself. Codex's own sandbox is disabled inside the container
 //! (`--dangerously-bypass-approvals-and-sandbox`): the Session container,
 //! its hardened writer user and the egress routes are the boundary.
 //!
@@ -75,32 +79,52 @@ pub const TOKEN_PLACEHOLDER_ENV: &str = "OPENAI_API_KEY";
 pub const ENV: &[(&str, &str)] = &[("NO_COLOR", "1")];
 
 /// The argv that runs one activation with an OpenAI API key (the prompt
-/// comes on stdin, `-`).
+/// comes on stdin, `-`), with OpenAI's hosted tools off.
 pub fn argv(model: &str) -> Result<Vec<String>, ExternalAgentError> {
+    argv_with(model, super::HostedTools::Off)
+}
+
+/// [`argv`] with OpenAI's hosted tools as `hosted`.
+pub fn argv_with(
+    model: &str,
+    hosted: super::HostedTools,
+) -> Result<Vec<String>, ExternalAgentError> {
     provider_argv(
         model,
         &format!("https://{API_HOST}/v1"),
         TOKEN_PLACEHOLDER_ENV,
+        hosted,
     )
 }
 
 /// The argv that runs one activation with a ChatGPT sign-in: the same
 /// program and provider, aimed at the ChatGPT backend, its key in
-/// [`CHATGPT_TOKEN_PLACEHOLDER_ENV`].
+/// [`CHATGPT_TOKEN_PLACEHOLDER_ENV`], with OpenAI's hosted tools off.
 pub fn chatgpt_argv(model: &str) -> Result<Vec<String>, ExternalAgentError> {
+    chatgpt_argv_with(model, super::HostedTools::Off)
+}
+
+/// [`chatgpt_argv`] with OpenAI's hosted tools as `hosted`.
+pub fn chatgpt_argv_with(
+    model: &str,
+    hosted: super::HostedTools,
+) -> Result<Vec<String>, ExternalAgentError> {
     provider_argv(
         model,
         &format!("https://{CHATGPT_HOST}{CHATGPT_BASE_PATH}"),
         CHATGPT_TOKEN_PLACEHOLDER_ENV,
+        hosted,
     )
 }
 
 /// `codex exec` with Axocoatl's own HTTP provider at `base_url`, its key
-/// from `env_key`.
+/// from `env_key`, and OpenAI's hosted web search and image generation off
+/// unless `hosted` keeps them.
 fn provider_argv(
     model: &str,
     base_url: &str,
     env_key: &str,
+    hosted: super::HostedTools,
 ) -> Result<Vec<String>, ExternalAgentError> {
     super::validate_model(model)?;
     let mut argv: Vec<String> = [
@@ -118,6 +142,7 @@ fn provider_argv(
     .iter()
     .map(|arg| (*arg).to_string())
     .collect();
+    let hosted_off = hosted == super::HostedTools::Off;
     for feature in [
         "apps",
         "plugins",
@@ -125,20 +150,33 @@ fn provider_argv(
         "unbounded_connection_retries",
         "tool_suggest",
         "skill_mcp_dependency_install",
-    ] {
+    ]
+    .into_iter()
+    // OpenAI's hosted image generation: a tool OpenAI runs, which a route
+    // that refuses provider fetches refuses (`egress_broker::provider_fetch`).
+    .chain(hosted_off.then_some("image_generation"))
+    {
         argv.push("--disable".into());
         argv.push(feature.into());
     }
     for setting in [
         "check_for_update_on_startup=false".to_string(),
         "analytics.enabled=false".to_string(),
+    ]
+    .into_iter()
+    // Codex 0.160.1 otherwise offers the model OpenAI's hosted `web_search`
+    // with live access (`external_web_access: true`): OpenAI would fetch
+    // pages for it, past the Session's egress routes, and a route that
+    // refuses provider fetches refuses every request that offers it.
+    .chain(hosted_off.then(|| "web_search=\"disabled\"".to_string()))
+    .chain([
         "model_provider=\"axocoatl\"".to_string(),
         "model_providers.axocoatl.name=\"axocoatl\"".to_string(),
         format!("model_providers.axocoatl.base_url=\"{base_url}\""),
         "model_providers.axocoatl.wire_api=\"responses\"".to_string(),
         "model_providers.axocoatl.supports_websockets=false".to_string(),
         format!("model_providers.axocoatl.env_key=\"{env_key}\""),
-    ] {
+    ]) {
         argv.push("-c".into());
         argv.push(setting);
     }

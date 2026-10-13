@@ -734,3 +734,71 @@ fn routes_cannot_claim_axocoatl_names_and_host_ollama_validates_in_the_whole_con
         warnings_of(&bridge)
     );
 }
+
+#[test]
+fn provider_fetch_parses_and_allowing_it_on_a_model_api_is_warned_about() {
+    // Unset, it stays unset in the config: the broker applies the host's
+    // default (refuse on a model API host).
+    let config = parse(&with_route(
+        "host: api.openai.com, credential: github, inject: {header: Authorization}, \
+         rules: [{methods: [POST], path: /v1/responses}]",
+    ))
+    .unwrap();
+    let routes = &config.sandbox.egress.as_ref().unwrap().routes;
+    assert_eq!(routes[0].provider_fetch, None);
+    assert!(!warnings_of(&config)
+        .iter()
+        .any(|w| w.contains("provider_fetch")));
+
+    let config = parse(&with_route(
+        "host: api.openai.com, credential: github, inject: {header: Authorization}, \
+         rules: [{methods: [POST], path: /v1/responses}], provider_fetch: allow",
+    ))
+    .unwrap();
+    let routes = &config.sandbox.egress.as_ref().unwrap().routes;
+    assert_eq!(routes[0].provider_fetch, Some(ProviderFetchYaml::Allow));
+    assert!(
+        warnings_of(&config)
+            .iter()
+            .any(|w| w.starts_with("sandbox.egress.routes[0].provider_fetch")
+                && w.contains("fetch URLs, search the web, connect to MCP servers")),
+        "{:?}",
+        warnings_of(&config)
+    );
+
+    // `refuse` on another host turns the check on there, and is not a
+    // weakening worth a warning; `allow` there changes nothing.
+    for value in ["refuse", "allow"] {
+        let config = parse(&with_route(&format!(
+            "host: llm.example.com, access: full, provider_fetch: {value}"
+        )))
+        .unwrap();
+        assert!(!warnings_of(&config)
+            .iter()
+            .any(|w| w.contains("provider_fetch")));
+    }
+
+    // Anything else is refused by name.
+    let error = parse(&with_route(
+        "host: api.openai.com, access: full, provider_fetch: deny",
+    ))
+    .unwrap_err();
+    assert!(
+        error.contains("provider_fetch") || error.contains("unknown variant"),
+        "{error}"
+    );
+    for host in [
+        "api.anthropic.com",
+        "api.openai.com",
+        "chatgpt.com",
+        "openrouter.ai",
+        "generativelanguage.googleapis.com",
+        "api.mistral.ai",
+        "api.x.ai",
+        "ai-gateway.vercel.sh",
+    ] {
+        assert!(is_model_api_host(host), "{host}");
+    }
+    assert_eq!(MODEL_API_HOSTS.len(), 8);
+    assert!(!is_model_api_host("api.github.com"));
+}

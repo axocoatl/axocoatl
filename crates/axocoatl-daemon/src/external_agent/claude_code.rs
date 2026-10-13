@@ -68,6 +68,20 @@ pub fn argv(model: &str) -> Result<Vec<String>, ExternalAgentError> {
     .collect())
 }
 
+/// The flags that turn off what Claude Code 2.1.292 would ask Anthropic to
+/// do for it: WebSearch, the one tool that sends a request of its own
+/// offering Anthropic's server-side `web_search`, which a route that refuses
+/// provider fetches refuses. (WebFetch fetches from the container, through
+/// the Session's egress, and is not offered in these runs.) `--disallowedTools`
+/// takes a list, so the flags come last but for `--max-budget-usd`, which
+/// ends the list.
+pub fn hosted_tools_args(hosted: super::HostedTools) -> Vec<String> {
+    match hosted {
+        super::HostedTools::Off => vec!["--disallowedTools".into(), "WebSearch".into()],
+        super::HostedTools::Program => Vec::new(),
+    }
+}
+
 /// `--max-budget-usd` at `cost_microunits`: Claude Code's own spending stop
 /// (its cost is its own computation from list prices), set to what the
 /// activation's grant still allows.

@@ -19,8 +19,8 @@ use crate::egress::{validate_ports, ConfigWarning, HostPattern};
 use crate::egress_presets::preset;
 use crate::error::ConfigError;
 use crate::types::{
-    AxocoatlConfig, CredentialSourceYaml, EgressAllowYaml, EgressRouteYaml, RouteForYaml,
-    RouteInjectYaml, RouteRuleYaml,
+    AxocoatlConfig, CredentialSourceYaml, EgressAllowYaml, EgressRouteYaml, ProviderFetchYaml,
+    RouteForYaml, RouteInjectYaml, RouteRuleYaml,
 };
 
 /// Most routes one config may list.
@@ -44,6 +44,26 @@ pub const MIN_MAX_REQUEST_BYTES: u64 = 1024;
 pub const MAX_MAX_REQUEST_BYTES: u64 = 1 << 40;
 /// Methods `access: read-only` allows.
 pub const READ_ONLY_METHODS: [&str; 3] = ["GET", "HEAD", "OPTIONS"];
+/// Hosts of model APIs: a route to one of them reads each request body and
+/// refuses one that asks the provider to reach other hosts or run tools
+/// itself, unless the route sets `provider_fetch: allow`.
+pub const MODEL_API_HOSTS: [&str; 8] = [
+    "api.anthropic.com",
+    "api.openai.com",
+    "chatgpt.com",
+    "openrouter.ai",
+    "generativelanguage.googleapis.com",
+    "api.mistral.ai",
+    "api.x.ai",
+    "ai-gateway.vercel.sh",
+];
+
+/// Whether `host` (lowercase, without a trailing dot) is one of
+/// [`MODEL_API_HOSTS`].
+pub fn is_model_api_host(host: &str) -> bool {
+    MODEL_API_HOSTS.contains(&host)
+}
+
 /// Largest credential file read.
 pub const MAX_SECRET_FILE_BYTES: u64 = 64 * 1024;
 /// Largest `upstream_ca` file read.
@@ -105,6 +125,10 @@ const ENCODED_WARNING: &str = "compressed responses pass without the check that 
                                is not sent back to the container";
 const SET_COOKIE_WARNING: &str = "Set-Cookie passes to the container, so a session the host \
                                   starts for the credential works there without the route";
+const PROVIDER_FETCH_WARNING: &str =
+    "request bodies pass unread, so a request can ask the model provider to fetch URLs, search \
+     the web, connect to MCP servers or run tools itself, reaching hosts the Session's egress \
+     policy does not list";
 
 /// A value for [`invalid`] printed as it is, without quotes.
 struct NotShown(String);
@@ -862,6 +886,12 @@ fn check_route(
         warnings.push(ConfigWarning {
             field: format!("{field}.allow_set_cookie"),
             message: SET_COOKIE_WARNING.into(),
+        });
+    }
+    if route.provider_fetch == Some(ProviderFetchYaml::Allow) && is_model_api_host(&host) {
+        warnings.push(ConfigWarning {
+            field: format!("{field}.provider_fetch"),
+            message: PROVIDER_FETCH_WARNING.into(),
         });
     }
     Ok(host)

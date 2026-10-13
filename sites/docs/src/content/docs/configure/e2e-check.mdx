@@ -88,6 +88,16 @@ run cannot change the cache your other e2e runs use; the rest of the Workspace s
 writable. Every model call e2e makes is a request on the route and is in the Session's
 network record.
 
+A route to a model API host (`openrouter.ai`, `api.openai.com`, `api.anthropic.com`,
+`generativelanguage.googleapis.com`, `api.mistral.ai`, `api.x.ai`,
+`ai-gateway.vercel.sh`) also reads each request body and refuses one that asks the
+provider to fetch a URL, search the web or run a tool itself
+([Requests to model APIs](/configure/credentials/#requests-to-model-apis)). It reads
+the Chat Completions, Responses and Messages formats; the AI SDK's own gateway
+protocol, which `@ai-sdk/gateway` speaks to `ai-gateway.vercel.sh`, is not one of them,
+so its requests are refused. Use the gateway's OpenAI-compatible API for e2e's model,
+or set `provider_fetch: allow` on the loadout's route.
+
 Under `network: egress` a required check normally has no network: the proxy refuses
 every connection it makes. An e2e check is the exception. Its process gets an egress
 credential of its own for as long as it runs, as a writer's shell does, so it reaches the

@@ -792,7 +792,7 @@ impl SessionDispatchController {
         timeout_ms: Option<u64>,
         settings: &ExternalSettings,
     ) -> Result<ExternalOutcome> {
-        let (reserved, credential) = {
+        let (reserved, credential, authority) = {
             let state = self.lock()?;
             let bound = state
                 .bound
@@ -827,6 +827,13 @@ impl SessionDispatchController {
                 .largest_provider_reservation(activation)
                 .map_err(error)?
                 .ok_or_else(|| error("the activation's model call has no reservation"))?;
+            // The Session's egress, which knows the route its model calls
+            // take.
+            let authority = bound
+                .repository
+                .as_ref()
+                .and_then(|repository| state.repository_owners.get(repository.reference()))
+                .and_then(|owner| owner.sandbox().egress_authority());
             (
                 ProviderExecutionBounds {
                     token_limit: reservation.tokens,
@@ -834,6 +841,7 @@ impl SessionDispatchController {
                     response_bytes: RESPONSE_BYTES,
                 },
                 credential,
+                authority,
             )
         };
         if prompt.len() > external::MAX_PROMPT_BYTES {
@@ -843,7 +851,19 @@ impl SessionDispatchController {
                 external::MAX_PROMPT_BYTES
             )));
         }
-        let mut argv = external::command_argv_with(runtime, credential, model).map_err(error)?;
+        // The tools the provider runs for the program stay off unless the
+        // route serving its model API lets such requests through (a loadout
+        // route with `provider_fetch: allow`): otherwise the route would
+        // refuse them, and the program would spend a turn on the refusal.
+        let hosted = external::HostedTools::for_route(
+            external::model_api_host(runtime, credential).and_then(|host| {
+                authority
+                    .as_ref()
+                    .and_then(|authority| authority.refuses_provider_fetch(host, 443))
+            }),
+        );
+        let mut argv =
+            external::command_argv_for(runtime, credential, model, hosted).map_err(error)?;
         if runtime == AgentRuntime::ClaudeCode && reserved.cost_microunits > 0 {
             // The program's own spending stop, at what the grant still allows.
             argv.extend(external::claude_code::budget_args(reserved.cost_microunits));

@@ -75,7 +75,8 @@ runs before a turn completes, are opt-in.
   under network egress (or none) with non-root workload users; your global defaults do not change.
 - **External agents and e2e.** The Claude Code CLI or Codex CLI can be a loadout's
   writer, inside the Session container, with its model credential added on your computer
-  by a route. tester-army/e2e can be a required check. **Keep as PR** commits a passing
+  by a route, which refuses model requests that ask the provider to fetch URLs, search
+  the web or run tools itself. tester-army/e2e can be a required check. **Keep as PR** commits a passing
   run to a new branch and, if you ask, opens a pull request, without touching your
   checkout.
 

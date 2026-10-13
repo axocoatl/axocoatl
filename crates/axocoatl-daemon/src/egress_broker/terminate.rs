@@ -31,6 +31,7 @@ use tokio::sync::{mpsc, oneshot};
 use zeroize::Zeroizing;
 
 use super::ca::SessionCa;
+use super::provider_fetch::{self, MAX_CHECKED_BODY_BYTES};
 use super::rules::{canonicalize, Injection, ManagedCredentials, Route, RuleDecision};
 use super::scan::ReflectionScanner;
 use super::upstream::{UpstreamBody, UpstreamConnector};
@@ -90,6 +91,9 @@ pub struct BrokerTimeouts {
     pub response_head: Duration,
     /// Waiting for the record to take events still queued at the end.
     pub record_drain: Duration,
+    /// Reading a whole request body on a route that checks bodies
+    /// ([`super::provider_fetch`]).
+    pub body_read: Duration,
 }
 
 impl Default for BrokerTimeouts {
@@ -99,6 +103,7 @@ impl Default for BrokerTimeouts {
             header_read: Duration::from_secs(30),
             response_head: Duration::from_secs(600),
             record_drain: Duration::from_secs(5),
+            body_read: Duration::from_secs(300),
         }
     }
 }
@@ -469,6 +474,9 @@ struct Refusal {
     reason: String,
     hint: String,
     close: bool,
+    /// Further fields of the JSON answer, such as what a refused body asks
+    /// for and where (`construct`, `json_path`).
+    details: Vec<(&'static str, String)>,
 }
 
 /// The fields every `request` event of one request shares.
@@ -485,7 +493,7 @@ fn bounded_path(path: &str) -> String {
 
 /// The JSON refusal sent to the client.
 fn refusal_response(refusal: &Refusal, host: &str, facts: &RequestFacts) -> Response<ClientBody> {
-    let body = json!({
+    let mut body = json!({
         "error": refusal.code,
         "reason": refusal.reason,
         "host": host,
@@ -493,6 +501,9 @@ fn refusal_response(refusal: &Refusal, host: &str, facts: &RequestFacts) -> Resp
         "path": facts.path,
         "hint": refusal.hint,
     });
+    for (name, value) in &refusal.details {
+        body[*name] = json!(value);
+    }
     let mut response = Response::new(
         Full::new(Bytes::from(body.to_string()))
             .map_err(|never: Infallible| -> BoxError { match never {} })
@@ -617,6 +628,21 @@ fn encoded(headers: &HeaderMap) -> bool {
     content || transfer
 }
 
+/// Whether a request body is sent with a content coding (a compressed
+/// body), which the provider-fetch check cannot read as sent.
+fn encoded_request(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(header::CONTENT_ENCODING)
+        .iter()
+        .any(|value| {
+            value.to_str().map_or(true, |text| {
+                text.split(',').any(|coding| {
+                    !coding.trim().is_empty() && !coding.trim().eq_ignore_ascii_case("identity")
+                })
+            })
+        })
+}
+
 /// The needles of a credential: the value and, for basic, the header's
 /// base64 form.
 fn needles(inject: &Injection, secret: &SecretString) -> Vec<Zeroizing<Vec<u8>>> {
@@ -737,6 +763,170 @@ impl Connection {
         .map_err(|error| error.0)
     }
 
+    /// The whole body of a request on a route that checks bodies, when
+    /// [`provider_fetch::check`] passes it for `path`; otherwise the
+    /// recorded refusal to answer with. At most the route's
+    /// `max_request_bytes`, and at most [`MAX_CHECKED_BODY_BYTES`], is read.
+    async fn checked_body(
+        &self,
+        route: &Route,
+        headers: &HeaderMap,
+        path: &str,
+        declared: Option<u64>,
+        mut body: Incoming,
+        facts: &RequestFacts,
+    ) -> Result<Bytes, Response<ClientBody>> {
+        let limit = route.max_request_bytes.min(MAX_CHECKED_BODY_BYTES);
+        let refusal = |status, code, reason: String, hint: String, close| Refusal {
+            status,
+            code,
+            reason,
+            hint,
+            close,
+            details: Vec::new(),
+        };
+        let too_large = || {
+            let (reason, hint) = if route.max_request_bytes <= MAX_CHECKED_BODY_BYTES {
+                (
+                    format!("the body is larger than {} bytes", route.max_request_bytes),
+                    "Raise max_request_bytes on the route if this upload is expected.".to_string(),
+                )
+            } else {
+                (
+                    format!(
+                        "this route reads each request body whole and checks it before sending \
+                         it, and reads at most {MAX_CHECKED_BODY_BYTES} bytes"
+                    ),
+                    "Send a smaller request. A route with provider_fetch: allow sends bodies \
+                     unread, up to its max_request_bytes."
+                        .to_string(),
+                )
+            };
+            self.refuse(
+                facts,
+                refusal(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "request_too_large",
+                    reason,
+                    hint,
+                    true,
+                ),
+            )
+        };
+        if declared.is_some_and(|length| length > limit) {
+            return Err(too_large());
+        }
+        let provider_fetch_refused = |construct: &str, at: &str, close| {
+            let mut refused = refusal(
+                StatusCode::FORBIDDEN,
+                "provider_fetch_refused",
+                format!(
+                    "the request asks the model provider to reach other hosts or run tools \
+                     itself: {construct} at {at}"
+                ),
+                route.provider_fetch_hint(),
+                close,
+            );
+            refused.details = vec![
+                ("construct", construct.to_string()),
+                ("json_path", at.to_string()),
+            ];
+            tracing::info!(
+                session = %self.ctx.session,
+                conn = %self.ctx.conn,
+                host = %route.host,
+                method = %facts.method,
+                path = %facts.path,
+                construct,
+                at,
+                "route request refused: its body asks the provider to reach other hosts"
+            );
+            self.refuse(facts, refused)
+        };
+        // A compressed body cannot be read without decoding it the way the
+        // provider would; it is refused unread.
+        if encoded_request(headers) {
+            return Err(provider_fetch_refused(
+                "a compressed request body (Content-Encoding), which the check cannot read",
+                "$",
+                true,
+            ));
+        }
+        enum ReadError {
+            TooLarge,
+            Failed(String),
+        }
+        let read = async {
+            let mut buffer = bytes::BytesMut::new();
+            while let Some(frame) = body.frame().await {
+                let frame = frame.map_err(|error| ReadError::Failed(error.to_string()))?;
+                if let Ok(data) = frame.into_data() {
+                    if (buffer.len() + data.len()) as u64 > limit {
+                        return Err(ReadError::TooLarge);
+                    }
+                    buffer.extend_from_slice(&data);
+                }
+            }
+            Ok(buffer.freeze())
+        };
+        let bytes =
+            match tokio::time::timeout(self.timeouts.body_read, read).await {
+                Ok(Ok(bytes)) => bytes,
+                Ok(Err(ReadError::TooLarge)) => return Err(too_large()),
+                Ok(Err(ReadError::Failed(error))) => return Err(self.refuse(
+                    facts,
+                    refusal(
+                        StatusCode::BAD_REQUEST,
+                        "request_incomplete",
+                        format!("the request body could not be read whole: {error}"),
+                        "Nothing was sent: this route checks each body whole before sending it."
+                            .into(),
+                        true,
+                    ),
+                )),
+                Err(_) => return Err(self.refuse(
+                    facts,
+                    refusal(
+                        StatusCode::REQUEST_TIMEOUT,
+                        "request_incomplete",
+                        format!(
+                            "the request body did not arrive within {} seconds",
+                            self.timeouts.body_read.as_secs()
+                        ),
+                        "Nothing was sent: this route checks each body whole before sending it."
+                            .into(),
+                        true,
+                    ),
+                )),
+            };
+        let path = path.to_string();
+        // The route to Ollama on this computer is checked by Ollama's own
+        // endpoints and model names; any other route by the hosted APIs'.
+        let ollama = route.host_loopback_port().is_some();
+        let checked = tokio::task::spawn_blocking(move || {
+            let result = if ollama {
+                provider_fetch::check_ollama(&path, &bytes)
+            } else {
+                provider_fetch::check(&path, &bytes)
+            };
+            (bytes, result)
+        })
+        .await;
+        match checked {
+            Ok((bytes, Ok(()))) => Ok(bytes),
+            Ok((_, Err(refused))) => Err(provider_fetch_refused(
+                &refused.construct,
+                &refused.at,
+                false,
+            )),
+            Err(_) => Err(provider_fetch_refused(
+                "a body whose check did not finish",
+                "$",
+                false,
+            )),
+        }
+    }
+
     async fn handle(self: Arc<Self>, request: Request<Incoming>) -> Response<ClientBody> {
         let started = Instant::now();
         let seq = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
@@ -758,6 +948,7 @@ impl Connection {
             reason,
             hint: hint.to_string(),
             close,
+            details: Vec::new(),
         };
 
         // A connection without a known process kind is never served.
@@ -867,6 +1058,7 @@ impl Connection {
                         reason,
                         hint,
                         close: false,
+                        details: Vec::new(),
                     },
                 )
             }
@@ -888,6 +1080,29 @@ impl Connection {
                 ),
             );
         }
+        // A route that checks bodies reads this one whole and refuses it
+        // when it asks the model provider to reach other hosts or run tools
+        // itself, before the credential is read and before anything is
+        // recorded as allowed or sent (`super::provider_fetch`).
+        let (parts, body) = request.into_parts();
+        let body = if route.provider_fetch.checks() {
+            match self
+                .checked_body(
+                    &route,
+                    &parts.headers,
+                    &canonical.path,
+                    declared,
+                    body,
+                    &facts,
+                )
+                .await
+            {
+                Ok(bytes) => OutgoingBody::Buffered((!bytes.is_empty()).then_some(bytes)),
+                Err(response) => return response,
+            }
+        } else {
+            OutgoingBody::Streamed(body)
+        };
         // A credential the daemon keeps current itself (a sign-in it
         // refreshes) gives its value, and any headers that go with it, on a
         // route to its own host only; any other route reads its file as a
@@ -1021,7 +1236,6 @@ impl Connection {
             "route request allowed"
         );
 
-        let (parts, body) = request.into_parts();
         let connection_tokens: Vec<String> = parts
             .headers
             .get_all(header::CONNECTION)
@@ -1280,10 +1494,18 @@ impl ResponseReport {
     }
 }
 
+/// Where a request body sent upstream comes from: the client's stream, or
+/// the bytes a route that checks bodies read whole and checked (none for an
+/// empty body), sent as they came.
+enum OutgoingBody {
+    Streamed(Incoming),
+    Buffered(Option<Bytes>),
+}
+
 /// The client's request body on its way upstream: counted, and cut off past
 /// the route's `max_request_bytes`.
 struct RequestBody {
-    inner: Incoming,
+    inner: OutgoingBody,
     sent: Arc<AtomicU64>,
     total: Arc<AtomicU64>,
     max: u64,
@@ -1303,8 +1525,17 @@ impl Body for RequestBody {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
         let this = &mut *self;
-        match Pin::new(&mut this.inner).poll_frame(cx) {
-            Poll::Ready(Some(Ok(frame))) => {
+        let polled = match &mut this.inner {
+            OutgoingBody::Streamed(inner) => match Pin::new(inner).poll_frame(cx) {
+                Poll::Ready(Some(Err(error))) => return Poll::Ready(Some(Err(Box::new(error)))),
+                Poll::Ready(Some(Ok(frame))) => Poll::Ready(Some(frame)),
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            },
+            OutgoingBody::Buffered(bytes) => Poll::Ready(bytes.take().map(Frame::data)),
+        };
+        match polled {
+            Poll::Ready(Some(frame)) => {
                 if let Some(data) = frame.data_ref() {
                     let len = data.len() as u64;
                     let sent = this.sent.fetch_add(len, Ordering::SeqCst) + len;
@@ -1316,18 +1547,25 @@ impl Body for RequestBody {
                 }
                 Poll::Ready(Some(Ok(frame)))
             }
-            Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(Box::new(error)))),
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
     }
 
     fn is_end_stream(&self) -> bool {
-        self.inner.is_end_stream()
+        match &self.inner {
+            OutgoingBody::Streamed(inner) => inner.is_end_stream(),
+            OutgoingBody::Buffered(bytes) => bytes.is_none(),
+        }
     }
 
     fn size_hint(&self) -> SizeHint {
-        self.inner.size_hint()
+        match &self.inner {
+            OutgoingBody::Streamed(inner) => inner.size_hint(),
+            OutgoingBody::Buffered(bytes) => {
+                SizeHint::with_exact(bytes.as_ref().map_or(0, |bytes| bytes.len() as u64))
+            }
+        }
     }
 }
 

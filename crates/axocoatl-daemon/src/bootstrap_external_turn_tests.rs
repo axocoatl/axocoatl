@@ -416,6 +416,8 @@ struct ApiRequest {
     /// `ChatGPT-Account-ID`, as sent.
     account: Vec<String>,
     body: serde_json::Value,
+    /// The body as it arrived.
+    raw: bytes::Bytes,
 }
 
 /// A local HTTPS model API for `api.anthropic.com`, `api.openai.com` or
@@ -471,7 +473,6 @@ fn anthropic_answer(body: &serde_json::Value) -> (String, &'static str) {
     let offers_bash = body["tools"]
         .as_array()
         .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "Bash"));
-    let model = body["model"].as_str().unwrap_or("claude").to_string();
     let (block, stop) = if offers_bash && !has_result {
         (
             serde_json::json!({"type": "tool_use", "id": "toolu_axocoatl_1", "name": "Bash",
@@ -489,6 +490,129 @@ fn anthropic_answer(body: &serde_json::Value) -> (String, &'static str) {
             "end_turn",
         )
     };
+    anthropic_message(body, block, stop)
+}
+
+/// The tool results the last message of a Messages API `body` carries, by
+/// their `tool_use_id`.
+fn last_tool_results(body: &serde_json::Value) -> Vec<String> {
+    body["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .and_then(|message| message["content"].as_array())
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter(|block| block["type"] == "tool_result")
+                .filter_map(|block| block["tool_use_id"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a Messages API `body` offers a tool the provider runs itself:
+/// Claude Code's WebSearch tool asks for Anthropic's `web_search` this way.
+fn offers_server_search(body: &serde_json::Value) -> bool {
+    body["tools"].as_array().is_some_and(|tools| {
+        tools.iter().any(|tool| {
+            tool["type"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("web_search"))
+        })
+    })
+}
+
+/// How a run that leads Claude Code to its WebSearch tool routes its model
+/// API ([`anthropic_web_search_answer`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchRoute {
+    /// The route Axocoatl adds, which refuses provider fetches: Claude Code
+    /// runs with WebSearch disallowed and never asks Anthropic to search.
+    Default,
+    /// A loadout route for `api.anthropic.com` with `provider_fetch: allow`:
+    /// Claude Code keeps WebSearch, and its search request reaches the API.
+    Allow,
+}
+
+/// The loadout route that replaces the one Axocoatl adds for Claude Code,
+/// letting provider fetches through.
+const CLAUDE_ROUTE_ALLOWING_FETCHES: &str = "routes:
+  - host: api.anthropic.com
+    credential: claude-code-oauth
+    inject: { header: Authorization, format: \"Bearer {}\" }
+    env_placeholders: [CLAUDE_CODE_OAUTH_TOKEN]
+    max_request_bytes: 67108864
+    provider_fetch: allow
+    rules:
+      - { methods: [POST], path: /v1/messages }
+";
+
+/// The Messages API's answer when the model leads Claude Code through its
+/// WebSearch tool: it loads the deferred tool (`ToolSearch`), searches
+/// (`WebSearch`, which makes Claude Code send a request of its own offering
+/// Anthropic's server-side `web_search` when the tool is not disallowed),
+/// runs [`PROGRAM_COMMAND`] and answers. A request offering the server tool
+/// gets a text answer.
+fn anthropic_web_search_answer(body: &serde_json::Value) -> (String, &'static str) {
+    if offers_server_search(body) {
+        return anthropic_message(
+            body,
+            serde_json::json!({"type": "text", "text": "No results."}),
+            "end_turn",
+        );
+    }
+    let results = last_tool_results(body);
+    let offers = |name: &str| {
+        body["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == name))
+    };
+    let call = |id: &str, name: &str, input: serde_json::Value| {
+        (
+            serde_json::json!({"type": "tool_use", "id": id, "name": name, "input": input}),
+            "tool_use",
+        )
+    };
+    let (block, stop) = if results.iter().any(|id| id == "toolu_axocoatl_1") {
+        (
+            serde_json::json!({"type": "text", "text": final_answer(CLAUDE_ANSWER, body)}),
+            "end_turn",
+        )
+    } else if results.iter().any(|id| id == "toolu_axocoatl_web") {
+        call(
+            "toolu_axocoatl_1",
+            "Bash",
+            serde_json::json!({"command": PROGRAM_COMMAND, "description": "Fix the file"}),
+        )
+    } else if results.iter().any(|id| id == "toolu_axocoatl_search") {
+        call(
+            "toolu_axocoatl_web",
+            "WebSearch",
+            serde_json::json!({"query": "axocoatl provider fetch"}),
+        )
+    } else if offers("ToolSearch") {
+        call(
+            "toolu_axocoatl_search",
+            "ToolSearch",
+            serde_json::json!({"query": "select:WebSearch", "max_results": 1}),
+        )
+    } else {
+        (
+            serde_json::json!({"type": "text", "text": "ok"}),
+            "end_turn",
+        )
+    };
+    anthropic_message(body, block, stop)
+}
+
+/// The Messages API's answer `block`, ending with `stop`: streamed when
+/// `body` asks for a stream.
+fn anthropic_message(
+    body: &serde_json::Value,
+    block: serde_json::Value,
+    stop: &'static str,
+) -> (String, &'static str) {
+    let model = body["model"].as_str().unwrap_or("claude").to_string();
     let usage = serde_json::json!({"input_tokens": 120, "output_tokens": 7,
         "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0});
     if body["stream"] != true {
@@ -499,7 +623,7 @@ fn anthropic_answer(body: &serde_json::Value) -> (String, &'static str) {
     }
     let (start, delta) = if block["type"] == "tool_use" {
         (
-            serde_json::json!({"type": "tool_use", "id": block["id"], "name": "Bash", "input": {}}),
+            serde_json::json!({"type": "tool_use", "id": block["id"], "name": block["name"], "input": {}}),
             serde_json::json!({"type": "input_json_delta",
                 "partial_json": block["input"].to_string()}),
         )
@@ -595,7 +719,7 @@ fn openai_answer(body: &serde_json::Value) -> (String, &'static str) {
 impl FakeModelApi {
     /// The API; when `rejects`, it answers every model request `401` as for
     /// a credential it does not accept.
-    async fn start(host: &str, rejects: bool) -> Self {
+    async fn start(host: &str, rejects: bool, web_search: bool) -> Self {
         use http_body_util::{BodyExt, Full};
         use hyper::body::Incoming;
         let ca = crate::egress_broker::SessionCa::new("external-turn-model-api").unwrap();
@@ -675,6 +799,9 @@ impl FakeModelApi {
                                         .to_string(),
                                         "application/json",
                                     )),
+                                    ("POST", "/v1/messages") if web_search => {
+                                        Some(anthropic_web_search_answer(&body))
+                                    }
                                     ("POST", "/v1/messages") => Some(anthropic_answer(&body)),
                                     ("POST", "/v1/responses" | "/backend-api/codex/responses") => {
                                         Some(openai_answer(&body))
@@ -687,6 +814,7 @@ impl FakeModelApi {
                                     authorization,
                                     account,
                                     body,
+                                    raw: bytes.clone(),
                                 });
                                 let (text, kind) = answer.unwrap_or_else(|| {
                                     ("{\"error\":\"not found\"}".into(), "application/json")
@@ -961,7 +1089,7 @@ fn git(repo: &std::path::Path, args: &[&str]) {
 /// request `401`: the run needs attention, and its not-covered reason says
 /// the stored credential was rejected and how to store it again.
 async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_rejects: bool) {
-    pinned_run(runtime, reviewed, api_rejects, false, false).await
+    pinned_run(runtime, reviewed, api_rejects, false, false, None).await
 }
 
 /// [`pinned_run_child_body`]; with `chatgpt`, the Codex writer names
@@ -983,6 +1111,7 @@ async fn pinned_run(
     api_rejects: bool,
     chatgpt: bool,
     stale_access: bool,
+    web_search: Option<SearchRoute>,
 ) {
     use axocoatl_session::network_record::{Decision, NetworkEvent};
     use axocoatl_session::run_outcome::{RunVerdict, TurnState};
@@ -1051,6 +1180,14 @@ async fn pinned_run(
     } else {
         loadout_text
     };
+    let loadout_text = if web_search == Some(SearchRoute::Allow) {
+        loadout_text.replace(
+            "budgets:",
+            &format!("{CLAUDE_ROUTE_ALLOWING_FETCHES}budgets:"),
+        )
+    } else {
+        loadout_text
+    };
     std::fs::write(
         home.path().join(format!("loadouts/{loadout_id}.yaml")),
         loadout_text,
@@ -1063,7 +1200,7 @@ async fn pinned_run(
     // The model API, reached at its real host name and port through the
     // route: the broker resolves the host to the fake and trusts its
     // authority. Everything else is production's.
-    let api = FakeModelApi::start(host, api_rejects).await;
+    let api = FakeModelApi::start(host, api_rejects, web_search.is_some()).await;
     if stale_access {
         api.refuse_token(crate::external_agent::codex_chatgpt::verify::STALE_ACCESS_TOKEN);
     }
@@ -1456,9 +1593,21 @@ async fn pinned_run(
         .filter(|request| request.method == "POST")
         .collect();
     // With `stale_access`, one call more: the first, carrying the switch's
-    // invalid token and answered 401, which the program sent again.
+    // invalid token and answered 401, which the program sent again. Led
+    // through WebSearch, Claude Code makes four model calls (ToolSearch,
+    // WebSearch, Bash, the answer), and one more, its own search request,
+    // where the route lets it through.
     let stale_calls = usize::from(stale_access);
-    assert_eq!(calls.len(), 2 * activations + stale_calls, "{context}");
+    let per_activation = match web_search {
+        None => 2,
+        Some(SearchRoute::Default) => 4,
+        Some(SearchRoute::Allow) => 5,
+    };
+    assert_eq!(
+        calls.len(),
+        per_activation * activations + stale_calls,
+        "{context}"
+    );
     assert_eq!(calls.len(), seen.len(), "{context}");
     let path = match (runtime, chatgpt) {
         (AgentRuntime::ClaudeCode, _) => "/v1/messages",
@@ -1470,7 +1619,28 @@ async fn pinned_run(
             call.target == path || call.target.starts_with(&format!("{path}?")),
             "{context}"
         );
+        // What the pinned program sends passes the route's body check and
+        // asks the provider to reach no other host, but for its own search
+        // request on a route that lets provider fetches through.
+        if web_search == Some(SearchRoute::Allow) && offers_server_search(&call.body) {
+            continue;
+        }
+        assert_eq!(
+            crate::egress_broker::provider_fetch::check(path, &call.raw),
+            Ok(()),
+            "{context}"
+        );
+        assert!(!offers_server_search(&call.body), "{context}");
     }
+    let searches = calls
+        .iter()
+        .filter(|call| offers_server_search(&call.body))
+        .count();
+    assert_eq!(
+        searches,
+        usize::from(web_search == Some(SearchRoute::Allow)),
+        "{context}"
+    );
     for (index, call) in calls.iter().enumerate() {
         let sent = if index < stale_calls {
             crate::external_agent::codex_chatgpt::verify::STALE_ACCESS_TOKEN
@@ -1636,11 +1806,61 @@ async fn pinned_run(
             "[usage] 600 input and 18 output tokens, as the program reported",
         ),
     };
+    if let Some(search) = web_search {
+        // No request was refused for what it asked the provider to do:
+        // with the route Axocoatl adds, Claude Code never asked (WebSearch
+        // is disallowed, so it is not among its deferred tools and a call
+        // to it fails in the program); with the loadout's route that allows
+        // it, its search request went through.
+        assert!(
+            !refused
+                .iter()
+                .any(|refusal| refusal.ends_with(" provider_fetch_refused")),
+            "{context}"
+        );
+        let first = calls[0].body.to_string();
+        assert_eq!(
+            first.contains("WebSearch"),
+            search == SearchRoute::Allow,
+            "{first}"
+        );
+        let search_result = calls
+            .iter()
+            .flat_map(|call| {
+                call.body["messages"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+            .find(|block| block["tool_use_id"] == "toolu_axocoatl_web")
+            .unwrap_or_else(|| panic!("no WebSearch result\n{context}"));
+        eprintln!("claude-code ({search:?}): the WebSearch tool's result: {search_result}");
+        let text = search_result["content"].to_string();
+        assert!(!text.contains("provider_fetch_refused"), "{text}");
+        match search {
+            SearchRoute::Default => {
+                assert_eq!(search_result["is_error"], true, "{search_result}");
+            }
+            SearchRoute::Allow => {
+                assert_ne!(search_result["is_error"], true, "{search_result}");
+                assert!(text.contains("Web search results"), "{text}");
+            }
+        }
+    }
+    // The fake API reports the same usage for each call. Claude Code's
+    // report counts the tokens of its four main model calls; its cost also
+    // counts its own search request, where it made one.
+    let usage = match web_search {
+        None => usage,
+        Some(SearchRoute::Default) => "[usage] 480 input and 28 output tokens, $0.000620",
+        Some(SearchRoute::Allow) => "[usage] 480 input and 28 output tokens, $0.000775",
+    };
     for wanted in [
         format!(
             "[external agent] {program}, model {}: exit 0, {} model request(s)",
             program_model(runtime),
-            2 + stale_calls,
+            per_activation + stale_calls,
         ),
         tool.to_string(),
         usage.to_string(),
@@ -1746,7 +1966,7 @@ async fn actual_loadout_run_with_the_pinned_codex() {
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
 async fn actual_loadout_run_with_the_pinned_codex_signed_in_with_chatgpt() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run(AgentRuntime::Codex, false, false, true, false).await;
+        pinned_run(AgentRuntime::Codex, false, false, true, false, None).await;
         return;
     }
     run_child(
@@ -1766,11 +1986,66 @@ async fn actual_loadout_run_with_the_pinned_codex_signed_in_with_chatgpt() {
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
 async fn the_pinned_codex_retries_a_401_after_the_stale_access_switch_and_the_run_passes() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run(AgentRuntime::Codex, false, false, true, true).await;
+        pinned_run(AgentRuntime::Codex, false, false, true, true, None).await;
         return;
     }
     run_child(
         "the_pinned_codex_retries_a_401_after_the_stale_access_switch_and_the_run_passes",
+        None,
+        true,
+    )
+    .await;
+}
+
+/// The pinned Claude Code led toward its WebSearch tool (see
+/// [`anthropic_web_search_answer`]) on the route Axocoatl adds, which
+/// refuses provider fetches: Claude Code runs with WebSearch disallowed, so
+/// it never sends a request offering Anthropic's server-side `web_search`
+/// (nothing is refused for it), the model's call to the tool fails in the
+/// program, and the run passes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the claude-code recipe image"]
+async fn the_pinned_claude_code_runs_without_web_search_on_the_route_axocoatl_adds() {
+    if std::env::var_os(CHILD).is_some() {
+        pinned_run(
+            AgentRuntime::ClaudeCode,
+            false,
+            false,
+            false,
+            false,
+            Some(SearchRoute::Default),
+        )
+        .await;
+        return;
+    }
+    run_child(
+        "the_pinned_claude_code_runs_without_web_search_on_the_route_axocoatl_adds",
+        None,
+        true,
+    )
+    .await;
+}
+
+/// The same run with a loadout route for `api.anthropic.com` that sets
+/// `provider_fetch: allow`: Claude Code keeps WebSearch, its own search
+/// request reaches the API through that route, and the run passes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the claude-code recipe image"]
+async fn the_pinned_claude_codes_web_search_reaches_the_api_on_a_route_that_allows_it() {
+    if std::env::var_os(CHILD).is_some() {
+        pinned_run(
+            AgentRuntime::ClaudeCode,
+            false,
+            false,
+            false,
+            false,
+            Some(SearchRoute::Allow),
+        )
+        .await;
+        return;
+    }
+    run_child(
+        "the_pinned_claude_codes_web_search_reaches_the_api_on_a_route_that_allows_it",
         None,
         true,
     )
