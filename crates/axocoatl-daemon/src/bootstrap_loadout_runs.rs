@@ -643,6 +643,14 @@ pub fn observation_from_control_plane(
             generations,
         });
     }
+    // The tree the required checks ran on: the readiness review that judged
+    // them records it (each check's own view names none). A check that ran
+    // ran on that tree.
+    let judged = view
+        .required_check_readiness
+        .as_ref()
+        .filter(|readiness| matches!(readiness.state.as_str(), "passed" | "failed"))
+        .and_then(|readiness| readiness.candidate_sha256.clone());
     let checks_out: Vec<CheckResult> = view
         .required_checks
         .iter()
@@ -665,7 +673,14 @@ pub fn observation_from_control_plane(
                 exit_code: check.exit_code,
                 stdout_tail: tail(&check.stdout, CHECK_TAIL_BYTES),
                 stderr_tail: tail(&check.stderr, CHECK_TAIL_BYTES),
-                candidate_sha256: check.candidate_sha256.clone(),
+                candidate_sha256: check.candidate_sha256.clone().or_else(|| {
+                    matches!(
+                        check_state(check),
+                        CheckState::Passed | CheckState::Failed | CheckState::TimedOut
+                    )
+                    .then(|| judged.clone())
+                    .flatten()
+                }),
                 report: None,
                 reason: check.reason.clone(),
             }
@@ -2834,6 +2849,44 @@ mod tests {
             decisions: EvidenceValue::NotRecorded,
             warnings: Vec::new(),
         }
+    }
+
+    /// Each check that ran names the tree its readiness review judged (a
+    /// check's own view names none), which the run's receipt looks up; a
+    /// check that did not run names none.
+    #[test]
+    fn a_check_that_ran_names_the_tree_its_readiness_judged() {
+        use crate::session_control_plane::EvidenceValue;
+        let mut view = projection(
+            "completed",
+            "accepted",
+            EvidenceValue::NotRecorded,
+            EvidenceValue::NotRecorded,
+        );
+        let mut ran = axocoatl_session::turn_checks::TurnCheckView::pending(vec!["sh".into()]);
+        ran.state = "passed".into();
+        ran.exit_code = Some(0);
+        let pending = axocoatl_session::turn_checks::TurnCheckView::pending(vec!["true".into()]);
+        view.required_checks = vec![ran, pending];
+        view.required_check_readiness = Some(axocoatl_session::turn_checks::TurnCheckReadiness {
+            state: "passed".into(),
+            reason: "Every check passed on the current tree and left it unchanged.".into(),
+            candidate_sha256: Some("e".repeat(64)),
+        });
+        let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert_eq!(
+            observed.checks[0].candidate_sha256.as_deref(),
+            Some("e".repeat(64).as_str())
+        );
+        assert_eq!(observed.checks[1].candidate_sha256, None);
+        // A readiness that has not judged the current result names no tree.
+        view.required_check_readiness = Some(axocoatl_session::turn_checks::TurnCheckReadiness {
+            state: "not_run".into(),
+            reason: String::new(),
+            candidate_sha256: Some("e".repeat(64)),
+        });
+        let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert_eq!(observed.checks[0].candidate_sha256, None);
     }
 
     /// An activation that failed with an empty recorded reason ends with
