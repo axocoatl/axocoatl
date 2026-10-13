@@ -592,6 +592,16 @@ pub enum LoadoutError {
     Param { param: String, reason: String },
     #[error("no loadout named {0:?}")]
     NotFound(String),
+    /// A user loadout file declares the id of a built-in loadout. It is
+    /// listed with this error and never used; a run of that id is refused
+    /// while the file declares it, so neither one is chosen silently.
+    #[error(
+        "{id:?} is {}the id of a built-in loadout, so this file is not used: to keep running \
+         it, give it another id (such as my-{id}) and run that id; to use the built-in, \
+         remove this file",
+        builtin_since(id)
+    )]
+    BuiltinId { id: String },
 }
 
 fn invalid(field: impl Into<String>, reason: impl Into<String>) -> LoadoutError {
@@ -1374,8 +1384,25 @@ pub fn builtin_loadouts() -> Vec<Result<Loadout, LoadoutError>> {
     .collect()
 }
 
-/// The ids of the built-in loadouts, in [`builtin_loadouts`] order.
+/// The ids of the built-in loadouts, in [`builtin_loadouts`] order. A user
+/// loadout that declares one of them is not used
+/// ([`LoadoutError::BuiltinId`]).
 pub const BUILTIN_LOADOUT_IDS: [&str; 5] = ["fix", "fix-claude-code", "fix-codex", "qa", "audit"];
+
+/// The built-in ids added after 1.3.1. A user loadout written earlier may
+/// declare one (the 1.3 docs showed a `fix-claude-code` to write yourself),
+/// so what refuses it says the id is now built in.
+pub const NEW_BUILTIN_LOADOUT_IDS: [&str; 2] = ["fix-claude-code", "fix-codex"];
+
+/// `now ` for an id of [`NEW_BUILTIN_LOADOUT_IDS`], else nothing: the
+/// word the messages about a user file declaring `id` put before "built".
+pub fn builtin_since(id: &str) -> &'static str {
+    if NEW_BUILTIN_LOADOUT_IDS.contains(&id) {
+        "now "
+    } else {
+        ""
+    }
+}
 
 /// One user loadout file as read: the loadout, or why it cannot be used.
 #[derive(Debug, Clone)]
@@ -1437,13 +1464,9 @@ fn read_user_loadout(path: &Path) -> Result<Loadout, LoadoutError> {
         },
     )?;
     if BUILTIN_LOADOUT_IDS.contains(&loadout.file.id.as_str()) {
-        return Err(invalid(
-            "id",
-            format!(
-                "{:?} is a built-in loadout; give your loadout another id",
-                loadout.file.id
-            ),
-        ));
+        return Err(LoadoutError::BuiltinId {
+            id: loadout.file.id.clone(),
+        });
     }
     Ok(loadout)
 }
@@ -2352,10 +2375,40 @@ prompt: "{task}"
         let custom = FIX_YAML.replace("id: fix", "id: fix-local");
         std::fs::write(dir.path().join("mine.yml"), custom).unwrap();
         std::fs::write(dir.path().join("notes.txt"), "ignored").unwrap();
+        // A file the docs once told people to write, under another name:
+        // its id, not its name, is what clashes.
+        let claude = FIX_YAML.replace("id: fix", "id: fix-claude-code").replace(
+            "    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]\n",
+            "    runtime: claude-code\n",
+        );
+        std::fs::write(dir.path().join("claude.yaml"), claude).unwrap();
         let entries = load_user_loadouts(dir.path()).unwrap();
-        assert_eq!(entries.len(), 2);
-        assert!(entries[0].loadout.is_err(), "fix.yaml reuses a built-in id");
-        assert_eq!(entries[1].loadout.as_ref().unwrap().file.id, "fix-local");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            entries[0].loadout.as_ref().unwrap_err(),
+            &LoadoutError::BuiltinId {
+                id: "fix-claude-code".into()
+            },
+            "claude.yaml declares a built-in id"
+        );
+        assert_eq!(
+            entries[0].loadout.as_ref().unwrap_err().to_string(),
+            "\"fix-claude-code\" is now the id of a built-in loadout, so this file is not \
+             used: to keep running it, give it another id (such as my-fix-claude-code) and run \
+             that id; to use the built-in, remove this file"
+        );
+        assert!(
+            matches!(&entries[1].loadout, Err(LoadoutError::BuiltinId { id }) if id == "fix"),
+            "fix.yaml reuses a built-in id"
+        );
+        // `fix` was always built in.
+        assert!(entries[1]
+            .loadout
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .starts_with("\"fix\" is the id of a built-in loadout"));
+        assert_eq!(entries[2].loadout.as_ref().unwrap().file.id, "fix-local");
         assert!(load_user_loadouts(&dir.path().join("missing"))
             .unwrap()
             .is_empty());

@@ -1035,55 +1035,143 @@ impl AxocoatlDaemon {
         entries
     }
 
-    /// The usable loadout `id`, or why it cannot be used.
-    fn find_loadout(&self, id: &str) -> Result<Loadout, DaemonError> {
-        let mut found = None;
-        for entry in self.loadout_registry() {
-            match entry.loadout {
-                Ok(loadout) if loadout.file.id == id => return Ok(loadout),
-                Ok(_) => {}
-                Err(error) => {
-                    let named = entry
-                        .path
-                        .as_ref()
-                        .and_then(|path| path.file_stem())
-                        .and_then(|stem| stem.to_str())
-                        == Some(id);
-                    if named {
-                        found = Some(error);
-                    }
+    /// The loadout a run of `id` runs. A built-in loadout whose id a user
+    /// file also declares is refused, naming the file and both ways out:
+    /// Axocoatl never chooses one of the two silently.
+    fn find_loadout_to_run(&self, id: &str) -> Result<Loadout, DaemonError> {
+        let registry = self.loadout_registry();
+        let files = files_declaring_builtin_id(&registry, id);
+        if !files.is_empty() {
+            return Err(DaemonError::InvalidRequest(builtin_id_refusal(id, &files)));
+        }
+        find_in_registry(registry, id)
+    }
+}
+
+/// The user files of `registry` that declare the built-in id `id`.
+fn files_declaring_builtin_id(registry: &[RegistryEntry], id: &str) -> Vec<std::path::PathBuf> {
+    registry
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.loadout, Err(LoadoutError::BuiltinId { id: declared }) if declared == id)
+        })
+        .filter_map(|entry| entry.path.clone())
+        .collect()
+}
+
+fn joined_paths(files: &[std::path::PathBuf]) -> String {
+    files
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" and ")
+}
+
+/// Why a run of the built-in loadout `id` is refused while `files` declare
+/// that id too.
+fn builtin_id_refusal(id: &str, files: &[std::path::PathBuf]) -> String {
+    let paths = joined_paths(files);
+    format!(
+        "loadout {id} is {}built into Axocoatl, and your loadout file {paths} also declares \
+         the id {id}, so nothing was started: Axocoatl does not choose between the two. To run \
+         your file, give it another id (such as my-{id}) and run that id; to run the \
+         built-in, remove {paths}",
+        axocoatl_config::loadout::builtin_since(id)
+    )
+}
+
+/// The warning a built-in loadout's summary carries while `files` declare
+/// its id too.
+fn builtin_id_warning(
+    id: &str,
+    files: &[std::path::PathBuf],
+) -> axocoatl_config::loadout::LoadoutWarning {
+    axocoatl_config::loadout::LoadoutWarning {
+        code: "user_loadout_uses_builtin_id".into(),
+        field: "id".into(),
+        message: format!(
+            "your loadout file {} also declares the id {id}, which is {}built in: a run of {id} \
+             is refused until you give that file another id (such as my-{id}) or remove it",
+            joined_paths(files),
+            axocoatl_config::loadout::builtin_since(id)
+        ),
+    }
+}
+
+/// The summary of `loadout` as `registry` lists it: a built-in whose id a
+/// user file also declares carries `user_loadout_uses_builtin_id`.
+fn registry_summary(registry: &[RegistryEntry], loadout: &Loadout) -> LoadoutSummary {
+    let mut summary = loadout_summary(loadout);
+    let files = files_declaring_builtin_id(registry, &loadout.file.id);
+    if loadout.source == LoadoutSource::Builtin && !files.is_empty() {
+        summary
+            .warnings
+            .push(builtin_id_warning(&loadout.file.id, &files));
+    }
+    summary
+}
+
+/// The usable loadout `id` of `registry`, or why it cannot be used.
+fn find_in_registry(registry: Vec<RegistryEntry>, id: &str) -> Result<Loadout, DaemonError> {
+    let mut found = None;
+    for entry in registry {
+        match entry.loadout {
+            Ok(loadout) if loadout.file.id == id => return Ok(loadout),
+            Ok(_) => {}
+            Err(error) => {
+                let named = entry
+                    .path
+                    .as_ref()
+                    .and_then(|path| path.file_stem())
+                    .and_then(|stem| stem.to_str())
+                    == Some(id);
+                if named {
+                    found = Some(error);
                 }
             }
         }
-        match found {
-            Some(error) => Err(DaemonError::InvalidRequest(format!(
-                "loadout {id} cannot be used: {error}"
-            ))),
-            None => Err(DaemonError::NotFound(format!(
-                "no loadout named {id:?}; `axocoatl loadouts list` shows them"
-            ))),
-        }
     }
+    match found {
+        Some(error) => Err(DaemonError::InvalidRequest(format!(
+            "loadout {id} cannot be used: {error}"
+        ))),
+        None => Err(DaemonError::NotFound(format!(
+            "no loadout named {id:?}; `axocoatl loadouts list` shows them"
+        ))),
+    }
+}
 
+impl AxocoatlDaemon {
     /// `GET /api/loadouts`: built-in loadouts, then user loadouts from
-    /// `<config dir>/loadouts/` (invalid ones listed with their error).
+    /// `<config dir>/loadouts/` (invalid ones listed with their error). A
+    /// built-in whose id a user file also declares carries the warning
+    /// `user_loadout_uses_builtin_id`, and that file's row says why it is
+    /// not used.
     pub async fn list_loadouts(&self) -> Result<Vec<LoadoutSummary>, DaemonError> {
-        Ok(self
-            .loadout_registry()
-            .into_iter()
+        let registry = self.loadout_registry();
+        let summaries = registry
+            .iter()
             .map(|entry| match (&entry.loadout, &entry.path) {
-                (Ok(loadout), _) => loadout_summary(loadout),
+                (Ok(loadout), _) => registry_summary(&registry, loadout),
                 (Err(error), Some(path)) => invalid_summary(path, error),
                 (Err(error), None) => invalid_summary(std::path::Path::new("built-in"), error),
             })
-            .collect())
+            .collect();
+        Ok(summaries)
     }
 
-    /// `GET /api/loadouts/{id}`.
+    /// `GET /api/loadouts/{id}`. A built-in whose id a user file also
+    /// declares is still shown, with the warning the list gives it.
     pub async fn loadout_view(&self, id: &str) -> Result<LoadoutView, DaemonError> {
-        let loadout = self.find_loadout(id)?;
+        let registry = self.loadout_registry();
+        let conflicts = files_declaring_builtin_id(&registry, id);
+        let loadout = find_in_registry(registry, id)?;
+        let mut summary = loadout_summary(&loadout);
+        if loadout.source == LoadoutSource::Builtin && !conflicts.is_empty() {
+            summary.warnings.push(builtin_id_warning(id, &conflicts));
+        }
         Ok(LoadoutView {
-            summary: loadout_summary(&loadout),
+            summary,
             graph: loadout_graph(&loadout.file),
             file: loadout.file.clone(),
             text: loadout.text.clone(),
@@ -1103,7 +1191,7 @@ impl AxocoatlDaemon {
         &self,
         request: &RunRequest,
     ) -> Result<(RunAccepted, RunContext), DaemonError> {
-        let loadout = self.find_loadout(&request.loadout)?;
+        let loadout = self.find_loadout_to_run(&request.loadout)?;
         if request.task.trim().is_empty() {
             return Err(DaemonError::InvalidRequest("the task is empty".into()));
         }
@@ -2534,10 +2622,10 @@ pub fn validate_text(text: &str) -> ValidateLoadoutResponse {
             ValidateLoadoutResponse {
                 valid: !builtin_id,
                 error: builtin_id.then(|| {
-                    format!(
-                        "{:?} is a built-in loadout; a user loadout takes another id",
-                        loadout.file.id
-                    )
+                    LoadoutError::BuiltinId {
+                        id: loadout.file.id.clone(),
+                    }
+                    .to_string()
                 }),
                 warnings: loadout.warnings.clone(),
                 summary: Some(summary),

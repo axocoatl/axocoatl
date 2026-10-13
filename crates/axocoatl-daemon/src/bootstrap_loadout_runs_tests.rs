@@ -762,8 +762,8 @@ async fn admission_child_body() {
 /// own data root: the writer's runtime, default model and recipe image, the
 /// credential its route sends (fix-codex's `auto` with each combination of
 /// stored secrets, and `--param credential=`), the routes, the team, the
-/// record of the choice (manifest, note event, Outcome notes) and the
-/// same-model warning.
+/// record of the choice (manifest, note event, Outcome notes), the
+/// same-model warning, and a user file that declares a built-in id.
 async fn external_fix_admission_child_body() {
     use crate::loadout::{credentials, egress, team_plan};
     let server = model_server().await;
@@ -1115,6 +1115,79 @@ async fn external_fix_admission_child_body() {
         accepted.warnings
     );
 
+    // A user file that declares a built-in id (the docs once showed one
+    // named fix-claude-code) is listed with why it is not used, the
+    // built-in carries a warning, the built-in is still shown, and a run of
+    // that id is refused: neither one is chosen silently.
+    let mine = dir.path().join(USER_LOADOUT_DIR).join("claude.yaml");
+    std::fs::write(
+        &mine,
+        builtin_loadouts()
+            .into_iter()
+            .map(Result::unwrap)
+            .find(|loadout| loadout.file.id == "fix-claude-code")
+            .unwrap()
+            .text
+            .replace("rounds: 3", "rounds: 2"),
+    )
+    .unwrap();
+    let listed = daemon.list_loadouts().await.unwrap();
+    let user_row = listed.iter().find(|row| !row.builtin).unwrap();
+    // The file as the daemon names it (its configuration directory, as it
+    // resolved it).
+    let shown = user_row.path.clone().unwrap();
+    assert!(shown.ends_with("/loadouts/claude.yaml"), "{shown}");
+    let builtin_row = listed
+        .iter()
+        .find(|row| row.id == "fix-claude-code" && row.builtin)
+        .unwrap();
+    assert_eq!(builtin_row.warnings.len(), 1, "{builtin_row:?}");
+    assert_eq!(builtin_row.warnings[0].code, "user_loadout_uses_builtin_id");
+    assert_eq!(
+        builtin_row.warnings[0].message,
+        format!(
+            "your loadout file {shown} also declares the id fix-claude-code, which is now \
+             built in: a run of fix-claude-code is refused until you give that file another id \
+             (such as my-fix-claude-code) or remove it"
+        )
+    );
+    assert_eq!(
+        user_row.error.as_deref(),
+        Some(
+            "\"fix-claude-code\" is now the id of a built-in loadout, so this file is not \
+             used: to keep running it, give it another id (such as my-fix-claude-code) and run \
+             that id; to use the built-in, remove this file"
+        )
+    );
+    let view = daemon.loadout_view("fix-claude-code").await.unwrap();
+    assert!(view.summary.builtin);
+    assert_eq!(view.summary.warnings, builtin_row.warnings);
+    let message = usage(admit(request("fix-claude-code", &[], "claude-clash")).await);
+    assert_eq!(
+        message,
+        format!(
+            "loadout fix-claude-code is now built into Axocoatl, and your loadout file {shown} \
+             also declares the id fix-claude-code, so nothing was started: Axocoatl does not \
+             choose between the two. To run your file, give it another id (such as \
+             my-fix-claude-code) and run that id; to run the built-in, remove {shown}",
+            shown = shown,
+        )
+    );
+    // Renamed, it runs as itself and the built-in runs again.
+    let renamed = std::fs::read_to_string(&mine)
+        .unwrap()
+        .replace("id: fix-claude-code", "id: my-fix-claude-code");
+    std::fs::write(&mine, renamed).unwrap();
+    let listed = daemon.list_loadouts().await.unwrap();
+    assert!(
+        listed
+            .iter()
+            .all(|row| row.error.is_none() && row.warnings.is_empty()),
+        "{listed:?}"
+    );
+    assert!(listed
+        .iter()
+        .any(|row| row.id == "my-fix-claude-code" && !row.builtin));
     daemon.shutdown().await.unwrap();
 }
 
@@ -1197,8 +1270,8 @@ async fn qa_admission_reads_the_live_lists_and_never_waits_for_a_held_workspace(
 
 /// fix-claude-code and fix-codex through admission: writer runtime, model
 /// default, recipe image, routes and the credential (auto with each
-/// combination of stored test secrets), how the choice is recorded and the
-/// same-model warning.
+/// combination of stored test secrets), how the choice is recorded, the
+/// same-model warning, and a user file declaring a built-in id.
 #[tokio::test]
 async fn the_external_fix_builtins_resolve_their_writer_recipe_routes_and_credential() {
     if std::env::var_os(CHILD).is_some() {
