@@ -512,7 +512,13 @@ fn receipt_section(outcome: &RunOutcome, receipt: Option<&OpenedReceipt>) -> Str
         predicate
             .checks
             .iter()
-            .map(|check| format!("{} {}", md(&check.name, 60), md(&check.state.replace('_', " "), 20)))
+            .map(|check| {
+                format!(
+                    "{} {}",
+                    md(&check.name, 60),
+                    md(&check.state.replace('_', " "), 20)
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -878,11 +884,8 @@ pub fn pr_body(
     body.push_str("\n---\nKept with Axocoatl Keep as PR. Findings, reasons and the task are quoted from the run.\n");
 
     // The receipt block is never cut: the rest of the body makes room.
-    let room = MAX_BODY_CHARS.saturating_sub(
-        block
-            .as_ref()
-            .map_or(0, |block| block.chars().count() + 2),
-    );
+    let room =
+        MAX_BODY_CHARS.saturating_sub(block.as_ref().map_or(0, |block| block.chars().count() + 2));
     if body.chars().count() > room {
         let cut = body
             .char_indices()
@@ -907,7 +910,10 @@ pub fn pr_body(
 pub fn commit_trailers(run_id: &str, receipt: Option<&OpenedReceipt>) -> String {
     let mut trailers = format!("{RUN_TRAILER}: {run_id}");
     if let Some(receipt) = receipt {
-        trailers.push_str(&format!("\n{RECEIPT_TRAILER}: {}", receipt.payload_digest()));
+        trailers.push_str(&format!(
+            "\n{RECEIPT_TRAILER}: {}",
+            receipt.payload_digest()
+        ));
     }
     trailers
 }
@@ -930,7 +936,10 @@ fn check_against_receipt(
     let mut uncovered = Vec::new();
     for path in paths {
         if let Some(mismatch) = receipt_v1::check_path(statement, root, path) {
-            if statement.subject.iter().any(|subject| subject.name == *path)
+            if statement
+                .subject
+                .iter()
+                .any(|subject| subject.name == *path)
                 || statement.predicate.files.removed.contains(path)
             {
                 changed.push(format!("{path}: {}", mismatch.problem));
@@ -942,7 +951,11 @@ fn check_against_receipt(
     if !changed.is_empty() {
         return Err(refused(format!(
             "{} {judged}; Keep commits only what the receipt covers: {}",
-            if changed.len() == 1 { "a path" } else { "paths" },
+            if changed.len() == 1 {
+                "a path"
+            } else {
+                "paths"
+            },
             listed(&changed)
         )));
     }
@@ -1122,12 +1135,12 @@ fn require_pass(outcome: &RunOutcome) -> Result<(), KeepPrError> {
 // ---------------------------------------------------------------------------
 // Attribution: `crate::run_attribution`, shared with receipts.
 
+use crate::run_attribution::is_git_internal;
 pub use crate::run_attribution::RunAttribution;
 #[cfg(test)]
 pub(crate) use crate::run_attribution::{
     attribute_activation, ActivationChanges, CaptureFacts, CapturePhase,
 };
-use crate::run_attribution::is_git_internal;
 
 /// A repository-relative path Keep can name to Git.
 fn is_plain_path(path: &str) -> bool {

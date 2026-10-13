@@ -890,7 +890,9 @@ async fn receipts_child_body() {
     let bytes = daemon.loadout_run_receipt(&run_id).unwrap();
     let key = daemon.receipt_public_key().await.unwrap();
     assert_eq!(key.algorithm, "ed25519");
-    assert!(key.line.starts_with(&format!("ed25519 {} axocoatl@", key.public_key)));
+    assert!(key
+        .line
+        .starts_with(&format!("ed25519 {} axocoatl@", key.public_key)));
     let public = PublicKey::from_base64(&key.public_key).unwrap();
     assert_eq!(public.key_id(), key.key_id);
     let opened = open_receipt(&bytes).unwrap();
@@ -909,7 +911,10 @@ async fn receipts_child_body() {
     assert_eq!(predicate.agents[0].provider, "ollama");
     assert_eq!(predicate.agents[0].model, MODEL);
     assert_eq!(predicate.agents[0].runtime, "native");
-    assert_eq!(predicate.repository.base_commit.as_deref(), Some(head.as_str()));
+    assert_eq!(
+        predicate.repository.base_commit.as_deref(),
+        Some(head.as_str())
+    );
     assert_eq!(
         predicate.repository.origin_url.as_deref(),
         Some("https://github.com/acme/widgets.git")
@@ -931,7 +936,10 @@ async fn receipts_child_body() {
     assert_eq!(view.statement_sha256, opened.payload_digest());
     // The bundle's last section is the receipt, as written.
     let mut bundle = Vec::new();
-    daemon.write_record_bundle(&run_id, &mut bundle).await.unwrap();
+    daemon
+        .write_record_bundle(&run_id, &mut bundle)
+        .await
+        .unwrap();
     let summary = axocoatl_session::record_bundle::verify_bundle(bundle.as_slice()).unwrap();
     assert_eq!(
         summary.header.schema,
@@ -958,7 +966,9 @@ async fn receipts_child_body() {
             },
         )
         .unwrap();
-    store.write_receipt(&restarted.run_id, b"{\"stale\":true}\n").unwrap();
+    store
+        .write_receipt(&restarted.run_id, b"{\"stale\":true}\n")
+        .unwrap();
     daemon.recover_loadout_runs().await;
     let bytes = daemon.loadout_run_receipt(&restarted.run_id).unwrap();
     let opened = open_receipt(&bytes).unwrap();
@@ -989,7 +999,11 @@ async fn receipts_child_body() {
         .await
         .expect("a warning");
     assert_eq!(warning.code, "receipt_unavailable");
-    assert!(!warning.message.contains("not-a-key"), "{}", warning.message);
+    assert!(
+        !warning.message.contains("not-a-key"),
+        "{}",
+        warning.message
+    );
     outcome.warnings.push(warning);
     daemon.finish_loadout_run(&broken.run_id, &outcome).unwrap();
     assert_eq!(outcome.exit_code, exit_code::INFRASTRUCTURE);
@@ -1000,7 +1014,12 @@ async fn receipts_child_body() {
         }
         other => panic!("{other:?}"),
     }
-    assert!(daemon.loadout_run(&broken.run_id).await.unwrap().receipt.is_none());
+    assert!(daemon
+        .loadout_run(&broken.run_id)
+        .await
+        .unwrap()
+        .receipt
+        .is_none());
     daemon.shutdown().await.unwrap();
 }
 
@@ -1841,7 +1860,8 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
             axocoatl_session::run_outcome::RunVerdict::NeedsAttention
         );
         assert_eq!(
-            sections[sections.len() - 2]["section"], "receipt",
+            sections[sections.len() - 2]["section"],
+            "receipt",
             "the receipt is the last section"
         );
 

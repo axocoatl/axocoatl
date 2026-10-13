@@ -118,7 +118,10 @@ fn without_a_judged_tree_the_last_writers_after_capture_then_the_workspace() {
     ] {
         let files = receipt_files(&attribution, &checks, Path::new("/nonexistent"));
         assert_eq!(files.facts.source, source::AFTER_CAPTURE);
-        assert_eq!(files.subject, vec![Subject::sha256("a.txt", "4".repeat(64))]);
+        assert_eq!(
+            files.subject,
+            vec![Subject::sha256("a.txt", "4".repeat(64))]
+        );
         assert!(files.facts.complete);
     }
 
@@ -170,7 +173,12 @@ fn the_workspace_is_read_without_following_links() {
     );
     assert_eq!(files.facts.links, vec!["src/alias.rs"]);
     assert_eq!(files.facts.removed, vec!["gone"]);
-    assert_eq!(files.facts.unattributed.len(), 2, "{:?}", files.facts.unattributed);
+    assert_eq!(
+        files.facts.unattributed.len(),
+        2,
+        "{:?}",
+        files.facts.unattributed
+    );
     assert!(files.facts.unattributed[0].starts_with("etc/hosts: etc is a symbolic link"));
     assert!(files.facts.unattributed[1].starts_with("src: is a directory"));
     assert!(!files.facts.complete);

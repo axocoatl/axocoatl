@@ -389,7 +389,10 @@ fn the_body_carries_checks_review_adjudications_not_covered_and_the_record() {
 
     let mut other = outcome();
     other.schema = "axocoatl.run-outcome/9".into();
-    assert!(matches!(pr_body(&other, None), Err(KeepPrError::Refused(_))));
+    assert!(matches!(
+        pr_body(&other, None),
+        Err(KeepPrError::Refused(_))
+    ));
 }
 
 #[test]
@@ -1933,7 +1936,10 @@ async fn a_kept_run_with_a_receipt_carries_it_in_trailers_and_the_body() {
         .unwrap();
     assert_eq!(kept.paths, vec!["a.txt", "b.txt", "src/new.rs"]);
     assert_eq!(kept.receipt, Some(receipt.payload_digest()));
-    assert!(!kept.warnings.iter().any(|warning| warning.contains("receipt")));
+    assert!(!kept
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("receipt")));
     let repo = &fixture.repo;
     assert_eq!(
         sh(
@@ -1973,11 +1979,7 @@ async fn a_kept_run_with_a_receipt_carries_it_in_trailers_and_the_body() {
     let worktree = fixture.dir.path().join("check");
     sh(
         repo,
-        &format!(
-            "git worktree add -q {} {}",
-            worktree.display(),
-            kept.commit
-        ),
+        &format!("git worktree add -q {} {}", worktree.display(), kept.commit),
     );
     assert!(receipt_v1::check_files(&parsed.statement, &worktree).is_empty());
 }
@@ -1997,7 +1999,14 @@ async fn a_path_that_differs_from_its_receipt_is_refused() {
     std::thread::sleep(std::time::Duration::from_millis(20));
     write(&fixture.repo.join("a.txt"), "one, fixed, then edited\n");
     match fixture
-        .keep_signed(&request(), &manifest, &ended, &attribution, None, Some(&receipt))
+        .keep_signed(
+            &request(),
+            &manifest,
+            &ended,
+            &attribution,
+            None,
+            Some(&receipt),
+        )
         .await
     {
         Err(KeepPrError::Refused(message)) => {
@@ -2012,7 +2021,11 @@ async fn a_path_that_differs_from_its_receipt_is_refused() {
         }
         other => panic!("expected a refusal, got {other:?}"),
     }
-    assert_eq!(fixture.branches(), "refs/heads/work", "a branch was created");
+    assert_eq!(
+        fixture.branches(),
+        "refs/heads/work",
+        "a branch was created"
+    );
     write(&fixture.repo.join("a.txt"), "one, fixed\n");
 
     // A receipt whose subjects differ from the files (judged before a later
@@ -2031,7 +2044,14 @@ async fn a_path_that_differs_from_its_receipt_is_refused() {
         (&back, "src/new.rs: the run removed it, and it exists"),
     ] {
         match fixture
-            .keep_signed(&request(), &manifest, &outcome(), &attribution, None, Some(receipt))
+            .keep_signed(
+                &request(),
+                &manifest,
+                &outcome(),
+                &attribution,
+                None,
+                Some(receipt),
+            )
             .await
         {
             Err(KeepPrError::Refused(message)) => {
@@ -2040,7 +2060,11 @@ async fn a_path_that_differs_from_its_receipt_is_refused() {
             other => panic!("expected a refusal containing {needle:?}, got {other:?}"),
         }
     }
-    assert_eq!(fixture.branches(), "refs/heads/work", "a branch was created");
+    assert_eq!(
+        fixture.branches(),
+        "refs/heads/work",
+        "a branch was created"
+    );
     // Without a receipt, Keep says the commit carries none.
     let kept = fixture
         .keep(&request(), &manifest, &outcome(), &attribution, None)
@@ -2100,7 +2124,9 @@ fn the_receipt_block_survives_the_body_cut_and_bad_receipts_are_refused() {
     });
     let body = pr_body(&unsigned, None).unwrap();
     assert!(
-        body.contains("This run has no signed receipt (The run finished, but its receipt could not be signed"),
+        body.contains(
+            "This run has no signed receipt (The run finished, but its receipt could not be signed"
+        ),
         "{body}"
     );
     assert!(!body.contains(receipt_v1::PR_BLOCK_START));

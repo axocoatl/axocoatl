@@ -708,10 +708,7 @@ pub fn extract_pr_block(text: &str) -> Option<Result<Vec<u8>, ReceiptError>> {
         .chars()
         .filter(|ch| !ch.is_whitespace())
         .collect();
-    Some(
-        decode_base64(&encoded)
-            .map_err(|_| malformed("the receipt block is not base64")),
-    )
+    Some(decode_base64(&encoded).map_err(|_| malformed("the receipt block is not base64")))
 }
 
 // ---------------------------------------------------------------------------
@@ -756,17 +753,12 @@ pub fn hash_repo_path(root: &Path, path: &str) -> PathState {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return PathState::Other(format!(
                     "{} is a symbolic link",
-                    current
-                        .strip_prefix(root)
-                        .unwrap_or(&current)
-                        .display()
+                    current.strip_prefix(root).unwrap_or(&current).display()
                 ))
             }
             Ok(metadata) if metadata.is_dir() => {}
             Ok(_) => return PathState::Absent,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return PathState::Absent
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return PathState::Absent,
             Err(error) => return PathState::Other(format!("cannot be read: {error}")),
         }
     }
@@ -853,11 +845,20 @@ pub fn check_path(statement: &Statement, root: &Path, path: &str) -> Option<File
         })
     };
     let state = hash_repo_path(root, path);
-    if let Some(subject) = statement.subject.iter().find(|subject| subject.name == path) {
+    if let Some(subject) = statement
+        .subject
+        .iter()
+        .find(|subject| subject.name == path)
+    {
         let Some(expected) = subject.sha256_digest() else {
             return mismatch("the receipt gives it no sha256 digest".into());
         };
-        let link = statement.predicate.files.links.iter().any(|link| link == path);
+        let link = statement
+            .predicate
+            .files
+            .links
+            .iter()
+            .any(|link| link == path);
         return match (state, link) {
             (PathState::File(found), false) | (PathState::Link(found), true) => {
                 if found == expected {
@@ -880,7 +881,13 @@ pub fn check_path(statement: &Statement, root: &Path, path: &str) -> Option<File
             (PathState::Other(why), _) => mismatch(why),
         };
     }
-    if statement.predicate.files.removed.iter().any(|removed| removed == path) {
+    if statement
+        .predicate
+        .files
+        .removed
+        .iter()
+        .any(|removed| removed == path)
+    {
         return match state {
             PathState::Absent => None,
             _ => mismatch("the run removed it, and it exists".into()),
@@ -990,7 +997,11 @@ pub fn describe(statement: &Statement) -> Vec<String> {
             review.provider,
             review.model,
             review.verdict,
-            if review.passed { "passed" } else { "not passed" },
+            if review.passed {
+                "passed"
+            } else {
+                "not passed"
+            },
             review.rounds,
             review.max_rounds,
             review.findings
@@ -1214,7 +1225,10 @@ mod tests {
         );
         assert_eq!(pae("", b""), b"DSSEv1 0  0 ".to_vec());
         // Lengths are bytes, not characters.
-        assert_eq!(pae("é", "ü".as_bytes()), "DSSEv1 2 é 2 ü".as_bytes().to_vec());
+        assert_eq!(
+            pae("é", "ü".as_bytes()),
+            "DSSEv1 2 é 2 ü".as_bytes().to_vec()
+        );
     }
 
     /// A fixed key and a fixed statement give fixed bytes: Ed25519 is
@@ -1237,13 +1251,18 @@ mod tests {
         assert!(text.starts_with(
             "{\"_type\":\"https://in-toto.io/Statement/v1\",\"subject\":[{\"name\":\"src/lib.rs\",\"digest\":{\"sha256\":\"aaaa"
         ), "{text}");
-        assert!(text.contains("\"predicateType\":\"https://axocoatl.ai/receipt/v1\",\"predicate\":{\"run\":{"));
+        assert!(text.contains(
+            "\"predicateType\":\"https://axocoatl.ai/receipt/v1\",\"predicate\":{\"run\":{"
+        ));
         let signature = base64::engine::general_purpose::STANDARD
             .decode(&envelope.signatures[0].sig)
             .unwrap();
         assert_eq!(
             signature,
-            key_pair.sign(&pae(PAYLOAD_TYPE, &payload)).as_ref().to_vec()
+            key_pair
+                .sign(&pae(PAYLOAD_TYPE, &payload))
+                .as_ref()
+                .to_vec()
         );
         // The vector: change the statement's shape and this changes.
         assert_eq!(sha256_hex(&payload), FIXED_PAYLOAD_SHA256, "{text}");
@@ -1403,7 +1422,9 @@ mod tests {
             (STATEMENT_TYPE, "https://in-toto.io/Statement/v0.1"),
             (PREDICATE_TYPE, "https://example.com/other/v1"),
         ] {
-            let text = String::from_utf8(payload.clone()).unwrap().replace(from, to);
+            let text = String::from_utf8(payload.clone())
+                .unwrap()
+                .replace(from, to);
             let mut changed = envelope.clone();
             changed.payload = base64::engine::general_purpose::STANDARD.encode(text);
             let error = opened(&changed).unwrap_err().to_string();
@@ -1427,7 +1448,9 @@ mod tests {
         let block = pr_block(&envelope);
         assert!(block.starts_with("<!-- axocoatl-receipt:v1\n"));
         assert!(block.ends_with("\n-->"));
-        assert!(block.lines().all(|line| line.len() <= 76 || line.starts_with("<!--")));
+        assert!(block
+            .lines()
+            .all(|line| line.len() <= 76 || line.starts_with("<!--")));
         let body = format!("## Run\n\nSome text with --> in it before.\n\n{block}\n\ntrailing\n");
         let receipt = open_receipt(body.as_bytes()).unwrap();
         assert_eq!(receipt.envelope, envelope);
@@ -1490,7 +1513,10 @@ mod tests {
             PathState::Other(why) if why.contains("symbolic link")
         ));
         for bad in ["", "/etc/passwd", "a/../b", "./a", "a//b"] {
-            assert!(matches!(hash_repo_path(root, bad), PathState::Other(_)), "{bad:?}");
+            assert!(
+                matches!(hash_repo_path(root, bad), PathState::Other(_)),
+                "{bad:?}"
+            );
         }
 
         let key_pair = key(RFC8032_SEED);

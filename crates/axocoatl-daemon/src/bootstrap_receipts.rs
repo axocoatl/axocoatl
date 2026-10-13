@@ -118,13 +118,13 @@ impl AxocoatlDaemon {
                         &legacy.id,
                         rehydrated_turn_touched_paths(session, legacy),
                     ),
-                    None => attribution.unattributable.push(format!(
-                        "turn {turn_id}: its Session cannot be read"
-                    )),
+                    None => attribution
+                        .unattributable
+                        .push(format!("turn {turn_id}: its Session cannot be read")),
                 },
-                None => attribution.unattributable.push(format!(
-                    "turn {turn_id} is not in the Session's history"
-                )),
+                None => attribution
+                    .unattributable
+                    .push(format!("turn {turn_id} is not in the Session's history")),
             }
         }
         attribution
@@ -182,48 +182,44 @@ impl AxocoatlDaemon {
             .map_err(|error| format!("the run's loadout cannot be read: {error}"))?;
         let resolved = resolve_loadout(&loadout, &manifest.params, &manifest.task, &manifest.repo)
             .map_err(|error| format!("the run's loadout cannot be resolved: {error}"))?;
-        let agents = loadout
-            .file
-            .agents
-            .iter()
-            .map(|agent| {
-                let identity = resolved.agent_models.get(&agent.id).map(|model| {
-                    crate::loadout::team_plan::model_identity(model, agent.runtime)
-                });
-                AgentFacts {
-                    id: agent.id.clone(),
-                    role: serde_name(&agent.role),
-                    runtime: agent.runtime.id().to_string(),
-                    program_version: match agent.runtime {
-                        AgentRuntime::Native => None,
-                        AgentRuntime::ClaudeCode => Some(
-                            crate::external_agent::claude_code::CLAUDE_CODE_VERSION.to_string(),
-                        ),
-                        AgentRuntime::Codex => {
-                            Some(crate::external_agent::codex::CODEX_VERSION.to_string())
-                        }
-                    },
-                    provider: identity
-                        .as_ref()
-                        .map(|identity| identity.provider.clone())
-                        .unwrap_or_default(),
-                    model: identity
-                        .map(|identity| identity.model)
-                        .unwrap_or_default(),
-                    credential: match agent.runtime {
-                        AgentRuntime::Native => None,
-                        runtime => agent
-                            .credential
-                            .clone()
-                            .or_else(|| runtime.credentials().first().map(|name| name.to_string())),
-                    },
-                }
-            })
-            .collect();
+        let agents =
+            loadout
+                .file
+                .agents
+                .iter()
+                .map(|agent| {
+                    let identity = resolved.agent_models.get(&agent.id).map(|model| {
+                        crate::loadout::team_plan::model_identity(model, agent.runtime)
+                    });
+                    AgentFacts {
+                        id: agent.id.clone(),
+                        role: serde_name(&agent.role),
+                        runtime: agent.runtime.id().to_string(),
+                        program_version: match agent.runtime {
+                            AgentRuntime::Native => None,
+                            AgentRuntime::ClaudeCode => Some(
+                                crate::external_agent::claude_code::CLAUDE_CODE_VERSION.to_string(),
+                            ),
+                            AgentRuntime::Codex => {
+                                Some(crate::external_agent::codex::CODEX_VERSION.to_string())
+                            }
+                        },
+                        provider: identity
+                            .as_ref()
+                            .map(|identity| identity.provider.clone())
+                            .unwrap_or_default(),
+                        model: identity.map(|identity| identity.model).unwrap_or_default(),
+                        credential: match agent.runtime {
+                            AgentRuntime::Native => None,
+                            runtime => agent.credential.clone().or_else(|| {
+                                runtime.credentials().first().map(|name| name.to_string())
+                            }),
+                        },
+                    }
+                })
+                .collect();
         let turns = self.receipt_turn_ids(&manifest.run_id, outcome);
-        let attribution = self
-            .receipt_attribution(&manifest.session_id, &turns)
-            .await;
+        let attribution = self.receipt_attribution(&manifest.session_id, &turns).await;
         let checks = outcome.checks.clone();
         let repo = std::path::PathBuf::from(&manifest.repo);
         let files = tokio::task::spawn_blocking(move || {

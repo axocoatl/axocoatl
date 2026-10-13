@@ -800,10 +800,7 @@ async fn write_receipt(
     console: &mut Console,
 ) -> Result<(), Failure> {
     let response = daemon
-        .send(daemon.request(
-            reqwest::Method::GET,
-            &format!("/api/runs/{run_id}/receipt"),
-        ))
+        .send(daemon.request(reqwest::Method::GET, &format!("/api/runs/{run_id}/receipt")))
         .await;
     let response = match response {
         Ok(response) => response,
@@ -821,9 +818,8 @@ async fn write_receipt(
         .bytes()
         .await
         .map_err(|error| Failure::infrastructure(format!("reading the receipt: {error}")))?;
-    write_atomically(path, &bytes).map_err(|error| {
-        Failure::infrastructure(format!("writing {}: {error}", path.display()))
-    })?;
+    write_atomically(path, &bytes)
+        .map_err(|error| Failure::infrastructure(format!("writing {}: {error}", path.display())))?;
     let covered = axocoatl_session::receipt::open_receipt(&bytes)
         .map(|opened| {
             let files = &opened.statement.predicate.files;
@@ -2029,7 +2025,12 @@ mod tests {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, ResponseTemplate};
         let envelope = b"{\"payloadType\":\"application/vnd.in-toto+json\",\"payload\":\"e30=\",\"signatures\":[]}\n";
-        let run = fake_daemon(outcome("checks_failed", serde_json::json!({})), Vec::new(), 200).await;
+        let run = fake_daemon(
+            outcome("checks_failed", serde_json::json!({})),
+            Vec::new(),
+            200,
+        )
+        .await;
         Mock::given(method("GET"))
             .and(path(format!("/api/runs/{RUN}/receipt")))
             .respond_with(ResponseTemplate::new(200).set_body_raw(

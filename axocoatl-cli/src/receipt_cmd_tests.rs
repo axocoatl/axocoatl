@@ -338,7 +338,9 @@ fn a_record_must_verify_and_carry_this_receipt_for_its_run() {
         record: Some(record),
         ..fixture.request()
     };
-    let other_run = verify(&request(fixture.bundle("run-other", Some(&fixture.envelope))));
+    let other_run = verify(&request(
+        fixture.bundle("run-other", Some(&fixture.envelope)),
+    ));
     assert_eq!(other_run.exit_code, exit::MISMATCH);
     assert!(other_run.record.unwrap().problems[0].contains("run-other"));
     let none = verify(&request(fixture.bundle(RUN, None)));
@@ -381,12 +383,25 @@ fn a_pull_request_body_holding_the_block_is_a_receipt() {
     assert_eq!(show(&body.display().to_string(), false, &mut out), 0);
     let text = String::from_utf8(out).unwrap();
     assert!(text.starts_with("Not verified:"), "{text}");
-    assert!(text.contains(&format!("Run {RUN} (fix@1), verdict pass")), "{text}");
+    assert!(
+        text.contains(&format!("Run {RUN} (fix@1), verdict pass")),
+        "{text}"
+    );
     assert!(text.contains("  docs/link  sha256:"), "{text}");
     let mut out = Vec::new();
-    assert_eq!(show(&fixture.receipt.display().to_string(), true, &mut out), 0);
+    assert_eq!(
+        show(&fixture.receipt.display().to_string(), true, &mut out),
+        0
+    );
     let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(value["predicateType"], PREDICATE_TYPE);
     let mut out = Vec::new();
-    assert_eq!(show(&fixture.dir.join("missing").display().to_string(), false, &mut out), 3);
+    assert_eq!(
+        show(
+            &fixture.dir.join("missing").display().to_string(),
+            false,
+            &mut out
+        ),
+        3
+    );
 }

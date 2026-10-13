@@ -1370,8 +1370,7 @@ impl AxocoatlDaemon {
                     detail
                 }
             };
-            let mut outcome =
-                ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
+            let mut outcome = ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
             if let Some(warning) = self.seal_or_warn(&run_id, &outcome).await {
                 let _ = store.append(
                     &run_id,
@@ -2078,7 +2077,9 @@ impl AxocoatlDaemon {
                     Some(bytes) => vec![(
                         axocoatl_session::record_bundle::RECEIPT_SECTION,
                         serde_json::from_slice(&bytes).map_err(|error| {
-                            DaemonError::Session(format!("the run's receipt is unreadable: {error}"))
+                            DaemonError::Session(format!(
+                                "the run's receipt is unreadable: {error}"
+                            ))
                         })?,
                     )],
                     None => Vec::new(),

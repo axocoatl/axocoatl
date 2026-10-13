@@ -552,7 +552,9 @@ pub fn receipt_files(
     let mut unattributed: Vec<String> = attribution.unattributable.clone();
     for path in &attribution.paths {
         if is_git_internal(path) {
-            unattributed.push(format!("{path}: one of Git's own files, which a receipt does not cover"));
+            unattributed.push(format!(
+                "{path}: one of Git's own files, which a receipt does not cover"
+            ));
             continue;
         }
         if !receipt::is_plain_path(path) {

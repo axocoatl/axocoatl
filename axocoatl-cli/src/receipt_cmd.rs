@@ -329,7 +329,11 @@ pub fn verify(request: &VerifyRequest) -> VerifyReport {
     let opened = match open_receipt(&bytes) {
         Ok(opened) => opened,
         Err(error) => {
-            return VerifyReport::new(exit::INVALID, "malformed", format!("not a receipt: {error}"))
+            return VerifyReport::new(
+                exit::INVALID,
+                "malformed",
+                format!("not a receipt: {error}"),
+            )
         }
     };
     let statement = &opened.statement;
@@ -369,7 +373,9 @@ pub fn verify(request: &VerifyRequest) -> VerifyReport {
             report.key_id = Some(statement.predicate.signer.key_id.clone());
             report.exit_code = exit::INVALID;
             report.result = "invalid".into();
-            report.problems.push(format!("the signature does not verify: {reason}"));
+            report
+                .problems
+                .push(format!("the signature does not verify: {reason}"));
             // Nothing else the receipt says is worth checking.
             return report;
         }
@@ -476,7 +482,12 @@ fn print_report(report: &VerifyReport, json: bool, out: &mut dyn std::io::Write)
                 }
             );
         } else {
-            let _ = writeln!(out, "files: {} differ in {}:", files.mismatches.len(), files.repo);
+            let _ = writeln!(
+                out,
+                "files: {} differ in {}:",
+                files.mismatches.len(),
+                files.repo
+            );
             for mismatch in &files.mismatches {
                 let _ = writeln!(out, "  {}: {}", mismatch.path, mismatch.problem);
             }
@@ -498,11 +509,7 @@ fn print_report(report: &VerifyReport, json: bool, out: &mut dyn std::io::Write)
     for problem in &report.problems {
         let _ = writeln!(out, "problem: {problem}");
     }
-    let _ = writeln!(
-        out,
-        "result: {} (exit {})",
-        report.result, report.exit_code
-    );
+    let _ = writeln!(out, "result: {} (exit {})", report.result, report.exit_code);
 }
 
 fn key(config: &Path, rotate: bool) -> i32 {

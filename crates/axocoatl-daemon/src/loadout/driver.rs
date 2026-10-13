@@ -1001,7 +1001,10 @@ prompt: "{task}"
         let (sealed, recorded) = host.sealed.lock().unwrap().clone().unwrap();
         assert_eq!(sealed, outcome);
         let events = host.events.lock().unwrap().clone();
-        assert!(matches!(events[recorded], RunEvent::Ended { .. }), "{events:?}");
+        assert!(
+            matches!(events[recorded], RunEvent::Ended { .. }),
+            "{events:?}"
+        );
         assert_eq!(recorded + 1, events.len());
 
         for (state, code) in [
@@ -1028,7 +1031,9 @@ prompt: "{task}"
                 .iter()
                 .find(|warning| warning.code == "receipt_unavailable")
                 .unwrap();
-            assert!(warning.message.contains("the secret store cannot be opened"));
+            assert!(warning
+                .message
+                .contains("the secret store cannot be opened"));
             assert!(warning.message.contains("exit code are unchanged"));
             assert_eq!(host.finished.lock().unwrap().as_ref(), Some(&outcome));
             assert!(host.events.lock().unwrap().iter().any(|event| matches!(

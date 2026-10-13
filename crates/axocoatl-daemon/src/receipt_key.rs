@@ -226,7 +226,10 @@ mod tests {
         // A value that is not a key is refused without being shown.
         secret_store::set_secret(root.path(), RECEIPT_KEY_SECRET, b"not-a-key").unwrap();
         let error = load_or_create(root.path()).err().unwrap();
-        assert!(error.contains("--rotate") && !error.contains("not-a-key"), "{error}");
+        assert!(
+            error.contains("--rotate") && !error.contains("not-a-key"),
+            "{error}"
+        );
         let (_, previous) = rotate(root.path()).unwrap();
         assert_eq!(previous, None);
         assert!(load(root.path()).unwrap().is_some());
