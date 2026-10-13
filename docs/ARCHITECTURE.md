@@ -648,10 +648,15 @@ reproduction directory; `audit`: one planner, one worker template and one integr
 read-only). A reviewer on a writer's model is a `same_model_reviewer` warning, never a
 refusal.
 
-Built-in loadouts (`fix`, `qa`, `audit`) are compiled in with `include_str!`. User
-loadouts are read on each listing and each admission from `loadouts/` beside the
-configuration file the daemon started with: at most 128 regular files of at most 64 KiB,
-no symbolic links, a reused built-in id listed with its error. Each loadout's digest is the
+Built-in loadouts (`fix`, `fix-claude-code`, `fix-codex`, `qa`, `audit`) are compiled in
+with `include_str!`; `fix-claude-code` and `fix-codex` are `fix` with an external writer,
+its recipe image and default writer models (parameters with defaults), so a run names
+only the reviewer. User loadouts are read on each listing and each admission from
+`loadouts/` beside the configuration file the daemon started with: at most 128 regular
+files of at most 64 KiB, no symbolic links, a reused built-in id listed with its error
+(`LoadoutError::BuiltinId`). While a user file declares a built-in id, the built-in's
+summary carries the warning `user_loadout_uses_builtin_id` and a run of that id is
+refused, naming the file (`find_loadout_to_run`), so neither is chosen silently. Each loadout's digest is the
 SHA-256 of its bytes. The lattice in Settings displays a loadout's graph read-only; it has
 no execution path for loadouts.
 
@@ -737,8 +742,14 @@ granted and captured like a native writer, and the program runs through the in-s
 supervisor as the hardened writer user under `--harden`, with the activation's timeout and
 stdout bounded to 16 MiB. Its JSON output becomes the activation's evidence and answer.
 Model traffic goes through routes from `external_agent::routes_for` with credentials from
-`credentials` or the secret store (`{data root}/secrets/<name>`, `0600`, written from stdin
-by `axocoatl secret set`); the container holds placeholders and trusts the Session CA. The
+`credentials` or the secret store (`{data root}/secrets/<name>`, `0600`, written by the
+`axocoatl connect` sign-ins or from stdin by `axocoatl secret set`); the container holds
+placeholders and trusts the Session CA. A writer's `credential` (a literal or a `text`
+parameter) is resolved into `ResolvedLoadout::agent_credentials`; `auto` is chosen at
+admission (`loadout::credentials::choose`) as the first of the runtime's credentials that
+is configured or stored, or refused as a usage error. The choice is kept in the run
+manifest's `credentials` (re-applied, not re-chosen, on restart), a `note` run event and
+the Outcome's notes, and the retained definition names it. The
 activation reserves its grant's limits up front, route requests count against its
 invocations, and the program's own usage report settles it: Claude Code reports its cost;
 Codex reports tokens only, and its cost is computed from them at the configuration's

@@ -1,14 +1,15 @@
 ---
 title: Fix, QA and audit runs
-description: What the built-in fix, qa and audit loadouts run, what each needs from you, how their results are decided, and what was measured behind their design.
+description: What the built-in fix, qa and audit loadouts run (and fix-claude-code and fix-codex, fix with an external writer), what each needs from you, how their results are decided, and what was measured behind their design.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Axocoatl has three built-in [loadouts](/configure/loadouts/). Each runs as one Session
-with network egress and the `hardened` workload, through [`axocoatl run`](/reference/run/),
-and ends with an Outcome and an exit code. This page says what each one does and why it
-is shaped that way.
+Axocoatl has five built-in [loadouts](/configure/loadouts/): `fix`, `qa` and `audit`,
+and `fix-claude-code` and `fix-codex`, which are `fix` with the Claude Code CLI or the
+Codex CLI as the writer. Each runs as one Session with network egress and the `hardened`
+workload, through [`axocoatl run`](/reference/run/), and ends with an Outcome and an exit
+code. This page says what each one does and why it is shaped that way.
 
 ## How answers are read
 
@@ -71,6 +72,22 @@ outcome panel, the [pull request body](/workbench/keep-as-pr/) and the record.
 
 The run passes (exit code 0) when the check passes on the final result, the reviewer
 approves that result, and every finding the host sent back was answered.
+
+### With Claude Code or Codex as the writer
+
+```sh
+axocoatl run fix-claude-code --task "…" --model reviewer=ollama:gpt-oss:120b
+axocoatl run fix-codex --task "…" --model reviewer=ollama:gpt-oss:120b
+```
+
+`fix-claude-code` and `fix-codex` run the same turn with the pinned Claude Code or Codex
+CLI as the writer, inside the Session container, from its recipe image: the same check,
+the same review for up to 3 rounds and the same adjudications. The writer's model has a
+default (`anthropic:sonnet`, `openai:gpt-6.1-sol`), so a run names only the reviewer;
+`fix-codex` sends an OpenAI API key when one is stored, else your ChatGPT sign-in
+(`credential: auto`), and the run's notes say which. Building the image, connecting the
+account and the budgets are in [External agents](/configure/external-agents/#run-claude-code-or-codex).
+No measurement on this page was made with an external writer.
 
 ### Use a different model to review
 

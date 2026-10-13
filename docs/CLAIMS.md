@@ -137,9 +137,11 @@ Every finding had to come with an executable reproduction that a validator re-ra
 These are supported and documented, and have no measurement. Public pages do not make
 quality or performance claims about them.
 
-- Runs of the built-in `fix`, `qa` and `audit` loadouts through Axocoatl 1.3.0, and
-  any `custom` loadout. The S and Q studies shaped their design; they were not run
-  through Axocoatl.
+- Runs of the built-in `fix`, `qa` and `audit` loadouts through Axocoatl 1.3.0, of the
+  built-in `fix-claude-code` and `fix-codex` (unreleased), and of any `custom` loadout.
+  The S and Q studies shaped their design; they were not run through Axocoatl. The
+  built-ins' default writer models (`anthropic:sonnet`, `openai:gpt-6.1-sol`) and
+  budgets are choices, not measurements.
 - External agents (Claude Code CLI, Codex CLI) run inside an Axocoatl Session.
 - The e2e check (tester-army/e2e) as a required check.
 - Any reviewer or Agent through OpenRouter.

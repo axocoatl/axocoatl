@@ -68,7 +68,7 @@ run them.
 
 | Term | Meaning |
 | --- | --- |
-| Loadout | A versioned file that declares a run. Three are built in: `fix`, `qa` and `audit` (opt-in). |
+| Loadout | A versioned file that declares a run. Five are built in: `fix`, `fix-claude-code` and `fix-codex` (`fix` with the Claude Code or Codex CLI as the writer), `qa` and `audit` (opt-in). |
 | Run | One execution of a loadout; its Session, record and Outcome. |
 | Adjudication | The writer's answer to one review finding: accept or reject, with a reason. A finding left unanswered makes the run need attention. |
 | Not covered | An area, Agent, helper or QA reproduction that ended without a result, with the reason. It is never counted as a pass. A check that did not run makes the run need attention too. |

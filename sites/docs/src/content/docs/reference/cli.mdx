@@ -197,8 +197,8 @@ else `AXOCOATL_URL`, else the configured server address, and authenticate with
 | Command | Purpose |
 | --- | --- |
 | `axocoatl run <LOADOUT> (--task <TEXT> \| --task-file <FILE\|->) [--repo DIR] [--junit FILE] [--record FILE] [--model ROLE=PROVIDER:MODEL]... [--param NAME=VALUE]... [--check CMD] [--setup CMD] [--keep none\|branch\|pr] [--json] [--url URL] [-c, --config CONFIG]` | Run a [loadout](/configure/loadouts/) headless and exit with its code: 0 pass, 1 checks failed, 2 needs attention, 3 usage, 4 daemon unavailable, 5 infrastructure, 6 interrupted. See [`axocoatl run`](/reference/run/) |
-| `axocoatl loadouts list [--url URL]` | List the built-in loadouts and yours, with kind, version, opt-in, warnings, and the error and path of a file that cannot be used |
-| `axocoatl loadouts show <ID> [--url URL]` | Print one loadout's exact text, parameters and graph |
+| `axocoatl loadouts list [--url URL]` | List the built-in loadouts (`fix`, `fix-claude-code`, `fix-codex`, `qa`, `audit`) and yours, with kind, version, opt-in, warnings, and the error and path of a file that cannot be used, such as one that declares a built-in id |
+| `axocoatl loadouts show <ID> [--url URL]` | Print one loadout's exact text, parameters and graph, and the `axocoatl run` command with its required parameters (`--model ROLE=provider:model` for a `ROLE_model` parameter) |
 | `axocoatl loadouts validate <FILE>` | Parse and validate a loadout file without the daemon; prints warnings such as `same_model_reviewer` |
 | `axocoatl record verify <FILE>` | Check a [record bundle](/reference/run/#record-bundle)'s header, section order, line count and SHA-256; exits 0, or 2 on a mismatch |
 

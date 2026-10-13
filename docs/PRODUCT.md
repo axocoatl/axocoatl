@@ -281,10 +281,12 @@ model interpretations, accepted execution, and passing checks remain distinct fa
 
 A loadout is a versioned YAML file (`axocoatl.loadout/1`) that declares one run: its
 Agents with roles and models, required checks with per-check timeouts, an optional
-required reviewer, an egress allowlist and routes, budgets and the prompt. Three are
-built into the executable: `fix`, `qa` and `audit` (opt-in, run only when named). A
-person's own loadouts are files in the `loadouts/` directory beside the user
-configuration; a built-in id cannot be reused.
+required reviewer, an egress allowlist and routes, budgets and the prompt. Five are
+built into the executable: `fix`, `fix-claude-code`, `fix-codex`, `qa` and `audit`
+(opt-in, run only when named). A person's own loadouts are files in the `loadouts/`
+directory beside the user configuration; a built-in id cannot be reused, and while a
+person's file declares one, a run of that id is refused, naming the file, so neither is
+chosen silently.
 
 `axocoatl run <loadout> --task "…"` runs one headless against the running daemon. The
 daemon creates an ordinary Session for the repository, bound to the loadout, and that
@@ -305,6 +307,12 @@ and QA studies ran with Claude Code subagents, not through Axocoatl):
   reviewer runs the writer's model. The writer answers every review finding with accept
   or reject and a reason; each answer is an adjudication, recorded and shown, and an
   unanswered finding needs attention.
+- `fix-claude-code` and `fix-codex`: `fix` with the pinned Claude Code or Codex CLI as
+  the writer, from its recipe image. The writer's model has a default
+  (`anthropic:sonnet`, `openai:gpt-6.1-sol`), so a run names only the reviewer. A Codex
+  writer's `credential: auto` sends an OpenAI API key when one is stored, else the
+  ChatGPT sign-in, and refuses the run when neither is; the run records which one it
+  sent.
 - `qa`: one browser explorer, no scouts, merge or verifier. Each finding names a
   Playwright reproduction the host re-runs on the build under test and, when configured,
   a clean reference: confirmed only when it fails on the first and passes on the second;
@@ -318,10 +326,12 @@ The workbench shows loadouts in Settings (YAML, parameters and a read-only latti
 displays the graph and never executes it) and shows a run's Session with a loadout badge
 and a Run outcome panel. Runs start from `axocoatl run`, not from the workbench.
 
-External coding agents (the Claude Code CLI and the Codex CLI) can be a loadout's writer.
-They run as programs inside the Session container as the non-root writer user; their
-model credential, stored with `axocoatl secret set` from stdin, is added by an egress
-route on the host, and the container holds a placeholder. Every model call is in the
+External coding agents (the Claude Code CLI and the Codex CLI) can be a loadout's writer,
+in the built-in `fix-claude-code` and `fix-codex` or in a person's own loadout. They run
+as programs inside the Session container as the non-root writer user; their model
+credential, stored by the browser sign-in of `axocoatl connect claude-code` or
+`axocoatl connect codex` (or `axocoatl secret set` from stdin in automation), is added
+by an egress route on the host, and the container holds a placeholder. Every model call is in the
 network record, and their output is parsed into the Session record. tester-army/e2e can
 run as a required check, with its report parsed into the Outcome.
 

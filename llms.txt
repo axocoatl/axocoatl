@@ -78,15 +78,21 @@ https://github.com/axocoatl/axocoatl/blob/main/docs/CLAIMS.md
 
 A loadout is a versioned YAML file that declares a whole run: Agents (roles, models),
 required checks with per-check timeouts, a required reviewer, an egress allowlist and
-routes, budgets and the prompt. Three are built in: fix (one writer, the repository's
+routes, budgets and the prompt. Five are built in: fix (one writer, the repository's
 checks, a required review by a different model for up to 3 rounds, and the writer's
-accept-or-reject answer with a reason to every finding), qa (one browser explorer;
+accept-or-reject answer with a reason to every finding), fix-claude-code and fix-codex
+(fix with the pinned Claude Code or Codex CLI as the writer, from its recipe image; the
+writer's model defaults to anthropic:sonnet or openai:gpt-6.1-sol, so
+`axocoatl run fix-codex --task "..." --model reviewer=...` is the whole command, and
+fix-codex sends an OpenAI API key when one is stored, else the ChatGPT sign-in, and
+records which), qa (one browser explorer;
 each finding carries a Playwright reproduction the host re-runs, and is confirmed only
 when it fails on the build under test and passes on a clean reference build) and audit
 (opt-in: a planner splits the scope into 2 to 8 areas, read-only workers audit them in
 parallel with fresh contexts, an integrator merges the findings). User loadouts live in
-the configuration directory's loadouts/ folder. Settings displays loadouts; it never
-runs one.
+the configuration directory's loadouts/ folder; a file that declares a built-in id is
+not used, and a run of that id is refused until it is renamed. Settings displays
+loadouts; it never runs one.
 
 `axocoatl run <loadout> --task "..."` runs one against the running daemon. A loadout's
 Session runs under network egress (or none) with non-root workload users; global defaults do not
