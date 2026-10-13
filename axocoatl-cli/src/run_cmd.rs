@@ -1126,17 +1126,25 @@ async fn show(id: &str, url: Option<&str>, config: &Path) -> Result<i32, Failure
     for edge in &view.graph.edges {
         println!("#   {} -> {}", edge.from, edge.to);
     }
-    println!(
-        "# run: axocoatl run {} --task \"...\"{}",
-        view.summary.id,
-        view.summary
-            .params
-            .iter()
-            .filter(|param| param.required)
-            .map(|param| format!(" --param {}=...", param.name))
-            .collect::<String>()
-    );
+    println!("# run: {}", run_command(&view.summary));
     Ok(0)
+}
+
+/// The `axocoatl run` command for a loadout with its required parameters,
+/// as Settings shows it: a `ROLE_model` model parameter as `--model
+/// ROLE=provider:model`, any other as `--param NAME=...`. A parameter with
+/// a default is left out.
+pub fn run_command(summary: &LoadoutSummary) -> String {
+    let mut command = format!("axocoatl run {} --task \"...\"", summary.id);
+    for param in summary.params.iter().filter(|param| param.required) {
+        match param.name.strip_suffix("_model") {
+            Some(role) if param.kind == "model" => {
+                command.push_str(&format!(" --model {role}=provider:model"))
+            }
+            _ => command.push_str(&format!(" --param {}=...", param.name)),
+        }
+    }
+    command
 }
 
 fn validate(file: &Path) -> Result<i32, Failure> {
@@ -1242,6 +1250,45 @@ mod tests {
         assert_eq!(plan.params["target_url"], "http://localhost:3000");
         assert_eq!(plan.keep, Keep::Branch);
         assert_eq!(plan.repo, std::fs::canonicalize(repo.path()).unwrap());
+    }
+
+    /// `axocoatl loadouts show` ends with the command a loadout runs with,
+    /// as Settings shows it: the built-in external fixes need only the
+    /// reviewer, since their writer's model has a default.
+    #[test]
+    fn the_run_command_names_the_required_parameters() {
+        let summary = |id: &str| {
+            let loadout = axocoatl_config::loadout::builtin_loadouts()
+                .into_iter()
+                .map(Result::unwrap)
+                .find(|loadout| loadout.file.id == id)
+                .unwrap();
+            axocoatl_daemon::bootstrap::loadout_runs::loadout_summary(&loadout)
+        };
+        for (id, command) in [
+            (
+                "fix",
+                "axocoatl run fix --task \"...\" --model reviewer=provider:model --model \
+                 writer=provider:model",
+            ),
+            (
+                "fix-claude-code",
+                "axocoatl run fix-claude-code --task \"...\" --model reviewer=provider:model",
+            ),
+            (
+                "fix-codex",
+                "axocoatl run fix-codex --task \"...\" --model reviewer=provider:model",
+            ),
+            (
+                "qa",
+                "axocoatl run qa --task \"...\" --model explorer=provider:model",
+            ),
+        ] {
+            assert_eq!(run_command(&summary(id)), command);
+        }
+        let mut custom = summary("fix");
+        custom.params[0].kind = "text".into();
+        assert!(run_command(&custom).contains(" --param reviewer_model=..."));
     }
 
     #[test]

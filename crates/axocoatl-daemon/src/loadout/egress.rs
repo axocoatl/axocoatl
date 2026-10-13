@@ -97,11 +97,16 @@ fn external_routes(
         if agent.runtime == AgentRuntime::Native {
             continue;
         }
-        // The credential the writer names picks its route: Codex's API key
-        // goes to api.openai.com, its ChatGPT sign-in to chatgpt.com.
+        // The credential the writer sends picks its route: Codex's API key
+        // goes to api.openai.com, its ChatGPT sign-in to chatgpt.com. It is
+        // the one resolution and admission chose (`credentials::choose`);
+        // an unchosen `auto` is refused here, never sent.
         let credential = crate::external_agent::ExternalCredential::named(
             agent.runtime,
-            agent.credential.as_deref(),
+            resolved
+                .agent_credentials
+                .get(&agent.id)
+                .map(String::as_str),
         )
         .map_err(|error| RunError::Usage(format!("agents.{}.credential: {error}", agent.id)))?;
         if seen.contains(&(agent.runtime, credential)) {
@@ -118,6 +123,20 @@ fn external_routes(
         routes.extend(needed.into_iter().map(|route| (route, origin.clone())));
     }
     Ok(routes)
+}
+
+/// Whether the route credential `name` can be read: a `credentials` entry
+/// of the configuration, or a secret stored under `data_dir` as a regular
+/// file, the two places [`loadout_overlay`] resolves it from, in that order.
+pub fn credential_available(
+    base: &EgressPolicyConfig,
+    data_dir: &std::path::Path,
+    name: &str,
+) -> bool {
+    base.credentials.contains_key(name)
+        || (axocoatl_config::egress_routes::is_valid_credential_name(name)
+            && std::fs::symlink_metadata(crate::secret_store::secret_path(data_dir, name))
+                .is_ok_and(|metadata| metadata.file_type().is_file()))
 }
 
 /// What `resolved` adds to its Session's policy. Credentials named by
@@ -161,26 +180,25 @@ pub fn loadout_overlay(
                 route.host
             )));
         }
-        let path = crate::secret_store::secret_path(data_dir, name);
-        match std::fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.file_type().is_file() => {
-                credentials.insert(
-                    name.clone(),
-                    CredentialSourceYaml {
-                        env: None,
-                        file: Some(path.display().to_string()),
-                    },
-                );
-            }
-            _ => {
-                return Err(RunError::Usage(format!(
-                    "the route to {} names credential {name:?}, which is neither in the \
-                     configuration's credentials nor stored: {}",
-                    route.host,
-                    crate::secret_store::how_to_store(name)
-                )))
-            }
+        if !credential_available(base, data_dir, name) {
+            return Err(RunError::Usage(format!(
+                "the route to {} names credential {name:?}, which is neither in the \
+                 configuration's credentials nor stored: {}",
+                route.host,
+                crate::secret_store::how_to_store(name)
+            )));
         }
+        credentials.insert(
+            name.clone(),
+            CredentialSourceYaml {
+                env: None,
+                file: Some(
+                    crate::secret_store::secret_path(data_dir, name)
+                        .display()
+                        .to_string(),
+                ),
+            },
+        );
     }
     let overlay = LoadoutEgressOverlay {
         allow: file.egress.allow.clone(),

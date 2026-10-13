@@ -165,6 +165,7 @@ fn manifest(head: Option<String>, started_at_ms: u64) -> RunManifest {
         loadout: outcome().loadout,
         loadout_text: "schema: axocoatl.loadout/1\n".into(),
         params: BTreeMap::new(),
+        credentials: BTreeMap::new(),
         task: outcome().task,
         repo: "/repo".into(),
         repo_head: head,

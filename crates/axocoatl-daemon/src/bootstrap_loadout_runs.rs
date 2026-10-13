@@ -85,7 +85,7 @@ impl LoadoutRuns {
         }
     }
 
-    fn store(&self) -> Result<&RunRecordStore, DaemonError> {
+    pub(crate) fn store(&self) -> Result<&RunRecordStore, DaemonError> {
         self.store.as_ref().map_err(|error| {
             DaemonError::Session(format!("the loadout run record is unavailable: {error}"))
         })
@@ -133,6 +133,21 @@ fn param_text<T: std::fmt::Display>(value: &ParamOr<T>) -> String {
     match value {
         ParamOr::Param { param } => format!("param {param}"),
         ParamOr::Value(value) => value.to_string(),
+    }
+}
+
+/// [`param_text`] with the parameter's default, when `file` declares one.
+fn param_text_in<T: std::fmt::Display>(file: &LoadoutFile, value: &ParamOr<T>) -> String {
+    match value {
+        ParamOr::Param { param } => match file
+            .params
+            .get(param)
+            .and_then(|declared| declared.default.as_deref())
+        {
+            Some(default) => format!("param {param} (default {default})"),
+            None => format!("param {param}"),
+        },
+        ParamOr::Value(_) => param_text(value),
     }
 }
 
@@ -240,16 +255,12 @@ pub fn loadout_graph(file: &LoadoutFile) -> LoadoutGraph {
     let mut edges = Vec::new();
     for agent in &file.agents {
         let area_workers = file.kind == LoadoutKind::Audit && agent.role == LoadoutRole::Worker;
-        let mut detail = vec![param_text(&agent.model)];
+        let mut detail = vec![param_text_in(file, &agent.model)];
         if agent.runtime != AgentRuntime::Native {
-            detail.push(format!(
-                "runtime {}",
-                match agent.runtime {
-                    AgentRuntime::ClaudeCode => "claude-code",
-                    AgentRuntime::Codex => "codex",
-                    AgentRuntime::Native => "native",
-                }
-            ));
+            detail.push(format!("runtime {}", agent.runtime.id()));
+            if let Some(credential) = &agent.credential {
+                detail.push(format!("credential {}", param_text_in(file, credential)));
+            }
         } else {
             detail.push(format!("tools: {}", agent.tools.join(", ")));
         }
@@ -1119,6 +1130,17 @@ impl AxocoatlDaemon {
             axocoatl_session::detect_check_command(&repo).as_deref(),
         )
         .map_err(run_error)?;
+        // The credential each external writer's route sends: the one the
+        // loadout names, or for `auto` the first of its runtime's that is
+        // stored (refused, saying how to connect, when none is). The run's
+        // manifest, a note event and the Outcome's notes record it.
+        let credentials = {
+            let base = self.network_policy.current();
+            crate::loadout::credentials::choose(&mut resolved, |name| {
+                crate::loadout::egress::credential_available(&base, self.data_root.path(), name)
+            })
+            .map_err(run_error)?
+        };
         // A loadout Session runs only where the host can isolate it:
         // local rootless Podman, never a fallback.
         if self.config.sandbox.backend == "e2b" {
@@ -1273,6 +1295,7 @@ impl AxocoatlDaemon {
             loadout: loadout_ref,
             loadout_text: loadout.text.clone(),
             params: resolved.params.clone(),
+            credentials,
             task: request.task.clone(),
             repo: repo_text,
             repo_head,
@@ -1303,6 +1326,21 @@ impl AxocoatlDaemon {
                     &RunEvent::Warning {
                         at_ms: now_ms(),
                         warning: warning.clone(),
+                    },
+                )
+                .map_err(record_error)?;
+        }
+        // What admission notes, such as the credential each external
+        // writer's route sends: a `note` event, which `axocoatl run` prints
+        // as the run starts, and a line of the Outcome's notes.
+        for note in &resolved.notes {
+            store
+                .append(
+                    &run_id,
+                    &RunEvent::Phase {
+                        at_ms: now_ms(),
+                        phase: "note".into(),
+                        detail: note.clone(),
                     },
                 )
                 .map_err(record_error)?;
@@ -1354,7 +1392,8 @@ impl AxocoatlDaemon {
                     detail
                 }
             };
-            let outcome = ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
+            let mut outcome = ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
+            outcome.notes = resolved.notes.clone();
             let _ = store.append(
                 &run_id,
                 &RunEvent::Ended {
@@ -2444,9 +2483,15 @@ impl AxocoatlDaemon {
                 .and_then(|manifest| {
                     let loadout = parse_loadout(&manifest.loadout_text, LoadoutSource::Builtin)
                         .map_err(|error| error.to_string())?;
-                    let resolved =
+                    let mut resolved =
                         resolve_loadout(&loadout, &manifest.params, &manifest.task, &manifest.repo)
                             .map_err(|error| error.to_string())?;
+                    // The credentials admission chose, not a new choice:
+                    // the stored secrets may have changed since.
+                    crate::loadout::credentials::apply_recorded(
+                        &mut resolved,
+                        &manifest.credentials,
+                    );
                     crate::loadout::egress::loadout_overlay(&base, &resolved, self.data_root.path())
                         .map_err(|error| error.to_string())
                 });

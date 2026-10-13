@@ -8,10 +8,11 @@
 //! Ownership (docs/design/1.3-loadouts.md, "Ownership"):
 //! `mod.rs`, `api.rs`, `host.rs`, `driver.rs`, `team_plan.rs`, `egress.rs`
 //! — core; `fix.rs`, `qa.rs` — review-qa; `audit.rs` — audit; `e2e.rs` —
-//! e2e.
+//! e2e; `credentials.rs` — agents.
 
 pub mod api;
 pub mod audit;
+pub mod credentials;
 pub mod driver;
 pub mod e2e;
 pub mod egress;

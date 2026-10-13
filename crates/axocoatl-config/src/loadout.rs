@@ -6,13 +6,13 @@
 //! This module parses and validates a loadout and resolves its parameters.
 //! It never runs anything: the daemon turns a resolved loadout into a
 //! Session, a Team and budget edit and a turn (`axocoatl_daemon::loadout`).
-//! The built-in loadouts (`fix`, `qa`, `audit`) are compiled in from
-//! `crates/axocoatl-config/loadouts/`; user loadouts are `*.yaml` files in
-//! `<config dir>/loadouts/`.
+//! The built-in loadouts (`fix`, `fix-claude-code`, `fix-codex`, `qa`,
+//! `audit`) are compiled in from `crates/axocoatl-config/loadouts/`; user
+//! loadouts are `*.yaml` files in `<config dir>/loadouts/`.
 //!
 //! Owner: workstream `core` (parser, validation, resolution). The built-in
-//! YAML files are owned by `review-qa` (`fix.yaml`, `qa.yaml`) and `audit`
-//! (`audit.yaml`).
+//! YAML files are owned by `review-qa` (`fix.yaml`, `qa.yaml`), `agents`
+//! (`fix-claude-code.yaml`, `fix-codex.yaml`) and `audit` (`audit.yaml`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -46,6 +46,11 @@ pub const MIN_AUDIT_AREAS: u32 = 2;
 pub const MAX_AUDIT_AREAS: u32 = 8;
 /// Subdirectory of the config directory that holds user loadouts.
 pub const USER_LOADOUT_DIR: &str = "loadouts";
+/// The `credential` of an external writer that admission resolves to the
+/// first of its runtime's credentials ([`AgentRuntime::credentials`]) that
+/// is stored: for Codex, `codex-openai` when it is stored, else
+/// `codex-chatgpt`.
+pub const AUTO_CREDENTIAL: &str = "auto";
 /// Placeholder every prompt must contain.
 pub const TASK_PLACEHOLDER: &str = "{task}";
 /// Placeholders a prompt may use.
@@ -60,6 +65,8 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 8192;
 pub const MIN_CALL_CONTEXT_TOKENS: u64 = 2048;
 
 const FIX_YAML: &str = include_str!("../loadouts/fix.yaml");
+const FIX_CLAUDE_CODE_YAML: &str = include_str!("../loadouts/fix-claude-code.yaml");
+const FIX_CODEX_YAML: &str = include_str!("../loadouts/fix-codex.yaml");
 const QA_YAML: &str = include_str!("../loadouts/qa.yaml");
 const AUDIT_YAML: &str = include_str!("../loadouts/audit.yaml");
 
@@ -170,6 +177,23 @@ impl AgentRuntime {
                 "a {} writer's route sends {}; {credential:?} is not one of them",
                 self.id(),
                 names.join(" or ")
+            )
+        })
+    }
+
+    /// Why `choice` cannot be this writer's `credential`: one of
+    /// [`Self::credentials`], or [`AUTO_CREDENTIAL`], which admission
+    /// resolves to the first of them that is stored.
+    pub fn credential_choice_refusal(self, choice: &str) -> Option<String> {
+        if self.credentials().is_empty() {
+            return self.credential_refusal(choice);
+        }
+        (choice != AUTO_CREDENTIAL && !self.credentials().contains(&choice)).then(|| {
+            format!(
+                "a {} writer's route sends {}, or {AUTO_CREDENTIAL} (the first of them that \
+                 is stored); {choice:?} is none of these",
+                self.id(),
+                self.credentials().join(" or ")
             )
         })
     }
@@ -306,11 +330,13 @@ pub struct LoadoutAgent {
     #[serde(default)]
     pub runtime: AgentRuntime,
     /// The stored credential an external writer's route sends, one of
-    /// [`AgentRuntime::credentials`]; absent is the runtime's default
-    /// (`claude-code-oauth`, `codex-openai`). `codex-chatgpt` runs Codex
-    /// with a ChatGPT sign-in instead of an API key.
+    /// [`AgentRuntime::credentials`], or [`AUTO_CREDENTIAL`] (the first of
+    /// them that is stored when the run is admitted); a literal or a `text`
+    /// parameter. Absent is the runtime's default (`claude-code-oauth`,
+    /// `codex-openai`). `codex-chatgpt` runs Codex with a ChatGPT sign-in
+    /// instead of an API key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential: Option<String>,
+    pub credential: Option<ParamOr<String>>,
     /// Tool names (native runtime). Required for native Agents.
     #[serde(default)]
     pub tools: Vec<String>,
@@ -934,9 +960,35 @@ pub fn validate_loadout(file: &LoadoutFile) -> Result<Vec<LoadoutWarning>, Loado
                 return Err(invalid(format!("{field}.model"), reason));
             }
         }
-        if let Some(credential) = &agent.credential {
-            if let Some(reason) = agent.runtime.credential_refusal(credential) {
-                return Err(invalid(format!("{field}.credential"), reason));
+        match &agent.credential {
+            None => {}
+            Some(ParamOr::Value(credential)) => {
+                if let Some(reason) = agent.runtime.credential_choice_refusal(credential) {
+                    return Err(invalid(format!("{field}.credential"), reason));
+                }
+            }
+            Some(credential @ ParamOr::Param { param }) => {
+                check_param_ref(
+                    file,
+                    credential,
+                    &format!("{field}.credential"),
+                    ParamKind::Text,
+                )?;
+                if agent.runtime.credentials().is_empty() {
+                    return Err(invalid(
+                        format!("{field}.credential"),
+                        agent.runtime.credential_refusal(param).unwrap_or_default(),
+                    ));
+                }
+                let default = file
+                    .params
+                    .get(param)
+                    .and_then(|declared| declared.default.as_deref());
+                if let Some(reason) =
+                    default.and_then(|choice| agent.runtime.credential_choice_refusal(choice))
+                {
+                    return Err(invalid(format!("params.{param}.default"), reason));
+                }
             }
         }
         if agent.runtime == AgentRuntime::Native && agent.tools.is_empty() {
@@ -1310,14 +1362,20 @@ fn validate_kind(file: &LoadoutFile) -> Result<(), LoadoutError> {
 /// Every built-in loadout, parsed. A built-in that fails to parse is a bug
 /// caught by this module's tests.
 pub fn builtin_loadouts() -> Vec<Result<Loadout, LoadoutError>> {
-    [FIX_YAML, QA_YAML, AUDIT_YAML]
-        .into_iter()
-        .map(|text| parse_loadout(text, LoadoutSource::Builtin))
-        .collect()
+    [
+        FIX_YAML,
+        FIX_CLAUDE_CODE_YAML,
+        FIX_CODEX_YAML,
+        QA_YAML,
+        AUDIT_YAML,
+    ]
+    .into_iter()
+    .map(|text| parse_loadout(text, LoadoutSource::Builtin))
+    .collect()
 }
 
-/// The ids of the built-in loadouts.
-pub const BUILTIN_LOADOUT_IDS: [&str; 3] = ["fix", "qa", "audit"];
+/// The ids of the built-in loadouts, in [`builtin_loadouts`] order.
+pub const BUILTIN_LOADOUT_IDS: [&str; 5] = ["fix", "fix-claude-code", "fix-codex", "qa", "audit"];
 
 /// One user loadout file as read: the loadout, or why it cannot be used.
 #[derive(Debug, Clone)]
@@ -1400,6 +1458,11 @@ pub struct ResolvedLoadout {
     pub params: ParamValues,
     /// Each Agent's model, by Agent id.
     pub agent_models: BTreeMap<String, ModelSpec>,
+    /// The credential each external Agent's route sends, by Agent id: the
+    /// loadout's `credential` (a literal or its parameter's value), or the
+    /// runtime's default when it names none. [`AUTO_CREDENTIAL`] until the
+    /// daemon's admission chooses the credential that is stored.
+    pub agent_credentials: BTreeMap<String, String>,
     pub reviewer_model: Option<ModelSpec>,
     /// Each check's argv (shell checks as `sh -c`), timeout in seconds, by
     /// check name. `detected` checks resolve to `None` here; the daemon
@@ -1408,6 +1471,10 @@ pub struct ResolvedLoadout {
     /// The prompt with `{task}` and the other placeholders replaced.
     pub prompt: String,
     pub warnings: Vec<LoadoutWarning>,
+    /// What the run's Outcome notes from admission, in words, such as the
+    /// credential an external writer's route sends and how it was chosen.
+    /// Resolution leaves it empty; the daemon's admission fills it.
+    pub notes: Vec<String>,
 }
 
 /// One resolved required check.
@@ -1536,6 +1603,29 @@ pub fn resolve_loadout(
         }
         agent_models.insert(agent.id.clone(), model);
     }
+    let mut agent_credentials = BTreeMap::new();
+    for agent in &file.agents {
+        let Some(default) = agent.runtime.credentials().first() else {
+            continue;
+        };
+        let asked = match &agent.credential {
+            Some(credential) => resolve_text(file, values, credential)?
+                .map(|choice| choice.trim().to_string())
+                .filter(|choice| !choice.is_empty()),
+            None => None,
+        };
+        let credential = asked.unwrap_or_else(|| (*default).to_string());
+        if let Some(reason) = agent.runtime.credential_choice_refusal(&credential) {
+            return Err(match &agent.credential {
+                Some(ParamOr::Param { param }) => LoadoutError::Param {
+                    param: param.clone(),
+                    reason,
+                },
+                _ => invalid(format!("agents.{}.credential", agent.id), reason),
+            });
+        }
+        agent_credentials.insert(agent.id.clone(), credential);
+    }
     let reviewer_model = match &file.review {
         Some(review) => Some(resolve_model(file, values, &review.model)?),
         None => None,
@@ -1605,10 +1695,12 @@ pub fn resolve_loadout(
         loadout: loadout.clone(),
         params,
         agent_models,
+        agent_credentials,
         reviewer_model,
         checks,
         prompt,
         warnings,
+        notes: Vec::new(),
     })
 }
 
@@ -1633,6 +1725,8 @@ mod tests {
         let ids: Vec<_> = loadouts.iter().map(|l| l.file.id.as_str()).collect();
         assert_eq!(ids, BUILTIN_LOADOUT_IDS);
         assert_eq!(builtin("fix").file.kind, LoadoutKind::Fix);
+        assert_eq!(builtin("fix-claude-code").file.kind, LoadoutKind::Fix);
+        assert_eq!(builtin("fix-codex").file.kind, LoadoutKind::Fix);
         assert_eq!(builtin("qa").file.kind, LoadoutKind::Qa);
         assert_eq!(builtin("audit").file.kind, LoadoutKind::Audit);
         assert!(builtin("audit").file.opt_in);
@@ -1868,25 +1962,33 @@ mod tests {
         if let ParamOr::Value(model) = &mut file.agents[0].model {
             model.provider = "openai".into();
         }
-        for name in ["codex-openai", "codex-chatgpt"] {
-            file.agents[0].credential = Some(name.into());
+        let literal = |name: &str| Some(ParamOr::Value(name.to_string()));
+        for name in ["codex-openai", "codex-chatgpt", AUTO_CREDENTIAL] {
+            file.agents[0].credential = literal(name);
             validate_loadout(&file).unwrap();
         }
-        file.agents[0].credential = Some("claude-code-oauth".into());
+        file.agents[0].credential = literal("claude-code-oauth");
         let error = validate_loadout(&file).unwrap_err().to_string();
         assert!(error.contains("agents.writer.credential"), "{error}");
-        assert!(error.contains("codex-openai or codex-chatgpt"), "{error}");
+        assert!(
+            error.contains("codex-openai or codex-chatgpt, or auto"),
+            "{error}"
+        );
         file.agents[0].runtime = AgentRuntime::ClaudeCode;
         if let ParamOr::Value(model) = &mut file.agents[0].model {
             model.provider = "anthropic".into();
         }
         validate_loadout(&file).unwrap();
-        file.agents[0].credential = Some("codex-chatgpt".into());
+        file.agents[0].credential = literal(AUTO_CREDENTIAL);
+        validate_loadout(&file).unwrap();
+        file.agents[0].credential = literal("codex-chatgpt");
         assert!(validate_loadout(&file).is_err());
         let mut file = builtin("fix").file.clone();
-        file.agents[0].credential = Some("codex-openai".into());
-        let error = validate_loadout(&file).unwrap_err().to_string();
-        assert!(error.contains("only an external writer"), "{error}");
+        for name in ["codex-openai", AUTO_CREDENTIAL] {
+            file.agents[0].credential = literal(name);
+            let error = validate_loadout(&file).unwrap_err().to_string();
+            assert!(error.contains("only an external writer"), "{error}");
+        }
         assert_eq!(AgentRuntime::Codex.credentials()[0], "codex-openai");
         assert_eq!(
             AgentRuntime::ClaudeCode.credentials(),
@@ -1912,9 +2014,204 @@ prompt: "{task}"
 "#;
         let loadout = parse_loadout(text, LoadoutSource::Builtin).unwrap();
         assert_eq!(
-            loadout.file.agents[0].credential.as_deref(),
-            Some("codex-chatgpt")
+            loadout.file.agents[0].credential,
+            Some(ParamOr::Value("codex-chatgpt".into()))
         );
+        let resolved = resolve_loadout(&loadout, &ParamValues::new(), "task", "/repo").unwrap();
+        assert_eq!(resolved.agent_credentials["writer"], "codex-chatgpt");
+        // Without a credential, the runtime's default.
+        let loadout = parse_loadout(
+            &text.replace("    credential: codex-chatgpt\n", ""),
+            LoadoutSource::Builtin,
+        )
+        .unwrap();
+        let resolved = resolve_loadout(&loadout, &ParamValues::new(), "task", "/repo").unwrap();
+        assert_eq!(resolved.agent_credentials["writer"], "codex-openai");
+        // A native Agent has none.
+        let fix = builtin("fix");
+        let mut values = ParamValues::new();
+        values.insert("writer_model".into(), "ollama:qwen3:32b".into());
+        values.insert("reviewer_model".into(), "ollama:gpt-oss:120b".into());
+        let resolved = resolve_loadout(&fix, &values, "task", "/repo").unwrap();
+        assert!(resolved.agent_credentials.is_empty());
+        assert!(resolved.notes.is_empty());
+    }
+
+    /// A writer's credential can be a `text` parameter, such as
+    /// fix-codex's `credential` (default `auto`): `--param` chooses it, a
+    /// value that is not one of the runtime's credentials or `auto` is a
+    /// parameter error, and so is a default that is not.
+    #[test]
+    fn an_external_writers_credential_can_be_a_parameter() {
+        let codex = builtin("fix-codex");
+        assert_eq!(
+            codex.file.agents[0].credential,
+            Some(ParamOr::Param {
+                param: "credential".into()
+            })
+        );
+        assert_eq!(
+            codex.file.params["credential"].default.as_deref(),
+            Some(AUTO_CREDENTIAL)
+        );
+        let mut values = ParamValues::new();
+        values.insert("reviewer_model".into(), "ollama:gpt-oss:120b".into());
+        let resolved = resolve_loadout(&codex, &values, "fix it", "/repo").unwrap();
+        assert_eq!(resolved.agent_credentials["writer"], AUTO_CREDENTIAL);
+        // The default is recorded among the run's parameters.
+        assert_eq!(resolved.params["credential"], AUTO_CREDENTIAL);
+        for choice in ["codex-openai", "codex-chatgpt", " codex-chatgpt "] {
+            values.insert("credential".into(), choice.into());
+            let resolved = resolve_loadout(&codex, &values, "fix it", "/repo").unwrap();
+            assert_eq!(resolved.agent_credentials["writer"], choice.trim());
+        }
+        values.insert("credential".into(), "claude-code-oauth".into());
+        let error = resolve_loadout(&codex, &values, "fix it", "/repo").unwrap_err();
+        assert!(matches!(error, LoadoutError::Param { .. }), "{error}");
+        assert_eq!(
+            error.to_string(),
+            "loadout parameter credential: a codex writer's route sends codex-openai or \
+             codex-chatgpt, or auto (the first of them that is stored); \"claude-code-oauth\" is \
+             none of these"
+        );
+        // A default that is not a credential of the runtime is refused.
+        let text = FIX_CODEX_YAML.replace("    default: auto\n", "    default: codex-api\n");
+        let error = parse_loadout(&text, LoadoutSource::Builtin).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("loadout field params.credential.default: a codex writer's route"),
+            "{error}"
+        );
+        // A credential parameter must be a text parameter, and a native
+        // Agent names none.
+        let text = FIX_CODEX_YAML.replace("    kind: text\n    default: auto", "    kind: url");
+        let error = parse_loadout(&text, LoadoutSource::Builtin).unwrap_err();
+        assert!(
+            error.to_string().contains("agents.writer.credential"),
+            "{error}"
+        );
+        let text = FIX_CODEX_YAML.replace("    runtime: codex\n", "    tools: [read_file]\n");
+        let error = parse_loadout(&text, LoadoutSource::Builtin).unwrap_err();
+        assert!(
+            error.to_string().contains("only an external writer"),
+            "{error}"
+        );
+    }
+
+    /// fix-claude-code and fix-codex are fix with an external writer: the
+    /// same check, review, adjudications and sandbox, the program's recipe
+    /// image, a default writer model, a required reviewer, and budgets that
+    /// hold one call of the programs' pinned models (1,000,000 tokens for a
+    /// 1M-window Claude model, 400,000 for Codex 0.160.1's).
+    #[test]
+    fn the_external_fix_builtins_are_fix_with_an_external_writer() {
+        let fix = builtin("fix");
+        for (id, runtime, recipe, default) in [
+            (
+                "fix-claude-code",
+                AgentRuntime::ClaudeCode,
+                "claude-code",
+                "anthropic:sonnet",
+            ),
+            (
+                "fix-codex",
+                AgentRuntime::Codex,
+                "codex",
+                "openai:gpt-6.1-sol",
+            ),
+        ] {
+            let loadout = builtin(id);
+            let file = &loadout.file;
+            assert!(loadout.warnings.is_empty(), "{id}: {:?}", loadout.warnings);
+            assert!(!file.opt_in, "{id}");
+            assert_eq!(file.agents.len(), 1, "{id}");
+            let writer = &file.agents[0];
+            assert_eq!(writer.role, LoadoutRole::Writer, "{id}");
+            assert_eq!(writer.runtime, runtime, "{id}");
+            assert!(writer.tools.is_empty(), "{id}: the program brings its own");
+            assert_eq!(writer.writes, None, "{id}");
+            assert_eq!(writer.instructions, fix.file.agents[0].instructions, "{id}");
+            assert_eq!(file.checks, fix.file.checks, "{id}");
+            assert_eq!(file.review, fix.file.review, "{id}");
+            let review = file.review.as_ref().unwrap();
+            assert_eq!((review.rounds, review.adjudicate), (3, true), "{id}");
+            assert_eq!(file.prompt, fix.file.prompt, "{id}");
+            assert_eq!(file.sandbox, fix.file.sandbox, "{id}");
+            assert_eq!(file.budgets.reviewer, fix.file.budgets.reviewer, "{id}");
+            assert_eq!(file.budgets.wall_clock, fix.file.budgets.wall_clock, "{id}");
+            assert_eq!(
+                file.environment.as_ref().map(|env| env.recipes.clone()),
+                Some(vec![recipe.to_string()]),
+                "{id}"
+            );
+            let writer_model = &file.params["writer_model"];
+            assert!(!writer_model.required, "{id}");
+            assert_eq!(writer_model.default.as_deref(), Some(default), "{id}");
+            assert!(file.params["reviewer_model"].required, "{id}");
+            // The admission floors of the programs' pinned models.
+            let floor = match runtime {
+                AgentRuntime::ClaudeCode => 1_000_000,
+                _ => 400_000,
+            };
+            let external = external_call_budgets(file);
+            assert_eq!(external.len(), 1, "{id}");
+            assert!(external[0].tokens >= floor, "{id}");
+            assert!(call_budgets(file)
+                .iter()
+                .all(|budget| budget.agent.is_none()));
+
+            // The common case names only the reviewer.
+            let mut values = ParamValues::new();
+            values.insert("reviewer_model".into(), "ollama:gpt-oss:120b".into());
+            let resolved = resolve_loadout(&loadout, &values, "fix it", "/repo").unwrap();
+            assert_eq!(
+                resolved.agent_models["writer"],
+                ModelSpec::parse(default).unwrap(),
+                "{id}"
+            );
+            assert_eq!(resolved.params["writer_model"], default, "{id}");
+            assert!(
+                resolved.warnings.is_empty(),
+                "{id}: {:?}",
+                resolved.warnings
+            );
+            // Without a reviewer the run is a usage error.
+            let error = resolve_loadout(&loadout, &ParamValues::new(), "t", "/repo").unwrap_err();
+            assert!(
+                matches!(&error, LoadoutError::Param { param, .. } if param == "reviewer_model"),
+                "{error}"
+            );
+            // The writer's provider is still held to its program's.
+            values.insert("writer_model".into(), "openrouter:qwen/qwen3-coder".into());
+            let error = resolve_loadout(&loadout, &values, "t", "/repo").unwrap_err();
+            assert!(
+                matches!(&error, LoadoutError::Param { param, .. } if param == "writer_model"),
+                "{error}"
+            );
+        }
+        // A reviewer on the default writer's model, through OpenRouter, is
+        // warned about: Claude Code's sonnet is claude-sonnet-5-5.
+        for (id, reviewer) in [
+            ("fix-claude-code", "openrouter:anthropic/claude-sonnet-5.5"),
+            ("fix-codex", "openrouter:openai/gpt-6.1-sol"),
+        ] {
+            let mut values = ParamValues::new();
+            values.insert("reviewer_model".into(), reviewer.into());
+            let resolved = resolve_loadout(&builtin(id), &values, "t", "/repo").unwrap();
+            assert!(
+                resolved
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.code == "same_model_reviewer"),
+                "{id}"
+            );
+        }
+        // fix-claude-code's writer sends Claude Code's only credential.
+        let mut values = ParamValues::new();
+        values.insert("reviewer_model".into(), "ollama:gpt-oss:120b".into());
+        let resolved = resolve_loadout(&builtin("fix-claude-code"), &values, "t", "/repo").unwrap();
+        assert_eq!(resolved.agent_credentials["writer"], "claude-code-oauth");
     }
 
     /// An external writer's model is the model its program calls through

@@ -1,0 +1,95 @@
+# Built-in loadout: fix-codex. The fix loadout with the Codex CLI as its
+# writer: the same required check, the same review by a different model for
+# up to three rounds, the same ADJUDICATIONS, in the same egress, hardened
+# Session. The writer is the pinned Codex from the codex recipe image
+# (`axocoatl recipe build codex`). Codex brings its own tools, so the writer
+# lists none.
+#
+# credential defaults to auto: at admission the run takes codex-openai (an
+# OpenAI API key, sent to api.openai.com) when it is stored, else
+# codex-chatgpt (a ChatGPT sign-in from `axocoatl connect codex`, sent to
+# chatgpt.com), else it is refused, saying how to connect. The run records
+# the credential it chose (a note in the Outcome and the run's manifest).
+# --param credential=codex-openai or codex-chatgpt chooses one.
+#
+# writer_model defaults to openai:gpt-6.1-sol, the first model (priority 1)
+# of Codex 0.160.1's bundled model catalog, which Axocoatl's pinned table
+# prices. The reviewer has no default: it is a native Agent on another model
+# (Ollama or OpenRouter), and a reviewer on the writer's model is warned
+# about.
+#
+# Budgets. Admission refuses a writer whose tokens cannot hold one model call
+# of its model: 400,000 for Codex 0.160.1's models (its 272,000-token context
+# plus 128,000 output tokens). Codex reports every input token of every
+# request, cached input included, so one program run can report several
+# million tokens; a program run that reports more tokens than its grant
+# still allows fails, so tokens leaves room for the first run and the two
+# revisions three review rounds can ask for. Codex has no spending stop of
+# its own: each of its requests counts against invocations and the host
+# stops it when they run out, and its cost, computed from the tokens it
+# reports at its model's price, settles against cost_usd. The reviewer's
+# budget is fix's.
+schema: axocoatl.loadout/1
+id: fix-codex
+version: 1
+name: Fix with Codex
+description: >-
+  The Codex CLI makes the change inside the Session; the host runs the
+  required checks on the exact final files and a reviewer on a different
+  model must approve the result.
+kind: fix
+params:
+  writer_model:
+    kind: model
+    default: openai:gpt-6.1-sol
+    description: openai:<model> that Codex runs (default openai:gpt-6.1-sol)
+  reviewer_model:
+    kind: model
+    required: true
+    description: provider:model of the reviewer, a native Agent on Ollama or OpenRouter (use a different model than the writer)
+  credential:
+    kind: text
+    default: auto
+    description: codex-openai (an OpenAI API key), codex-chatgpt (a ChatGPT sign-in) or auto (codex-openai when stored, else codex-chatgpt)
+agents:
+  - id: writer
+    role: writer
+    runtime: codex
+    credential: { param: credential }
+    model: { param: writer_model }
+    instructions: >-
+      You own this change. Find the relevant code and tests, make the change,
+      run the project's check command and fix failures, then compare your diff
+      with the task. When the host sends you review findings, answer every
+      finding in an ADJUDICATIONS block: a line ADJUDICATIONS, then a fenced
+      JSON array with one object per finding, {"id": "F1", "decision":
+      "accept" or "reject", "reason": "..."}. Reject only with a concrete
+      reason (the code that shows the finding is wrong). Fix each finding you
+      accept, run the checks again, and give your final answer.
+checks:
+  - name: tests
+    run: { detected: true }
+    timeout: 3m
+review:
+  model: { param: reviewer_model }
+  rounds: 3
+  tools: [read_file, list_dir, grep, glob]
+  adjudicate: true
+  instructions: >-
+    Review the change against the task and against every contract and edge
+    case the docs, comments and tests describe. Read the code the change
+    touches, not only the diff. Number each finding F1, F2, ... at the start
+    of its line, with file:line, what is wrong and what to change; report
+    only defects, not style. Give the verdict line the host asks for,
+    VERDICT: APPROVE or VERDICT: CHANGES. Change nothing.
+budgets:
+  agent: { activations: 4, invocations: 200, tokens: 20000000, cost_usd: 10 }
+  reviewer: { activations: 3, invocations: 120, tokens: 1500000, cost_usd: 3 }
+  wall_clock: 60m
+prompt: |
+  {task}
+sandbox:
+  network: egress
+  workload: hardened
+environment:
+  recipes: [codex]
