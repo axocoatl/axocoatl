@@ -46,7 +46,7 @@ summary { cursor: pointer; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); padding: var(--sp-2); border-radius: var(--r-sm); max-height: 240px; overflow: auto; font: var(--fs-xs) var(--font-mono); }
 .actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 a.download, a.receipt-download { color: var(--accent); }
-.receipt .mono { overflow-wrap: anywhere; }
+.receipt .mono, .actions .mono { min-width: 0; overflow-wrap: anywhere; }
 `;
 
 const el = (tag, className, text) => {
