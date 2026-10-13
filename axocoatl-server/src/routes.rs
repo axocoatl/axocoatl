@@ -9936,6 +9936,6 @@ pub use connect_codex_routes::{refresh_codex_sign_in, require_authenticated_loop
 pub mod loadout_routes;
 pub use loadout_routes::{
     get_loadout, get_loadout_run, list_loadout_runs, list_loadouts, loadout_run_events_route,
-    loadout_run_junit_route, loadout_run_record_route, start_loadout_run, stop_loadout_run,
-    validate_loadout,
+    loadout_run_junit_route, loadout_run_receipt_route, loadout_run_record_route,
+    receipt_key_route, start_loadout_run, stop_loadout_run, validate_loadout,
 };

@@ -75,6 +75,19 @@ async fn fail_run(host: &DaemonRunHost, context: &RunContext, reason: String) {
     outcome.error = Some(reason);
     outcome.finished_at_ms = axocoatl_daemon::loadout::driver::now_ms();
     outcome.decide(Default::default());
+    if let Err(reason) = host.seal(&context.run_id, &outcome).await {
+        let warning = axocoatl_daemon::bootstrap::receipts::receipt_unavailable(&reason);
+        outcome.warnings.push(warning.clone());
+        let _ = host
+            .record(
+                &context.run_id,
+                RunEvent::Warning {
+                    at_ms: outcome.finished_at_ms,
+                    warning,
+                },
+            )
+            .await;
+    }
     let _ = host
         .record(
             &context.run_id,
@@ -194,6 +207,47 @@ pub async fn stop_loadout_run(
         .await
         .map_err(attempt_err)?;
     Ok(StatusCode::ACCEPTED)
+}
+
+/// `GET /api/runs/{run_id}/receipt`: the run's signed receipt (a DSSE
+/// envelope), exactly as written; 404 with the reason while the run has not
+/// finished or when it has none.
+pub async fn loadout_run_receipt_route(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Result<Response, RouteError> {
+    let bytes = state
+        .read()
+        .await
+        .loadout_run_receipt(&run_id)
+        .map_err(attempt_err)?;
+    let mut response = Response::new(axum::body::Body::from(bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(axocoatl_session::receipt::ENVELOPE_MEDIA_TYPE),
+    );
+    if let Ok(value) = HeaderValue::from_str(&format!(
+        "attachment; filename=\"{run_id}.receipt.dsse.json\""
+    )) {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_DISPOSITION, value);
+    }
+    Ok(response)
+}
+
+/// `GET /api/receipts/key`: the data root's public signing key and its
+/// trusted-keys line; the key is made when there is none yet.
+pub async fn receipt_key_route(
+    State(state): State<AppState>,
+) -> Result<Json<axocoatl_daemon::loadout::api::ReceiptKeyView>, RouteError> {
+    state
+        .read()
+        .await
+        .receipt_public_key()
+        .await
+        .map(Json)
+        .map_err(attempt_err)
 }
 
 pub async fn loadout_run_junit_route(
@@ -592,6 +646,14 @@ impl RunHost for DaemonRunHost {
 
     async fn stop_requested(&self, run_id: &str) -> bool {
         self.state.read().await.loadout_run_stop_requested(run_id)
+    }
+
+    async fn seal(&self, run_id: &str, outcome: &RunOutcome) -> Result<(), String> {
+        self.state
+            .read()
+            .await
+            .seal_loadout_run(run_id, outcome)
+            .await
     }
 
     async fn finish(&self, run_id: &str, outcome: &RunOutcome) -> Result<(), RunError> {

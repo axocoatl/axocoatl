@@ -142,6 +142,42 @@ pub struct RunStatusView {
     /// Keep.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep: Option<axocoatl_session::run_outcome::KeepResult>,
+    /// The run's signed receipt (`GET /api/runs/{run_id}/receipt`), once it
+    /// has finished and was signed; a run whose signing failed has the
+    /// warning `receipt_unavailable` instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<RunReceiptView>,
+}
+
+/// What a run's receipt covers, for the run status and the UI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunReceiptView {
+    /// `sha256:<hex>` of the signing key.
+    pub key_id: String,
+    /// Files covered (subjects).
+    pub files: usize,
+    /// Paths the run removed.
+    pub removed: usize,
+    /// Where the digests come from: `judged_capture`, `after_capture` or
+    /// `workspace_at_finish`.
+    pub source: String,
+    /// Every path the run changed is covered.
+    pub complete: bool,
+    /// `sha256:<hex>` of the signed statement.
+    pub statement_sha256: String,
+}
+
+/// `GET /api/receipts/key`: the data root's public signing key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptKeyView {
+    /// `ed25519`.
+    pub algorithm: String,
+    /// Base64 of the 32-byte raw public key.
+    pub public_key: String,
+    /// `sha256:` + hex SHA-256 of the raw public key.
+    pub key_id: String,
+    /// The line for a trusted-keys file, as `axocoatl receipt key` prints it.
+    pub line: String,
 }
 
 /// `GET /api/runs/{run_id}/events?after=&limit=`.

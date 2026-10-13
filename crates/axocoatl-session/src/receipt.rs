@@ -298,7 +298,7 @@ pub struct FileFacts {
     pub unattributed: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerFacts {
     pub algorithm: String,
     /// Base64 of the 32-byte raw public key.

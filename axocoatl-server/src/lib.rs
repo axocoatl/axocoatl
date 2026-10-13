@@ -104,6 +104,11 @@ pub fn build_router(
             "/api/runs/{run_id}/record",
             get(routes::loadout_run_record_route),
         )
+        .route(
+            "/api/runs/{run_id}/receipt",
+            get(routes::loadout_run_receipt_route),
+        )
+        .route("/api/receipts/key", get(routes::receipt_key_route))
         .route("/api/sessions/{id}/keep-pr", post(routes::keep_pr))
         .route(
             "/api/workflows/{workflow_id}/execute",

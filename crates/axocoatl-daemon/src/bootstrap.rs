@@ -58,6 +58,9 @@ pub(crate) mod keep_pr_host;
 pub mod loadout_runs;
 #[path = "bootstrap_qa_repro.rs"]
 pub(crate) mod qa_repro_host;
+// 1.4 receipts.
+#[path = "bootstrap_receipts.rs"]
+pub mod receipts;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;

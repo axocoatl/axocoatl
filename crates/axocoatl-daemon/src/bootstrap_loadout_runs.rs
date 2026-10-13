@@ -85,7 +85,7 @@ impl LoadoutRuns {
         }
     }
 
-    fn store(&self) -> Result<&RunRecordStore, DaemonError> {
+    pub(crate) fn store(&self) -> Result<&RunRecordStore, DaemonError> {
         self.store.as_ref().map_err(|error| {
             DaemonError::Session(format!("the loadout run record is unavailable: {error}"))
         })
@@ -985,6 +985,7 @@ pub enum BundleCursor {
     History,
     Network { after: Option<u64> },
     RunEvents { after: Option<u64> },
+    Receipt,
     Done,
 }
 
@@ -1354,7 +1355,18 @@ impl AxocoatlDaemon {
                     detail
                 }
             };
-            let outcome = ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
+            let mut outcome =
+                ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
+            if let Some(warning) = self.seal_or_warn(&run_id, &outcome).await {
+                let _ = store.append(
+                    &run_id,
+                    &RunEvent::Warning {
+                        at_ms: now_ms(),
+                        warning: warning.clone(),
+                    },
+                );
+                outcome.warnings.push(warning);
+            }
             let _ = store.append(
                 &run_id,
                 &RunEvent::Ended {
@@ -1829,6 +1841,7 @@ impl AxocoatlDaemon {
                 .iter()
                 .rev()
                 .find_map(|(_, event)| crate::keep_pr::keep_result_of(event)),
+            receipt: self.loadout_run_receipt_view(run_id),
         })
     }
 
@@ -2028,7 +2041,7 @@ impl AxocoatlDaemon {
                     .events(run_id, after, RUN_EVENT_PAGE)
                     .map_err(record_error)?;
                 if events.is_empty() {
-                    return Ok((Vec::new(), BundleCursor::Done));
+                    return Ok((Vec::new(), BundleCursor::Receipt));
                 }
                 let next = events.last().map(|(seq, _)| *seq);
                 let sections = events
@@ -2041,6 +2054,21 @@ impl AxocoatlDaemon {
                     })
                     .collect();
                 Ok((sections, BundleCursor::RunEvents { after: next }))
+            }
+            // The signed receipt of a finished run, as written: its
+            // envelope as JSON. A run without one has no receipt line.
+            BundleCursor::Receipt => {
+                let receipt = store.receipt(run_id).map_err(record_error)?;
+                let sections = match receipt {
+                    Some(bytes) => vec![(
+                        axocoatl_session::record_bundle::RECEIPT_SECTION,
+                        serde_json::from_slice(&bytes).map_err(|error| {
+                            DaemonError::Session(format!("the run's receipt is unreadable: {error}"))
+                        })?,
+                    )],
+                    None => Vec::new(),
+                };
+                Ok((sections, BundleCursor::Done))
             }
             BundleCursor::Done => Ok((Vec::new(), BundleCursor::Done)),
         }
@@ -2414,11 +2442,21 @@ impl AxocoatlDaemon {
                     let Ok(manifest) = store.manifest(&run_id) else {
                         continue;
                     };
-                    let outcome = ended_outcome(
+                    let mut outcome = ended_outcome(
                         &manifest,
                         "the daemon restarted during the run; it was not resumed".into(),
                         Vec::new(),
                     );
+                    if let Some(warning) = self.seal_or_warn(&run_id, &outcome).await {
+                        let _ = store.append(
+                            &run_id,
+                            &RunEvent::Warning {
+                                at_ms: now_ms(),
+                                warning: warning.clone(),
+                            },
+                        );
+                        outcome.warnings.push(warning);
+                    }
                     let _ = store.append(
                         &run_id,
                         &RunEvent::Ended {
