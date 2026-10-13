@@ -17,6 +17,7 @@ fn tree(manifest: &str) -> CapturedTree {
     CapturedTree {
         tree_sha256: sha256_hex(manifest.as_bytes()),
         manifest: Some(manifest.to_string()),
+        changed: None,
     }
 }
 
@@ -52,6 +53,7 @@ fn capture(phase: CapturePhase, manifest: Option<&str>) -> CaptureFacts {
         compared: None,
         manifest: manifest.map(str::to_string),
         patch: None,
+        changed: None,
     }
 }
 
@@ -132,11 +134,13 @@ fn without_a_judged_tree_the_last_writers_after_capture_then_the_workspace() {
     forged.last_writer_after = Some(CapturedTree {
         tree_sha256: "f".repeat(64),
         manifest: Some(after.clone()),
+        changed: None,
     });
     let mut incomplete = attribution.clone();
     incomplete.last_writer_after = Some(CapturedTree {
         tree_sha256: "f".repeat(64),
         manifest: None,
+        changed: None,
     });
     for attribution in [forged, incomplete] {
         let files = receipt_files(&attribution, &[], dir.path());
@@ -220,4 +224,55 @@ fn attribution_keeps_the_checked_trees_and_the_last_writers_after_capture() {
     attribution.add_activation("writer 2", &[capture(CapturePhase::Before, Some(&after))]);
     assert_eq!(attribution.unattributable.len(), 1);
     assert_eq!(attribution.last_writer_after, None);
+}
+
+/// In a repository too large for a whole manifest, the judged capture's
+/// lines of the paths that differ from HEAD give the digests; a path they
+/// do not hold was as in HEAD in that tree (a change the run undid), and is
+/// read when the run finishes and named as such.
+#[test]
+fn a_large_repository_takes_digests_from_the_changed_lines_of_the_judged_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("reverted.txt"), "as in HEAD\n").unwrap();
+    let changed = format!(
+        "{}{}{}",
+        line("a.txt", "file", &"1".repeat(64)),
+        line("gone.txt", "deleted", "missing"),
+        line("new/link", "link", &"2".repeat(64)),
+    );
+    let judged = CapturedTree {
+        tree_sha256: "c".repeat(64),
+        manifest: None,
+        changed: Some(changed),
+    };
+    let attribution = RunAttribution {
+        paths: paths(&["a.txt", "gone.txt", "new/link", "reverted.txt"]),
+        checked: vec![judged],
+        ..RunAttribution::default()
+    };
+    let files = receipt_files(&attribution, &[check(Some(&"c".repeat(64)))], dir.path());
+    assert_eq!(files.facts.source, source::JUDGED_CAPTURE);
+    assert_eq!(
+        files.facts.tree_sha256.as_deref(),
+        Some("c".repeat(64).as_str())
+    );
+    assert_eq!(
+        files.subject,
+        vec![
+            Subject::sha256("a.txt", "1".repeat(64)),
+            Subject::sha256("new/link", "2".repeat(64)),
+            Subject::sha256("reverted.txt", sha256_hex(b"as in HEAD\n")),
+        ]
+    );
+    assert_eq!(files.facts.links, vec!["new/link"]);
+    assert_eq!(files.facts.removed, vec!["gone.txt"]);
+    assert_eq!(files.facts.read_at_finish, vec!["reverted.txt"]);
+    assert!(files.facts.complete);
+    // A capture that left the lines out (too many changed paths) gives no
+    // digests: the files are read when the run finishes.
+    let mut without = attribution.clone();
+    without.checked[0].changed = None;
+    let files = receipt_files(&without, &[check(Some(&"c".repeat(64)))], dir.path());
+    assert_eq!(files.facts.source, source::WORKSPACE_AT_FINISH);
+    assert!(files.facts.read_at_finish.is_empty());
 }

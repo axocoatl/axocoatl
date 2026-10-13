@@ -41,12 +41,25 @@ pub struct RunAttribution {
     pub last_writer_after: Option<CapturedTree>,
 }
 
-/// One repository capture's tree: its digest and, when the capture holds it
-/// whole, its manifest (`<base64 path>\t<mode>\t<kind>\t<sha256>` lines).
+/// One repository capture's tree: its digest; when the capture holds it
+/// whole, its manifest (`<base64 path>\t<mode>\t<kind>\t<sha256>` lines);
+/// and the lines of every path that differs from `HEAD`, which a capture
+/// records whatever the repository's size.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapturedTree {
     pub tree_sha256: String,
     pub manifest: Option<String>,
+    pub changed: Option<String>,
+}
+
+/// What a capture recorded of its tree that a receipt reads digests from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Recorded {
+    /// The whole manifest: a path it does not hold is absent.
+    Whole(BTreeMap<String, ManifestEntry>),
+    /// The lines of the paths that differ from `HEAD`: a path they do not
+    /// hold is as it is in `HEAD`.
+    Changed(BTreeMap<String, ManifestEntry>),
 }
 
 impl CapturedTree {
@@ -56,6 +69,18 @@ impl CapturedTree {
         self.manifest
             .as_deref()
             .filter(|manifest| sha256_hex(manifest.as_bytes()) == self.tree_sha256)
+    }
+
+    /// The whole manifest when the capture held it, else the lines of the
+    /// paths that differ from `HEAD`; `None` when it recorded neither.
+    fn recorded(&self) -> Option<Recorded> {
+        if let Some(manifest) = self.verified_manifest() {
+            return parse_manifest(manifest).ok().map(Recorded::Whole);
+        }
+        self.changed
+            .as_deref()
+            .and_then(|lines| parse_manifest(lines).ok())
+            .map(Recorded::Changed)
     }
 }
 
@@ -136,6 +161,8 @@ pub(crate) struct CaptureFacts {
     pub(crate) manifest: Option<String>,
     /// The complete patch, when it fit the recorded bound.
     pub(crate) patch: Option<Vec<u8>>,
+    /// The lines of the paths that differ from `HEAD`, when recorded.
+    pub(crate) changed: Option<String>,
 }
 
 impl CaptureFacts {
@@ -173,6 +200,7 @@ impl CaptureFacts {
                 .manifest_complete
                 .then(|| snapshot.manifest_prefix.clone()),
             patch,
+            changed: snapshot.changed_manifest.clone(),
         }
     }
 
@@ -188,6 +216,7 @@ impl CaptureFacts {
         Some(CapturedTree {
             tree_sha256: self.tree_sha256.clone()?,
             manifest: self.manifest.clone(),
+            changed: self.changed.clone(),
         })
     }
 }
@@ -500,9 +529,9 @@ pub struct ReceiptFiles {
 }
 
 /// The tree the run's required checks judged: the one tree their results
-/// name (`candidate_sha256`), when its capture is among the run's and holds
-/// its whole manifest. Checks that name no tree, or more than one, judged
-/// none that a receipt can name.
+/// name (`candidate_sha256`), when its capture is among the run's and
+/// recorded its whole manifest or the lines of its changed paths. Checks
+/// that name no tree, or more than one, judged none that a receipt can name.
 fn judged_tree<'a>(
     attribution: &'a RunAttribution,
     checks: &[CheckResult],
@@ -518,15 +547,19 @@ fn judged_tree<'a>(
         .checked
         .iter()
         .rev()
-        .find(|tree| tree.tree_sha256 == candidate && tree.verified_manifest().is_some())
+        .find(|tree| tree.tree_sha256 == candidate && tree.recorded().is_some())
 }
 
 /// The subjects and file facts of a receipt: every path `attribution`
 /// names, with its digest from the judged capture (the tree the required
 /// checks ran on), else from the last writer's After capture, else as read
-/// under `repo_root` now. Removed paths are listed apart; a path that is
-/// Git's own, not plain, or not a file or link, and every activation whose
-/// changes cannot be attributed, makes the list incomplete and says why.
+/// under `repo_root` now. A capture gives a path's digest from its whole
+/// manifest, or, in a repository too large for that, from the lines of the
+/// paths that differ from `HEAD`; a path those lines do not hold was as in
+/// `HEAD` in that tree, and is read under `repo_root` now and listed in
+/// `read_at_finish`. Removed paths are listed apart; a path that is Git's
+/// own, not plain, or not a file or link, and every activation whose changes
+/// cannot be attributed, makes the list incomplete and says why.
 pub fn receipt_files(
     attribution: &RunAttribution,
     checks: &[CheckResult],
@@ -538,21 +571,30 @@ pub fn receipt_files(
             attribution
                 .last_writer_after
                 .as_ref()
-                .filter(|tree| tree.verified_manifest().is_some())
+                .filter(|tree| tree.recorded().is_some())
                 .map(|tree| (receipt::source::AFTER_CAPTURE, tree))
         });
-    let manifest = captured.and_then(|(_, tree)| {
-        tree.verified_manifest()
-            .and_then(|manifest| parse_manifest(manifest).ok())
-    });
-    let (source, tree_sha256) = match (&captured, &manifest) {
+    let recorded = captured.and_then(|(_, tree)| tree.recorded());
+    let (source, tree_sha256) = match (&captured, &recorded) {
         (Some((source, tree)), Some(_)) => (source.to_string(), Some(tree.tree_sha256.clone())),
         _ => (receipt::source::WORKSPACE_AT_FINISH.to_string(), None),
     };
     let mut subject = Vec::new();
     let mut links = Vec::new();
     let mut removed = Vec::new();
+    let mut read_at_finish = Vec::new();
     let mut unattributed: Vec<String> = attribution.unattributable.clone();
+    let state_of = |entry: &ManifestEntry| {
+        if std::str::from_utf8(&entry.path).is_err() {
+            return PathState::Other("its name is not UTF-8".into());
+        }
+        match entry.kind.as_str() {
+            "file" => PathState::File(entry.digest.clone()),
+            "link" => PathState::Link(entry.digest.clone()),
+            "deleted" => PathState::Absent,
+            kind => PathState::Other(format!("recorded as {kind:?}")),
+        }
+    };
     for path in &attribution.paths {
         if is_git_internal(path) {
             unattributed.push(format!(
@@ -564,16 +606,14 @@ pub fn receipt_files(
             unattributed.push(format!("{path:?}: not a plain repository path"));
             continue;
         }
-        let state = match &manifest {
-            Some(entries) => match entries.get(path) {
-                Some(entry) if std::str::from_utf8(&entry.path).is_err() => {
-                    PathState::Other("its name is not UTF-8".into())
+        let state = match &recorded {
+            Some(Recorded::Whole(entries)) => entries.get(path).map_or(PathState::Absent, state_of),
+            Some(Recorded::Changed(entries)) => match entries.get(path) {
+                Some(entry) => state_of(entry),
+                None => {
+                    read_at_finish.push(path.clone());
+                    receipt::hash_repo_path(repo_root, path)
                 }
-                Some(entry) if entry.kind == "file" => PathState::File(entry.digest.clone()),
-                Some(entry) if entry.kind == "link" => PathState::Link(entry.digest.clone()),
-                Some(entry) if entry.kind == "deleted" => PathState::Absent,
-                Some(entry) => PathState::Other(format!("recorded as {:?}", entry.kind)),
-                None => PathState::Absent,
             },
             None => receipt::hash_repo_path(repo_root, path),
         };
@@ -594,6 +634,7 @@ pub fn receipt_files(
             tree_sha256,
             links,
             removed,
+            read_at_finish,
             complete: unattributed.is_empty(),
             unattributed,
         },

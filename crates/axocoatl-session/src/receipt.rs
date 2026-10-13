@@ -292,6 +292,13 @@ pub struct FileFacts {
     pub links: Vec<String>,
     /// Paths the run changed that do not exist after it.
     pub removed: Vec<String>,
+    /// Subjects (or removed paths) whose state the host read from the
+    /// working tree when the run finished, although `source` is a capture:
+    /// the capture's lines of the paths that differ from `HEAD` did not
+    /// hold them, so in that tree they were as in `HEAD` (a change the run
+    /// made and undid).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_at_finish: Vec<String>,
     /// Every path the run changed is a subject or removed.
     pub complete: bool,
     /// What could not be attributed or read, and why.
@@ -1031,10 +1038,18 @@ pub fn describe(statement: &Statement) -> Vec<String> {
     }
     let files = &predicate.files;
     lines.push(format!(
-        "Files: {} covered, {} removed, {}{}",
+        "Files: {} covered, {} removed, {}{}{}",
         statement.subject.len(),
         files.removed.len(),
         source_words(&files.source),
+        if files.read_at_finish.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; read when the run finished (as in HEAD when judged): {}",
+                files.read_at_finish.join(", ")
+            )
+        },
         if files.complete {
             String::new()
         } else {
@@ -1191,6 +1206,7 @@ mod tests {
                     tree_sha256: Some("f".repeat(64)),
                     links: Vec::new(),
                     removed: vec!["old.txt".into()],
+                    read_at_finish: Vec::new(),
                     complete: true,
                     unattributed: Vec::new(),
                 },

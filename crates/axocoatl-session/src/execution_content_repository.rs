@@ -22,6 +22,17 @@ pub const REPOSITORY_SNAPSHOT_COMMAND: &str = concat!(
 pub const REPOSITORY_SNAPSHOT_COMMAND_V1: &str =
     include_str!("execution_content_repository_snapshot_v1.sh");
 
+/// The capture command of 1.2 and 1.3 (`format=1`), which recorded no lines
+/// of the paths that differ from `HEAD`. Turns admitted with it keep it.
+pub const REPOSITORY_SNAPSHOT_COMMAND_V2: &str = concat!(
+    "capture_mode=observe\n",
+    include_str!("execution_content_repository_snapshot_v2.sh")
+);
+
+/// Most bytes of the manifest lines of the paths that differ from `HEAD`
+/// one capture records ([`ActivationRepositorySnapshot::changed_manifest`]).
+pub const MAX_CHANGED_MANIFEST_BYTES: usize = 576 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RepositorySnapshotPhase {
@@ -64,6 +75,13 @@ pub struct ActivationRepositorySnapshot {
     /// it verified, and every path whose entry differs from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compared: Option<RepositoryComparison>,
+    /// The manifest lines (`<base64 path>\t<mode>\t<kind>\t<sha256>`) of
+    /// every path whose state differs from `HEAD`, as the tree this capture
+    /// saw had them, whatever the repository's size; a path gone from it is
+    /// `0\tdeleted\tmissing`. Absent when the capture predates it (format 1)
+    /// or the lines did not fit its output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_manifest: Option<String>,
 }
 
 /// Paths whose entries differ between a verified Before manifest and the
@@ -287,6 +305,10 @@ fn validate_observation(
     observation: &ActivationRepositorySnapshot,
 ) -> Result<(), ExecutionContentError> {
     if observation.manifest_prefix.len() > 8192
+        || observation
+            .changed_manifest
+            .as_ref()
+            .is_some_and(|lines| lines.len() > MAX_CHANGED_MANIFEST_BYTES)
         || observation.patch_prefix.len() > 12288
         || observation
             .unavailable
@@ -687,6 +709,96 @@ mod tests {
                 "{tamper}: {failure}"
             );
         }
+    }
+
+    /// The lines a capture records of the paths that differ from HEAD:
+    /// `(path, mode, kind, digest)`, or `None` when it left them out.
+    fn changed_lines(output: &str) -> Option<Vec<(String, String, String, String)>> {
+        if field(output, "changed_complete") != "1" {
+            assert_eq!(field(output, "changed_b64"), "");
+            return None;
+        }
+        let text = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(field(output, "changed_b64"))
+                .unwrap(),
+        )
+        .unwrap();
+        Some(
+            text.lines()
+                .map(|line| {
+                    let fields: Vec<&str> = line.split('\t').collect();
+                    let path = base64::engine::general_purpose::STANDARD
+                        .decode(fields[0])
+                        .unwrap();
+                    (
+                        String::from_utf8(path).unwrap(),
+                        fields[1].to_owned(),
+                        fields[2].to_owned(),
+                        fields[3].to_owned(),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    fn sha256_text(text: &str) -> String {
+        use sha2::Digest as _;
+        format!("{:x}", sha2::Sha256::digest(text.as_bytes()))
+    }
+
+    /// In a repository far beyond the 8 KiB manifest, a capture still
+    /// records, for every path that differs from HEAD, the line its whole
+    /// manifest has: edits, additions, a link, a deletion, a path removed
+    /// from the index and the worktree, staged and unstaged changes; never
+    /// an unchanged or ignored path.
+    #[test]
+    fn a_capture_records_the_manifest_lines_of_every_path_that_differs_from_head() {
+        let repo = sizeable_repository();
+        let root = repo.path();
+        let unchanged = capture(root, "capture_mode=observe\n").unwrap();
+        assert_eq!(field(&unchanged, "format"), "2");
+        assert!(field(&unchanged, "manifest_bytes").parse::<u64>().unwrap() > 8192);
+        assert_eq!(changed_lines(&unchanged), Some(Vec::new()));
+
+        std::fs::write(root.join("config/prod.js"), "prod, fixed\n").unwrap();
+        std::fs::write(root.join("lib/file-7.js"), "staged\n").unwrap();
+        git(root, &["add", "lib/file-7.js"]);
+        std::fs::remove_file(root.join("lib/file-1.js")).unwrap();
+        git(root, &["rm", "--quiet", "lib/file-2.js"]);
+        std::fs::write(root.join("new file.txt"), "new\n").unwrap();
+        std::os::unix::fs::symlink("prod.js", root.join("config/alias.js")).unwrap();
+        std::fs::create_dir_all(root.join("build")).unwrap();
+        std::fs::write(root.join("build/out.js"), "ignored\n").unwrap();
+        let output = capture(root, "capture_mode=observe\n").unwrap();
+        let row = |path: &str, mode: &str, kind: &str, digest: &str| {
+            (
+                path.to_owned(),
+                mode.to_owned(),
+                kind.to_owned(),
+                digest.to_owned(),
+            )
+        };
+        assert_eq!(
+            changed_lines(&output).unwrap(),
+            vec![
+                row("config/alias.js", "777", "link", &sha256_text("prod.js")),
+                row(
+                    "config/prod.js",
+                    "644",
+                    "file",
+                    &sha256_text("prod, fixed\n")
+                ),
+                row("lib/file-1.js", "0", "deleted", "missing"),
+                row("lib/file-2.js", "0", "deleted", "missing"),
+                row("lib/file-7.js", "644", "file", &sha256_text("staged\n")),
+                row("new file.txt", "644", "file", &sha256_text("new\n")),
+            ]
+        );
+        // The same lines in every mode, which also report their judgement.
+        let kept = capture(root, "capture_mode=keep\n").unwrap();
+        assert_eq!(changed_lines(&kept), changed_lines(&output));
+        let _ = std::fs::remove_dir_all(field(&kept, "baseline"));
     }
 
     #[test]

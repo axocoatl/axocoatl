@@ -110,6 +110,7 @@ fn statement(signer: &receipt_key::SigningKey) -> Statement {
                 tree_sha256: Some("d".repeat(64)),
                 links: vec!["docs/link".into()],
                 removed: vec!["old.py".into()],
+                read_at_finish: Vec::new(),
                 complete: true,
                 unattributed: Vec::new(),
             },

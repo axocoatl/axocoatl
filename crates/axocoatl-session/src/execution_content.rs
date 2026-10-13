@@ -60,8 +60,9 @@ pub use attachment::RetainedBinaryAttachment;
 use repository_snapshot::StandingRepositoryCheck;
 pub use repository_snapshot::{
     is_capture_baseline, ActivationRepositorySnapshot, ActivationRepositorySnapshotView,
-    RepositoryComparison, RepositorySnapshotPhase, MAX_COMPARED_PATH_BYTES,
-    REPOSITORY_CAPTURE_SCRIPT, REPOSITORY_SNAPSHOT_COMMAND, REPOSITORY_SNAPSHOT_COMMAND_V1,
+    RepositoryComparison, RepositorySnapshotPhase, MAX_CHANGED_MANIFEST_BYTES,
+    MAX_COMPARED_PATH_BYTES, REPOSITORY_CAPTURE_SCRIPT, REPOSITORY_SNAPSHOT_COMMAND,
+    REPOSITORY_SNAPSHOT_COMMAND_V1, REPOSITORY_SNAPSHOT_COMMAND_V2,
 };
 
 #[path = "execution_content_reattachment.rs"]

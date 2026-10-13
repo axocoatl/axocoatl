@@ -562,6 +562,7 @@ fn capture(phase: CapturePhase) -> CaptureFacts {
         compared: None,
         manifest: None,
         patch: None,
+        changed: None,
     }
 }
 
@@ -728,6 +729,7 @@ fn recorded_snapshots_convert_to_capture_facts() {
             before_sha256: "b".repeat(64),
             changed_paths: vec!["x".into()],
         }),
+        changed_manifest: None,
     };
     let facts = CaptureFacts::from_snapshot(&snapshot);
     assert_eq!(facts.phase, CapturePhase::After);
