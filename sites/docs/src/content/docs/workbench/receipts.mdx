@@ -44,9 +44,10 @@ pre-authentication encoding of the statement's exact bytes.
     codes;
   - `usage`: tokens and cost, with whether they are complete and whether the cost is
     known or computed;
-  - `files`: where the digests come from (below), the paths the run removed, which
-    subjects are symbolic links, and whether every changed path is covered, with the
-    reason for each that is not;
+  - `files`: where the digests come from (below), the tree they were taken from, the
+    paths the run removed, which subjects are symbolic links, which were read when the
+    run finished instead, and whether every changed path is covered, with the reason
+    for each that is not;
   - `signer`: the algorithm, public key and key id, so a verifier can tell a valid
     signature by an unknown key from a broken one. Trust never comes from this field.
 
@@ -54,12 +55,22 @@ pre-authentication encoding of the statement's exact bytes.
 
 | `files.source` | The digests are the files |
 | --- | --- |
-| `judged_capture` | as the required checks judged them: from the repository capture of the tree the checks ran on (the one `candidate_sha256` their results name), when that capture holds its whole manifest. |
-| `after_capture` | as the run's last writer left them: from the After capture of the last activation that changed a file, when there is no judged tree (a loadout without checks, or checks that did not run on the final result) and that capture is whole. |
+| `judged_capture` | as the required checks judged them: from the repository capture of the tree the checks ran on (the one `candidate_sha256` their results name). |
+| `after_capture` | as the run's last writer left them: from the After capture of the last activation that changed a file, when there is no judged tree (a loadout without checks, or checks that did not run on the final result). |
 | `workspace_at_finish` | as the host read them from the working tree when the run finished, without following symbolic links. The files could have changed between the checks and the finish; the receipt does not claim otherwise. |
 
-A capture's manifest is kept whole only up to 8 KiB (roughly 80 files), so in a larger
-repository the source is `workspace_at_finish`. A path the run changed inside Git's own
+Every repository capture records, whatever the repository's size, the digest of each path
+that differs from `HEAD` in the tree it captured (and its whole manifest too, in a
+repository small enough, roughly 80 files). That record is bounded by the changed paths:
+up to 10,000 of them, and only while the capture's output, with its patch, stays within
+768 KiB. A capture past that bound, or one made by a check group admitted with 1.3's
+capture command, records no digests, and the source is then `workspace_at_finish`.
+
+A path the run changed back to what it is in `HEAD` is not in that record. Its digest is
+read when the run finishes, and the path is named under `files.read_at_finish`, so a
+verifier knows which subjects were not taken from the judged tree.
+
+A path the run changed inside Git's own
 directory, a path that is not a file or a link (a directory, a path under a symbolic
 link) or a turn the host cannot attribute is named under `files.unattributed`, and
 `files.complete` is then false.

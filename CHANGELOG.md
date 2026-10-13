@@ -26,12 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   covered, warning codes, usage, the files and the signer's public key. `files.source`
   says where the digests come from: `judged_capture` (the repository capture of the tree
   the required checks ran on), `after_capture` (the last writer's After capture, when no
-  check judged a tree), each only when the capture holds its whole manifest (up to 8 KiB,
-  roughly 80 files) and that manifest hashes to its tree digest, else
-  `workspace_at_finish` (read on the host when the run finished, without following
-  symbolic links). Removed paths, symbolic links, and what cannot be attributed (a turn
-  not in the Session's history, Git's own files, a directory) are listed apart, the last
-  making `files.complete` false. The receipt is written as
+  check judged a tree), else `workspace_at_finish` (read on the host when the run
+  finished, without following symbolic links). Every repository capture now records,
+  whatever the repository's size, the manifest line (mode, kind, SHA-256) of each path
+  that differs from `HEAD` in the tree it captured, besides its whole manifest up to
+  8 KiB; the record is bounded by the changed paths (up to 10,000, while the capture's
+  output with its patch stays within 768 KiB), and only a capture past that bound, or one
+  a check group admitted with 1.3's capture command makes, leaves the source
+  `workspace_at_finish`. A path changed back to what it is in `HEAD` is read when the
+  run finishes and named in `files.read_at_finish`. Removed paths, symbolic links, and
+  what cannot be attributed (a turn not in the Session's history, Git's own files, a
+  directory) are listed apart, the last making `files.complete` false. The receipt is written as
   `loadout-runs/<run id>/receipt.dsse.json` (`0600`) just before the Outcome, so a
   finished run's receipt is settled; runs that end at admission, after a driver error or
   at a daemon restart are signed too. A receipt that cannot be signed adds the warning

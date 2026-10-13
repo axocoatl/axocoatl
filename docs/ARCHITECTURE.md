@@ -775,10 +775,13 @@ public key. It is serialized once with `serde_json::to_vec` and signed with Ed25
 DSSE's PAE inside a DSSE envelope. The subjects come from `run_attribution` (shared with
 Keep): each attributed path's digest from the manifest of the capture of the tree the
 required checks' readiness review judged (`judged_capture`), else the last writer
-activation's After capture (`after_capture`), each only when its manifest is whole and
-hashes to its tree digest, else read on the host without following links
-(`workspace_at_finish`); removed paths, symbolic links and what cannot be attributed are
-listed apart. The key is one Ed25519 key per data root (`receipt_key`, `ring`), stored as
+activation's After capture (`after_capture`), else read on the host without following
+links (`workspace_at_finish`). A capture's digests are its whole manifest when that is
+complete (8 KiB) and hashes to its tree digest, else the manifest lines of the paths that
+differ from `HEAD`, which every capture (output format 2) records whatever the
+repository's size, up to 10,000 paths within the 768 KiB a check capture retains; a path
+those lines do not hold was as in `HEAD` and is read at the finish (`read_at_finish`).
+Removed paths, symbolic links and what cannot be attributed are listed apart. The key is one Ed25519 key per data root (`receipt_key`, `ring`), stored as
 the secret `receipt-signing-key` in a tagged JSON value that the egress broker refuses to
 send whatever a route calls it, and made on first use. Admission failures, driver errors
 and runs a restart ends are sealed the same way. Signing that fails adds the warning

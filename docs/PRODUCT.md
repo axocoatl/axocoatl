@@ -299,14 +299,15 @@ passing run to a new branch and, opt-in, opens a pull request with host `git` an
 
 Every finished run, whatever its verdict, gets a signed receipt: a small statement of
 which files it changed (each with the SHA-256 of its content as the required checks
-judged it, when the host captured that tree whole), what the host enforced (sandbox,
-network policy, checks, review, adjudications), which programs and models wrote and
-reviewed, and the verdict, signed with an Ed25519 key kept in this computer's data
-directory. `axocoatl run --receipt` writes it, the Run outcome panel downloads it, the
-record bundle and the pull request Keep opens carry it, and Keep commits only the files
-it covers. Anyone can check it offline with `axocoatl receipt verify` against the public
-key lines they trust and a checkout. A receipt proves who signed which facts and that the
-covered files are the ones judged; it does not prove that the change is correct.
+judged it, in a repository of any size, up to 10,000 changed paths), what the host
+enforced (sandbox, network policy, checks, review, adjudications), which programs and
+models wrote and reviewed, and the verdict, signed with an Ed25519 key kept in this
+computer's data directory. `axocoatl run --receipt` writes it, the Run outcome panel
+downloads it, the record bundle and the pull request Keep opens carry it, and Keep
+commits only the files it covers. Anyone can check it offline with `axocoatl receipt
+verify` against the public key lines they trust and a checkout. A receipt proves who
+signed which facts and that the covered files are the ones judged; it does not prove that
+the change is correct.
 
 The built-in loadouts follow what was measured (`docs/CLAIMS.md`; the one-agent-or-several
 and QA studies ran with Claude Code subagents, not through Axocoatl):
