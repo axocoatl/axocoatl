@@ -240,6 +240,10 @@ pub(crate) async fn refresh(daemon: &crate::run_cmd::Daemon) -> Result<String, F
 
 /// `axocoatl connect codex --refresh`. Returns the process exit code.
 pub(crate) async fn cmd_refresh(url: Option<&str>, config: &Path) -> i32 {
+    if let Some(Err(message)) = url.map(check_url) {
+        eprintln!("✗ {message}");
+        return exit::USAGE;
+    }
     let daemon = match crate::run_cmd::Daemon::locate(url, config).await {
         Ok(daemon) => daemon,
         Err(located) => {
@@ -261,6 +265,20 @@ pub(crate) async fn cmd_refresh(url: Option<&str>, config: &Path) -> i32 {
             eprintln!("✗ {message}");
             code
         }
+    }
+}
+
+/// `--url` is an `http://` or `https://` URL. The refusal never repeats
+/// it: a key given as `--url KEY` would otherwise be printed.
+pub(crate) fn check_url(url: &str) -> Result<(), String> {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        Ok(())
+    } else {
+        Err(
+            "--url is not an http:// or https:// URL, so nothing was run (it is not repeated \
+             here, in case it is a key or token)"
+                .to_string(),
+        )
     }
 }
 

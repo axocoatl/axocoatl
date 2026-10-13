@@ -69,8 +69,9 @@ pub fn normalize_secret_value(value: &[u8]) -> Result<Zeroizing<Vec<u8>>, Secret
         .unwrap_or(value);
     if trimmed.is_empty() {
         return Err(SecretStoreError::Invalid(
-            "the value is empty; pipe it on stdin (`axocoatl secret set <name> < token-file`) or \
-             name a variable with --from-env (for Claude Code, run `axocoatl connect claude-code`)"
+            "the value is empty; pipe it on stdin or name a variable with --from-env (for \
+             Claude Code, run `axocoatl connect claude-code`; for Codex's API key, \
+             `axocoatl connect codex --api-key`)"
                 .into(),
         ));
     }
@@ -191,9 +192,19 @@ impl SecretsLock {
     pub fn set(&self, name: &str, value: &[u8]) -> Result<(), SecretStoreError> {
         check_name(name)?;
         let value = normalize_secret_value(value)?;
-        check_room(&self.directory, name)?;
+        check_room(&self.directory, &[name])?;
         self.directory.atomic_write_with_mode(name, &value, 0o600)?;
         Ok(())
+    }
+
+    /// Check, without writing anything, that every one of `names` could be
+    /// stored now ([`check_can_store_all`]), so a command that stores
+    /// several secrets stores all of them or none.
+    pub fn check_room(&self, names: &[&str]) -> Result<(), SecretStoreError> {
+        for name in names {
+            check_name(name)?;
+        }
+        check_room(&self.directory, names)
     }
 
     /// Remove secret `name`. `Ok(false)` when there was none.
@@ -227,21 +238,50 @@ pub fn set_secret(data_dir: &Path, name: &str, value: &[u8]) -> Result<(), Secre
 /// runs it before the sign-in, so a store that cannot take the token fails
 /// before a new token is made rather than after.
 pub fn check_can_store(data_dir: &Path, name: &str) -> Result<(), SecretStoreError> {
-    check_name(name)?;
+    check_can_store_all(data_dir, &[name])
+}
+
+/// [`check_can_store`] for several secrets stored together: each name is
+/// valid and absent or a regular file, and all the names not stored yet fit
+/// under [`MAX_SECRETS`] together, so a command that stores them all after
+/// a sign-in (`axocoatl connect codex --api-key`) is refused before the
+/// sign-in rather than after storing only some of them.
+pub fn check_can_store_all(data_dir: &Path, names: &[&str]) -> Result<(), SecretStoreError> {
+    for name in names {
+        check_name(name)?;
+    }
     let Some(directory) = secrets_dir(data_dir, false)? else {
         return Ok(());
     };
-    check_room(&directory, name)?;
-    Ok(())
+    check_room(&directory, names)
 }
 
-/// `secrets/<name>` is absent or a regular file (never a link or a
-/// directory), and a new name still fits under [`MAX_SECRETS`].
-fn check_room(directory: &SecureDir, name: &str) -> Result<(), SecretStoreError> {
-    let exists = directory.has_exact_file(name)?;
-    if !exists && stored_names(directory)?.len() >= MAX_SECRETS {
+/// Each `secrets/<name>` is absent or a regular file (never a link or a
+/// directory), and the names not stored yet fit under [`MAX_SECRETS`]
+/// together.
+fn check_room(directory: &SecureDir, names: &[&str]) -> Result<(), SecretStoreError> {
+    let mut new: Vec<&str> = Vec::new();
+    for name in names {
+        if !directory.has_exact_file(name)? && !new.contains(name) {
+            new.push(name);
+        }
+    }
+    if new.is_empty() {
+        return Ok(());
+    }
+    let stored = stored_names(directory)?.len();
+    if stored >= MAX_SECRETS {
         return Err(SecretStoreError::Invalid(format!(
             "the store already holds {MAX_SECRETS} secrets; remove one first"
+        )));
+    }
+    if stored + new.len() > MAX_SECRETS {
+        let over = stored + new.len() - MAX_SECRETS;
+        return Err(SecretStoreError::Invalid(format!(
+            "the store holds {stored} secrets and this needs {} new ones ({}), more than the \
+             {MAX_SECRETS} it can hold; remove {over} first",
+            new.len(),
+            new.join(" and "),
         )));
     }
     Ok(())
@@ -881,6 +921,53 @@ mod tests {
         let warned = value_warnings("codex-chatgpt", b"eyJhbGciOi.eyJleHAiOjF9.c2ln");
         assert_eq!(warned.len(), 1, "{warned:?}");
         assert!(warned[0].contains("axocoatl connect codex"), "{warned:?}");
+    }
+
+    /// `check_can_store_all` refuses names that fit one at a time but not
+    /// together: with one place left, two new names are refused, while one
+    /// new name and one already stored fit.
+    #[test]
+    fn check_can_store_all_counts_every_new_name_together() {
+        let root = data_root();
+        for index in 1..MAX_SECRETS {
+            set_secret(root.path(), &format!("filler-{index}"), b"sk-test-x").unwrap();
+        }
+        assert_eq!(list_secrets(root.path()).unwrap().len(), MAX_SECRETS - 1);
+        check_can_store(root.path(), "codex-openai").unwrap();
+        check_can_store(root.path(), "codex-chatgpt").unwrap();
+        let both = ["codex-openai", "codex-chatgpt"];
+        let refused = check_can_store_all(root.path(), &both)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains(&format!(
+                "holds {} secrets and this needs 2 new ones (codex-openai and codex-chatgpt), \
+                 more than the {MAX_SECRETS} it can hold; remove 1 first",
+                MAX_SECRETS - 1
+            )),
+            "{refused}"
+        );
+        let lock = lock_secrets(root.path(), false).unwrap().unwrap();
+        assert_eq!(lock.check_room(&both).unwrap_err().to_string(), refused);
+        drop(lock);
+        assert_eq!(list_secrets(root.path()).unwrap().len(), MAX_SECRETS - 1);
+        // The same name twice is one new name.
+        check_can_store_all(root.path(), &["codex-openai", "codex-openai"]).unwrap();
+
+        set_secret(root.path(), "codex-openai", b"sk-test-y").unwrap();
+        check_can_store_all(root.path(), &both).unwrap_err();
+        remove_secret(root.path(), "filler-1").unwrap();
+        check_can_store_all(root.path(), &both).unwrap();
+        lock_secrets(root.path(), false)
+            .unwrap()
+            .unwrap()
+            .check_room(&both)
+            .unwrap();
+        let value = "sk-proj-NOTANAMEbutAVALUEthatIsLongerThanSixtyFourCharacters_ABCDEFGH";
+        let refused = check_can_store_all(root.path(), &["codex-openai", value])
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("not a secret name") && !refused.contains("NOTANAME"));
     }
 
     /// `check_can_store` refuses, without writing, every store `set_secret`

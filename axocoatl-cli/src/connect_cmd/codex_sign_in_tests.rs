@@ -476,3 +476,17 @@ fn the_sign_in_time_is_in_the_messages() {
         codex_container::run_args("n", "i", true, codex_container::sign_in_lifetime(Some(60)));
     assert!(args.iter().any(|arg| arg == "--timeout=3600"), "{args:?}");
 }
+
+/// `--url` must be an http:// or https:// URL, and the refusal never
+/// repeats what was given (`--url KEY`).
+#[test]
+fn a_url_that_is_not_one_is_refused_without_being_repeated() {
+    for url in ["http://127.0.0.1:8080", "https://daemon.example"] {
+        check_url(url).unwrap();
+    }
+    for url in ["sk-proj-0123456789abcdefTYPEDKEY", "127.0.0.1:8080", ""] {
+        let refused = check_url(url).unwrap_err();
+        assert!(refused.contains("--url is not an http:// or https:// URL"));
+        assert!(url.is_empty() || !refused.contains(url), "{refused}");
+    }
+}

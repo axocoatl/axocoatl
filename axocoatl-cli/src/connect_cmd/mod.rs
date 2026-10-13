@@ -350,9 +350,11 @@ pub(crate) fn find_program(
         return if is_executable(explicit) {
             Ok(absolute(explicit.to_path_buf()))
         } else {
+            // The path is not repeated: a key given as `--codex KEY` would
+            // otherwise be printed.
             Err(format!(
-                "--{name} {} is not an executable file",
-                explicit.display()
+                "the path given with --{name} is not an executable file (it is not repeated \
+                 here, in case it is a key or token)"
             ))
         };
     }
@@ -558,6 +560,62 @@ pub(crate) fn flag_takes_no_value(flag: &str) -> String {
     message
 }
 
+/// The refusal of an invalid value given to `flag` (`--sign-in-timeout
+/// KEY`), in place of clap's own error, which would print it. `None` when
+/// the flag is not one `connect` takes.
+pub(crate) fn invalid_value(flag: Option<&str>) -> String {
+    let mut message = format!(
+        "the value given to {} is not one it takes, so nothing was run or stored (the value is \
+         not repeated here, in case it is a key or token).",
+        flag.unwrap_or("an option")
+    );
+    if flag == Some("--sign-in-timeout") {
+        message.push_str(" --sign-in-timeout takes 1 to 60 minutes.");
+    }
+    message
+}
+
+/// The refusal of an argument `connect` does not take (`"--api-key KEY"`
+/// as one argument, a misspelt flag), in place of clap's own error, which
+/// would print it: only a flag `connect` takes that it starts with
+/// (`starts_with`) and clap's suggestion (`suggested`, a flag `connect`
+/// takes) are named.
+pub(crate) fn unknown_argument(starts_with: Option<&str>, suggested: Option<&str>) -> String {
+    let mut message = match starts_with {
+        Some(flag) => format!(
+            "an argument that starts with {flag} is not one axocoatl connect takes, so nothing \
+             was run or stored (the rest of it is not repeated here, in case it is a key or \
+             token)."
+        ),
+        None => "axocoatl connect was given an argument it does not take, so nothing was run \
+                 or stored (it is not repeated here, in case it is a key or token)."
+            .to_string(),
+    };
+    if let Some(suggested) = suggested {
+        message.push_str(&format!(" Did you mean {suggested}?"));
+    }
+    if starts_with.is_some_and(|flag| flag.starts_with("--api-key")) {
+        message.push_str(
+            " You never type or paste a key: `axocoatl connect codex --api-key` signs you in in \
+             the browser and stores the OpenAI API key OpenAI issues with that sign-in, without \
+             showing it.",
+        );
+    }
+    message
+}
+
+/// The refusal of a `connect` target that is neither `claude-code` nor
+/// `codex`, which never repeats it.
+pub(crate) const UNKNOWN_TARGET: &str =
+    "axocoatl connect connects claude-code or codex, and what was given is neither, so nothing \
+     was run or stored (it is not repeated here, in case it is a key or token).";
+
+/// Any other `connect` command line clap refuses whose error would repeat
+/// a value given on it.
+pub(crate) const UNREADABLE_COMMAND_LINE: &str =
+    "axocoatl connect could not use its command line, so nothing was run or stored (it is not \
+     repeated here, in case it holds a key or token). Run `axocoatl connect --help`.";
+
 /// Returns the process exit code.
 pub async fn cmd_connect(command: ConnectCommands) -> i32 {
     if let ConnectCommands::Codex {
@@ -715,11 +773,11 @@ async fn cmd_connect_codex(
             return exit::FAILURE;
         }
     };
-    for secret in keep.secrets() {
-        if let Err(error) = secret_store::check_can_store(&data_dir, secret) {
-            eprintln!("✗ {error}; `codex login` was not run, so no sign-in was made");
-            return exit::FAILURE;
-        }
+    // Every secret this run may store, together: two that each fit alone
+    // may not fit both, and a sign-in made then would be lost.
+    if let Err(error) = secret_store::check_can_store_all(&data_dir, &keep.secrets()) {
+        eprintln!("✗ {error}; `codex login` was not run, so no sign-in was made");
+        return exit::FAILURE;
     }
     let kept = codex::what_is_kept(keep);
     // Only for the container: a Codex on this computer opens the browser

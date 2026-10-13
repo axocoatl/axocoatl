@@ -383,40 +383,119 @@ enum TokenCommands {
 /// clap's own usage errors exit with code 2, which `axocoatl connect` uses
 /// for "no token" (claude-code) and "no sign-in" (codex): a usage error of
 /// `connect` exits with its usage code, 3, instead. Help and the version
-/// still exit 0. A value given to a `connect` flag that takes none
-/// (`--api-key=VALUE`) is not printed: it may be a key.
-fn exit_for_parse_error(error: clap::Error, first_argument: Option<&std::ffi::OsStr>) -> ! {
-    use clap::error::{ContextKind, ContextValue, ErrorKind};
-    let connect = first_argument.is_some_and(|argument| argument == "connect");
+/// still exit 0. A value given on a `connect` command line clap refuses is
+/// never printed: it may be a key ([`connect_parse_error`]).
+fn exit_for_parse_error(error: clap::Error, argv: &[std::ffi::OsString]) -> ! {
+    use clap::error::ErrorKind;
+    let connect = argv.get(1).is_some_and(|argument| argument == "connect");
     if connect
         && !matches!(
             error.kind(),
             ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
         )
     {
-        if error.kind() == ErrorKind::TooManyValues {
-            let flag = match error.get(ContextKind::InvalidArg) {
-                Some(ContextValue::String(flag)) => flag
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("a flag")
-                    .to_string(),
-                _ => "a flag".to_string(),
-            };
-            eprintln!("✗ {}", connect_cmd::flag_takes_no_value(&flag));
-        } else {
-            let _ = error.print();
+        match connect_parse_error(&error, argv) {
+            Some(message) => eprintln!("✗ {message}"),
+            None => {
+                let _ = error.print();
+            }
         }
         std::process::exit(connect_cmd::exit::USAGE);
     }
     error.exit()
 }
 
+/// The words of a `connect` command line that are not values: `connect`,
+/// its targets and their flags (long and short, with aliases).
+fn connect_words() -> std::collections::HashSet<String> {
+    use clap::CommandFactory;
+    let mut words = std::collections::HashSet::from(["connect".to_string()]);
+    let command = Cli::command();
+    let Some(connect) = command.find_subcommand("connect") else {
+        return words;
+    };
+    for target in connect.get_subcommands() {
+        words.insert(target.get_name().to_string());
+        words.extend(["--help".to_string(), "-h".to_string()]);
+        for argument in target.get_arguments() {
+            for long in argument
+                .get_long_and_visible_aliases()
+                .into_iter()
+                .flatten()
+            {
+                words.insert(format!("--{long}"));
+            }
+            for short in argument
+                .get_short_and_visible_aliases()
+                .into_iter()
+                .flatten()
+            {
+                words.insert(format!("-{short}"));
+            }
+        }
+    }
+    words
+}
+
+/// The message for a `connect` command line clap refused, which never
+/// repeats a value given on it, or `None` when clap's own message holds
+/// none and may be printed. Only a flag `connect` takes is named.
+fn connect_parse_error(error: &clap::Error, argv: &[std::ffi::OsString]) -> Option<String> {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+    let words = connect_words();
+    // The flag a context string starts with ("--api-key sk-…",
+    // "--sign-in-timeout <MINUTES>", "--api-key=sk-…"), if `connect` takes it.
+    let flag_in = |kind: ContextKind| -> Option<String> {
+        let text = match error.get(kind)? {
+            ContextValue::String(text) => text.clone(),
+            ContextValue::Strings(texts) => texts.first()?.clone(),
+            _ => return None,
+        };
+        let flag = text.split(|c: char| c.is_whitespace() || c == '=').next()?;
+        (flag.starts_with('-') && words.contains(flag)).then(|| flag.to_string())
+    };
+    let flag = flag_in(ContextKind::InvalidArg);
+    match error.kind() {
+        ErrorKind::DisplayHelp
+        | ErrorKind::DisplayVersion
+        | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => None,
+        ErrorKind::TooManyValues => Some(connect_cmd::flag_takes_no_value(
+            flag.as_deref().unwrap_or("a flag"),
+        )),
+        ErrorKind::InvalidValue
+        | ErrorKind::ValueValidation
+        | ErrorKind::NoEquals
+        | ErrorKind::WrongNumberOfValues
+        | ErrorKind::TooFewValues
+        | ErrorKind::InvalidUtf8 => Some(connect_cmd::invalid_value(flag.as_deref())),
+        ErrorKind::UnknownArgument => Some(connect_cmd::unknown_argument(
+            flag.as_deref(),
+            flag_in(ContextKind::SuggestedArg).as_deref(),
+        )),
+        ErrorKind::InvalidSubcommand => Some(connect_cmd::UNKNOWN_TARGET.to_string()),
+        _ => {
+            // A conflict or a missing argument names arguments, not
+            // values; print clap's message unless a value is in it.
+            let rendered = error.render().to_string();
+            let leaks = argv.iter().skip(2).any(|argument| {
+                let argument = argument.to_string_lossy();
+                let value = match argument.split_once('=') {
+                    Some((flag, value)) if words.contains(flag) => value,
+                    _ if words.contains(argument.as_ref()) => return false,
+                    _ => argument.as_ref(),
+                };
+                !value.is_empty() && rendered.contains(value)
+            });
+            leaks.then(|| connect_cmd::UNREADABLE_COMMAND_LINE.to_string())
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
-        Err(error) => exit_for_parse_error(error, std::env::args_os().nth(1).as_deref()),
+        Err(error) => exit_for_parse_error(error, &std::env::args_os().collect::<Vec<_>>()),
     };
 
     // Initialize tracing. Logs go to stderr so they never collide with a
@@ -4864,5 +4943,91 @@ providers:
         assert_eq!(display_environment_state("failed"), "setup failed");
         assert_eq!(display_environment_state("ready"), "ready");
         assert_eq!(display_environment_state(""), "needs setup review");
+    }
+
+    /// A key given anywhere on a `connect` command line clap refuses is
+    /// never in the message: only flags `connect` takes are named, and
+    /// clap's own message is kept only when it holds no value.
+    #[test]
+    fn a_connect_parse_error_never_repeats_a_value() {
+        let key = "sk-proj-0123456789abcdefTYPEDKEY";
+        let argv = |words: &[&str]| -> Vec<std::ffi::OsString> {
+            ["axocoatl", "connect"]
+                .iter()
+                .chain(words)
+                .map(std::ffi::OsString::from)
+                .collect()
+        };
+        let refused = |words: &[&str]| -> (clap::error::ErrorKind, Option<String>) {
+            let argv = argv(words);
+            let error = Cli::try_parse_from(&argv)
+                .err()
+                .unwrap_or_else(|| panic!("{words:?} parsed"));
+            (error.kind(), connect_parse_error(&error, &argv))
+        };
+        let with_equals = format!("--sign-in-timeout={key}");
+        let one_argument = format!("--api-key {key}");
+        let api_key_equals = format!("--api-key={key}");
+        for (words, said) in [
+            (
+                vec!["codex", "--sign-in-timeout", key],
+                "the value given to --sign-in-timeout is not one it takes",
+            ),
+            (
+                vec!["codex", with_equals.as_str()],
+                "--sign-in-timeout takes 1 to 60 minutes",
+            ),
+            (
+                vec!["codex", "--sign-in-timeout", "0"],
+                "the value given to --sign-in-timeout",
+            ),
+            (
+                vec!["codex", one_argument.as_str()],
+                "an argument that starts with --api-key is not one axocoatl connect takes",
+            ),
+            (
+                vec!["codex", api_key_equals.as_str()],
+                "--api-key takes no value",
+            ),
+            (vec![key], "axocoatl connect connects claude-code or codex"),
+            (
+                vec!["claude-code", key],
+                "axocoatl connect was given an argument it does not take",
+            ),
+            (
+                vec!["claude-code", "--no-verfy"],
+                "Did you mean --no-verify?",
+            ),
+        ] {
+            let (kind, message) = refused(&words);
+            let message = message.unwrap_or_else(|| panic!("{words:?}: {kind:?} kept"));
+            assert!(message.contains(said), "{words:?}: {message}");
+            assert!(!message.contains("sk-proj"), "{words:?}: {message}");
+            assert!(!message.contains("TYPEDKEY"), "{words:?}: {message}");
+        }
+        // A conflict or a missing argument names only arguments: clap's
+        // own message is kept.
+        for words in [
+            vec!["codex", "--refresh", "--codex", "/opt/codex"],
+            vec!["codex", "--url", "http://127.0.0.1:9"],
+        ] {
+            let (kind, message) = refused(&words);
+            assert_eq!(message, None, "{words:?}: {kind:?}");
+        }
+        // Whatever is printed, a key is not in it.
+        for words in [
+            vec!["codex", "--url", key],
+            vec!["codex", "--status", "--codex", key],
+            vec!["codex", "--refresh", "--sign-in-timeout", key],
+            vec!["claude-code", "--secret", key, "--codex", "/opt/codex"],
+        ] {
+            let argv = argv(&words);
+            let error = Cli::try_parse_from(&argv).err().unwrap();
+            let shown =
+                connect_parse_error(&error, &argv).unwrap_or_else(|| error.render().to_string());
+            assert!(!shown.contains("TYPEDKEY"), "{words:?}: {shown}");
+        }
+        // Help is clap's.
+        assert_eq!(refused(&["codex", "--help"]).1, None);
     }
 }

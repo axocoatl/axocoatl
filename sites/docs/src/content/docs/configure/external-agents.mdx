@@ -316,15 +316,24 @@ hides an `sk-…` key Codex might print, though Codex 0.160.1 prints none.
   says why.
 - **When OpenAI issues no key.** Codex ignores a failed exchange: the sign-in still
   succeeds, and `auth.json` holds no key (for example when your account has no OpenAI
-  Platform organization). Then nothing is stored as `codex-openai`, and the command says
-  so plainly: OpenAI issued no API key for this account; API-key mode needs an OpenAI
-  Platform organization; ChatGPT mode works with `codex-chatgpt`. With `--api-key` the
-  ChatGPT sign-in is still stored as `codex-chatgpt`; with `--api-key-only` nothing is.
+  Platform organization, or when the request for the key failed: Codex does not tell
+  them apart). Then nothing is stored as `codex-openai`, and the command says so
+  plainly: OpenAI issued no API key with this sign-in; API-key mode needs an OpenAI
+  Platform organization, and if your account has one, run it again; a `codex-openai`
+  stored before is left as it was (a Codex writer still uses it by default); ChatGPT mode
+  works with `codex-chatgpt`. With `--api-key` the ChatGPT sign-in is still stored as
+  `codex-chatgpt`; with `--api-key-only` nothing is.
   It exits with code 8. A value in `OPENAI_API_KEY` that does not have the form of a key
   is treated the same way (the message says so and never shows it).
 - **Nothing on the command line.** `axocoatl connect codex` takes no key: a value after
   `--api-key`, or `--api-key=VALUE`, is refused with exit code 3, and the message never
-  repeats it.
+  repeats it. Nor does any other refusal of a `connect` command line: a value a flag
+  does not take (`--sign-in-timeout`), an argument `connect` does not take, a target
+  other than `claude-code` or `codex`, a `--codex` that is not an executable or a `--url`
+  that is not a URL.
+- **Room for both.** With `--api-key`, the secret store must have room for both
+  `codex-openai` and `codex-chatgpt` before `codex login` runs (a data root holds at most
+  64 secrets); otherwise the command exits 5 without signing in.
 
 Exit codes are those of `axocoatl connect codex` above, with 8 when no API key was stored.
 Run it again when a run says the key was rejected.
@@ -338,9 +347,11 @@ standard input, or with `--from-env VAR` from that environment variable of the c
 and stores it in the data root as `secrets/<name>`, a file only your user can read
 (`0600`), replaced atomically. It never takes the value as an argument, never prints it, and never writes
 it to a log or a record. Standard input must be a pipe or a file: when it is a terminal,
-where typing or pasting would show the value, the command refuses and prints how to
-pipe it. An unset or empty `--from-env` variable is refused. `--from-env` takes the
-variable's name, without `$`: `--from-env "$OPENAI_API_KEY"` would put the key itself
+where typing or pasting would show the value, the command refuses and says how to store
+it instead: for `codex-openai` and `claude-code-oauth`, the `connect` command first and
+then `--from-env` for automation without a browser; for other names, how to pipe it.
+An unset or empty `--from-env` variable is refused. `--from-env` takes the variable's
+name, without `$`: `--from-env "$OPENAI_API_KEY"` would put the key itself
 on the command line, so a value there (or after the name) is refused, and the message
 never repeats it.
 
@@ -354,8 +365,8 @@ On your own computer, use `axocoatl connect codex --api-key` and
 `axocoatl connect claude-code` instead: you never type or paste a key.
 
 A value is one line of at most 8 KiB with no control characters; one trailing line break
-is ignored. If a command prints more than the token, put the token alone in a file and
-redirect it. A route sends the value exactly as stored, so `secret set` warns on standard
+is ignored. For another credential, if the command that prints it prints more than the
+token, pipe only the token into `secret set`. A route sends the value exactly as stored, so `secret set` warns on standard
 error, and still stores it, when the value has whitespace inside it, starts with
 `Bearer ` (the route adds that itself), looks like JSON or holds several tokens, and, for
 `claude-code-oauth` (the secret Claude Code's route sends), when it does not start with

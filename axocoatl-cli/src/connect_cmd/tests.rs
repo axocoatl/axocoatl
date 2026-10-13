@@ -952,6 +952,19 @@ fn claude_is_found_from_the_flag_then_path_then_local_bin() {
     assert_eq!(find_claude(Some(&local), Some(&path), None).unwrap(), local);
     let error = find_claude(Some(&not_executable), Some(&path), Some(&home)).unwrap_err();
     assert!(error.contains("is not an executable file"), "{error}");
+    assert!(
+        !error.contains(&*not_executable.to_string_lossy()),
+        "{error}"
+    );
+    // A key given where the path belongs is never repeated.
+    let key = "sk-proj-0123456789abcdefTYPEDKEY";
+    for error in [
+        host_codex(Path::new(key)).unwrap_err(),
+        find_claude(Some(Path::new(key)), Some(&path), Some(&home)).unwrap_err(),
+    ] {
+        assert!(error.contains("is not an executable file"), "{error}");
+        assert!(!error.contains("TYPEDKEY"), "{error}");
+    }
     let error = find_claude(None, None, Some(&root)).unwrap_err();
     assert!(error.contains("--claude"), "{error}");
 }
@@ -1450,13 +1463,19 @@ async fn connect_codex_with_api_key_when_none_was_issued() {
             .err()
             .unwrap_or_else(|| panic!("{key} {keep:?}: no failure"));
         assert_eq!(failure.code, exit::NO_API_KEY, "{}", failure.message);
-        assert_eq!(failure.message, codex::no_api_key(keep, !issued_none));
+        assert_eq!(
+            failure.message,
+            codex::no_api_key(keep, !issued_none, false)
+        );
         if issued_none {
             assert!(
-                failure.message.starts_with(
-                    "OpenAI issued no API key for this account, so nothing was stored as \
-                     codex-openai. API-key mode needs an OpenAI Platform organization"
-                ),
+                failure.message.starts_with(&format!(
+                    "OpenAI issued no API key with this sign-in, so nothing was stored as \
+                     codex-openai. API-key mode needs an OpenAI Platform organization \
+                     (https://platform.openai.com); if your account has one, the request for \
+                     the key may have failed, so run `axocoatl connect codex {}` again.",
+                    keep.flag()
+                )),
                 "{}",
                 failure.message
             );
@@ -1480,6 +1499,29 @@ async fn connect_codex_with_api_key_when_none_was_issued() {
         }
         fixture.assert_no_home_left();
     }
+
+    // A key stored before is left as it was, and the message says so.
+    let fixture =
+        CodexFixture::new("ok").with_api_key(serde_json::Value::Null, codex::Keep::ApiKeyAndSignIn);
+    let earlier = fake_api_key();
+    secret_store::set_secret(&fixture.data(), "codex-openai", earlier.as_bytes()).unwrap();
+    let (result, _) = run_connect_codex(&fixture, false, false).await;
+    let failure = result.expect_err("no failure");
+    assert_eq!(failure.code, exit::NO_API_KEY, "{}", failure.message);
+    assert!(
+        failure.message.contains(
+            "nothing was stored as codex-openai (the codex-openai already stored was left as it \
+             was, and a Codex writer still uses it by default)."
+        ),
+        "{}",
+        failure.message
+    );
+    assert!(!failure.message.contains(&earlier));
+    assert_eq!(
+        stored_secret(&fixture.data(), "codex-openai").unwrap(),
+        earlier.as_bytes()
+    );
+    fixture.assert_no_home_left();
 }
 
 /// `--api-key` with `--device-auth` is refused before Codex runs: the

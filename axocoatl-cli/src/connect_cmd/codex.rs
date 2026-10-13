@@ -373,17 +373,30 @@ pub(crate) fn api_key_needs_browser(flag: &str) -> String {
 
 /// The message when Codex's `auth.json` holds no usable API key: none
 /// (`malformed` false: OpenAI issued none), or a value that is not one.
-pub(crate) fn no_api_key(keep: Keep, malformed: bool) -> String {
+pub(crate) fn no_api_key(keep: Keep, malformed: bool, kept_existing: bool) -> String {
+    let left = if kept_existing {
+        format!(
+            " (the {CODEX_SECRET} already stored was left as it was, and a Codex writer still \
+             uses it by default)"
+        )
+    } else {
+        String::new()
+    };
     let why = if malformed {
         format!(
             "Codex's auth.json holds an OPENAI_API_KEY that does not have the form of an \
-             OpenAI API key (sk-…), so nothing was stored as {CODEX_SECRET}."
+             OpenAI API key (sk-…), so nothing was stored as {CODEX_SECRET}{left}."
         )
     } else {
+        // Codex drops every failure of the key request, a network or server
+        // error as well as an account without an organization: the cause
+        // cannot be told apart.
         format!(
-            "OpenAI issued no API key for this account, so nothing was stored as \
-             {CODEX_SECRET}. API-key mode needs an OpenAI Platform organization \
-             (https://platform.openai.com)."
+            "OpenAI issued no API key with this sign-in, so nothing was stored as \
+             {CODEX_SECRET}{left}. API-key mode needs an OpenAI Platform organization \
+             (https://platform.openai.com); if your account has one, the request for the key \
+             may have failed, so run `axocoatl connect codex {}` again.",
+            keep.flag()
         )
     };
     let chatgpt = if keep.sign_in() {
@@ -526,6 +539,21 @@ pub(crate) fn store_sign_in(
                 "storing the sign-in: the secrets directory could not be created",
             )
         })?;
+    // Both or neither: another process may have filled the store since the
+    // check before the sign-in.
+    let mut storing = Vec::new();
+    if key.is_some() {
+        storing.push(CODEX_SECRET);
+    }
+    if encoded.is_some() {
+        storing.push(CODEX_CHATGPT_SECRET);
+    }
+    lock.check_room(&storing).map_err(|error| {
+        failure(
+            exit::FAILURE,
+            format!("storing the sign-in: {error}; nothing was stored"),
+        )
+    })?;
     if let Some(key) = &key {
         lock.set(CODEX_SECRET, key.as_bytes()).map_err(|error| {
             failure(
@@ -550,7 +578,11 @@ pub(crate) fn store_sign_in(
     drop(lock);
     drop(encoded);
     if keep.api_key() && key.is_none() {
-        return Err(failure(exit::NO_API_KEY, no_api_key(keep, malformed)));
+        let kept_existing = secret_store::has_secret(data_dir, CODEX_SECRET).unwrap_or(false);
+        return Err(failure(
+            exit::NO_API_KEY,
+            no_api_key(keep, malformed, kept_existing),
+        ));
     }
     drop(key);
     Ok(connected_message(keep, container))

@@ -289,6 +289,12 @@ fn connect_codex_refuses_without_an_interactive_terminal() {
 /// pseudo-terminal in `root`, pressing Enter at the fake's prompt; its exit
 /// code and everything it showed.
 fn run_in_terminal(root: &Path, args: &[&str]) -> (u32, Vec<u8>) {
+    run_in_terminal_until(root, args, true)
+}
+
+/// [`run_in_terminal`], waiting for the fake's prompt only when `prompted`
+/// (a run refused before `codex login` never shows it).
+fn run_in_terminal_until(root: &Path, args: &[&str], prompted: bool) -> (u32, Vec<u8>) {
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 30,
@@ -328,7 +334,7 @@ fn run_in_terminal(root: &Path, args: &[&str]) -> (u32, Vec<u8>) {
     };
     let shown = || String::from_utf8_lossy(&screen.lock().unwrap()).into_owned();
     let deadline = Instant::now() + Duration::from_secs(60);
-    while !shown().contains("Press Enter once you have signed in") {
+    while prompted && !shown().contains("Press Enter once you have signed in") {
         assert!(
             child.try_wait().unwrap().is_none(),
             "exited early:\n{}",
@@ -337,8 +343,10 @@ fn run_in_terminal(root: &Path, args: &[&str]) -> (u32, Vec<u8>) {
         assert!(Instant::now() < deadline, "no prompt:\n{}", shown());
         std::thread::sleep(Duration::from_millis(20));
     }
-    writer.write_all(b"\r").unwrap();
-    writer.flush().unwrap();
+    if prompted {
+        writer.write_all(b"\r").unwrap();
+        writer.flush().unwrap();
+    }
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
@@ -492,7 +500,7 @@ fn connect_codex_with_api_key_stores_the_key_openai_issued() {
         let flat: String = text.split(['\r', '\n']).collect();
         assert!(
             flat.contains(
-                "OpenAI issued no API key for this account, so nothing was stored as \
+                "OpenAI issued no API key with this sign-in, so nothing was stored as \
                  codex-openai. API-key mode needs an OpenAI Platform organization"
             ),
             "{text}"
@@ -512,14 +520,94 @@ fn connect_codex_with_api_key_stores_the_key_openai_issued() {
     }
 }
 
+/// With one place left in the store, `connect codex --api-key` needs two
+/// (codex-openai and codex-chatgpt): it is refused with exit code 5 before
+/// `codex login` runs, so no sign-in is made and nothing is stored, rather
+/// than storing the key, losing the sign-in and exiting 5. With one of the
+/// two already stored, it fits and stores both.
+#[test]
+fn connect_codex_with_api_key_needs_room_for_both_secrets_before_signing_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let key = format!(
+        "sk-proj-{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    api_key_root(&root, serde_json::json!(key));
+    let fill = |name: &str| {
+        let output = Command::new(BIN)
+            .args(["secret", "set", name, "-c"])
+            .arg(root.join("axocoatl.yaml"))
+            .env("AXOCOATL_DATA_DIR", root.join("data"))
+            .env("HOME", root.join("home"))
+            .env("AXO_FILLER", "sk-test-filler")
+            .args(["--from-env", "AXO_FILLER"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    for index in 1..64 {
+        fill(&format!("filler-{index}"));
+    }
+    let secrets = root.join("data/secrets");
+    assert_eq!(std::fs::read_dir(&secrets).unwrap().count(), 63);
+
+    let (code, shown) = run_in_terminal_until(&root, &["--api-key"], false);
+    let text = String::from_utf8_lossy(&shown).into_owned();
+    assert_eq!(code, 5, "{text}");
+    let flat: String = text.split(['\r', '\n']).collect();
+    assert!(
+        flat.contains(
+            "the store holds 63 secrets and this needs 2 new ones (codex-openai and \
+             codex-chatgpt), more than the 64 it can hold; remove 1 first; `codex login` was \
+             not run, so no sign-in was made"
+        ),
+        "{text}"
+    );
+    assert!(!root.join("bin/seen").exists(), "codex login ran:\n{text}");
+    assert!(!secrets.join("codex-openai").exists());
+    assert!(!secrets.join("codex-chatgpt").exists());
+    assert_eq!(std::fs::read_dir(&secrets).unwrap().count(), 63);
+
+    // `--api-key-only` needs one place, and fits.
+    let (code, shown) = run_in_terminal(&root, &["--api-key-only"]);
+    let text = String::from_utf8_lossy(&shown).into_owned();
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        std::fs::read(secrets.join("codex-openai")).unwrap(),
+        key.as_bytes()
+    );
+    assert!(!secrets.join("codex-chatgpt").exists());
+    // Now full: `--api-key` would need a place for codex-chatgpt.
+    let (code, shown) = run_in_terminal_until(&root, &["--api-key"], false);
+    let text = String::from_utf8_lossy(&shown).into_owned();
+    assert_eq!(code, 5, "{text}");
+    let flat: String = text.split(['\r', '\n']).collect();
+    assert!(
+        flat.contains("the store already holds 64 secrets"),
+        "{text}"
+    );
+    assert!(!secrets.join("codex-chatgpt").exists());
+}
+
 /// `--api-key` with `--device-auth`, and a key typed on the command line
-/// (after `--api-key`, or as `--api-key=KEY`), are refused before anything
-/// runs, with exit code 3; the value is never repeated.
+/// (after `--api-key`, as `--api-key=KEY`, as one argument with
+/// `--api-key`, to `--sign-in-timeout` or to `--url`), are refused before
+/// anything runs, with exit code 3; the value is never repeated.
 #[test]
 fn connect_codex_refuses_device_auth_and_a_typed_key_with_api_key() {
     let directory = tempfile::tempdir().unwrap();
     let typed = format!("sk-proj-{}", uuid::Uuid::new_v4().simple());
     let with_equals = format!("--api-key={typed}");
+    let timeout_equals = format!("--sign-in-timeout={typed}");
+    let one_argument = format!("--api-key {typed}");
     for (args, said) in [
         (
             vec!["--api-key", "--device-auth"],
@@ -535,6 +623,22 @@ fn connect_codex_refuses_device_auth_and_a_typed_key_with_api_key() {
             "axocoatl connect codex takes no key, token or other value on its command line",
         ),
         (vec![with_equals.as_str()], "--api-key takes no value"),
+        (
+            vec!["--sign-in-timeout", typed.as_str()],
+            "the value given to --sign-in-timeout is not one it takes",
+        ),
+        (
+            vec![timeout_equals.as_str()],
+            "the value given to --sign-in-timeout is not one it takes",
+        ),
+        (
+            vec![one_argument.as_str()],
+            "an argument that starts with --api-key is not one axocoatl connect takes",
+        ),
+        (
+            vec!["--refresh", "--url", typed.as_str()],
+            "--url is not an http:// or https:// URL",
+        ),
     ] {
         let output = Command::new(BIN)
             .args(["connect", "codex", "-c"])

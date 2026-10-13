@@ -63,32 +63,35 @@ pub enum SecretCommands {
 ///
 /// Only the well-known names are repeated, as `secret set "$TOKEN"` typed in
 /// a terminal would otherwise print a value that happens to look like a name.
+/// For Codex's API key and Claude Code's token, the `connect` command that
+/// signs you in comes first, and only `--from-env` follows, for automation
+/// without a browser: never a file the key would have to be pasted into.
 fn pipe_hint(name: &str) -> String {
-    let (name, variable) = match name {
-        "codex-openai" => (name, "OPENAI_API_KEY"),
-        CLAUDE_CODE_SECRET => (name, "VAR"),
-        _ => ("<name>", "VAR"),
+    const READS: &str = "axocoatl secret set reads the value from stdin or an environment \
+                         variable, not from the command line or the keyboard.";
+    let automation = |name: &str, variable: &str| {
+        format!(
+            "\nOnly for automation without a browser, with the value already in an environment \
+             variable:\n  axocoatl secret set {name} --from-env {variable}"
+        )
     };
-    let mut hint = format!(
-        "axocoatl secret set reads the value from stdin or an environment variable, not from \
-         the command line or the keyboard. For example:\n  axocoatl secret set {name} \
-         --from-env {variable}\n  axocoatl secret set {name} < token-file"
-    );
-    if name == CLAUDE_CODE_SECRET {
-        hint.push_str(
-            "\nFor Claude Code, run `axocoatl connect claude-code`: it runs `claude setup-token` \
-             and stores the token without showing it.",
-        );
+    match name {
+        "codex-openai" => format!(
+            "{READS} You never type or paste the OpenAI API key: run `axocoatl connect codex \
+             --api-key`, which signs you in in the browser and stores the key OpenAI issues with \
+             that sign-in as codex-openai, without showing it.{}",
+            automation(name, "OPENAI_API_KEY")
+        ),
+        CLAUDE_CODE_SECRET => format!(
+            "{READS} For Claude Code, run `axocoatl connect claude-code`: it runs `claude \
+             setup-token` and stores the token without showing it.{}",
+            automation(name, "VAR")
+        ),
+        _ => format!(
+            "{READS} For example:\n  axocoatl secret set <name> --from-env VAR\n  \
+             axocoatl secret set <name> < token-file"
+        ),
     }
-    if name == "codex-openai" {
-        hint.push_str(
-            "\nYou never type or paste the key: run `axocoatl connect codex --api-key`, which \
-             signs you in in the browser and stores the OpenAI API key OpenAI issues with that \
-             sign-in without showing it. `--from-env` is only for automation without a browser, \
-             with a key already in the environment.",
-        );
-    }
-    hint
 }
 
 /// The data dir the daemon uses for `config`, created owner-only if absent.
@@ -367,7 +370,34 @@ mod tests {
             "{message}"
         );
         assert!(!message.contains("claude setup-token |"), "{message}");
+        assert!(!message.contains("token-file"), "{message}");
         assert!(secret_store::list_secrets(root.path()).unwrap().is_empty());
+
+        // Codex's API key: the browser sign-in first, then only an
+        // environment variable for automation, never a file to paste it in.
+        let (code, message) =
+            set_from(root.path(), "codex-openai", &b"sk-typed"[..], true).unwrap_err();
+        assert_eq!(code, USAGE);
+        let connect = message
+            .find("run `axocoatl connect codex --api-key`")
+            .expect(&message);
+        let from_env = message
+            .find("axocoatl secret set codex-openai --from-env OPENAI_API_KEY")
+            .expect(&message);
+        assert!(connect < from_env, "{message}");
+        assert!(
+            message.contains("Only for automation without a browser"),
+            "{message}"
+        );
+        assert!(!message.contains("token-file"), "{message}");
+        assert!(!message.contains(" < "), "{message}");
+        assert!(!message.contains("sk-typed"), "{message}");
+        assert!(secret_store::list_secrets(root.path()).unwrap().is_empty());
+        let (_, message) = set_from(root.path(), "other", &b"x"[..], true).unwrap_err();
+        assert!(
+            message.contains("axocoatl secret set <name> < token-file"),
+            "{message}"
+        );
 
         let stored = set_from(
             root.path(),

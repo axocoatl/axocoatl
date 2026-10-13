@@ -70,12 +70,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (or the temporary home). Requests with `codex-openai` are billed at OpenAI API
   rates to the key's OpenAI Platform organization, not to the ChatGPT plan. When
   `auth.json` holds no key, or a value that is not one, nothing is stored as
-  `codex-openai` and the command says so plainly (OpenAI issued no API key for this
-  account; API-key mode needs an OpenAI Platform organization; ChatGPT mode works with
-  `codex-chatgpt`) and exits with the new code 8; with `--api-key` the ChatGPT sign-in is
-  still stored. `--api-key` or `--api-key-only` with `--device-auth` is refused before
-  anything runs (exit code 3) with why, and so is a value on the command line (after
-  `--api-key`, or `--api-key=VALUE`), whose message never repeats it.
+  `codex-openai` and the command says so plainly (OpenAI issued no API key with this
+  sign-in; API-key mode needs an OpenAI Platform organization, and with one the request
+  for the key may have failed, so run it again; a `codex-openai` stored before is left as
+  it was; ChatGPT mode works with `codex-chatgpt`) and exits with the new code 8; with
+  `--api-key` the ChatGPT sign-in is still stored. `--api-key` or `--api-key-only` with
+  `--device-auth` is refused before anything runs (exit code 3) with why, and so is a
+  value on the command line (after `--api-key`, or `--api-key=VALUE`), whose message
+  never repeats it; nor does the message for a key given to another flag, as an argument
+  `connect` does not take, as the target or as `--codex` or `--url`. With `--api-key`,
+  the store must have room for both secrets before `codex login` runs, so a sign-in is
+  never made and then half stored.
 - **`axocoatl connect codex --status` and `--refresh`.** `--status` reads the stored
   sign-in from the data root, without the daemon, and shows whether one is stored, its
   ChatGPT account id by its last four characters, when its access token expires (its JWT
