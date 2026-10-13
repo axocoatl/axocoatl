@@ -738,7 +738,17 @@ supervisor as the hardened writer user under `--harden`, with the activation's t
 stdout bounded to 16 MiB. Its JSON output becomes the activation's evidence and answer.
 Model traffic goes through routes from `external_agent::routes_for` with credentials from
 `credentials` or the secret store (`{data root}/secrets/<name>`, `0600`, written from stdin
-by `axocoatl secret set`); the container holds placeholders and trusts the Session CA. The
+by `axocoatl secret set`); the container holds placeholders and trusts the Session CA.
+Those routes set `provider_fetch: refuse`, as every route to a model API host does by
+default: the broker reads each request body (at most 64 MiB, strict JSON) before it adds
+the credential or writes the request event, and refuses with `403 provider_fetch_refused`,
+recorded with that reason, a body that offers a tool the provider runs (tools pass by
+client-run type only), names MCP servers or enabled plugins, asks the provider to fetch a
+URL, names a web-searching model or a stored prompt, or cannot be read
+(`egress_broker::provider_fetch`); an allowed body goes upstream byte for byte. Codex runs
+with `web_search="disabled"` and `--disable image_generation`; Claude Code's WebSearch
+tool sends a request offering Anthropic's server-side `web_search`, which is refused,
+and the program goes on with the tool's error. The
 activation reserves its grant's limits up front, route requests count against its
 invocations, and the program's own usage report settles it: Claude Code reports its cost;
 Codex reports tokens only, and its cost is computed from them at the configuration's
@@ -1297,7 +1307,11 @@ agent:**
   outbound connection; this also disables
   network-dependent setup and commands in that container. `sandbox.network: egress`
   gives the container only loopback and Axocoatl's egress proxy, which reaches only
-  the hosts under `sandbox.egress` and records each connection; see
+  the hosts under `sandbox.egress` and records each connection. A route to a model API
+  (`api.anthropic.com`, `api.openai.com`, `chatgpt.com`, `openrouter.ai`,
+  `generativelanguage.googleapis.com`) also reads request bodies and refuses one that
+  asks the provider to reach other hosts or run tools itself, unless the route sets
+  `provider_fetch: allow`; settings stored with the provider account are not seen; see
   [Network egress](https://docs.axocoatl.ai/configure/sandboxes/#network-egress) and
   [the security guide](https://docs.axocoatl.ai/operate/security/#control-network-egress).
   Only `bridge`, `none` and `egress` are accepted; any other value fails config

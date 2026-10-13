@@ -11,7 +11,10 @@ The program runs inside the Session container, not on your computer, under the s
 rules as any loadout Session:
 
 - network `egress`: the program reaches its model API only through a route, and other
-  hosts only when the loadout or your configuration lists them;
+  hosts only when the loadout or your configuration lists them; the route refuses a
+  model request that asks the provider to fetch a URL, search the web, connect to an
+  MCP server or run a tool itself
+  ([what it checks](/configure/credentials/#requests-to-model-apis));
 - the `hardened` workload: it runs as the non-root `writer_user` through the in-sandbox
   supervisor with `--harden`, under its seccomp filter and in a Landlock domain of its
   own;
@@ -493,6 +496,28 @@ account's policy limits and remote settings (`GET /api/claude_code/policy_limits
 refusals, and Claude Code goes on without them: a run with the pinned version passes
 with both refused.
 
+Each of these routes also reads every request body and refuses one that asks the
+model provider to reach other hosts or run tools itself (`provider_fetch: refuse`; what
+it refuses is in [Requests to model APIs](/configure/credentials/#requests-to-model-apis)).
+Without that, the provider could fetch pages, search the web or connect to MCP servers
+for the program, past the Session's egress policy. The pinned programs' model calls,
+as captured in Axocoatl's Podman runs, pass it: Claude Code 2.1.292 offers only its
+own tools, which it runs in the container, and Codex 0.160.1 runs with
+`-c web_search="disabled"` and `--disable image_generation`, so it offers only
+function and custom tools and a `tool_search` it runs itself. Without that setting,
+Codex 0.160.1 offers OpenAI's hosted `web_search`, with live access, on every request,
+and the route would refuse them all.
+
+Claude Code's WebSearch tool is the exception. Asked to search, Claude Code sends a
+request of its own that offers Anthropic's server-side `web_search_20250305`; the route
+refuses it (`403 provider_fetch_refused`) and the network record shows the refusal.
+Claude Code gives the model the failure as the tool's result (it words a `403` as
+`Failed to authenticate. API Error: 403`, followed by the route's answer), and the run
+goes on: in Axocoatl's Podman test, the pinned Claude Code, led to search, then ran its
+shell command and the run passed. To let a writer's provider search or fetch for it,
+list a route for the same host in the loadout's `routes` with
+`provider_fetch: allow`.
+
 The route stays this small on purpose. The daemon adds your credential to every request
 a route's rules allow, so each rule is one more endpoint that receives it; these routes
 allow only the model calls a run needs, which is what the pinned versions were seen to
@@ -597,7 +622,8 @@ terms before you use it, and use an API key (`codex-openai`) where they do not a
 
 - **Every model call.** Each request the program makes on its route is written to the
   Session's network record before it is sent, with the rule that allowed it and the name
-  of the credential, never its value. **Session network** shows them.
+  of the credential, never its value; a refused one is written with its reason, such as
+  `provider_fetch_refused`. **Session network** shows them.
 - **The program's output.** Claude Code's `stream-json` and Codex's JSON Lines output
   (at most 16 MiB) is parsed into the activation's evidence: its text, and bounded
   previews of its tool calls and their results. Its final text is the activation's
@@ -692,6 +718,7 @@ warning `external_model_not_pinned`, which also says whether its cost will be kn
 | --- | --- |
 | Where it runs | Enforced: inside the Session container, as the non-root writer user, under `--harden`. |
 | What it can reach | Enforced: only the route to its model API and the hosts the loadout and your configuration allow. |
+| What its model provider reaches for it | Enforced for what a request body asks: the route refuses a model request that offers a tool the provider runs, names an MCP server, turns on a provider's web search or plugins, or asks the provider to fetch content from a URL ([the full list](/configure/credentials/#requests-to-model-apis)). Not seen: settings stored with your provider account. The provider receives everything a request sends. |
 | Its credential | Enforced: added on your computer; the container holds a placeholder. A token the API returns in a response body would reach the container, as on any route. A ChatGPT sign-in is refreshed by the daemon, on your computer; the container never holds its refresh token. |
 | Its time | Enforced: the activation's wall-clock timeout, and the run's wall clock. |
 | Its spend | Bounded, not per call. The activation reserves what its grant still allows before the program starts: all of its tokens and, when its cost will be known, all of its cost. Each request on the route counts against the grant's invocations, and the host stops the program when they run out. Claude Code also gets its own spending stop, `--max-budget-usd`, at what the grant still allows. The program's own usage report settles the reservation; without one, usage is marked incomplete and the reservation stays charged. How the cost is known is in [What a run costs](#what-a-run-costs). |

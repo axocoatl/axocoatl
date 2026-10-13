@@ -5,6 +5,64 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **Routes to model APIs refuse requests that make the provider reach other hosts.**
+  Routes checked a request's method, path and query and passed its body unread, so a
+  request a route allowed could ask the model provider to fetch a URL, search the web,
+  connect to an MCP server or run a tool on its own servers, and the provider then
+  reached hosts the Session's egress policy does not list, with whatever the request
+  put in the URL or the search. Claude Code 2.1.292's WebSearch tool sends such a
+  request itself (`POST /v1/messages` offering Anthropic's `web_search_20250305`), and
+  the route Axocoatl adds for a Claude Code writer forwarded it; Codex 0.160.1, as
+  Axocoatl ran it, offered OpenAI's hosted `web_search` with live access on every
+  request. A route to `api.anthropic.com`, `api.openai.com`, `chatgpt.com`,
+  `openrouter.ai` or `generativelanguage.googleapis.com`, which includes the routes
+  Axocoatl adds for external writers, and any route with `provider_fetch: refuse`, now
+  reads each request body whole (at most 64 MiB; a larger one gets `413`) before it adds
+  the credential or records the request, and refuses with `403 provider_fetch_refused`
+  a body that offers a tool of a type the client does not run (tools pass only by
+  client-run type: Anthropic custom, `bash_`, `text_editor_`, `computer_` and
+  `memory_` tools; OpenAI `function`, `custom`, `local_shell`, `apply_patch`, local
+  `shell` and client-executed `tool_search`; Chat Completions `function` and `custom`;
+  Gemini function declarations), names MCP servers (`mcp_servers`), turns on an
+  OpenRouter plugin or `web_search_options`, asks for content from a URL (an Anthropic
+  `source` of type `url`, an `image_url`, `video_url`, `audio_url` or `document_url`
+  that is not a `data:` URL, `file_url`, a `file_data` URL, a Gemini file URI outside
+  its Files API), names an `:online`, search, deep research or Perplexity model, or uses
+  an OpenAI stored prompt, anywhere outside schemas, metadata and tool-call arguments.
+  It also refuses a body it cannot read: not JSON, a key repeated in one object, more
+  than 512 levels deep, compressed, or sent to an endpoint other than Messages,
+  Responses, Chat Completions and Gemini's `generateContent`. The answer names what was
+  refused and its JSON path and never repeats a value from the body; the refusal is in
+  the Session's network record with that reason, and nothing reaches the provider. An
+  allowed body is sent byte for byte. What a request asks for in its headers or through
+  settings stored with the provider (an OpenRouter account's default plugins, a preset)
+  is not seen. See
+  [Requests to model APIs](https://docs.axocoatl.ai/configure/credentials/#requests-to-model-apis).
+
+### Added
+- **`provider_fetch` on a route** (`allow` or `refuse`). Unset, it is `refuse` on a
+  route to a model API host and off elsewhere. `allow` sends bodies unread, and
+  validation warns about it on a model API host; `refuse` turns the check on for a
+  route to another host, such as a gateway serving one of these APIs. A Session's
+  policy records the setting of every route to a model API and of every route that
+  sets it. **Session network** explains the new refusals, `provider_fetch_refused` and
+  `request_incomplete` (a body that did not arrive whole on a route that checks bodies).
+
+### Changed
+- **Codex writers run without OpenAI's hosted tools.** Codex 0.160.1 runs with
+  `-c web_search="disabled"` and `--disable image_generation`, so its model requests
+  offer only its own function and custom tools and a `tool_search` it runs itself.
+- **Claude Code's WebSearch fails in a run.** The route refuses the request it sends;
+  Claude Code hands the model the error as the tool's result and goes on. In the Podman
+  test the pinned Claude Code, led to search, then finished its task and the run passed.
+- **A configured or loadout route to a model API refuses more.** Besides the constructs
+  above, a request with a body to an endpoint other than the model endpoints (a file
+  upload, a batch, embeddings) and a compressed body are refused. Set
+  `provider_fetch: allow` on a route that needs them.
+
 ## [1.3.1] - 2026-10-13
 
 ### Added

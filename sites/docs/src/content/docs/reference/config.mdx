@@ -438,11 +438,18 @@ paths that do not start with `/` or have `//`, `.` or `..` segments (also before
 `/`, `\` or `.`, or a `*` inside a segment; both `access` and `rules`, or neither; a
 placeholder Axocoatl sets itself (proxy, certificate, `AXOCOATL_*` and basic process
 variables); an `upstream_ca` that is not an owner-only regular file holding a PEM
-certificate; and `max_request_bytes` outside 1 KiB-1 TiB. At most 64 routes, 64 rules
-per route, 16 methods and 16 query parameters per rule. It warns when a credentialed
-route allows every path (a `**` rule, `access: read-only` or `access: full`), when it
-passes compressed responses or `Set-Cookie`, and when a route's host is also allowed by
-`allow` or a preset. A refusal does not repeat a value written in a credential's
+certificate; `max_request_bytes` outside 1 KiB-1 TiB; and `provider_fetch` other than
+`allow` or `refuse`. At most 64 routes, 64 rules per route, 16 methods and 16 query
+parameters per rule. It warns when a credentialed route allows every path (a `**` rule,
+`access: read-only` or `access: full`), when it passes compressed responses or
+`Set-Cookie`, when a route to a model API sets `provider_fetch: allow`, and when a
+route's host is also allowed by `allow` or a preset.
+
+`provider_fetch` decides whether the route reads request bodies and refuses those that
+ask the model provider to reach other hosts or run tools itself. Unset, it is `refuse`
+on a route to `api.anthropic.com`, `api.openai.com`, `chatgpt.com`, `openrouter.ai` or
+`generativelanguage.googleapis.com` and off on any other route; see
+[Requests to model APIs](/configure/credentials/#requests-to-model-apis). A refusal does not repeat a value written in a credential's
 `env` or `file`, `inject.format` or `inject.basic.username`, where a pasted token may
 be.
 

@@ -424,10 +424,14 @@ What `egress` does not do:
   credential presented, not by the container. While a `browser_check` call runs, its
   test holds the browser's credential and can pass it to the Session container; see
   [Declared hosts](/configure/browser/#declared-hosts).
-- Route rules check the method, path and query of HTTP/1.1 requests. They do not
-  read request bodies, so GraphQL operations and JSON-RPC or MCP methods look alike,
-  and they do not handle WebSocket messages. A request a route allows can still carry
-  data out in its body. A credential is added only as a header: query, path and body
+- Route rules check the method, path and query of HTTP/1.1 requests, so GraphQL
+  operations and JSON-RPC or MCP methods look alike, and they do not handle WebSocket
+  messages. A request a route allows can still carry data out in its body. A route to a
+  model API also reads each body, and refuses one that asks the provider to fetch a
+  URL, search the web, connect to an MCP server or run a tool itself
+  ([Requests to model APIs](/configure/credentials/#requests-to-model-apis)); settings
+  stored with your provider account, such as an OpenRouter account's default plugins,
+  are not seen. A credential is added only as a header: query, path and body
   credentials, request signing such as AWS SigV4, and OAuth token exchange are not
   supported. A tool that pins certificates or keeps its own trust store cannot use a
   route.

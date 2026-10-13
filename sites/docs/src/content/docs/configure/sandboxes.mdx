@@ -254,7 +254,9 @@ What egress does not cover:
   `validate` and `doctor` warn about both. For a host listed under
   [routes](/configure/credentials/), Axocoatl ends TLS on your computer and checks
   each request's method, path and query, and the server name and `Host` must be the
-  route's host; routes do not read request bodies or WebSocket messages.
+  route's host; routes do not read WebSocket messages, and read request bodies only on
+  a route to a model API, to refuse requests that ask the provider to reach other hosts
+  or run tools itself ([Requests to model APIs](/configure/credentials/#requests-to-model-apis)).
 - Traffic from Axocoatl itself is outside the proxy: model providers, MCP servers,
   `web_search` and `web_fetch`, webhooks and Podman image pulls. The web tools run
   on your computer, so `sandbox.egress` does not limit them; their calls are kept in
