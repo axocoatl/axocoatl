@@ -886,7 +886,7 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
         let flat: String = text.split(['\r', '\n']).collect();
         assert!(
             flat.contains(
-                "OpenAI issued no API key for this account, so nothing was stored as \
+                "OpenAI issued no API key with this sign-in, so nothing was stored as \
                  codex-openai. API-key mode needs an OpenAI Platform organization"
             ),
             "{text}"
