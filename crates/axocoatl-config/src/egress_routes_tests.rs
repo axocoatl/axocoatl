@@ -787,7 +787,18 @@ fn provider_fetch_parses_and_allowing_it_on_a_model_api_is_warned_about() {
         error.contains("provider_fetch") || error.contains("unknown variant"),
         "{error}"
     );
-    assert!(is_model_api_host("api.anthropic.com"));
-    assert!(is_model_api_host("chatgpt.com"));
+    for host in [
+        "api.anthropic.com",
+        "api.openai.com",
+        "chatgpt.com",
+        "openrouter.ai",
+        "generativelanguage.googleapis.com",
+        "api.mistral.ai",
+        "api.x.ai",
+        "ai-gateway.vercel.sh",
+    ] {
+        assert!(is_model_api_host(host), "{host}");
+    }
+    assert_eq!(MODEL_API_HOSTS.len(), 8);
     assert!(!is_model_api_host("api.github.com"));
 }

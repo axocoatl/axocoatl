@@ -47,12 +47,15 @@ pub const READ_ONLY_METHODS: [&str; 3] = ["GET", "HEAD", "OPTIONS"];
 /// Hosts of model APIs: a route to one of them reads each request body and
 /// refuses one that asks the provider to reach other hosts or run tools
 /// itself, unless the route sets `provider_fetch: allow`.
-pub const MODEL_API_HOSTS: [&str; 5] = [
+pub const MODEL_API_HOSTS: [&str; 8] = [
     "api.anthropic.com",
     "api.openai.com",
     "chatgpt.com",
     "openrouter.ai",
     "generativelanguage.googleapis.com",
+    "api.mistral.ai",
+    "api.x.ai",
+    "ai-gateway.vercel.sh",
 ];
 
 /// Whether `host` (lowercase, without a trailing dot) is one of

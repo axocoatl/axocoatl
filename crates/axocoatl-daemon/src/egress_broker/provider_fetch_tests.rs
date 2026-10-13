@@ -713,3 +713,206 @@ fn passes_ollama(path: &str, body: &str) {
         panic!("{path} refused {body}: {refused:?}");
     }
 }
+
+#[test]
+fn xai_live_search_and_server_tools_are_refused() {
+    const XAI_CHAT: &str = "/v1/chat/completions";
+    for body in [
+        r#"{"model":"grok-4","messages":[],"search_parameters":{}}"#,
+        r#"{"model":"grok-4","messages":[],"search_parameters":{"mode":"on"}}"#,
+        r#"{"model":"grok-4","messages":[],"search_parameters":{"mode":"auto","sources":[{"type":"web"}]}}"#,
+        r#"{"model":"grok-4","messages":[],"search_parameters":{"mode":"OFF"}}"#,
+        r#"{"model":"grok-4","messages":[],"search_parameters":true}"#,
+    ] {
+        let refusal = refused(XAI_CHAT, body);
+        assert_eq!(refusal.at, "$.search_parameters", "{body}");
+        assert!(refusal.construct.contains("live search"), "{refusal:?}");
+        // The Responses endpoint takes it too.
+        assert_eq!(refused(RESPONSES, body).at, "$.search_parameters");
+    }
+    passes(
+        XAI_CHAT,
+        r#"{"model":"grok-4","messages":[],"search_parameters":{"mode":"off"}}"#,
+    );
+    passes(
+        XAI_CHAT,
+        r#"{"model":"grok-4","messages":[],"search_parameters":null}"#,
+    );
+    for tool in [
+        "web_search",
+        "x_search",
+        "code_interpreter",
+        "code_execution",
+        "collections_search",
+    ] {
+        let refusal = refused(RESPONSES, &format!(r#"{{"tools":[{{"type":"{tool}"}}]}}"#));
+        assert_eq!(refusal.at, "$.tools[0]", "{tool}");
+    }
+    let refusal = refused(
+        XAI_CHAT,
+        r#"{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://e.example/x.jpg"}}]}]}"#,
+    );
+    assert_eq!(refusal.at, "$.messages[0].content[0].image_url");
+}
+
+#[test]
+fn mistral_urls_built_in_tools_and_agents_are_refused() {
+    const MISTRAL_CHAT: &str = "/v1/chat/completions";
+    for (part, at) in [
+        (
+            r#"{"type":"document_url","document_url":"https://arxiv.org/pdf/1805.04770"}"#,
+            "$.messages[0].content[0].document_url",
+        ),
+        (
+            r#"{"type":"image_url","image_url":"https://e.example/eiffel.jpg"}"#,
+            "$.messages[0].content[0].image_url",
+        ),
+        (
+            r#"{"type":"input_audio","input_audio":{"data":"https://e.example/a.mp3","format":"mp3"}}"#,
+            "$.messages[0].content[0].input_audio",
+        ),
+        (
+            r#"{"type":"input_audio","input_audio":"https://e.example/a.mp3"}"#,
+            "$.messages[0].content[0].input_audio",
+        ),
+    ] {
+        let refusal = refused(
+            MISTRAL_CHAT,
+            &format!(
+                r#"{{"model":"mistral-small-latest","messages":[{{"role":"user","content":[{part}]}}]}}"#
+            ),
+        );
+        assert_eq!(refusal.at, at, "{part}");
+        assert!(
+            refusal.construct.contains("fetches from a URL"),
+            "{refusal:?}"
+        );
+    }
+    for part in [
+        r#"{"type":"input_audio","input_audio":"UklGRiQAAABXQVZF"}"#,
+        r#"{"type":"input_audio","input_audio":{"data":"UklGRiQAAABXQVZF","format":"wav"}}"#,
+        r#"{"type":"image_url","image_url":"data:image/jpeg;base64,/9j/4AAQ"}"#,
+        r#"{"type":"file","file_id":"f-1"}"#,
+    ] {
+        passes(
+            MISTRAL_CHAT,
+            &format!(r#"{{"model":"m","messages":[{{"role":"user","content":[{part}]}}]}}"#),
+        );
+    }
+    for (tool, kind) in [
+        (r#"{"type":"image_generation"}"#, "image_generation"),
+        (
+            r#"{"type":"document_library","library_ids":["l"]}"#,
+            "document_library",
+        ),
+        (
+            r#"{"type":"connector","connector_id":"my_deepwiki"}"#,
+            "connector",
+        ),
+        (r#"{"type":"web_search_premium"}"#, "web_search_premium"),
+    ] {
+        let refusal = refused(MISTRAL_CHAT, &format!(r#"{{"tools":[{tool}]}}"#));
+        assert_eq!(
+            refusal.construct,
+            format!("tool type {kind}, which the provider runs itself")
+        );
+    }
+    // Agents and conversations run tools an agent stored with Mistral
+    // carries, which the body names only by its id.
+    for path in [
+        "/v1/agents/completions",
+        "/v1/agents",
+        "/v1/conversations",
+        "/v1/conversations/c-1",
+        "/v1/conversations/c-1/restart",
+    ] {
+        let refusal = refused(path, r#"{"agent_id":"ag-1","inputs":"hi"}"#);
+        assert_eq!(refusal.at, "$", "{path}");
+        assert!(
+            refusal
+                .construct
+                .contains("agents or conversations endpoint"),
+            "{refusal:?}"
+        );
+    }
+    // Fill-in-the-middle is a completion like any other.
+    passes(
+        "/v1/fim/completions",
+        r#"{"model":"codestral-latest","prompt":"def f(","suffix":"return 1"}"#,
+    );
+}
+
+#[test]
+fn vercel_ai_gateway_server_tools_and_provider_options_are_refused() {
+    const GATEWAY_CHAT: &str = "/v1/chat/completions";
+    for kind in [
+        "vercel:perplexity_search",
+        "vercel:exa_search",
+        "vercel:parallel_search",
+        "vercel:tako_search",
+        "vercel:browserbase_search",
+        "vercel:browserbase_fetch",
+    ] {
+        let refusal = refused(
+            GATEWAY_CHAT,
+            &format!(
+                r#"{{"model":"openai/gpt-6-astra","messages":[],"tools":[{{"type":"{kind}","config":{{"query":"q"}}}}]}}"#
+            ),
+        );
+        assert_eq!(refusal.at, "$.tools[0]", "{kind}");
+        assert_eq!(
+            refusal.construct,
+            format!("tool type {kind}, which the provider runs itself")
+        );
+    }
+    // The gateway's own routing options pass; anything passed through to
+    // the provider does not.
+    passes(
+        GATEWAY_CHAT,
+        r#"{"model":"anthropic/claude-opus-5","messages":[],"models":["openai/gpt-6-astra"],
+            "provider":{"sort":"tps"},
+            "providerOptions":{"gateway":{"order":["vertex","anthropic"],"models":["google/gemini-3.6-flash"],"caching":"auto"}}}"#,
+    );
+    let refusal = refused(
+        GATEWAY_CHAT,
+        r#"{"model":"anthropic/claude-sonnet-5","messages":[],"providerOptions":{"gateway":{"order":["anthropic"]},"anthropic":{"thinking":{"type":"adaptive"}}}}"#,
+    );
+    assert_eq!(refusal.at, "$.providerOptions.anthropic");
+    assert!(
+        refusal.construct.contains("passed through to anthropic"),
+        "{refusal:?}"
+    );
+    assert_eq!(
+        refused(
+            MESSAGES,
+            r#"{"providerOptions":{"google":{"useSearchGrounding":true}}}"#
+        )
+        .at,
+        "$.providerOptions.google"
+    );
+    // Fallback models that search are refused where they are named.
+    assert_eq!(
+        refused(
+            GATEWAY_CHAT,
+            r#"{"model":"m","providerOptions":{"gateway":{"models":["perplexity/sonar-pro"]}}}"#
+        )
+        .at,
+        "$.providerOptions.gateway.models[0]"
+    );
+    for model in [
+        "exa/exa-research",
+        "parallel/search",
+        "browserbase/fetch",
+        "tako/x",
+    ] {
+        let refusal = refused(GATEWAY_CHAT, &format!(r#"{{"model":"{model}"}}"#));
+        assert!(
+            refusal.construct.contains("search or fetch provider"),
+            "{model}"
+        );
+    }
+    // The AI SDK's own gateway protocol is not a format the check knows.
+    assert!(refused("/v1/ai/language-model", r#"{"prompt":[]}"#)
+        .construct
+        .contains("endpoint whose request format"));
+}

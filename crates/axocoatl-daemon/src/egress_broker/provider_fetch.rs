@@ -43,6 +43,12 @@
 //!   `*-deep-research` models, and OpenRouter's `perplexity/` models.
 //! - An OpenAI stored prompt (`prompt` with an `id`), which can bring tools
 //!   and inputs the request does not show.
+//! - xAI Live Search (`search_parameters` with a `mode` other than `off`),
+//!   audio the provider fetches (`input_audio` holding a URL), and Vercel AI
+//!   Gateway `providerOptions` for anything but the gateway itself, which it
+//!   passes through to the provider.
+//! - Any body to an `agents` or `conversations` endpoint (Mistral's run the
+//!   tools and connectors an agent stored with Mistral carries).
 //!
 //! These are looked for anywhere in the body except inside the parts the
 //! provider does not act on: JSON schemas (`input_schema`, `parameters`,
@@ -142,6 +148,25 @@ pub fn check(path: &str, body: &[u8]) -> Result<(), Refused> {
         .all(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
     {
         return Ok(());
+    }
+    // Mistral's Agents and Conversations APIs run its built-in tools
+    // (`web_search`, `web_search_premium`, `code_interpreter`,
+    // `image_generation`, `document_library`) and connectors, also ones an
+    // agent stored with Mistral carries, which a request names only by its
+    // `agent_id` (https://docs.mistral.ai/studio-api/connectors/conversations).
+    // `/v1/agents/completions` ends like a Chat Completions path, so these
+    // endpoints are refused by name, on any host.
+    if path
+        .split('/')
+        .any(|segment| matches!(segment, "agents" | "conversations"))
+    {
+        return Err(Refused {
+            construct: "a request to an agents or conversations endpoint, whose agent can run \
+                        tools the provider runs itself (web search, code execution, connectors), \
+                        stored with the provider where the body does not show them"
+                .into(),
+            at: "$".into(),
+        });
     }
     let Some(dialect) = Dialect::for_path(path) else {
         return Err(Refused {
@@ -308,6 +333,13 @@ fn web_model(model: &str) -> Option<&'static str> {
         Some("a deep research model, which searches the web")
     } else if lower.starts_with("perplexity/") {
         Some("a Perplexity model, which searches the web")
+    } else if ["exa/", "parallel/", "tako/", "browserbase/"]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+    {
+        // The search and fetch providers the Vercel AI Gateway lists
+        // (https://vercel.com/docs/ai-gateway/models-and-providers/web-search).
+        Some("a model of a search or fetch provider, which reaches the web")
     } else {
         None
     }
@@ -414,6 +446,65 @@ impl<'a> Walk<'a> {
                 Value::Null => Ok(()),
                 _ => self.refuse("web search by the provider (web_search_options)"),
             },
+            // xAI Live Search, on Chat Completions and Responses: `mode` is
+            // `off`, `on` or `auto`, and `on` when unset
+            // (https://docs.x.ai/developers/rest-api-reference/inference/chat-completions,
+            // https://docs.x.ai/docs/api-reference).
+            "search_parameters" => match child {
+                Value::Null => Ok(()),
+                Value::Object(_) if child.get("mode").and_then(Value::as_str) == Some("off") => {
+                    Ok(())
+                }
+                _ => self.refuse(
+                    "live search by the provider (search_parameters with a mode other than off)",
+                ),
+            },
+            // Audio the provider fetches: Mistral documents a public URL in
+            // `input_audio.data`; base64 audio has no URL scheme.
+            "input_audio" => {
+                let remote = |value: &Value| {
+                    value
+                        .as_str()
+                        .is_some_and(|data| has_scheme(data) && !is_data_url(data))
+                };
+                if remote(child)
+                    || ["data", "url"]
+                        .iter()
+                        .any(|name| child.get(name).is_some_and(remote))
+                {
+                    self.refuse("audio the provider fetches from a URL (input_audio)")
+                } else {
+                    self.value(child)
+                }
+            }
+            // The Vercel AI Gateway passes provider-specific options
+            // (`providerOptions.anthropic`, `.openai`, …) through to the
+            // provider, where some turn on its own search or grounding
+            // (https://vercel.com/docs/ai-gateway/models-and-providers/provider-options):
+            // only the gateway's own routing options pass.
+            "providerOptions" => match child {
+                Value::Null => Ok(()),
+                Value::Object(entries) => {
+                    for (name, options) in entries {
+                        self.path.push(Step::Key(name));
+                        if name != "gateway" {
+                            return self.refuse(format!(
+                                "provider options passed through to {} (providerOptions), which \
+                                 can turn on its own search or fetch",
+                                shown(name)
+                            ));
+                        }
+                        self.value(options)?;
+                        self.path.pop();
+                    }
+                    Ok(())
+                }
+                _ => self.refuse("providerOptions in a form the check does not read"),
+            },
+            // Mistral fetches a public `document_url` and `image_url`
+            // (https://docs.mistral.ai/capabilities/OCR/document_qna,
+            // https://docs.mistral.ai/capabilities/vision/), as OpenAI,
+            // OpenRouter and xAI fetch image URLs.
             "image_url" | "video_url" | "audio_url" | "document_url" => {
                 let remote = match child {
                     Value::String(url) => !is_data_url(url),
@@ -561,7 +652,16 @@ impl<'a> Walk<'a> {
         Ok(())
     }
 
-    /// Whether `tool` is one the client runs, by its type.
+    /// Whether `tool` is one the client runs, by its type. Every type a
+    /// provider runs itself fails this, among them xAI's `web_search`,
+    /// `x_search`, `code_interpreter` and `code_execution`
+    /// (https://docs.x.ai/docs/guides/tools/overview), Mistral's
+    /// `image_generation`, `document_library` and `connector` on Chat
+    /// Completions (https://docs.mistral.ai/api/) and the Vercel AI Gateway's
+    /// `vercel:perplexity_search`, `vercel:exa_search`,
+    /// `vercel:parallel_search`, `vercel:tako_search`,
+    /// `vercel:browserbase_search` and `vercel:browserbase_fetch`
+    /// (https://vercel.com/docs/ai-gateway/models-and-providers/web-search).
     fn tool(&self, tool: &Value) -> Result<(), String> {
         let Value::Object(fields) = tool else {
             return Err("a tool that is not an object".into());
