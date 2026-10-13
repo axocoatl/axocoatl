@@ -59,6 +59,51 @@ workflows.each do |path|
   end
 end
 
+# Composite actions under actions/: actionlint reads only workflows, so
+# their structure is checked here and their scripts by run-actionlint.sh's
+# pinned ShellCheck. A step's script never expands an expression (an input
+# reaches it only through env, so no input becomes shell code), names its
+# shell, and pins any action it uses.
+composite_actions = Dir[ROOT.join("actions/*/action.{yml,yaml}")].sort
+composite_actions.each do |path|
+  begin
+    document = YAML.load_file(path)
+  rescue StandardError => e
+    errors << "#{path}: invalid YAML: #{e.message}"
+    next
+  end
+  runs = document.is_a?(Hash) ? document["runs"] : nil
+  unless runs.is_a?(Hash) && runs["using"] == "composite" && runs["steps"].is_a?(Array)
+    errors << "#{path}: must be a composite action with steps"
+    next
+  end
+  declared = document["inputs"].is_a?(Hash) ? document["inputs"].keys : []
+  File.read(path).scan(/\binputs\.([A-Za-z0-9_-]+)/).flatten.uniq.each do |name|
+    errors << "#{path}: uses undeclared input #{name}" unless declared.include?(name)
+  end
+  runs["steps"].each_with_index do |step, index|
+    label = "#{path}: step #{index + 1}"
+    if step["uses"]
+      reference = step["uses"].to_s
+      unless reference.start_with?("./") || reference.match?(/\A[^\s@]+@\h{40}\z/)
+        errors << "#{label}: action is not pinned to a full commit: #{reference}"
+      end
+    end
+    next unless step["run"]
+    run_blocks += 1
+    errors << "#{label}: a run step must name its shell" unless step["shell"]
+    if step["run"].to_s.include?("${{")
+      errors << "#{label}: its script expands an expression; pass it through env"
+    end
+    Dir.mktmpdir("axocoatl-action-shell") do |directory|
+      file = File.join(directory, "run.sh")
+      File.write(file, step["run"].to_s + "\n")
+      _stdout, stderr, status = Open3.capture3("bash", "-n", file)
+      errors << "#{label}: invalid run-block shell syntax: #{stderr.strip}" unless status.success?
+    end
+  end
+end
+
 scripts = `git -C #{ROOT} ls-files --cached --others --exclude-standard -- '*.sh'`
           .lines.map(&:strip).reject(&:empty?).uniq.sort
 scripts.each do |relative|
@@ -481,4 +526,4 @@ unless errors.empty?
   exit 1
 end
 
-puts "Workflow contract: PASS (#{workflows.length} YAML files, #{run_blocks} run blocks, #{scripts.length} shell scripts)"
+puts "Workflow contract: PASS (#{workflows.length} YAML files, #{composite_actions.length} composite actions, #{run_blocks} run blocks, #{scripts.length} shell scripts)"

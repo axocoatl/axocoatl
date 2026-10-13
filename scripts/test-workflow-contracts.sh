@@ -123,6 +123,21 @@ with_change refused 'another manifest turning the feature on' \
   "ruby -EUTF-8:UTF-8 -e 'p = \"axocoatl-server/Cargo.toml\"; s = File.read(p); s.sub!(/^axocoatl-daemon = (.*)\$/) { \"axocoatl-daemon = \" + \$1.sub(/\\}\\s*\\z/, %q(, features = [\"live-verify\"] })) } or abort(\"no anchor\"); File.write(p, s)'" \
   axocoatl-server/Cargo.toml
 
+with_change refused 'an action step expanding an input in its script' \
+  'its script expands an expression; pass it through env' \
+  "ruby -EUTF-8:UTF-8 -e 'p = \"actions/verify-receipt/action.yml\"; s = File.read(p); s.sub!(/run: .*verify[.]sh.*\$/, %q(run: echo \${{ inputs.keys-file }})) or abort(\"no anchor\"); File.write(p, s)'" \
+  actions/verify-receipt/action.yml
+
+with_change refused 'an action step without a shell' \
+  'a run step must name its shell' \
+  "ruby -EUTF-8:UTF-8 -e 'p = \"actions/verify-receipt/action.yml\"; s = File.read(p); s.sub!(/^      id: verify\n      shell: bash\n/, %Q(      id: verify\n)) or abort(\"no anchor\"); File.write(p, s)'" \
+  actions/verify-receipt/action.yml
+
+with_change refused 'an action using an undeclared input' \
+  'uses undeclared input keyfile' \
+  "ruby -EUTF-8:UTF-8 -e 'p = \"actions/verify-receipt/action.yml\"; s = File.read(p); s.sub!(%q(inputs.keys-file }}), %q(inputs.keyfile }})) or abort(\"no anchor\"); File.write(p, s)'" \
+  actions/verify-receipt/action.yml
+
 if ((failures)); then
   echo "Workflow contract self-test: FAIL ($failures failed, $pass_count passed)" >&2
   exit 1
