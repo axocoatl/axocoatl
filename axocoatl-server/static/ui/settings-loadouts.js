@@ -10,6 +10,11 @@ import './loadout-graph.js';
  * `axocoatl run` command to copy. Nothing here runs a loadout: runs start from
  * `axocoatl run`.
  *
+ * Beside the loadouts, "Receipts" shows this computer's receipt signing key:
+ * the public line (`GET /api/receipts/key`, as `axocoatl receipt key` prints
+ * it) to copy into a trusted-keys file. The private key never leaves the
+ * data directory; reading the line makes the key when there is none yet.
+ *
  * @element ax-settings-loadouts
  * @fires loadouts-change detail: {loadouts}
  * @fires notify          detail: {title, body, kind}
@@ -36,6 +41,9 @@ pre.yaml { margin: 0; padding: var(--sp-3); max-height: 420px; overflow: auto; b
 .side-row .label small { color: var(--muted-2); margin-left: var(--sp-1); }
 `;
 
+/** The key of the Receipts row in the side list. */
+export const RECEIPT_KEY_ROW = 'receipt-key';
+
 /** The `axocoatl run` command for a loadout, with its required parameters. */
 export function runCommand(summary) {
   const parts = ['axocoatl', 'run', summary.id, '--task', '"..."'];
@@ -57,6 +65,8 @@ export class AxSettingsLoadouts extends HTMLElement {
   #view = null;
   #error = '';
   #generation = 0;
+  #signingKey = null;
+  #keyError = '';
 
   constructor() {
     super();
@@ -72,6 +82,10 @@ export class AxSettingsLoadouts extends HTMLElement {
             <section class="side-section" data-group="user">
               <div class="side-head" role="heading" aria-level="3">Yours</div>
               <div class="side-list user-list"></div>
+            </section>
+            <section class="side-section" data-group="receipts">
+              <div class="side-head" role="heading" aria-level="3">Receipts</div>
+              <div class="side-list receipts-list"></div>
             </section>
           </div>
         </aside>
@@ -102,6 +116,11 @@ export class AxSettingsLoadouts extends HTMLElement {
       this.#loadouts = Array.isArray(loadouts) ? loadouts : [];
       this.#error = '';
       emit(this, 'loadouts-change', { loadouts: this.#loadouts });
+      if (this.#selected === RECEIPT_KEY_ROW) {
+        this.#renderList();
+        await this.select(RECEIPT_KEY_ROW);
+        return;
+      }
       const still = this.#loadouts.find((row) => this.#key(row) === this.#selected);
       const first = still || this.#loadouts.find((row) => !row.error) || this.#loadouts[0];
       this.#renderList();
@@ -122,6 +141,20 @@ export class AxSettingsLoadouts extends HTMLElement {
     this.#selected = key;
     this.#view = null;
     this.#renderList();
+    if (key === RECEIPT_KEY_ROW) {
+      try {
+        const signingKey = await jsonRequest('/api/receipts/key');
+        if (this.#selected !== key) return;
+        this.#signingKey = signingKey;
+        this.#keyError = '';
+      } catch (error) {
+        if (this.#selected !== key) return;
+        this.#keyError = error.message || String(error);
+      }
+      this.#renderList();
+      this.#renderDetail();
+      return;
+    }
     const row = this.#loadouts.find((item) => this.#key(item) === key);
     if (row && !row.error) {
       try {
@@ -168,11 +201,72 @@ export class AxSettingsLoadouts extends HTMLElement {
         list.append(button);
       }
     }
+    const receipts = this.#root.querySelector('.receipts-list');
+    receipts.replaceChildren();
+    const row = h('button', 'side-row');
+    row.type = 'button';
+    row.dataset.key = RECEIPT_KEY_ROW;
+    row.setAttribute('aria-current', String(this.#selected === RECEIPT_KEY_ROW));
+    const label = h('span', 'label', 'Signing key');
+    if (this.#signingKey?.key_id) label.append(h('small', '', this.#signingKey.key_id.replace(/^sha256:/, '').slice(0, 16)));
+    row.append(h('span', 'dot'), label);
+    row.addEventListener('click', () => void this.select(RECEIPT_KEY_ROW));
+    receipts.append(row);
+  }
+
+  /** The receipt signing key: its public line to copy, and what it is for. */
+  #renderKey(detail) {
+    detail.append(h('h3', '', 'Receipt signing key'));
+    if (this.#keyError) {
+      const box = h('div', 'invalid-error', `The key could not be read: ${this.#keyError}`);
+      detail.append(box);
+      return;
+    }
+    const signingKey = this.#signingKey;
+    if (!signingKey) {
+      detail.append(h('p', 'note', 'Loading…'));
+      return;
+    }
+    const facts = h('div', 'facts');
+    facts.append(h('span', 'badge', signingKey.algorithm),
+      h('span', 'badge mono', signingKey.key_id.replace(/^sha256:/, '').slice(0, 16)));
+    detail.append(facts);
+    detail.append(h('p', 'note', 'Axocoatl signs every finished run with this key: a receipt says which files the run '
+      + 'changed (with their digests), what the host enforced, which models wrote and reviewed, and the verdict. '
+      + 'The private key stays in this computer\'s data directory; only this public line is shown.'));
+    const section = h('div', 'section');
+    section.append(h('h4', '', 'Public key line'));
+    const line = h('div', 'command');
+    const input = h('input');
+    input.readOnly = true;
+    input.value = signingKey.line;
+    input.setAttribute('aria-label', 'receipt public key line');
+    const copy = h('button', 'action', 'Copy');
+    copy.type = 'button';
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(input.value);
+        emit(this, 'notify', { title: 'Copied', body: 'The public key line', kind: 'info' });
+      } catch {
+        input.select();
+      }
+    });
+    line.append(input, copy);
+    section.append(line, h('p', 'note', 'Add it to the trusted-keys file of a repository that verifies receipts: '
+      + 'axocoatl receipt verify <receipt> --keys <that file> --repo <checkout>. axocoatl receipt key prints the same '
+      + 'line; axocoatl receipt key --rotate replaces the key, and receipts the old key signed still verify with its line.'));
+    detail.append(section);
+    detail.append(h('p', 'note', 'A receipt proves which key signed the facts and that the covered files are the ones '
+      + 'the run judged. It does not prove that the change is correct.'));
   }
 
   #renderDetail() {
     const detail = this.#root.querySelector('.detail');
     detail.replaceChildren();
+    if (this.#selected === RECEIPT_KEY_ROW) {
+      this.#renderKey(detail);
+      return;
+    }
     const row = this.#loadouts.find((item) => this.#key(item) === this.#selected);
     if (!row) {
       detail.append(h('p', 'empty', this.#error ? '' : 'Select a loadout.'));

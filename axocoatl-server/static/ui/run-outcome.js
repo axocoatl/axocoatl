@@ -9,8 +9,9 @@ import { adopt } from './sheets.js';
  * whose findings could not be read (with the worker's answers), the run's notes
  * (what was neither a gap nor a warning), warnings (the same-model reviewer
  * warning included), usage (a known subtotal when
- * incomplete, and a cost the run does not know as such), the network summary, a link to download the record bundle and
- * Keep as PR (`<ax-keep-pr>`, workstream keep).
+ * incomplete, and a cost the run does not know as such), the network summary, the run's signed receipt
+ * (the key that signed it, the files it covers and a download link, or why there is none), a link to
+ * download the record bundle and Keep as PR (`<ax-keep-pr>`, workstream keep).
  *
  * @element ax-run-outcome
  * @attr {string} run-id  The run to show; the panel reads `/api/runs/{id}`.
@@ -44,7 +45,8 @@ details { margin: var(--sp-1) 0; }
 summary { cursor: pointer; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); padding: var(--sp-2); border-radius: var(--r-sm); max-height: 240px; overflow: auto; font: var(--fs-xs) var(--font-mono); }
 .actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
-a.download { color: var(--accent); }
+a.download, a.receipt-download { color: var(--accent); }
+.receipt .mono { overflow-wrap: anywhere; }
 `;
 
 const el = (tag, className, text) => {
@@ -70,6 +72,18 @@ const REPRO = {
   repro_error: ['reproduction error', 'error'],
   missing: ['no reproduction', 'error'],
 };
+
+/** Where a receipt's file digests come from (`predicate.files.source`). */
+const RECEIPT_SOURCE = {
+  judged_capture: 'as the required checks judged them',
+  after_capture: 'as the last writer left them',
+  workspace_at_finish: 'as read when the run finished',
+};
+
+/** The first 16 hex characters of a `sha256:<hex>` key id. */
+export function shortKeyId(keyId = '') {
+  return String(keyId).replace(/^sha256:/, '').slice(0, 16);
+}
 
 const CHECK = {
   passed: ['passed', 'pass'],
@@ -179,6 +193,39 @@ export class AxRunOutcome extends HTMLElement {
     section.append(el('h3', '', title));
     this.#root.append(section);
     return section;
+  }
+
+  /**
+   * The Receipt line: the key that signed the run, the files it covers and
+   * a download of the envelope, or why the run has none.
+   */
+  #renderReceipt(status, outcome) {
+    const section = this.#section('Receipt');
+    const receipt = status.receipt;
+    if (!receipt) {
+      const unavailable = outcome.warnings?.find((warning) => warning.code === 'receipt_unavailable');
+      section.append(unavailable
+        ? el('div', 'warning receipt-missing', `No receipt: ${unavailable.message}`)
+        : el('p', 'muted receipt-missing', 'No receipt: this run finished before Axocoatl signed receipts.'));
+      return;
+    }
+    const files = Number(receipt.files) || 0;
+    const removed = Number(receipt.removed) || 0;
+    const line = el('p', 'receipt');
+    line.dataset.keyId = receipt.key_id;
+    line.append('Signed by key ', el('span', 'mono', shortKeyId(receipt.key_id)),
+      `: ${files} file${files === 1 ? '' : 's'} covered ${RECEIPT_SOURCE[receipt.source] || `(${receipt.source})`}`
+      + `${removed ? `, ${removed} removed` : ''}.`);
+    if (!receipt.complete) line.append(' ', el('span', 'badge attention', 'not every changed path is covered'));
+    section.append(line);
+    const actions = el('div', 'actions');
+    const link = el('a', 'receipt-download', 'Download receipt');
+    link.href = `/api/runs/${encodeURIComponent(outcome.run_id)}/receipt`;
+    link.setAttribute('download', `${outcome.run_id}.receipt.dsse.json`);
+    actions.append(link, el('span', 'muted mono', receipt.statement_sha256 || ''));
+    section.append(actions, el('p', 'muted',
+      'Check it with axocoatl receipt verify <file> --keys <trusted keys> --repo <checkout>. '
+      + 'It proves which key signed these facts and that the covered files are the ones judged, not that the change is correct.'));
   }
 
   #render() {
@@ -320,6 +367,7 @@ export class AxRunOutcome extends HTMLElement {
       for (const [host, count] of network.routes) list.append(el('li', 'mono', `${host}: ${count}`));
       net.append(list);
     }
+    this.#renderReceipt(status, outcome);
     const actions = el('div', 'actions');
     const download = el('a', 'download', 'Download record');
     download.href = `/api/runs/${encodeURIComponent(outcome.run_id)}/record`;

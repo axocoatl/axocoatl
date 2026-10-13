@@ -67,7 +67,9 @@ test('the run outcome panel shows every part of an Outcome, missing adjudication
     `<!doctype html><html><head><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-run-outcome run-id="${RUN}"></ax-run-outcome><script type="module" src="/ui/run-outcome.js"></script></body></html>` }));
   await page.route(`**/api/runs/${RUN}`, (route) => route.fulfill({ json: {
     run_id: RUN, session_id: 'ses-1', loadout: 'qa@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome,
-    keep: { branch: 'axocoatl/qa-00000000', commit: 'a'.repeat(40) } } }));
+    keep: { branch: 'axocoatl/qa-00000000', commit: 'a'.repeat(40) },
+    receipt: { key_id: `sha256:${'1a2b3c4d5e6f7a8b'.repeat(4)}`, files: 3, removed: 1, source: 'judged_capture',
+      complete: true, statement_sha256: `sha256:${'e'.repeat(64)}` } } }));
   try {
     await page.goto(`${runtime.baseUrl}/run-outcome-fixture`);
     const panel = page.locator('ax-run-outcome');
@@ -104,6 +106,12 @@ test('the run outcome panel shows every part of an Outcome, missing adjudication
     assert.equal(await panel.locator('.warning[data-code="same_model_reviewer"]').count(), 1);
     assert.match(await panel.locator('p.usage').textContent(), /known subtotal/);
     assert.match(await panel.locator('section[data-section="network"]').textContent(), /openrouter\.ai: 3/);
+    // The receipt: the key that signed it, what it covers and its download.
+    assert.equal(await panel.locator('p.receipt').textContent(),
+      'Signed by key 1a2b3c4d5e6f7a8b: 3 files covered as the required checks judged them, 1 removed.');
+    const receiptLink = panel.locator('a.receipt-download');
+    assert.equal(await receiptLink.getAttribute('href'), `/api/runs/${RUN}/receipt`);
+    assert.equal(await receiptLink.getAttribute('download'), `${RUN}.receipt.dsse.json`);
     // Download record and Keep as PR.
     assert.equal(await panel.locator('a.download').getAttribute('href'), `/api/runs/${RUN}/record`);
     const keep = panel.locator('ax-keep-pr');
@@ -180,6 +188,33 @@ test('the panel shows a cost the run does not know as what was reserved, never a
     const priced = page.locator('ax-run-outcome').nth(2).locator('p.usage');
     await priced.waitFor();
     assert.equal(await priced.textContent(), '4107 input + 60 output tokens, $0.0178 (includes cost computed from reported tokens at list prices)');
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('a run without a receipt says why: the signing failure, or an older run', async () => {
+  const context = await newAuthorizedContext(browser), page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const failed = 'run-00000000-0000-4000-8000-0000000000ce', older = 'run-00000000-0000-4000-8000-0000000000cf';
+  const message = 'The run finished, but its receipt could not be signed: the secret store cannot be opened. The verdict and exit code are unchanged.';
+  await page.route('**/run-outcome-fixture', (route) => route.fulfill({ contentType: 'text/html', body:
+    `<!doctype html><html><head><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-run-outcome run-id="${failed}"></ax-run-outcome><ax-run-outcome run-id="${older}"></ax-run-outcome><script type="module" src="/ui/run-outcome.js"></script></body></html>` }));
+  await page.route(`**/api/runs/${failed}`, (route) => route.fulfill({ json: {
+    run_id: failed, session_id: 'ses-1', loadout: 'fix@1', state: 'finished', phase: 'finishing', started_at_ms: 1,
+    outcome: { ...outcome, run_id: failed, warnings: [{ code: 'receipt_unavailable', message }] } } }));
+  await page.route(`**/api/runs/${older}`, (route) => route.fulfill({ json: {
+    run_id: older, session_id: 'ses-1', loadout: 'fix@1', state: 'finished', phase: 'finishing', started_at_ms: 1,
+    outcome: { ...outcome, run_id: older, warnings: [] } } }));
+  try {
+    await page.goto(`${runtime.baseUrl}/run-outcome-fixture`);
+    const first = page.locator('ax-run-outcome').first().locator('.receipt-missing');
+    await first.waitFor();
+    assert.equal(await first.textContent(), `No receipt: ${message}`);
+    assert.equal(await page.locator('ax-run-outcome').first().locator('a.receipt-download').count(), 0);
+    const second = page.locator('ax-run-outcome').nth(1).locator('.receipt-missing');
+    await second.waitFor();
+    assert.equal(await second.textContent(), 'No receipt: this run finished before Axocoatl signed receipts.');
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });

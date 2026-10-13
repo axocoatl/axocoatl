@@ -178,9 +178,26 @@ test('a custom loadout runs headless in a hardened Session: 202, events, JUnit a
   const record = await fetch(`${runtime.baseUrl}/api/runs/${accepted.run_id}/record`);
   assert.equal(record.headers.get('content-type'), 'application/vnd.axocoatl.record+jsonl');
   const lines = (await record.text()).trim().split('\n').map((line) => JSON.parse(line));
-  assert.equal(lines[0].schema, 'axocoatl.record-bundle/1');
+  assert.equal(lines[0].schema, 'axocoatl.record-bundle/2');
   assert.equal(lines.at(-1).section, 'end');
   assert.ok(lines.some((line) => line.section === 'turn'));
+  // The finished run is signed: its receipt is the bundle's last section,
+  // served as a DSSE envelope, and the run status names its key.
+  const receipt = await fetch(`${runtime.baseUrl}/api/runs/${accepted.run_id}/receipt`);
+  assert.equal(receipt.status, 200);
+  assert.equal(receipt.headers.get('content-type'), 'application/vnd.dsse.envelope.v1+json');
+  const envelope = JSON.parse(await receipt.text());
+  assert.equal(envelope.payloadType, 'application/vnd.in-toto+json');
+  assert.deepEqual(lines.at(-2), { section: 'receipt', data: envelope });
+  const key = await json('/api/receipts/key');
+  assert.equal(key.value.algorithm, 'ed25519');
+  assert.equal(envelope.signatures[0].keyid, key.value.key_id);
+  assert.equal(status.value.receipt.key_id, key.value.key_id);
+  const statement = JSON.parse(Buffer.from(envelope.payload, 'base64').toString('utf8'));
+  assert.equal(statement.predicate.run.run_id, accepted.run_id);
+  assert.equal(statement.predicate.verdict, 'pass');
+  assert.equal((await runtime.fetchWithoutToken(`/api/runs/${accepted.run_id}/receipt`)).status, 401);
+  assert.equal((await runtime.fetchWithoutToken('/api/receipts/key')).status, 401);
   assert.ok(chats.length > 0, 'the writer called the stub provider');
   finishedRun = accepted;
 
@@ -188,9 +205,24 @@ test('a custom loadout runs headless in a hardened Session: 202, events, JUnit a
   // axocoatl record verify accepts the bundle.
   const out = await mkdtemp(path.join(runtime.runRoot, 'out-'));
   const junitPath = path.join(out, 'junit.xml'), recordPath = path.join(out, 'run.axorecord.jsonl');
+  const receiptPath = path.join(out, 'run.receipt.json');
   const run = await cli(['run', 'smoke', '--task', 'Say done again.', '--repo', repo,
-    '--junit', junitPath, '--record', recordPath, '--url', runtime.baseUrl], { AXOCOATL_TOKEN: runtime.token });
+    '--junit', junitPath, '--record', recordPath, '--receipt', receiptPath, '--url', runtime.baseUrl], { AXOCOATL_TOKEN: runtime.token });
   assert.equal(run.code, 0, `${run.stdout}\n${run.stderr}`);
+  assert.match(run.stderr, /· receipt written to .*run\.receipt\.json \(key [0-9a-f]{16}, /);
+  // The receipt verifies against the daemon's key line (as `axocoatl
+  // receipt key` prints it for the same data root), the checkout and the
+  // record; without a trusted key it exits 2.
+  const keyLine = await cli(['receipt', 'key', '-c', path.join(runtime.runRoot, 'axocoatl.e2e.yaml')],
+    { AXOCOATL_DATA_DIR: path.join(runtime.runRoot, 'data') });
+  assert.equal(keyLine.code, 0, keyLine.stderr);
+  assert.equal(keyLine.stdout.trim(), key.value.line);
+  const trusted = path.join(out, 'trusted-keys');
+  await writeFile(trusted, keyLine.stdout);
+  const receiptVerified = await cli(['receipt', 'verify', receiptPath, '--keys', trusted, '--repo', repo, '--record', recordPath]);
+  assert.equal(receiptVerified.code, 0, receiptVerified.stdout + receiptVerified.stderr);
+  assert.match(receiptVerified.stdout, /signature: valid, by trusted key/);
+  assert.equal((await cli(['receipt', 'verify', receiptPath])).code, 2);
   assert.match(run.stdout, /Verdict: pass \(exit 0\)/);
   assert.match(run.stdout, /readme\s+passed/);
   assert.match(run.stdout, /Record: run-/);
@@ -264,6 +296,15 @@ test('Settings → Loadouts lists loadouts, shows invalid files and keeps the gr
     await lattice.focus(); await page.keyboard.press('Delete');
     assert.equal(await snapshot(), before);
     assert.deepEqual(await page.evaluate(() => window.loadoutEdits), []);
+    // Receipts: the signing key's public line, as the API gives it, to copy.
+    const key = await json('/api/receipts/key');
+    await settings.locator(`.side-row[data-key="receipt-key"]`).click();
+    const line = settings.locator('input[aria-label="receipt public key line"]');
+    await line.waitFor();
+    assert.equal(await line.inputValue(), key.value.line);
+    assert.match(await settings.locator('.detail').textContent(), /does not prove that the change is correct/);
+    assert.equal(await settings.locator('.side-row[data-key="receipt-key"] small').textContent(),
+      key.value.key_id.replace('sha256:', '').slice(0, 16));
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
