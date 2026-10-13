@@ -556,6 +556,13 @@ pub trait EgressAuthority: Send + Sync + fmt::Debug {
     /// Never allow these addresses, whatever the policy lists: the gateways
     /// of the sidecar's network, which lead to the host running Podman.
     fn forbid_destinations(&self, _addrs: &[IpAddr]) {}
+    /// Whether the route that serves `host:port` now reads request bodies
+    /// and refuses those that ask a model provider to reach other hosts or
+    /// run tools itself (`provider_fetch`), or `None` when no route serves
+    /// it or the authority has no routes.
+    fn refuses_provider_fetch(&self, _host: &str, _port: u16) -> Option<bool> {
+        None
+    }
 }
 
 /// What a sandbox needs to run under `network: egress`.

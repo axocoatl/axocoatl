@@ -515,9 +515,50 @@ pub fn routes_for_credential(
     Ok(vec![route])
 }
 
+/// Whether the program starts with the tools its model provider runs for
+/// it, which reach hosts the Session's egress policy does not list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HostedTools {
+    /// Off, the default: the route serving the program's model API refuses
+    /// requests that offer them (`provider_fetch: refuse`), so Claude Code
+    /// runs with `--disallowedTools WebSearch` and Codex with
+    /// `web_search="disabled"` and `--disable image_generation`, and neither
+    /// sends a request the route would refuse.
+    #[default]
+    Off,
+    /// As the program has them: the route serving its model API lets such
+    /// requests through (a loadout route with `provider_fetch: allow`).
+    Program,
+}
+
+impl HostedTools {
+    /// For a route that refuses provider fetches (`Some(true)`), or none
+    /// known (`None`): off. Only a route known to allow them turns them on.
+    pub fn for_route(refuses_provider_fetch: Option<bool>) -> Self {
+        match refuses_provider_fetch {
+            Some(false) => Self::Program,
+            Some(true) | None => Self::Off,
+        }
+    }
+}
+
+/// The host of the model API `runtime`'s program calls with `credential`,
+/// the one its route serves.
+pub fn model_api_host(
+    runtime: AgentRuntime,
+    credential: ExternalCredential,
+) -> Option<&'static str> {
+    match (runtime, credential) {
+        (AgentRuntime::Native, _) => None,
+        (AgentRuntime::ClaudeCode, _) => Some(claude_code::API_HOST),
+        (AgentRuntime::Codex, ExternalCredential::Default) => Some(codex::API_HOST),
+        (AgentRuntime::Codex, ExternalCredential::CodexChatgpt) => Some(codex::CHATGPT_HOST),
+    }
+}
+
 /// The program's argv for one activation (no wrapper): `env` with the
 /// runtime's fixed variables, then the program reading its prompt from
-/// stdin.
+/// stdin, with its hosted tools off.
 pub fn program_argv(runtime: AgentRuntime, model: &str) -> Result<Vec<String>, ExternalAgentError> {
     program_argv_with(runtime, ExternalCredential::Default, model)
 }
@@ -528,16 +569,32 @@ pub fn program_argv_with(
     credential: ExternalCredential,
     model: &str,
 ) -> Result<Vec<String>, ExternalAgentError> {
+    program_argv_for(runtime, credential, model, HostedTools::Off)
+}
+
+/// [`program_argv_with`] with the program's hosted tools as `hosted`.
+pub fn program_argv_for(
+    runtime: AgentRuntime,
+    credential: ExternalCredential,
+    model: &str,
+    hosted: HostedTools,
+) -> Result<Vec<String>, ExternalAgentError> {
     let (env, argv): (&[(&str, &str)], Vec<String>) = match (runtime, credential) {
         (AgentRuntime::Native, _) => {
             return Err(ExternalAgentError::Invalid(
                 "a native Agent runs no program".into(),
             ))
         }
-        (AgentRuntime::ClaudeCode, _) => (claude_code::ENV, claude_code::argv(model)?),
-        (AgentRuntime::Codex, ExternalCredential::Default) => (codex::ENV, codex::argv(model)?),
+        (AgentRuntime::ClaudeCode, _) => {
+            let mut argv = claude_code::argv(model)?;
+            argv.extend(claude_code::hosted_tools_args(hosted));
+            (claude_code::ENV, argv)
+        }
+        (AgentRuntime::Codex, ExternalCredential::Default) => {
+            (codex::ENV, codex::argv_with(model, hosted)?)
+        }
         (AgentRuntime::Codex, ExternalCredential::CodexChatgpt) => {
-            (codex::ENV, codex::chatgpt_argv(model)?)
+            (codex::ENV, codex::chatgpt_argv_with(model, hosted)?)
         }
     };
     let mut command = vec!["env".to_string()];
@@ -601,6 +658,16 @@ pub fn command_argv_with(
     credential: ExternalCredential,
     model: &str,
 ) -> Result<Vec<String>, ExternalAgentError> {
+    command_argv_for(runtime, credential, model, HostedTools::Off)
+}
+
+/// [`command_argv_with`] with the program's hosted tools as `hosted`.
+pub fn command_argv_for(
+    runtime: AgentRuntime,
+    credential: ExternalCredential,
+    model: &str,
+    hosted: HostedTools,
+) -> Result<Vec<String>, ExternalAgentError> {
     let mut argv = vec![
         "sh".to_string(),
         "-c".to_string(),
@@ -609,7 +676,7 @@ pub fn command_argv_with(
         MAX_OUTPUT_FILE_BYTES.to_string(),
         MAX_READ_BACK_BYTES.to_string(),
     ];
-    argv.extend(program_argv_with(runtime, credential, model)?);
+    argv.extend(program_argv_for(runtime, credential, model, hosted)?);
     Ok(argv)
 }
 

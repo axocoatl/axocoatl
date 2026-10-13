@@ -92,7 +92,11 @@ fn the_argv_runs_the_pinned_programs_headless_with_their_own_sandbox_off() {
             "--model",
             "claude-sonnet-4-5",
             "--dangerously-skip-permissions",
-            "--no-session-persistence"
+            "--no-session-persistence",
+            // Its route refuses provider fetches, so WebSearch, which asks
+            // Anthropic to search for it, is off.
+            "--disallowedTools",
+            "WebSearch"
         ]
     );
     // No token, placeholder or key is ever an argument.
@@ -693,5 +697,65 @@ fn a_codex_writer_signed_in_with_chatgpt_gets_the_chatgpt_route_and_provider() {
     assert_eq!(
         AgentRuntime::ClaudeCode.credentials(),
         [claude_code::CLAUDE_CODE_SECRET]
+    );
+}
+
+/// A route that lets provider fetches through (a loadout route with
+/// `provider_fetch: allow`) starts the programs with their hosted tools as
+/// they have them; any other route, or none known, with them off.
+#[test]
+fn hosted_tools_are_off_unless_the_route_allows_provider_fetches() {
+    assert_eq!(HostedTools::for_route(Some(true)), HostedTools::Off);
+    assert_eq!(HostedTools::for_route(None), HostedTools::Off);
+    assert_eq!(HostedTools::for_route(Some(false)), HostedTools::Program);
+    for credential in [
+        ExternalCredential::Default,
+        ExternalCredential::CodexChatgpt,
+    ] {
+        let off =
+            command_argv_for(AgentRuntime::Codex, credential, "gpt-5.5", HostedTools::Off).unwrap();
+        let on = command_argv_for(
+            AgentRuntime::Codex,
+            credential,
+            "gpt-5.5",
+            HostedTools::Program,
+        )
+        .unwrap();
+        assert_eq!(
+            off,
+            command_argv_with(AgentRuntime::Codex, credential, "gpt-5.5").unwrap()
+        );
+        assert!(off.contains(&"web_search=\"disabled\"".to_string()));
+        assert!(off
+            .windows(2)
+            .any(|pair| pair == ["--disable", "image_generation"]));
+        assert!(!on
+            .iter()
+            .any(|arg| arg.contains("web_search") || arg == "image_generation"));
+        // Only those four arguments differ.
+        assert_eq!(off.len(), on.len() + 4);
+        assert_eq!(on.last().map(String::as_str), Some("-"));
+    }
+    let off = command_argv(AgentRuntime::ClaudeCode, "claude-haiku-4-5").unwrap();
+    let on = command_argv_for(
+        AgentRuntime::ClaudeCode,
+        ExternalCredential::Default,
+        "claude-haiku-4-5",
+        HostedTools::Program,
+    )
+    .unwrap();
+    assert_eq!(&off[off.len() - 2..], ["--disallowedTools", "WebSearch"]);
+    assert_eq!(off[..off.len() - 2], on[..]);
+    assert_eq!(
+        model_api_host(AgentRuntime::Codex, ExternalCredential::CodexChatgpt),
+        Some("chatgpt.com")
+    );
+    assert_eq!(
+        model_api_host(AgentRuntime::ClaudeCode, ExternalCredential::Default),
+        Some("api.anthropic.com")
+    );
+    assert_eq!(
+        model_api_host(AgentRuntime::Native, ExternalCredential::Default),
+        None
     );
 }

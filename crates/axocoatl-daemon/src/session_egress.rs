@@ -2309,6 +2309,15 @@ impl EgressAuthority for SessionEgress {
         self.state().forbidden.extend(addrs.iter().copied());
     }
 
+    fn refuses_provider_fetch(&self, host: &str, port: u16) -> Option<bool> {
+        self.state()
+            .scopes
+            .get(&EgressScope::Session)?
+            .routes
+            .find(host, port)
+            .map(|route| route.provider_fetch.checks())
+    }
+
     async fn sidecar_event(&self, event: SidecarEvent) {
         self.record_sidecar_event(event).await;
     }

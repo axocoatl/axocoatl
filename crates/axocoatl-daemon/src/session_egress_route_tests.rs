@@ -1135,3 +1135,56 @@ async fn a_loadout_routes_refusals_name_the_loadout_not_the_configuration() {
         "{hint}"
     );
 }
+
+/// The Session's egress says whether the route that serves a host refuses
+/// provider fetches: an external writer's program is started with its
+/// hosted tools off unless it does not. A reload changes the answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_egress_says_whether_a_hosts_route_refuses_provider_fetches() {
+    let model_api = |provider_fetch: &str| -> EgressRouteYaml {
+        axocoatl_config::yaml::from_str(&format!(
+            "{{host: api.anthropic.com, credential: test, \
+              inject: {{header: Authorization, format: 'Bearer {{}}'}}, \
+              rules: [{{methods: [POST], path: /v1/messages}}]{provider_fetch}}}"
+        ))
+        .unwrap()
+    };
+    let f = fixture_with(|port| EgressPolicyConfig {
+        routes: vec![route_yaml(port, ""), model_api("")],
+        credentials: credentials(),
+        ..EgressPolicyConfig::default()
+    })
+    .await;
+    let egress: &dyn EgressAuthority = f.egress.as_ref();
+    assert_eq!(
+        egress.refuses_provider_fetch("api.anthropic.com", 443),
+        Some(true)
+    );
+    assert_eq!(
+        egress.refuses_provider_fetch("API.Anthropic.com.", 443),
+        Some(true)
+    );
+    assert_eq!(
+        egress.refuses_provider_fetch("api.anthropic.com", 8443),
+        None
+    );
+    assert_eq!(egress.refuses_provider_fetch("api.openai.com", 443), None);
+    let port = f.upstream.addr.port();
+    assert_eq!(egress.refuses_provider_fetch(HOST, port), Some(false));
+
+    f.egress
+        .reload_config(
+            EgressPolicyConfig {
+                routes: vec![route_yaml(port, ""), model_api(", provider_fetch: allow")],
+                credentials: credentials(),
+                ..EgressPolicyConfig::default()
+            },
+            "human",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        egress.refuses_provider_fetch("api.anthropic.com", 443),
+        Some(false)
+    );
+}

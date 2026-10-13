@@ -635,6 +635,9 @@ impl crate::egress::EgressAuthority for ContainerEgressAuthority {
     async fn relay(&self, open: crate::egress::RelayOpen, stream: crate::egress::RelayStream) {
         self.inner.relay(open, stream).await
     }
+    fn refuses_provider_fetch(&self, host: &str, port: u16) -> Option<bool> {
+        self.inner.refuses_provider_fetch(host, port)
+    }
 }
 
 /// Whether the Podman this process uses runs rootless, from `podman info`.

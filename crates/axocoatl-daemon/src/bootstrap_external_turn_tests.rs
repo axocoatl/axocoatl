@@ -522,12 +522,37 @@ fn offers_server_search(body: &serde_json::Value) -> bool {
     })
 }
 
+/// How a run that leads Claude Code to its WebSearch tool routes its model
+/// API ([`anthropic_web_search_answer`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchRoute {
+    /// The route Axocoatl adds, which refuses provider fetches: Claude Code
+    /// runs with WebSearch disallowed and never asks Anthropic to search.
+    Default,
+    /// A loadout route for `api.anthropic.com` with `provider_fetch: allow`:
+    /// Claude Code keeps WebSearch, and its search request reaches the API.
+    Allow,
+}
+
+/// The loadout route that replaces the one Axocoatl adds for Claude Code,
+/// letting provider fetches through.
+const CLAUDE_ROUTE_ALLOWING_FETCHES: &str = "routes:
+  - host: api.anthropic.com
+    credential: claude-code-oauth
+    inject: { header: Authorization, format: \"Bearer {}\" }
+    env_placeholders: [CLAUDE_CODE_OAUTH_TOKEN]
+    max_request_bytes: 67108864
+    provider_fetch: allow
+    rules:
+      - { methods: [POST], path: /v1/messages }
+";
+
 /// The Messages API's answer when the model leads Claude Code through its
-/// WebSearch tool before the fix: it loads the deferred tool
-/// (`ToolSearch`), searches (`WebSearch`, which makes Claude Code send a
-/// request of its own offering Anthropic's server-side `web_search`), runs
-/// [`PROGRAM_COMMAND`] and answers. A request offering the server tool gets
-/// a text answer: reaching the API at all is what the route must prevent.
+/// WebSearch tool: it loads the deferred tool (`ToolSearch`), searches
+/// (`WebSearch`, which makes Claude Code send a request of its own offering
+/// Anthropic's server-side `web_search` when the tool is not disallowed),
+/// runs [`PROGRAM_COMMAND`] and answers. A request offering the server tool
+/// gets a text answer.
 fn anthropic_web_search_answer(body: &serde_json::Value) -> (String, &'static str) {
     if offers_server_search(body) {
         return anthropic_message(
@@ -1064,7 +1089,7 @@ fn git(repo: &std::path::Path, args: &[&str]) {
 /// request `401`: the run needs attention, and its not-covered reason says
 /// the stored credential was rejected and how to store it again.
 async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_rejects: bool) {
-    pinned_run(runtime, reviewed, api_rejects, false, false, false).await
+    pinned_run(runtime, reviewed, api_rejects, false, false, None).await
 }
 
 /// [`pinned_run_child_body`]; with `chatgpt`, the Codex writer names
@@ -1086,7 +1111,7 @@ async fn pinned_run(
     api_rejects: bool,
     chatgpt: bool,
     stale_access: bool,
-    web_search: bool,
+    web_search: Option<SearchRoute>,
 ) {
     use axocoatl_session::network_record::{Decision, NetworkEvent};
     use axocoatl_session::run_outcome::{RunVerdict, TurnState};
@@ -1155,6 +1180,14 @@ async fn pinned_run(
     } else {
         loadout_text
     };
+    let loadout_text = if web_search == Some(SearchRoute::Allow) {
+        loadout_text.replace(
+            "budgets:",
+            &format!("{CLAUDE_ROUTE_ALLOWING_FETCHES}budgets:"),
+        )
+    } else {
+        loadout_text
+    };
     std::fs::write(
         home.path().join(format!("loadouts/{loadout_id}.yaml")),
         loadout_text,
@@ -1167,7 +1200,7 @@ async fn pinned_run(
     // The model API, reached at its real host name and port through the
     // route: the broker resolves the host to the fake and trusts its
     // authority. Everything else is production's.
-    let api = FakeModelApi::start(host, api_rejects, web_search).await;
+    let api = FakeModelApi::start(host, api_rejects, web_search.is_some()).await;
     if stale_access {
         api.refuse_token(crate::external_agent::codex_chatgpt::verify::STALE_ACCESS_TOKEN);
     }
@@ -1562,9 +1595,14 @@ async fn pinned_run(
     // With `stale_access`, one call more: the first, carrying the switch's
     // invalid token and answered 401, which the program sent again. Led
     // through WebSearch, Claude Code makes four model calls (ToolSearch,
-    // WebSearch, Bash, the answer); its own search request is refused.
+    // WebSearch, Bash, the answer), and one more, its own search request,
+    // where the route lets it through.
     let stale_calls = usize::from(stale_access);
-    let per_activation = if web_search { 4 } else { 2 };
+    let per_activation = match web_search {
+        None => 2,
+        Some(SearchRoute::Default) => 4,
+        Some(SearchRoute::Allow) => 5,
+    };
     assert_eq!(
         calls.len(),
         per_activation * activations + stale_calls,
@@ -1581,8 +1619,12 @@ async fn pinned_run(
             call.target == path || call.target.starts_with(&format!("{path}?")),
             "{context}"
         );
-        // What the pinned program sends passes the route's body check: it
-        // came through it, and asks the provider to reach no other host.
+        // What the pinned program sends passes the route's body check and
+        // asks the provider to reach no other host, but for its own search
+        // request on a route that lets provider fetches through.
+        if web_search == Some(SearchRoute::Allow) && offers_server_search(&call.body) {
+            continue;
+        }
         assert_eq!(
             crate::egress_broker::provider_fetch::check(path, &call.raw),
             Ok(()),
@@ -1590,6 +1632,15 @@ async fn pinned_run(
         );
         assert!(!offers_server_search(&call.body), "{context}");
     }
+    let searches = calls
+        .iter()
+        .filter(|call| offers_server_search(&call.body))
+        .count();
+    assert_eq!(
+        searches,
+        usize::from(web_search == Some(SearchRoute::Allow)),
+        "{context}"
+    );
     for (index, call) in calls.iter().enumerate() {
         let sent = if index < stale_calls {
             crate::external_agent::codex_chatgpt::verify::STALE_ACCESS_TOKEN
@@ -1726,15 +1777,10 @@ async fn pinned_run(
     // Nothing reached another host. Claude Code 2.1.292 also asks the route
     // for its account's policy limits and remote settings; the route refuses
     // them, records the refusal and the program goes on.
-    let allowed_refusals: &[&str] = match (runtime, web_search) {
-        (AgentRuntime::ClaudeCode, false) => &[
+    let allowed_refusals: &[&str] = match runtime {
+        AgentRuntime::ClaudeCode => &[
             "GET api.anthropic.com/api/claude_code/policy_limits",
             "GET api.anthropic.com/api/claude_code/settings",
-        ],
-        (AgentRuntime::ClaudeCode, true) => &[
-            "GET api.anthropic.com/api/claude_code/policy_limits",
-            "GET api.anthropic.com/api/claude_code/settings",
-            "POST api.anthropic.com/v1/messages",
         ],
         _ => &[],
     };
@@ -1760,18 +1806,23 @@ async fn pinned_run(
             "[usage] 600 input and 18 output tokens, as the program reported",
         ),
     };
-    if web_search {
-        // Claude Code's own request for Anthropic's web search was refused
-        // once, with its reason; its WebSearch tool answered the model with
-        // the failure, and the run went on to pass.
-        let provider_fetches: Vec<&String> = refused
-            .iter()
-            .filter(|refusal| refusal.ends_with(" provider_fetch_refused"))
-            .collect();
-        assert_eq!(
-            provider_fetches,
-            ["POST api.anthropic.com/v1/messages provider_fetch_refused"],
+    if let Some(search) = web_search {
+        // No request was refused for what it asked the provider to do:
+        // with the route Axocoatl adds, Claude Code never asked (WebSearch
+        // is disallowed, so it is not among its deferred tools and a call
+        // to it fails in the program); with the loadout's route that allows
+        // it, its search request went through.
+        assert!(
+            !refused
+                .iter()
+                .any(|refusal| refusal.ends_with(" provider_fetch_refused")),
             "{context}"
+        );
+        let first = calls[0].body.to_string();
+        assert_eq!(
+            first.contains("WebSearch"),
+            search == SearchRoute::Allow,
+            "{first}"
         );
         let search_result = calls
             .iter()
@@ -1784,23 +1835,26 @@ async fn pinned_run(
             .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
             .find(|block| block["tool_use_id"] == "toolu_axocoatl_web")
             .unwrap_or_else(|| panic!("no WebSearch result\n{context}"));
-        eprintln!("claude-code: the WebSearch tool's result after the refusal: {search_result}");
-        // Claude Code 2.1.292 words any 403 as "Failed to authenticate",
-        // then gives the route's answer: what was refused and why.
-        assert_eq!(search_result["is_error"], true, "{search_result}");
+        eprintln!("claude-code ({search:?}): the WebSearch tool's result: {search_result}");
         let text = search_result["content"].to_string();
-        assert!(
-            text.contains("API Error: 403")
-                && text.contains("provider_fetch_refused")
-                && text.contains("web_search_20250305"),
-            "{text}"
-        );
+        assert!(!text.contains("provider_fetch_refused"), "{text}");
+        match search {
+            SearchRoute::Default => {
+                assert_eq!(search_result["is_error"], true, "{search_result}");
+            }
+            SearchRoute::Allow => {
+                assert_ne!(search_result["is_error"], true, "{search_result}");
+                assert!(text.contains("Web search results"), "{text}");
+            }
+        }
     }
-    // The fake API reports the same usage for each call.
-    let usage = if web_search {
-        "[usage] 480 input and 28 output tokens, $0.000620"
-    } else {
-        usage
+    // The fake API reports the same usage for each call. Claude Code's
+    // report counts the tokens of its four main model calls; its cost also
+    // counts its own search request, where it made one.
+    let usage = match web_search {
+        None => usage,
+        Some(SearchRoute::Default) => "[usage] 480 input and 28 output tokens, $0.000620",
+        Some(SearchRoute::Allow) => "[usage] 480 input and 28 output tokens, $0.000775",
     };
     for wanted in [
         format!(
@@ -1912,7 +1966,7 @@ async fn actual_loadout_run_with_the_pinned_codex() {
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
 async fn actual_loadout_run_with_the_pinned_codex_signed_in_with_chatgpt() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run(AgentRuntime::Codex, false, false, true, false, false).await;
+        pinned_run(AgentRuntime::Codex, false, false, true, false, None).await;
         return;
     }
     run_child(
@@ -1932,7 +1986,7 @@ async fn actual_loadout_run_with_the_pinned_codex_signed_in_with_chatgpt() {
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
 async fn the_pinned_codex_retries_a_401_after_the_stale_access_switch_and_the_run_passes() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run(AgentRuntime::Codex, false, false, true, true, false).await;
+        pinned_run(AgentRuntime::Codex, false, false, true, true, None).await;
         return;
     }
     run_child(
@@ -1943,20 +1997,55 @@ async fn the_pinned_codex_retries_a_401_after_the_stale_access_switch_and_the_ru
     .await;
 }
 
-/// The pinned Claude Code led through its WebSearch tool (see
-/// [`anthropic_web_search_answer`]): Claude Code asks Anthropic to search
-/// the web for it, with a request offering the server-side `web_search`
-/// tool. The route refuses that request and records why; the program gets
-/// an error from its WebSearch tool, goes on, and the run passes.
+/// The pinned Claude Code led toward its WebSearch tool (see
+/// [`anthropic_web_search_answer`]) on the route Axocoatl adds, which
+/// refuses provider fetches: Claude Code runs with WebSearch disallowed, so
+/// it never sends a request offering Anthropic's server-side `web_search`
+/// (nothing is refused for it), the model's call to the tool fails in the
+/// program, and the run passes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the claude-code recipe image"]
-async fn the_pinned_claude_codes_web_search_is_refused_and_its_run_passes() {
+async fn the_pinned_claude_code_runs_without_web_search_on_the_route_axocoatl_adds() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run(AgentRuntime::ClaudeCode, false, false, false, false, true).await;
+        pinned_run(
+            AgentRuntime::ClaudeCode,
+            false,
+            false,
+            false,
+            false,
+            Some(SearchRoute::Default),
+        )
+        .await;
         return;
     }
     run_child(
-        "the_pinned_claude_codes_web_search_is_refused_and_its_run_passes",
+        "the_pinned_claude_code_runs_without_web_search_on_the_route_axocoatl_adds",
+        None,
+        true,
+    )
+    .await;
+}
+
+/// The same run with a loadout route for `api.anthropic.com` that sets
+/// `provider_fetch: allow`: Claude Code keeps WebSearch, its own search
+/// request reaches the API through that route, and the run passes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the claude-code recipe image"]
+async fn the_pinned_claude_codes_web_search_reaches_the_api_on_a_route_that_allows_it() {
+    if std::env::var_os(CHILD).is_some() {
+        pinned_run(
+            AgentRuntime::ClaudeCode,
+            false,
+            false,
+            false,
+            false,
+            Some(SearchRoute::Allow),
+        )
+        .await;
+        return;
+    }
+    run_child(
+        "the_pinned_claude_codes_web_search_reaches_the_api_on_a_route_that_allows_it",
         None,
         true,
     )
