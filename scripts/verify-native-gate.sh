@@ -47,6 +47,7 @@ cargo build --locked --release -p axocoatl-cli --jobs 1
 release_target_dir=$(cargo metadata --locked --offline --format-version 1 --no-deps \
   | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
 ./scripts/check-no-live-verify.sh "$release_target_dir/release/axocoatl"
+./scripts/test-verify-receipt-action.sh "$release_target_dir/release/axocoatl"
 ./scripts/test-server-package.sh
 
 echo 'Native release gate: PASS'

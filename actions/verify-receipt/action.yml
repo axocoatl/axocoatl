@@ -1,0 +1,95 @@
+name: Verify Axocoatl receipt
+description: >-
+  Verify the signed Axocoatl receipt a pull request carries: its signature against the
+  keys the base branch trusts, the pull request's head files against its digests, and
+  every file the pull request changes against what it covers.
+author: Axocoatl
+
+inputs:
+  version:
+    description: >-
+      The Axocoatl release to install, as its tag. The archive for this runner (Linux
+      x86_64 or ARM64) is checked against the release's published SHA-256 file.
+    required: false
+    default: v1.4.0
+  sha256:
+    description: >-
+      The SHA-256 the release archive for this runner must also have. Leave empty to
+      rely on the release's own checksum file.
+    required: false
+    default: ''
+  keys-file:
+    description: >-
+      The trusted-keys file, one line per key as `axocoatl receipt key` prints it. It is
+      read from the pull request's base commit, never from its head, so a pull request
+      cannot add its own key.
+    required: false
+    default: .axocoatl/receipt-keys
+  require-receipt:
+    description: >-
+      Fail a pull request whose description carries no receipt. With `false`, such a
+      pull request passes with a notice.
+    required: false
+    default: 'true'
+  require-pass:
+    description: >-
+      Fail a receipt whose run did not pass (its verdict is not `pass`).
+    required: false
+    default: 'true'
+  allow-uncovered-files:
+    description: >-
+      Let the pull request change files the receipt does not cover (they are listed as
+      warnings). By default they fail the check.
+    required: false
+    default: 'false'
+  github-token:
+    description: >-
+      The token `gh` uses to read the base commit's keys file and the pull request's
+      changed files.
+    required: false
+    default: ${{ github.token }}
+  binary:
+    description: >-
+      An `axocoatl` executable already on the runner to use instead of downloading the
+      release (for testing a build).
+    required: false
+    default: ''
+
+outputs:
+  result:
+    description: >-
+      `valid`, `missing` (no receipt, and none required), or why it failed: `malformed`,
+      `invalid`, `untrusted`, `mismatch`, `uncovered`, `not-passed`, `error`.
+    value: ${{ steps.verify.outputs.result }}
+  run-id:
+    description: The run the receipt is of.
+    value: ${{ steps.verify.outputs.run-id }}
+  verdict:
+    description: The run's verdict, as the receipt states it.
+    value: ${{ steps.verify.outputs.verdict }}
+  key-id:
+    description: The key that signed the receipt (`sha256:<hex>`).
+    value: ${{ steps.verify.outputs.key-id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Axocoatl
+      id: install
+      shell: bash
+      env:
+        AXOCOATL_VERSION: ${{ inputs.version }}
+        AXOCOATL_SHA256: ${{ inputs.sha256 }}
+        AXOCOATL_BINARY: ${{ inputs.binary }}
+      run: '"$GITHUB_ACTION_PATH/install.sh"'
+    - name: Verify the receipt
+      id: verify
+      shell: bash
+      env:
+        AXOCOATL_BIN: ${{ steps.install.outputs.binary }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        KEYS_FILE: ${{ inputs.keys-file }}
+        REQUIRE_RECEIPT: ${{ inputs.require-receipt }}
+        REQUIRE_PASS: ${{ inputs.require-pass }}
+        ALLOW_UNCOVERED_FILES: ${{ inputs.allow-uncovered-files }}
+      run: '"$GITHUB_ACTION_PATH/verify.sh"'
