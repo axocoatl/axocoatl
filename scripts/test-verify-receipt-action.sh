@@ -24,7 +24,7 @@ binary=${1:-$repo_root/target/debug/axocoatl}
   exit 1
 }
 binary=$(CDPATH='' cd -- "$(dirname -- "$binary")" && pwd)/$(basename -- "$binary")
-for tool in git jq tar; do
+for tool in git jq tar ruby; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "test-verify-receipt-action: $tool is required" >&2
     exit 1
@@ -533,6 +533,97 @@ expect bad-boolean fails error "require-pass must be 'true' or 'false'"
 jq -n '{ref: "refs/heads/main"}' >"$work/push.event"
 event_override="$work/push.event" verify push-event "$work/head" "$work/valid.md" "$base" "$head"
 expect push-event fails error "this event has no pull request"
+
+# ---------------------------------------------------------------------------
+# The action as a runner runs it: action.yml's steps in order, each step's
+# env from its expressions (inputs with their defaults, the install step's
+# outputs), each script under `bash --noprofile --norc -eo pipefail`, and
+# the action's outputs from its steps'.
+
+cat >"$work/run-composite.rb" <<'RUBY'
+require "json"
+require "tmpdir"
+require "yaml"
+
+action_dir, given_json, outputs_file = ARGV
+action = YAML.load_file(File.join(action_dir, "action.yml"))
+given = JSON.parse(given_json)
+unknown = given.keys - action.fetch("inputs").keys
+abort("undeclared inputs: #{unknown.join(", ")}") unless unknown.empty?
+steps = {}
+inputs = {}
+evaluate = lambda do |expression|
+  case expression.strip
+  when /\Ainputs\.([A-Za-z0-9_-]+)\z/ then inputs.fetch(Regexp.last_match(1))
+  when /\Asteps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\z/
+    steps.fetch(Regexp.last_match(1), {}).fetch(Regexp.last_match(2), "")
+  when "github.token" then "fake-token"
+  else abort("unsupported expression: #{expression}")
+  end
+end
+expand = ->(text) { text.to_s.gsub(/\$\{\{(.*?)\}\}/m) { evaluate.call(Regexp.last_match(1)) } }
+action.fetch("inputs").each do |name, input|
+  inputs[name] = given.key?(name) ? given[name] : expand.call(input["default"])
+end
+status = true
+Dir.mktmpdir("composite") do |dir|
+  action.fetch("runs").fetch("steps").each_with_index do |step, index|
+    abort("step #{index + 1} is not a bash run step") unless step["shell"] == "bash" && step["run"]
+    output = File.join(dir, "output-#{index}")
+    script = File.join(dir, "step-#{index}.sh")
+    File.write(output, "")
+    File.write(script, step["run"])
+    env = (step["env"] || {}).transform_values { |value| expand.call(value) }
+    env["GITHUB_ACTION_PATH"] = action_dir
+    env["GITHUB_OUTPUT"] = output
+    status = system(env, "bash", "--noprofile", "--norc", "-eo", "pipefail", script)
+    values = File.readlines(output, chomp: true).select { |line| line.include?("=") }
+                 .map { |line| line.split("=", 2) }.to_h
+    steps[step["id"]] = values if step["id"]
+    break unless status
+  end
+end
+File.write(outputs_file, action.fetch("outputs").map { |name, output| "#{name}=#{expand.call(output["value"])}\n" }.join)
+exit(status ? 0 : 1)
+RUBY
+
+# composite NAME CHECKOUT BODY_FILE BASE HEAD INPUTS_JSON
+composite() {
+  local name=$1 checkout=$2 body_file=$3 base_sha=$4 head_sha=$5 inputs=$6
+  local run="$work/run/$name"
+  mkdir -p "$run.tmp"
+  : >"$run.output"
+  : >"$run.summary"
+  : >"$run.gh"
+  event "$body_file" "$base_sha" "$head_sha" >"$run.event"
+  local status=0
+  (
+    cd "$checkout"
+    env PATH="$fakebin:$PATH" GITHUB_EVENT_PATH="$run.event" GITHUB_STEP_SUMMARY="$run.summary" \
+      RUNNER_TEMP="$run.tmp" RUNNER_OS=Linux RUNNER_ARCH=X64 FAKE_GH_LOG="$run.gh" \
+      FAKE_GH_UPSTREAM="$upstream" FAKE_GH_REPO_NAME=octo/widgets FAKE_GH_NUMBER=7 \
+      FAKE_GH_BASE="$base_sha" FAKE_GH_HEAD="$head_sha" \
+      ruby "$work/run-composite.rb" "$action_dir" "$inputs" "$run.output"
+  ) >"$run.log" 2>&1 || status=$?
+  printf '%s\n' "$status" >"$run.status"
+}
+
+composite composite-valid "$work/head" "$work/valid.md" "$base" "$head" \
+  "$(jq -c -n --arg binary "$binary" '{binary: $binary}')"
+expect composite-valid passes valid "Using $binary" "123 changed file(s), 0 not covered"
+if grep -qx "run-id=run-00000000-0000-4000-8000-000000000001" "$work/run/composite-valid.output" \
+  && grep -qx "key-id=$trusted_id" "$work/run/composite-valid.output" \
+  && grep -qx "verdict=pass" "$work/run/composite-valid.output"; then
+  ok "composite-valid: the action's outputs"
+else
+  bad "composite-valid: the action's outputs" "missing run-id, key-id or verdict" "$work/run/composite-valid.output"
+fi
+composite composite-own-key "$work/head-own-key" "$work/own-key.md" "$base" "$head_own_key" \
+  "$(jq -c -n --arg binary "$binary" '{binary: $binary, "keys-file": ".axocoatl/receipt-keys"}')"
+expect composite-own-key fails untrusted "signed by key $stranger_id"
+composite composite-uncovered-allowed "$work/head-extra" "$work/valid.md" "$base" "$head_extra" \
+  "$(jq -c -n --arg binary "$binary" '{binary: $binary, "allow-uncovered-files": "true"}')"
+expect composite-uncovered-allowed passes valid "1 not covered"
 
 # ---------------------------------------------------------------------------
 # The install step
