@@ -500,23 +500,28 @@ Each of these routes also reads every request body and refuses one that asks the
 model provider to reach other hosts or run tools itself (`provider_fetch: refuse`; what
 it refuses is in [Requests to model APIs](/configure/credentials/#requests-to-model-apis)).
 Without that, the provider could fetch pages, search the web or connect to MCP servers
-for the program, past the Session's egress policy. The pinned programs' model calls,
-as captured in Axocoatl's Podman runs, pass it: Claude Code 2.1.292 offers only its
-own tools, which it runs in the container, and Codex 0.160.1 runs with
-`-c web_search="disabled"` and `--disable image_generation`, so it offers only
-function and custom tools and a `tool_search` it runs itself. Without that setting,
-Codex 0.160.1 offers OpenAI's hosted `web_search`, with live access, on every request,
-and the route would refuse them all.
+for the program, past the Session's egress policy.
 
-Claude Code's WebSearch tool is the exception. Asked to search, Claude Code sends a
-request of its own that offers Anthropic's server-side `web_search_20250305`; the route
-refuses it (`403 provider_fetch_refused`) and the network record shows the refusal.
-Claude Code gives the model the failure as the tool's result (it words a `403` as
-`Failed to authenticate. API Error: 403`, followed by the route's answer), and the run
-goes on: in Axocoatl's Podman test, the pinned Claude Code, led to search, then ran its
-shell command and the run passed. To let a writer's provider search or fetch for it,
-list a route for the same host in the loadout's `routes` with
-`provider_fetch: allow`.
+So that the programs never send such a request, Axocoatl starts them without the tools
+their provider runs for them while the route that serves their model API refuses
+provider fetches, which is the default: Claude Code 2.1.292 with
+`--disallowedTools WebSearch` (its WebSearch tool sends a request of its own offering
+Anthropic's server-side `web_search_20250305`), and Codex 0.160.1 with
+`-c web_search="disabled"` and `--disable image_generation` (without them it offers
+OpenAI's hosted `web_search`, with live access, on every request). The pinned programs'
+model calls, as captured in Axocoatl's Podman runs, then pass the check: Claude Code's
+offer only its own tools, which it runs in the container, and Codex's only function and
+custom tools and a `tool_search` it runs itself. A model that calls WebSearch anyway
+gets `Error: No such tool available: WebSearch` from Claude Code, and the run goes on:
+in Axocoatl's Podman test the pinned Claude Code, led to search, then ran its shell
+command and the run passed, with no request refused. Should a program ask anyway, the
+route refuses it (`403 provider_fetch_refused`) and the network record shows the
+refusal.
+
+To let a writer's provider search or fetch for it, list a route for the same host in
+the loadout's `routes` with `provider_fetch: allow`. The program is then started with
+its hosted tools as it has them: in Axocoatl's Podman test, Claude Code's search request
+reached the API through such a route.
 
 The route stays this small on purpose. The daemon adds your credential to every request
 a route's rules allow, so each rule is one more endpoint that receives it; these routes

@@ -745,10 +745,13 @@ the credential or writes the request event, and refuses with `403 provider_fetch
 recorded with that reason, a body that offers a tool the provider runs (tools pass by
 client-run type only), names MCP servers or enabled plugins, asks the provider to fetch a
 URL, names a web-searching model or a stored prompt, or cannot be read
-(`egress_broker::provider_fetch`); an allowed body goes upstream byte for byte. Codex runs
-with `web_search="disabled"` and `--disable image_generation`; Claude Code's WebSearch
-tool sends a request offering Anthropic's server-side `web_search`, which is refused,
-and the program goes on with the tool's error. The
+(`egress_broker::provider_fetch`); an allowed body goes upstream byte for byte. While the
+route serving the program's model API refuses provider fetches (asked through
+`EgressAuthority::refuses_provider_fetch` when the activation runs), the program starts
+without its hosted tools (`external_agent::HostedTools`): Claude Code with
+`--disallowedTools WebSearch`, Codex with `web_search="disabled"` and
+`--disable image_generation`. A loadout route with `provider_fetch: allow` for the same
+host starts them as they are. The
 activation reserves its grant's limits up front, route requests count against its
 invocations, and the program's own usage report settles it: Claude Code reports its cost;
 Codex reports tokens only, and its cost is computed from them at the configuration's
@@ -786,7 +789,11 @@ lists it as not covered. `check_options[i].timeout_ms` (1 s to 30 min, 180 s by 
 reaches the admitted check definition and the condition permission's bound; 1.2 graphs
 still verify. `sandbox.egress.host_ollama` is an opt-in route from Session containers to a
 loopback Ollama port through `ollama.host.axocoatl.internal`, ended with the Session CA
-and recorded like any route.
+and recorded like any route. It allows only Ollama's inference and model listing
+(`egress_broker::rules::HOST_OLLAMA_RULES`), refusing pulls, pushes, creates, copies,
+deletes, blobs, the account endpoints and web search and fetch, and checks bodies with
+`provider_fetch::check_ollama`, which refuses a cloud model (a tag that is `cloud` or
+ends in `-cloud`) that Ollama would run on `ollama.com`.
 
 ## Automations
 

@@ -41,6 +41,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   settings stored with the provider (an OpenRouter account's default plugins, a preset)
   is not seen. See
   [Requests to model APIs](https://docs.axocoatl.ai/configure/credentials/#requests-to-model-apis).
+- **The route to Ollama on this computer carries only inference and model listing.**
+  `sandbox.egress.host_ollama` allowed every request, and Ollama 0.20.6 reaches other
+  hosts for several: `/api/pull` and `/api/create` fetch from whatever registry the model
+  name names, `/api/experimental/web_search`, `/api/experimental/web_fetch` and the
+  account endpoints call `ollama.com`, and with its cloud features on (the default) any
+  request for a model whose tag is `cloud` or ends in `-cloud` goes to `ollama.com`,
+  prompt included, without a pull. The route now allows only `GET` or `HEAD` of `/`,
+  `/api/version`, `/api/tags`, `/api/ps`, `/api/status`, `/v1/models` and
+  `/v1/models/<model>`, and `POST` of `/api/show`, `/api/chat`, `/api/generate`,
+  `/api/embed`, `/api/embeddings`, `/v1/chat/completions`, `/v1/completions`,
+  `/v1/embeddings`, `/v1/responses` and `/v1/messages`; anything else gets
+  `403 route_denied`. It reads each body and refuses a cloud model with
+  `403 provider_fetch_refused`, and checks the compatible endpoints as it checks a hosted
+  API. Both are recorded like any refusal. Pull models on this computer with
+  `ollama pull`.
 
 ### Added
 - **`provider_fetch` on a route** (`allow` or `refuse`). Unset, it is `refuse` on a
@@ -52,12 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `request_incomplete` (a body that did not arrive whole on a route that checks bodies).
 
 ### Changed
-- **Codex writers run without OpenAI's hosted tools.** Codex 0.160.1 runs with
-  `-c web_search="disabled"` and `--disable image_generation`, so its model requests
-  offer only its own function and custom tools and a `tool_search` it runs itself.
-- **Claude Code's WebSearch fails in a run.** The route refuses the request it sends;
-  Claude Code hands the model the error as the tool's result and goes on. In the Podman
-  test the pinned Claude Code, led to search, then finished its task and the run passed.
+- **External writers run without their provider's hosted tools.** While the route that
+  serves the program's model API refuses provider fetches, the default, Claude Code
+  2.1.292 runs with `--disallowedTools WebSearch` and Codex 0.160.1 with
+  `-c web_search="disabled"` and `--disable image_generation`, so neither sends a
+  request the route would refuse: Codex's offer only its own function and custom tools
+  and a `tool_search` it runs itself, and Claude Code's WebSearch tool, which would ask
+  Anthropic to search, answers the model `No such tool available: WebSearch`. In the
+  Podman test the pinned Claude Code, led to search, finished its task and the run
+  passed with no request refused. A loadout route for the program's API host with
+  `provider_fetch: allow` starts the program with these tools as it has them.
 - **A configured or loadout route to a model API refuses more.** Besides the constructs
   above, a request with a body to an endpoint other than the model endpoints (a file
   upload, a batch, embeddings) and a compressed body are refused. Set

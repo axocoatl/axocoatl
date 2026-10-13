@@ -431,7 +431,11 @@ What `egress` does not do:
   URL, search the web, connect to an MCP server or run a tool itself
   ([Requests to model APIs](/configure/credentials/#requests-to-model-apis)); settings
   stored with your provider account, such as an OpenRouter account's default plugins,
-  are not seen. A credential is added only as a header: query, path and body
+  are not seen. The route to Ollama on this computer
+  ([`sandbox.egress.host_ollama`](/reference/config/#sandboxegresshost_ollama)) carries
+  only Ollama's inference and model listing, and refuses a request for a cloud model;
+  pulling, creating and pushing models, Ollama's account endpoints and its web search
+  and fetch are refused, since those reach other hosts. A credential is added only as a header: query, path and body
   credentials, request signing such as AWS SigV4, and OAuth token exchange are not
   supported. A tool that pins certificates or keeps its own trust store cannot use a
   route.
