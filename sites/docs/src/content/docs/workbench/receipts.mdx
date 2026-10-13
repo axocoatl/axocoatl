@@ -185,3 +185,99 @@ refused, naming the path. The commit carries the trailers `Axocoatl-Run: <run id
 **Receipt** section (signer, verdict, checks, review, writer, files covered, how to
 verify) and the receipt block at its end, which the description's length limit never
 cuts.
+
+## Checking pull requests in GitHub Actions
+
+<Aside type="caution">
+The `verify-receipt` action is verified locally, against a stand-in for GitHub's API and
+real signed receipts; its first run on a real pull request is pending.
+</Aside>
+
+`axocoatl/axocoatl/actions/verify-receipt` is a composite action that checks the receipt a
+pull request's description carries, the way Keep as PR puts it there:
+
+```yaml
+name: Axocoatl receipt
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  receipt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: axocoatl/axocoatl/actions/verify-receipt@v1.4.0
+```
+
+It runs on Linux x86_64 and ARM64 runners and needs `git`, `gh` and `jq`, which
+GitHub-hosted runners have. In order, it:
+
+1. installs the Axocoatl release named by `version` (the archive for the runner,
+   `axocoatl-<version>-<target>.tar.gz`), checks it against the release's own
+   `.sha256` file and, when given, the `sha256` input, and checks the version the binary
+   reports;
+2. reads the description from the event (`pull_request` or `pull_request_target`); a
+   description without an `<!-- axocoatl-receipt:v1 … -->` block fails, or passes with a
+   notice when `require-receipt` is `false`;
+3. requires the checkout to be the pull request's head commit, with no local changes to
+   tracked files (`actions/checkout` checks out a merge commit unless given `ref`);
+4. reads the trusted keys from the **base** commit, never the head:
+   `gh api repos/<repo>/contents/<keys-file>?ref=<base sha>`. A pull request that adds its
+   own key to the file still fails, because the base does not list it, and a base without
+   the file trusts no key;
+5. runs `axocoatl receipt verify - --keys <those keys> --repo <checkout> --json`, so the
+   signature, the signer and every covered file and removed path are checked as above;
+6. lists the pull request's changed files (`gh api …/pulls/<n>/files`, every page) and
+   requires the receipt to cover each one: a removed file among the receipt's removed
+   paths, a renamed file's new path among its subjects and its old path among its removed
+   paths, any other file among its subjects. A file the receipt does not cover fails the
+   check unless `allow-uncovered-files` is `true`, which lists it as a warning. GitHub
+   lists at most 3,000 files of a pull request, so a larger one cannot be fully checked
+   and fails the same way;
+7. fails a valid receipt whose run did not pass, unless `require-pass` is `false`, and
+   writes a job summary: run, verdict, signer, checks, review, writers, files and what is
+   not covered.
+
+Each failure is an error annotation that says what failed: the description has no
+receipt, the receipt does not verify, the key is not trusted (naming the key id and the
+keys file at the base commit), a covered file differs (naming each path), a changed file
+is not covered (naming each path), or the run did not pass. The pull request's head is
+read again after its files are listed; if a push moved it meanwhile, the check fails and
+the run for the new head decides.
+
+| Input | Default | |
+| --- | --- | --- |
+| `version` | `v1.4.0` | The Axocoatl release to install |
+| `sha256` | (empty) | A SHA-256 the release archive must also have |
+| `keys-file` | `.axocoatl/receipt-keys` | The trusted-keys file, read at the base commit |
+| `require-receipt` | `true` | Fail a pull request without a receipt |
+| `require-pass` | `true` | Fail a receipt whose verdict is not `pass` |
+| `allow-uncovered-files` | `false` | Let changed files the receipt does not cover through, as warnings |
+| `github-token` | `github.token` | The token `gh` reads the keys file and the changed files with |
+| `binary` | (empty) | An `axocoatl` already on the runner, used instead of downloading |
+
+Its outputs are `result` (`valid`, `missing`, or why it failed: `malformed`, `invalid`,
+`untrusted`, `mismatch`, `uncovered`, `not-passed`, `error`), `run-id`, `verdict` and
+`key-id`. It reads the checkout's files without following symbolic links and runs
+nothing from them.
+
+### Trusting a computer's receipts in a repository
+
+The keys file has the format `--keys` reads: one line per key, as `axocoatl receipt key`
+prints it, with `#` comments and blank lines allowed. To trust the receipts a computer
+signs, run on that computer, with the daemon's `--config` and data directory:
+
+```sh
+axocoatl receipt key >> .axocoatl/receipt-keys
+```
+
+and commit the file to the branch pull requests merge into, through a pull request of its
+own. Only lines the base commit holds are trusted, so a key added in the pull request
+being checked is not. To stop trusting a key, delete its line; to keep accepting receipts
+an old key signed after `axocoatl receipt key --rotate`, keep its line next to the new one.

@@ -787,7 +787,12 @@ send whatever a route calls it, and made on first use. Admission failures, drive
 and runs a restart ends are sealed the same way. Signing that fails adds the warning
 `receipt_unavailable` and changes neither verdict nor exit code. `GET
 /api/runs/{run_id}/receipt` serves the envelope as written and `GET /api/receipts/key`
-the public key; `axocoatl receipt show|verify` read envelopes without a daemon.
+the public key; `axocoatl receipt show|verify` read envelopes without a daemon. The
+composite action `actions/verify-receipt` runs `verify` in a pull request's workflow
+against the trusted keys of the base commit (read with `gh api`, never from the head) and
+requires the receipt to cover every file the pull request changes; it is verified
+locally against a stand-in for GitHub's API, and its first real pull request run is
+pending.
 
 **Keep as PR.** For a passing run, host `git` commits exactly the run's attributed paths
 through a temporary `GIT_INDEX_FILE` seeded from HEAD (`update-index`, `write-tree`,

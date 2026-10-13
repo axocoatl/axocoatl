@@ -100,11 +100,15 @@ envelope: the changed files with their SHA-256 as the required checks judged the
 10,000 changed paths in a repository of any size, the sandbox and network policy, checks,
 review, models and verdict); `--receipt` writes it, and `axocoatl receipt verify` checks
 it offline against trusted key lines (`axocoatl receipt key`), a checkout and the record.
-It proves who signed which facts, not that the change is correct. `--keep branch|pr`
-commits a passing run to a new branch with host git (only the files its receipt covers, with `Axocoatl-Run` and
-`Axocoatl-Receipt` trailers) and, opt-in, opens a pull request with gh that carries the
-receipt; it never force-pushes and never pushes to the default branch. The Claude Code CLI or Codex CLI can be a
-loadout's writer inside the Session container, with its credential stored by
+It proves who signed which facts, not that the change is correct. The GitHub Action
+`axocoatl/axocoatl/actions/verify-receipt` checks a pull request's receipt against keys
+on its base branch (`.axocoatl/receipt-keys`) and that it covers every changed file
+(verified locally; first real pull request run pending). `--keep branch|pr` commits a
+passing run to a new branch with host git (only the files its receipt covers, with
+`Axocoatl-Run` and `Axocoatl-Receipt` trailers) and, opt-in, opens a pull request with gh
+that carries the receipt; it never force-pushes and never pushes to the default branch.
+The Claude Code CLI or Codex CLI can be a loadout's writer inside the Session container,
+with its credential stored by
 `axocoatl connect claude-code` (which runs `claude setup-token` and stores the token
 without showing it), `axocoatl connect codex` (which runs the pinned `codex login` in a throwaway Podman
 container with a private in-memory CODEX_HOME, or a host Codex with `--codex PATH`, and

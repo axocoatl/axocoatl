@@ -87,6 +87,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receipt**, or why the run has none. **Settings → Loadouts → Receipts → Signing key**
   shows the public key line with a Copy button and what a receipt does and does not
   prove.
+- **The `verify-receipt` GitHub Action (verified locally; its first run on a real pull
+  request is pending).** `axocoatl/axocoatl/actions/verify-receipt` installs the pinned
+  Axocoatl release for a Linux x86_64 or ARM64 runner, checked against the release's
+  `.sha256` file and an optional `sha256` input; reads the receipt from the pull
+  request's description; reads the trusted keys from the base commit's
+  `.axocoatl/receipt-keys` (`keys-file`), never from the head, so a pull request cannot
+  add its own key; runs `axocoatl receipt verify` on the checked-out head; and requires
+  the receipt to cover every file the pull request changes (`allow-uncovered-files: true`
+  turns that into warnings). It fails a pull request without a receipt unless
+  `require-receipt` is `false`, and a run that did not pass unless `require-pass` is
+  `false`, with an annotation naming what failed, and writes a job summary.
+  `scripts/test-verify-receipt-action.sh`, part of the native gate, runs it against a
+  stand-in for GitHub's API and real signed receipts; `scripts/run-actionlint.sh` checks
+  the action's scripts with the pinned ShellCheck and the workflow contract checks its
+  steps.
 
 ### Fixed
 - **A run's Outcome names the tree each check ran on.** `checks[].candidate_sha256` was
