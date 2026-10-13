@@ -1,7 +1,9 @@
 //! `axocoatl run`, `axocoatl loadouts`, `axocoatl record`. They talk to the
 //! running daemon over its HTTP API with the local API token (or
-//! `AXOCOATL_URL` / `AXOCOATL_TOKEN`). Owner: workstream `core`.
-//! Contract: docs/design/1.3-loadouts.md ("axocoatl run").
+//! `AXOCOATL_URL` / `AXOCOATL_TOKEN`); `axocoatl record verify` reads only
+//! the file. Owner: workstream `core`.
+//! Contract: docs/design/1.3-loadouts.md ("axocoatl run"), and for
+//! `--receipt` docs/design/1.4-receipts.md.
 //!
 //! `axocoatl run` never starts a daemon. Progress goes to stderr, the
 //! summary (or the Outcome as JSON) to stdout, and the process exits with
@@ -43,6 +45,9 @@ pub struct RunArgs {
     /// Write the run's record bundle (one JSON Lines file) here
     #[arg(long)]
     pub record: Option<PathBuf>,
+    /// Write the run's signed receipt (a DSSE envelope) here
+    #[arg(long)]
+    pub receipt: Option<PathBuf>,
     /// A model parameter as ROLE=provider:model (sets the `ROLE_model` parameter)
     #[arg(long = "model", value_name = "ROLE=PROVIDER:MODEL")]
     pub models: Vec<String>,
@@ -777,6 +782,62 @@ fn write_unadmitted_files(args: &RunArgs, failure: &Failure, console: &mut Conso
             path.display()
         ));
     }
+    if let Some(path) = &args.receipt {
+        console.note(&format!(
+            "· no receipt written to {}: no run was admitted, so there is nothing to sign",
+            path.display()
+        ));
+    }
+}
+
+/// Write the run's receipt to `path` atomically and say what it covers. A
+/// run without one (it could not be signed; its Outcome says why) is said,
+/// not a failure: a receipt never changes a run's exit code.
+async fn write_receipt(
+    daemon: &Daemon,
+    run_id: &str,
+    path: &Path,
+    console: &mut Console,
+) -> Result<(), Failure> {
+    let response = daemon
+        .send(daemon.request(
+            reqwest::Method::GET,
+            &format!("/api/runs/{run_id}/receipt"),
+        ))
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(failure) if failure.code == exit_code::USAGE => {
+            console.note(&format!(
+                "· no receipt written to {}: {}",
+                path.display(),
+                failure.message
+            ));
+            return Ok(());
+        }
+        Err(failure) => return Err(failure),
+    };
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| Failure::infrastructure(format!("reading the receipt: {error}")))?;
+    write_atomically(path, &bytes).map_err(|error| {
+        Failure::infrastructure(format!("writing {}: {error}", path.display()))
+    })?;
+    let covered = axocoatl_session::receipt::open_receipt(&bytes)
+        .map(|opened| {
+            let files = &opened.statement.predicate.files;
+            format!(
+                " (key {}, {} files covered, {} removed, {})",
+                axocoatl_session::receipt::short_key_id(&opened.statement.predicate.signer.key_id),
+                opened.statement.subject.len(),
+                files.removed.len(),
+                files.source
+            )
+        })
+        .unwrap_or_default();
+    console.note(&format!("· receipt written to {}{covered}", path.display()));
+    Ok(())
 }
 
 async fn run(
@@ -892,6 +953,12 @@ async fn run(
                 console.note(&format!("axocoatl run: record: {}", failure.message));
                 file_failure = Some(failure);
             }
+        }
+    }
+    if let Some(path) = &args.receipt {
+        if let Err(failure) = write_receipt(&daemon, &accepted.run_id, path, console).await {
+            console.note(&format!("axocoatl run: receipt: {}", failure.message));
+            file_failure = Some(failure);
         }
     }
     if interrupted {
@@ -1759,6 +1826,7 @@ mod tests {
                 started_at_ms: 1,
                 outcome: Some(outcome),
                 keep: None,
+                receipt: None,
             }))
             .mount(&server)
             .await;
@@ -1946,6 +2014,76 @@ mod tests {
         assert_eq!(std::fs::read(&record).unwrap(), run.after_keep);
     }
 
+    /// `--receipt` writes the envelope the daemon serves, also for a run
+    /// that did not pass; a run the daemon could not sign is said and keeps
+    /// its exit code.
+    #[tokio::test]
+    async fn the_receipt_is_written_whatever_the_verdict_and_its_absence_is_said() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, ResponseTemplate};
+        let envelope = b"{\"payloadType\":\"application/vnd.in-toto+json\",\"payload\":\"e30=\",\"signatures\":[]}\n";
+        let run = fake_daemon(outcome("checks_failed", serde_json::json!({})), Vec::new(), 200).await;
+        Mock::given(method("GET"))
+            .and(path(format!("/api/runs/{RUN}/receipt")))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                envelope.to_vec(),
+                axocoatl_session::receipt::ENVELOPE_MEDIA_TYPE,
+            ))
+            .mount(&run.server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let receipt = dir.path().join("r.json");
+        let (mut console, out, err) = captured_console();
+        let code = run_on(
+            run_args(
+                &run.server.uri(),
+                dir.path(),
+                &["--receipt", receipt.to_str().unwrap()],
+            ),
+            &mut console,
+            ADMISSION_NOTE_AFTER,
+        )
+        .await;
+        let err = err.text();
+        assert_eq!(code, exit_code::CHECKS_FAILED, "{}\n{err}", out.text());
+        assert_eq!(std::fs::read(&receipt).unwrap(), envelope);
+        assert!(
+            err.contains(&format!("· receipt written to {}", receipt.display())),
+            "{err}"
+        );
+
+        let run = fake_daemon(outcome("pass", serde_json::json!({})), Vec::new(), 200).await;
+        Mock::given(method("GET"))
+            .and(path(format!("/api/runs/{RUN}/receipt")))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "error": format!("run {RUN} has no receipt: the key cannot be read")
+            })))
+            .mount(&run.server)
+            .await;
+        let receipt = dir.path().join("none.json");
+        let (mut console, _out, err) = captured_console();
+        let code = run_on(
+            run_args(
+                &run.server.uri(),
+                dir.path(),
+                &["--receipt", receipt.to_str().unwrap()],
+            ),
+            &mut console,
+            ADMISSION_NOTE_AFTER,
+        )
+        .await;
+        let err = err.text();
+        assert_eq!(code, exit_code::PASS, "{err}");
+        assert!(!receipt.exists());
+        assert!(
+            err.contains(&format!(
+                "· no receipt written to {}: run {RUN} has no receipt: the key cannot be read",
+                receipt.display()
+            )),
+            "{err}"
+        );
+    }
+
     #[tokio::test]
     async fn a_run_that_needs_attention_is_not_kept_and_prints_classes_as_documented() {
         use axocoatl_session::run_outcome::{FailureClass, NotCovered, TurnState};
@@ -2123,6 +2261,7 @@ mod tests {
             let junit = dir.path().join("out").join("junit.xml");
             std::fs::create_dir(dir.path().join("out")).unwrap();
             let record = dir.path().join("out").join("run.axorecord.jsonl");
+            let receipt = dir.path().join("out").join("r.json");
             let (mut console, out, err) = captured_console();
             let exit = run_on(
                 run_args(
@@ -2133,6 +2272,8 @@ mod tests {
                         junit.to_str().unwrap(),
                         "--record",
                         record.to_str().unwrap(),
+                        "--receipt",
+                        receipt.to_str().unwrap(),
                     ],
                 ),
                 &mut console,
@@ -2163,15 +2304,18 @@ mod tests {
                 assert!(xml.contains("held by Session ses-1"), "{xml}");
             }
             assert!(!record.exists(), "a record was written for no run");
-            // Only the two files' notes after the reason; nothing says the
-            // run started.
+            assert!(!receipt.exists(), "a receipt was written for no run");
+            // Only the files' notes after the reason; nothing says the run
+            // started.
             assert!(!err.contains("· run "), "{err}");
             assert!(
                 err.ends_with(&format!(
                     "· JUnit written to {}\n· no record written to {}: no run was admitted, so \
-                     there is nothing to record\n",
+                     there is nothing to record\n· no receipt written to {}: no run was \
+                     admitted, so there is nothing to sign\n",
                     junit.display(),
-                    record.display()
+                    record.display(),
+                    receipt.display()
                 )),
                 "{err}"
             );

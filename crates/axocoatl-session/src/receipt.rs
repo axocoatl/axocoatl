@@ -641,20 +641,27 @@ pub fn check_signature(opened: &OpenedReceipt, trusted: &[PublicKey]) -> Signatu
                 .map(|bytes| (signature.keyid.clone(), bytes))
         })
         .collect();
+    let signer = match opened.signer() {
+        Ok(signer) => signer,
+        Err(error) => return SignatureCheck::Invalid(error.to_string()),
+    };
     for key in trusted {
         if signatures
             .iter()
             .any(|(_, signature)| key.verifies(&message, signature))
         {
+            if *key != signer {
+                return SignatureCheck::Invalid(format!(
+                    "the receipt names key {} as its signer, and key {} signed it",
+                    signer.short_id(),
+                    key.short_id()
+                ));
+            }
             return SignatureCheck::Trusted {
                 key_id: key.key_id(),
             };
         }
     }
-    let signer = match opened.signer() {
-        Ok(signer) => signer,
-        Err(error) => return SignatureCheck::Invalid(error.to_string()),
-    };
     let key_id = signer.key_id();
     let named = signatures
         .iter()
@@ -1352,6 +1359,27 @@ mod tests {
         assert!(matches!(
             check_signature(&receipt, &[other]),
             SignatureCheck::Invalid(_)
+        ));
+        // The trusted key signed a statement that names another signer.
+        let mut misnamed = statement(other.signer());
+        misnamed.predicate.signer = other.signer();
+        let payload = serde_json::to_vec(&misnamed).unwrap();
+        let receipt = OpenedReceipt {
+            envelope: Envelope {
+                payload_type: PAYLOAD_TYPE.into(),
+                payload: base64::engine::general_purpose::STANDARD.encode(&payload),
+                signatures: vec![EnvelopeSignature {
+                    keyid: signer.key_id(),
+                    sig: base64::engine::general_purpose::STANDARD
+                        .encode(key_pair.sign(&pae(PAYLOAD_TYPE, &payload)).as_ref()),
+                }],
+            },
+            payload,
+            statement: misnamed,
+        };
+        assert!(matches!(
+            check_signature(&receipt, &[signer]),
+            SignatureCheck::Invalid(reason) if reason.contains("names key")
         ));
         // A signer whose key id is not its key's.
         let mut lying = statement(signer.signer());

@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 
 mod connect_cmd;
 mod ollama_setup;
+mod receipt_cmd;
 mod recipe_cmd;
 mod run_cmd;
 mod secret_cmd;
@@ -198,6 +199,12 @@ enum Commands {
         command: run_cmd::RecordCommands,
     },
 
+    /// Signed receipts of loadout runs: show, verify, and this computer's key
+    Receipt {
+        #[command(subcommand)]
+        command: receipt_cmd::ReceiptCommands,
+    },
+
     /// Connect an external agent's account without showing its token
     Connect {
         #[command(subcommand)]
@@ -387,6 +394,24 @@ enum TokenCommands {
 /// never printed: it may be a key ([`connect_parse_error`]).
 fn exit_for_parse_error(error: clap::Error, argv: &[std::ffi::OsString]) -> ! {
     use clap::error::ErrorKind;
+    // These commands document 3 as their usage exit code, and 2 means
+    // something else for each of them (needs attention, a record that does
+    // not verify, a receipt signed by an untrusted key): clap's own 2 for a
+    // bad command line must not read as that.
+    let documented = argv.get(1).is_some_and(|argument| {
+        ["run", "loadouts", "record", "receipt"]
+            .iter()
+            .any(|command| argument == command)
+    });
+    if documented
+        && !matches!(
+            error.kind(),
+            ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+        )
+    {
+        let _ = error.print();
+        std::process::exit(axocoatl_session::run_outcome::exit_code::USAGE);
+    }
     let connect = argv.get(1).is_some_and(|argument| argument == "connect");
     if connect
         && !matches!(
@@ -597,6 +622,9 @@ async fn main() {
         Commands::Run(args) => std::process::exit(run_cmd::cmd_run(*args).await),
         Commands::Loadouts { command } => std::process::exit(run_cmd::cmd_loadouts(command).await),
         Commands::Record { command } => std::process::exit(run_cmd::cmd_record(command).await),
+        Commands::Receipt { command } => {
+            std::process::exit(receipt_cmd::cmd_receipt(command).await)
+        }
         Commands::Connect { command } => {
             std::process::exit(connect_cmd::cmd_connect(command).await)
         }
