@@ -27,6 +27,7 @@ pub mod native_history;
 pub mod network_record;
 pub mod path_scope;
 pub mod qa_repro;
+pub mod receipt;
 pub mod record_bundle;
 pub mod review_adjudication;
 pub mod run_junit;

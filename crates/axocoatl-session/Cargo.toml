@@ -20,6 +20,8 @@ sha2 = { workspace = true }
 base64 = { workspace = true }
 memchr = "2.7"
 quick-xml = "0.41"
+# Receipts: Ed25519 signatures of run statements (the daemon's version).
+ring = "0.17"
 thiserror = { workspace = true }
 unicode-normalization = { workspace = true }
 uuid = { workspace = true }

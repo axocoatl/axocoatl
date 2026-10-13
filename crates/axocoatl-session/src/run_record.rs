@@ -1,7 +1,8 @@
 //! Durable record of one loadout run, beside the Session it ran in:
 //! `{data root}/loadout-runs/{run_id}/` with `manifest.json` (written once),
-//! `events.jsonl` (append-only, one synced JSON line per event) and
-//! `outcome.json` (written once, when the run ends). The Session's own
+//! `events.jsonl` (append-only, one synced JSON line per event),
+//! `receipt.dsse.json` (the signed receipt, written just before the Outcome)
+//! and `outcome.json` (written once, when the run ends). The Session's own
 //! record (turns, activations, tool calls, checks, network) stays where it
 //! is; the record bundle joins both (`record_bundle`).
 //!
@@ -159,6 +160,9 @@ pub enum RunRecordError {
 const MANIFEST_FILE: &str = "manifest.json";
 const EVENTS_FILE: &str = "events.jsonl";
 const OUTCOME_FILE: &str = "outcome.json";
+const RECEIPT_FILE: &str = crate::receipt::RECEIPT_FILE;
+/// Largest `receipt.dsse.json` written or read back.
+const MAX_RECEIPT_BYTES: usize = crate::receipt::MAX_ENVELOPE_BYTES;
 /// Largest `manifest.json` read back: the loadout text is at most 64 KiB and
 /// the task is bounded at admission.
 const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
@@ -440,6 +444,44 @@ impl RunRecordStore {
         Ok(())
     }
 
+    /// Write the run's receipt (`receipt.dsse.json`, `0600`). It is written
+    /// just before the Outcome, so a run that has finished has its receipt
+    /// settled: once `outcome.json` exists the receipt is written once (the
+    /// same bytes again are accepted, other bytes refused). Before that a
+    /// write replaces the receipt of a finish that never completed.
+    pub fn write_receipt(&self, run_id: &str, bytes: &[u8]) -> Result<(), RunRecordError> {
+        let dir = self.run_dir(run_id)?;
+        if bytes.len() > MAX_RECEIPT_BYTES {
+            return Err(RunRecordError::Invalid(format!(
+                "the receipt is larger than {MAX_RECEIPT_BYTES} bytes"
+            )));
+        }
+        let _appends = self.appends();
+        if dir.has_exact_file(OUTCOME_FILE)? {
+            if dir.has_exact_file(RECEIPT_FILE)?
+                && dir.read_limited(RECEIPT_FILE, MAX_RECEIPT_BYTES)? == bytes
+            {
+                return Ok(());
+            }
+            return Err(RunRecordError::Invalid(format!(
+                "run {run_id} has ended already; its receipt is written once, before its Outcome"
+            )));
+        }
+        dir.atomic_write_with_mode(RECEIPT_FILE, bytes, 0o600)?;
+        dir.sync_all()?;
+        Ok(())
+    }
+
+    /// The receipt of a finished run, as written; `None` while the run has
+    /// not finished or when it has none (its signing failed).
+    pub fn receipt(&self, run_id: &str) -> Result<Option<Vec<u8>>, RunRecordError> {
+        let dir = self.run_dir(run_id)?;
+        if !dir.has_exact_file(OUTCOME_FILE)? || !dir.has_exact_file(RECEIPT_FILE)? {
+            return Ok(None);
+        }
+        Ok(Some(dir.read_limited(RECEIPT_FILE, MAX_RECEIPT_BYTES)?))
+    }
+
     pub fn outcome(&self, run_id: &str) -> Result<Option<RunOutcome>, RunRecordError> {
         let dir = self.run_dir(run_id)?;
         if !dir.has_exact_file(OUTCOME_FILE)? {
@@ -634,6 +676,41 @@ mod tests {
             RunEvent::Phase { phase, .. } if phase == KEEP_PHASE)
         );
         assert_eq!(store.outcome(&id).unwrap(), Some(done));
+    }
+
+    #[test]
+    fn the_receipt_is_settled_once_the_outcome_is_written() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, _root, store) = store();
+        let id = run_id();
+        let manifest = manifest(&id);
+        store.create(&manifest).unwrap();
+        // A finish that never completed may leave a receipt; the next one
+        // replaces it, and neither is served before the Outcome exists.
+        store.write_receipt(&id, b"{\"first\":1}\n").unwrap();
+        assert_eq!(store.receipt(&id).unwrap(), None);
+        store.write_receipt(&id, b"{\"second\":2}\n").unwrap();
+        store.finish(&id, &outcome(&manifest)).unwrap();
+        assert_eq!(
+            store.receipt(&id).unwrap().as_deref(),
+            Some(&b"{\"second\":2}\n"[..])
+        );
+        let path = dir.path().join(RUN_RECORD_DIR).join(&id).join(RECEIPT_FILE);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // Written once: the same bytes again are accepted, others refused.
+        store.write_receipt(&id, b"{\"second\":2}\n").unwrap();
+        assert!(store.write_receipt(&id, b"{\"third\":3}\n").is_err());
+        // A finished run without a receipt (its signing failed) has none,
+        // and none can be added after the end.
+        let other = run_id();
+        let manifest = super::tests::manifest(&other);
+        store.create(&manifest).unwrap();
+        store.finish(&other, &outcome(&manifest)).unwrap();
+        assert_eq!(store.receipt(&other).unwrap(), None);
+        assert!(store.write_receipt(&other, b"{}\n").is_err());
     }
 
     #[test]
