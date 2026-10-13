@@ -120,6 +120,7 @@ axocoatl connect codex --no-browser    # does not open the sign-in page for you
 axocoatl connect codex --sign-in-timeout 10   # gives the sign-in 10 minutes, not 30
 axocoatl connect codex --status        # shows the stored sign-in, never a token
 axocoatl connect codex --refresh       # asks the running daemon to refresh it now
+axocoatl connect codex --api-key       # also stores the OpenAI API key OpenAI issues (below)
 ```
 
 This runs the official `codex login` for you and stores the ChatGPT sign-in it makes as
@@ -190,8 +191,9 @@ throwaway container.
   refused. Axocoatl stores the access token, the refresh token, your ChatGPT account id
   (from the file, or the id token's `chatgpt_account_id`) and the time, as one line, the
   way `axocoatl secret set` stores a value (`secrets/codex-chatgpt` in the data root,
-  `0600`, replaced atomically). The id token, and an API key Codex may have obtained with
-  the sign-in, are not kept.
+  `0600`, replaced atomically). The id token is not kept, nor is the OpenAI API key Codex
+  may have obtained with the browser sign-in, unless you ask for it with `--api-key`
+  ([below](#codex-with-an-openai-api-key-axocoatl-connect-codex---api-key)).
 - Then the container is removed (`podman rm --force`), and with it its in-memory
   `CODEX_HOME`: after a sign-in, and also when the sign-in fails, is refused or is
   interrupted.
@@ -231,12 +233,16 @@ always named `codex-chatgpt`, because that is the one the daemon refreshes. Like
 build`, it uses the data root of `--config` or `AXOCOATL_DATA_DIR`. Exit codes: 0 stored,
 2 `codex login` stored no ChatGPT sign-in (also when the sign-in was not completed within
 the sign-in time), 3 usage (no terminal, no Podman on `PATH`, a `--codex` that is not an
-executable, port 1455 in use, or a command line `axocoatl connect` does not take, such
-as `--sign-in-timeout 0`), 5 the data directory, the secret store, Podman, the image
+executable, port 1455 in use, `--api-key` with `--device-auth`, a value on the command
+line, or a command line `axocoatl connect` does not take, such as
+`--sign-in-timeout 0`), 5 the data directory, the secret store, Podman, the image
 build, the pseudo-terminal or `auth.json` failed (also when `auth.json` is a link, or
 the login container stopped before the sign-in time was up and before the sign-in was
-read), 6 interrupted by a signal. Nothing is stored unless it exits 0. Run it again when
-a run says the sign-in was refused.
+read), 6 interrupted by a signal, 8 with `--api-key` or `--api-key-only`, no API key was
+stored ([below](#codex-with-an-openai-api-key-axocoatl-connect-codex---api-key)).
+Nothing is stored unless it exits 0, except that with `--api-key` exit code 8 means the
+ChatGPT sign-in was stored without a key. Run it again when a run says the sign-in was
+refused.
 
 #### Check and refresh the sign-in
 
@@ -277,12 +283,60 @@ only an authenticated request from this computer: a daemon that accepts API requ
 without authentication (`server.auth.allow_unauthenticated`) refuses it with `403`, and
 so does any daemon for a request from an address that is not a loopback address.
 
+### Codex with an OpenAI API key: `axocoatl connect codex --api-key`
+
+```sh
+axocoatl connect codex --api-key        # the API key and the ChatGPT sign-in
+axocoatl connect codex --api-key-only   # the API key only
+```
+
+A Codex writer's default credential, `codex-openai`, is an OpenAI API key. You get it the
+same way as the ChatGPT sign-in, by signing in in the browser: you never see, copy, paste
+or type the key. `--api-key` runs the same `codex login` as above, and after the browser
+sign-in Codex 0.160.1 asks OpenAI for an API key for your account: it exchanges the id
+token it just obtained at `https://auth.openai.com/oauth/token` (an OAuth token exchange,
+`requested_token=openai-api-key`) and writes the key it gets as `OPENAI_API_KEY` in its
+`auth.json` (`codex-rs/login/src/server.rs` at `rust-v0.160.1`). Axocoatl reads that key
+from the same `auth.json`, in memory, as it reads the sign-in, checks that it has the
+form Codex writes (`sk-`, then letters, digits, `-` and `_`, 20 to 1024 characters) and
+stores it as the secret `codex-openai` (`secrets/codex-openai`, `0600`, replaced
+atomically), under the same lock of the secret store as the ChatGPT sign-in, which it
+also stores as `codex-chatgpt`. With `--api-key-only` it stores only the key, and the
+ChatGPT sign-in goes with the container (or the temporary home). Axocoatl never shows,
+logs or writes the key anywhere else, and Codex's own copy in its `auth.json` goes with
+the container (or is overwritten and removed with the temporary home); the relay also
+hides an `sk-…` key Codex might print, though Codex 0.160.1 prints none.
+
+- **Billing.** Requests a Codex writer makes with `codex-openai` are billed at OpenAI API
+  rates to the OpenAI Platform organization the key belongs to, not to your ChatGPT plan.
+  A writer with `credential: codex-chatgpt` uses your plan instead.
+- **Only the browser sign-in.** Codex exchanges for a key only after the browser sign-in;
+  the device-code sign-in gets none. `--api-key` (or `--api-key-only`) with
+  `--device-auth` is refused before anything runs, with exit code 3 and a message that
+  says why.
+- **When OpenAI issues no key.** Codex ignores a failed exchange: the sign-in still
+  succeeds, and `auth.json` holds no key (for example when your account has no OpenAI
+  Platform organization). Then nothing is stored as `codex-openai`, and the command says
+  so plainly: OpenAI issued no API key for this account; API-key mode needs an OpenAI
+  Platform organization; ChatGPT mode works with `codex-chatgpt`. With `--api-key` the
+  ChatGPT sign-in is still stored as `codex-chatgpt`; with `--api-key-only` nothing is.
+  It exits with code 8. A value in `OPENAI_API_KEY` that does not have the form of a key
+  is treated the same way (the message says so and never shows it).
+- **Nothing on the command line.** `axocoatl connect codex` takes no key: a value after
+  `--api-key`, or `--api-key=VALUE`, is refused with exit code 3, and the message never
+  repeats it.
+
+Exit codes are those of `axocoatl connect codex` above, with 8 when no API key was stored.
+Run it again when a run says the key was rejected.
+
 ### Other credentials: `axocoatl secret set`
 
-`axocoatl secret set <name>` reads a value from standard input, or with
-`--from-env VAR` from that environment variable of the command, and stores it in the
-data root as `secrets/<name>`, a file only your user can read (`0600`), replaced
-atomically. It never takes the value as an argument, never prints it, and never writes
+`axocoatl secret set <name>` stores a credential that no `connect` command obtains, and
+Codex's API key or Claude Code's token for automation without a browser (for example in
+CI), from an environment variable the automation already has. It reads the value from
+standard input, or with `--from-env VAR` from that environment variable of the command,
+and stores it in the data root as `secrets/<name>`, a file only your user can read
+(`0600`), replaced atomically. It never takes the value as an argument, never prints it, and never writes
 it to a log or a record. Standard input must be a pipe or a file: when it is a terminal,
 where typing or pasting would show the value, the command refuses and prints how to
 pipe it. An unset or empty `--from-env` variable is refused. `--from-env` takes the
@@ -291,13 +345,13 @@ on the command line, so a value there (or after the name) is refused, and the me
 never repeats it.
 
 ```sh
-# Codex: an OpenAI API key, from the environment or from a file
+# Automation without a browser (for example in CI), from the job's environment
 axocoatl secret set codex-openai --from-env OPENAI_API_KEY
-axocoatl secret set codex-openai < openai-key.txt
-
-# Claude Code without a terminal (for example in CI): a token you already have
 axocoatl secret set claude-code-oauth --from-env CLAUDE_CODE_OAUTH_TOKEN
 ```
+
+On your own computer, use `axocoatl connect codex --api-key` and
+`axocoatl connect claude-code` instead: you never type or paste a key.
 
 A value is one line of at most 8 KiB with no control characters; one trailing line break
 is ignored. If a command prints more than the token, put the token alone in a file and
@@ -311,8 +365,9 @@ anything else). The warning never shows the value. When the model API rejects a 
 credential (`401` through the route), the run's not-covered reason names the credential
 and says how to store it again: for Claude Code, `axocoatl connect claude-code`; for the
 ChatGPT sign-in, run again (the daemon asks OpenAI for a new access token after the
-rejection) and, if it is rejected again, `axocoatl connect codex`; for others,
-`axocoatl secret set <name>`, piping in only the token.
+rejection) and, if it is rejected again, `axocoatl connect codex`; for Codex's API key,
+`axocoatl connect codex --api-key`; for others, `axocoatl secret set <name>`, piping in
+only the token.
 `axocoatl secret list` prints the stored names, never values, and
 `axocoatl secret remove <name>` deletes one. A route's `credential` resolves to a
 `credentials` entry in the configuration first, then to a stored secret of that name; a
@@ -320,7 +375,8 @@ name found in neither refuses the run (exit code 3).
 
 You supply the credential, for your own account. `axocoatl connect claude-code` obtains
 the Claude Code token through `claude setup-token` when you run it, and
-`axocoatl connect codex` your ChatGPT sign-in through `codex login`. The only credential
+`axocoatl connect codex` your ChatGPT sign-in through `codex login` (with `--api-key`,
+also the OpenAI API key OpenAI issues with it). The only credential
 Axocoatl refreshes by itself is that ChatGPT sign-in (see
 [Codex with a ChatGPT sign-in](#codex-with-a-chatgpt-sign-in)).
 
@@ -362,8 +418,9 @@ axocoatl run fix-claude-code --task "…" \
 ```
 
 For Codex, the writer's `credential` says which stored credential its route sends:
-`codex-openai` (the default: an OpenAI API key, to `api.openai.com`) or `codex-chatgpt`
-(your ChatGPT sign-in from `axocoatl connect codex`, to `chatgpt.com`). Both run the same
+`codex-openai` (the default: an OpenAI API key from `axocoatl connect codex --api-key`,
+to `api.openai.com`) or `codex-chatgpt` (your ChatGPT sign-in from
+`axocoatl connect codex`, to `chatgpt.com`). Both run the same
 program from the same `codex` image:
 
 ```yaml
@@ -382,7 +439,7 @@ axocoatl run fix-codex --task "…" --model writer=openai:gpt-5.5 --model review
 ```
 
 A run whose credential is not stored is refused before it starts (exit code 3), with how
-to store it: `axocoatl secret set codex-openai` for the API key, `axocoatl connect codex`
+to store it: `axocoatl connect codex --api-key` for the API key, `axocoatl connect codex`
 for the sign-in. Claude Code's only credential is `claude-code-oauth`, and a native Agent
 names none; `axocoatl loadouts validate` refuses any other name.
 

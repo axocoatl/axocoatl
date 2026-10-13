@@ -383,9 +383,10 @@ enum TokenCommands {
 /// clap's own usage errors exit with code 2, which `axocoatl connect` uses
 /// for "no token" (claude-code) and "no sign-in" (codex): a usage error of
 /// `connect` exits with its usage code, 3, instead. Help and the version
-/// still exit 0.
+/// still exit 0. A value given to a `connect` flag that takes none
+/// (`--api-key=VALUE`) is not printed: it may be a key.
 fn exit_for_parse_error(error: clap::Error, first_argument: Option<&std::ffi::OsStr>) -> ! {
-    use clap::error::ErrorKind;
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
     let connect = first_argument.is_some_and(|argument| argument == "connect");
     if connect
         && !matches!(
@@ -393,7 +394,19 @@ fn exit_for_parse_error(error: clap::Error, first_argument: Option<&std::ffi::Os
             ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
         )
     {
-        let _ = error.print();
+        if error.kind() == ErrorKind::TooManyValues {
+            let flag = match error.get(ContextKind::InvalidArg) {
+                Some(ContextValue::String(flag)) => flag
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("a flag")
+                    .to_string(),
+                _ => "a flag".to_string(),
+            };
+            eprintln!("✗ {}", connect_cmd::flag_takes_no_value(&flag));
+        } else {
+            let _ = error.print();
+        }
         std::process::exit(connect_cmd::exit::USAGE);
     }
     error.exit()

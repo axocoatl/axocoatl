@@ -548,7 +548,9 @@ this contract, and Axocoatl cannot change or always detect those settings.
   answers only an authenticated request from a loopback address and returns no token).
   Its access token goes only on a route to `chatgpt.com`; a request on a route to another
   host that names it is refused, and its refresh token goes only to OpenAI's token
-  endpoint.
+  endpoint. `axocoatl connect codex --api-key` also stores, as `codex-openai`, the OpenAI
+  API key Codex writes to that `auth.json` after the browser sign-in, read the same way
+  and never shown.
   A route adds it on your computer; it never enters a container, a record or a log. It is not encrypted at rest, and a backup of the data
   root includes it.
 - Scope E2B Git tokens, MCP credentials, webhook headers, API keys, and bearer

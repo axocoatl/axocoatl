@@ -55,6 +55,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ChatGPT sign-in (also when the sign-in time ran out), 3 usage (also no Podman on
   `PATH`, port 1455 in use, or a command line it does not take), 5 failure, 6
   interrupted.
+- **`axocoatl connect codex --api-key`: Codex's OpenAI API key from the browser sign-in,
+  never typed or pasted.** After the browser sign-in, Codex 0.160.1 exchanges the id
+  token it obtained for an OpenAI API key at `auth.openai.com` (an OAuth token exchange,
+  `requested_token=openai-api-key`) and writes it as `OPENAI_API_KEY` in `auth.json`;
+  when the exchange fails it writes none and the sign-in still succeeds, and the
+  device-code sign-in never exchanges. With `--api-key`, `connect codex` runs the same
+  browser sign-in, reads that key from the same `auth.json` in memory, checks it has the
+  form Codex writes (`sk-`, then letters, digits, `-` and `_`, 20 to 1024 characters),
+  and stores it as the secret `codex-openai` (a Codex writer's default credential;
+  `0600`, replaced atomically, under the secret store's lock) beside the ChatGPT sign-in
+  as `codex-chatgpt`; `--api-key-only` stores only the key. Axocoatl never shows, logs
+  or writes the key anywhere else, and Codex's own copy goes with the login container
+  (or the temporary home). Requests with `codex-openai` are billed at OpenAI API
+  rates to the key's OpenAI Platform organization, not to the ChatGPT plan. When
+  `auth.json` holds no key, or a value that is not one, nothing is stored as
+  `codex-openai` and the command says so plainly (OpenAI issued no API key for this
+  account; API-key mode needs an OpenAI Platform organization; ChatGPT mode works with
+  `codex-chatgpt`) and exits with the new code 8; with `--api-key` the ChatGPT sign-in is
+  still stored. `--api-key` or `--api-key-only` with `--device-auth` is refused before
+  anything runs (exit code 3) with why, and so is a value on the command line (after
+  `--api-key`, or `--api-key=VALUE`), whose message never repeats it.
 - **`axocoatl connect codex --status` and `--refresh`.** `--status` reads the stored
   sign-in from the data root, without the daemon, and shows whether one is stored, its
   ChatGPT account id by its last four characters, when its access token expires (its JWT
@@ -139,6 +160,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `connect` uses for "no token printed" (`claude-code`) and "no sign-in" (`codex`).
 - `axocoatl secret set codex-chatgpt` warns when the value is not a sign-in
   `connect codex` stored, and a missing `codex-chatgpt` names `axocoatl connect codex`.
+- A missing or rejected `codex-openai` now names `axocoatl connect codex --api-key`
+  instead of `axocoatl secret set codex-openai`, and `secret set codex-openai` from a
+  terminal and `connect codex` without one point to it; `secret set --from-env` is
+  described only for automation without a browser. The documentation no longer shows
+  storing a key from a file you write.
 - `axocoatl secret set`, `axocoatl secret remove` and the `connect` commands store and
   remove a secret while holding an exclusive lock on the data root's `secrets` directory
   (waiting up to five seconds for another holder), the lock the daemon takes to write a

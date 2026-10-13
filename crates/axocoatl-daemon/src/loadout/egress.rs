@@ -372,13 +372,13 @@ prompt: "{task}"
                 "",
                 "api.openai.com",
                 "codex-openai",
-                "axocoatl secret set codex-openai",
+                "axocoatl connect codex --api-key",
             ),
             (
                 "    credential: codex-openai\n",
                 "api.openai.com",
                 "codex-openai",
-                "axocoatl secret set codex-openai",
+                "axocoatl connect codex --api-key",
             ),
             (
                 "    credential: codex-chatgpt\n",

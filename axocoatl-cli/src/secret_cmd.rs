@@ -80,6 +80,14 @@ fn pipe_hint(name: &str) -> String {
              and stores the token without showing it.",
         );
     }
+    if name == "codex-openai" {
+        hint.push_str(
+            "\nYou never type or paste the key: run `axocoatl connect codex --api-key`, which \
+             signs you in in the browser and stores the OpenAI API key OpenAI issues with that \
+             sign-in without showing it. `--from-env` is only for automation without a browser, \
+             with a key already in the environment.",
+        );
+    }
     hint
 }
 

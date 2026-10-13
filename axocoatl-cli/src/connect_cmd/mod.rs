@@ -22,7 +22,9 @@
 //! same way, with a private `CODEX_HOME`, and stores the ChatGPT sign-in
 //! Codex writes there: by default the pinned Codex in a throwaway container
 //! ([`codex_container`]), whose sign-in page Axocoatl opens on this computer
-//! ([`browser`]), or a Codex CLI on this computer with `--codex`.
+//! ([`browser`]), or a Codex CLI on this computer with `--codex`. With
+//! `--api-key` it also stores the OpenAI API key OpenAI issues with the
+//! browser sign-in (`codex-openai`), and with `--api-key-only` only that key.
 //! `claude setup-token` opens the browser itself (Claude Code 2.1.271's
 //! bundle starts its OAuth flow without `skipBrowserOpen`), so nothing is
 //! opened for it. `axocoatl connect codex --refresh` and `--status`
@@ -79,8 +81,10 @@ pub(crate) mod exit {
     pub(crate) const FAILURE: i32 = 5;
     // `connect codex` uses CONNECTED, NO_TOKEN (no ChatGPT sign-in was
     // stored by `codex login`, also when the sign-in was not completed
-    // within the sign-in time, `--sign-in-timeout`), USAGE, FAILURE and
-    // INTERRUPTED. `connect codex --refresh` uses CONNECTED (refreshed),
+    // within the sign-in time, `--sign-in-timeout`), USAGE (also
+    // `--api-key` with `--device-auth`, or a value on the command line),
+    // FAILURE, INTERRUPTED and, with `--api-key` or `--api-key-only`,
+    // NO_API_KEY. `connect codex --refresh` uses CONNECTED (refreshed),
     // REJECTED (OpenAI refused the refresh: sign in again), NO_TOKEN (no
     // sign-in stored), USAGE, UNVERIFIED (the refresh could not be
     // completed: the token endpoint could not be reached, did not answer in
@@ -92,6 +96,11 @@ pub(crate) mod exit {
     /// `connect codex --refresh`: no daemon answers at its address (start
     /// it with `axocoatl serve`); nothing was refreshed.
     pub(crate) const DAEMON_NOT_RUNNING: i32 = 7;
+    /// `connect codex --api-key` or `--api-key-only`: the sign-in held no
+    /// OpenAI API key (OpenAI issued none for the account), or one that is
+    /// not in the form of a key, so none was stored as `codex-openai`; with
+    /// `--api-key` the ChatGPT sign-in was stored as `codex-chatgpt`.
+    pub(crate) const NO_API_KEY: i32 = 8;
 }
 
 #[derive(Debug, Subcommand)]
@@ -116,7 +125,8 @@ pub enum ConnectCommands {
     /// Run the official `codex login` (the pinned Codex, in a throwaway
     /// container through Podman) with a private CODEX_HOME, and store the
     /// ChatGPT sign-in it makes (never shown) as the secret codex-chatgpt,
-    /// for Codex writers with `credential: codex-chatgpt`
+    /// for Codex writers with `credential: codex-chatgpt`; with --api-key,
+    /// also the OpenAI API key OpenAI issues with it, as codex-openai
     Codex {
         /// Path to config file (selects the data directory)
         #[arg(short, long, default_value_os_t = crate::default_config_path_for_clap())]
@@ -143,12 +153,26 @@ pub enum ConnectCommands {
             conflicts_with = "codex"
         )]
         sign_in_timeout: Option<u64>,
+        /// Also store the OpenAI API key OpenAI issues with the browser
+        /// sign-in, never shown, as the secret codex-openai (a Codex writer's
+        /// default credential, billed at OpenAI API rates to an OpenAI
+        /// Platform organization, not to your ChatGPT plan); the ChatGPT
+        /// sign-in is stored as codex-chatgpt too. Not with --device-auth
+        #[arg(long)]
+        api_key: bool,
+        /// Like --api-key, but store only the API key (codex-openai), not
+        /// the ChatGPT sign-in
+        #[arg(long)]
+        api_key_only: bool,
         /// Ask the running daemon to refresh the stored ChatGPT sign-in now,
         /// the way it refreshes it before a request; prints when the new
         /// access token expires, never a token
         #[arg(
             long,
-            conflicts_with_all = ["device_auth", "codex", "no_browser", "sign_in_timeout", "status"]
+            conflicts_with_all = [
+                "device_auth", "codex", "no_browser", "sign_in_timeout", "status", "api_key",
+                "api_key_only"
+            ]
         )]
         refresh: bool,
         /// Show whether a ChatGPT sign-in is stored, its account (last four
@@ -156,13 +180,20 @@ pub enum ConnectCommands {
         /// refreshed or signed in, never a token
         #[arg(
             long,
-            conflicts_with_all = ["device_auth", "codex", "no_browser", "sign_in_timeout"]
+            conflicts_with_all = [
+                "device_auth", "codex", "no_browser", "sign_in_timeout", "api_key", "api_key_only"
+            ]
         )]
         status: bool,
         /// With --refresh: the daemon's URL (default: AXOCOATL_URL, then
         /// the configured server address)
         #[arg(long, requires = "refresh", conflicts_with = "status")]
         url: Option<String>,
+        /// A value given on the command line (`connect codex --api-key
+        /// "$KEY"`): refused without being shown, since clap's own
+        /// "unexpected argument" error would print it.
+        #[arg(hide = true, value_name = "VALUE")]
+        on_command_line: Vec<String>,
     },
 }
 
@@ -502,8 +533,42 @@ fn needs_terminal() -> String {
         .to_string()
 }
 
+/// The refusal of a value on `connect codex`'s command line, which never
+/// repeats it.
+pub(crate) const VALUE_ON_COMMAND_LINE: &str =
+    "axocoatl connect codex takes no key, token or other value on its command line, so \
+     nothing was run or stored (the value is not repeated here). You never type or paste a \
+     key: `axocoatl connect codex --api-key` signs you in in the browser and stores the OpenAI \
+     API key OpenAI issues with that sign-in, without showing it.";
+
+/// The refusal of a value given to a `connect` flag that takes none
+/// (`--api-key=VALUE`), in place of clap's own error, which would print it.
+pub(crate) fn flag_takes_no_value(flag: &str) -> String {
+    let mut message = format!(
+        "{flag} takes no value, so nothing was run or stored (the value is not repeated here, \
+         in case it is a key or token)."
+    );
+    if flag.starts_with("--api-key") {
+        message.push_str(
+            " You never type or paste a key: `axocoatl connect codex --api-key` signs you in in \
+             the browser and stores the OpenAI API key OpenAI issues with that sign-in, without \
+             showing it.",
+        );
+    }
+    message
+}
+
 /// Returns the process exit code.
 pub async fn cmd_connect(command: ConnectCommands) -> i32 {
+    if let ConnectCommands::Codex {
+        on_command_line, ..
+    } = &command
+    {
+        if !on_command_line.is_empty() {
+            eprintln!("✗ {VALUE_ON_COMMAND_LINE}");
+            return exit::USAGE;
+        }
+    }
     let (config, secret, no_verify, claude) = match command {
         ConnectCommands::ClaudeCode {
             config,
@@ -528,9 +593,18 @@ pub async fn cmd_connect(command: ConnectCommands) -> i32 {
             codex: path,
             no_browser,
             sign_in_timeout,
+            api_key,
+            api_key_only,
             ..
         } => {
-            return cmd_connect_codex(config, device_auth, path, no_browser, sign_in_timeout).await
+            let keep = codex::Keep::from_flags(api_key, api_key_only);
+            // Before anything else: no sign-in could give the key asked for.
+            if device_auth && keep.api_key() {
+                eprintln!("✗ {}", codex::api_key_needs_browser(keep.flag()));
+                return exit::USAGE;
+            }
+            return cmd_connect_codex(config, device_auth, path, no_browser, sign_in_timeout, keep)
+                .await;
         }
     };
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
@@ -628,6 +702,7 @@ async fn cmd_connect_codex(
     explicit: Option<PathBuf>,
     no_browser: bool,
     sign_in_timeout: Option<u64>,
+    keep: codex::Keep,
 ) -> i32 {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         eprintln!("✗ {}", codex::needs_terminal());
@@ -640,11 +715,13 @@ async fn cmd_connect_codex(
             return exit::FAILURE;
         }
     };
-    let secret = axocoatl_daemon::external_agent::codex_chatgpt::CODEX_CHATGPT_SECRET;
-    if let Err(error) = secret_store::check_can_store(&data_dir, secret) {
-        eprintln!("✗ {error}; `codex login` was not run, so no sign-in was made");
-        return exit::FAILURE;
+    for secret in keep.secrets() {
+        if let Err(error) = secret_store::check_can_store(&data_dir, secret) {
+            eprintln!("✗ {error}; `codex login` was not run, so no sign-in was made");
+            return exit::FAILURE;
+        }
     }
+    let kept = codex::what_is_kept(keep);
     // Only for the container: a Codex on this computer opens the browser
     // sign-in itself.
     let opener = if no_browser || explicit.is_some() {
@@ -664,8 +741,8 @@ async fn cmd_connect_codex(
             };
             let intro = format!(
                 "Running `{} login{}` with a private temporary CODEX_HOME. {how} Axocoatl reads \
-                 the sign-in Codex stores there, never shows it, stores it as secret {secret} \
-                 and then erases the temporary CODEX_HOME. Your own ~/.codex is not touched.\n",
+                 the sign-in Codex stores there, {kept} and then erases the temporary \
+                 CODEX_HOME. Your own ~/.codex is not touched.\n",
                 path.display(),
                 if device_auth { " --device-auth" } else { "" },
             );
@@ -712,9 +789,8 @@ async fn cmd_connect_codex(
             let intro = format!(
                 "Running `codex login{}` (Codex {}) in a throwaway container of the codex recipe \
                  image ({}), with a private CODEX_HOME in its memory. {how}{returns} {} \
-                 Axocoatl reads the sign-in Codex stores there, never shows it, stores it as \
-                 secret {secret} and then removes the container. Your own ~/.codex is not \
-                 touched.\n",
+                 Axocoatl reads the sign-in Codex stores there, {kept} and then removes the \
+                 container. Your own ~/.codex is not touched.\n",
                 if device_auth { " --device-auth" } else { "" },
                 axocoatl_daemon::external_agent::codex::CODEX_VERSION,
                 &login.image[..12.min(login.image.len())],
@@ -744,6 +820,7 @@ async fn cmd_connect_codex(
             runner,
             data_dir,
             device_auth,
+            keep,
         },
         input,
         Box::new(lines.follow(std::io::stdout())),

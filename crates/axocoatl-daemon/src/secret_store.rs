@@ -368,7 +368,8 @@ fn is_codex_chatgpt_secret(name: &str) -> bool {
 /// `axocoatl connect claude-code`, which obtains and stores a new token
 /// without anyone seeing it; for the ChatGPT sign-in, run again (the daemon
 /// asks for a new access token after a rejection) or `axocoatl connect
-/// codex`; otherwise pipe in only the token. For the refusal of a credential
+/// codex`; for Codex's OpenAI API key, `axocoatl connect codex --api-key`;
+/// otherwise pipe in only the token. For the refusal of a credential
 /// a model API rejected and for `secret set`'s warnings.
 pub fn store_again_hint(name: &str) -> String {
     if is_codex_chatgpt_secret(name) {
@@ -384,15 +385,25 @@ pub fn store_again_hint(name: &str) -> String {
             connect_command(name)
         );
     }
-    let token = if name == crate::external_agent::codex::CODEX_SECRET {
-        " (the OpenAI API key, for example `axocoatl secret set codex-openai --from-env \
-         OPENAI_API_KEY`)"
-            .to_string()
-    } else {
-        String::new()
-    };
-    format!("store it again with `axocoatl secret set {name}`, piping in only the token{token}")
+    if is_codex_api_key_secret(name) {
+        return format!(
+            "connect again with `axocoatl connect codex --api-key`, which signs you in in the \
+             browser and stores the OpenAI API key OpenAI issues with that sign-in without \
+             showing it ({AUTOMATION})"
+        );
+    }
+    format!("store it again with `axocoatl secret set {name}`, piping in only the token")
 }
+
+/// Codex's OpenAI API key, which `axocoatl connect codex --api-key` stores.
+fn is_codex_api_key_secret(name: &str) -> bool {
+    name == crate::external_agent::codex::CODEX_SECRET
+}
+
+/// How Codex's API key is stored without a browser.
+const AUTOMATION: &str = "only for automation without a browser: `axocoatl secret set \
+                          codex-openai --from-env VAR` stores a key already in the \
+                          environment variable VAR";
 
 /// How to store secret `name` when a route names it and it is missing.
 pub fn how_to_store(name: &str) -> String {
@@ -400,6 +411,13 @@ pub fn how_to_store(name: &str) -> String {
         return "run `axocoatl connect codex` (it runs `codex login` with a private temporary \
                 CODEX_HOME and stores your ChatGPT sign-in without showing it)"
             .to_string();
+    }
+    if is_codex_api_key_secret(name) {
+        return format!(
+            "run `axocoatl connect codex --api-key` (it signs you in in the browser and stores \
+             the OpenAI API key OpenAI issues with that sign-in without showing it; \
+             {AUTOMATION})"
+        );
     }
     if is_claude_code_secret(name) {
         format!(
@@ -836,7 +854,16 @@ mod tests {
             "connect again with `axocoatl connect claude-code`, which runs `claude setup-token` \
              and stores the new sk-ant-oat01-… token without showing it"
         );
-        assert!(store_again_hint("codex-openai").contains("--from-env OPENAI_API_KEY"));
+        let again = store_again_hint("codex-openai");
+        assert!(
+            again.starts_with("connect again with `axocoatl connect codex --api-key`"),
+            "{again}"
+        );
+        assert!(
+            again.contains("only for automation without a browser"),
+            "{again}"
+        );
+        assert!(how_to_store("codex-openai").starts_with("run `axocoatl connect codex --api-key`"));
         assert_eq!(
             store_again_hint("example-token"),
             "store it again with `axocoatl secret set example-token`, piping in only the token"

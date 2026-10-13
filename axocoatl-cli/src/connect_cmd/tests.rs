@@ -1051,6 +1051,11 @@ struct CodexFixture {
     /// What the fake prints on screen: an API key and a JWT.
     shown_key: String,
     shown_jwt: String,
+    /// The `OPENAI_API_KEY` the fake writes to `auth.json`
+    /// ([`CodexFixture::with_api_key`]).
+    api_key: Option<String>,
+    /// What `connect codex` is asked to store.
+    keep: codex::Keep,
 }
 
 impl CodexFixture {
@@ -1095,7 +1100,22 @@ impl CodexFixture {
             refresh,
             shown_key,
             shown_jwt,
+            api_key: None,
+            keep: codex::Keep::SignIn,
         }
+    }
+
+    /// The fake writes `key` (a JSON value) as `auth.json`'s
+    /// `OPENAI_API_KEY`, and `connect codex` is asked to keep `keep`.
+    fn with_api_key(mut self, key: serde_json::Value, keep: codex::Keep) -> Self {
+        let path = self.root.join("bin/auth");
+        let mut auth: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        auth["OPENAI_API_KEY"] = key.clone();
+        std::fs::write(&path, serde_json::to_string_pretty(&auth).unwrap()).unwrap();
+        self.api_key = key.as_str().map(str::to_string);
+        self.keep = keep;
+        self
     }
 
     fn data(&self) -> PathBuf {
@@ -1109,6 +1129,7 @@ impl CodexFixture {
             },
             data_dir: self.data(),
             device_auth,
+            keep: self.keep,
         }
     }
 
@@ -1303,6 +1324,256 @@ async fn connect_codex_without_a_chatgpt_sign_in_stores_nothing() {
     }
 }
 
+/// An OpenAI API key shaped as Codex writes one, unique to the test.
+fn fake_api_key() -> String {
+    format!(
+        "sk-proj-{}{}_{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+/// The secret `name` as stored, if it is.
+fn stored_secret(data: &Path, name: &str) -> Option<Vec<u8>> {
+    std::fs::read(secret_store::secret_path(data, name)).ok()
+}
+
+/// `--api-key`: the key Codex wrote is stored exactly as `codex-openai`
+/// (`0600`) beside the ChatGPT sign-in; neither is shown, and the key is in
+/// no file but the fake's own and the secret (the temporary home, where the
+/// fake also left a copy of auth.json, is gone).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_codex_with_api_key_stores_the_key_and_the_sign_in() {
+    use axocoatl_daemon::external_agent::codex_chatgpt::ChatgptSignIn;
+    let since = SystemTime::now();
+    let key = fake_api_key();
+    let fixture =
+        CodexFixture::new("ok").with_api_key(serde_json::json!(key), codex::Keep::ApiKeyAndSignIn);
+    let (result, screen) = run_connect_codex(&fixture, false, false).await;
+    let message = result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert!(
+        message.starts_with(
+            "Connected Codex: stored the OpenAI API key OpenAI issued with your sign-in as \
+             secret codex-openai and your ChatGPT sign-in as secret codex-chatgpt"
+        ),
+        "{message}"
+    );
+    assert!(message.contains("billed at OpenAI API rates"), "{message}");
+    assert!(message.contains("not to your ChatGPT plan"), "{message}");
+    assert!(!message.contains(&key));
+    let path = secret_store::secret_path(&fixture.data(), "codex-openai");
+    assert_eq!(std::fs::read(&path).unwrap(), key.as_bytes());
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let sign_in = ChatgptSignIn::decode(&fixture.stored().unwrap()).unwrap();
+    assert_eq!(sign_in.access_token(), fixture.access);
+    assert_eq!(sign_in.refresh_token(), fixture.refresh);
+    let stored_sign_in = String::from_utf8(fixture.stored().unwrap()).unwrap();
+    assert!(!stored_sign_in.contains(&key));
+    fixture.assert_no_home_left();
+    for secret in [
+        &key,
+        &fixture.access,
+        &fixture.refresh,
+        &fixture.shown_key,
+        &fixture.shown_jwt,
+    ] {
+        assert_not_shown(&screen, secret);
+    }
+    let mut hits = Vec::new();
+    files_containing(&fixture.root, key.as_bytes(), 8, None, &[], &mut hits);
+    hits.sort();
+    let mut expected = vec![fixture.root.join("bin/auth"), path];
+    expected.sort();
+    assert_eq!(hits, expected);
+    let mut elsewhere = Vec::new();
+    files_containing(
+        &std::env::temp_dir(),
+        key.as_bytes(),
+        4,
+        Some(since),
+        &[fixture.root.clone(), fixture.directory.path().to_path_buf()],
+        &mut elsewhere,
+    );
+    assert!(elsewhere.is_empty(), "{elsewhere:?}");
+    assert_eq!(fixture.api_key.as_deref(), Some(key.as_str()));
+}
+
+/// `--api-key-only`: the key is stored, the ChatGPT sign-in is not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_codex_with_api_key_only_stores_only_the_key() {
+    let key = fake_api_key();
+    let fixture =
+        CodexFixture::new("ok").with_api_key(serde_json::json!(key), codex::Keep::ApiKeyOnly);
+    let (result, screen) = run_connect_codex(&fixture, false, false).await;
+    let message = result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert!(
+        message.starts_with(
+            "Connected Codex: stored the OpenAI API key OpenAI issued with your sign-in as \
+             secret codex-openai (no key or token was shown, your ChatGPT sign-in was not kept"
+        ),
+        "{message}"
+    );
+    assert_eq!(
+        stored_secret(&fixture.data(), "codex-openai").unwrap(),
+        key.as_bytes()
+    );
+    assert!(fixture.stored().is_none());
+    assert_not_shown(&screen, &key);
+    fixture.assert_no_home_left();
+}
+
+/// `--api-key` when OpenAI issued no key (`OPENAI_API_KEY` null, absent or
+/// empty, as Codex writes it when the exchange failed), or when the value
+/// is not a key: nothing is stored as codex-openai, the message says so
+/// plainly without a value, and the exit code is NO_API_KEY; the ChatGPT
+/// sign-in is still stored with `--api-key`, not with `--api-key-only`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_codex_with_api_key_when_none_was_issued() {
+    let malformed = format!("sk-proj {}", uuid::Uuid::new_v4().simple());
+    for (key, keep, issued_none) in [
+        (serde_json::Value::Null, codex::Keep::ApiKeyAndSignIn, true),
+        (serde_json::json!(""), codex::Keep::ApiKeyAndSignIn, true),
+        (serde_json::Value::Null, codex::Keep::ApiKeyOnly, true),
+        (
+            serde_json::json!(malformed),
+            codex::Keep::ApiKeyAndSignIn,
+            false,
+        ),
+    ] {
+        let fixture = CodexFixture::new("ok").with_api_key(key.clone(), keep);
+        let (result, screen) = run_connect_codex(&fixture, false, false).await;
+        let failure = result
+            .err()
+            .unwrap_or_else(|| panic!("{key} {keep:?}: no failure"));
+        assert_eq!(failure.code, exit::NO_API_KEY, "{}", failure.message);
+        assert_eq!(failure.message, codex::no_api_key(keep, !issued_none));
+        if issued_none {
+            assert!(
+                failure.message.starts_with(
+                    "OpenAI issued no API key for this account, so nothing was stored as \
+                     codex-openai. API-key mode needs an OpenAI Platform organization"
+                ),
+                "{}",
+                failure.message
+            );
+        } else {
+            assert!(failure.message.contains("does not have the form"));
+            assert!(!failure.message.contains(&malformed));
+            assert_not_shown(&screen, &malformed);
+        }
+        assert!(stored_secret(&fixture.data(), "codex-openai").is_none());
+        if keep == codex::Keep::ApiKeyAndSignIn {
+            assert!(fixture.stored().is_some(), "{key}");
+            assert!(failure
+                .message
+                .contains("Your ChatGPT sign-in was stored as codex-chatgpt: ChatGPT mode works"));
+        } else {
+            assert!(fixture.stored().is_none());
+            assert!(failure.message.contains("Nothing else was stored."));
+            assert!(failure
+                .message
+                .contains("ChatGPT mode works with codex-chatgpt"));
+        }
+        fixture.assert_no_home_left();
+    }
+}
+
+/// `--api-key` with `--device-auth` is refused before Codex runs: the
+/// device-code sign-in gets no key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_codex_refuses_api_key_with_device_auth() {
+    for keep in [codex::Keep::ApiKeyAndSignIn, codex::Keep::ApiKeyOnly] {
+        let fixture = CodexFixture::new("ok").with_api_key(serde_json::json!(fake_api_key()), keep);
+        let input: std::os::fd::OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
+        let failure = codex::connect(
+            fixture.request(true),
+            input,
+            Box::new(Vec::new()),
+            &Interrupt::default(),
+            &Resized::default(),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(failure.code, exit::USAGE);
+        assert_eq!(failure.message, codex::api_key_needs_browser(keep.flag()));
+        assert!(failure.message.starts_with(&format!(
+            "{} cannot be used with --device-auth: OpenAI issues the API key only with the \
+             browser sign-in",
+            keep.flag()
+        )));
+        assert_eq!(fixture.seen(), "", "codex ran");
+        assert!(fixture.stored().is_none());
+        assert!(stored_secret(&fixture.data(), "codex-openai").is_none());
+    }
+}
+
+/// The form of the key Codex writes, and reading it from `auth.json`.
+#[test]
+fn the_api_key_is_read_from_auth_json_in_the_form_codex_writes() {
+    let key = fake_api_key();
+    assert!(codex::is_api_key(&key));
+    assert!(codex::is_api_key("sk-abcdefghijklmnopqrstu"));
+    for bad in [
+        "sk-short",
+        "pk-abcdefghijklmnopqrstuvwxyz",
+        "sk-abc def ghi jkl mno pqr",
+        "sk-abcdefghijklmnopqrstu\n",
+        "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.sig",
+        "sk-ant-oat01-abcdefghijklmnop.qrstuvwxyz",
+    ] {
+        assert!(!codex::is_api_key(bad), "{bad:?}");
+    }
+    assert!(!codex::is_api_key(&format!(
+        "sk-{}",
+        "a".repeat(codex::MAX_API_KEY_BYTES)
+    )));
+    let read = |json: &str| codex::api_key_from_auth_json(json.as_bytes());
+    match read(&format!(
+        "{{\"auth_mode\":\"chatgpt\",\"OPENAI_API_KEY\":\"{key}\"}}"
+    )) {
+        codex::ApiKey::Issued(read) => assert_eq!(read.as_str(), key),
+        _ => panic!("not read"),
+    }
+    for none in [
+        "{\"OPENAI_API_KEY\":null}",
+        "{\"OPENAI_API_KEY\":\"\"}",
+        "{\"auth_mode\":\"chatgpt\"}",
+    ] {
+        assert!(matches!(read(none), codex::ApiKey::None), "{none}");
+    }
+    for malformed in [
+        "{\"OPENAI_API_KEY\":\"not a key\"}",
+        "{\"OPENAI_API_KEY\":42}",
+        "not json",
+    ] {
+        assert!(
+            matches!(read(malformed), codex::ApiKey::Malformed),
+            "{malformed}"
+        );
+    }
+    assert_eq!(codex::Keep::from_flags(false, false), codex::Keep::SignIn);
+    assert_eq!(
+        codex::Keep::from_flags(true, false),
+        codex::Keep::ApiKeyAndSignIn
+    );
+    assert_eq!(
+        codex::Keep::from_flags(false, true),
+        codex::Keep::ApiKeyOnly
+    );
+    assert_eq!(codex::Keep::from_flags(true, true), codex::Keep::ApiKeyOnly);
+    assert_eq!(codex::Keep::SignIn.secrets(), ["codex-chatgpt"]);
+    assert_eq!(
+        codex::Keep::ApiKeyAndSignIn.secrets(),
+        ["codex-openai", "codex-chatgpt"]
+    );
+    assert_eq!(codex::Keep::ApiKeyOnly.secrets(), ["codex-openai"]);
+}
+
 /// A signal while Codex waits: nothing is stored and the home is erased.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connect_codex_interrupted_stores_nothing_and_erases_its_home() {
@@ -1431,12 +1702,53 @@ fn connect_codex_runs_codex_login_with_file_storage_and_no_other_credentials() {
     assert_eq!(codex.as_deref(), Some(Path::new("/opt/codex")));
     assert_eq!(config, Path::new("/tmp/a.yaml"));
     for argv in [
-        &["x", "codex", "eyJhbGciOi.value.sig"][..],
-        &["x", "codex", "--secret", "other"],
+        &["x", "codex", "--secret", "other"][..],
         &["x", "codex", "--token", "value"],
+        &["x", "codex", "--api-key", "--status"],
+        &["x", "codex", "--api-key-only", "--refresh"],
     ] {
         assert!(Cli::try_parse_from(argv).is_err(), "{argv:?}");
     }
+    // A value on the command line (a key after `--api-key`) is taken, to be
+    // refused by `cmd_connect` without being repeated, as clap would.
+    for argv in [
+        &["x", "codex", "eyJhbGciOi.value.sig"][..],
+        &["x", "codex", "--api-key", "sk-proj-typed-by-hand"],
+    ] {
+        let parsed = Cli::try_parse_from(argv).unwrap();
+        let ConnectCommands::Codex {
+            on_command_line, ..
+        } = parsed.command
+        else {
+            panic!("codex")
+        };
+        assert_eq!(on_command_line.len(), 1, "{argv:?}");
+    }
+    assert!(!VALUE_ON_COMMAND_LINE.contains("sk-"));
+    let refused = flag_takes_no_value("--api-key");
+    assert!(refused.contains("--api-key takes no value"), "{refused}");
+    assert!(refused.contains("signs you in in the browser"), "{refused}");
+    assert!(!flag_takes_no_value("--no-browser").contains("signs you in"));
+    let parsed = Cli::try_parse_from(["x", "codex", "--api-key"]).unwrap();
+    let ConnectCommands::Codex {
+        api_key,
+        api_key_only,
+        ..
+    } = parsed.command
+    else {
+        panic!("codex")
+    };
+    assert!(api_key && !api_key_only);
+    let parsed = Cli::try_parse_from(["x", "codex", "--api-key-only"]).unwrap();
+    let ConnectCommands::Codex {
+        api_key,
+        api_key_only,
+        ..
+    } = parsed.command
+    else {
+        panic!("codex")
+    };
+    assert!(!api_key && api_key_only);
     // `--codex PATH` must name an executable file; no `codex` on PATH or in
     // ~/.local/bin is used without it.
     let root = tempfile::tempdir().unwrap();
@@ -1967,6 +2279,8 @@ struct ContainerFixture {
     _directory: tempfile::TempDir,
     root: PathBuf,
     access: String,
+    /// What `connect codex` is asked to store.
+    keep: codex::Keep,
 }
 
 impl ContainerFixture {
@@ -1997,7 +2311,20 @@ impl ContainerFixture {
             _directory: directory,
             root,
             access,
+            keep: codex::Keep::SignIn,
         }
+    }
+
+    /// The fake prints an `auth.json` with `key` as its `OPENAI_API_KEY`,
+    /// and `connect codex` is asked to keep `keep`.
+    fn with_api_key(mut self, key: &str, keep: codex::Keep) -> Self {
+        let path = self.root.join("bin/auth");
+        let mut auth: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        auth["OPENAI_API_KEY"] = serde_json::Value::String(key.to_string());
+        std::fs::write(&path, auth.to_string()).unwrap();
+        self.keep = keep;
+        self
     }
 
     fn login(&self, opener: Option<browser::Opener>, lifetime: Duration) -> codex_container::Login {
@@ -2042,6 +2369,7 @@ async fn run_container_login(
             login,
             fixture.root.join("data"),
             device_auth,
+            fixture.keep,
             terminal.slave.try_clone().unwrap(),
             Box::new(screen.clone()),
             &interrupt,
@@ -2122,6 +2450,38 @@ async fn the_container_sign_in_page_is_opened_once_on_this_computer() {
     let mut expected = vec![fixture.root.join("bin/podman"), log];
     expected.sort();
     assert_eq!(hits, expected);
+}
+
+/// `--api-key` with the login container: the key in the `auth.json` read
+/// from the container is stored exactly as `codex-openai` beside the
+/// sign-in, never shown, and the container is removed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_container_sign_in_stores_the_api_key_with_api_key() {
+    let key = fake_api_key();
+    let fixture = ContainerFixture::new("ok").with_api_key(&key, codex::Keep::ApiKeyAndSignIn);
+    let login = fixture.login(None, codex_container::DEFAULT_LIFETIME);
+    let (result, screen) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
+    let message = result.unwrap_or_else(|failure| panic!("{}", failure.message));
+    assert!(
+        message.contains("as secret codex-openai and your ChatGPT sign-in as secret"),
+        "{message}"
+    );
+    assert!(
+        message.contains("the login container was removed"),
+        "{message}"
+    );
+    let data = fixture.root.join("data");
+    assert_eq!(
+        stored_secret(&data, "codex-openai").unwrap(),
+        key.as_bytes()
+    );
+    assert!(fixture.stored().is_some());
+    assert_not_shown(&screen, &key);
+    assert_not_shown(&screen, &fixture.access);
+    let mut hits = Vec::new();
+    files_containing(&data, key.as_bytes(), 6, None, &[], &mut hits);
+    assert_eq!(hits, [secret_store::secret_path(&data, "codex-openai")]);
+    assert!(fixture.calls().trim_end().ends_with("rm --force"));
 }
 
 /// With `--device-auth` the device page is the one opened, once.

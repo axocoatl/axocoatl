@@ -36,7 +36,9 @@
 //! ([`super::browser`]). The sign-in is
 //! then read with `podman exec … head` straight into a zeroizing buffer in
 //! this process: Axocoatl never writes `auth.json` to disk, and the only
-//! other copy, Codex's own on the tmpfs, goes with the container. When the
+//! other copy, Codex's own on the tmpfs, goes with the container. With
+//! `--api-key`, the OpenAI API key Codex wrote there is taken from that
+//! buffer too ([`super::codex::store_sign_in`]). When the
 //! sign-in cannot be read because the container has ended after its
 //! lifetime, the user is told the sign-in was not completed in time
 //! ([`timed_out`]), and the error `podman exec` printed about the exec
@@ -63,7 +65,7 @@ use axocoatl_isolation::recipes;
 use zeroize::Zeroizing;
 
 use super::browser::{Opener, SignInPage};
-use super::codex::{login_args, store_sign_in, Ended};
+use super::codex::{login_args, store_sign_in, Ended, Keep};
 use super::{exit, failure, relay, Failure, Interrupt, Resized};
 
 /// The recipe whose image runs `codex login`.
@@ -594,11 +596,14 @@ impl Drop for Container {
 /// Run `codex login` in a login container (`login`) on the terminal
 /// `input`/`output`, opening the sign-in page it prints on this computer
 /// once (when `login` has an opener), read the sign-in Codex stored in its
-/// `CODEX_HOME`, store it, and remove the container (on every path).
+/// `CODEX_HOME`, store what `keep` asks for, and remove the container (on
+/// every path).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn connect(
     login: Login,
     data_dir: PathBuf,
     device_auth: bool,
+    keep: Keep,
     input: OwnedFd,
     output: Box<dyn std::io::Write + Send>,
     interrupt: &Interrupt,
@@ -686,6 +691,5 @@ pub(crate) async fn connect(
     }
     drop(output);
     let bytes = read.map_err(|read| read.failure)?;
-    store_sign_in(&data_dir, bytes, &ended)?;
-    Ok(super::codex::connected_message(true))
+    store_sign_in(&data_dir, bytes, &ended, keep, true)
 }

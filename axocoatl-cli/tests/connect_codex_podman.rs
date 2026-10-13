@@ -160,16 +160,25 @@ struct FakeImage {
     refresh: String,
     shown_key: String,
     shown_jwt: String,
+    /// The `OPENAI_API_KEY` its `auth.json` holds, if any.
+    api_key: Option<String>,
 }
 
 impl FakeImage {
     fn build(mode: &str, scratch: &Path) -> Self {
-        let context = scratch.join(format!("image-{mode}"));
+        Self::build_with_key(mode, scratch, None)
+    }
+
+    /// [`FakeImage::build`] whose `auth.json` holds `api_key` as its
+    /// `OPENAI_API_KEY` (`null` without one), as Codex writes it after the
+    /// browser sign-in.
+    fn build_with_key(mode: &str, scratch: &Path, api_key: Option<String>) -> Self {
+        let context = scratch.join(format!("image-{mode}-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir(&context).unwrap();
         let (access, refresh) = (jwt(), format!("rt_{}", uuid::Uuid::new_v4().simple()));
         let auth = serde_json::json!({
             "auth_mode": "chatgpt",
-            "OPENAI_API_KEY": null,
+            "OPENAI_API_KEY": api_key,
             "tokens": {"id_token": jwt(), "access_token": access,
                 "refresh_token": refresh, "account_id": "acct-podman"},
             "last_refresh": "2026-10-11T12:00:00Z",
@@ -221,6 +230,7 @@ impl FakeImage {
             refresh,
             shown_key,
             shown_jwt,
+            api_key,
         }
     }
 }
@@ -476,7 +486,10 @@ fn assert_nothing_shown(shown: &[u8], image: &FakeImage) {
         &image.refresh,
         &image.shown_key,
         &image.shown_jwt,
-    ] {
+    ]
+    .into_iter()
+    .chain(&image.api_key)
+    {
         assert!(leaked_positions(shown, token).is_empty(), "{text}");
     }
 }
@@ -514,6 +527,12 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
     let volumes_before = volumes();
     let ok = FakeImage::build("ok", &scratch_path);
     let none = FakeImage::build("none", &scratch_path);
+    let key = format!(
+        "sk-proj-{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let with_key = FakeImage::build_with_key("ok", &scratch_path, Some(key.clone()));
 
     // 1. The browser sign-in: one port, published on this computer's
     //    loopback only, reaches Codex's login server in the container;
@@ -792,7 +811,109 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
         assert_nothing_shown(&shown, &ok);
         assert_cleaned_up(&volumes_before);
     }
+
+    // 10. `--api-key`: the browser sign-in's API key, which the fake Codex
+    //     wrote to `auth.json` in the container, is stored exactly as
+    //     codex-openai (0600) beside the ChatGPT sign-in, never shown and in
+    //     no other file; the container goes.
+    {
+        let root = scratch_path.join("api-key");
+        let mut run = Run::start_with(&root, &path_dir, &with_key, false, &["--api-key"]);
+        run.wait_for("originator=codex_cli_rs");
+        let response = callback();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let (code, shown) = run.finish();
+        let text = String::from_utf8_lossy(&shown).into_owned();
+        assert_eq!(code, 0, "{text}");
+        let flat: String = text.split(['\r', '\n']).collect();
+        assert!(
+            flat.contains(
+                "Connected Codex: stored the OpenAI API key OpenAI issued with your sign-in as \
+                 secret codex-openai and your ChatGPT sign-in as secret codex-chatgpt"
+            ),
+            "{text}"
+        );
+        assert!(flat.contains("the login container was removed"), "{text}");
+        assert_nothing_shown(&shown, &with_key);
+        let stored_key = root.join("data/secrets/codex-openai");
+        assert_eq!(std::fs::read(&stored_key).unwrap(), key.as_bytes());
+        assert_eq!(
+            std::fs::metadata(&stored_key).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let sign_in = ChatgptSignIn::decode(&std::fs::read(Run::secret(&root)).unwrap()).unwrap();
+        assert_eq!(sign_in.access_token(), with_key.access);
+        assert_tokens_only_in_the_secret(&root, &scratch_path, &with_key, since);
+        let mut hits = Vec::new();
+        files_containing(
+            &root,
+            key.as_bytes(),
+            8,
+            None,
+            Path::new("/nonexistent"),
+            &mut hits,
+        );
+        assert_eq!(hits, [stored_key]);
+        let mut elsewhere = Vec::new();
+        files_containing(
+            &std::env::temp_dir(),
+            key.as_bytes(),
+            4,
+            Some(since),
+            &scratch_path,
+            &mut elsewhere,
+        );
+        assert!(elsewhere.is_empty(), "{elsewhere:?}");
+        assert_cleaned_up(&volumes_before);
+    }
+
+    // 11. `--api-key` when OpenAI issued no key (`OPENAI_API_KEY` null):
+    //     nothing is stored as codex-openai, the ChatGPT sign-in is, and
+    //     the command says so and exits 8. With `--api-key-only`, nothing
+    //     is stored.
+    for (name, flag, sign_in_kept) in [
+        ("no-key", "--api-key", true),
+        ("no-key-only", "--api-key-only", false),
+    ] {
+        let root = scratch_path.join(name);
+        let mut run = Run::start_with(&root, &path_dir, &ok, false, &[flag]);
+        run.wait_for("originator=codex_cli_rs");
+        let response = callback();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let (code, shown) = run.finish();
+        let text = String::from_utf8_lossy(&shown).into_owned();
+        assert_eq!(code, 8, "{text}");
+        let flat: String = text.split(['\r', '\n']).collect();
+        assert!(
+            flat.contains(
+                "OpenAI issued no API key for this account, so nothing was stored as \
+                 codex-openai. API-key mode needs an OpenAI Platform organization"
+            ),
+            "{text}"
+        );
+        assert!(!root.join("data/secrets/codex-openai").exists());
+        assert_eq!(Run::secret(&root).exists(), sign_in_kept, "{text}");
+        assert_nothing_shown(&shown, &ok);
+        assert_cleaned_up(&volumes_before);
+    }
+
+    // 12. `--api-key` with `--device-auth`: refused before any container
+    //     starts (the device sign-in gets no key).
+    {
+        let root = scratch_path.join("api-key-device");
+        let run = Run::start_with(&root, &path_dir, &with_key, true, &["--api-key"]);
+        let (code, shown) = run.finish();
+        let text = String::from_utf8_lossy(&shown).into_owned();
+        assert_eq!(code, 3, "{text}");
+        assert!(
+            text.contains("--api-key cannot be used with --device-auth"),
+            "{text}"
+        );
+        assert!(login_containers().is_empty());
+        assert!(!root.join("data/secrets/codex-openai").exists());
+    }
     drop(ok);
     drop(none);
+    drop(with_key);
     assert_eq!(volumes(), volumes_before);
 }
