@@ -2004,7 +2004,7 @@ async fn a_path_that_differs_from_its_receipt_is_refused() {
             assert!(
                 message.starts_with(
                     "a path changed after the run's checks judged it; Keep commits only what \
-                     the receipt covers: a.txt (content differs"
+                     the receipt covers: a.txt: content differs"
                 ),
                 "{message}"
             );
@@ -2026,9 +2026,9 @@ async fn a_path_that_differs_from_its_receipt_is_refused() {
     let back = signed_receipt(&key, &[("a.txt", "one, fixed\n")], &["src/new.rs", "b.txt"]);
     std::thread::sleep(std::time::Duration::from_millis(20));
     for (receipt, needle) in [
-        (&stale, "a.txt (content differs"),
+        (&stale, "a.txt: content differs"),
         (&missing, "the run's receipt does not cover src/new.rs"),
-        (&back, "src/new.rs (the run removed it, and it exists)"),
+        (&back, "src/new.rs: the run removed it, and it exists"),
     ] {
         match fixture
             .keep_signed(&request(), &manifest, &outcome(), &attribution, None, Some(receipt))

@@ -933,7 +933,7 @@ fn check_against_receipt(
             if statement.subject.iter().any(|subject| subject.name == *path)
                 || statement.predicate.files.removed.contains(path)
             {
-                changed.push(format!("{path} ({})", mismatch.problem));
+                changed.push(format!("{path}: {}", mismatch.problem));
             } else {
                 uncovered.push(path.clone());
             }

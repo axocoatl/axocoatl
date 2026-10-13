@@ -827,10 +827,11 @@ async fn write_receipt(
     let covered = axocoatl_session::receipt::open_receipt(&bytes)
         .map(|opened| {
             let files = &opened.statement.predicate.files;
+            let covered = opened.statement.subject.len();
             format!(
-                " (key {}, {} files covered, {} removed, {})",
+                " (key {}, {covered} file{} covered, {} removed, {})",
                 axocoatl_session::receipt::short_key_id(&opened.statement.predicate.signer.key_id),
-                opened.statement.subject.len(),
+                if covered == 1 { "" } else { "s" },
                 files.removed.len(),
                 files.source
             )
