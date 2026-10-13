@@ -165,7 +165,7 @@ ledger, checkpoint recovery, memory, provider adapters, tool execution, typed
 events, Automations, and sandbox lifecycle.
 
 - Native providers: reviewed Ollama profiles and eligible OpenRouter-credit
-  text/tool endpoints with whole-call limits. BYOK remains deferred. Direct OpenAI,
+  text/tool endpoints with whole-call limits. BYOK is not supported. Direct OpenAI,
   Anthropic, Gemini, Mistral, and other compatible adapters retain their supported
   compatibility execution paths.
 - Tools: bounded built-ins plus approved tools discovered from configured stdio
