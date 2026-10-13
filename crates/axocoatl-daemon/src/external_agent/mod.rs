@@ -444,7 +444,9 @@ impl ExternalRuntimeProfile {
 /// Codex 0.160.1 through its HTTP provider: `POST /v1/responses`); anything
 /// else is refused and recorded with a hint. Claude Code 2.1.292 also asks
 /// for `GET /api/claude_code/policy_limits` and `/api/claude_code/settings`
-/// and goes on without them when they are refused.
+/// and goes on without them when they are refused. Each route also refuses
+/// a request whose body asks the provider to reach other hosts or run tools
+/// itself (`provider_fetch: refuse`).
 pub fn routes_for(runtime: AgentRuntime) -> Result<Vec<EgressRouteYaml>, ExternalAgentError> {
     routes_for_credential(runtime, ExternalCredential::Default)
 }
@@ -504,6 +506,11 @@ pub fn routes_for_credential(
         allow_encoded_responses: false,
         allow_set_cookie: false,
         max_request_bytes: 64 * 1024 * 1024,
+        // Named, not left to the host's default: a request body that asks
+        // the provider to reach other hosts or run tools itself (Claude
+        // Code's WebSearch asks for Anthropic's server-side web_search) is
+        // refused on this route (`egress_broker::provider_fetch`).
+        provider_fetch: Some(axocoatl_config::ProviderFetchYaml::Refuse),
     };
     Ok(vec![route])
 }

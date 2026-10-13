@@ -16,7 +16,11 @@
 //!    as `X-HTTP-Method-Override` or `X-Forwarded-Host`, also spelled with
 //!    `_` in place of `-`), and match one of
 //!    the route's rules ([`rules`]); anything else gets a JSON refusal saying
-//!    why.
+//!    why. On a route to a model API (or one with `provider_fetch: refuse`)
+//!    it then reads the body whole, at most 64 MiB, and refuses one that
+//!    asks the provider to reach other hosts or run tools itself, or that it
+//!    cannot read ([`provider_fetch`]); an allowed body is sent byte for
+//!    byte as it came.
 //! 3. It writes a `request` event to the Session's network record and waits
 //!    for it before anything goes upstream; a request that cannot be
 //!    recorded is refused.
@@ -48,15 +52,17 @@ use axocoatl_session::network_record::NetworkEvent;
 use rustls::crypto::CryptoProvider;
 
 pub mod ca;
+pub mod provider_fetch;
 pub mod rules;
 pub mod scan;
+mod strict_json;
 pub mod terminate;
 pub mod trust;
 pub mod upstream;
 mod x509;
 
 pub use ca::SessionCa;
-pub use rules::{CredentialSource, Route, RouteOrigin, RouteTable, RuleDecision};
+pub use rules::{CredentialSource, ProviderFetch, Route, RouteOrigin, RouteTable, RuleDecision};
 pub use terminate::{serve, BrokerOutcome, RelayContext, SessionBroker, WorkspaceRoots};
 pub use trust::TrustMaterial;
 pub use upstream::UpstreamConnector;

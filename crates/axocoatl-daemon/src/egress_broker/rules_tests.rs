@@ -468,3 +468,93 @@ fn an_upstream_ca_is_read_when_the_route_compiles() {
         Route::compile(0, &route, &BTreeMap::new(), &[dir.path().to_path_buf()]).unwrap_err();
     assert!(refused.contains("inside the Workspace"), "{refused}");
 }
+
+#[test]
+fn routes_to_model_apis_check_bodies_unless_they_allow_provider_fetches() {
+    for host in axocoatl_config::egress_routes::MODEL_API_HOSTS {
+        let route = route_from(0, &format!("{{host: {host}, access: full}}"));
+        assert_eq!(route.provider_fetch, ProviderFetch::Refused, "{host}");
+        assert_eq!(route.canonical()["provider_fetch"], "refuse", "{host}");
+        assert!(
+            route
+                .policy_text()
+                .ends_with("for agent, provider fetches refused)"),
+            "{}",
+            route.policy_text()
+        );
+        let allowed = route_from(
+            0,
+            &format!("{{host: {host}, access: full, provider_fetch: allow}}"),
+        );
+        assert_eq!(allowed.provider_fetch, ProviderFetch::Allowed, "{host}");
+        assert_eq!(allowed.canonical()["provider_fetch"], "allow", "{host}");
+        assert!(allowed.policy_text().ends_with("provider fetches allowed)"));
+    }
+    // A host's spelling does not matter.
+    assert_eq!(
+        route_from(0, "{host: API.Anthropic.com., access: full}").provider_fetch,
+        ProviderFetch::Refused
+    );
+    // Elsewhere bodies pass unread and the policy does not mention it, so
+    // its digest is what it was before; `refuse` turns the check on there.
+    let other = api_route();
+    assert_eq!(other.provider_fetch, ProviderFetch::NotChecked);
+    assert!(other.canonical().get("provider_fetch").is_none());
+    assert!(!other.policy_text().contains("provider fetches"));
+    let opted_in = route_from(
+        0,
+        "{host: llm.example.com, access: full, provider_fetch: refuse}",
+    );
+    assert_eq!(opted_in.provider_fetch, ProviderFetch::Refused);
+    assert_eq!(opted_in.canonical()["provider_fetch"], "refuse");
+    // The route to Ollama on this computer reads no bodies.
+    let ollama = Route::host_ollama(
+        0,
+        &axocoatl_config::HostOllamaRouteYaml {
+            port: 11434,
+            bindings: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(ollama.provider_fetch, ProviderFetch::NotChecked);
+}
+
+#[test]
+fn the_routes_axocoatl_adds_for_external_writers_check_bodies() {
+    use crate::external_agent::{routes_for_credential, ExternalCredential};
+    use axocoatl_config::loadout::AgentRuntime;
+    for (runtime, credential) in [
+        (AgentRuntime::ClaudeCode, ExternalCredential::Default),
+        (AgentRuntime::Codex, ExternalCredential::Default),
+        (AgentRuntime::Codex, ExternalCredential::CodexChatgpt),
+    ] {
+        let yaml = routes_for_credential(runtime, credential)
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            yaml.provider_fetch,
+            Some(axocoatl_config::ProviderFetchYaml::Refuse)
+        );
+        let mut credentials = BTreeMap::new();
+        credentials.insert(
+            yaml.credential.clone().unwrap(),
+            CredentialSourceYaml {
+                env: Some("AXOCOATL_RULES_TEST_TOKEN".into()),
+                file: None,
+            },
+        );
+        let route = Route::compile(0, &yaml, &credentials, &[]).unwrap();
+        assert_eq!(route.provider_fetch, ProviderFetch::Refused, "{runtime:?}");
+        assert_eq!(route.canonical()["provider_fetch"], "refuse");
+        let origin = RouteOrigin::ExternalWriter {
+            runtime: crate::external_agent::runtime_provider(runtime)
+                .unwrap()
+                .into(),
+        };
+        let route = Route { origin, ..route };
+        assert!(route.provider_fetch_hint().contains("the loadout's"));
+        assert!(route
+            .provider_fetch_hint()
+            .contains("refuses requests that ask the model provider to fetch URLs"));
+    }
+}

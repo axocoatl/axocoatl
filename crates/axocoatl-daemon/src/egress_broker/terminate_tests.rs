@@ -44,6 +44,8 @@ struct SeenRequest {
     path: String,
     headers: Vec<(String, String)>,
     body_len: usize,
+    /// The body as the upstream received it.
+    body: Bytes,
 }
 
 impl SeenRequest {
@@ -108,6 +110,7 @@ async fn upstream_handler(
         path: path.clone(),
         headers: headers.clone(),
         body_len: body.len(),
+        body: body.clone(),
     });
     let token = authorization
         .strip_prefix("Bearer ")
@@ -181,9 +184,9 @@ async fn upstream_handler(
     }
 }
 
-async fn start_upstream() -> TestUpstream {
+async fn start_upstream(host: &str) -> TestUpstream {
     let ca = SessionCa::new("upstream-test-ca").unwrap();
-    let (cert, key) = ca.leaf(HOST).unwrap();
+    let (cert, key) = ca.leaf(host).unwrap();
     let mut config = ServerConfig::builder_with_provider(crate::egress_broker::crypto_provider())
         .with_safe_default_protocol_versions()
         .unwrap()
@@ -281,6 +284,8 @@ async fn wait_for_response_event(sink: &MemorySink) -> NetworkEvent {
 // ---------------------------------------------------------------- harness
 
 struct Harness {
+    /// The route's host, which the client names and the upstream serves.
+    host: String,
     upstream: TestUpstream,
     broker: Arc<SessionBroker>,
     route: Arc<Route>,
@@ -354,7 +359,7 @@ fn covering(route: &Route, port: u16) -> Arc<Route> {
 
 async fn harness_with(route: Arc<Route>, local: LocalCheck) -> Harness {
     secret();
-    let upstream = start_upstream().await;
+    let upstream = start_upstream(&route.host).await;
     let connector = UpstreamConnector::with_verifier(trusting(&upstream.ca), local);
     let broker = Arc::new(SessionBroker::new(
         Arc::new(SessionCa::new("ses-terminate").unwrap()),
@@ -363,6 +368,7 @@ async fn harness_with(route: Arc<Route>, local: LocalCheck) -> Harness {
     ));
     let port = upstream.addr.port();
     Harness {
+        host: route.host.clone(),
         port,
         addrs: vec![upstream.addr.ip()],
         upstream,
@@ -386,7 +392,7 @@ impl Harness {
             session: "ses-terminate".into(),
             conn: "g1:1".into(),
             route: self.route.clone(),
-            host: HOST.into(),
+            host: self.host.clone(),
             port: self.port,
             addrs: self.addrs.clone(),
             binding: Some(EgressBinding::new(BindingKind::Agent)),
@@ -440,8 +446,9 @@ impl Harness {
     }
 
     async fn client_with(&self, context: RelayContext, sink: Arc<MemorySink>) -> Client {
+        let host = self.host.clone();
         let (tls, served) = self
-            .tls_with(context, sink, HOST, vec![b"http/1.1".to_vec()])
+            .tls_with(context, sink, &host, vec![b"http/1.1".to_vec()])
             .await;
         let (sender, connection) =
             hyper::client::conn::http1::handshake(TokioIo::new(tls.unwrap()))
@@ -454,7 +461,7 @@ impl Harness {
     }
 
     fn host_header(&self) -> String {
-        format!("{HOST}:{}", self.port)
+        format!("{}:{}", self.host, self.port)
     }
 }
 
@@ -1454,7 +1461,7 @@ async fn unreachable_upstreams_own_addresses_and_missing_credentials_are_answere
 async fn an_upstream_ca_is_trusted_through_the_platform_verifier() {
     use std::os::unix::fs::PermissionsExt;
     secret();
-    let upstream = start_upstream().await;
+    let upstream = start_upstream(HOST).await;
     let dir = tempfile::tempdir().unwrap();
     let ca_path = dir.path().join("upstream-ca.pem");
     std::fs::write(&ca_path, upstream.ca.pem()).unwrap();
@@ -1470,6 +1477,7 @@ async fn an_upstream_ca_is_trusted_through_the_platform_verifier() {
     ));
     let port = upstream.addr.port();
     let h = Harness {
+        host: HOST.into(),
         port,
         addrs: vec![upstream.addr.ip()],
         upstream,
@@ -1581,3 +1589,6 @@ async fn the_credential_is_never_in_logs_or_record_lines() {
         );
     }
 }
+
+#[path = "terminate_provider_fetch_tests.rs"]
+mod body_checks;

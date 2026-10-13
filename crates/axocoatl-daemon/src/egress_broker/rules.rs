@@ -21,12 +21,12 @@ use axocoatl_config::egress_host_ollama::{
     host_ollama_bindings, HOST_OLLAMA_ROUTE_HOST, HOST_OLLAMA_ROUTE_PORT,
 };
 use axocoatl_config::egress_routes::{
-    canonical_segment, check_owner_only_file, expand_user_path, parse_path_glob, PathGlob,
-    MAX_CA_FILE_BYTES, MAX_SECRET_FILE_BYTES, READ_ONLY_METHODS,
+    canonical_segment, check_owner_only_file, expand_user_path, is_model_api_host, parse_path_glob,
+    PathGlob, MAX_CA_FILE_BYTES, MAX_SECRET_FILE_BYTES, READ_ONLY_METHODS,
 };
 use axocoatl_config::{
-    CredentialSourceYaml, EgressRouteYaml, HostOllamaRouteYaml, RouteAccessYaml, RouteForYaml,
-    RouteInjectYaml,
+    CredentialSourceYaml, EgressRouteYaml, HostOllamaRouteYaml, ProviderFetchYaml, RouteAccessYaml,
+    RouteForYaml, RouteInjectYaml,
 };
 use axocoatl_session::network_record::BindingKind;
 use hyper::header::HeaderName;
@@ -336,6 +336,40 @@ pub enum RouteUpstream {
     HostLoopback { port: u16 },
 }
 
+/// Whether a route reads request bodies and refuses those that ask the
+/// model provider to reach other hosts or run tools itself
+/// ([`super::provider_fetch`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProviderFetch {
+    /// A host that is not a model API, without `provider_fetch`: bodies
+    /// stream unread, and the route's policy does not mention it.
+    #[default]
+    NotChecked,
+    /// `provider_fetch: allow`: bodies stream unread.
+    Allowed,
+    /// `provider_fetch: refuse`, or a model API host without
+    /// `provider_fetch`: each body is read whole and checked before the
+    /// request is recorded as allowed or sent.
+    Refused,
+}
+
+impl ProviderFetch {
+    /// The route's policy: `provider_fetch` when it is set, otherwise
+    /// `refuse` on a model API host.
+    pub fn for_route(host: &str, setting: Option<ProviderFetchYaml>) -> Self {
+        match (setting, is_model_api_host(host)) {
+            (Some(ProviderFetchYaml::Refuse), _) | (None, true) => Self::Refused,
+            (Some(ProviderFetchYaml::Allow), _) => Self::Allowed,
+            (None, false) => Self::NotChecked,
+        }
+    }
+
+    /// Whether bodies are read and checked.
+    pub fn checks(self) -> bool {
+        self == Self::Refused
+    }
+}
+
 /// Where a route of a Session's policy comes from, so a refusal names the
 /// place a person changes it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -374,6 +408,8 @@ pub struct Route {
     /// Pass `Set-Cookie` and `Set-Cookie2` on a credentialed route.
     pub allow_set_cookie: bool,
     pub max_request_bytes: u64,
+    /// Whether request bodies are checked for provider-side fetches.
+    pub provider_fetch: ProviderFetch,
     /// Where checked requests go.
     pub upstream: RouteUpstream,
 }
@@ -670,6 +706,7 @@ impl Route {
             }
             None => (Vec::new(), None),
         };
+        let provider_fetch = ProviderFetch::for_route(&host, route.provider_fetch);
         Ok(Self {
             index,
             origin: RouteOrigin::Configured,
@@ -692,6 +729,7 @@ impl Route {
             allow_encoded_responses: route.allow_encoded_responses,
             allow_set_cookie: route.allow_set_cookie,
             max_request_bytes: route.max_request_bytes,
+            provider_fetch,
             upstream: RouteUpstream::Tls,
         })
     }
@@ -721,6 +759,7 @@ impl Route {
             allow_encoded_responses: false,
             allow_set_cookie: false,
             max_request_bytes: HOST_ROUTE_MAX_REQUEST_BYTES,
+            provider_fetch: ProviderFetch::NotChecked,
             upstream: RouteUpstream::HostLoopback { port: route.port },
         })
     }
@@ -796,6 +835,13 @@ impl Route {
         if let RouteUpstream::HostLoopback { port } = self.upstream {
             canonical["upstream"] = serde_json::json!({ "host_loopback": port });
         }
+        // Likewise only a route to a model API, or one that sets it, names
+        // its provider_fetch.
+        match self.provider_fetch {
+            ProviderFetch::NotChecked => {}
+            ProviderFetch::Allowed => canonical["provider_fetch"] = "allow".into(),
+            ProviderFetch::Refused => canonical["provider_fetch"] = "refuse".into(),
+        }
         canonical
     }
 
@@ -835,11 +881,41 @@ impl Route {
             RouteUpstream::HostLoopback { port } => format!(" to 127.0.0.1:{port}"),
             RouteUpstream::Tls => String::new(),
         };
+        let provider_fetch = match self.provider_fetch {
+            ProviderFetch::NotChecked => "",
+            ProviderFetch::Allowed => ", provider fetches allowed",
+            ProviderFetch::Refused => ", provider fetches refused",
+        };
         format!(
-            "{}:{ports} ({}{upstream}: {rules}{credential}, for {kinds})",
+            "{}:{ports} ({}{upstream}: {rules}{credential}, for {kinds}{provider_fetch})",
             self.host,
             self.label()
         )
+    }
+
+    /// What to do about a request body this route refused because it asks
+    /// the provider to reach other hosts or run tools itself.
+    pub fn provider_fetch_hint(&self) -> String {
+        let host = &self.host;
+        match &self.origin {
+            RouteOrigin::ExternalWriter { runtime } => format!(
+                "This is the route Axocoatl adds for the loadout's {runtime} writer, which refuses \
+                 requests that ask the model provider to fetch URLs, search the web, connect to \
+                 MCP servers or run tools itself. The program's own tools run in the Session \
+                 container, under its egress policy."
+            ),
+            RouteOrigin::Configured => format!(
+                "Send the request without it. If the provider may reach other hosts for requests \
+                 on this route, set provider_fetch: allow on sandbox.egress.routes[{}] ({host}), \
+                 then run axocoatl network reload.",
+                self.index
+            ),
+            RouteOrigin::Loadout => format!(
+                "Send the request without it. If the provider may reach other hosts for requests \
+                 on this route, set provider_fetch: allow on the loadout's route for {host}, then \
+                 run the loadout again."
+            ),
+        }
     }
 
     /// Check one request whose path is already canonical.
