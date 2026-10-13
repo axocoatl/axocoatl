@@ -8,11 +8,11 @@ class AxFooter extends HTMLElement {
           <div class="footer-grid">
             <div class="footer-col">
               <div class="footer-brand-row"><img src="/assets/favicon.png" alt="" width="28" height="28"><span>Axocoatl</span></div>
-              <p class="muted small">An open-source, local-first coding workbench backed by a durable Rust runtime.</p>
+              <p class="muted small">An open-source harness that runs coding agents in a sandbox, with checks the host runs, review by a different model and a record of every step.</p>
             </div>
             <div class="footer-col">
               <h2>Product</h2>
-              <ul><li><a href="/concepts">How it works</a></li><li><a href="/why">Why Axocoatl</a></li><li><a href="/showcase">Demos</a></li><li><a href="/pricing">Pricing</a></li></ul>
+              <ul><li><a href="/concepts">How it works</a></li><li><a href="/why">Why Axocoatl</a></li><li><a href="/compare">Compare</a></li><li><a href="/pricing">Pricing</a></li></ul>
             </div>
             <div class="footer-col">
               <h2>Start</h2>

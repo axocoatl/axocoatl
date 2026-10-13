@@ -1,9 +1,10 @@
 # Axocoatl marketing site
 
 Vanilla HTML, Web Components, and CSS. The public site tells one product story:
-the harness you can trust to run coding agents on your own machine or infrastructure,
-with isolation built in, a complete record of every step, and any model, local or
-hosted. A lead writes, read-only helpers answer and review, and opt-in required checks
+run coding agents unattended (Claude Code, Codex or a model you choose, in a sandbox
+its credential never enters), with the host running the checks on the final files, a
+review by a different model, an exit code for CI and a checksummed record of every
+step; isolation built in, a complete record, and any model, local or hosted. A lead writes, read-only helpers answer and review, and opt-in required checks
 and review decide when a turn is done, all inside one durable folder-anchored Session. Conversation, context, files,
 terminal, Preview, tools, history, and Git are the core work surface. Settings owns Agents, Skills, MCP servers, and Automations and
 shows each Agent's provider/model assignment. Normal onboarding writes one owner-only
@@ -29,11 +30,12 @@ and reduced-motion states.
 
 | Path | Purpose |
 |---|---|
-| `/` | Positioning: isolation built in, a complete record, any model per Agent; what we measured; cross-model review with an optional demo video |
+| `/` | The job first: install, one headless `axocoatl run fix`, what a run does (sandbox, checks, review, exit codes, JUnit, record, Keep as PR) with an example summary, the built-in loadouts, Claude Code and Codex as the writer; then the mechanisms, what we measured, cross-model review with an optional demo video, and the browser workbench |
+| `/compare` | Mechanisms only: questions to ask of any setup (who runs the checks, who reviews, where the credential lives, network, record, CI, changes, spend) answered for a loadout run, and how that differs from running Claude Code or Codex directly, a devcontainer, or a parallel-agent workbench, without naming or describing other products beyond links to their own documentation |
 | `/concepts` | What the host enforces and where it stops (isolation, any model per Agent, a short measured summary), then Workspace, Session, Turn, sandboxed work surface, execution shapes, completion conditions and write scopes, Settings, workspace knowledge, events, compatibility MCP approval, optional Ways, and runtime boundaries |
 | `/why` | Why agent work needs a durable workspace |
-| `/showcase` | Complete directory of the twelve product films, grouped by what each proves (the record, isolation, model choice, the runtime), with an evidence contract for each film |
-| `/install` | Supported installation paths and first run |
+| `/showcase` | Complete directory of the twelve product films, grouped by what each proves (the record, isolation, model choice, the runtime), with an evidence contract for each film. While the films are pending it shows only notes, so it is `noindex` and left out of the navigation, the footer and the sitemap; the build still renders it because the portfolio places every film there |
+| `/install` | Supported installation paths, first run, a headless `axocoatl run`, and Claude Code or Codex as a loadout's writer |
 | `/pricing` | License and user-owned infrastructure costs |
 | `/integrations/openrouter` | OpenRouter provider setup |
 | `/changelog` | Published release history |

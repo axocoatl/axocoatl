@@ -50,7 +50,7 @@ one edit. Each id:
 | Block id | Appears on | Claims |
 | --- | --- | --- |
 | `axocoatl-1.1.0 2026-10-01` | `README.md`, `llms.txt`, docs `understand/what-we-measured`, docs `workbench/fix-qa-audit`, marketing home and concepts pages | R1–R12 |
-| `claude-code-subagents single-vs-multi 2026-10-06` | `README.md`, `llms.txt`, docs `understand/what-we-measured`, docs `workbench/fix-qa-audit` | S1–S6 |
+| `claude-code-subagents single-vs-multi 2026-10-06` | `llms.txt`, docs `understand/what-we-measured`, docs `workbench/fix-qa-audit` | S1–S6 |
 | `claude-code-subagents qa 2026-10-04..06` | docs `understand/what-we-measured`, docs `workbench/fix-qa-audit` | Q1–Q6 |
 
 ## Review benchmark (R)
@@ -70,9 +70,9 @@ withheld tests the agents never see. Writer qwen3-coder 30B on local Ollama, tem
 | R6 | The same model writes its own tests (4 of 6 tasks run): one more test at 9× to 15×; when its tests failed it often rewrote the tests, not the code | README, what-we-measured | `plain-loop/FOLLOWUP.md`, arm D | Plain loop | measured |
 | R7 | A stronger reviewer (gpt-oss 120B): 20 / 25 at 3.3×; 9 real defects, 2 false alarms | README, llms.txt, what-we-measured | `plain-loop/FOLLOWUP.md`, arm E | Plain loop | measured |
 | R8 | A panel of three same-model critics: 17 / 25 at 4.7×; together with R4 and R5, "another look by the same model added nothing … at 2.3× to 4.7× the tokens" | fix-qa-audit | `walled-tests/panel-P-Q/PANEL.md`, arm P | Plain loop | measured |
-| R9 | "Extra tokens helped when they bought a stronger model's judgment, not more looks from the same model." | README, llms.txt, what-we-measured, marketing home | R1–R8 | Axocoatl 1.1.0 and plain loop | measured, for this bank and these two local models only |
+| R9 | "Extra tokens helped when they bought a stronger model's judgment, not more looks from the same model." In README and on the marketing home also: "A stronger, different reviewer helped a small local writer; a second look from the same model didn't." | README, llms.txt, what-we-measured, marketing home | R1–R8 | Axocoatl 1.1.0 and plain loop | measured, for this bank and these two local models only |
 | R10 | Axocoatl's token counts are higher than the plain loop's for the same work | what-we-measured | `axocoatl-1.1.0/NOTES-X32k.md`; `README.md` of the directory | Both | measured |
-| R11 | Demo video: "A real Axocoatl Session from the benchmark above, trimmed but not edited" | marketing home (optional demo slot) | `axocoatl-1.1.0/NOTES-X32k.md` (invoice_settlement arm X, start and end trimmed); frames in `axocoatl-1.1.0/screens/` | Axocoatl 1.1.0 | measured (provenance) |
+| R11 | Demo video: "A real Axocoatl 1.1.0 Session from the benchmark above, recorded in the browser workbench, trimmed and cropped to the conversation and agent graph (the workbench's header and sidebar are cut out) but otherwise not edited"; every frame is cropped to the region its poster shows (the poster is the recording at 2:30, round 1 asks for changes) | marketing home (optional demo slot) | `axocoatl-1.1.0/NOTES-X32k.md` (invoice_settlement arm X, start and end trimmed); frames in `axocoatl-1.1.0/screens/` | Axocoatl 1.1.0 | measured (provenance) |
 | R12 | Product text: the same-model warning, "A same-model second look measured no gain; choose a different reviewer model" (run warning) and "a same-model second look measured no gain" (loadout validation) | `crates/axocoatl-session/src/run_outcome.rs`, `crates/axocoatl-config/src/loadout.rs`; shown by the API, Settings, Team and budget, `axocoatl run` and the record | R4, R5, R8 | Plain loop | measured, for this bank only |
 
 Limits stated on the public pages: one run per task, 6 tasks, one language, two local
@@ -97,7 +97,7 @@ and an integrating agent (ORCH), every agent Claude Opus (`claude-opus-5-5`, eff
 
 | Id | Claim as published | Where | Evidence | n | Status |
 | --- | --- | --- | --- | --- | --- |
-| S1 | On work that fits in one context (research, independent modules, a coupled feature change), one agent and several both scored 100%; what-we-measured names the research work as 40 questions | README, llms.txt, what-we-measured, fix-qa-audit | Tables 2 and 4 (40/40 research answers per run) | research 5 pairs; parallel-code 2 pairs; coupled-code 2 pairs (protocol analysis; Table 5 with 5 pairs each agrees) | measured (a tie at the ceiling: it cannot show a difference either way) |
+| S1 | On work that fits in one context (research, independent modules, a coupled feature change), one agent and several both scored 100%; what-we-measured names the research work as 40 questions | llms.txt, what-we-measured, fix-qa-audit | Tables 2 and 4 (40/40 research answers per run) | research 5 pairs; parallel-code 2 pairs; coupled-code 2 pairs (protocol analysis; Table 5 with 5 pairs each agrees) | measured (a tie at the ceiling: it cannot show a difference either way) |
 | S2 | There, several agents took 1.6× to 4.9× as long | same | Table 4: 1.58× (parallel-code), 3.59× (research), 4.93× (coupled-code) | same | measured; the parallel-code and coupled-code verdicts rest on 2 pairs each |
 | S3 | …and used 4× to 5.5× the tokens | same | Table 4, tokens without cache reads: 4.04×, 5.20×, 5.53× | same | measured |
 | S4 | On an audit larger than one context (5.2 to 5.7 million characters of source, 150 planted defects over 5 instances), recall was 11 points higher (99% against 87%; interval +4 to +19 points); fix-qa-audit adds that the planning agent used six workers there | same; in words without numbers in `CHANGELOG.md` (1.3.0, `audit`) | "The answer" and "Large-audit" sections: recall 0.987 against 0.873, +11.3 points, 97.06% interval [+4.0, +19.3]; the split ORCH chose: 6 workers on the large audit | 5 blocks with the excluded attempts put back; 0 valid pairs under the protocol | **sensitivity analysis**: the pre-registered exclusion rule excluded 9 of 10 attempts |

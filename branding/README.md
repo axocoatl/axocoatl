@@ -13,6 +13,9 @@ Single canonical mark.  Every brand asset descends from `mark.png`.
 | `wordmark-vellum.png` | PNG | any size  | Wordmark composited on ink background.               |
 | `colors.json`     | JSON | code         | Palette source of truth.                             |
 | `SERPENT-AXIOM.md`| MD   | docs         | Character spec — drives every serpent generation.    |
+| `launch-card.html`| HTML | source       | Source of the social cards below.                    |
+| `launch-card.png` | PNG  | 1200×630     | Open Graph card; the site ships it as `sites/marketing/assets/og-home.png`. |
+| `github-social-preview.png` | PNG | 1280×640 | GitHub repository social preview (uploaded by hand in the repository settings). |
 
 ## Palette
 
@@ -39,6 +42,17 @@ checker background to clean alpha, then promoted to `branding/mark.png`.
 `tools/wordmark.py` composes the mark inline between the letters `ax`
 and `atl` (Space Grotesk SemiBold).  Re-run after any `mark.png`
 replacement to regenerate `wordmark.png` + the ink/vellum variants.
+
+## How the social cards are made
+
+`launch-card.html` lays out the card at any size given as `?w=…&h=…`.
+`node branding/render-cards.mjs` renders it with the Playwright Chromium the
+browser tests install (`cd axocoatl-server/browser-tests && npm ci && npx
+playwright install chromium`) and writes `sites/marketing/assets/og-home.png`,
+`launch-card.png` and `github-social-preview.png`. It loads Space Grotesk and
+JetBrains Mono from Google Fonts, so it needs the network. Re-render after
+changing the card's copy, and keep the `og:image:alt` text of the marketing
+pages in step with it.
 
 ## Single-mark rule
 

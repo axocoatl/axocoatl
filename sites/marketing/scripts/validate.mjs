@@ -26,7 +26,7 @@ const builtRoot = root !== sourceRoot;
 const { version: productVersion, pending: filmsPending } = filmMode(repositoryRoot);
 const skippedFilmRules = [];
 const pages = [
-  'index.html', '404.html', 'changelog/index.html', 'concepts/index.html',
+  'index.html', '404.html', 'changelog/index.html', 'compare/index.html', 'concepts/index.html',
   'install/index.html', 'integrations/openrouter/index.html', 'pricing/index.html',
   'showcase/index.html', 'why/index.html',
 ];
@@ -586,7 +586,9 @@ if (root === sourceRoot) {
   const readme = readRequired(join(repositoryRoot, readmeLabel), readmeLabel, 'utf8');
   if (readme) {
     for (const [contract, marker] of [
-      ['launch headline', 'The harness you can trust to run coding agents on your own machine or infrastructure.'],
+      ['launch headline', 'Run coding agents unattended, and let the host decide when they are done.'],
+      ['headless run example', 'axocoatl run fix --task'],
+      ['external agents in the opening', 'https://docs.axocoatl.ai/configure/external-agents/'],
       ['measured-results section', '<!-- measured: '],
       ['current HTTP reference', 'https://docs.axocoatl.ai/reference/http-api/'],
     ]) {

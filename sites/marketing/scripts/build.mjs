@@ -56,7 +56,7 @@ if (new Set(filmFiles).size !== 24) {
 
 const pages = [
   'index.html', '404.html',
-  'changelog/index.html', 'concepts/index.html', 'install/index.html',
+  'changelog/index.html', 'compare/index.html', 'concepts/index.html', 'install/index.html',
   'integrations/openrouter/index.html', 'pricing/index.html',
   'showcase/index.html', 'why/index.html',
 ];
