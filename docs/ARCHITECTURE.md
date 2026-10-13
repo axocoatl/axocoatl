@@ -1574,6 +1574,84 @@ The sandbox is pluggable behind one trait, selected for this daemon configuratio
 
 Report security issues per [SECURITY.md](../SECURITY.md).
 
+## Concepts reference
+
+This list moved here from the README. The first entries name what a person uses today;
+the later ones (Agent memory tiers, the Coordinator role, Automations, the event feed
+and protocols) describe the legacy and compatibility runtime explained in the sections
+above.
+
+- **Workspace** — a persistent, user-named identity for one authorized project directory.
+- **Session** — one durable work item and conversation created inside a Workspace.
+- **Session turn** — one accepted request, its immutable context references, outputs,
+  and final lifecycle state in the Session's canonical history. Actor checkpoints remain a
+  separate execution-recovery cache.
+- **Attempt** — a candidate solution, optionally run in parallel with different
+  agents and models, verified and resolved to one kept result.
+- **Lead and helpers** — in a native Session, an Agent whose Team & budget approval
+  names helper templates gets a `delegate` tool. Each call starts one read-only helper
+  in an empty conversation, reserves its limits from the lead's grant, and returns
+  its answer to the lead. A helper that could change files is refused.
+- **Grant** — the limits you approve in Team & budget for an Agent: activations,
+  invocations, tokens, cost, and expiry. Every provider and tool call is reserved
+  against it before it runs; raising a limit takes a human decision.
+- **Loadout** — a versioned YAML file that declares a whole run: Agents and models,
+  required checks, a required reviewer, network, budgets and prompt. `axocoatl run`
+  runs one; Settings only displays it. A **run** ends with an Outcome and an exit code;
+  an **adjudication** is the writer's accept or reject, with a reason, of one review
+  finding; **not covered** lists what ended without a result, never counted as a pass.
+- **Required checks and required review** — optional completion conditions for a
+  native team. Checks are commands the host runs between two captures of the
+  repository; review is a read-only reviewer the host runs, in a fresh conversation,
+  for 1 to 3 rounds. A turn completes only when every condition passes on the exact
+  final tree.
+- **Agents** — configured templates for a provider, model, tools, memory policy, role, and
+  token budget. Native activations retain exact input, accepted conversation checkpoints,
+  and usage; their execution path does not attach Tier 2–4 memory stores. On the legacy
+  path, an autonomous Agent has a Session-scoped Tier 1–4 identity. A Coordinator owns
+  scoped Tier-1 conversation plus orchestration checkpointing; its declared Workers
+  own scoped Tier 1–4 identities beneath it. The global
+  compatibility actor remains separate, and ad-hoc Workers are run-scoped and ephemeral.
+- **Legacy hybrid memory recall** — relevant past exchanges are injected each turn, and
+  the Agent can also pull on demand: `recall_search` (semantic search within that
+  Agent instance's scope) and `recall_timeframe` (read its dated activity log). Tunable
+  for autonomous Agents and declared Workers, retained across actor restart in the same
+  Session. The Coordinator provider loop itself does not expose Tier 2–4 recall in 1.0.
+- **Legacy agent-managed core memory** — editable blocks (`persona`, `human`, `project`,
+  …) the agent curates via tools and that render into its prompt each turn (the
+  MemGPT/Letta model). Available to autonomous Agents and declared Workers, scoped to their
+  Session runtime identity by default; only blocks marked `shared: true` cross Agent or
+  Session scopes. A
+  configured background "sleep-time" pass consolidates registered idle autonomous
+  Agents' memory. Declared Coordinator Workers are not polled by that loop.
+  Legacy Lattice, Custom, and Coordinator turns can read these stores, but cannot
+  write them or run core-memory consolidation during the turn.
+- **Event feed** — firing a Skill publishes each event in its `emits` list;
+  Automation triggers, webhooks, and retained API/WebSocket observers consume
+  that feed, which keeps no history and starts no Agents on its own. Library
+  users get the feed from `axocoatl_core::event_feed`.
+- **Coordinator role** — in a native Session, a template with `role: coordinator`
+  runs as a lead over its approved Worker templates. On a legacy Session, it
+  decomposes a goal into subtasks with its model, assigns each to the first
+  declared worker that can call its required tools, runs them in parallel, and
+  synthesizes the results; once that turn is Completed, Cancelled, Failed, or
+  Interrupted, a later turn decomposes fresh rather than silently resuming it.
+  On a 1.0 data root, a Session turn that would run two or more Agents is refused
+  until the operator runs `axocoatl session upgrade --confirm`.
+- **Workflow compatibility** — workflow commands and routes project manual
+  Automation records; legacy YAML seeds those records only on first boot.
+- **Automations** — explicit DAGs created, inspected, edited, and run in
+  Settings, with the HTTP API available for programmatic CRUD. New records start
+  with a valid Input → Agent graph. They can fire manually, on a fixed interval, by
+  the name of an event a Skill publishes, or by one Skill. The persisted Automation store is live in
+  both `dev` and `serve`; legacy YAML is first-boot seed data only. A top-level
+  Interrupt parked at an operator decision survives a daemon restart and resumes
+  without replaying completed nodes; arbitrary in-flight calls and nested
+  Subgraph Interrupts do not have that recovery guarantee.
+- **Providers** — Ollama, OpenAI, Anthropic, Mistral, Gemini, OpenRouter. No lock-in.
+- **Protocols** — MCP (discover, call, and expose tools — agents invoke external
+  MCP tools through the daemon over a persistent connection) and inbound A2A task dispatch.
+
 ## Crate map
 
 `axocoatl-core` (types, event feed) · `axocoatl-token` (budgets) · `axocoatl-llm*`

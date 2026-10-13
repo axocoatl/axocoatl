@@ -6,10 +6,10 @@ tiers (the in-process session transcript and crash-recovery checkpoints). This
 example demonstrates the **top two** — agent-managed core memory and semantic
 recall — plus the **sleep-time consolidation** pass that connects them.
 
-This is the "Tell it once — it remembers" workflow from the project README's
-[See it work](../../README.md#see-it-work) section (the `docs/img/memory.gif`
-demo), as a runnable program: store a preference in one session, open a
-brand-new session, and it still knows.
+This is the "Tell it once — it remembers" workflow (the `docs/img/memory.gif`
+demo; the tiers are described in
+[Memory tiers](../../docs/ARCHITECTURE.md#memory-tiers)), as a runnable program:
+store a preference in one session, open a brand-new session, and it still knows.
 
 ```
 cargo run -p memory-recall

@@ -1,30 +1,149 @@
 # Axocoatl
 
-**The harness you can trust to run coding agents on your own machine or infrastructure.**
+**Run coding agents unattended, and let the host decide when they are done.**
 
-Isolation built in. A complete record of every step. Any model, local or hosted.
+Claude Code, Codex or a local model works in a sandbox its model credential never
+enters. When it says it is done, the host runs your tests on the final files and a
+different model reviews the change. You get an exit code for CI and a checksummed
+record of every step. One open-source Rust executable; no Axocoatl account or telemetry.
 
-[![CI](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml/badge.svg)](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/axocoatl-cli.svg)](https://crates.io/crates/axocoatl-cli)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml/badge.svg)](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/axocoatl-cli.svg)](https://crates.io/crates/axocoatl-cli) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+```bash
+curl -fsSL https://axocoatl.ai/install.sh | sh   # macOS 11+, glibc 2.35+ Linux, or WSL2
+axocoatl onboard   # configure this OS user; choose Ollama or OpenRouter
+axocoatl doctor    # check Podman (the sandbox) and the provider
+axocoatl dev       # start the daemon and leave it running
+
+cd ~/src/my-app    # then, in another shell
+axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" \
+  --model writer=ollama:qwen3-coder:30b --model reviewer=ollama:gpt-oss:120b \
+  --junit axocoatl-junit.xml --record run.axorecord.jsonl
+```
+
+An example of the summary a passing run prints on standard output, in the format
+`axocoatl run` prints it (progress goes to standard error):
+
+```text
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:b579bd67515486bebaf28d2bbfc76853260abef7623a05d2d5f83c1593cc9b41
+Checks:
+  tests            passed, exit 0
+Review: approved after 2 of 3 rounds by ollama:gpt-oss:120b
+Adjudications:
+  round 1 F1   accept: the last page was dropped when total % size == 0; fixed, with a test
+  round 1 F2   reject: Paginator.__init__ already refuses size 0 (pages.py:12)
+Usage: 412907 input + 23118 output tokens, $0.0000
+Network: 0 recorded events, 0 allowed and 0 refused connections, 0 route requests
+Record: run-7f3c9a2e-4b1d-4c8a-9e6f-2d5b8a1c0e47
+```
+
+- **Claude Code or Codex as the writer.** The Claude Code CLI or the Codex CLI runs
+  inside the Session container as a non-root user, and the host runs the same checks and
+  review on what it leaves. `axocoatl connect claude-code` (it runs `claude setup-token`)
+  or `axocoatl connect codex` (your ChatGPT sign-in, in a browser) stores the credential
+  on your computer without showing it; the daemon adds it on the host to each model
+  request, and the container holds a placeholder. For now this takes a loadout you write:
+  see [External agents](https://docs.axocoatl.ai/configure/external-agents/).
 
 <p align="center">
-  <img src="sites/marketing/assets/og-home.png" alt="Axocoatl: the local-first workbench for coding agents" width="760">
+  <img src="sites/marketing/assets/og-home.png" alt="Axocoatl: run coding agents unattended. Claude Code, Codex or a local model in a sandbox; the host runs your checks on the final files; a different model reviews the change; an exit code for CI and a checksummed record." width="760">
 </p>
 
-Axocoatl runs coding agents against your repository. It is one open-source Rust
-executable: a daemon that runs the Agents and records their work, and a web
-workbench you open in your browser. The default is one Agent, the Lead, which
-writes; read-only helpers it can delegate to, and checks and a review the host
-runs before a turn completes, are opt-in.
+## What a run does
+
+A **loadout** is a YAML recipe for one run: its Agents (the model-driven workers) and
+their models, the required checks with their timeouts, a required reviewer, the network,
+the budgets and the prompt. `axocoatl run` hands one to the running daemon, which runs
+it in a **Session**: one durable work item with its conversation, the sandbox its tools
+run in, and its record.
+
+- **Three built-in loadouts.** `fix` runs one writer, your check command as a required
+  check, and a required review by a different model for up to 3 rounds; the writer must
+  answer every finding with accept or reject and a reason. `qa` runs one browser explorer
+  whose findings carry Playwright reproductions the host re-runs. `audit` (opt-in: it
+  runs only when named) plans areas, reads them with parallel read-only workers and
+  merges the findings. Your own loadouts are YAML files in the `loadouts/` directory
+  beside your configuration.
+- **A sandbox with no direct network.** A loadout's Session always runs under network
+  egress (or none) with non-root workload users; the container has no direct network
+  access and reaches the outside only through the daemon's egress proxy and routes,
+  which decide and record every connection. Your global defaults do not change.
+- **The host decides.** Required checks run on the exact final files, by the host. A
+  reviewer on the writer's own model is warned about, not refused. A finding left
+  unanswered, a check that did not run, or anything not covered makes the run need
+  attention; nothing passes by default.
+- **A verdict for CI.** Exit codes: 0 pass, 1 checks failed, 2 needs attention, 3 usage,
+  4 daemon unavailable, 5 infrastructure, 6 interrupted, 7 busy. `--junit` writes JUnit of
+  the checks, review, adjudications, findings and coverage. `--record` writes the whole
+  run as one JSON Lines file ending with its line count and SHA-256, which
+  `axocoatl record verify` checks; it is checksummed, not signed.
+- **Keep as PR.** `--keep branch` commits exactly the run's changed paths to a new branch
+  with your `git`, without touching your checkout; `--keep pr` also pushes it and opens a
+  pull request with `gh`.
+
+Details: [Loadouts](https://docs.axocoatl.ai/configure/loadouts/),
+[`axocoatl run`](https://docs.axocoatl.ai/reference/run/),
+[Fix, QA and audit runs](https://docs.axocoatl.ai/workbench/fix-qa-audit/) and
+[Keep as PR](https://docs.axocoatl.ai/workbench/keep-as-pr/).
+
+## What we measured
+
+<!-- measured: axocoatl-1.1.0 2026-10-01 -->
+A pre-registered benchmark with small local models, measured through Axocoatl 1.1.0
+and, for comparison, a plain agent loop: 6 Python maintenance tasks frozen on
+2026-09-22, scored by 25 withheld tests the agents never see. The writer is qwen3-coder
+30B running locally; one run per task, temperature 0.
+
+**Through Axocoatl 1.1.0:**
+
+| Setup | Withheld tests passed | Tokens vs. one pass |
+| --- | --- | --- |
+| One Agent, one pass | 17 / 25 | 1× |
+| The same writer with a Required review by a stronger local model (gpt-oss 120B) | **19 / 25** | 2.6× |
+
+The reviewer reported 15 defects and 14 were real. The writer applied every finding it
+received, including the one false alarm, which cost a test; 6 real findings came in the
+second and last review round, after which Axocoatl stops revising.
+
+**Where extra tokens help** (same tasks, a plain agent loop, not through Axocoatl):
+
+| Setup | Withheld tests passed | Tokens vs. one pass |
+| --- | --- | --- |
+| The same Agent reviews its own work | 17 / 25 | 3.5× |
+| A fresh reviewer on the same model (it approved every change) | 17 / 25 | 2.3× |
+| The same model writes its own tests (4 of 6 tasks run) | one more test | 9–15× |
+| A stronger reviewer (gpt-oss 120B) | 20 / 25 | 3.3× |
+<!-- /measured -->
+
+A stronger, different reviewer helped a small local writer; a second look from the same
+model didn't: extra tokens helped when they bought a stronger model's judgment, not
+more looks from the same model. That is one small benchmark with two local models, not
+a claim that Axocoatl makes agents better. Axocoatl lets each Agent use its own model,
+so a local writer can be reviewed by a stronger model, and the host still runs your
+checks and records every step. The reviewer we measured ran locally; reviewers through OpenRouter
+have not been measured, and neither have the built-in loadouts of 1.3. We do not claim
+the default team beats a single Agent; one Agent remains the cheaper choice for small
+tasks.
+
+The built-in loadouts run one writer or one explorer, and `audit` is opt-in, following
+studies that ran with Claude Code subagents, not through Axocoatl. They, the method and
+the limits are in [What we measured](https://docs.axocoatl.ai/understand/what-we-measured/),
+and every public number with its evidence is in [`docs/CLAIMS.md`](docs/CLAIMS.md).
+
+---
+
+## How the boundaries work
 
 ### Isolation built in
 
 - **Every Session's repository tools run in a sandbox.** File, shell and terminal
   tools run in a rootless Podman container on your machine by default; E2B Cloud is
   an explicit remote option on the compatibility path. The web and MCP tools run on
-  the host, and the browser tools in a container of their own. Network access is on
-  by default; set `sandbox.network: none` for repositories you don't trust.
+  the host, and the browser tools in a container of their own. Interactive Sessions
+  have network access by default (`sandbox.network: bridge`); set
+  `sandbox.network: none` for repositories you don't trust. A loadout run's container
+  has no direct network access (see above).
 - **Read-only helpers cannot write files or open TCP connections.** They get no
   file-writing tools, and the kernel blocks their shell from writing, creating,
   renaming or deleting repository files and from opening TCP connections (Landlock,
@@ -60,97 +179,24 @@ runs before a turn completes, are opt-in.
   is replaced by a short placeholder in later requests, and a request that would
   overflow the context window is trimmed instead of failing.
 
-### Run it headless
-
-- **Loadouts.** A versioned YAML file declares a whole run: Agents and models, required
-  checks with their timeouts, a required reviewer, network, budgets and prompt. Three are
-  built in: `fix` (one writer, your checks, review by a different model, every finding
-  answered accept or reject with a reason), `qa` (one browser explorer whose findings
-  carry Playwright reproductions the host re-runs) and `audit` (opt-in: plan, parallel
-  read-only area workers, integrate).
-- **`axocoatl run`.** Runs a loadout against the running daemon and exits 0 (pass),
-  1 (checks failed), 2 (needs attention: review not passed, a finding unanswered,
-  anything not covered) or higher for usage and infrastructure errors. It writes JUnit
-  and a single-file record bundle of the whole run. A loadout's Session always runs
-  under network egress (or none) with non-root workload users; your global defaults do not change.
-- **External agents and e2e.** The Claude Code CLI or Codex CLI can be a loadout's
-  writer, inside the Session container, with its model credential added on your computer
-  by a route. tester-army/e2e can be a required check. **Keep as PR** commits a passing
-  run to a new branch and, if you ask, opens a pull request, without touching your
-  checkout.
-
 Axocoatl adds no product telemetry and needs no Axocoatl account.
-
-## What we measured
-
-<!-- measured: axocoatl-1.1.0 2026-10-01 -->
-A pre-registered benchmark: 6 Python maintenance tasks frozen on 2026-09-22, scored by
-25 withheld tests the agents never see. The writer is qwen3-coder 30B running locally;
-one run per task, temperature 0.
-
-**Through Axocoatl 1.1.0:**
-
-| Setup | Withheld tests passed | Tokens vs. one pass |
-| --- | --- | --- |
-| One Agent, one pass | 17 / 25 | 1× |
-| The same writer with a Required review by a stronger local model (gpt-oss 120B) | **19 / 25** | 2.6× |
-
-The reviewer reported 15 defects and 14 were real. The writer applied every finding it
-received, including the one false alarm, which cost a test; 6 real findings came in the
-second and last review round, after which Axocoatl stops revising.
-
-**Where extra tokens help** (same tasks, a plain agent loop without Axocoatl):
-
-| Setup | Withheld tests passed | Tokens vs. one pass |
-| --- | --- | --- |
-| The same Agent reviews its own work | 17 / 25 | 3.5× |
-| A fresh reviewer on the same model (it approved every change) | 17 / 25 | 2.3× |
-| The same model writes its own tests (4 of 6 tasks run) | one more test | 9–15× |
-| A stronger reviewer (gpt-oss 120B) | 20 / 25 | 3.3× |
-<!-- /measured -->
-
-Extra tokens helped when they bought a stronger model's judgment, not more looks
-from the same model. Axocoatl lets each Agent use its own model, so a local writer
-can be reviewed by a stronger model, and the host still runs your checks and records
-every step. The reviewer we measured ran locally; reviewers through OpenRouter have not
-been measured. We do not claim the default team beats a single Agent; one Agent remains
-the cheaper choice for small tasks.
-
-<!-- measured: claude-code-subagents single-vs-multi 2026-10-06 -->
-**One agent or several, on the same model** (Claude Opus as Claude Code subagents, not
-through Axocoatl): on work that fits in one context, one agent and a planner with
-parallel workers both scored 100%, and the multi-agent setup took 1.6× to 4.9× as long
-and 4× to 5.5× the tokens. On an audit larger than one context, the multi-agent setup
-found 11 points more (99% against 87%) at 8 points lower precision and about 3× the
-tokens; that result is a sensitivity analysis, because the study's pre-registered
-exclusion rule removed 9 of its 10 attempts.
-<!-- /measured -->
-
-This is why the built-in loadouts have one writer or one explorer and `audit` is
-opt-in. Details and limits:
-[What we measured](https://docs.axocoatl.ai/understand/what-we-measured/), and every
-public number with its evidence in [`docs/CLAIMS.md`](docs/CLAIMS.md).
 
 ---
 
-## Quickstart
+## The browser workbench
 
-The execution contracts below describe the 1.3.0 source tree. The installer and
+The same daemon serves a workbench in your browser for work you want to watch: the
+default is one Agent, the Lead, which writes; read-only helpers it can delegate to,
+and checks and a review the host runs before a turn completes, are opt-in.
+
+The execution contracts below describe the 1.3.1 source tree. The installer and
 `cargo install` select published releases; see the [changelog](CHANGELOG.md)
 for versioned changes.
 
 ```bash
-# 1. Install (no Rust toolchain required)
-curl -fsSL https://axocoatl.ai/install.sh | sh
-
-# 2. Configure Axocoatl for this OS user
-axocoatl onboard
-
-# 3. Check your environment
-axocoatl doctor
-
-# 4. Start the daemon and open the one app
-axocoatl dev
+axocoatl onboard   # configure Axocoatl for this OS user
+axocoatl doctor    # check your environment
+axocoatl dev       # start the daemon and the one app
 # Open the "Sign in:" link it prints (http://localhost:8080/?token=…).
 # `axocoatl url` prints it again.
 # Choose Open workspace… in the app to authorize a repository.
@@ -184,9 +230,7 @@ tokens, and one Agent is cheaper for small tasks. To change the team, see
 > explicit local `axocoatl.yaml`. Pass it with `--config`; Axocoatl never selects
 > a repository's configuration merely because it is the current directory.
 
----
-
-## From request to reviewed change
+### From request to reviewed change
 
 1. Open or resume a Workspace Session.
 2. In **Team & budget**, enter the limits for Lead and its helpers, and add any
@@ -204,7 +248,7 @@ tokens, and one Agent is cheaper for small tasks. To change the team, see
 6. Open **Last turn** in Source Control, review the current attributed diff,
    stage what you want, and commit deliberately.
 
-## What else the workbench does
+### What else the workbench does
 
 - **One executable, one browser surface.** `axocoatl dev` starts the local daemon
   and serves the embedded workbench at `http://localhost:8080`, behind a
@@ -322,79 +366,26 @@ remain explicit. **Investigate in chat** attaches a selected
 note and prepares a follow-up request under ordinary Session authority and budgets.
 Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
 
-## Core concepts
+## Concepts
 
-- **Workspace** — a persistent, user-named identity for one authorized project directory.
-- **Session** — one durable work item and conversation created inside a Workspace.
-- **Session turn** — one accepted request, its immutable context references, outputs,
-  and final lifecycle state in the Session's canonical history. Actor checkpoints remain a
-  separate execution-recovery cache.
-- **Attempt** — a candidate solution, optionally run in parallel with different
-  agents and models, verified and resolved to one kept result.
-- **Lead and helpers** — in a native Session, an Agent whose Team & budget approval
-  names helper templates gets a `delegate` tool. Each call starts one read-only helper
-  in an empty conversation, reserves its limits from the lead's grant, and returns
-  its answer to the lead. A helper that could change files is refused.
-- **Grant** — the limits you approve in Team & budget for an Agent: activations,
-  invocations, tokens, cost, and expiry. Every provider and tool call is reserved
-  against it before it runs; raising a limit takes a human decision.
-- **Loadout** — a versioned YAML file that declares a whole run: Agents and models,
-  required checks, a required reviewer, network, budgets and prompt. `axocoatl run`
-  runs one; Settings only displays it. A **run** ends with an Outcome and an exit code;
-  an **adjudication** is the writer's accept or reject, with a reason, of one review
-  finding; **not covered** lists what ended without a result, never counted as a pass.
-- **Required checks and required review** — optional completion conditions for a
-  native team. Checks are commands the host runs between two captures of the
-  repository; review is a read-only reviewer the host runs, in a fresh conversation,
-  for 1 to 3 rounds. A turn completes only when every condition passes on the exact
-  final tree.
-- **Agents** — configured templates for a provider, model, tools, memory policy, role, and
-  token budget. Native activations retain exact input, accepted conversation checkpoints,
-  and usage; their execution path does not attach Tier 2–4 memory stores. On the legacy
-  path, an autonomous Agent has a Session-scoped Tier 1–4 identity. A Coordinator owns
-  scoped Tier-1 conversation plus orchestration checkpointing; its declared Workers
-  own scoped Tier 1–4 identities beneath it. The global
-  compatibility actor remains separate, and ad-hoc Workers are run-scoped and ephemeral.
-- **Legacy hybrid memory recall** — relevant past exchanges are injected each turn, and
-  the Agent can also pull on demand: `recall_search` (semantic search within that
-  Agent instance's scope) and `recall_timeframe` (read its dated activity log). Tunable
-  for autonomous Agents and declared Workers, retained across actor restart in the same
-  Session. The Coordinator provider loop itself does not expose Tier 2–4 recall in 1.0.
-- **Legacy agent-managed core memory** — editable blocks (`persona`, `human`, `project`,
-  …) the agent curates via tools and that render into its prompt each turn (the
-  MemGPT/Letta model). Available to autonomous Agents and declared Workers, scoped to their
-  Session runtime identity by default; only blocks marked `shared: true` cross Agent or
-  Session scopes. A
-  configured background "sleep-time" pass consolidates registered idle autonomous
-  Agents' memory. Declared Coordinator Workers are not polled by that loop.
-  Legacy Lattice, Custom, and Coordinator turns can read these stores, but cannot
-  write them or run core-memory consolidation during the turn.
-- **Event feed** — firing a Skill publishes each event in its `emits` list;
-  Automation triggers, webhooks, and retained API/WebSocket observers consume
-  that feed, which keeps no history and starts no Agents on its own. Library
-  users get the feed from `axocoatl_core::event_feed`.
-- **Coordinator role** — in a native Session, a template with `role: coordinator`
-  runs as a lead over its approved Worker templates. On a legacy Session, it
-  decomposes a goal into subtasks with its model, assigns each to the first
-  declared worker that can call its required tools, runs them in parallel, and
-  synthesizes the results; once that turn is Completed, Cancelled, Failed, or
-  Interrupted, a later turn decomposes fresh rather than silently resuming it.
-  On a 1.0 data root, a Session turn that would run two or more Agents is refused
-  until the operator runs `axocoatl session upgrade --confirm`.
-- **Workflow compatibility** — workflow commands and routes project manual
-  Automation records; legacy YAML seeds those records only on first boot.
-- **Automations** — explicit DAGs created, inspected, edited, and run in
-  Settings, with the HTTP API available for programmatic CRUD. New records start
-  with a valid Input → Agent graph. They can fire manually, on a fixed interval, by
-  the name of an event a Skill publishes, or by one Skill. The persisted Automation store is live in
-  both `dev` and `serve`; legacy YAML is first-boot seed data only. A top-level
-  Interrupt parked at an operator decision survives a daemon restart and resumes
-  without replaying completed nodes; arbitrary in-flight calls and nested
-  Subgraph Interrupts do not have that recovery guarantee.
-- **Providers** — Ollama, OpenAI, Anthropic, Mistral, Gemini, OpenRouter. No lock-in.
-- **Protocols** — MCP (discover, call, and expose tools — agents invoke external
-  MCP tools through the daemon over a persistent connection) and inbound A2A task dispatch.
+- **Workspace**: a repository folder you named and authorized in the app.
+- **Session**: one durable work item inside a Workspace: its conversation, the sandbox
+  its tools run in, and its record. A loadout run creates one too.
+- **Turn**: one accepted request with its context, output and final state.
+- **Agent**: a configured model-driven worker with its own provider, model, tools and
+  limits. In a team, the **lead** writes and **helpers** only read.
+- **Grant**: the limits you approve in Team & budget for an Agent: activations,
+  invocations, tokens, cost and expiry.
+- **Required checks and required review**: completion conditions the host evaluates on
+  the exact final tree; the Agents cannot skip or answer them.
+- **Loadout** and **run**: a YAML recipe for one run, and one headless execution of it
+  through `axocoatl run`, ending in an Outcome and an exit code. An **adjudication** is
+  the writer's accept or reject, with a reason, of one review finding; **not covered**
+  lists what ended without a result, never counted as a pass.
+- **Attempt** (a Way): one candidate solution when a Session explores several.
 
+The runtime and legacy concepts (memory tiers, the Coordinator role, Automations, the
+event feed, protocols) are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#concepts-reference).
 See [`docs/PRODUCT.md`](docs/PRODUCT.md) for the product model, the
 [docs site](https://docs.axocoatl.ai) for the full guide, the
 [marketing site](https://axocoatl.ai) for the positioning, or

@@ -1,5 +1,5 @@
 # Axocoatl — a local-first harness for coding agents
-> Axocoatl v1.3: the harness you can trust to run coding agents on your own machine or infrastructure. Isolation built in, a complete record of every step, any model, local or hosted.
+> Axocoatl v1.3: run coding agents unattended. Claude Code, Codex or a local model works in a sandbox its model credential never enters; when it says it is done, the host runs your tests on the final files and a different model reviews the change; the run ends with an exit code for CI and a checksummed record of every step. Isolation built in, a complete record, any model, local or hosted.
 
 Axocoatl v1.3 is an Apache-2.0, local-first harness for coding agents working in
 real repositories. One Rust executable runs a daemon that executes the Agents and a
@@ -92,9 +92,9 @@ runs one.
 Session runs under network egress (or none) with non-root workload users; global defaults do not
 change. Exit codes: 0 pass, 1 required checks failed, 2 needs attention (review not
 passed, a finding unanswered, anything not covered, budget), 3 usage, 4 daemon
-unavailable, 5 infrastructure, 6 interrupted. `--junit` writes JUnit of checks and
+unavailable, 5 infrastructure, 6 interrupted, 7 busy (another run or turn holds the repository). `--junit` writes JUnit of checks and
 findings; `--record` writes the whole Session record as one JSON Lines file that
-`axocoatl record verify` checks. `--keep branch|pr` commits a passing run to a new
+`axocoatl record verify` checks (it is checksummed, not signed). `--keep branch|pr` commits a passing run to a new
 branch with host git and, opt-in, opens a pull request with gh; it never force-pushes
 and never pushes to the default branch. The Claude Code CLI or Codex CLI can be a
 loadout's writer inside the Session container, with its credential stored by
