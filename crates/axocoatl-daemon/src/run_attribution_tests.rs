@@ -215,4 +215,9 @@ fn attribution_keeps_the_checked_trees_and_the_last_writers_after_capture() {
     unusable.unavailable = Some("Execution was stopped".into());
     attribution.add_activation("checks", &[unusable]);
     assert_eq!(attribution.checked.len(), 1);
+    // A later activation whose changes are unknown may have changed files
+    // after that writer: its After capture is no longer what the run left.
+    attribution.add_activation("writer 2", &[capture(CapturePhase::Before, Some(&after))]);
+    assert_eq!(attribution.unattributable.len(), 1);
+    assert_eq!(attribution.last_writer_after, None);
 }

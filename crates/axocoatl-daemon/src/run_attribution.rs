@@ -37,7 +37,7 @@ pub struct RunAttribution {
     /// (`BeforeCheck`/`AfterCheck`) of the run's activations, in order.
     pub checked: Vec<CapturedTree>,
     /// The After capture of the last activation that changed a file, when
-    /// one did.
+    /// one did and no activation whose changes are unknown came after it.
     pub last_writer_after: Option<CapturedTree>,
 }
 
@@ -99,6 +99,9 @@ impl RunAttribution {
             }
             ActivationChanges::NotCaptured => {}
             ActivationChanges::Unknown(reason) => {
+                // It may have changed files after the last known writer: that
+                // writer's After capture is no longer what the run left.
+                self.last_writer_after = None;
                 self.unattributable.push(format!("{label}: {reason}"))
             }
         }
