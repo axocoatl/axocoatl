@@ -207,6 +207,24 @@ impl SecretsLock {
         check_room(&self.directory, names)
     }
 
+    /// Read secret `name` (a regular file of at most [`MAX_SECRET_BYTES`]
+    /// and a line break). `Ok(None)` when it is not stored. The value is
+    /// never formatted into an error.
+    pub fn read(&self, name: &str) -> Result<Option<Zeroizing<Vec<u8>>>, SecretStoreError> {
+        check_name(name)?;
+        if !self.directory.has_exact_file(name)? {
+            return Ok(None);
+        }
+        let bytes = Zeroizing::new(
+            self.directory
+                .read_limited(name, MAX_SECRET_BYTES + 2)
+                .map_err(|error| {
+                    SecretStoreError::Invalid(format!("secret {name} cannot be read: {error}"))
+                })?,
+        );
+        normalize_secret_value(&bytes).map(Some)
+    }
+
     /// Remove secret `name`. `Ok(false)` when there was none.
     pub fn remove(&self, name: &str) -> Result<bool, SecretStoreError> {
         check_name(name)?;
@@ -326,15 +344,28 @@ pub fn has_secret(data_dir: &Path, name: &str) -> Result<bool, SecretStoreError>
     }
 }
 
+/// Refuse the names of secrets no route may send: the receipt signing key
+/// (`crate::receipt_key::RECEIPT_KEY_SECRET`) signs receipts and never
+/// leaves the data root.
+fn check_route_secret(name: &str) -> Result<(), SecretStoreError> {
+    if crate::receipt_key::is_receipt_key_name(name) {
+        return Err(SecretStoreError::Invalid(
+            crate::receipt_key::NEVER_A_ROUTE_CREDENTIAL.to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// The credential source a route naming `name` uses when the config's
 /// `credentials` block has no entry of that name: the stored secret's file,
 /// read by the broker per request (`CredentialSource::File`). `None` when no
 /// such secret is stored. Core's `loadout::egress::loadout_policy` adds it to
-/// the Session's `credentials`.
+/// the Session's `credentials`. The receipt signing key is refused.
 pub fn credential_source(
     data_dir: &Path,
     name: &str,
 ) -> Result<Option<CredentialSourceYaml>, SecretStoreError> {
+    check_route_secret(name)?;
     if !has_secret(data_dir, name)? {
         return Ok(None);
     }
@@ -352,6 +383,7 @@ pub fn credential_source_in(
     name: &str,
 ) -> Result<Option<CredentialSourceYaml>, SecretStoreError> {
     check_name(name)?;
+    check_route_secret(name)?;
     let directory = match SecureDir::open_existing_all(secrets_dir) {
         Ok(directory) => directory,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
