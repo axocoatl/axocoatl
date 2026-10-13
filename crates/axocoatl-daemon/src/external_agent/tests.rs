@@ -106,6 +106,12 @@ fn the_argv_runs_the_pinned_programs_headless_with_their_own_sandbox_off() {
     );
     assert!(codex.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
     assert!(codex.contains(&"model_providers.axocoatl.supports_websockets=false".to_string()));
+    // OpenAI's hosted tools are off: the route refuses requests that offer
+    // them (`egress_broker::provider_fetch`).
+    assert!(codex.contains(&"web_search=\"disabled\"".to_string()));
+    assert!(codex
+        .windows(2)
+        .any(|pair| pair[0] == "--disable" && pair[1] == "image_generation"));
     assert!(codex
         .contains(&"model_providers.axocoatl.base_url=\"https://api.openai.com/v1\"".to_string()));
     assert!(codex.contains(&"model_providers.axocoatl.env_key=\"OPENAI_API_KEY\"".to_string()));

@@ -11,7 +11,11 @@
 //! the Responses API, no WebSockets, the key from `OPENAI_API_KEY`) and turns
 //! off the apps, plugins, update check and analytics. The only requests are
 //! then `POST /v1/responses` with `Authorization: Bearer <key>`, which the
-//! route replaces. Codex's own sandbox is disabled inside the container
+//! route replaces. It also turns off OpenAI's hosted `web_search` (which
+//! 0.160.1 otherwise offers on every request, with live access) and hosted
+//! image generation: tools OpenAI runs itself, which the route refuses
+//! (`egress_broker::provider_fetch`). Its own tools are then function and
+//! custom tools and a `tool_search` it executes itself. Codex's own sandbox is disabled inside the container
 //! (`--dangerously-bypass-approvals-and-sandbox`): the Session container,
 //! its hardened writer user and the egress routes are the boundary.
 //!
@@ -125,6 +129,9 @@ fn provider_argv(
         "unbounded_connection_retries",
         "tool_suggest",
         "skill_mcp_dependency_install",
+        // OpenAI's hosted image generation: a tool OpenAI runs, which the
+        // route refuses (`egress_broker::provider_fetch`).
+        "image_generation",
     ] {
         argv.push("--disable".into());
         argv.push(feature.into());
@@ -132,6 +139,11 @@ fn provider_argv(
     for setting in [
         "check_for_update_on_startup=false".to_string(),
         "analytics.enabled=false".to_string(),
+        // Codex 0.160.1 otherwise offers the model OpenAI's hosted
+        // `web_search` with live access (`external_web_access: true`): OpenAI
+        // would fetch pages for it, past the Session's egress routes. The
+        // route refuses a request that offers it.
+        "web_search=\"disabled\"".to_string(),
         "model_provider=\"axocoatl\"".to_string(),
         "model_providers.axocoatl.name=\"axocoatl\"".to_string(),
         format!("model_providers.axocoatl.base_url=\"{base_url}\""),
