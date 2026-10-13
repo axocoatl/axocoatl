@@ -1,0 +1,176 @@
+---
+title: Signed receipts
+description: Every finished loadout run gets a receipt signed with this computer's key. It says which files the run changed, what the host enforced, which models wrote and reviewed, and the verdict. Anyone can verify it offline against the keys they trust.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+When a [loadout run](/reference/run/) finishes, the daemon signs a **receipt**: a small
+statement of what the run did and what the host observed, signed with an Ed25519 key that
+lives in this computer's data directory. You can hand the receipt to someone who did not
+watch the run, such as a reviewer of the pull request [Keep as PR](/workbench/keep-as-pr/)
+opens, and they can check it without trusting you, Axocoatl's servers (there are none
+involved) or the network.
+
+## What it is
+
+A receipt is an [in-toto Statement v1](https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md)
+with the predicate type `https://axocoatl.ai/receipt/v1`, inside a
+[DSSE](https://github.com/secure-systems-lab/dsse/blob/master/envelope.md) envelope
+(`application/vnd.dsse.envelope.v1+json`) whose one signature is Ed25519 over DSSE's
+pre-authentication encoding of the statement's exact bytes.
+
+- **Subjects:** each file the run changed that exists after it, with the SHA-256 of its
+  content (for a symbolic link, of its target), sorted by path.
+- **Predicate:**
+  - `run`: run and Session ids, start and finish times, the Axocoatl version that signed,
+    and the SHA-256 of the task (the task itself is in the run's record);
+  - `repository`: the commit the run started from, the paths that had uncommitted changes
+    then, and the `origin` remote as `https://host/path` without credentials (absent when
+    there is none or it is a local path);
+  - `loadout`: id, version, kind, digest, built-in or yours;
+  - `agents`: each Agent's id, role, runtime (`native`, `claude-code`, `codex`), the
+    pinned program version of an external writer, provider and model, and the name (never
+    the value) of the credential an external writer's route sends;
+  - `sandbox`: the backend, the Session's network (`egress` or `none`), the `hardened`
+    workload, and the last network policy the Session's record holds for each scope: its
+    revision, digest, and the allowlist hosts and routes as the record renders them;
+  - `network`: the Outcome's network summary;
+  - `checks`: each required check's name, state, exit code, timeout, command and the tree
+    it ran on;
+  - `review` (model, verdict, rounds, number of findings) and `adjudications` (each
+    finding id and the writer's decision);
+  - `verdict`, `exit_code`, `attention`, `not_covered` (count and areas) and the warning
+    codes;
+  - `usage`: tokens and cost, with whether they are complete and whether the cost is
+    known or computed;
+  - `files`: where the digests come from (below), the paths the run removed, which
+    subjects are symbolic links, and whether every changed path is covered, with the
+    reason for each that is not;
+  - `signer`: the algorithm, public key and key id, so a verifier can tell a valid
+    signature by an unknown key from a broken one. Trust never comes from this field.
+
+`files.source` says when the digests were taken:
+
+| `files.source` | The digests are the files |
+| --- | --- |
+| `judged_capture` | as the required checks judged them: from the repository capture of the tree the checks ran on (the one `candidate_sha256` their results name), when that capture holds its whole manifest. |
+| `after_capture` | as the run's last writer left them: from the After capture of the last activation that changed a file, when there is no judged tree (a loadout without checks, or checks that did not run on the final result) and that capture is whole. |
+| `workspace_at_finish` | as the host read them from the working tree when the run finished, without following symbolic links. The files could have changed between the checks and the finish; the receipt does not claim otherwise. |
+
+A capture's manifest is kept whole only up to 8 KiB (roughly 80 files), so in a larger
+repository the source is `workspace_at_finish`. A path the run changed inside Git's own
+directory, a path that is not a file or a link (a directory, a path under a symbolic
+link) or a turn the host cannot attribute is named under `files.unattributed`, and
+`files.complete` is then false.
+
+## What it proves, and what it does not
+
+A receipt that verifies against a key you trust proves that:
+
+- the holder of that key signed exactly these facts, unchanged since;
+- a checkout whose files match the subjects (`--repo`) has the content the run left, as
+  the source above describes, and the paths the run removed are absent.
+
+It does not prove that the change is correct, that the tests are good tests, or that the
+review was right. The facts are what one Axocoatl daemon observed and recorded; the
+signature says which daemon (which key), not that the person running it is honest about
+their machine. A key copied from the data root signs as well as the original. Receipts
+from runs that did not pass are signed too, and say so in `verdict`.
+
+## The signing key
+
+Each data root has one Ed25519 key, made with `ring` the first time the daemon signs a
+receipt (or when you run `axocoatl receipt key`, or open **Settings → Loadouts →
+Receipts**). It is stored with the secret store as `receipt-signing-key`
+(`{data root}/secrets/receipt-signing-key`, `0600`), never in a log, a record, an API
+response, a container or a command line. The egress broker refuses to send it as a route
+credential, whatever name or file a route uses for it.
+
+Only the public half is shown, as one line for a trusted-keys file:
+
+```text
+$ axocoatl receipt key
+ed25519 x0R3…= axocoatl@my-laptop 1a2b3c4d5e6f7a8b
+```
+
+The fields are the algorithm, the base64 public key, a comment and the first 16 hex
+characters of the key id (`sha256:` + the SHA-256 of the raw public key). Run it with the
+same `--config` and `AXOCOATL_DATA_DIR` as the daemon. **Settings → Loadouts → Receipts →
+Signing key** shows the same line with a Copy button, as does
+[`GET /api/receipts/key`](/reference/http-api/#loadouts-and-runs).
+
+`axocoatl receipt key --rotate` replaces the key and prints the new line. Receipts the old
+key signed still verify with the old line; keep it in a trusted-keys file as long as you
+want those receipts accepted.
+
+## Getting a run's receipt
+
+- `axocoatl run … --receipt run.receipt.json` writes it when the run finishes, whatever
+  the verdict, like `--junit` and `--record`. A run that was never admitted has nothing to
+  sign, and standard error says so.
+- [`GET /api/runs/{run_id}/receipt`](/reference/http-api/#loadouts-and-runs) serves it
+  exactly as written, once the run has finished.
+- **Download receipt** in the Session's Run outcome panel, which also shows the key that
+  signed it and how many files it covers.
+- The [record bundle](/reference/run/#record-bundle) carries it as its last section.
+- A pull request Keep as PR opens carries it at the end of its description.
+
+The receipt is written just before the run's Outcome, so a run that has finished has its
+receipt settled. When it cannot be signed (the key cannot be read, say), the run gets the
+warning `receipt_unavailable` with the reason; the verdict and the exit code are never
+changed by it.
+
+## Verifying a receipt
+
+`axocoatl receipt verify` needs no daemon, no Podman and no network.
+
+```sh
+axocoatl receipt verify run.receipt.json --keys trusted-keys --repo . --record run.axorecord.jsonl
+```
+
+1. It reads the receipt: a DSSE envelope, or text holding an
+   `<!-- axocoatl-receipt:v1 … -->` block, such as a saved pull request description; `-`
+   reads standard input. Another payload type, statement type or predicate type is
+   refused.
+2. It checks the signature against each trusted key: `--key LINE` (repeatable) and
+   `--keys FILE` (one line per key as `axocoatl receipt key` prints it, `#` comments and
+   blank lines allowed). The signer the receipt names must be the key that signed it.
+3. With `--repo DIR`, it hashes each covered path in that checkout, without following
+   symbolic links, and checks that each removed path is absent; every difference is
+   listed with its path.
+4. With `--record BUNDLE`, it verifies the bundle and checks that its `receipt` section is
+   this receipt, for the same run.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | The signature is valid and by a trusted key, and the files and record match when asked |
+| 1 | Not a receipt, or the signature does not verify (a changed byte of the statement, the signature or its type) |
+| 2 | The signature is valid, but by a key you did not give as trusted, including when you gave none |
+| 3 | Usage: a bad flag, a file that cannot be read, a key line that is not one |
+| 4 | A covered file differs, a removed path exists, or the record does not verify or carry this receipt |
+
+When several apply, the first of 1, 2, 4 wins. `--json` prints the result as one JSON
+document (`exit_code`, `result`, `problems`, `signature`, `key_id`, `run_id`, `verdict`,
+`statement_sha256`, `files` with each mismatch, `record`).
+
+`axocoatl receipt show FILE` prints what a receipt says in words (run, verdict, signer,
+agents, checks, review, files, network policy) without verifying it, and says so;
+`--json` prints the statement itself.
+
+<Aside>
+Trust only keys you got from the person or machine they belong to, the way you would an
+SSH host key. In a repository, keep the trusted-keys file on the branch the pull request
+merges into, so a pull request cannot add its own key.
+</Aside>
+
+## Keep as PR and receipts
+
+When a run has a receipt, [Keep as PR](/workbench/keep-as-pr/) commits only what it
+covers: each path it is about to commit must have the content the receipt gives it, and a
+path the run removed must still be absent. A path edited after the checks judged it is
+refused, naming the path. The commit carries the trailers `Axocoatl-Run: <run id>` and
+`Axocoatl-Receipt: sha256:<SHA-256 of the statement>`, and the pull request description a
+**Receipt** section (signer, verdict, checks, review, writer, files covered, how to
+verify) and the receipt block at its end, which the description's length limit never
+cuts.

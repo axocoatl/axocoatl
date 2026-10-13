@@ -89,6 +89,7 @@ export default defineConfig({
             { label: 'Context, History, and Stop', slug: 'workbench/history' },
             { label: 'Fix, QA and audit runs', slug: 'workbench/fix-qa-audit' },
             { label: 'Keep as PR', slug: 'workbench/keep-as-pr' },
+            { label: 'Signed receipts', slug: 'workbench/receipts' },
           ],
         },
         {

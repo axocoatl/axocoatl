@@ -702,17 +702,20 @@ attention. Nothing is a pass by default.
 
 **Record.** `{data root}/loadout-runs/{run_id}/` holds `manifest.json` (written once, with
 the loadout's exact text), `events.jsonl` (append-only, synced, at most 100,000 events of
-at most 256 KiB) and `outcome.json` (written once), through `SecureDir`. Runs are never
+at most 256 KiB), `receipt.dsse.json` (the signed receipt, `0600`, written just before the
+Outcome and fixed once it exists) and `outcome.json` (written once), through `SecureDir`. Runs are never
 evicted and outlive their Session. A daemon restart during a run marks it failed; it is not
 resumed. The run's Session loads again after the restart: its `Custom` mode lists no Agent
 (the run applies the loadout's team), which startup validation accepts with its `loadout`
 binding. `render_junit` writes the JUnit view (not covered is always a failure, fails on
 clean build is skipped); `render_refused_run_junit` writes the one `axocoatl run --junit`
-leaves for a run that was never admitted. The record bundle (`axocoatl.record-bundle/1`) streams the
+leaves for a run that was never admitted. The record bundle (`axocoatl.record-bundle/2`) streams the
 manifest, loadout, Outcome, Session, team (with each applied slot's `reset_history`, tools
 and definition), every turn's control-plane projection, the versioned History export,
-every network-record event and every run event as JSON Lines, ending with the line count
-and the SHA-256 of every preceding byte; `verify_bundle` checks order, count and digest.
+every network-record event, every run event and the run's receipt as JSON Lines, ending
+with the line count and the SHA-256 of every preceding byte; `verify_bundle` checks order,
+count and digest, and accepts 1.3's `axocoatl.record-bundle/1` (no `receipt` section).
+The digest proves the file is intact, not who wrote it; the receipt section is signed.
 Its header carries the run's `finished_at_ms`, so every download of a finished run is the
 same bytes while its record and Session do not change. Routes never record credential
 values, so the bundle holds none.
@@ -759,14 +762,43 @@ public catalog, a request the host makes outside the Session's network record. T
 final turn, `collect_reports` reads each report (at most 4 MiB) and attaches it only when
 its digest matches the marker of the final recorded check run.
 
+**Receipts.** When the driver has a run's final Outcome, its host seals it
+(`bootstrap_receipts.rs`) before the `Ended` event and `outcome.json`: an in-toto
+Statement v1 (`axocoatl_session::receipt`, predicate type `https://axocoatl.ai/receipt/v1`)
+whose subjects are the run's changed files with their SHA-256, and whose predicate holds
+the run, repository (base commit, dirty paths, `origin` as `https://host/path`), loadout,
+Agents (runtime, pinned program version, provider and model, credential name), sandbox
+(backend, network, workload and the last recorded network policy of each scope: revision,
+digest, rendered rules), network summary, checks with the tree they ran on, review,
+adjudications, verdict, attention, not covered, warning codes, usage, files and the signer's
+public key. It is serialized once with `serde_json::to_vec` and signed with Ed25519 over
+DSSE's PAE inside a DSSE envelope. The subjects come from `run_attribution` (shared with
+Keep): each attributed path's digest from the manifest of the capture of the tree the
+required checks' readiness review judged (`judged_capture`), else the last writer
+activation's After capture (`after_capture`), each only when its manifest is whole and
+hashes to its tree digest, else read on the host without following links
+(`workspace_at_finish`); removed paths, symbolic links and what cannot be attributed are
+listed apart. The key is one Ed25519 key per data root (`receipt_key`, `ring`), stored as
+the secret `receipt-signing-key` in a tagged JSON value that the egress broker refuses to
+send whatever a route calls it, and made on first use. Admission failures, driver errors
+and runs a restart ends are sealed the same way. Signing that fails adds the warning
+`receipt_unavailable` and changes neither verdict nor exit code. `GET
+/api/runs/{run_id}/receipt` serves the envelope as written and `GET /api/receipts/key`
+the public key; `axocoatl receipt show|verify` read envelopes without a daemon.
+
 **Keep as PR.** For a passing run, host `git` commits exactly the run's attributed paths
 through a temporary `GIT_INDEX_FILE` seeded from HEAD (`update-index`, `write-tree`,
-`commit-tree -p HEAD`, `update-ref` of a new branch), refusing paths that were dirty before the run, paths
-whose status changed after the run ended (by inode change time) and an existing branch;
-HEAD, the index, the current branch and the working tree are unchanged.
+`commit-tree -p HEAD`, `update-ref` of a new branch), refusing paths that were dirty before the run,
+paths whose content is not the one the run's receipt covers (a removed path that exists
+again, a path it does not cover), paths whose status changed after the run ended (by
+inode change time) and an existing branch; HEAD, the index, the current branch and the
+working tree are unchanged. The commit carries the trailers `Axocoatl-Run` and
+`Axocoatl-Receipt` (the statement's SHA-256).
 Opt-in, it pushes without `--force` to a new remote branch that is not the default branch
-and opens a pull request with `gh`, whose body carries checks, review, adjudications,
-findings, not-covered entries, warnings and the run id.
+and opens a pull request with `gh`, whose body carries a Receipt section, checks, review,
+adjudications, findings, not-covered entries, warnings and the run id, and ends with the
+envelope in an `<!-- axocoatl-receipt:v1 … -->` block that the body's length cut never
+reaches.
 
 **Runtime policy.** Native provider calls that fail with 429, 5xx, a timeout or a reset
 connection before the provider sent anything are retried once (after `Retry-After`, at most 30 s, or 2 s) on the same pinned

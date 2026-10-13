@@ -25,6 +25,14 @@ Three ways to ask for it:
 - None of the run's changed paths had uncommitted changes before the run began. The run's
   manifest lists those paths; when one of them is among the run's changes, Keep is
   refused rather than mixing your edits into the commit.
+- When the run has a [signed receipt](/workbench/receipts/), each path Keep is about to
+  commit has the content the receipt covers (its SHA-256 in the working tree is the
+  receipt's), and each path the run removed is still absent. A path edited after the
+  checks judged it is refused, naming it: "changed after the run's checks judged it;
+  Keep commits only what the receipt covers". A receipt that cannot be read, or that is
+  another run's, is refused too. A run without a receipt (one from before Axocoatl
+  signed receipts, or whose signing failed) is kept as before, and Keep says the commit
+  and pull request carry none.
 - None of the run's changed paths changed in your working tree after the run ended, by
   the file's status-change time. The checks and the review judged the files as the run
   left them, so a later edit is refused rather than committed under their results.
@@ -48,7 +56,8 @@ Axocoatl uses the host's `git` with a temporary index, so nothing you have open 
 1. a temporary `GIT_INDEX_FILE` is filled from `HEAD`;
 2. exactly the run's paths are added or removed in it from the working tree;
 3. `git write-tree` and `git commit-tree -p HEAD` make the commit, with the title and the
-   run id in its message;
+   run id in its message, and the trailers `Axocoatl-Run: <run id>` and, when the run has a
+   receipt, `Axocoatl-Receipt: sha256:<SHA-256 of the receipt's signed statement>`;
 4. `git update-ref` creates the branch at that commit only if no branch of that name
    exists yet.
 
@@ -67,9 +76,21 @@ With `--keep pr`, **Open a PR**, or `"open_pr": true`:
 - it opens the pull request with `gh pr create --head <branch> --base <default branch>`,
   with the title and a body file.
 
-The body holds the run's verdict, a table of check results, the review verdict and
-rounds, a table of adjudications, the findings, everything not covered, the warnings, and
-the run id with the command to verify its [record bundle](/reference/run/#record-bundle).
+The body holds the run's verdict; a **Receipt** section with the key that signed the
+run's receipt, its verdict, checks, review, writer and the files it covers, and how to
+verify it (or why the run has none); a table of check results, the review verdict and
+rounds, a table of adjudications, the findings, everything not covered, the warnings,
+and the run id with the command to verify its
+[record bundle](/reference/run/#record-bundle). The body ends with the receipt itself, the
+DSSE envelope as base64 inside an `<!-- axocoatl-receipt:v1 … -->` comment, which GitHub
+does not display. The body is cut to fit a pull request description; the cut never
+reaches the receipt block. `axocoatl receipt verify` reads a saved description
+directly:
+
+```sh
+gh pr view 7 --json body --jq .body > body.md
+axocoatl receipt verify body.md --keys trusted-keys --repo .
+```
 
 `git` and `gh` run on your computer with your own credentials and configuration. Nothing
 runs in a container for this, and Axocoatl reads no credential. The daemon finds them on
@@ -80,7 +101,8 @@ the `PATH` it searched.
 ## What is recorded
 
 Keep is recorded as a `keep` phase in the run's events, and its branch, commit, pull
-request URL or error appear as `keep` in the run's status. The Outcome itself is written
+request URL or error appear as `keep` in the run's status. Keep's response names the
+receipt the commit carries (`receipt`), and `axocoatl run --keep` prints it. The Outcome itself is written
 once, when the run ends, and does not change.
 
 A failed Keep after a passing run makes `axocoatl run` print the reason and exit with
