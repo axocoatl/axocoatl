@@ -27,6 +27,17 @@ async function signInCookie(context) {
   return (await context.cookies()).find((cookie) => cookie.name === runtime.cookieName);
 }
 
+// The sign-in redirect lands on `/` without the token. The workbench may then
+// resume the last Session and add `?session=…` to the address before the test
+// reads it, so only the origin, the path and the absence of the token are
+// checked here; the 303's Location is asserted separately.
+function assertLandedOnWorkbench(address) {
+  const landed = new URL(address);
+  assert.equal(`${landed.origin}${landed.pathname}`, `http://localhost:${port()}/`);
+  assert.equal(landed.searchParams.has('token'), false);
+  assert.ok(!address.includes(runtime.token));
+}
+
 test('a signed-out browser gets the sign-in page and the API refuses it', async () => {
   const context = await browser.newContext();
   try {
@@ -55,7 +66,7 @@ test('the sign-in link sets an HttpOnly cookie, drops the token from the URL and
       if (response.status() === 303) redirects.push(response.headers());
     });
     await page.goto(runtime.signInUrl);
-    assert.equal(page.url(), `http://localhost:${port()}/`);
+    assertLandedOnWorkbench(page.url());
     assert.equal(redirects.length, 1);
     assert.equal(redirects[0].location, '/');
     assert.equal(redirects[0]['referrer-policy'], 'no-referrer');
@@ -84,7 +95,7 @@ test('a loopback IP sign-in link and a loopback IP bookmark both reach the workb
   try {
     const page = await context.newPage();
     await page.goto(`http://127.0.0.1:${port()}/?token=${runtime.token}`);
-    assert.equal(page.url(), `http://localhost:${port()}/`);
+    assertLandedOnWorkbench(page.url());
     assert.ok(await signInCookie(context));
     await page.waitForFunction(workbenchConnected);
 
