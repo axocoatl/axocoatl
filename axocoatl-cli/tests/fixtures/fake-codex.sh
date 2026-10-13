@@ -29,8 +29,13 @@ else
   printf 'fake codex: unexpected arguments: %s\n' "$*" >&2
   exit 64
 fi
-home_mode=$(stat -f '%Lp' "${CODEX_HOME:-/nonexistent}" 2>/dev/null \
-  || stat -c '%a' "${CODEX_HOME:-/nonexistent}" 2>/dev/null)
+# BSD stat (macOS) takes -f FORMAT; GNU stat (Linux) reads -f as "file system"
+# and prints that instead of failing, so pick the form by the system.
+if [ "$(uname -s)" = Darwin ]; then
+  home_mode=$(stat -f '%Lp' "${CODEX_HOME:-/nonexistent}" 2>/dev/null)
+else
+  home_mode=$(stat -c '%a' "${CODEX_HOME:-/nonexistent}" 2>/dev/null)
+fi
 {
   printf 'device=%s\n' "$device"
   printf 'codex_home=%s\n' "${CODEX_HOME:-}"
