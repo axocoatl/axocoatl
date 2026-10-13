@@ -367,15 +367,15 @@ impl Run {
         assert!(status.success());
     }
 
-    /// Type `text` every 15 ms until it exits (writes after the terminal
-    /// closed are ignored).
-    fn keep_typing_until_exit(&mut self, text: &[u8]) {
+    /// Type `text` every `interval` until it exits (writes after the
+    /// terminal closed are ignored).
+    fn keep_typing_until_exit(&mut self, text: &[u8], interval: Duration) {
         let deadline = Instant::now() + Duration::from_secs(120);
         while self.child.try_wait().unwrap().is_none() {
             assert!(Instant::now() < deadline, "no exit:\n{}", self.shown());
             let _ = self.writer.write_all(text);
             let _ = self.writer.flush();
-            std::thread::sleep(Duration::from_millis(15));
+            std::thread::sleep(interval);
         }
     }
 
@@ -715,16 +715,22 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
     //    Axocoatl's process group, which Axocoatl catches. The podman
     //    commands that read the sign-in and remove the container are in
     //    their own group: the container (and the tokens in it) still goes.
+    //    Then the same ten times with Ctrl-C typed every millisecond, so
+    //    that some arrive while one of those commands is being started,
+    //    still in Axocoatl's group: they do not kill it either.
+    for (round, interval) in std::iter::once(Duration::from_millis(15))
+        .chain(std::iter::repeat_n(Duration::from_millis(1), 10))
+        .enumerate()
     {
-        let root = scratch_path.join("ctrl-c-after-sign-in");
+        let root = scratch_path.join(format!("ctrl-c-after-sign-in-{round}"));
         let mut run = Run::start(&root, &path_dir, &ok, true);
         run.wait_for("WXYZ-1234");
         run.type_text(b"\r");
         run.wait_for("Successfully logged in");
-        run.keep_typing_until_exit(b"\x03");
+        run.keep_typing_until_exit(b"\x03", interval);
         let (code, shown) = run.finish();
         let text = String::from_utf8_lossy(&shown).into_owned();
-        assert!(!text.contains("could not be read"), "{text}");
+        assert!(!text.contains("could not be read"), "round {round}: {text}");
         match code {
             // Read and stored before Axocoatl saw the signal.
             0 => {
@@ -732,12 +738,17 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
                     ChatgptSignIn::decode(&std::fs::read(Run::secret(&root)).unwrap()).unwrap();
                 assert_eq!(sign_in.access_token(), ok.access);
             }
-            // Seen while the relay was still draining: nothing stored.
+            // Seen while the relay was still draining: nothing stored. (A
+            // Ctrl-C discards what the terminal has not shown yet, so with
+            // one every millisecond the message itself may be lost.)
             6 => {
-                assert!(text.contains("the login container was removed"), "{text}");
+                assert!(
+                    round > 0 || text.contains("the login container was removed"),
+                    "{text}"
+                );
                 assert!(!Run::secret(&root).exists());
             }
-            _ => panic!("exit {code}: {text}"),
+            _ => panic!("round {round}: exit {code}: {text}"),
         }
         assert_nothing_shown(&shown, &ok);
         assert_cleaned_up(&volumes_before);
@@ -751,7 +762,7 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
         let mut run = Run::start(&root, &path_dir, &ok, false);
         run.wait_for("originator=codex_cli_rs");
         assert_eq!(login_containers().len(), 1);
-        run.keep_typing_until_exit(b"\x03");
+        run.keep_typing_until_exit(b"\x03", Duration::from_millis(15));
         let (code, shown) = run.finish();
         let text = String::from_utf8_lossy(&shown).into_owned();
         assert!(code == 2 || code == 6, "exit {code}: {text}");

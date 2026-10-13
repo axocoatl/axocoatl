@@ -2054,6 +2054,130 @@ fn the_login_containers_podman_commands_run_in_their_own_process_group() {
     }
 }
 
+/// Where [`podman_commands_started_while_ctrl_c_is_typed`] tells
+/// [`start_podman_commands_while_ctrl_c_is_typed`] to write.
+const CTRL_C_WHILE_STARTING: &str = "AXOCOATL_TEST_CTRL_C_WHILE_STARTING";
+/// How many commands it starts.
+const STARTED_WHILE_CTRL_C_IS_TYPED: usize = 300;
+
+/// Nor can a Ctrl-C (or Ctrl-\ or hangup) that reaches Axocoatl's process
+/// group while one of those `podman` commands is being started kill it: a
+/// new process is in Axocoatl's group until it has moved to its own, and
+/// the signal must not end it then either. This runs
+/// [`start_podman_commands_while_ctrl_c_is_typed`] as the foreground
+/// process group of a terminal of its own, with Axocoatl's signal handlers,
+/// and types Ctrl-C on that terminal all the while it starts commands the
+/// way the `podman` commands are started: none may end by a signal.
+#[test]
+fn podman_commands_started_while_ctrl_c_is_typed() {
+    use std::io::Read;
+    let directory = tempfile::tempdir().unwrap();
+    let pair = portable_pty::native_pty_system()
+        .openpty(portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = portable_pty::CommandBuilder::new(std::env::current_exe().unwrap());
+    command.args([
+        "connect_cmd::tests::start_podman_commands_while_ctrl_c_is_typed",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1",
+    ]);
+    command.env(CTRL_C_WHILE_STARTING, directory.path());
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    std::thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        while reader.read(&mut buffer).is_ok_and(|read| read > 0) {}
+    });
+    let mut writer = pair.master.take_writer().unwrap();
+    let ready = directory.path().join("ready");
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "the commands did not finish");
+        if ready.exists() {
+            // Each Ctrl-C is a SIGINT to the terminal's foreground group.
+            let _ = writer.write_all(b"\x03");
+            let _ = writer.flush();
+            std::thread::sleep(Duration::from_micros(200));
+        } else {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    let result = std::fs::read_to_string(directory.path().join("result")).unwrap_or_default();
+    assert!(status.success(), "{status:?}: {result}");
+    assert_eq!(
+        result,
+        format!(
+            "{STARTED_WHILE_CTRL_C_IS_TYPED} started, ended by a signal: {{}}, Ctrl-C meanwhile: \
+             true"
+        )
+    );
+}
+
+/// [`podman_commands_started_while_ctrl_c_is_typed`]'s side (it does
+/// nothing run any other way): with Axocoatl's handlers for the signals it
+/// catches, once the first Ctrl-C has arrived, start
+/// [`STARTED_WHILE_CTRL_C_IS_TYPED`] commands as
+/// [`codex_container::podman_command`] starts `podman`, and write how many
+/// each signal ended and whether Ctrl-C kept arriving meanwhile.
+#[test]
+#[ignore = "run by podman_commands_started_while_ctrl_c_is_typed"]
+fn start_podman_commands_while_ctrl_c_is_typed() {
+    use std::os::unix::process::ExitStatusExt;
+    let Some(directory) = std::env::var_os(CTRL_C_WHILE_STARTING).map(PathBuf::from) else {
+        return;
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let interrupt = Interrupt::default();
+    let _listeners = runtime.block_on(async { interrupt.listen() });
+    std::fs::write(directory.join("ready"), "").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !interrupt.raised() {
+        assert!(Instant::now() < deadline, "no Ctrl-C arrived");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let program = ["/usr/bin/true", "/bin/true"]
+        .into_iter()
+        .map(Path::new)
+        .find(|program| program.exists())
+        .unwrap();
+    // Set again by a Ctrl-C while they are started.
+    interrupt
+        .flag
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let mut signals = std::collections::BTreeMap::<i32, usize>::new();
+    for _ in 0..STARTED_WHILE_CTRL_C_IS_TYPED {
+        let status = codex_container::podman_command(program)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        if let Some(signal) = status.signal() {
+            *signals.entry(signal).or_default() += 1;
+        }
+    }
+    std::fs::write(
+        directory.join("result"),
+        format!(
+            "{STARTED_WHILE_CTRL_C_IS_TYPED} started, ended by a signal: {signals:?}, Ctrl-C \
+             meanwhile: {}",
+            interrupt.raised()
+        ),
+    )
+    .unwrap();
+}
+
 /// A taken callback port is refused before anything runs, with the device
 /// sign-in as the way out.
 #[test]

@@ -181,8 +181,8 @@ throwaway container.
   device code) and writes the tokens to `auth.json`. Ctrl-C goes to Codex, as it would
   on your computer. Once Codex has exited, Ctrl-C (or closing the terminal) reaches
   Axocoatl, which catches it; the `podman` commands that start the container, read the
-  sign-in and remove the container run in a process group of their own, so it does not
-  stop them.
+  sign-in and remove the container run in a process group of their own and ignore the
+  signal, so it does not stop them, not even while one is being started.
 - Axocoatl reads the tokens from that file, never from the screen: `podman exec` prints
   `auth.json` (a regular file, a link is refused, of at most 64 KiB) straight into
   Axocoatl's memory, and Axocoatl never writes it to disk; the only other copy is

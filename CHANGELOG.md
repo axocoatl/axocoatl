@@ -41,8 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as the secret `codex-chatgpt` (`0600`, replaced atomically, as `axocoatl secret set`
   stores one), and then removes the container, or overwrites every file of the temporary
   home with zeros and removes it, also on an error or a signal (the `podman` commands
-  that start, read and remove the container run in a process group of their own, so a
-  Ctrl-C typed after Codex exits does not stop them); Podman removes a login container
+  that start, read and remove the container run in a process group of their own and
+  ignore SIGINT, SIGQUIT and SIGHUP, so a Ctrl-C typed after Codex exits does not stop
+  them, not even while one is being started); Podman removes a login container
   when the sign-in time has passed even if Axocoatl is killed: 30 minutes, or 1 to 60
   with `--sign-in-timeout MINUTES` (Podman's `--timeout`; not with `--codex`). The
   command says when the sign-in starts how long you have (`You have 30 minutes to finish

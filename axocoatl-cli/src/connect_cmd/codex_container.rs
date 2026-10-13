@@ -46,10 +46,11 @@
 //! the relay as its last line, is not shown.
 //!
 //! The `podman` commands that start, read and remove the container
-//! ([`podman_command`]) each run in a process group of their own (the
-//! `podman exec` of `codex login` runs in the relay's own session), so a
-//! Ctrl-C, Ctrl-\ or terminal hangup, which Axocoatl catches, cannot stop
-//! them.
+//! ([`podman_command`]) each run in a process group of their own and with
+//! `SIGINT`, `SIGQUIT` and `SIGHUP` ignored (the `podman exec` of `codex
+//! login` runs in the relay's own session), so a Ctrl-C, Ctrl-\ or terminal
+//! hangup, which Axocoatl catches, cannot stop them, not even while one is
+//! being started.
 
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, OwnedFd};
@@ -341,15 +342,38 @@ pub(crate) fn find_podman(path: Option<&std::ffi::OsStr>) -> Result<PathBuf, Str
     )
 }
 
-/// A `podman` command in its own process group. Once the relay gives the
-/// terminal back, a Ctrl-C, Ctrl-\ or the hangup when the terminal closes
-/// goes to Axocoatl's process group, where Axocoatl catches it and goes on
-/// to remove the container; in that group it would kill these commands,
-/// above all the `podman rm` that removes the container and the sign-in in
-/// it. None of them uses the terminal.
+/// A `podman` command in its own process group, started with `SIGINT`,
+/// `SIGQUIT` and `SIGHUP` ignored. Once the relay gives the terminal back,
+/// a Ctrl-C, Ctrl-\ or the hangup when the terminal closes goes to
+/// Axocoatl's process group, where Axocoatl catches it and goes on to
+/// remove the container; in that group it would kill these commands, above
+/// all the `podman rm` that removes the container and the sign-in in it.
+/// None of them uses the terminal.
+///
+/// Its own group alone is not enough: a new process is in Axocoatl's group
+/// until it has moved to its own, and with `posix_spawn` (which `std` uses
+/// for a plain command) a signal sent to the group in that moment is
+/// delivered only after `exec` has reset Axocoatl's handler to the default
+/// action, which kills the command before it runs. With a `pre_exec`
+/// closure `std` forks instead: until the child has moved to its own group
+/// it still has Axocoatl's handlers, which only note the signal, and then
+/// it ignores these signals (dropping one pending) before `exec`, which
+/// keeps them ignored.
 pub(crate) fn podman_command(podman: &Path) -> Command {
     let mut command = Command::new(podman);
     command.process_group(0);
+    // SAFETY: between `fork` and `exec` the closure only calls `signal`,
+    // which is async-signal-safe, and allocates nothing.
+    unsafe {
+        command.pre_exec(|| {
+            for signal in [libc::SIGINT, libc::SIGQUIT, libc::SIGHUP] {
+                if libc::signal(signal, libc::SIG_IGN) == libc::SIG_ERR {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
     command
 }
 

@@ -342,6 +342,7 @@ dependencies = [
  "chrono",
  "clap",
  "dialoguer",
+ "libc",
  "portable-pty",
  "reqwest 0.12.28",
  "rmcp",
