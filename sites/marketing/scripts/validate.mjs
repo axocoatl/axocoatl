@@ -26,7 +26,7 @@ const builtRoot = root !== sourceRoot;
 const { version: productVersion, pending: filmsPending } = filmMode(repositoryRoot);
 const skippedFilmRules = [];
 const pages = [
-  'index.html', '404.html', 'changelog/index.html', 'concepts/index.html',
+  'index.html', '404.html', 'changelog/index.html', 'compare/index.html', 'concepts/index.html',
   'install/index.html', 'integrations/openrouter/index.html', 'pricing/index.html',
   'showcase/index.html', 'why/index.html',
 ];
