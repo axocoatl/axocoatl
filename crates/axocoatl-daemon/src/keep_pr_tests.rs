@@ -1,6 +1,7 @@
 //! Keep as PR tests: pure parts, then host git against temporary
 //! repositories, a local bare remote and a fake `gh`.
 use super::*;
+use axocoatl_session::execution_content::{ActivationRepositorySnapshot, RepositorySnapshotPhase};
 use axocoatl_session::run_outcome::{
     Adjudication, CheckReport, CheckResult, FailureClass, Finding, LoadoutRef, ModelIdentity,
     NetworkSummary, NotCovered, ReproResult, ReviewFinding, ReviewOutcome, ReviewRound, RunTurnRef,
@@ -549,7 +550,7 @@ fn capture(phase: CapturePhase) -> CaptureFacts {
     CaptureFacts {
         phase,
         unavailable: None,
-        has_tree: true,
+        tree_sha256: Some("t".repeat(64)),
         judged_sha256: None,
         compared: None,
         manifest: None,

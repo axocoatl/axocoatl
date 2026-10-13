@@ -21,6 +21,7 @@ pub mod mcp_approval_hook;
 pub mod proactive;
 pub mod provider_retry;
 pub mod receipt_key;
+pub mod run_attribution;
 pub mod scheduler;
 pub mod secret_store;
 pub mod session_control_plane;
