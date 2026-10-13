@@ -447,8 +447,9 @@ route's host is also allowed by `allow` or a preset.
 
 `provider_fetch` decides whether the route reads request bodies and refuses those that
 ask the model provider to reach other hosts or run tools itself. Unset, it is `refuse`
-on a route to `api.anthropic.com`, `api.openai.com`, `chatgpt.com`, `openrouter.ai` or
-`generativelanguage.googleapis.com` and off on any other route; see
+on a route to `api.anthropic.com`, `api.openai.com`, `chatgpt.com`, `openrouter.ai`,
+`generativelanguage.googleapis.com`, `api.mistral.ai`, `api.x.ai` or
+`ai-gateway.vercel.sh` and off on any other route; see
 [Requests to model APIs](/configure/credentials/#requests-to-model-apis). A refusal does not repeat a value written in a credential's
 `env` or `file`, `inject.format` or `inject.basic.username`, where a pasted token may
 be.

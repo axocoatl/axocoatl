@@ -18,28 +18,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the route Axocoatl adds for a Claude Code writer forwarded it; Codex 0.160.1, as
   Axocoatl ran it, offered OpenAI's hosted `web_search` with live access on every
   request. A route to `api.anthropic.com`, `api.openai.com`, `chatgpt.com`,
-  `openrouter.ai` or `generativelanguage.googleapis.com`, which includes the routes
-  Axocoatl adds for external writers, and any route with `provider_fetch: refuse`, now
+  `openrouter.ai`, `generativelanguage.googleapis.com`, `api.mistral.ai`, `api.x.ai` or
+  `ai-gateway.vercel.sh`, which includes the routes Axocoatl adds for external writers,
+  and any route with `provider_fetch: refuse`, now
   reads each request body whole (at most 64 MiB; a larger one gets `413`) before it adds
   the credential or records the request, and refuses with `403 provider_fetch_refused`
   a body that offers a tool of a type the client does not run (tools pass only by
   client-run type: Anthropic custom, `bash_`, `text_editor_`, `computer_` and
   `memory_` tools; OpenAI `function`, `custom`, `local_shell`, `apply_patch`, local
   `shell` and client-executed `tool_search`; Chat Completions `function` and `custom`;
-  Gemini function declarations), names MCP servers (`mcp_servers`), turns on an
-  OpenRouter plugin or `web_search_options`, asks for content from a URL (an Anthropic
-  `source` of type `url`, an `image_url`, `video_url`, `audio_url` or `document_url`
-  that is not a `data:` URL, `file_url`, a `file_data` URL, a Gemini file URI outside
-  its Files API), names an `:online`, search, deep research or Perplexity model, or uses
-  an OpenAI stored prompt, anywhere outside schemas, metadata and tool-call arguments.
-  It also refuses a body it cannot read: not JSON, a key repeated in one object, more
-  than 512 levels deep, compressed, or sent to an endpoint other than Messages,
-  Responses, Chat Completions and Gemini's `generateContent`. The answer names what was
+  Gemini function declarations; so xAI's `x_search` and `code_execution`, Mistral's
+  `image_generation`, `document_library` and `connector`, and the Vercel AI Gateway's
+  `vercel:*_search` and `vercel:browserbase_fetch` are refused with the rest), names
+  MCP servers (`mcp_servers`), turns on an OpenRouter plugin, `web_search_options` or
+  xAI Live Search (`search_parameters` with a mode other than `off`), passes Vercel AI
+  Gateway `providerOptions` other than `gateway` through to the provider, asks for
+  content from a URL (an Anthropic `source` of type `url`, an `image_url`,
+  `video_url`, `audio_url` or `document_url` that is not a `data:` URL, `file_url`, a
+  `file_data` URL, an `input_audio` URL, a Gemini file URI outside its Files API),
+  names an `:online`, search, deep research or Perplexity model or one of the Vercel AI
+  Gateway's search providers, or uses an OpenAI stored prompt, anywhere outside
+  schemas, metadata and tool-call arguments. It also refuses a body it cannot read: not
+  JSON, a key repeated in one object, more than 512 levels deep, compressed, or sent to
+  an endpoint other than Messages, Responses, Chat Completions and Gemini's
+  `generateContent`, and any body to an `agents` or `conversations` endpoint (Mistral's
+  run the tools of an agent stored with Mistral). The answer names what was
   refused and its JSON path and never repeats a value from the body; the refusal is in
   the Session's network record with that reason, and nothing reaches the provider. An
   allowed body is sent byte for byte. What a request asks for in its headers or through
-  settings stored with the provider (an OpenRouter account's default plugins, a preset)
-  is not seen. See
+  settings stored with the provider account (an OpenRouter account's default plugins, a
+  preset, a Gemini cached content, Vercel AI Gateway routing rules) is not seen. See
   [Requests to model APIs](https://docs.axocoatl.ai/configure/credentials/#requests-to-model-apis).
 - **The route to Ollama on this computer carries only inference and model listing.**
   `sandbox.egress.host_ollama` allowed every request, and Ollama 0.20.6 reaches other

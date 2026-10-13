@@ -427,11 +427,13 @@ What `egress` does not do:
 - Route rules check the method, path and query of HTTP/1.1 requests, so GraphQL
   operations and JSON-RPC or MCP methods look alike, and they do not handle WebSocket
   messages. A request a route allows can still carry data out in its body. A route to a
-  model API also reads each body, and refuses one that asks the provider to fetch a
-  URL, search the web, connect to an MCP server or run a tool itself
+  model API (`api.anthropic.com`, `api.openai.com`, `chatgpt.com`, `openrouter.ai`,
+  `generativelanguage.googleapis.com`, `api.mistral.ai`, `api.x.ai`,
+  `ai-gateway.vercel.sh`) also reads each body, and refuses one that asks the provider
+  to fetch a URL, search the web, connect to an MCP server or run a tool itself
   ([Requests to model APIs](/configure/credentials/#requests-to-model-apis)); settings
   stored with your provider account, such as an OpenRouter account's default plugins,
-  are not seen. The route to Ollama on this computer
+  presets or Vercel AI Gateway routing rules, are not seen. The route to Ollama on this computer
   ([`sandbox.egress.host_ollama`](/reference/config/#sandboxegresshost_ollama)) carries
   only Ollama's inference and model listing, and refuses a request for a cloud model;
   pulling, creating and pushing models, Ollama's account endpoints and its web search

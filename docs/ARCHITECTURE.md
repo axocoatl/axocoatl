@@ -1316,7 +1316,8 @@ agent:**
   gives the container only loopback and Axocoatl's egress proxy, which reaches only
   the hosts under `sandbox.egress` and records each connection. A route to a model API
   (`api.anthropic.com`, `api.openai.com`, `chatgpt.com`, `openrouter.ai`,
-  `generativelanguage.googleapis.com`) also reads request bodies and refuses one that
+  `generativelanguage.googleapis.com`, `api.mistral.ai`, `api.x.ai`,
+  `ai-gateway.vercel.sh`) also reads request bodies and refuses one that
   asks the provider to reach other hosts or run tools itself, unless the route sets
   `provider_fetch: allow`; settings stored with the provider account are not seen; see
   [Network egress](https://docs.axocoatl.ai/configure/sandboxes/#network-egress) and
