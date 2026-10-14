@@ -394,6 +394,30 @@ async fn a_reload_turns_the_host_route_on_and_off() {
             if rules.iter().any(|rule| rule.contains("host_ollama to 127.0.0.1")))));
 }
 
+/// Send one request on `sender` once its connection is ready for the next
+/// one, and read the whole answer. Sending before `ready()` resolves can be
+/// cancelled with "connection was not ready" while the previous exchange is
+/// still being settled.
+async fn exchange(
+    sender: &mut hyper::client::conn::http1::SendRequest<Full<Bytes>>,
+    method: &'static str,
+    path: &'static str,
+    body: &'static str,
+) -> (StatusCode, String) {
+    sender.ready().await.unwrap();
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(hyper::header::HOST, OLLAMA)
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(Full::new(Bytes::from_static(body.as_bytes())))
+        .unwrap();
+    let response = sender.send_request(request).await.unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
 /// Ollama's endpoints that reach other hosts or change its models, its
 /// account and web endpoints, and a body naming a cloud model (which Ollama
 /// 0.20.6 sends to ollama.com) are refused at the route, recorded with the
@@ -417,28 +441,12 @@ async fn the_host_route_allows_only_inference_and_listing_and_refuses_cloud_mode
             .await
             .unwrap();
     tokio::spawn(connection);
-    let mut exchange = |method: &'static str, path: &'static str, body: &'static str| {
-        let request = Request::builder()
-            .method(method)
-            .uri(path)
-            .header(hyper::header::HOST, OLLAMA)
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(Full::new(Bytes::from_static(body.as_bytes())))
-            .unwrap();
-        let response = sender.send_request(request);
-        async move {
-            let response = response.await.unwrap();
-            let status = response.status();
-            let body = response.into_body().collect().await.unwrap().to_bytes();
-            (status, String::from_utf8_lossy(&body).into_owned())
-        }
-    };
 
     // A local model's chat passes as it was sent.
     const CHAT: &str = r#"{"model":"qwen3:8b","messages":[{"role":"user","content":"hi"}],"stream":false,"format":{"properties":{"image_url":{"type":"string"}}},"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}"#;
-    let (status, body) = exchange("POST", "/api/chat", CHAT).await;
+    let (status, body) = exchange(&mut sender, "POST", "/api/chat", CHAT).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let (status, _) = exchange("GET", "/v1/models", "").await;
+    let (status, _) = exchange(&mut sender, "GET", "/v1/models", "").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "Ollama answered it");
 
     // Refused at the route, by endpoint.
@@ -456,7 +464,13 @@ async fn the_host_route_allows_only_inference_and_listing_and_refuses_cloud_mode
         ("POST", "/v1/images/generations"),
         ("GET", "/api/chat"),
     ] {
-        let (status, body) = exchange(method, path, r#"{"model":"evil.example/ns/m:tag"}"#).await;
+        let (status, body) = exchange(
+            &mut sender,
+            method,
+            path,
+            r#"{"model":"evil.example/ns/m:tag"}"#,
+        )
+        .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {body}");
         assert!(body.contains("\"route_denied\""), "{body}");
     }
@@ -498,7 +512,7 @@ async fn the_host_route_allows_only_inference_and_listing_and_refuses_cloud_mode
             "kimi-k2.5:cloud",
         ),
     ] {
-        let (status, answer) = exchange("POST", path, body).await;
+        let (status, answer) = exchange(&mut sender, "POST", path, body).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{path}: {answer}");
         let json: serde_json::Value = serde_json::from_str(&answer).unwrap();
         assert_eq!(json["error"], "provider_fetch_refused", "{answer}");
@@ -514,6 +528,7 @@ async fn the_host_route_allows_only_inference_and_listing_and_refuses_cloud_mode
     }
     // And a server tool on a compatible endpoint, as on a hosted API.
     let (status, answer) = exchange(
+        &mut sender,
         "POST",
         "/v1/responses",
         r#"{"model":"qwen3:8b","input":"hi","tools":[{"type":"web_search"}]}"#,
