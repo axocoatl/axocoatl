@@ -1,9 +1,9 @@
 ---
 title: Axocoatl documentation
-description: The harness you can trust to run coding agents on your own machine or infrastructure. Install it, run the workbench, configure Agents and models, and operate its local data.
+description: Run coding agents unattended. Agents write the code; Axocoatl writes the receipt. Run Claude Code, Codex or a local model headless, with host-run checks, a review by a different model, an exit code and a signed receipt, or work in the browser workbench.
 template: splash
 hero:
-  tagline: The harness you can trust to run coding agents on your own machine or infrastructure. Isolation built in, a complete record of every step, any model, local or hosted.
+  tagline: Run coding agents unattended. Agents write the code. Axocoatl writes the receipt.
   actions:
     - text: Install Axocoatl
       link: /start/install/
@@ -16,12 +16,56 @@ hero:
 
 import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 
-Axocoatl is an open-source harness for coding agents: a Rust daemon that runs Agents
-against your repository and records their work, and a browser workbench around one
-durable Session. A new Session starts with one Agent, the lead, which writes. Read-only
-helpers it can delegate to, and [required checks](/configure/agents/#required-checks)
-and a [required review](/configure/agents/#required-review) that the host runs before a
-turn completes, are opt-in.
+Claude Code, Codex or a local model works in a sandbox its credential never enters.
+When it says it is done, the host runs your tests on the final files and a different
+model reviews the change. Every run ends with an exit code for CI and a receipt signed
+on your computer.
+
+<CardGrid>
+  <Card title="Run it headless" icon="seti:shell">
+    One command per task, from a shell or a CI job, ending with an exit code and a
+    signed receipt.
+
+    - [`axocoatl run fix`](/workbench/fix-qa-audit/#fix) with a local writer and a
+      different reviewer, or [`fix-claude-code` and `fix-codex`](/configure/external-agents/)
+      with the Claude Code or Codex CLI as the writer.
+    - `--receipt` writes the run's [signed receipt](/workbench/receipts/);
+      `axocoatl receipt verify` checks it offline.
+    - [Keep as PR](/workbench/keep-as-pr/) commits a passing run to a branch and opens
+      a pull request that carries the receipt; the
+      [verify-receipt Action](/workbench/receipts/#checking-pull-requests-in-github-actions)
+      checks it in CI.
+
+    [Every flag and exit code →](/reference/run/)
+  </Card>
+  <Card title="Work in the browser workbench" icon="laptop">
+    Watch and steer the work in a Session: one durable work item anchored to a
+    repository folder, its conversation beside Files, Terminal, Preview, History and
+    Git, with the same required checks and review when you ask for them.
+
+    - [Your first Session](/start/first-session/) and [Work in a Session](/workbench/session/).
+    - [Explore several Ways](/workbench/ways/) when one answer is not enough, then
+      [review Git and Last turn](/workbench/git/).
+
+    [Open the guide →](/workbench/session/)
+  </Card>
+</CardGrid>
+
+## What the receipt rests on
+
+When a run finishes, passing or not, the daemon signs a receipt with a key kept on
+your computer: the files the run changed, each with its SHA-256 as the required checks
+judged it, the sandbox and network policy, the checks, the review, the models and the
+verdict. It proves which key signed which facts, not that the change is correct
+([What it proves, and what it does not](/workbench/receipts/#what-it-proves-and-what-it-does-not)).
+The facts come from what the host enforces whatever the model says.
+
+Axocoatl is open source: a Rust daemon that runs Agents against your repository and
+records their work, and a browser workbench around one durable Session. A new Session
+starts with one Agent, the lead, which writes. Read-only helpers it can delegate to,
+and [required checks](/configure/agents/#required-checks) and a
+[required review](/configure/agents/#required-review) that the host runs before a turn
+completes, are opt-in.
 
 <CardGrid>
   <Card title="Isolation built in" icon="padlock">
@@ -36,7 +80,8 @@ turn completes, are opt-in.
   <Card title="A complete record" icon="list-format">
     The host runs required checks on the exact final files. Budgets you approve are
     charged with what each call actually used and carry across restarts. The Session
-    durably records every model call, tool call, budget decision and check.
+    durably records every model call, tool call, budget decision and check, and every
+    finished loadout run gets a signed receipt.
     [Native authority and budgets →](/configure/agents/#native-authority-and-budgets)
   </Card>
   <Card title="Any model, per Agent" icon="random">
@@ -52,11 +97,10 @@ Claims about results come only from measurements, stated once with their setup a
 limits in [What we measured](/understand/what-we-measured/). One Agent remains the
 cheaper choice for small tasks.
 
-To run agents from a script or a CI job, run a [loadout](/configure/loadouts/) headless
-with [`axocoatl run`](/reference/run/): the built-in `fix`, `qa` and `audit` loadouts,
-`fix-claude-code` and `fix-codex` with the [Claude Code or Codex CLI](/configure/external-agents/)
-as the writer, or your own, in a Session under network egress (or none), ending with an
-exit code, a JUnit file and a record of the whole run.
+A [loadout](/configure/loadouts/) is a YAML recipe for one run: the built-in `fix`,
+`fix-claude-code`, `fix-codex`, `qa` and `audit`, or your own. [`axocoatl run`](/reference/run/)
+runs one headless in a Session under network egress (or none), ending with an exit
+code, and on request a JUnit file, a record of the whole run and the signed receipt.
 
 The Session keeps conversation, context, files, terminal, Preview, history, and Git
 review together. Explore several Ways only when the task warrants comparison.
@@ -69,8 +113,8 @@ findings across Sessions.
 
 1. [Install the binary](/start/install/).
 2. Run [`axocoatl onboard`](/start/onboard/) to configure Axocoatl for this user, then run [`axocoatl doctor`](/start/onboard/#run-doctor). Onboarding does not create a project or Workspace.
-3. Start `axocoatl dev`, open the sign-in link it prints, choose **Open workspace…**, and [create a Session](/start/first-session/).
-4. Apply **Team & budget**: Lead's limits, its helpers' limits, and any required checks or review. Then ask for a bounded change and inspect Git.
+3. Start `axocoatl dev` and leave it running. From another shell, in a repository, run `axocoatl run fix --task "…" --model writer=… --model reviewer=… --receipt receipt.json` ([`axocoatl run`](/reference/run/)).
+4. Or open the sign-in link `axocoatl dev` prints, choose **Open workspace…**, and [create a Session](/start/first-session/). Apply **Team & budget**: Lead's limits, its helpers' limits, and any required checks or review. Then ask for a bounded change and inspect Git.
 
 </Steps>
 
@@ -80,6 +124,10 @@ findings across Sessions.
   <Card title="Start" icon="rocket">
     Install, create the user-level configuration, run doctor, and open your first Workspace and Session.
     [Begin →](/start/install/)
+  </Card>
+  <Card title="Run headless" icon="seti:shell">
+    Run `fix`, `qa` or `audit` from a shell or CI, keep a passing run as a pull request, and verify its receipt.
+    [Fix, QA and audit runs →](/workbench/fix-qa-audit/)
   </Card>
   <Card title="Use the workbench" icon="puzzle">
     Work in Conversation, open Files, Terminal, Preview, History, and Git, and use several Ways when one answer is not enough.

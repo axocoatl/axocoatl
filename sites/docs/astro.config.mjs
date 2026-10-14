@@ -33,7 +33,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'Axocoatl',
-      description: 'The harness you can trust to run coding agents on your own machine or infrastructure: isolation built in, a complete record of every step, any model, local or hosted.',
+      description: 'Run coding agents unattended. Agents write the code; Axocoatl writes the receipt: the host runs your checks on the final files, a different model reviews the change, and every run ends with an exit code for CI and a receipt signed on your computer.',
       disable404Route: true,
       favicon: '/favicon.png',
       customCss: ['./src/styles/tokens.css', './src/styles/overrides.css'],
@@ -79,6 +79,17 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Run headless',
+          items: [
+            { label: 'Fix, QA and audit runs', slug: 'workbench/fix-qa-audit' },
+            { label: 'Keep as PR', slug: 'workbench/keep-as-pr' },
+            { label: 'Signed receipts', slug: 'workbench/receipts' },
+            // Pages that live under Configure, linked here too; their slugs stay put.
+            { label: 'Loadouts', link: '/configure/loadouts/' },
+            { label: 'External agents', link: '/configure/external-agents/' },
+          ],
+        },
+        {
           label: 'Use the workbench',
           items: [
             { label: 'Work in a Session', slug: 'workbench/session' },
@@ -87,9 +98,6 @@ export default defineConfig({
             { label: 'Explore several Ways', slug: 'workbench/ways' },
             { label: 'Review Git and Last turn', slug: 'workbench/git' },
             { label: 'Context, History, and Stop', slug: 'workbench/history' },
-            { label: 'Fix, QA and audit runs', slug: 'workbench/fix-qa-audit' },
-            { label: 'Keep as PR', slug: 'workbench/keep-as-pr' },
-            { label: 'Signed receipts', slug: 'workbench/receipts' },
           ],
         },
         {
