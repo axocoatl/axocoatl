@@ -6,9 +6,14 @@ product speaks and looks; `ARCHITECTURE.md` explains the runtime beneath it.
 
 ## One product
 
-Axocoatl is the harness you can trust to run coding agents on your own machine or
-infrastructure: isolation built in, a complete record of every step, any model, local
-or hosted. Each of those is a mechanism, not an adjective: Session tools run in a
+Axocoatl runs coding agents unattended. Agents write the code; Axocoatl writes the
+receipt. Claude Code, Codex or a local model works in a sandbox its credential never
+enters; when it says it is done, the host runs the required checks on the exact final
+files and a different model reviews the change; every run ends with an exit code for CI
+and a receipt signed on this computer (positioning approved 2026-10-14, `BRAND.md`).
+Behind the receipt are three pillars, stated as evidence rather than as the pitch:
+isolation built in, a complete record of every step, and any model per Agent, local or
+hosted. Each of those is a mechanism, not an adjective: Session tools run in a
 rootless Podman container, read-only helpers are blocked from writing by the kernel or
 get no shell, write scopes are checked against digest-verified snapshots, the host runs
 required checks on the exact final files, approved budgets are charged with actual

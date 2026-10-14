@@ -6,7 +6,7 @@ page, doc, or post conflicts with current product fact, fix the fact source and 
 file together. The goal is consistency that compounds: every page reinforces every
 other page, and a year from now we still sound like ourselves.
 
-Last updated: 2026-10-06.
+Last updated: 2026-10-14 (positioning, §2).
 
 ---
 
@@ -32,12 +32,31 @@ the copy is wrong.
 
 ## 2 · Positioning statement
 
-> Axocoatl is the harness you can trust to run coding agents on your own machine or
-> infrastructure: isolation built in, a complete record of every step, any model,
-> local or hosted.
+> **Run coding agents unattended.**
+> **Agents write the code. Axocoatl writes the receipt.**
+>
+> Claude Code, Codex or a local model works in a sandbox its credential never enters.
+> When it says it is done, the host runs your tests on the final files and a different
+> model reviews the change. Every run ends with an exit code for CI and a receipt signed
+> on your computer.
 
-The trust is earned by mechanisms we can name, never by adjectives. Three pillars;
-every page should reinforce one or more, each with its concrete facts:
+Approved by the maintainer on 2026-10-14, replacing "the harness you can trust to run
+coding agents on your own machine or infrastructure". Lead with the job (running coding
+agents unattended) and own one word nobody else owns: the receipt. Do not lead with an
+adjective or a category: "sandboxed", "any model", "harness" and "trust" describe how,
+not what for. Trust is earned by mechanisms we can name, never by adjectives.
+
+**What a receipt proves.** Which key signed which facts: the files the run changed,
+each with its SHA-256 as the required checks judged it, the sandbox and network policy,
+the checks, the review, the models and the verdict. It does not prove that the change
+is correct, that the tests are good tests or that the review was right, and a key
+copied from a data directory signs as well as the original. Never call a receipt
+"tamper-proof", "proof the code works" or a guarantee; say what it holds and who signed
+it.
+
+The three pillars are the evidence behind the receipt. They stay below the fold, as
+evidence, not as the pitch; every page should reinforce one or more, each with its
+concrete facts:
 
 1. **Isolation built in.** Every Session's tools run in a rootless Podman container
    (E2B Cloud is an explicit remote option on the compatibility path). Read-only
