@@ -60,6 +60,16 @@ fn validated_name(name: Option<&str>, path: &Path) -> Result<String, WorkspaceEr
     }
 }
 
+/// What [`WorkspaceStore::register_reporting_move`] registered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredWorkspace {
+    pub workspace: Workspace,
+    /// The Workspace's previous path when its directory had moved to the
+    /// registered path. Its Sessions keep the previous path, which is no
+    /// longer the Workspace's.
+    pub moved_from: Option<PathBuf>,
+}
+
 /// Persistent store of Workspaces — JSON files under `{data_dir}/workspaces/`.
 pub struct WorkspaceStore {
     secure_dir: SecureDir,
@@ -68,12 +78,24 @@ pub struct WorkspaceStore {
     by_identity: HashMap<WorkspacePathIdentity, String>,
 }
 
+/// One directory, however it is named. On Unix the birth time, where the
+/// file system records one, tells a moved directory (same inode, same birth
+/// time) from a new directory that reuses a deleted one's inode.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum WorkspacePathIdentity {
     #[cfg(unix)]
-    Unix { device: u64, inode: u64 },
+    Unix {
+        device: u64,
+        inode: u64,
+        born: Option<SystemTime>,
+    },
     #[cfg(not(unix))]
     Path(PathBuf),
+}
+
+/// Whether `path` is a directory itself, not a symbolic link to one.
+fn is_real_directory(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
 
 fn existing_directory_identity(path: &Path) -> Option<WorkspacePathIdentity> {
@@ -87,6 +109,7 @@ fn existing_directory_identity(path: &Path) -> Option<WorkspacePathIdentity> {
         Some(WorkspacePathIdentity::Unix {
             device: metadata.dev(),
             inode: metadata.ino(),
+            born: metadata.created().ok(),
         })
     }
     #[cfg(not(unix))]
@@ -191,11 +214,34 @@ impl WorkspaceStore {
     /// Register a directory explicitly. Canonical path is the unique key, so
     /// replaying Open Workspace returns the same durable identity. Supplying a
     /// name for an existing path deliberately updates only its display label.
+    ///
+    /// A Workspace whose directory was moved here keeps its id and moves with
+    /// it: see [`Self::register_reporting_move`].
     pub fn register(
         &mut self,
         path: impl AsRef<Path>,
         name: Option<&str>,
     ) -> Result<Workspace, WorkspaceError> {
+        self.register_reporting_move(path, name)
+            .map(|registered| registered.workspace)
+    }
+
+    /// [`Self::register`], saying when the Workspace's directory had moved.
+    ///
+    /// A directory belongs to the Workspace whose retained path is that
+    /// directory now. When no retained path is, the Workspace this directory
+    /// was last seen as (by device and inode) owns it only if that
+    /// Workspace's own path is no longer a real directory: the directory was
+    /// moved here (`mv A B`), and the Workspace's path becomes this one,
+    /// durably. When the old path is a real directory again (another
+    /// directory made at A), this directory is a new Workspace, never the old
+    /// one. A retained path that is now a symbolic link to this directory is
+    /// likewise moved to this real path, so no Workspace is left on a link.
+    pub fn register_reporting_move(
+        &mut self,
+        path: impl AsRef<Path>,
+        name: Option<&str>,
+    ) -> Result<RegisteredWorkspace, WorkspaceError> {
         let raw = path.as_ref();
         let canonical_path = raw
             .canonicalize()
@@ -220,12 +266,6 @@ impl WorkspaceStore {
             })
             .map(|workspace| workspace.id.clone())
             .collect::<Vec<_>>();
-        if let Some(id) = self.by_identity.get(&identity) {
-            matching_ids.push(id.clone());
-        }
-        if let Some(id) = self.by_path.get(&canonical_path) {
-            matching_ids.push(id.clone());
-        }
         matching_ids.sort();
         matching_ids.dedup();
         if matching_ids.len() > 1 {
@@ -233,18 +273,44 @@ impl WorkspaceStore {
                 canonical_path.display().to_string(),
             ));
         }
-        let existing = matching_ids.pop();
-        if let Some(id) = existing {
-            self.by_identity.insert(identity, id.clone());
-            self.by_path.insert(canonical_path, id.clone());
-            if let Some(name) = name {
-                return self.rename(&id, name);
-            }
-            return self
+        if let Some(id) = matching_ids.pop() {
+            let retained = self
                 .workspaces
                 .get(&id)
-                .cloned()
-                .ok_or(WorkspaceError::NotFound(id));
+                .map(|workspace| workspace.canonical_path.clone())
+                .ok_or_else(|| WorkspaceError::NotFound(id.clone()))?;
+            if retained != canonical_path && !is_real_directory(&retained) {
+                // The retained path is a link to this directory now.
+                return self.relocate(&id, canonical_path, identity, name);
+            }
+            self.by_identity.insert(identity, id.clone());
+            self.by_path.insert(canonical_path, id.clone());
+            let workspace = match name {
+                Some(name) => self.rename(&id, name)?,
+                None => self
+                    .workspaces
+                    .get(&id)
+                    .cloned()
+                    .ok_or(WorkspaceError::NotFound(id))?,
+            };
+            return Ok(RegisteredWorkspace {
+                workspace,
+                moved_from: None,
+            });
+        }
+        // No retained path is this directory. The Workspace it was last seen
+        // as moved here only if that Workspace's own path is gone; a real
+        // directory there now is another directory, and this one is new.
+        if let Some(id) = self.by_identity.get(&identity).cloned() {
+            if let Some(retained) = self
+                .workspaces
+                .get(&id)
+                .map(|workspace| workspace.canonical_path.clone())
+            {
+                if !is_real_directory(&retained) {
+                    return self.relocate(&id, canonical_path, identity, name);
+                }
+            }
         }
 
         let now = now_secs();
@@ -261,7 +327,44 @@ impl WorkspaceStore {
             .insert(workspace.canonical_path.clone(), workspace.id.clone());
         self.workspaces
             .insert(workspace.id.clone(), workspace.clone());
-        Ok(workspace)
+        Ok(RegisteredWorkspace {
+            workspace,
+            moved_from: None,
+        })
+    }
+
+    /// Durably move Workspace `id` to `canonical_path`, its directory's new
+    /// path. The old path and every alias of it stop naming this Workspace.
+    fn relocate(
+        &mut self,
+        id: &str,
+        canonical_path: PathBuf,
+        identity: WorkspacePathIdentity,
+        name: Option<&str>,
+    ) -> Result<RegisteredWorkspace, WorkspaceError> {
+        let mut workspace = self
+            .workspaces
+            .get(id)
+            .cloned()
+            .ok_or_else(|| WorkspaceError::NotFound(id.to_string()))?;
+        let moved_from = std::mem::replace(&mut workspace.canonical_path, canonical_path);
+        if let Some(name) = name {
+            workspace.name = validated_name(Some(name), &workspace.canonical_path)?;
+        } else if workspace.name == default_name(&moved_from) {
+            // A name nobody chose follows the folder's.
+            workspace.name = default_name(&workspace.canonical_path);
+        }
+        self.persist(&workspace)?;
+        self.by_path.retain(|_, owner| owner != id);
+        self.by_identity.retain(|_, owner| owner != id);
+        self.by_path
+            .insert(workspace.canonical_path.clone(), id.to_string());
+        self.by_identity.insert(identity, id.to_string());
+        self.workspaces.insert(id.to_string(), workspace.clone());
+        Ok(RegisteredWorkspace {
+            workspace,
+            moved_from: Some(moved_from),
+        })
     }
 
     /// Find or create the Workspace for a legacy Session path. Missing paths
@@ -448,6 +551,113 @@ mod tests {
             Err(WorkspaceError::DuplicatePath(_))
         ));
         assert_eq!(store.len(), 2, "registration must not create a third id");
+    }
+
+    /// `mv A B`, then Open B: the Workspace moves with its directory,
+    /// durably, and A no longer names it.
+    #[test]
+    fn a_moved_directory_moves_its_workspace() {
+        let data = tempdir().unwrap();
+        let parent = tempdir().unwrap();
+        let parent = parent.path().canonicalize().unwrap();
+        let (a, b) = (parent.join("a"), parent.join("b"));
+        std::fs::create_dir(&a).unwrap();
+        let mut store = WorkspaceStore::new(data.path().join("workspaces")).unwrap();
+        let first = store.register(&a, None).unwrap();
+
+        std::fs::rename(&a, &b).unwrap();
+        let moved = store.register_reporting_move(&b, None).unwrap();
+        assert_eq!(moved.workspace.id, first.id);
+        assert_eq!(moved.workspace.canonical_path, b);
+        assert_eq!(moved.moved_from.as_deref(), Some(a.as_path()));
+        // The name nobody chose follows the folder.
+        assert_eq!(moved.workspace.name, "b");
+        // Registering B again is no move.
+        let again = store.register_reporting_move(&b, None).unwrap();
+        assert_eq!(again.workspace.id, first.id);
+        assert_eq!(again.moved_from, None);
+
+        // A new directory at A is a new Workspace.
+        std::fs::create_dir(&a).unwrap();
+        let other = store.register(&a, None).unwrap();
+        assert_ne!(other.id, first.id);
+        assert_eq!(other.canonical_path, a);
+        assert_eq!(store.get(&first.id).unwrap().canonical_path, b);
+
+        let mut reopened = WorkspaceStore::new(data.path().join("workspaces")).unwrap();
+        reopened.load_all().unwrap();
+        assert_eq!(reopened.get(&first.id).unwrap().canonical_path, b);
+        assert_eq!(reopened.register(&b, None).unwrap().id, first.id);
+        assert_eq!(reopened.register(&a, None).unwrap().id, other.id);
+    }
+
+    /// A chosen name stays when the directory moves.
+    #[test]
+    fn a_moved_workspace_keeps_a_chosen_name() {
+        let data = tempdir().unwrap();
+        let parent = tempdir().unwrap();
+        let (a, b) = (parent.path().join("a"), parent.path().join("b"));
+        std::fs::create_dir(&a).unwrap();
+        let mut store = WorkspaceStore::new(data.path().join("workspaces")).unwrap();
+        let first = store.register(&a, Some("Shop")).unwrap();
+        std::fs::rename(&a, &b).unwrap();
+        let moved = store.register(&b, None).unwrap();
+        assert_eq!(moved.id, first.id);
+        assert_eq!(moved.name, "Shop");
+    }
+
+    /// `mv A B; mkdir A`, then Open B: the old Workspace keeps A, which is a
+    /// directory again, and B is never given it.
+    #[test]
+    fn a_directory_moved_away_from_a_path_made_again_is_a_new_workspace() {
+        let data = tempdir().unwrap();
+        let parent = tempdir().unwrap();
+        let parent = parent.path().canonicalize().unwrap();
+        let (a, b) = (parent.join("a"), parent.join("b"));
+        std::fs::create_dir(&a).unwrap();
+        let mut store = WorkspaceStore::new(data.path().join("workspaces")).unwrap();
+        let first = store.register(&a, None).unwrap();
+
+        std::fs::rename(&a, &b).unwrap();
+        std::fs::create_dir(&a).unwrap();
+        let moved = store.register_reporting_move(&b, None).unwrap();
+        assert_ne!(moved.workspace.id, first.id);
+        assert_eq!(moved.workspace.canonical_path, b);
+        assert_eq!(moved.moved_from, None);
+        assert_eq!(store.get(&first.id).unwrap().canonical_path, a);
+        assert_eq!(store.register(&a, None).unwrap().id, first.id);
+        assert_eq!(store.register(&b, None).unwrap().id, moved.workspace.id);
+        assert_eq!(store.len(), 2);
+    }
+
+    /// `mv A B` and a file or a link left at A: the Workspace moves to B,
+    /// the real directory, and never stays on the link.
+    #[cfg(unix)]
+    #[test]
+    fn a_retained_path_replaced_by_a_file_or_a_link_moves_to_the_directory() {
+        use std::os::unix::fs::symlink;
+
+        for leave in ["file", "link to the moved directory", "link elsewhere"] {
+            let data = tempdir().unwrap();
+            let parent = tempdir().unwrap();
+            let parent = parent.path().canonicalize().unwrap();
+            let (a, b, elsewhere) = (parent.join("a"), parent.join("b"), parent.join("c"));
+            std::fs::create_dir(&a).unwrap();
+            std::fs::create_dir(&elsewhere).unwrap();
+            let mut store = WorkspaceStore::new(data.path().join("workspaces")).unwrap();
+            let first = store.register(&a, None).unwrap();
+
+            std::fs::rename(&a, &b).unwrap();
+            match leave {
+                "file" => std::fs::write(&a, b"not a directory").unwrap(),
+                "link to the moved directory" => symlink(&b, &a).unwrap(),
+                _ => symlink(&elsewhere, &a).unwrap(),
+            }
+            let moved = store.register_reporting_move(&b, None).unwrap();
+            assert_eq!(moved.workspace.id, first.id, "{leave}");
+            assert_eq!(moved.workspace.canonical_path, b, "{leave}");
+            assert_eq!(moved.moved_from.as_deref(), Some(a.as_path()), "{leave}");
+        }
     }
 
     #[test]

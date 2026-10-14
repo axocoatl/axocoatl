@@ -107,6 +107,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gateway()` working and sends every body unread. See
   [The Vercel AI Gateway](https://docs.axocoatl.ai/configure/e2e-check/#the-vercel-ai-gateway).
 
+### Fixed
+- **A Session whose folder is gone no longer blocks other Sessions and runs, and can be
+  deleted.** When the folder a Session works in was deleted, moved away, or replaced by
+  a file or a symbolic link, every request that looked at that Session's attempt state
+  failed with `opening Workspace attempt metadata: No such file or directory`: each later
+  `axocoatl run` on the moved repository (`POST /api/runs`, `400`), a new Session in its
+  Workspace, Close and Delete of the Session itself (`500`), and daemon shutdown. Such a
+  Session is now skipped by those checks, and the daemon log says so once for that Session
+  and folder. Close and Delete succeed, change only Axocoatl's own records, and log that
+  the folder was already gone. A turn, the runtime, Files, Git, Terminal, Reopen,
+  a change of the environment and Ways are refused with a message that names the folder
+  and says to restore it or delete the Session. The folder is never created, and a
+  symbolic link in its place is never followed; a daemon whose Session folder became a
+  link also starts again.
+- **A repository moved to another path keeps its Workspace, and a run there works in the
+  new path.** After `mv A B`, opening B or `axocoatl run --repo B` returned A's Workspace
+  with its old path, so the new run's Session worked in A, a missing folder or another
+  directory made at A since. The Workspace now moves to B, durably, when A is no longer
+  a directory (deleted, a file, or a link); a name nobody chose follows the folder's.
+  When A is a directory again, B gets a new Workspace and A's stays at A. Sessions made
+  in A keep A: while their Workspace is at B they are refused with both paths and the
+  choice to move the folder back or delete the Session, and A is never used for them. A
+  moved directory is recognized by device, inode and birth time while the daemon runs;
+  after a restart, B gets a new Workspace.
+
 ## [1.3.1] - 2026-10-13
 
 ### Added
