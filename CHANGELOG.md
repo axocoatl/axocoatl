@@ -224,6 +224,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `403 provider_fetch_refused`, and checks the compatible endpoints as it checks a hosted
   API. Both are recorded like any refusal. Pull models on this computer with
   `ollama pull`.
+- Update `rustls` in `Cargo.lock` to 0.23.46 for RUSTSEC-2026-0346 (`Debug` output of
+  client session values shows TLS secrets), RUSTSEC-2026-0347 (buffered application data
+  sent to the outer server after an ECH rejection), RUSTSEC-2026-0348 (brotli certificate
+  decompression can allocate up to 1 GiB before authentication) and RUSTSEC-2026-0349 (an
+  unauthenticated ServerHello can downgrade later connections to classical key exchange).
 
 ### Added
 - **`provider_fetch` on a route** (`allow` or `refuse`). Unset, it is `refuse` on a
