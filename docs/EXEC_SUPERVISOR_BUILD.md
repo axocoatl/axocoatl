@@ -81,7 +81,8 @@ or `/work/checkout/axocoatl`, and two other target directories; all five gave
 byte-identical payloads and manifests. The 1.3.2 payloads, whose source differs from
 1.3.1's only in the package version, were built twice, once with the command above and
 once with `CARGO_HOME=/cargo-home`, the checkout at `/work/checkout/axocoatl` and another
-target directory, with byte-identical payloads and manifests.
+target directory, with byte-identical payloads and manifests. The 1.4.0 payloads, again
+differing only in the package version, were built the same two ways, also byte-identical.
 
 Before replacing the checked-in assets, run the real protocol and process-lifecycle
 tests for both architectures in Alpine and Debian containers. ELF inspection alone
@@ -124,6 +125,8 @@ x86_64 image with rootless Podman and with Podman as root, running a test binary
 cross-built for `x86_64-unknown-linux-musl`. On 2026-10-13 the 1.3.2 payloads passed the
 same way: the aarch64 one 32 of 32 on a Linux 7.1 aarch64 kernel with rootless Podman 5.8,
 the x86_64 one 64 of 64 in that x86_64 Alpine virtual machine (Linux 6.12, Podman 5.6).
+On 2026-10-13 the 1.4.0 payloads passed the same suites: 32 of 32 on aarch64 and 64 of 64
+on x86_64.
 
 The test's temporary directory (`TMPDIR`, where each test's Workspace is created) may be
 anywhere, `/tmp` included. The test mounts the Workspace in the container at its own path,
