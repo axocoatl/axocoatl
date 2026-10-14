@@ -1,6 +1,7 @@
 # Axocoatl
 
 **Run coding agents unattended, and let the host decide when they are done.**
+Agents write the code. Axocoatl writes the receipt.
 
 Claude Code, Codex or a local model works in a sandbox its model credential never
 enters. When it says it is done, the host runs your tests on the final files and a

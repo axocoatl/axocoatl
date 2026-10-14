@@ -1,5 +1,5 @@
 # Axocoatl — a local-first harness for coding agents
-> Axocoatl v1.4: run coding agents unattended. Claude Code, Codex or a local model works in a sandbox its model credential never enters; when it says it is done, the host runs your tests on the final files and a different model reviews the change; the run ends with an exit code for CI, a checksummed record of every step and a receipt signed on your computer. Isolation built in, a complete record, any model, local or hosted.
+> Axocoatl v1.4: run coding agents unattended. Claude Code, Codex or a local model works in a sandbox its model credential never enters; when it says it is done, the host runs your tests on the final files and a different model reviews the change; the run ends with an exit code for CI, a checksummed record of every step and a receipt signed on your computer. Agents write the code; Axocoatl writes the receipt.
 
 Axocoatl v1.4 is an Apache-2.0, local-first harness for coding agents working in
 real repositories. One Rust executable runs a daemon that executes the Agents and a
