@@ -1370,14 +1370,18 @@ impl RepoFacts {
             }
         }
         let listing = local(
-            repository_git(tools, &root, &["config", "--list", "--show-scope", "-z"]),
+            repository_git(
+                tools,
+                &root,
+                &["config", "--list", "--show-scope", "--show-origin", "-z"],
+            ),
             "git config",
         )
         .await?;
         let person = listing
             .status
             .success()
-            .then(|| git_host::person_settings(&listing.stdout))
+            .then(|| git_host::person_settings(&listing.stdout, &root))
             .flatten();
         let exclude_path = common_dir.join("info/exclude");
         let exclude = match std::fs::symlink_metadata(&exclude_path) {

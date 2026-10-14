@@ -745,12 +745,21 @@ pub(crate) struct ProtectedGitSpec<'a> {
     pub person: Option<Vec<String>>,
 }
 
-/// The person's global and system settings from `git config --list
-/// --show-scope -z` run in their repository, as `key=value` for `-c`:
-/// conditional includes resolved, repository-local and command-line entries
-/// left out, include directives themselves dropped. `None` when the listing
-/// cannot be passed on exactly (too large, not UTF-8, a key with `=`).
-pub(crate) fn person_settings(listing: &[u8]) -> Option<Vec<String>> {
+/// The person's own settings from `git config --list --show-scope
+/// --show-origin -z` run in their repository, as `key=value` for `-c`:
+/// conditional includes resolved, include directives themselves dropped.
+/// Global and system entries are kept, and so are entries git reports with
+/// the scope `unknown` that come from a configuration file outside
+/// `repository`: the configuration a git installation carries beside its
+/// system file, such as Apple's
+/// `/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig`, where
+/// Apple's git sets `credential.helper=osxkeychain`. Keep's processes run with
+/// `GIT_CONFIG_NOSYSTEM`, which drops that file, so without it a push to a
+/// private HTTPS remote finds no credential. Repository-local, worktree and
+/// command-line entries, and `unknown` entries from anywhere else, are left
+/// out. `None` when the listing cannot be passed on exactly (too large, not
+/// UTF-8, a key with `=`).
+pub(crate) fn person_settings(listing: &[u8], repository: &Path) -> Option<Vec<String>> {
     const MAX_ENTRIES: usize = 4096;
     const MAX_BYTES: usize = 128 * 1024;
     let mut fields = listing.split(|byte| *byte == 0);
@@ -760,8 +769,14 @@ pub(crate) fn person_settings(listing: &[u8]) -> Option<Vec<String>> {
         if scope.is_empty() {
             continue;
         }
+        let origin = fields.next()?;
         let entry = fields.next()?;
-        if !matches!(scope, b"global" | b"system") {
+        let kept = match scope {
+            b"global" | b"system" => true,
+            b"unknown" => installation_config(origin, repository),
+            _ => false,
+        };
+        if !kept {
             continue;
         }
         let entry = std::str::from_utf8(entry).ok()?;
@@ -787,6 +802,39 @@ pub(crate) fn person_settings(listing: &[u8]) -> Option<Vec<String>> {
         }
     }
     Some(settings)
+}
+
+/// Whether an `unknown`-scope entry's origin is a configuration file of the
+/// git installation: an absolute `file:` path, not inside the repository
+/// (lexically or once resolved), so nothing a Session can write qualifies.
+fn installation_config(origin: &[u8], repository: &Path) -> bool {
+    let Ok(origin) = std::str::from_utf8(origin) else {
+        return false;
+    };
+    let Some(path) = origin.strip_prefix("file:") else {
+        return false;
+    };
+    let path = Path::new(path);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return false;
+    }
+    let inside = |candidate: &Path| {
+        candidate.starts_with(repository)
+            || std::fs::canonicalize(repository)
+                .map(|root| candidate.starts_with(root))
+                .unwrap_or(true)
+    };
+    if inside(path) {
+        return false;
+    }
+    match std::fs::canonicalize(path) {
+        Ok(resolved) => !inside(&resolved),
+        Err(_) => false,
+    }
 }
 
 /// A Git directory of Axocoatl's own beside a repository: the repository's
