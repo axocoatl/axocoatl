@@ -2,30 +2,67 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Why Axocoatl — agent work should hold up in Git</title>
-  <meta name="description" content="Axocoatl keeps durable Session evidence beside the current repository, has the host decide when agent work is done, and leaves the commit to you.">
+  <title>Why Axocoatl — an agent’s “done” is not evidence</title>
+  <meta name="description" content="When a coding agent says it is done, that is a claim about its own work. Axocoatl has the host run your checks and a different model review the change, then hands you a signed receipt that someone who didn't watch can check.">
   <meta name="theme-color" content="#3E7C5C"><link rel="canonical" href="https://axocoatl.ai/why">
-  <meta property="og:type" content="website"><meta property="og:site_name" content="Axocoatl"><meta property="og:url" content="https://axocoatl.ai/why"><meta property="og:title" content="Why Axocoatl — agent work should hold up in Git"><meta property="og:description" content="Keep durable Session evidence beside the repository. Compare checked Ways when needed, then return one result to normal Git review."><meta property="og:image" content="https://axocoatl.ai/assets/og-home.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="Axocoatl: run coding agents unattended. Claude Code, Codex or a local model in a sandbox; the host runs your checks on the final files; a different model reviews the change; an exit code for CI and a checksummed record."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Why Axocoatl"><meta name="twitter:description" content="Keep durable Session evidence beside the repository. Compare checked Ways when needed, then return one result to normal Git review."><meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png"><meta name="twitter:image:alt" content="Axocoatl: run coding agents unattended. Claude Code, Codex or a local model in a sandbox; the host runs your checks on the final files; a different model reviews the change; an exit code for CI and a checksummed record.">
-  <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20261013-run"><link rel="stylesheet" href="/styles/finder.css?v=20261013-run">
-  <script type="module" src="/components/ax-site-nav.js?v=20261013-run"></script><script type="module" src="/components/ax-comparison-row.js"></script><script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script><script type="module" src="/components/ax-footer.js?v=20261013-run"></script><script type="module" src="/components/ax-theme-toggle.js"></script>
+  <meta property="og:type" content="website"><meta property="og:site_name" content="Axocoatl"><meta property="og:url" content="https://axocoatl.ai/why"><meta property="og:title" content="Why Axocoatl — an agent’s “done” is not evidence"><meta property="og:description" content="Axocoatl has the host run your checks and a different model review the change, then hands you a signed receipt that someone who didn't watch can check."><meta property="og:image" content="https://axocoatl.ai/assets/og-home.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="Axocoatl: run coding agents unattended. Agents write the code; Axocoatl writes the receipt. Claude Code, Codex or a local model in a sandbox; the host runs your checks and a different model reviews; an exit code for CI and a signed receipt."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Why Axocoatl"><meta name="twitter:description" content="Axocoatl has the host run your checks and a different model review the change, then hands you a signed receipt that someone who didn't watch can check."><meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png"><meta name="twitter:image:alt" content="Axocoatl: run coding agents unattended. Agents write the code; Axocoatl writes the receipt. Claude Code, Codex or a local model in a sandbox; the host runs your checks and a different model reviews; an exit code for CI and a signed receipt.">
+  <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20261014-receipt"><link rel="stylesheet" href="/styles/finder.css?v=20261013-run">
+  <script type="module" src="/components/ax-site-nav.js?v=20261013-run"></script><script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script><script type="module" src="/components/ax-footer.js?v=20261014-receipt"></script><script type="module" src="/components/ax-theme-toggle.js"></script>
 </head>
 <body>
   <ax-site-nav active="why"></ax-site-nav>
   <main id="main-content">
-    <header class="container hero"><span class="eyebrow">Why Axocoatl</span><h1>A final answer is not the job.</h1><p class="lede">Axocoatl makes the Session, one durable work item anchored to a repository folder, the unit of agent work: accepted requests, context, output, bounded tool activity, and final lifecycle state persist while repository changes remain ordinary Git decisions. Whether you watch the work in the browser or run it unattended, the host decides when it is done.</p></header>
+    <header class="container hero"><span class="eyebrow">Why Axocoatl</span><h1>An agent’s “done” is not evidence.</h1><p class="lede">Agents now write more code than the people around them can read. When one says it is done, that is a claim about its own work. Axocoatl has the host decide when the work is done, then hands you a receipt that someone who didn't watch can check.</p></header>
 
-    <section class="container-narrow section section-rule">
-      <div class="stack"><span class="eyebrow">The problem</span><h2>A transcript is not the job.</h2><p>Repository work spans files, commands, previews, failures, restarts, and review. The Session record explains what was accepted and executed; the working tree says what exists now.</p><p>A final answer cannot replace either one. The product has to keep the execution record reviewable, expose current repository state, and make the handoff between them explicit.</p></div>
+    <section class="container-narrow section section-rule" id="self-review">
+      <div class="stack"><span class="eyebrow">The problem</span><h2>Grading its own work added nothing.</h2>
+        <p>The obvious fix is to ask the agent to check itself. In our benchmark that did not help.</p>
+        <!-- measured: axocoatl-1.1.0 2026-10-01 -->
+        <p>An Agent that reviewed its own work passed 17 of 25 withheld tests, the same as one pass, at 3.5 times the tokens. A fresh reviewer on the same model also passed 17, and approved every change, including three with real defects. A stronger, different reviewer took the same writer to 19 of 25, at 2.6 times the tokens.</p>
+        <p class="small muted">Measured on small local models: a qwen3-coder 30B writer and a gpt-oss 120B reviewer, 6 Python maintenance tasks frozen in advance, 25 withheld tests the agents never saw, one run per task at temperature 0. One pass and the different reviewer ran through Axocoatl 1.1.0; the two same-model reviews ran in a plain agent loop, without Axocoatl. It is one small benchmark, not a claim that Axocoatl makes agents better. The reviewer ran locally; reviewers through OpenRouter have not been measured.</p>
+        <!-- /measured -->
+        <p><a href="https://docs.axocoatl.ai/understand/what-we-measured/">The method, the full results, and their limits →</a></p>
+      </div>
     </section>
 
-    <section class="container section section-rule">
-      <div class="section-head"><span class="eyebrow">The product decision</span><h2>Keep the record beside the repository.</h2><p>The conversation is the Session spine. Its durable record explains accepted Turns and execution; Files, Terminal, Preview, and Source Control expose the Workspace, the authorized repository folder, as it exists now.</p></div>
-      <div class="comparison">
-        <ax-comparison-row header label="Stage" left="Durable Session record" right="Repository state"></ax-comparison-row>
-        <ax-comparison-row label="Accept" left="Request and immutable context snapshot" right="Authorized Workspace and reviewed environment"></ax-comparison-row>
-        <ax-comparison-row label="Execute" left="Agent output, bounded tool Route, and final lifecycle state" right="Current working tree"></ax-comparison-row>
-        <ax-comparison-row label="Review" left="Searchable History and export" right="Current paths and hunks in Source Control"></ax-comparison-row>
-        <ax-comparison-row label="Several Ways" left="Same task and snapshot, common Checks, compared evidence" right="Only the kept result returns as uncommitted changes"></ax-comparison-row>
+    <section class="container-narrow section section-rule" id="host">
+      <div class="stack"><span class="eyebrow">So the host decides</span><h2>The host decides, not the agent.</h2>
+        <p>Axocoatl takes the decisions a model should not make about its own work and gives them to the host: the computer that runs the Axocoatl daemon.</p>
+        <ul class="fact-list">
+          <li>The agent, Claude Code, Codex or a model you choose, works in a rootless Podman container as a non-root user. Its model credential stays outside: the daemon makes the model calls for its own Agents, and adds the credential on the host to each request it allows for Claude Code or Codex, so the container holds a placeholder.</li>
+          <li>In a headless run the container has no direct network access. It reaches the outside only through the daemon's egress proxy, which decides and records every connection.</li>
+          <li>When the agent says it is done, the host runs your checks on the exact final files, with a timeout. A check that did not run never counts as a pass.</li>
+          <li>A different model then reviews the result in a fresh conversation with read-only tools, for up to 3 rounds. The writer must accept or reject every finding with a reason; a finding left unanswered makes the run need attention. A reviewer on the writer's own model gets a warning, not a refusal.</li>
+          <li>The run ends with an exit code CI can read: 0 pass, 1 a check failed, 2 needs attention.</li>
+        </ul>
+        <p><a href="/#run">What a run does, step by step →</a></p>
+      </div>
+    </section>
+
+    <section class="container-narrow section section-rule" id="receipt">
+      <div class="stack"><span class="eyebrow">Then it hands you a receipt</span><h2>Evidence someone else can check.</h2>
+        <p>When the run finishes, passing or not, the daemon signs a receipt with a key kept on your computer. It lists the files the run changed, each with its SHA-256 as the checks judged it, and the sandbox and network policy, the checks, the review, the models and the verdict.</p>
+        <ul class="fact-list">
+          <li>Keep as PR commits those files to a new branch, with <code>Axocoatl-Run</code> and <code>Axocoatl-Receipt</code> trailers, and opens a pull request whose description carries the receipt.</li>
+          <li>In GitHub Actions, the verify-receipt Action reads the trusted keys from the base branch, never from the pull request, and fails a pull request whose receipt is missing, signed by a key the base branch does not list, or does not cover every changed file.</li>
+          <li>Anyone can run <code>axocoatl receipt verify</code> offline, against the keys they trust and a checkout.</li>
+        </ul>
+        <p>A receipt proves which key signed which facts. It does not prove that the change is correct, and a key copied from your data directory signs as well as yours.</p>
+        <p><a href="/#receipt">A real receipt, and how to check it →</a></p>
+      </div>
+    </section>
+
+    <section class="container-narrow section section-rule" id="local">
+      <div class="stack"><span class="eyebrow">Why a local binary</span><h2>It runs on your computer.</h2>
+        <p>Axocoatl is one Rust executable, licensed Apache-2.0. There is no Axocoatl account, hosted control plane or product telemetry. The models are yours to choose: local models through Ollama, hosted models through OpenRouter, or the Claude Code and Codex CLIs with your own sign-in. The signing key stays in your data directory, and a run calls no Axocoatl service. If the project stopped tomorrow, the executable you have would keep running and your receipts would keep verifying.</p>
+        <p>This does not mean nothing ever reaches a network. Providers, MCP servers, web search and page fetches, webhooks, the optional remote sandbox, Podman image or package downloads, the browser tool's declared hosts and the downloads its image build makes, requests Axocoatl sends on egress routes, and the one-time Hugging Face embedding download can use the network. <code>sandbox.network: none</code> blocks code and commands inside the local Podman sandbox and turns off the native web tools; daemon-side integrations remain separate paths.</p>
+      </div>
+    </section>
+
+    <section class="container-narrow section section-rule" id="workbench">
+      <div class="stack"><span class="eyebrow">When to use the workbench</span><h2>Watch the work when you want to.</h2>
+        <p>The same daemon serves a workbench in your browser for work you want to watch or steer. There, a Session (one durable work item anchored to a repository folder: its conversation, the sandbox its tools run in, and its record) keeps the conversation beside Files, Terminal, Preview and Source Control. A Session can require the same checks and review as a headless run, and keeps the same record. Axocoatl does not commit for you; you review the Git changes and commit.</p>
+        <p>When an implementation choice is genuinely ambiguous, turn on <strong>Explore several ways</strong>. Each Way is a separate attempt from the same task and repository snapshot. Compare their outcomes, diffs and cost, keep one, and it returns to your checkout uncommitted. One answer is the default; Ways are for a hard decision.</p>
       </div>
       <ax-product-film
         film="workspace-sessions-turns"
@@ -33,41 +70,20 @@
         poster="/assets/films/v1.4.0/workspace-sessions-turns.jpg"
         label="An Axocoatl Workspace with two Sessions and a completed Turn restored after switching Sessions"
         caption="One authorized Workspace groups durable Sessions. Switching away and back restores the selected Session and its accepted Turn."
+        pending="omit"
       ></ax-product-film>
-    </section>
-
-    <section class="container-narrow section section-rule">
-      <div class="stack"><span class="eyebrow">What it is</span><h2>A harness, not a framework kit.</h2><p>One installed executable starts the local Rust daemon. Run a loadout, a YAML recipe for one run, headless with <code>axocoatl run</code> and get an exit code, JUnit and a checksummed record; or work in the browser workbench, where Files, editor, Source Control, Terminal, Preview, History, and focused review open around the active Session instead of competing as separate products. Both use the same sandbox, checks, review and record.</p><p>The daemon supervises agent actors, connects providers and tools, owns durable Session history, manages checkpoints and workspace knowledge, and creates sandboxes. Versioned notes retain decisions and source links across Sessions; the Knowledge inspector makes their origin and changed evidence visible. You do not have to assemble those primitives into a usable coding product or install a bundled browser runtime.</p></div>
-    </section>
-
-    <section class="container section section-rule">
-      <div class="grid-3">
-        <article class="card"><span class="card-kicker">Durable</span><h3>Keep the thread</h3><p>Accepted turns, context relations, bounded tool evidence, output, and final lifecycle state stay attached to the Session.</p></article>
-        <article class="card"><span class="card-kicker">Inspectable</span><h3>Show the work</h3><p>Open Files, Preview, Terminal, and Source Control around the Session. History keeps accepted Turns and bounded tool evidence; Source Control shows current Git state.</p></article>
-        <article class="card"><span class="card-kicker">Extensible</span><h3>Bring the stack</h3><p>Configure Agents, Skills, MCP servers, and Automations in Settings. Configure Axocoatl once for the current OS user; explicit project-local YAML remains an advanced operator path.</p></article>
-      </div>
-    </section>
-
-    <section class="container-narrow section section-rule">
-      <div class="stack"><span class="eyebrow">When uncertainty matters</span><h2>One answer is the default.</h2><p>Most Sessions can stay on the direct path: use the lead and its helpers, or one Agent, inspect the result, and review the Git changes. When implementation choices are genuinely ambiguous, turn on <strong>Explore several ways</strong> inside that same Session.</p><p>Each Way starts from the same task and repository snapshot. Run common repository Checks; compare Outcome, Route, available diff, cost, and an optional Judge; then Keep one passing result. Ways strengthens a difficult decision without redefining ordinary work.</p></div>
-    </section>
-
-    <section class="container section section-rule">
-      <div class="section-head"><span class="eyebrow">Repository control</span><h2>The final response does not own Git.</h2><p>The stricter several-Ways path makes the handoff explicit: Keep returns one checked result to the primary Session checkout without committing it. Last turn filters the current Git diff to paths attributed to that durable Turn; it is not a frozen per-turn patch.</p></div>
       <ax-product-film
         film="git-last-turn"
         src="/assets/films/v1.4.0/git-last-turn.mp4"
         poster="/assets/films/v1.4.0/git-last-turn.jpg"
         label="A kept Axocoatl Way shown as uncommitted paths and hunks in Source Control Last turn"
         caption="Keep returns one checked result to the primary checkout without committing it. Last turn scopes the Git review before any optional staging."
+        pending="omit"
       ></ax-product-film>
+      <p><a href="https://docs.axocoatl.ai/workbench/session/">Work in a Session →</a> · <a href="https://docs.axocoatl.ai/workbench/ways/">Explore several Ways →</a></p>
     </section>
 
-    <section class="container-narrow section section-rule">
-      <div class="stack"><span class="eyebrow">Open source on purpose</span><h2>The runtime is yours.</h2><p>Axocoatl is Apache-2.0 licensed. There is no Axocoatl account, hosted control plane, or product telemetry. The source is the product, and local-first is a permanent constraint rather than a temporary packaging choice.</p><p>This does not mean nothing ever reaches a network. Providers, MCP servers, web search and page fetches, webhooks, the optional remote sandbox, Podman image or package downloads, the browser tool's declared hosts and the downloads its image build makes, requests Axocoatl sends on egress routes, and the one-time Hugging Face embedding download can use the network. <code>sandbox.network: none</code> blocks code and commands inside the local Podman sandbox and turns off the native web tools; daemon-side integrations remain separate paths.</p></div>
-    </section>
-
-    <section class="container section section-rule"><div class="cta-strip"><div><h2>Run it on a real repository.</h2><p>Run a loadout or open a Workspace, keep the Session record, and make the work hold up before you commit.</p></div><div class="cta-actions"><a class="btn btn-primary" href="/install">Install →</a><a class="btn btn-ghost" href="https://github.com/axocoatl/axocoatl">View the source →</a></div></div></section>
+    <section class="container section section-rule"><div class="cta-strip"><div><h2>Run it on a real repository.</h2><p>Install Axocoatl, run one task headless, and hand the receipt to someone who didn't watch.</p></div><div class="cta-actions"><a class="btn btn-primary" href="/install">Install →</a><a class="btn btn-ghost" href="https://github.com/axocoatl/axocoatl">View the source →</a></div></div></section>
   </main>
   <ax-footer></ax-footer>
 </body>

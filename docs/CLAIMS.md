@@ -49,7 +49,7 @@ one edit. Each id:
 
 | Block id | Appears on | Claims |
 | --- | --- | --- |
-| `axocoatl-1.1.0 2026-10-01` | `README.md`, `llms.txt`, docs `understand/what-we-measured`, docs `workbench/fix-qa-audit`, marketing home and concepts pages | R1–R12 |
+| `axocoatl-1.1.0 2026-10-01` | `README.md`, `llms.txt`, docs `understand/what-we-measured`, docs `workbench/fix-qa-audit`, marketing home, concepts and why pages | R1–R12 |
 | `claude-code-subagents single-vs-multi 2026-10-06` | `llms.txt`, docs `understand/what-we-measured`, docs `workbench/fix-qa-audit` | S1–S6 |
 | `claude-code-subagents qa 2026-10-04..06` | docs `understand/what-we-measured`, docs `workbench/fix-qa-audit` | Q1–Q6 |
 
@@ -62,11 +62,11 @@ withheld tests the agents never see. Writer qwen3-coder 30B on local Ollama, tem
 
 | Id | Claim as published | Where | Evidence | Harness | Status |
 | --- | --- | --- | --- | --- | --- |
-| R1 | One Agent, one pass: 17 / 25 withheld tests | README, llms.txt, what-we-measured, fix-qa-audit, marketing home and concepts | `axocoatl-1.1.0/RESULTS-X32k.md`, arm A | Axocoatl 1.1.0 | measured |
-| R2 | The same writer with a Required review by a stronger local model, gpt-oss 120B (up to 2 rounds): 19 / 25 at 2.6× the tokens (1,324,504 against 515,217) | same | `axocoatl-1.1.0/RESULTS-X32k.md`, arm X (reviewer `gpt-oss:axocoatl-review`, 32k context) | Axocoatl 1.1.0 | measured |
+| R1 | One Agent, one pass: 17 / 25 withheld tests | README, llms.txt, what-we-measured, fix-qa-audit, marketing home, concepts and why | `axocoatl-1.1.0/RESULTS-X32k.md`, arm A | Axocoatl 1.1.0 | measured |
+| R2 | The same writer with a Required review by a stronger local model, gpt-oss 120B (up to 2 rounds): 19 / 25 at 2.6× the tokens (1,324,504 against 515,217) | same; the marketing why page as "a stronger, different reviewer took the same writer to 19 of 25, at 2.6 times the tokens" | `axocoatl-1.1.0/RESULTS-X32k.md`, arm X (reviewer `gpt-oss:axocoatl-review`, 32k context) | Axocoatl 1.1.0 | measured |
 | R3 | The reviewer reported 15 defects and 14 were real; the writer applied the one false alarm, which cost a test; 6 real findings came in the last round, after which Axocoatl stops revising; one task went from 1/4 to 4/4 | README, llms.txt, what-we-measured, marketing home and concepts | `axocoatl-1.1.0/NOTES-X32k.md` (per-round table and totals) | Axocoatl 1.1.0 | measured |
-| R4 | The same Agent reviews its own work: 17 / 25 at 3.5×; final files byte-identical to one pass | README, llms.txt, what-we-measured, marketing home | `plain-loop/RESULTS.md`, arm B | Plain loop | measured |
-| R5 | A fresh reviewer on the same model: 17 / 25 at 2.3×; it approved every change, including three with real defects | README, llms.txt, what-we-measured, marketing home and concepts | `plain-loop/RESULTS.md`, arm C | Plain loop | measured |
+| R4 | The same Agent reviews its own work: 17 / 25 at 3.5×; final files byte-identical to one pass | README, llms.txt, what-we-measured, marketing home and why ("Grading its own work added nothing") | `plain-loop/RESULTS.md`, arm B | Plain loop | measured |
+| R5 | A fresh reviewer on the same model: 17 / 25 at 2.3×; it approved every change, including three with real defects | README, llms.txt, what-we-measured, marketing home, concepts and why (the why page gives the score and the approvals, not the token ratio) | `plain-loop/RESULTS.md`, arm C | Plain loop | measured |
 | R6 | The same model writes its own tests (4 of 6 tasks run): one more test at 9× to 15×; when its tests failed it often rewrote the tests, not the code | README, what-we-measured | `plain-loop/FOLLOWUP.md`, arm D | Plain loop | measured |
 | R7 | A stronger reviewer (gpt-oss 120B): 20 / 25 at 3.3×; 9 real defects, 2 false alarms | README, llms.txt, what-we-measured | `plain-loop/FOLLOWUP.md`, arm E | Plain loop | measured |
 | R8 | A panel of three same-model critics: 17 / 25 at 4.7×; together with R4 and R5, "another look by the same model added nothing … at 2.3× to 4.7× the tokens" | fix-qa-audit | `walled-tests/panel-P-Q/PANEL.md`, arm P | Plain loop | measured |
