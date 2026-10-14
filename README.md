@@ -208,7 +208,7 @@ The same daemon serves a workbench in your browser for work you want to watch: t
 default is one Agent, the Lead, which writes; read-only helpers it can delegate to,
 and checks and a review the host runs before a turn completes, are opt-in.
 
-The execution contracts below describe the 1.3.2 source tree. The installer and
+The execution contracts below describe the 1.4.0 source tree. The installer and
 `cargo install` select published releases; see the [changelog](CHANGELOG.md)
 for versioned changes.
 

@@ -17,8 +17,8 @@ name = "axocoatl_graph"
 crate-type = ["rlib"]
 
 [dependencies]
-axocoatl-core = { version = "1.3.2", path = "../axocoatl-core" }
-axocoatl-config = { version = "1.3.2", path = "../axocoatl-config" }
+axocoatl-core = { version = "1.4.0", path = "../axocoatl-core" }
+axocoatl-config = { version = "1.4.0", path = "../axocoatl-config" }
 petgraph = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

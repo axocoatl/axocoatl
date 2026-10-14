@@ -116,6 +116,44 @@
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
 
       <article class="release">
+        <span class="release-tag">v1.4.0</span>
+        <span class="release-date">2026-10-14</span>
+        <h2>Every run is signed, and Claude Code or Codex is one command.</h2>
+
+        <p>When a loadout run finishes, passing or not, the daemon signs a receipt with an
+          Ed25519 key kept in your data directory: an in-toto statement in a DSSE envelope
+          that lists the files the run changed with their SHA-256, as the required checks
+          judged them when they ran, and the sandbox and network policy, the checks, the
+          review, the models and the verdict. <code>axocoatl receipt verify</code> checks it
+          offline against the keys you trust and the files in a checkout. It proves which key
+          signed which facts, not that the change is correct.</p>
+
+        <h3>Added</h3>
+        <ul>
+          <li>Signed receipts of every finished loadout run, <code>axocoatl run
+              --receipt FILE</code>, and <code>axocoatl receipt show</code>,
+              <code>verify</code> and <code>key</code>. A route's body check is in the
+              receipt.</li>
+          <li>Keep as PR commits only what the receipt covers, adds
+              <code>Axocoatl-Run</code> and <code>Axocoatl-Receipt</code> trailers, and puts
+              the receipt in the pull request's description.</li>
+          <li>The Run outcome panel shows the run's receipt, and Settings shows the public
+              key line to copy.</li>
+          <li>Built-in loadouts <code>fix-claude-code</code> and <code>fix-codex</code>:
+              <code>axocoatl run fix-claude-code --task "…" --model reviewer=…</code> runs
+              <code>fix</code> with the pinned Claude Code or Codex as the writer.
+              <code>fix-codex</code> sends the OpenAI API key when one is stored, else your
+              ChatGPT sign-in, and says which.</li>
+        </ul>
+
+        <h3>Changed</h3>
+        <ul>
+          <li>A loadout file of yours that declares a built-in id is refused with how to
+              rename it, instead of the built-in running silently.</li>
+        </ul>
+      </article>
+
+      <article class="release">
         <span class="release-tag">v1.3.2</span>
         <span class="release-date">2026-10-14</span>
         <h2>Model calls through a route are read before they leave.</h2>
