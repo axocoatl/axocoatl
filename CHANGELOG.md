@@ -141,6 +141,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writer's credential.
 
 ### Changed
+- Repository captures record the digest of every path that differs from `HEAD`, which
+  signed receipts use. Axocoatl 1.3 does not know that field: once a 1.4 daemon has
+  recorded a capture in a data root, a 1.3 daemon does not start on it (`unknown field
+  changed_manifest`). Going back to 1.3 is a restore of the cold backup made before
+  upgrading ([Upgrade](https://docs.axocoatl.ai/operate/upgrade/#data-written-by-14)).
 - **A user loadout that declares a built-in id no longer leaves the choice to
   Axocoatl.** Such a file was listed with an error while a run of the id silently ran
   the built-in. Now, while a file declares `fix`, `fix-claude-code`, `fix-codex`, `qa`
