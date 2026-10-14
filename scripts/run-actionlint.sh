@@ -76,3 +76,16 @@ unset SHELLCHECK_OPTS
   -ignore "$runner_label_ignore" \
   -ignore "$concurrency_queue_ignore" \
   "$@"
+
+# actionlint reads workflows, not composite actions: check the actions'
+# scripts, and the script that tests them, with the same pinned ShellCheck.
+if [[ $# -eq 0 ]]; then
+  repo_root=$(git rev-parse --show-toplevel)
+  action_scripts=()
+  for script in "$repo_root"/actions/*/*.sh "$repo_root"/scripts/test-verify-receipt-action.sh; do
+    [[ -f "$script" ]] && action_scripts+=("$script")
+  done
+  if [[ ${#action_scripts[@]} -gt 0 ]]; then
+    "$shellcheck_path" --severity=style "${action_scripts[@]}"
+  fi
+fi

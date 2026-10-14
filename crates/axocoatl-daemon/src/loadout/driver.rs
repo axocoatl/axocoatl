@@ -5,8 +5,8 @@
 //! what it observed into one [`RunOutcome`]: the final turn's checks (with
 //! their reports) and review, the kind's findings and adjudications, every
 //! node that ended without a result as not covered, the warnings, usage and
-//! the network summary. It decides the verdict, writes `outcome.json` once
-//! and records the `Ended` event. Nothing is ever silently a pass: a failed
+//! the network summary. It decides the verdict, has the host sign the
+//! run's receipt, records the `Ended` event and writes `outcome.json` once. Nothing is ever silently a pass: a failed
 //! hook, a failed node or a run cut off by its wall clock each change the
 //! exit code.
 
@@ -606,6 +606,23 @@ pub async fn run_to_outcome_with(
         )
         .await?;
     }
+    // The receipt is signed from the finished Outcome and written before
+    // it. A receipt that cannot be signed is a warning, never a change of
+    // verdict or exit code: a key problem cannot turn a failing run into a
+    // passing one or the reverse.
+    if let Err(reason) = host.seal(&run.run_id, &outcome).await {
+        let warning = crate::bootstrap::receipts::receipt_unavailable(&reason);
+        outcome.warnings.push(warning.clone());
+        record(
+            host,
+            run,
+            RunEvent::Warning {
+                at_ms: now_ms(),
+                warning,
+            },
+        )
+        .await?;
+    }
     // The Ended event is the record's last line; outcome.json, written
     // once after it, closes the record to further events.
     let ended = RunEvent::Ended {
@@ -785,6 +802,11 @@ prompt: "{task}"
         /// When set, `send_turn` refuses: another Session holds the
         /// Workspace, as the daemon's turn start says.
         busy: Option<String>,
+        /// The Outcome the host was asked to sign, and the events recorded
+        /// by then.
+        sealed: Mutex<Option<(RunOutcome, usize)>>,
+        /// When set, signing fails with this reason.
+        seal_error: Option<String>,
     }
 
     impl FakeHost {
@@ -851,6 +873,14 @@ prompt: "{task}"
         }
         async fn recorded_events(&self, _: &str) -> Result<Vec<RunEvent>, RunError> {
             Ok(self.events.lock().unwrap().clone())
+        }
+        async fn seal(&self, _: &str, outcome: &RunOutcome) -> Result<(), String> {
+            let recorded = self.events.lock().unwrap().len();
+            *self.sealed.lock().unwrap() = Some((outcome.clone(), recorded));
+            match &self.seal_error {
+                Some(reason) => Err(reason.clone()),
+                None => Ok(()),
+            }
         }
         async fn finish(&self, _: &str, outcome: &RunOutcome) -> Result<(), RunError> {
             *self.finished.lock().unwrap() = Some(outcome.clone());
@@ -961,6 +991,64 @@ prompt: "{task}"
         assert!(events
             .iter()
             .any(|event| matches!(event, RunEvent::TurnStarted { .. })));
+    }
+
+    /// The host signs the final Outcome before the `Ended` event and the
+    /// Outcome are written. When it cannot, the run carries the warning
+    /// `receipt_unavailable` and keeps its verdict and exit code, passing
+    /// or failing.
+    #[tokio::test]
+    async fn the_receipt_is_signed_before_the_end_and_its_failure_is_only_a_warning() {
+        let run = context(&[], later());
+        let host = host(vec![observation(
+            TurnState::Completed,
+            vec![check(CheckState::Passed)],
+            review(true, "openai/gpt-oss-120b"),
+        )]);
+        let outcome = run_to_outcome(&host, &run).await.unwrap();
+        let (sealed, recorded) = host.sealed.lock().unwrap().clone().unwrap();
+        assert_eq!(sealed, outcome);
+        let events = host.events.lock().unwrap().clone();
+        assert!(
+            matches!(events[recorded], RunEvent::Ended { .. }),
+            "{events:?}"
+        );
+        assert_eq!(recorded + 1, events.len());
+
+        for (state, code) in [
+            (CheckState::Passed, exit_code::PASS),
+            (CheckState::Failed, exit_code::CHECKS_FAILED),
+        ] {
+            let host = FakeHost {
+                waits: Mutex::new(vec![observation(
+                    if state == CheckState::Passed {
+                        TurnState::Completed
+                    } else {
+                        TurnState::NeedsAttention
+                    },
+                    vec![check(state)],
+                    review(true, "openai/gpt-oss-120b"),
+                )]),
+                seal_error: Some("the secret store cannot be opened".into()),
+                ..FakeHost::default()
+            };
+            let outcome = run_to_outcome(&host, &run).await.unwrap();
+            assert_eq!(outcome.exit_code, code);
+            let warning = outcome
+                .warnings
+                .iter()
+                .find(|warning| warning.code == "receipt_unavailable")
+                .unwrap();
+            assert!(warning
+                .message
+                .contains("the secret store cannot be opened"));
+            assert!(warning.message.contains("exit code are unchanged"));
+            assert_eq!(host.finished.lock().unwrap().as_ref(), Some(&outcome));
+            assert!(host.events.lock().unwrap().iter().any(|event| matches!(
+                event,
+                RunEvent::Warning { warning, .. } if warning.code == "receipt_unavailable"
+            )));
+        }
     }
 
     #[tokio::test]

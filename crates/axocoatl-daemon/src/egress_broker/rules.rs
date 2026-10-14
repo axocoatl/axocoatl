@@ -98,6 +98,11 @@ fn valid_secret(value: &str) -> Result<(), String> {
     if value.is_empty() {
         return Err("it is empty".into());
     }
+    // However a route names the file or variable that holds it, the receipt
+    // signing key is never sent.
+    if value.starts_with(crate::receipt_key::KEY_VALUE_PREFIX) {
+        return Err(crate::receipt_key::NEVER_A_ROUTE_CREDENTIAL.into());
+    }
     if value.starts_with(MANAGED_VALUE_PREFIX) {
         return Err(
             "it is a sign-in that the daemon sends only on a route to its own host (for \
@@ -137,6 +142,9 @@ impl CredentialSource {
             name: name.to_string(),
             reason,
         };
+        if crate::receipt_key::is_receipt_key_name(name) {
+            return Err(error(crate::receipt_key::NEVER_A_ROUTE_CREDENTIAL.into()));
+        }
         match self {
             Self::Env(variable) => {
                 let value = std::env::var(variable).map_err(|_| {

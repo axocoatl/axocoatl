@@ -299,6 +299,18 @@ failed, 2 needs attention, 3 usage, 4 daemon unavailable, 5 infrastructure, 6
 interrupted. It can write JUnit and a single-file record bundle, and Keep as PR commits a
 passing run to a new branch and, opt-in, opens a pull request with host `git` and `gh`.
 
+Every finished run, whatever its verdict, gets a signed receipt: a small statement of
+which files it changed (each with the SHA-256 of its content as the required checks
+judged it, in a repository of any size, up to 10,000 changed paths), what the host
+enforced (sandbox, network policy, checks, review, adjudications), which programs and
+models wrote and reviewed, and the verdict, signed with an Ed25519 key kept in this
+computer's data directory. `axocoatl run --receipt` writes it, the Run outcome panel
+downloads it, the record bundle and the pull request Keep opens carry it, and Keep
+commits only the files it covers. Anyone can check it offline with `axocoatl receipt
+verify` against the public key lines they trust and a checkout. A receipt proves who
+signed which facts and that the covered files are the ones judged; it does not prove that
+the change is correct.
+
 The built-in loadouts follow what was measured (`docs/CLAIMS.md`; the one-agent-or-several
 and QA studies ran with Claude Code subagents, not through Axocoatl):
 
@@ -323,8 +335,9 @@ and QA studies ran with Claude Code subagents, not through Axocoatl):
   runs in parallel with a fresh context, and an integrator merges the findings.
 
 The workbench shows loadouts in Settings (YAML, parameters and a read-only lattice that
-displays the graph and never executes it) and shows a run's Session with a loadout badge
-and a Run outcome panel. Runs start from `axocoatl run`, not from the workbench.
+displays the graph and never executes it), and beside them the receipt signing key's
+public line to copy; it shows a run's Session with a loadout badge and a Run outcome panel
+that includes the run's receipt. Runs start from `axocoatl run`, not from the workbench.
 
 External coding agents (the Claude Code CLI and the Codex CLI) can be a loadout's writer,
 in the built-in `fix-claude-code` and `fix-codex` or in a person's own loadout. They run
@@ -354,6 +367,7 @@ run as a required check, with its report parsed into the Outcome.
 | Loadout | A versioned YAML file that declares a whole run: Agents and models, checks, reviewer, network, budgets and prompt. |
 | Run | One headless execution of a loadout through `axocoatl run`: its Session, record, Outcome and exit code. |
 | Adjudication | The writer's answer to one review finding: accept or reject, with a reason. |
+| Receipt | A finished run's signed statement of the files it changed, what the host enforced, which models worked, and the verdict; verified against keys a person trusts. |
 | Not covered | An area, Agent, helper or QA reproduction that ended without a result, with its reason; never counted as a pass. A check that did not run makes the run need attention too. |
 
 Use internal words such as variant, lane, fan-out, worktree, branch, adopt, and discard in

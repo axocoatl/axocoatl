@@ -1239,6 +1239,243 @@ esac
     );
 }
 
+/// `git` in `dir` with no configuration of the person's.
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Setup")
+        .env("GIT_AUTHOR_EMAIL", "setup@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Setup")
+        .env("GIT_COMMITTER_EMAIL", "setup@example.invalid")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{args:?}: {output:?}");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// A run of `session` in `repo`, admitted as admission writes it.
+fn receipt_manifest(session: &Session, repo: &std::path::Path, head: &str) -> RunManifest {
+    let loadout = parse_loadout(NATIVE_RUN, LoadoutSource::Builtin).unwrap();
+    RunManifest {
+        schema: RUN_MANIFEST_SCHEMA.into(),
+        run_id: format!("run-{}", uuid::Uuid::new_v4()),
+        session_id: session.id.clone(),
+        workspace_id: session.workspace_id.clone(),
+        loadout: LoadoutRef {
+            id: loadout.file.id.clone(),
+            version: loadout.file.version,
+            kind: loadout.file.kind.to_string(),
+            digest: loadout.digest.clone(),
+            builtin: false,
+        },
+        loadout_text: NATIVE_RUN.into(),
+        params: [("writer_model".to_string(), format!("ollama:{MODEL}"))]
+            .into_iter()
+            .collect(),
+        credentials: Default::default(),
+        task: "Read README.md and say what it is.".into(),
+        repo: repo.display().to_string(),
+        repo_head: Some(head.to_string()),
+        dirty_paths: Vec::new(),
+        started_at_ms: now_ms(),
+        options: serde_json::json!({}),
+    }
+}
+
+async fn receipts_child_body() {
+    use axocoatl_session::receipt::{check_signature, open_receipt, PublicKey, SignatureCheck};
+    let server = model_server().await;
+    let daemon = AxocoatlDaemon::bootstrap_headless(config(&server.uri(), "podman"))
+        .await
+        .unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let repo = work.path().canonicalize().unwrap();
+    std::fs::write(repo.join("README.md"), "# Receipts\n").unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "README.md"]);
+    git(&repo, &["commit", "-q", "-m", "initial"]);
+    // Credentials in the remote's URL never reach a receipt.
+    git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://person:not-a-real-token@github.com/acme/widgets.git",
+        ],
+    );
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let session = native_session(&daemon, &repo, Some(binding("egress"))).await;
+    let store = daemon.loadout_runs.store().unwrap();
+
+    // A finished run, whatever its verdict, is signed before its Outcome
+    // is written; the receipt is served only once the run has finished.
+    let manifest = receipt_manifest(&session, &repo, &head);
+    let run_id = manifest.run_id.clone();
+    store.create(&manifest).unwrap();
+    let outcome = ended_outcome(&manifest, "the environment failed".into(), Vec::new());
+    daemon.seal_loadout_run(&run_id, &outcome).await.unwrap();
+    assert!(matches!(
+        daemon.loadout_run_receipt(&run_id),
+        Err(DaemonError::NotFound(message)) if message.contains("has not finished")
+    ));
+    daemon.finish_loadout_run(&run_id, &outcome).unwrap();
+    let bytes = daemon.loadout_run_receipt(&run_id).unwrap();
+    let key = daemon.receipt_public_key().await.unwrap();
+    assert_eq!(key.algorithm, "ed25519");
+    assert!(key
+        .line
+        .starts_with(&format!("ed25519 {} axocoatl@", key.public_key)));
+    let public = PublicKey::from_base64(&key.public_key).unwrap();
+    assert_eq!(public.key_id(), key.key_id);
+    let opened = open_receipt(&bytes).unwrap();
+    assert_eq!(
+        check_signature(&opened, &[public]),
+        SignatureCheck::Trusted {
+            key_id: key.key_id.clone()
+        }
+    );
+    let predicate = &opened.statement.predicate;
+    assert_eq!(predicate.run.run_id, run_id);
+    assert_eq!(predicate.verdict, RunVerdict::Error);
+    assert_eq!(predicate.exit_code, exit_code::INFRASTRUCTURE);
+    assert_eq!(predicate.loadout.id, "native-run");
+    assert_eq!(predicate.agents.len(), 1);
+    assert_eq!(predicate.agents[0].provider, "ollama");
+    assert_eq!(predicate.agents[0].model, MODEL);
+    assert_eq!(predicate.agents[0].runtime, "native");
+    assert_eq!(
+        predicate.repository.base_commit.as_deref(),
+        Some(head.as_str())
+    );
+    assert_eq!(
+        predicate.repository.origin_url.as_deref(),
+        Some("https://github.com/acme/widgets.git")
+    );
+    assert!(!String::from_utf8_lossy(&opened.payload).contains("not-a-real-token"));
+    assert_eq!(predicate.sandbox.network, "egress");
+    assert_eq!(predicate.sandbox.backend, "podman");
+    assert_eq!(
+        predicate.run.task_sha256,
+        axocoatl_session::receipt::sha256_hex(manifest.task.as_bytes())
+    );
+    // No turn ran: nothing is attributed, and the list says where it was read.
+    assert!(opened.statement.subject.is_empty());
+    assert_eq!(predicate.files.source, "workspace_at_finish");
+    assert!(predicate.files.complete);
+    let status = daemon.loadout_run(&run_id).await.unwrap();
+    let view = status.receipt.unwrap();
+    assert_eq!(view.key_id, key.key_id);
+    assert_eq!(view.statement_sha256, opened.payload_digest());
+    // The bundle's last section is the receipt, as written.
+    let mut bundle = Vec::new();
+    daemon
+        .write_record_bundle(&run_id, &mut bundle)
+        .await
+        .unwrap();
+    let summary = axocoatl_session::record_bundle::verify_bundle(bundle.as_slice()).unwrap();
+    assert_eq!(
+        summary.header.schema,
+        axocoatl_session::record_bundle::RECORD_BUNDLE_SCHEMA
+    );
+    assert_eq!(
+        summary.receipt,
+        Some(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap())
+    );
+    // The same key signs the next run; the receipt is written once.
+    assert!(store.write_receipt(&run_id, b"{}\n").is_err());
+
+    // A run the daemon restarted during: a receipt its interrupted finish
+    // left is replaced by the receipt of the Outcome the restart writes.
+    let restarted = receipt_manifest(&session, &repo, &head);
+    store.create(&restarted).unwrap();
+    store
+        .append(
+            &restarted.run_id,
+            &RunEvent::TurnStarted {
+                at_ms: now_ms(),
+                turn_id: "turn-gone".into(),
+                purpose: "run".into(),
+            },
+        )
+        .unwrap();
+    store
+        .write_receipt(&restarted.run_id, b"{\"stale\":true}\n")
+        .unwrap();
+    daemon.recover_loadout_runs().await;
+    let bytes = daemon.loadout_run_receipt(&restarted.run_id).unwrap();
+    let opened = open_receipt(&bytes).unwrap();
+    assert!(matches!(
+        check_signature(&opened, &[public]),
+        SignatureCheck::Trusted { .. }
+    ));
+    let files = &opened.statement.predicate.files;
+    assert!(!files.complete);
+    assert_eq!(
+        files.unattributed,
+        vec!["turn turn-gone is not in the Session's history".to_string()]
+    );
+
+    // A key that cannot be read: the run keeps its verdict and says why it
+    // has no receipt; the API says so too.
+    crate::secret_store::set_secret(
+        daemon.data_root.path(),
+        crate::receipt_key::RECEIPT_KEY_SECRET,
+        b"not-a-key",
+    )
+    .unwrap();
+    let broken = receipt_manifest(&session, &repo, &head);
+    store.create(&broken).unwrap();
+    let mut outcome = ended_outcome(&broken, "the environment failed".into(), Vec::new());
+    let warning = daemon
+        .seal_or_warn(&broken.run_id, &outcome)
+        .await
+        .expect("a warning");
+    assert_eq!(warning.code, "receipt_unavailable");
+    assert!(
+        !warning.message.contains("not-a-key"),
+        "{}",
+        warning.message
+    );
+    outcome.warnings.push(warning);
+    daemon.finish_loadout_run(&broken.run_id, &outcome).unwrap();
+    assert_eq!(outcome.exit_code, exit_code::INFRASTRUCTURE);
+    match daemon.loadout_run_receipt(&broken.run_id) {
+        Err(DaemonError::NotFound(message)) => {
+            assert!(message.contains("has no receipt"), "{message}");
+            assert!(message.contains("--rotate"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(daemon
+        .loadout_run(&broken.run_id)
+        .await
+        .unwrap()
+        .receipt
+        .is_none());
+    daemon.shutdown().await.unwrap();
+}
+
+/// Every finished run is signed with the data root's key before its Outcome
+/// is written, served once it has finished, carried as the record bundle's
+/// last section, re-signed when a restart ends it, and a signing failure
+/// leaves the verdict alone with a warning.
+#[tokio::test]
+async fn every_finished_run_is_signed_served_and_bundled() {
+    if std::env::var_os(CHILD).is_some() {
+        receipts_child_body().await;
+        return;
+    }
+    run_child(
+        "bootstrap::loadout_runs::daemon_tests::every_finished_run_is_signed_served_and_bundled",
+        true,
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn loadout_sessions_bind_their_sandbox_apply_inline_teams_and_refuse_rootful_podman() {
     if std::env::var_os(CHILD).is_some() {
@@ -1782,6 +2019,10 @@ impl crate::loadout::RunHost for LiveHost {
         self.daemon.loadout_run_stop_requested(run_id)
     }
 
+    async fn seal(&self, run_id: &str, outcome: &RunOutcome) -> Result<(), String> {
+        self.daemon.seal_loadout_run(run_id, outcome).await
+    }
+
     async fn finish(&self, run_id: &str, outcome: &RunOutcome) -> Result<(), RunError> {
         Ok(self.daemon.finish_loadout_run(run_id, outcome)?)
     }
@@ -2055,6 +2296,27 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
         assert_eq!(slot["slot_id"], "writer", "{team}");
         assert_eq!(slot["reset_history"], true, "{team}");
         assert_eq!(slot["tools"], serde_json::json!(["read_file"]), "{team}");
+        // The run that needs attention is signed too: its receipt verifies
+        // with the data root's key and is the bundle's last section.
+        let receipt = daemon.loadout_run_receipt(&accepted.run_id)?;
+        let key = daemon.receipt_public_key().await?;
+        let opened = axocoatl_session::receipt::open_receipt(&receipt).unwrap();
+        assert!(matches!(
+            axocoatl_session::receipt::check_signature(
+                &opened,
+                &[axocoatl_session::receipt::PublicKey::from_base64(&key.public_key).unwrap()]
+            ),
+            axocoatl_session::receipt::SignatureCheck::Trusted { .. }
+        ));
+        assert_eq!(
+            opened.statement.predicate.verdict,
+            axocoatl_session::run_outcome::RunVerdict::NeedsAttention
+        );
+        assert_eq!(
+            sections[sections.len() - 2]["section"],
+            "receipt",
+            "the receipt is the last section"
+        );
 
         // A run a person stops while its writer's provider call is running,
         // after the writer streamed part of its answer, ends interrupted;

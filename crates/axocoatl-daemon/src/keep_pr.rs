@@ -13,15 +13,20 @@
 //! Host `git` and `gh` run with the person's own credentials; Axocoatl reads
 //! none. Nothing a repository can configure runs: see `git_host`.
 //!
+//! When the run has a signed receipt (docs/design/1.4-receipts.md), Keep
+//! commits only what it covers: each path it is about to commit must have
+//! the content the receipt gives it (or, for a removed path, be absent). The
+//! commit carries the trailers `Axocoatl-Run` and `Axocoatl-Receipt`, and the
+//! pull request body a Receipt section and the receipt itself in an
+//! `<!-- axocoatl-receipt:v1 … -->` block that the body's cut never cuts.
+//!
 //! Owner: workstream `keep`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use axocoatl_core::SecureDir;
-use axocoatl_session::execution_content::{
-    ActivationRepositorySnapshot, ExecutionTurnView, RepositorySnapshotPhase,
-};
+use axocoatl_session::receipt::{self as receipt_v1, OpenedReceipt};
 use axocoatl_session::run_outcome::{
     AdjudicationDecision, CheckState, FindingSource, KeepResult, ReproClassification,
     ReviewVerdictKind, RunOutcome, RunVerdict, Severity, RUN_OUTCOME_SCHEMA,
@@ -50,10 +55,14 @@ const MAX_LISTED_PATHS: usize = 200;
 const MAX_MESSAGE_CHARS: usize = 2048;
 const MAX_EXCLUDE_BYTES: u64 = 1024 * 1024;
 const MAX_BODY_CHARS: usize = 60_000;
+/// Largest receipt block a pull request body carries; a larger receipt is
+/// left to the run's record bundle, and the body says so.
+const MAX_RECEIPT_BLOCK_CHARS: usize = 40_000;
+/// The commit trailer that names the run.
+pub const RUN_TRAILER: &str = "Axocoatl-Run";
+/// The commit trailer that names the receipt's statement digest.
+pub const RECEIPT_TRAILER: &str = "Axocoatl-Receipt";
 const MAX_TABLE_ROWS: usize = 100;
-/// The reason a repository capture records for an activation whose profile
-/// has neither a shell nor a limited write scope (`capture_tool` is `None`).
-const NO_CAPTURE_REASON: &str = "does not permit repository capture";
 
 /// `POST /api/sessions/{id}/keep-pr`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +105,10 @@ pub struct KeepPrResponse {
     /// What the person should know about this Keep.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// `sha256:<hex>` of the receipt's statement the commit names, when the
+    /// run has a receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<String>,
 }
 
 impl KeepPrResponse {
@@ -475,10 +488,109 @@ fn table_rows<T>(
     }
 }
 
-/// The pull request body for a run's Outcome: verdict, check results,
-/// review verdict and rounds, adjudications, findings, not-covered list,
-/// warnings, usage, and the record id with how to verify the record bundle.
-pub fn pr_body(outcome: &RunOutcome) -> Result<String, KeepPrError> {
+/// The Receipt section of a pull request body: what the receipt covers and
+/// how to verify it, or why there is none.
+fn receipt_section(outcome: &RunOutcome, receipt: Option<&OpenedReceipt>) -> String {
+    let mut section = String::from("\n### Receipt\n\n");
+    let Some(receipt) = receipt else {
+        let why = outcome
+            .warnings
+            .iter()
+            .find(|warning| warning.code == receipt_v1::RECEIPT_UNAVAILABLE)
+            .map(|warning| format!(" ({})", md(&warning.message, 300)))
+            .unwrap_or_default();
+        section.push_str(&format!(
+            "This run has no signed receipt{why}, so this pull request carries none.\n"
+        ));
+        return section;
+    };
+    let statement = &receipt.statement;
+    let predicate = &statement.predicate;
+    let checks = if predicate.checks.is_empty() {
+        "none required".to_string()
+    } else {
+        predicate
+            .checks
+            .iter()
+            .map(|check| {
+                format!(
+                    "{} {}",
+                    md(&check.name, 60),
+                    md(&check.state.replace('_', " "), 20)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let review = match &predicate.review {
+        Some(review) => format!(
+            "{}: {}",
+            code(&format!("{}:{}", review.provider, review.model)),
+            md(&review.verdict, 40)
+        ),
+        None => "none required".into(),
+    };
+    let writers: Vec<String> = predicate
+        .agents
+        .iter()
+        .filter(|agent| agent.role == "writer")
+        .map(|agent| {
+            let program = match &agent.program_version {
+                Some(version) => format!("{} {version} ", md(&agent.runtime, 40)),
+                None if agent.runtime == "native" => String::new(),
+                None => format!("{} ", md(&agent.runtime, 40)),
+            };
+            format!(
+                "{program}{}",
+                code(&format!("{}:{}", agent.provider, agent.model))
+            )
+        })
+        .collect();
+    let source = match predicate.files.source.as_str() {
+        receipt_v1::source::JUDGED_CAPTURE => "as the required checks judged them",
+        receipt_v1::source::AFTER_CAPTURE => "as the last writer left them",
+        _ => "as read when the run finished",
+    };
+    section.push_str(&format!(
+        "- Signed by key {} ({})\n- Verdict: **{}** (exit code {})\n- Checks: {checks}\n- Review: {review}\n- Writer: {}\n- Files covered: {} ({}), removed: {}{}\n- Statement: {}\n",
+        code(&receipt_v1::short_key_id(&predicate.signer.key_id)),
+        code(&predicate.signer.key_id),
+        verdict_words(predicate.verdict),
+        predicate.exit_code,
+        if writers.is_empty() {
+            "—".to_string()
+        } else {
+            writers.join(", ")
+        },
+        statement.subject.len(),
+        source,
+        predicate.files.removed.len(),
+        if predicate.files.complete {
+            ""
+        } else {
+            "; the receipt does not cover every path the run changed"
+        },
+        code(&receipt.payload_digest()),
+    ));
+    section.push_str(
+        "\nThe receipt is the `axocoatl-receipt:v1` block at the end of this description. Save \
+         the description, check out this branch, and verify it against the keys you trust \
+         (lines `axocoatl receipt key` prints):\n\n```sh\naxocoatl receipt verify body.md \
+         --keys trusted-keys --repo .\n```\n\nA receipt proves which key signed these facts and \
+         that the covered files are the ones judged; it does not prove the change is correct.\n",
+    );
+    section
+}
+
+/// The pull request body for a run's Outcome: verdict, the Receipt section,
+/// check results, review verdict and rounds, adjudications, findings,
+/// not-covered list, warnings, usage, the record id with how to verify the
+/// record bundle, and at the end the receipt block, which the cut to
+/// [`MAX_BODY_CHARS`] never cuts.
+pub fn pr_body(
+    outcome: &RunOutcome,
+    receipt: Option<&OpenedReceipt>,
+) -> Result<String, KeepPrError> {
     if outcome.schema != RUN_OUTCOME_SCHEMA {
         return Err(refused(format!(
             "the run's Outcome has schema {:?}, not {RUN_OUTCOME_SCHEMA}",
@@ -517,6 +629,19 @@ pub fn pr_body(outcome: &RunOutcome) -> Result<String, KeepPrError> {
     }
     if let Some(error) = &outcome.error {
         body.push_str(&format!("- Error: {}\n", md(error, 300)));
+    }
+
+    body.push_str(&receipt_section(outcome, receipt));
+    let block = receipt
+        .map(|receipt| receipt_v1::pr_block(&receipt.envelope))
+        .filter(|block| block.chars().count() <= MAX_RECEIPT_BLOCK_CHARS);
+    if receipt.is_some() && block.is_none() {
+        body.push_str(&format!(
+            "\nThe receipt is larger than a pull request description holds, so it is not \
+             here: verify it from the run's record bundle (`axocoatl run … --receipt <file>` \
+             writes it; the daemon serves it at `GET /api/runs/{}/receipt`).\n",
+            outcome.run_id.replace('`', "'")
+        ));
     }
 
     body.push_str("\n### Record\n\n");
@@ -758,10 +883,13 @@ pub fn pr_body(outcome: &RunOutcome) -> Result<String, KeepPrError> {
     ));
     body.push_str("\n---\nKept with Axocoatl Keep as PR. Findings, reasons and the task are quoted from the run.\n");
 
-    if body.chars().count() > MAX_BODY_CHARS {
+    // The receipt block is never cut: the rest of the body makes room.
+    let room =
+        MAX_BODY_CHARS.saturating_sub(block.as_ref().map_or(0, |block| block.chars().count() + 2));
+    if body.chars().count() > room {
         let cut = body
             .char_indices()
-            .nth(MAX_BODY_CHARS)
+            .nth(room)
             .map(|(index, _)| index)
             .unwrap_or(body.len());
         body.truncate(cut);
@@ -769,7 +897,75 @@ pub fn pr_body(outcome: &RunOutcome) -> Result<String, KeepPrError> {
             "\n\n…cut to fit a pull request body; the run record {run} has everything.\n"
         ));
     }
+    if let Some(block) = block {
+        body.push('\n');
+        body.push_str(&block);
+        body.push('\n');
+    }
     Ok(body)
+}
+
+/// The commit message's trailers: the run, and the receipt's statement
+/// digest when the run has one.
+pub fn commit_trailers(run_id: &str, receipt: Option<&OpenedReceipt>) -> String {
+    let mut trailers = format!("{RUN_TRAILER}: {run_id}");
+    if let Some(receipt) = receipt {
+        trailers.push_str(&format!(
+            "\n{RECEIPT_TRAILER}: {}",
+            receipt.payload_digest()
+        ));
+    }
+    trailers
+}
+
+/// Each path Keep is about to commit, checked against the run's receipt:
+/// its content in the working tree must be the content the receipt covers
+/// (a removed path must be absent). Refused, naming each path, otherwise.
+fn check_against_receipt(
+    receipt: &OpenedReceipt,
+    root: &Path,
+    paths: &[String],
+) -> Result<(), KeepPrError> {
+    let statement = &receipt.statement;
+    let judged = match statement.predicate.files.source.as_str() {
+        receipt_v1::source::JUDGED_CAPTURE => "changed after the run's checks judged it",
+        receipt_v1::source::AFTER_CAPTURE => "changed after the run's last writer left it",
+        _ => "changed after the run finished",
+    };
+    let mut changed = Vec::new();
+    let mut uncovered = Vec::new();
+    for path in paths {
+        if let Some(mismatch) = receipt_v1::check_path(statement, root, path) {
+            if statement
+                .subject
+                .iter()
+                .any(|subject| subject.name == *path)
+                || statement.predicate.files.removed.contains(path)
+            {
+                changed.push(format!("{path}: {}", mismatch.problem));
+            } else {
+                uncovered.push(path.clone());
+            }
+        }
+    }
+    if !changed.is_empty() {
+        return Err(refused(format!(
+            "{} {judged}; Keep commits only what the receipt covers: {}",
+            if changed.len() == 1 {
+                "a path"
+            } else {
+                "paths"
+            },
+            listed(&changed)
+        )));
+    }
+    if !uncovered.is_empty() {
+        return Err(refused(format!(
+            "the run's receipt does not cover {}; Keep commits only what the receipt covers",
+            listed(&uncovered)
+        )));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -784,6 +980,10 @@ pub trait KeepRunRecord: Send + Sync {
     fn keep_results(&self, run_id: &str) -> Result<Vec<KeepResult>, KeepPrError>;
     /// Append one Keep result as `RunEvent::Phase("keep", …)`.
     fn record_keep(&self, run_id: &str, result: &KeepResult) -> Result<(), KeepPrError>;
+    /// The run's signed receipt as written, when it has one.
+    fn receipt(&self, _run_id: &str) -> Result<Option<Vec<u8>>, KeepPrError> {
+        Ok(None)
+    }
 }
 
 /// Map a run record error: a missing run is a refusal, an unfinished hook is
@@ -860,6 +1060,30 @@ impl KeepRunRecord for RunRecordStore {
             .map(|_| ())
             .map_err(record_error)
     }
+
+    fn receipt(&self, run_id: &str) -> Result<Option<Vec<u8>>, KeepPrError> {
+        RunRecordStore::receipt(self, run_id).map_err(record_error)
+    }
+}
+
+/// The run's receipt for Keep: `None` without one; a receipt that cannot be
+/// read, or that is not this run's, is refused rather than ignored.
+pub fn load_receipt(
+    record: &dyn KeepRunRecord,
+    run_id: &str,
+) -> Result<Option<OpenedReceipt>, KeepPrError> {
+    let Some(bytes) = record.receipt(run_id)? else {
+        return Ok(None);
+    };
+    let opened = receipt_v1::open_receipt(&bytes)
+        .map_err(|error| refused(format!("the run's receipt cannot be read: {error}")))?;
+    if opened.statement.predicate.run.run_id != run_id {
+        return Err(refused(format!(
+            "the receipt stored for run {run_id} is of run {}",
+            opened.statement.predicate.run.run_id
+        )));
+    }
+    Ok(Some(opened))
 }
 
 /// Load a run for Keep: it must be a run of `session_id`, finished, and its
@@ -909,399 +1133,14 @@ fn require_pass(outcome: &RunOutcome) -> Result<(), KeepPrError> {
 }
 
 // ---------------------------------------------------------------------------
-// Attribution
+// Attribution: `crate::run_attribution`, shared with receipts.
 
-/// The repository paths a run's Agents changed, from the repository
-/// captures recorded around each of their activations.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RunAttribution {
-    /// Repository-relative paths (Git's spelling).
-    pub paths: BTreeSet<String>,
-    /// Activations whose captures exist but cannot establish what they
-    /// changed. Keep refuses rather than guess.
-    pub unattributable: Vec<String>,
-    /// Facts Keep reports with its result.
-    pub notes: Vec<String>,
-}
-
-impl RunAttribution {
-    /// Add every activation of one native turn.
-    pub fn add_execution_turn(&mut self, turn: &ExecutionTurnView) {
-        for activation in &turn.activations {
-            let reference = &activation.activation.activation;
-            let label = format!(
-                "{} (generation {}) in turn {}",
-                reference.node_id.as_str(),
-                reference.generation,
-                turn.turn_id.as_str()
-            );
-            let captures: Vec<CaptureFacts> = activation
-                .repository_snapshots
-                .iter()
-                .map(|view| CaptureFacts::from_snapshot(&view.content))
-                .collect();
-            self.add_activation(&label, &captures);
-        }
-    }
-
-    fn add_activation(&mut self, label: &str, captures: &[CaptureFacts]) {
-        match attribute_activation(captures) {
-            ActivationChanges::Changed(paths) => self.paths.extend(paths),
-            ActivationChanges::NotCaptured => {}
-            ActivationChanges::Unknown(reason) => {
-                self.unattributable.push(format!("{label}: {reason}"))
-            }
-        }
-    }
-
-    /// Add a turn recorded before repository captures: its file-tool writes
-    /// (the "Last turn" attribution of that turn).
-    pub fn add_legacy_turn(&mut self, turn_id: &str, touched: Vec<String>) {
-        self.paths.extend(touched);
-        self.notes.push(format!(
-            "Turn {turn_id} predates repository captures; only its file-tool writes are attributed to the run."
-        ));
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CapturePhase {
-    Before,
-    After,
-    Check,
-}
-
-/// What attribution reads of one repository capture.
-#[derive(Debug, Clone)]
-struct CaptureFacts {
-    phase: CapturePhase,
-    unavailable: Option<String>,
-    has_tree: bool,
-    judged_sha256: Option<String>,
-    compared: Option<(String, Vec<String>)>,
-    /// The complete manifest, when it fit the recorded bound.
-    manifest: Option<String>,
-    /// The complete patch, when it fit the recorded bound.
-    patch: Option<Vec<u8>>,
-}
-
-impl CaptureFacts {
-    fn from_snapshot(snapshot: &ActivationRepositorySnapshot) -> Self {
-        use base64::Engine as _;
-        let phase = match snapshot.phase {
-            _ if snapshot.condition_run.is_some() => CapturePhase::Check,
-            RepositorySnapshotPhase::Before => CapturePhase::Before,
-            RepositorySnapshotPhase::After => CapturePhase::After,
-            RepositorySnapshotPhase::BeforeCheck { .. }
-            | RepositorySnapshotPhase::AfterCheck { .. } => CapturePhase::Check,
-        };
-        let patch = if snapshot.patch_complete {
-            snapshot.patch_base64.as_deref().and_then(|encoded| {
-                base64::engine::general_purpose::STANDARD
-                    .decode(encoded)
-                    .ok()
-                    .filter(|bytes| bytes.len() as u64 == snapshot.patch_bytes)
-            })
-        } else {
-            None
-        };
-        Self {
-            phase,
-            unavailable: snapshot.unavailable.clone(),
-            has_tree: snapshot.tree_sha256.is_some(),
-            judged_sha256: snapshot.judged_sha256.clone(),
-            compared: snapshot.compared.as_ref().map(|compared| {
-                (
-                    compared.before_sha256.clone(),
-                    compared.changed_paths.clone(),
-                )
-            }),
-            manifest: snapshot
-                .manifest_complete
-                .then(|| snapshot.manifest_prefix.clone()),
-            patch,
-        }
-    }
-
-    fn usable(&self) -> bool {
-        self.unavailable.is_none() && self.has_tree
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ActivationChanges {
-    Changed(BTreeSet<String>),
-    /// No capture was possible: the activation's profile has neither a shell
-    /// nor a limited write scope, or it had no repository.
-    NotCaptured,
-    Unknown(String),
-}
-
-fn attribute_activation(captures: &[CaptureFacts]) -> ActivationChanges {
-    let own: Vec<&CaptureFacts> = captures
-        .iter()
-        .filter(|capture| capture.phase != CapturePhase::Check)
-        .collect();
-    if own.is_empty() {
-        return ActivationChanges::NotCaptured;
-    }
-    if own.iter().all(|capture| {
-        capture
-            .unavailable
-            .as_deref()
-            .is_some_and(|reason| reason.contains(NO_CAPTURE_REASON))
-    }) {
-        return ActivationChanges::NotCaptured;
-    }
-    let before = own
-        .iter()
-        .find(|capture| capture.phase == CapturePhase::Before);
-    let after = own
-        .iter()
-        .find(|capture| capture.phase == CapturePhase::After);
-    let (before, after) = match (before, after) {
-        (None, _) => return ActivationChanges::Unknown("it has no Before capture".into()),
-        (_, None) => return ActivationChanges::Unknown("it has no After capture".into()),
-        (Some(before), Some(after)) => (before, after),
-    };
-    for (name, capture) in [("Before", before), ("After", after)] {
-        if !capture.usable() {
-            return ActivationChanges::Unknown(format!(
-                "its {name} capture is unavailable ({})",
-                capture
-                    .unavailable
-                    .as_deref()
-                    .unwrap_or("no tree was recorded")
-            ));
-        }
-    }
-    if let Some((compared_before, paths)) = &after.compared {
-        return if before.judged_sha256.as_deref() == Some(compared_before.as_str()) {
-            ActivationChanges::Changed(paths.iter().cloned().collect())
-        } else {
-            ActivationChanges::Unknown(
-                "its After capture compared with another Before capture".into(),
-            )
-        };
-    }
-    if let (Some(before), Some(after)) = (&before.manifest, &after.manifest) {
-        return match manifest_changes(before, after) {
-            Ok(paths) => ActivationChanges::Changed(paths),
-            Err(reason) => ActivationChanges::Unknown(reason),
-        };
-    }
-    if let (Some(before), Some(after)) = (&before.patch, &after.patch) {
-        return match patch_changes(before, after) {
-            Ok(paths) => ActivationChanges::Changed(paths),
-            Err(reason) => ActivationChanges::Unknown(reason),
-        };
-    }
-    ActivationChanges::Unknown(
-        "its captures are larger than the recorded manifest and patch bounds, so they cannot be compared"
-            .into(),
-    )
-}
-
-/// Paths whose manifest entry (mode, kind, content digest) differs between
-/// two complete capture manifests (`<base64 path>\t<mode>\t<kind>\t<digest>`).
-fn manifest_changes(before: &str, after: &str) -> Result<BTreeSet<String>, String> {
-    use base64::Engine as _;
-    let lines = |manifest: &str| -> Result<BTreeMap<String, String>, String> {
-        let mut entries = BTreeMap::new();
-        for line in manifest.lines().filter(|line| !line.is_empty()) {
-            let (encoded, rest) = line
-                .split_once('\t')
-                .ok_or_else(|| "a capture manifest line is unreadable".to_string())?;
-            let path = base64::engine::general_purpose::STANDARD
-                .decode(encoded)
-                .map_err(|_| "a capture manifest path is unreadable".to_string())?;
-            entries.insert(
-                String::from_utf8_lossy(&path).into_owned(),
-                rest.to_string(),
-            );
-        }
-        Ok(entries)
-    };
-    let before = lines(before)?;
-    let after = lines(after)?;
-    let mut changed = BTreeSet::new();
-    for (path, entry) in &before {
-        if after.get(path) != Some(entry) {
-            changed.insert(path.clone());
-        }
-    }
-    for path in after.keys() {
-        if !before.contains_key(path) {
-            changed.insert(path.clone());
-        }
-    }
-    Ok(changed)
-}
-
-/// Paths whose part of the patch against `HEAD` differs between two
-/// complete capture patches.
-fn patch_changes(before: &[u8], after: &[u8]) -> Result<BTreeSet<String>, String> {
-    let before = patch_blocks(before)?;
-    let after = patch_blocks(after)?;
-    let mut changed = BTreeSet::new();
-    for (header, block) in &before {
-        if after.get(header) != Some(block) {
-            changed.extend(block_paths(header, block)?);
-        }
-    }
-    for (header, block) in &after {
-        if !before.contains_key(header) {
-            changed.extend(block_paths(header, block)?);
-        }
-    }
-    Ok(changed)
-}
-
-fn patch_blocks(patch: &[u8]) -> Result<BTreeMap<Vec<u8>, Vec<u8>>, String> {
-    let mut blocks: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
-    let mut current: Option<(Vec<u8>, Vec<u8>)> = None;
-    for line in patch.split_inclusive(|byte| *byte == b'\n') {
-        if line.starts_with(b"diff --git ") {
-            if let Some((header, block)) = current.take() {
-                if blocks.insert(header, block).is_some() {
-                    return Err("a capture patch names one file twice".into());
-                }
-            }
-            let header = line.strip_suffix(b"\n").unwrap_or(line).to_vec();
-            current = Some((header, line.to_vec()));
-        } else {
-            match &mut current {
-                Some((_, block)) => block.extend_from_slice(line),
-                None => return Err("a capture patch is unreadable".into()),
-            }
-        }
-    }
-    if let Some((header, block)) = current {
-        if blocks.insert(header, block).is_some() {
-            return Err("a capture patch names one file twice".into());
-        }
-    }
-    Ok(blocks)
-}
-
-/// Undo Git's C-style quoting of a path (`"a/\303\251 x"`), or take it as
-/// is. Returns the path and what follows it.
-fn unquote_path(text: &[u8]) -> Option<(Vec<u8>, &[u8])> {
-    if text.first() != Some(&b'"') {
-        return Some((text.to_vec(), &[]));
-    }
-    let mut out = Vec::new();
-    let mut index = 1;
-    while index < text.len() {
-        match text[index] {
-            b'"' => return Some((out, &text[index + 1..])),
-            b'\\' => {
-                let next = *text.get(index + 1)?;
-                index += 2;
-                match next {
-                    b'n' => out.push(b'\n'),
-                    b't' => out.push(b'\t'),
-                    b'a' => out.push(7),
-                    b'b' => out.push(8),
-                    b'f' => out.push(12),
-                    b'r' => out.push(b'\r'),
-                    b'v' => out.push(11),
-                    b'0'..=b'7' => {
-                        let digits = text.get(index - 1..index + 2)?;
-                        if !digits.iter().all(|digit| (b'0'..=b'7').contains(digit)) {
-                            return None;
-                        }
-                        let value = digits
-                            .iter()
-                            .fold(0u32, |value, digit| value * 8 + u32::from(digit - b'0'));
-                        out.push(u8::try_from(value).ok()?);
-                        index += 2;
-                    }
-                    other => out.push(other),
-                }
-            }
-            byte => {
-                out.push(byte);
-                index += 1;
-            }
-        }
-    }
-    None
-}
-
-fn strip_side(path: Vec<u8>, prefix: &[u8]) -> Option<String> {
-    let rest = path.strip_prefix(prefix)?;
-    (!rest.is_empty()).then(|| String::from_utf8_lossy(rest).into_owned())
-}
-
-/// The paths one block of a patch is about: from its extended header
-/// (`rename from/to`, `copy from/to`, `---`/`+++`) before any hunk, else from
-/// the `diff --git a/P b/P` line.
-fn block_paths(header: &[u8], block: &[u8]) -> Result<BTreeSet<String>, String> {
-    let unreadable = || "a capture patch header is unreadable".to_string();
-    let mut paths = BTreeSet::new();
-    for line in block.split(|byte| *byte == b'\n').skip(1) {
-        if line.starts_with(b"@@")
-            || line.starts_with(b"GIT binary patch")
-            || line.starts_with(b"Binary files ")
-        {
-            break;
-        }
-        for (prefix, side) in [
-            (&b"rename from "[..], &b""[..]),
-            (b"rename to ", b""),
-            (b"copy from ", b""),
-            (b"copy to ", b""),
-            (b"--- ", b"a/"),
-            (b"+++ ", b"b/"),
-        ] {
-            let Some(rest) = line.strip_prefix(prefix) else {
-                continue;
-            };
-            if rest == b"/dev/null" {
-                continue;
-            }
-            let rest = rest.strip_suffix(b"\t").unwrap_or(rest);
-            let (path, _) = unquote_path(rest).ok_or_else(unreadable)?;
-            let path = if side.is_empty() {
-                (!path.is_empty()).then(|| String::from_utf8_lossy(&path).into_owned())
-            } else {
-                strip_side(path, side)
-            };
-            paths.insert(path.ok_or_else(unreadable)?);
-        }
-    }
-    if !paths.is_empty() {
-        return Ok(paths);
-    }
-    let rest = header.strip_prefix(b"diff --git ").ok_or_else(unreadable)?;
-    if rest.first() == Some(&b'"') {
-        let (first, after) = unquote_path(rest).ok_or_else(unreadable)?;
-        let after = after.strip_prefix(b" ").ok_or_else(unreadable)?;
-        let (second, _) = unquote_path(after).ok_or_else(unreadable)?;
-        paths.insert(strip_side(first, b"a/").ok_or_else(unreadable)?);
-        paths.insert(strip_side(second, b"b/").ok_or_else(unreadable)?);
-        return Ok(paths);
-    }
-    // `a/P b/P`: the two halves name the same path.
-    if rest.len() >= 7 && (rest.len() - 5) % 2 == 0 && rest.starts_with(b"a/") {
-        let length = (rest.len() - 5) / 2;
-        let first = &rest[2..2 + length];
-        let middle = &rest[2 + length..5 + length];
-        let second = &rest[5 + length..];
-        if middle == b" b/" && first == second {
-            paths.insert(String::from_utf8_lossy(first).into_owned());
-            return Ok(paths);
-        }
-    }
-    Err(unreadable())
-}
-
-/// A path inside Git's own directory at any depth.
-fn is_git_internal(path: &str) -> bool {
-    path.split('/')
-        .any(|segment| segment.eq_ignore_ascii_case(".git"))
-}
+use crate::run_attribution::is_git_internal;
+pub use crate::run_attribution::RunAttribution;
+#[cfg(test)]
+pub(crate) use crate::run_attribution::{
+    attribute_activation, ActivationChanges, CaptureFacts, CapturePhase,
+};
 
 /// A repository-relative path Keep can name to Git.
 fn is_plain_path(path: &str) -> bool {
@@ -1348,6 +1187,8 @@ pub struct KeepJob<'a> {
     pub outside: &'a RunAttribution,
     /// The latest recorded Keep of this run that created its branch.
     pub previous: Option<&'a KeepResult>,
+    /// The run's signed receipt, when it has one ([`load_receipt`]).
+    pub receipt: Option<&'a OpenedReceipt>,
     pub tools: &'a HostTools,
 }
 
@@ -1874,6 +1715,10 @@ async fn build_commit(
             listed(&dirty)
         )));
     }
+    // With a receipt, each path's content must be the one it covers.
+    if let Some(receipt) = job.receipt {
+        check_against_receipt(receipt, &repo.root, &run_paths)?;
+    }
     // The run's checks and review judged the files as the run left them. A
     // run path whose file changed after the run ended (by its status-change
     // time, which no process can set back) holds work they never saw, such
@@ -1894,6 +1739,7 @@ async fn build_commit(
             if later.len() == 1 { "it" } else { "them" },
         )));
     }
+
     let not_committed: Vec<String> = changed
         .iter()
         .filter(|path| !attributed.contains(*path) && !was_dirty(path, &job.manifest.dirty_paths))
@@ -1965,6 +1811,7 @@ async fn build_commit(
         ));
     }
     let message = format!("Axocoatl run {}", job.outcome.run_id);
+    let trailers = commit_trailers(&job.outcome.run_id, job.receipt);
     let mut command = protected.command(
         tools,
         &[
@@ -1976,6 +1823,8 @@ async fn build_commit(
             title,
             "-m",
             &message,
+            "-m",
+            &trailers,
             &tree,
         ],
     );
@@ -2187,6 +2036,7 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
                     "An earlier Keep of this run already created {}; nothing new was created.",
                     previous.branch
                 )],
+                receipt: job.receipt.map(OpenedReceipt::payload_digest),
             });
         }
     }
@@ -2213,6 +2063,11 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
     };
 
     let mut warnings = job.attribution.notes.clone();
+    if job.receipt.is_none() {
+        warnings.push(
+            "The run has no signed receipt, so the commit and pull request carry none.".into(),
+        );
+    }
     let (commit, paths, not_committed) = match &reused {
         Some(commit) => (
             commit.clone(),
@@ -2239,6 +2094,7 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
         base: None,
         not_committed,
         warnings,
+        receipt: job.receipt.map(OpenedReceipt::payload_digest),
     };
     let Some(remote) = remote else {
         return Ok(response);
@@ -2282,7 +2138,8 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
     response.pushed_to = Some(format!("{}/{branch}", remote.name));
     response.base = Some(remote.default_branch.clone());
 
-    let body = pr_body(job.outcome).map_err(|error| after_branch(message_of(error)))?;
+    let body =
+        pr_body(job.outcome, job.receipt).map_err(|error| after_branch(message_of(error)))?;
     let body_file = protected
         .write("pull-request-body.md", body.as_bytes())
         .map_err(after_branch)?;

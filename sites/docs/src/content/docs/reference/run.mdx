@@ -1,17 +1,18 @@
 ---
 title: axocoatl run
-description: Run a loadout headless against the running daemon. Flags, how it finds the daemon, its output, exit codes, the JUnit file and the record bundle.
+description: Run a loadout headless against the running daemon. Flags, how it finds the daemon, its output, exit codes, the JUnit file, the record bundle and the signed receipt.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 `axocoatl run` runs one [loadout](/configure/loadouts/) against a repository through the
-running daemon, prints progress and a summary, writes JUnit and a record bundle when asked,
-and exits with a code that says how the run ended.
+running daemon, prints progress and a summary, writes JUnit, a record bundle and the run's
+[signed receipt](/workbench/receipts/) when asked, and exits with a code that says how the
+run ended.
 
 ```text
 axocoatl run <LOADOUT> (--task <TEXT> | --task-file <FILE|->)
-             [--repo <DIR>] [--junit <FILE>] [--record <FILE>]
+             [--repo <DIR>] [--junit <FILE>] [--record <FILE>] [--receipt <FILE>]
              [--model <ROLE>=<PROVIDER:MODEL>]... [--param <NAME>=<VALUE>]...
              [--check <CMD>] [--setup <CMD>] [--keep none|branch|pr]
              [--json] [--url <DAEMON URL>] [-c, --config <CONFIG>]
@@ -25,6 +26,7 @@ axocoatl run <LOADOUT> (--task <TEXT> | --task-file <FILE|->)
 | `--repo <DIR>` | The repository; default the current directory. The daemon resolves it to a canonical path and uses the Workspace for it, creating one if needed. |
 | `--junit <FILE>` | Write the [JUnit file](#junit) of checks and findings. |
 | `--record <FILE>` | Write the [record bundle](#record-bundle). |
+| `--receipt <FILE>` | Write the run's [signed receipt](/workbench/receipts/), a DSSE envelope. |
 | `--model <ROLE>=<PROVIDER:MODEL>` | Sets the parameter `<ROLE>_model`, such as `--model writer=ollama:qwen3-coder:30b`. Repeatable. A parameter with a default needs none: `fix-claude-code` and `fix-codex` need only `--model reviewer=…`. |
 | `--param <NAME>=<VALUE>` | Sets a loadout parameter, such as `--param credential=codex-chatgpt` for `fix-codex`. Repeatable. An unknown name is a usage error. |
 | `--check <CMD>` | The command a `detected: true` check runs, as `sh -c`, in place of the repository's detected check command. Needed when the repository has none. |
@@ -98,21 +100,27 @@ on the repository is admitted. The Outcome keeps each turn as it was observed.
    and the record id. With `--json`, standard output holds only the Outcome, one JSON
    document, and everything else goes to standard error, `Kept:` and `Pull request:`
    from Keep included. That Outcome is the one the run ended with; what Keep did is in
-   the record's `keep` event and in `GET /api/runs/{run_id}`.
+   the record's `keep` event and in `GET /api/runs/{run_id}`. After Keep, `Receipt:`
+   names the receipt the commit's `Axocoatl-Receipt` trailer carries.
 
-`--junit` and `--record` are written even when the run fails, each to a temporary file
-that is then renamed, so a reader never sees half a file. A run that never started (the
+`--junit`, `--record` and `--receipt` are written even when the run fails, each to a
+temporary file that is then renamed, so a reader never sees half a file; standard error
+says where, and for the receipt which key signed it, how many files it covers and where
+their digests come from. A run that never started (the
 daemon refused it, as for a busy Workspace or a missing parameter, could not be reached,
 or the flags were refused) has no run id: `--junit` still writes a file whose `run`
 suite's `verdict` case is an `<error>` of type `busy` (exit code 7), `usage` (3) or
-`error` (any other code), with the reason and `axocoatl.exit_code`, and `--record` writes
-nothing, since there is no run to record; standard error says so. With `--keep`, Keep runs first,
+`error` (any other code), with the reason and `axocoatl.exit_code`, and `--record` and
+`--receipt` write nothing, since there is no run to record or sign; standard error says
+so. A finished run whose receipt could not be signed has the warning
+`receipt_unavailable`; `--receipt` then writes nothing, says why, and the exit code is
+the run's. With `--keep`, Keep runs first,
 so the `--record` file holds its `keep` event like `GET /api/runs/{run_id}/record`. When
 the run passed but one of the files could not be written, `axocoatl run` exits with that
 error's code instead of 0.
 
 **Ctrl-C** asks the daemon to stop the run, waits up to 30 seconds for its Outcome,
-writes `--junit` and `--record`, and exits with code 6.
+writes `--junit`, `--record` and `--receipt`, and exits with code 6.
 
 ## Exit codes
 
@@ -218,7 +226,8 @@ one `truncated` case.
 
 ## Record bundle
 
-`--record` writes the run's whole record as one JSON Lines file
+`--record` writes the run's whole record as one JSON Lines file, schema
+`axocoatl.record-bundle/2`
 (`application/vnd.axocoatl.record+jsonl`; a name such as
 `run-….axorecord.jsonl`). The same file, byte for byte, is
 [`GET /api/runs/{run_id}/record`](/reference/http-api/#loadouts-and-runs) and
@@ -230,7 +239,7 @@ changes its `session` section. The bundle of a run that has not finished is a sn
 of a record still growing and carries the time it was read.
 
 ```text
-{"schema":"axocoatl.record-bundle/1","run_id":"run-…","session_id":"ses-…","created_at_ms":…,"axocoatl_version":"1.3.0"}
+{"schema":"axocoatl.record-bundle/2","run_id":"run-…","session_id":"ses-…","created_at_ms":…,"axocoatl_version":"1.4.0"}
 {"section":"manifest","data":{…}}        the run's manifest: loadout, parameters, the stored credential each external writer sent, task, repository HEAD, dirty paths
 {"section":"loadout","data":{"text":"…exact YAML…","digest":"…"}}
 {"section":"outcome","data":{…}}         the Outcome
@@ -240,6 +249,7 @@ of a record still growing and carries the time it was read.
 {"section":"history","data":[…]}         the Session's History, versioned
 {"section":"network","data":{…}}         one per network-record event, all of them
 {"section":"run_event","data":{"seq":1,"event":{…}}}   one per run event
+{"section":"receipt","data":{…}}         the run's signed receipt, its DSSE envelope (absent without one)
 {"section":"end","lines":N,"sha256":"…"}
 ```
 
@@ -256,14 +266,19 @@ axocoatl record verify run.axorecord.jsonl
 ```
 
 It prints the run id, the sections and their line counts, and exits 0, or 2 when the
-order, the count or the digest does not match. The digest shows that the file was not
-changed after it was written; it is not a signature. The bundle holds only recorded
+order, the count or the digest does not match. It also accepts the bundles of Axocoatl
+1.3 (schema `axocoatl.record-bundle/1`, the same sections without `receipt`). The digest
+shows that the file was not changed after it was written; it is not a signature: anyone
+who edits the file can compute it again. The `receipt` section is signed:
+`axocoatl receipt verify <receipt> --record <bundle> --keys <trusted keys>` checks that the
+bundle verifies and carries that receipt for its run. The bundle holds only recorded
 evidence: routes never record a credential's value, so none is in the file.
 
 ## Where runs are kept
 
 Each run is kept under `loadout-runs/<run id>/` in the data root: `manifest.json`,
-written once when the run is admitted; `events.jsonl`, appended as the run proceeds; and
+written once when the run is admitted; `events.jsonl`, appended as the run proceeds;
+`receipt.dsse.json` (`0600`), the signed receipt, written just before the Outcome; and
 `outcome.json`, written once when it ends. Deleting the Session does not delete them.
 If the daemon restarts during a run, the run ends as failed with the reason "the daemon
 restarted during the run; it was not resumed". A repeated `request_id` returns the same

@@ -2220,7 +2220,16 @@ async fn a_rejected_claude_code_credential_is_named_with_how_to_store_it_again()
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the claude-code recipe image"]
 async fn the_builtin_fix_claude_code_runs_the_pinned_claude_code() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run(AgentRuntime::ClaudeCode, true, false, false, false, None, true).await;
+        pinned_run(
+            AgentRuntime::ClaudeCode,
+            true,
+            false,
+            false,
+            false,
+            None,
+            true,
+        )
+        .await;
         return;
     }
     run_child(

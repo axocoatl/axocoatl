@@ -8,6 +8,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Signed receipts of loadout runs.** When a run finishes, whatever its verdict, the
+  daemon signs a receipt: an in-toto Statement v1 (predicate type
+  `https://axocoatl.ai/receipt/v1`) in a DSSE envelope, signed with Ed25519 over DSSE's
+  pre-authentication encoding of the statement's exact bytes. Its subjects are the files
+  the run changed that exist after it, each with the SHA-256 of its content (of its
+  target, for a symbolic link). Its predicate holds the run (ids, times, the signing
+  Axocoatl's version, the SHA-256 of the task), the repository (base commit, paths dirty
+  before the run, the `origin` remote as `https://host/path` without credentials), the
+  loadout (id, version, kind, digest), each Agent (role, runtime, pinned program version,
+  provider and model, the name of an external writer's credential), the sandbox (backend,
+  network, `hardened` workload, and the last network policy the Session's record holds
+  for each scope: revision, digest and the rendered allowlist hosts and routes), the
+  network summary, each required check (state, exit code, timeout, command and the tree it
+  ran on), the review (model, verdict, rounds, number of findings), each adjudication's
+  finding id and decision, the verdict, exit code, attention reasons, what was not
+  covered, warning codes, usage, the files and the signer's public key. `files.source`
+  says where the digests come from: `judged_capture` (the repository capture of the tree
+  the required checks ran on), `after_capture` (the last writer's After capture, when no
+  check judged a tree), else `workspace_at_finish` (read on the host when the run
+  finished, without following symbolic links). Every repository capture now records,
+  whatever the repository's size, the manifest line (mode, kind, SHA-256) of each path
+  that differs from `HEAD` in the tree it captured, besides its whole manifest up to
+  8 KiB; the record is bounded by the changed paths (up to 10,000, while the capture's
+  output with its patch stays within 768 KiB), and only a capture past that bound, or one
+  a check group admitted with 1.3's capture command makes, leaves the source
+  `workspace_at_finish`. A path changed back to what it is in `HEAD` is read when the
+  run finishes and named in `files.read_at_finish`. Removed paths, symbolic links, and
+  what cannot be attributed (a turn not in the Session's history, Git's own files, a
+  directory) are listed apart, the last making `files.complete` false. The receipt is written as
+  `loadout-runs/<run id>/receipt.dsse.json` (`0600`) just before the Outcome, so a
+  finished run's receipt is settled; runs that end at admission, after a driver error or
+  at a daemon restart are signed too. A receipt that cannot be signed adds the warning
+  `receipt_unavailable` with the reason and never changes the verdict or the exit code.
+- **A receipt signing key per data root.** One Ed25519 key, made with `ring` the first
+  time it is needed and stored with the secret store as `receipt-signing-key` (`0600`,
+  replaced atomically under the secrets lock), as a tagged one-line JSON value holding the
+  PKCS#8 v2 document. Only the public key is ever shown. The egress broker refuses to send
+  that value, and any credential named `receipt-signing-key`, whatever name or file a
+  route uses for it, and the secret store never offers it as a route's credential.
+- **`axocoatl receipt show|verify|key`.** `show FILE|-` prints what a receipt says, says
+  that it is not verified, and with `--json` prints the statement. `verify FILE|-` checks
+  the signature against `--key LINE` and `--keys FILE` (one line per key, `#` comments),
+  then with `--repo DIR` each covered file's SHA-256 and each removed path in a checkout
+  (without following symbolic links), and with `--record BUNDLE` that the bundle verifies
+  and carries this receipt for its run; `--json` prints one document. Exit codes: 0 valid
+  and trusted (and matching), 1 malformed or a signature that does not verify, 2 a valid
+  signature by a key not given as trusted (also with none given), 3 usage, 4 a file or the
+  record that does not match. Both read a DSSE envelope or text holding the pull request
+  block, from a file or standard input, and need no daemon, Podman or network. `key`
+  prints this data root's public key as one trusted-keys line, `ed25519 <base64>
+  axocoatl@<host> <first 16 hex of the key id>`, making the key when there is none;
+  `--rotate` replaces it, and receipts the old key signed still verify with its line.
+- **`axocoatl run --receipt FILE`** writes the run's receipt when it finishes, whatever the
+  verdict, atomically like `--junit` and `--record`, and says which key signed it, how
+  many files it covers and their source. A run that was never admitted has nothing to
+  sign, and a run without a receipt keeps its exit code; both are said on standard error.
+- **`GET /api/runs/{run_id}/receipt` and `GET /api/receipts/key`.** The first serves the
+  envelope exactly as written (`application/vnd.dsse.envelope.v1+json`; 404 with the
+  reason before the run finishes or when it has none), the second the public key, its key
+  id and its trusted-keys line, making the key when there is none. A run's status gains
+  `receipt`: the signing key's id, the files covered and removed, their source, whether
+  every changed path is covered, and the statement's SHA-256.
+- **Record bundles of schema `axocoatl.record-bundle/2`**, whose last section, `receipt`,
+  is the run's receipt. `axocoatl record verify` accepts `/2` and 1.3's `/1`.
+- **Keep as PR commits only what the receipt covers.** With a receipt, each path Keep is
+  about to commit must have the content the receipt gives it and each removed path must
+  be absent; a path edited after the checks judged it, or one the receipt does not cover,
+  is refused, naming it, and a receipt that cannot be read or is another run's is refused
+  too. The commit gains the trailers `Axocoatl-Run: <run id>` and `Axocoatl-Receipt:
+  sha256:<statement SHA-256>`. The pull request body gains a **Receipt** section before
+  the record (signer key, verdict, checks, review, writer, files covered, how to verify)
+  and ends with the envelope, base64, in an `<!-- axocoatl-receipt:v1 … -->` block that the
+  body's length cut never reaches. A run without a receipt is kept as before, and the body
+  and Keep's warnings say it carries none. Keep's response names the receipt.
+- **The receipt in the app.** The Run outcome panel shows the key that signed the run's
+  receipt, the files it covers and their source, the statement's SHA-256 and **Download
+  receipt**, or why the run has none. **Settings → Loadouts → Receipts → Signing key**
+  shows the public key line with a Copy button and what a receipt does and does not
+  prove.
+- **The `verify-receipt` GitHub Action (verified locally; its first run on a real pull
+  request is pending).** `axocoatl/axocoatl/actions/verify-receipt` installs the pinned
+  Axocoatl release for a Linux x86_64 or ARM64 runner, checked against the release's
+  `.sha256` file and an optional `sha256` input; reads the receipt from the pull
+  request's description; reads the trusted keys from the base commit's
+  `.axocoatl/receipt-keys` (`keys-file`), never from the head, so a pull request cannot
+  add its own key; runs `axocoatl receipt verify` on the checked-out head; and requires
+  the receipt to cover every file the pull request changes (`allow-uncovered-files: true`
+  turns that into warnings). It fails a pull request without a receipt unless
+  `require-receipt` is `false`, and a run that did not pass unless `require-pass` is
+  `false`, with an annotation naming what failed, and writes a job summary.
+  `scripts/test-verify-receipt-action.sh`, part of the native gate, runs it against a
+  stand-in for GitHub's API and real signed receipts; `scripts/run-actionlint.sh` checks
+  the action's scripts with the pinned ShellCheck and the workflow contract checks its
+  steps.
 - **Built-in loadouts `fix-claude-code` and `fix-codex`: Claude Code or Codex through
   Axocoatl with one command.** After `axocoatl recipe build claude-code` (or `codex`)
   and `axocoatl connect claude-code` (or `connect codex`, or `connect codex --api-key`),
@@ -56,6 +150,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such as `my-fix-claude-code`) or use the built-in (remove the file). The 1.3 external
   agents documentation showed a `fix-claude-code` loadout to write yourself; that id is
   now built in, and the messages say so.
+
+### Fixed
+- **A run's Outcome names the tree each check ran on.** `checks[].candidate_sha256` was
+  always empty: a check's own control-plane view names no tree. Each check that ran now
+  names the tree the readiness review that judged it records.
+- **A command line `axocoatl run`, `loadouts`, `record` or `receipt` refuses exits 3**,
+  the usage code they document, not clap's 2, which each of them uses for another
+  outcome (needs attention, a record that does not verify, an untrusted signer).
 
 ## [1.3.2] - 2026-10-14
 

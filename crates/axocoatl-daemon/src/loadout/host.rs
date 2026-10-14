@@ -152,8 +152,18 @@ pub trait RunHost: Send + Sync {
         false
     }
 
+    /// Sign the finished run's Outcome and write its receipt
+    /// (`receipt.dsse.json`) before the Outcome itself is written, so a run
+    /// that has finished has its receipt settled. `Err` says why there is
+    /// none: the driver records it as the warning `receipt_unavailable`,
+    /// which never changes the verdict or the exit code. Daemon:
+    /// `seal_loadout_run` (receipts). A host without receipts signs nothing.
+    async fn seal(&self, _run_id: &str, _outcome: &RunOutcome) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Write the run's Outcome once. Daemon: `RunRecordStore::finish`
-    /// (core). The run driver records the `Ended` event after it.
+    /// (core). The run driver records the `Ended` event before it.
     async fn finish(&self, _run_id: &str, _outcome: &RunOutcome) -> Result<(), RunError> {
         Ok(())
     }

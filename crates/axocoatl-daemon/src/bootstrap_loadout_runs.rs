@@ -654,6 +654,14 @@ pub fn observation_from_control_plane(
             generations,
         });
     }
+    // The tree the required checks ran on: the readiness review that judged
+    // them records it (each check's own view names none). A check that ran
+    // ran on that tree.
+    let judged = view
+        .required_check_readiness
+        .as_ref()
+        .filter(|readiness| matches!(readiness.state.as_str(), "passed" | "failed"))
+        .and_then(|readiness| readiness.candidate_sha256.clone());
     let checks_out: Vec<CheckResult> = view
         .required_checks
         .iter()
@@ -676,7 +684,14 @@ pub fn observation_from_control_plane(
                 exit_code: check.exit_code,
                 stdout_tail: tail(&check.stdout, CHECK_TAIL_BYTES),
                 stderr_tail: tail(&check.stderr, CHECK_TAIL_BYTES),
-                candidate_sha256: check.candidate_sha256.clone(),
+                candidate_sha256: check.candidate_sha256.clone().or_else(|| {
+                    matches!(
+                        check_state(check),
+                        CheckState::Passed | CheckState::Failed | CheckState::TimedOut
+                    )
+                    .then(|| judged.clone())
+                    .flatten()
+                }),
                 report: None,
                 reason: check.reason.clone(),
             }
@@ -996,6 +1011,7 @@ pub enum BundleCursor {
     History,
     Network { after: Option<u64> },
     RunEvents { after: Option<u64> },
+    Receipt,
     Done,
 }
 
@@ -1482,6 +1498,16 @@ impl AxocoatlDaemon {
             };
             let mut outcome = ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
             outcome.notes = resolved.notes.clone();
+            if let Some(warning) = self.seal_or_warn(&run_id, &outcome).await {
+                let _ = store.append(
+                    &run_id,
+                    &RunEvent::Warning {
+                        at_ms: now_ms(),
+                        warning: warning.clone(),
+                    },
+                );
+                outcome.warnings.push(warning);
+            }
             let _ = store.append(
                 &run_id,
                 &RunEvent::Ended {
@@ -1956,6 +1982,7 @@ impl AxocoatlDaemon {
                 .iter()
                 .rev()
                 .find_map(|(_, event)| crate::keep_pr::keep_result_of(event)),
+            receipt: self.loadout_run_receipt_view(run_id),
         })
     }
 
@@ -2155,7 +2182,7 @@ impl AxocoatlDaemon {
                     .events(run_id, after, RUN_EVENT_PAGE)
                     .map_err(record_error)?;
                 if events.is_empty() {
-                    return Ok((Vec::new(), BundleCursor::Done));
+                    return Ok((Vec::new(), BundleCursor::Receipt));
                 }
                 let next = events.last().map(|(seq, _)| *seq);
                 let sections = events
@@ -2168,6 +2195,23 @@ impl AxocoatlDaemon {
                     })
                     .collect();
                 Ok((sections, BundleCursor::RunEvents { after: next }))
+            }
+            // The signed receipt of a finished run, as written: its
+            // envelope as JSON. A run without one has no receipt line.
+            BundleCursor::Receipt => {
+                let receipt = store.receipt(run_id).map_err(record_error)?;
+                let sections = match receipt {
+                    Some(bytes) => vec![(
+                        axocoatl_session::record_bundle::RECEIPT_SECTION,
+                        serde_json::from_slice(&bytes).map_err(|error| {
+                            DaemonError::Session(format!(
+                                "the run's receipt is unreadable: {error}"
+                            ))
+                        })?,
+                    )],
+                    None => Vec::new(),
+                };
+                Ok((sections, BundleCursor::Done))
             }
             BundleCursor::Done => Ok((Vec::new(), BundleCursor::Done)),
         }
@@ -2541,11 +2585,21 @@ impl AxocoatlDaemon {
                     let Ok(manifest) = store.manifest(&run_id) else {
                         continue;
                     };
-                    let outcome = ended_outcome(
+                    let mut outcome = ended_outcome(
                         &manifest,
                         "the daemon restarted during the run; it was not resumed".into(),
                         Vec::new(),
                     );
+                    if let Some(warning) = self.seal_or_warn(&run_id, &outcome).await {
+                        let _ = store.append(
+                            &run_id,
+                            &RunEvent::Warning {
+                                at_ms: now_ms(),
+                                warning: warning.clone(),
+                            },
+                        );
+                        outcome.warnings.push(warning);
+                    }
                     let _ = store.append(
                         &run_id,
                         &RunEvent::Ended {
@@ -2929,6 +2983,44 @@ mod tests {
             decisions: EvidenceValue::NotRecorded,
             warnings: Vec::new(),
         }
+    }
+
+    /// Each check that ran names the tree its readiness review judged (a
+    /// check's own view names none), which the run's receipt looks up; a
+    /// check that did not run names none.
+    #[test]
+    fn a_check_that_ran_names_the_tree_its_readiness_judged() {
+        use crate::session_control_plane::EvidenceValue;
+        let mut view = projection(
+            "completed",
+            "accepted",
+            EvidenceValue::NotRecorded,
+            EvidenceValue::NotRecorded,
+        );
+        let mut ran = axocoatl_session::turn_checks::TurnCheckView::pending(vec!["sh".into()]);
+        ran.state = "passed".into();
+        ran.exit_code = Some(0);
+        let pending = axocoatl_session::turn_checks::TurnCheckView::pending(vec!["true".into()]);
+        view.required_checks = vec![ran, pending];
+        view.required_check_readiness = Some(axocoatl_session::turn_checks::TurnCheckReadiness {
+            state: "passed".into(),
+            reason: "Every check passed on the current tree and left it unchanged.".into(),
+            candidate_sha256: Some("e".repeat(64)),
+        });
+        let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert_eq!(
+            observed.checks[0].candidate_sha256.as_deref(),
+            Some("e".repeat(64).as_str())
+        );
+        assert_eq!(observed.checks[1].candidate_sha256, None);
+        // A readiness that has not judged the current result names no tree.
+        view.required_check_readiness = Some(axocoatl_session::turn_checks::TurnCheckReadiness {
+            state: "not_run".into(),
+            reason: String::new(),
+            candidate_sha256: Some("e".repeat(64)),
+        });
+        let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert_eq!(observed.checks[0].candidate_sha256, None);
     }
 
     /// An activation that failed with an empty recorded reason ends with

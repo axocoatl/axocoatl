@@ -712,6 +712,7 @@ dependencies = [
  "base64 0.22.1",
  "memchr",
  "quick-xml",
+ "ring",
  "serde",
  "serde_json",
  "sha2",

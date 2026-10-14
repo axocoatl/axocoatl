@@ -2,8 +2,8 @@
 use super::*;
 use axocoatl_session::execution_content::{
     is_capture_baseline, ActivationRepositorySnapshot, ActivationRepositorySnapshotView,
-    RepositoryComparison, RepositorySnapshotPhase, MAX_COMPARED_PATH_BYTES,
-    REPOSITORY_CAPTURE_SCRIPT,
+    RepositoryComparison, RepositorySnapshotPhase, MAX_CHANGED_MANIFEST_BYTES,
+    MAX_COMPARED_PATH_BYTES, REPOSITORY_CAPTURE_SCRIPT,
 };
 use base64::Engine as _;
 
@@ -1187,7 +1187,14 @@ pub(super) fn parse_capture(
         CaptureMode::Keep => 2,
         CaptureMode::Compare { .. } => 3,
     };
-    if field("format")? != "1" || fields.len() != 8 + judgement_fields {
+    // Format 2 adds the lines of the paths that differ from HEAD; format 1
+    // is the capture a check group admitted before it keeps running.
+    let base_fields = match field("format")? {
+        "1" => 8,
+        "2" => 10,
+        _ => return Err(error("Unsupported repository capture")),
+    };
+    if fields.len() != base_fields + judgement_fields {
         return Err(error("Unsupported repository capture"));
     }
     let head = field("head")?;
@@ -1242,6 +1249,10 @@ pub(super) fn parse_capture(
     {
         return Err(error("Captured patch digest differs from its exact bytes"));
     }
+    if base_fields == 10 {
+        observation.changed_manifest =
+            changed_manifest(field("changed_complete")?, field("changed_b64")?)?;
+    }
     if matches!(mode, CaptureMode::Observe) {
         return Ok(());
     }
@@ -1290,6 +1301,47 @@ pub(super) fn parse_capture(
     Ok(())
 }
 
+/// The lines of the paths that differ from HEAD a capture recorded: each
+/// `<base64 path>\t<mode>\t<kind>\t<digest>`, of a file or link with its
+/// SHA-256 or a deleted path. `None` when the capture left them out.
+fn changed_manifest(complete: &str, encoded: &str) -> Result<Option<String>> {
+    match complete {
+        "0" if encoded.is_empty() => return Ok(None),
+        "1" => {}
+        _ => return Err(error("Invalid record of the changed paths")),
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| error("Invalid record of the changed paths"))?;
+    if bytes.len() > MAX_CHANGED_MANIFEST_BYTES {
+        return Err(error("Repository capture exceeds its declared bounds"));
+    }
+    let text =
+        String::from_utf8(bytes).map_err(|_| error("Invalid record of the changed paths"))?;
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let valid = match fields.as_slice() {
+            [path, mode, kind, digest] => {
+                base64::engine::general_purpose::STANDARD
+                    .decode(path)
+                    .is_ok_and(|path| !path.is_empty())
+                    && mode.len() <= 4
+                    && mode.bytes().all(|byte| (b'0'..=b'7').contains(&byte))
+                    && match *kind {
+                        "file" | "link" => is_digest(digest),
+                        "deleted" => *digest == "missing",
+                        _ => false,
+                    }
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(error("Invalid record of the changed paths"));
+        }
+    }
+    Ok(Some(text))
+}
+
 pub(super) fn empty_observation(
     activation: &ActivationRef,
     phase: RepositorySnapshotPhase,
@@ -1316,6 +1368,7 @@ pub(super) fn empty_observation(
         judged_sha256: None,
         baseline: None,
         compared: None,
+        changed_manifest: None,
     }
 }
 
@@ -1431,6 +1484,82 @@ mod judgement_tests {
             digest('f')
         );
         assert!(parse_capture(&output(&other), &mut observation(), &compare).is_err());
+    }
+
+    /// Format 2 records the lines of the paths that differ from HEAD (or
+    /// says it left them out); format 1, which a check group admitted before
+    /// still runs, has none; a malformed line refuses the capture.
+    #[test]
+    fn the_lines_of_the_changed_paths_are_read_from_format_2() {
+        let encode = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
+        let lines = format!(
+            "{}\t644\tfile\t{}\n{}\t0\tdeleted\tmissing\n{}\t777\tlink\t{}\n",
+            encode("lib/a.rs"),
+            digest('1'),
+            encode("old.rs"),
+            encode("docs/link"),
+            digest('2')
+        );
+        let format2 = |complete: &str, encoded: &str| {
+            let mut value = output(&format!(
+                "changed_complete={complete}
+changed_b64={encoded}
+"
+            ));
+            let stdout = value["stdout"]
+                .as_str()
+                .unwrap()
+                .replacen("format=1", "format=2", 1);
+            value["stdout"] = serde_json::Value::String(stdout);
+            value
+        };
+        let mut recorded = observation();
+        parse_capture(
+            &format2("1", &encode(&lines)),
+            &mut recorded,
+            &CaptureMode::Observe,
+        )
+        .unwrap();
+        assert_eq!(recorded.changed_manifest.as_deref(), Some(lines.as_str()));
+        let mut left_out = observation();
+        parse_capture(&format2("0", ""), &mut left_out, &CaptureMode::Observe).unwrap();
+        assert_eq!(left_out.changed_manifest, None);
+        let mut earlier = observation();
+        parse_capture(&output(""), &mut earlier, &CaptureMode::Observe).unwrap();
+        assert_eq!(earlier.changed_manifest, None);
+        for bad in [
+            format2("0", &encode(&lines)),
+            format2("2", ""),
+            format2("1", &encode("lib/a.rs\t644\tfile\tabc\n")),
+            format2(
+                "1",
+                &encode(&format!("{}\t644\tfile\tnot-hex\n", encode("a"))),
+            ),
+            format2(
+                "1",
+                &encode(&format!("{}\t0\tdeleted\t{}\n", encode("a"), digest('3'))),
+            ),
+            format2("1", "!!"),
+            // Format 2 without its fields, format 1 with them.
+            {
+                let mut value = output("");
+                let stdout = value["stdout"]
+                    .as_str()
+                    .unwrap()
+                    .replacen("format=1", "format=2", 1);
+                value["stdout"] = serde_json::Value::String(stdout);
+                value
+            },
+            output(&format!(
+                "changed_complete=1\nchanged_b64={}\n",
+                encode(&lines)
+            )),
+        ] {
+            assert!(
+                parse_capture(&bad, &mut observation(), &CaptureMode::Observe).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     fn view(content: ActivationRepositorySnapshot) -> ActivationRepositorySnapshotView {

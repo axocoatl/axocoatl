@@ -7,7 +7,14 @@
 //! lines. `axocoatl record verify <file>` checks both. Sections, in order:
 //! `manifest`, `loadout`, `outcome`, `session`, `team`, `turn` (one per turn,
 //! the control-plane projection), `history` (the Session export), `network`
-//! (one per network-record event), `run_event` (one per run event).
+//! (one per network-record event), `run_event` (one per run event), and, from
+//! schema `axocoatl.record-bundle/2` on, `receipt` (the run's signed receipt,
+//! its DSSE envelope as JSON; absent for a run without one). Bundles of
+//! schema `/1` (Axocoatl 1.3) still verify.
+//!
+//! The end line's digest proves the file is intact, not who wrote it: anyone
+//! who edits the file can recompute it. The `receipt` section is what a
+//! signature covers (`crate::receipt`).
 //!
 //! Owner: workstream `core`.
 
@@ -16,15 +23,17 @@ use std::io::{BufRead, Read};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// `schema` of the header line.
-pub const RECORD_BUNDLE_SCHEMA: &str = "axocoatl.record-bundle/1";
+/// `schema` of the header line a bundle is written with.
+pub const RECORD_BUNDLE_SCHEMA: &str = "axocoatl.record-bundle/2";
+/// The schema of Axocoatl 1.3's bundles: the sections before `receipt`.
+pub const RECORD_BUNDLE_SCHEMA_V1: &str = "axocoatl.record-bundle/1";
 /// File extension written by `axocoatl run --record` when none is given.
 pub const RECORD_BUNDLE_EXTENSION: &str = "axorecord.jsonl";
 /// Media type of `GET /api/runs/{run_id}/record`.
 pub const RECORD_BUNDLE_MEDIA_TYPE: &str = "application/vnd.axocoatl.record+jsonl";
 
 /// Section names, in the order they appear.
-pub const BUNDLE_SECTIONS: [&str; 9] = [
+pub const BUNDLE_SECTIONS: [&str; 10] = [
     "manifest",
     "loadout",
     "outcome",
@@ -34,7 +43,20 @@ pub const BUNDLE_SECTIONS: [&str; 9] = [
     "history",
     "network",
     "run_event",
+    RECEIPT_SECTION,
 ];
+
+/// The last section of a `/2` bundle: the run's receipt, at most once.
+pub const RECEIPT_SECTION: &str = "receipt";
+
+/// How many of [`BUNDLE_SECTIONS`] a bundle of `schema` may hold.
+fn sections_of(schema: &str) -> Option<usize> {
+    match schema {
+        RECORD_BUNDLE_SCHEMA => Some(BUNDLE_SECTIONS.len()),
+        RECORD_BUNDLE_SCHEMA_V1 => Some(BUNDLE_SECTIONS.len() - 1),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundleHeader {
@@ -68,6 +90,8 @@ pub struct BundleSummary {
     pub header: BundleHeader,
     pub lines: u64,
     pub sections: Vec<(String, u64)>,
+    /// The `receipt` section's data, when the bundle has one.
+    pub receipt: Option<serde_json::Value>,
 }
 
 /// Longest line `verify_bundle` reads; the Session export is the largest
@@ -86,8 +110,10 @@ pub enum BundleError {
     Io(#[from] std::io::Error),
 }
 
-fn section_index(section: &str) -> Option<usize> {
-    BUNDLE_SECTIONS.iter().position(|name| *name == section)
+fn section_index(section: &str, count: usize) -> Option<usize> {
+    BUNDLE_SECTIONS[..count]
+        .iter()
+        .position(|name| *name == section)
 }
 
 /// Writes a bundle line by line, hashing as it goes.
@@ -97,6 +123,7 @@ pub struct BundleWriter<W: std::io::Write> {
     lines: u64,
     /// Index in [`BUNDLE_SECTIONS`] of the last section written.
     position: usize,
+    receipt_written: bool,
 }
 
 impl<W: std::io::Write> BundleWriter<W> {
@@ -111,6 +138,7 @@ impl<W: std::io::Write> BundleWriter<W> {
             hasher: Sha256::new(),
             lines: 0,
             position: 0,
+            receipt_written: false,
         };
         let line =
             serde_json::to_vec(header).map_err(|error| BundleError::Invalid(error.to_string()))?;
@@ -134,7 +162,7 @@ impl<W: std::io::Write> BundleWriter<W> {
     /// Write one section line. Sections must come in [`BUNDLE_SECTIONS`]
     /// order; a section may repeat (`turn`, `network`, `run_event`).
     pub fn section(&mut self, section: &str, data: &serde_json::Value) -> Result<(), BundleError> {
-        let index = section_index(section)
+        let index = section_index(section, BUNDLE_SECTIONS.len())
             .ok_or_else(|| BundleError::Invalid(format!("unknown section {section:?}")))?;
         if index < self.position {
             return Err(BundleError::Invalid(format!(
@@ -142,6 +170,10 @@ impl<W: std::io::Write> BundleWriter<W> {
                 BUNDLE_SECTIONS[self.position]
             )));
         }
+        if section == RECEIPT_SECTION && self.receipt_written {
+            return Err(BundleError::Invalid("a bundle holds one receipt".into()));
+        }
+        self.receipt_written |= section == RECEIPT_SECTION;
         #[derive(Serialize)]
         struct Line<'a> {
             section: &'a str,
@@ -212,14 +244,15 @@ pub fn verify_bundle(mut input: impl std::io::BufRead) -> Result<BundleSummary, 
     }
     let header: BundleHeader = serde_json::from_slice(&buffer[..buffer.len() - 1])
         .map_err(|error| BundleError::Invalid(format!("line 1 is not a bundle header: {error}")))?;
-    if header.schema != RECORD_BUNDLE_SCHEMA {
+    let Some(known) = sections_of(&header.schema) else {
         return Err(BundleError::Invalid(format!(
-            "schema {:?} is not {RECORD_BUNDLE_SCHEMA}",
+            "schema {:?} is neither {RECORD_BUNDLE_SCHEMA} nor {RECORD_BUNDLE_SCHEMA_V1}",
             header.schema
         )));
-    }
+    };
     hasher.update(&buffer);
     let mut sections: Vec<(String, u64)> = Vec::new();
+    let mut receipt: Option<serde_json::Value> = None;
     let mut position = 0usize;
     let mut lines = 0u64;
     let mut line_number = 1u64;
@@ -273,6 +306,7 @@ pub fn verify_bundle(mut input: impl std::io::BufRead) -> Result<BundleSummary, 
                 header,
                 lines,
                 sections,
+                receipt,
             });
         }
         if !complete {
@@ -280,8 +314,11 @@ pub fn verify_bundle(mut input: impl std::io::BufRead) -> Result<BundleSummary, 
                 "line {line_number} is cut off"
             )));
         }
-        let index = section_index(&section).ok_or_else(|| {
-            BundleError::Invalid(format!("line {line_number}: unknown section {section:?}"))
+        let index = section_index(&section, known).ok_or_else(|| {
+            BundleError::Invalid(format!(
+                "line {line_number}: unknown section {section:?} for schema {}",
+                header.schema
+            ))
         })?;
         if index < position {
             return Err(BundleError::Invalid(format!(
@@ -289,10 +326,18 @@ pub fn verify_bundle(mut input: impl std::io::BufRead) -> Result<BundleSummary, 
                 BUNDLE_SECTIONS[position]
             )));
         }
-        if value.get("data").is_none() {
+        let Some(data) = value.get("data") else {
             return Err(BundleError::Invalid(format!(
                 "line {line_number}: the section has no data"
             )));
+        };
+        if section == RECEIPT_SECTION {
+            if receipt.is_some() {
+                return Err(BundleError::Invalid(format!(
+                    "line {line_number}: a second receipt"
+                )));
+            }
+            receipt = Some(data.clone());
         }
         position = index;
         lines += 1;
@@ -363,6 +408,80 @@ mod tests {
         let text = String::from_utf8(bytes).unwrap();
         let last = text.lines().last().unwrap();
         assert!(last.starts_with("{\"section\":\"end\",\"lines\":7,\"sha256\":\""));
+    }
+
+    /// Lines as given, then an end line over them: any schema.
+    fn raw_bundle(lines: &[String]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for line in lines {
+            bytes.extend_from_slice(line.as_bytes());
+            bytes.push(b'\n');
+        }
+        let end = format!(
+            "{{\"section\":\"end\",\"lines\":{},\"sha256\":\"{:x}\"}}\n",
+            lines.len() - 1,
+            Sha256::digest(&bytes)
+        );
+        bytes.extend_from_slice(end.as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_receipt_is_the_last_section_of_a_v2_bundle_and_v1_still_verifies() {
+        let envelope = serde_json::json!({
+            "payloadType": "application/vnd.in-toto+json",
+            "payload": "e30=",
+            "signatures": [{"keyid": "sha256:00", "sig": "AA=="}],
+        });
+        let mut writer = BundleWriter::new(Vec::new(), &header()).unwrap();
+        writer
+            .section("run_event", &serde_json::json!({"seq": 1, "event": {}}))
+            .unwrap();
+        writer.section(RECEIPT_SECTION, &envelope).unwrap();
+        assert!(
+            writer.section(RECEIPT_SECTION, &envelope).is_err(),
+            "one receipt"
+        );
+        assert!(writer.section("run_event", &serde_json::json!({})).is_err());
+        let bytes = writer.finish().unwrap();
+        let summary = verify_bundle(bytes.as_slice()).unwrap();
+        assert_eq!(summary.header.schema, RECORD_BUNDLE_SCHEMA);
+        assert_eq!(summary.receipt, Some(envelope.clone()));
+        assert_eq!(
+            summary.sections.last(),
+            Some(&(RECEIPT_SECTION.to_string(), 1))
+        );
+        // Without a receipt, there is no receipt line.
+        assert_eq!(verify_bundle(bundle().as_slice()).unwrap().receipt, None);
+
+        // A 1.3 bundle (schema /1) verifies; a receipt in one does not.
+        let v1 = |extra: &[&str]| {
+            let mut lines = vec![format!(
+                "{{\"schema\":\"{RECORD_BUNDLE_SCHEMA_V1}\",\"run_id\":\"run-1\",\"session_id\":\"ses-1\",\"created_at_ms\":5,\"axocoatl_version\":\"1.3.1\"}}"
+            )];
+            lines.push("{\"section\":\"manifest\",\"data\":{}}".into());
+            lines.push("{\"section\":\"run_event\",\"data\":{\"seq\":1}}".into());
+            lines.extend(extra.iter().map(|line| line.to_string()));
+            raw_bundle(&lines)
+        };
+        let summary = verify_bundle(v1(&[]).as_slice()).unwrap();
+        assert_eq!(summary.header.schema, RECORD_BUNDLE_SCHEMA_V1);
+        assert_eq!(summary.lines, 2);
+        assert_eq!(summary.receipt, None);
+        let error = verify_bundle(v1(&["{\"section\":\"receipt\",\"data\":{}}"]).as_slice())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown section \"receipt\""), "{error}");
+        // Two receipts in a /2 bundle are refused.
+        let text = String::from_utf8(bytes).unwrap();
+        let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+        lines.pop();
+        let receipt_line = lines.last().unwrap().clone();
+        lines.push(receipt_line);
+        let error = verify_bundle(raw_bundle(&lines).as_slice())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("a second receipt"), "{error}");
     }
 
     #[test]

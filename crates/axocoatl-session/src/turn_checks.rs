@@ -15,6 +15,7 @@ use crate::check_options::{
 use crate::execution_content::{
     ConditionProcessStatus, ExecutionContentError, ExecutionContentStore,
     RepositoryCheckDefinition, REPOSITORY_SNAPSHOT_COMMAND, REPOSITORY_SNAPSHOT_COMMAND_V1,
+    REPOSITORY_SNAPSHOT_COMMAND_V2,
 };
 use crate::execution_store::DurableTurnSnapshot;
 use crate::turn_contract::{
@@ -87,7 +88,11 @@ pub fn group_of(graph: &TurnGraphSnapshot) -> Option<(CheckGroup, usize)> {
 
 /// Capture commands a check group may carry, newest first. A turn keeps the
 /// capture it was admitted with.
-const CAPTURE_COMMANDS: [&str; 2] = [REPOSITORY_SNAPSHOT_COMMAND, REPOSITORY_SNAPSHOT_COMMAND_V1];
+const CAPTURE_COMMANDS: [&str; 3] = [
+    REPOSITORY_SNAPSHOT_COMMAND,
+    REPOSITORY_SNAPSHOT_COMMAND_V2,
+    REPOSITORY_SNAPSHOT_COMMAND_V1,
+];
 
 /// How long each repository capture around the checks may take.
 const CAPTURE_TIMEOUT_MS: u64 = DEFAULT_CHECK_TIMEOUT_MS;
@@ -647,7 +652,18 @@ mod tests {
         .unwrap();
         assert_ne!(current, earlier);
         assert_eq!(current[0].argv[2], REPOSITORY_SNAPSHOT_COMMAND);
-        for definitions in [current.clone(), earlier] {
+        // 1.3's capture, which recorded no lines of the changed paths.
+        let previous = check_definitions_with(
+            &checks,
+            &[CheckSettings {
+                timeout_ms: DEFAULT_CHECK_TIMEOUT_MS,
+                egress: false,
+            }],
+            REPOSITORY_SNAPSHOT_COMMAND_V2,
+        )
+        .unwrap();
+        assert_ne!(current, previous);
+        for definitions in [current.clone(), earlier, previous] {
             let graph = graph_with(&mut content, &group, definitions.clone());
             assert_eq!(
                 admitted_check_definitions(&graph, &content, &group, &checks).unwrap(),

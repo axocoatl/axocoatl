@@ -1,6 +1,7 @@
 //! Keep as PR tests: pure parts, then host git against temporary
 //! repositories, a local bare remote and a fake `gh`.
 use super::*;
+use axocoatl_session::execution_content::{ActivationRepositorySnapshot, RepositorySnapshotPhase};
 use axocoatl_session::run_outcome::{
     Adjudication, CheckReport, CheckResult, FailureClass, Finding, LoadoutRef, ModelIdentity,
     NetworkSummary, NotCovered, ReproResult, ReviewFinding, ReviewOutcome, ReviewRound, RunTurnRef,
@@ -292,7 +293,7 @@ fn default_branch_and_title_come_from_the_run() {
 
 #[test]
 fn the_body_carries_checks_review_adjudications_not_covered_and_the_record() {
-    let body = pr_body(&outcome()).unwrap();
+    let body = pr_body(&outcome(), None).unwrap();
     for needle in [
         "### Checks",
         "| tests | passed | 0 | 12 passed, 0 failed, 1 skipped, 0 errors (junit) | npm test |",
@@ -334,7 +335,7 @@ fn the_body_carries_checks_review_adjudications_not_covered_and_the_record() {
     failing.review = None;
     failing.adjudications.clear();
     failing.checks.clear();
-    let body = pr_body(&failing).unwrap();
+    let body = pr_body(&failing, None).unwrap();
     // The Outcome's one rendering of why (`NotCovered::reason`), Markdown
     // escaped.
     assert!(
@@ -356,7 +357,7 @@ fn the_body_carries_checks_review_adjudications_not_covered_and_the_record() {
             writer_generation: None,
         })
         .collect();
-    let body = pr_body(&huge).unwrap();
+    let body = pr_body(&huge, None).unwrap();
     assert!(body.chars().count() < MAX_BODY_CHARS + 200);
     assert!(body.contains("…and 400 more adjudications in the run record."));
     assert!(body.contains("**missing**"));
@@ -365,13 +366,13 @@ fn the_body_carries_checks_review_adjudications_not_covered_and_the_record() {
     // A cost the run does not know (a Codex writer's on a model without a
     // price) is what was reserved, never a price; one computed from a Codex
     // writer's reported tokens says so.
-    assert!(pr_body(&outcome())
+    assert!(pr_body(&outcome(), None)
         .unwrap()
         .contains("output tokens, $0.0123"));
     let mut computed = outcome();
     computed.usage.cost_computed = true;
     computed.usage.complete = true;
-    let body = pr_body(&computed).unwrap();
+    let body = pr_body(&computed, None).unwrap();
     assert!(
         body.contains(
             "300 output tokens, $0.0123 (includes cost computed from reported tokens at list \
@@ -381,7 +382,7 @@ fn the_body_carries_checks_review_adjudications_not_covered_and_the_record() {
     );
     let mut codex = outcome();
     codex.usage.cost_known = false;
-    let body = pr_body(&codex).unwrap();
+    let body = pr_body(&codex, None).unwrap();
     assert!(
         body.contains("300 output tokens, cost unknown (reserved up to $0.0123)"),
         "{body}"
@@ -389,7 +390,10 @@ fn the_body_carries_checks_review_adjudications_not_covered_and_the_record() {
 
     let mut other = outcome();
     other.schema = "axocoatl.run-outcome/9".into();
-    assert!(matches!(pr_body(&other), Err(KeepPrError::Refused(_))));
+    assert!(matches!(
+        pr_body(&other, None),
+        Err(KeepPrError::Refused(_))
+    ));
 }
 
 #[test]
@@ -469,6 +473,7 @@ pub(crate) struct MemoryRecord {
     pub manifests: Mutex<BTreeMap<String, RunManifest>>,
     pub outcomes: Mutex<BTreeMap<String, RunOutcome>>,
     pub keeps: Mutex<Vec<(String, KeepResult)>>,
+    pub receipts: Mutex<BTreeMap<String, Vec<u8>>>,
 }
 
 impl KeepRunRecord for MemoryRecord {
@@ -499,6 +504,9 @@ impl KeepRunRecord for MemoryRecord {
             .unwrap()
             .push((run_id.into(), result.clone()));
         Ok(())
+    }
+    fn receipt(&self, run_id: &str) -> Result<Option<Vec<u8>>, KeepPrError> {
+        Ok(self.receipts.lock().unwrap().get(run_id).cloned())
     }
 }
 
@@ -550,11 +558,12 @@ fn capture(phase: CapturePhase) -> CaptureFacts {
     CaptureFacts {
         phase,
         unavailable: None,
-        has_tree: true,
+        tree_sha256: Some("t".repeat(64)),
         judged_sha256: None,
         compared: None,
         manifest: None,
         patch: None,
+        changed: None,
     }
 }
 
@@ -721,6 +730,7 @@ fn recorded_snapshots_convert_to_capture_facts() {
             before_sha256: "b".repeat(64),
             changed_paths: vec!["x".into()],
         }),
+        changed_manifest: None,
     };
     let facts = CaptureFacts::from_snapshot(&snapshot);
     assert_eq!(facts.phase, CapturePhase::After);
@@ -1002,6 +1012,19 @@ impl Fixture {
         attribution: &RunAttribution,
         previous: Option<&KeepResult>,
     ) -> Result<KeepPrResponse, KeepPrError> {
+        self.keep_signed(request, manifest, outcome, attribution, previous, None)
+            .await
+    }
+
+    async fn keep_signed(
+        &self,
+        request: &KeepPrRequest,
+        manifest: &RunManifest,
+        outcome: &RunOutcome,
+        attribution: &RunAttribution,
+        previous: Option<&KeepResult>,
+        receipt: Option<&OpenedReceipt>,
+    ) -> Result<KeepPrResponse, KeepPrError> {
         keep(KeepJob {
             session_root: &self.repo,
             control_root: &self.data,
@@ -1011,6 +1034,7 @@ impl Fixture {
             attribution,
             outside: &RunAttribution::default(),
             previous,
+            receipt,
             tools: &self.tools,
         })
         .await
@@ -1083,7 +1107,7 @@ async fn keep_commits_exactly_the_run_paths_without_touching_the_checkout() {
     );
     assert_eq!(
         sh(repo, &format!("git log -1 --format=%an%n%ae%n%B {}", kept.commit)),
-        format!("Person\nperson@example.invalid\nfix: Fix the off-by-one in pagination\n\nAxocoatl run {RUN}")
+        format!("Person\nperson@example.invalid\nfix: Fix the off-by-one in pagination\n\nAxocoatl run {RUN}\n\nAxocoatl-Run: {RUN}")
     );
     assert_eq!(sh(repo, "git rev-parse HEAD"), fixture.head);
     assert_eq!(
@@ -1218,7 +1242,7 @@ async fn open_pr_pushes_without_force_and_gives_gh_the_body_file() {
     ] {
         assert!(body.contains(needle), "{needle} missing from\n{body}");
     }
-    assert_eq!(body, pr_body(&outcome()).unwrap());
+    assert_eq!(body, pr_body(&outcome(), None).unwrap());
 }
 
 #[cfg(unix)]
@@ -1286,6 +1310,7 @@ async fn keep_refuses_what_it_must_not_commit_or_push() {
         attribution: &attribution,
         outside: &outside,
         previous: None,
+        receipt: None,
         tools: &fixture.tools,
     })
     .await;
@@ -1303,6 +1328,7 @@ async fn keep_refuses_what_it_must_not_commit_or_push() {
         attribution: &attribution,
         outside: &outside,
         previous: None,
+        receipt: None,
         tools: &fixture.tools,
     })
     .await;
@@ -1613,6 +1639,7 @@ async fn a_later_keep_continues_from_the_branch_an_earlier_keep_created() {
                 attribution: &attribution,
                 outside: &RunAttribution::default(),
                 previous: previous.as_ref(),
+                receipt: None,
                 tools: &tools,
             })
             .await
@@ -1792,6 +1819,7 @@ async fn a_missing_gh_is_named_and_the_pushed_branch_stays() {
         attribution: &attribution,
         outside: &RunAttribution::default(),
         previous: None,
+        receipt: None,
         tools: &tools,
     })
     .await
@@ -1812,5 +1840,325 @@ async fn a_missing_gh_is_named_and_the_pushed_branch_stays() {
             "git rev-parse refs/heads/axocoatl/fix-0f8c1a2b"
         ),
         *commit
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Receipts
+
+/// A data root's signing key, in a private directory of its own.
+fn signing_key() -> (tempfile::TempDir, crate::receipt_key::SigningKey) {
+    let dir = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let (key, _) = crate::receipt_key::load_or_create(dir.path()).unwrap();
+    (dir, key)
+}
+
+/// A receipt of the passing run [`outcome`] covering `files` (path and
+/// content) and `removed`, signed by `key`.
+fn signed_receipt(
+    key: &crate::receipt_key::SigningKey,
+    files: &[(&str, &str)],
+    removed: &[&str],
+) -> OpenedReceipt {
+    use axocoatl_session::receipt::{sha256_hex, sign_statement, Statement};
+    let subject: Vec<serde_json::Value> = files
+        .iter()
+        .map(|(path, content)| {
+            serde_json::json!({"name": path, "digest": {"sha256": sha256_hex(content.as_bytes())}})
+        })
+        .collect();
+    let statement: Statement = serde_json::from_value(serde_json::json!({
+        "_type": receipt_v1::STATEMENT_TYPE,
+        "subject": subject,
+        "predicateType": receipt_v1::PREDICATE_TYPE,
+        "predicate": {
+            "run": {"run_id": RUN, "session_id": SESSION, "started_at_ms": 1, "finished_at_ms": 2,
+                "axocoatl_version": "1.4.0", "task_sha256": "0".repeat(64)},
+            "repository": {"dirty_paths": []},
+            "loadout": {"id": "fix", "version": 1, "kind": "fix", "digest": "ab".repeat(32), "builtin": true},
+            "agents": [{"id": "writer", "role": "writer", "runtime": "native", "provider": "ollama",
+                "model": "qwen3-coder:30b"}],
+            "sandbox": {"backend": "podman", "network": "egress", "workload": "hardened", "policies": []},
+            "network": NetworkSummary::default(),
+            "checks": [{"name": "tests", "state": "passed", "exit_code": 0, "timeout_ms": 180000,
+                "argv": ["npm", "test"]}],
+            "review": {"provider": "openrouter", "model": "openai/gpt-oss-120b", "runtime": "native",
+                "verdict": "approved", "passed": true, "rounds": 2, "max_rounds": 2, "findings": 2},
+            "adjudications": [],
+            "verdict": "pass", "exit_code": 0, "attention": [],
+            "not_covered": {"count": 0, "areas": []},
+            "warnings": [],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "cost_microunits": 0, "cost_usd": 0.0,
+                "complete": true, "cost_known": true, "cost_computed": false},
+            "files": {"source": "judged_capture", "removed": removed, "complete": true, "unattributed": []},
+            "signer": key.public().signer(),
+        }
+    }))
+    .unwrap();
+    let (envelope, _) = sign_statement(key.key_pair(), &statement).unwrap();
+    receipt_v1::open_envelope(envelope).unwrap()
+}
+
+/// What the fixture's run left: an edited, a new and a removed path.
+fn run_receipt(key: &crate::receipt_key::SigningKey) -> OpenedReceipt {
+    signed_receipt(
+        key,
+        &[("a.txt", "one, fixed\n"), ("src/new.rs", "fn new() {}\n")],
+        &["b.txt"],
+    )
+}
+
+/// With a receipt, Keep commits what it covers; the commit names the run
+/// and the receipt in trailers; the pull request body has a Receipt section
+/// near the top and the receipt itself at the end, which parses back to the
+/// signed envelope.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_kept_run_with_a_receipt_carries_it_in_trailers_and_the_body() {
+    let fixture = Fixture::new();
+    let attribution = fixture.run_changes();
+    let (_keys, key) = signing_key();
+    let receipt = run_receipt(&key);
+    let mut open = request();
+    open.open_pr = true;
+    let kept = fixture
+        .keep_signed(
+            &open,
+            &fixture.manifest(),
+            &outcome(),
+            &attribution,
+            None,
+            Some(&receipt),
+        )
+        .await
+        .unwrap();
+    assert_eq!(kept.paths, vec!["a.txt", "b.txt", "src/new.rs"]);
+    assert_eq!(kept.receipt, Some(receipt.payload_digest()));
+    assert!(!kept
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("receipt")));
+    let repo = &fixture.repo;
+    assert_eq!(
+        sh(
+            repo,
+            &format!(
+                "git log -1 --format='%(trailers:key=Axocoatl-Run,valueonly)%(trailers:key=Axocoatl-Receipt,valueonly)' {}",
+                kept.commit
+            )
+        ),
+        format!("{RUN}\n{}", receipt.payload_digest())
+    );
+    let body = std::fs::read_to_string(&fixture.gh_body).unwrap();
+    assert_eq!(body, pr_body(&outcome(), Some(&receipt)).unwrap());
+    let section = body.find("### Receipt").unwrap();
+    assert!(section < body.find("### Record").unwrap());
+    for needle in [
+        &format!("Signed by key `{}`", key.public().short_id()),
+        "- Verdict: **passed** (exit code 0)",
+        "- Checks: tests passed",
+        "- Review: `openrouter:openai/gpt-oss-120b`: approved",
+        "- Writer: `ollama:qwen3-coder:30b`",
+        "- Files covered: 2 (as the required checks judged them), removed: 1",
+        "axocoatl receipt verify body.md --keys trusted-keys --repo .",
+    ] {
+        assert!(body.contains(needle), "missing {needle:?} in\n{body}");
+    }
+    assert!(body.trim_end().ends_with("-->"), "{body}");
+    let parsed = receipt_v1::open_receipt(body.as_bytes()).unwrap();
+    assert_eq!(parsed.envelope, receipt.envelope);
+    assert_eq!(
+        receipt_v1::check_signature(&parsed, &[key.public()]),
+        receipt_v1::SignatureCheck::Trusted {
+            key_id: key.public().key_id()
+        }
+    );
+    // And the files of the branch are the ones it covers.
+    let worktree = fixture.dir.path().join("check");
+    sh(
+        repo,
+        &format!("git worktree add -q {} {}", worktree.display(), kept.commit),
+    );
+    assert!(receipt_v1::check_files(&parsed.statement, &worktree).is_empty());
+}
+
+/// A covered file edited after the run (after its checks judged it), a
+/// removed path that exists again, or a path the receipt does not cover is
+/// refused, naming each, and nothing is created.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_path_that_differs_from_its_receipt_is_refused() {
+    let fixture = Fixture::new();
+    let attribution = fixture.run_changes();
+    let manifest = fixture.manifest();
+    let (_keys, key) = signing_key();
+    let receipt = run_receipt(&key);
+    let ended = outcome();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    write(&fixture.repo.join("a.txt"), "one, fixed, then edited\n");
+    match fixture
+        .keep_signed(
+            &request(),
+            &manifest,
+            &ended,
+            &attribution,
+            None,
+            Some(&receipt),
+        )
+        .await
+    {
+        Err(KeepPrError::Refused(message)) => {
+            assert!(
+                message.starts_with(
+                    "a path changed after the run's checks judged it; Keep commits only what \
+                     the receipt covers: a.txt: content differs"
+                ),
+                "{message}"
+            );
+            assert!(!message.contains("src/new.rs"), "{message}");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert_eq!(
+        fixture.branches(),
+        "refs/heads/work",
+        "a branch was created"
+    );
+    write(&fixture.repo.join("a.txt"), "one, fixed\n");
+
+    // A receipt whose subjects differ from the files (judged before a later
+    // change the run made without new checks), or that misses a path.
+    let stale = signed_receipt(
+        &key,
+        &[("a.txt", "one, judged\n"), ("src/new.rs", "fn new() {}\n")],
+        &["b.txt"],
+    );
+    let missing = signed_receipt(&key, &[("a.txt", "one, fixed\n")], &["b.txt"]);
+    let back = signed_receipt(&key, &[("a.txt", "one, fixed\n")], &["src/new.rs", "b.txt"]);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    for (receipt, needle) in [
+        (&stale, "a.txt: content differs"),
+        (&missing, "the run's receipt does not cover src/new.rs"),
+        (&back, "src/new.rs: the run removed it, and it exists"),
+    ] {
+        match fixture
+            .keep_signed(
+                &request(),
+                &manifest,
+                &outcome(),
+                &attribution,
+                None,
+                Some(receipt),
+            )
+            .await
+        {
+            Err(KeepPrError::Refused(message)) => {
+                assert!(message.contains(needle), "{message} lacks {needle}")
+            }
+            other => panic!("expected a refusal containing {needle:?}, got {other:?}"),
+        }
+    }
+    assert_eq!(
+        fixture.branches(),
+        "refs/heads/work",
+        "a branch was created"
+    );
+    // Without a receipt, Keep says the commit carries none.
+    let kept = fixture
+        .keep(&request(), &manifest, &outcome(), &attribution, None)
+        .await
+        .unwrap();
+    assert!(kept.receipt.is_none());
+    assert!(kept
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("no signed receipt")));
+}
+
+/// The body's cut never cuts the receipt block; a body without a receipt
+/// says so and why; a receipt that cannot be read, or another run's, is
+/// refused.
+#[test]
+fn the_receipt_block_survives_the_body_cut_and_bad_receipts_are_refused() {
+    let (_keys, key) = signing_key();
+    let receipt = run_receipt(&key);
+    let mut huge = outcome();
+    huge.adjudications = (0..500)
+        .map(|index| Adjudication {
+            round: 1,
+            finding_id: format!("F{index}"),
+            finding: "x".repeat(400),
+            decision: AdjudicationDecision::Accept,
+            reason: "y".repeat(300),
+            writer_generation: None,
+        })
+        .collect();
+    huge.findings = (0..200)
+        .map(|index| Finding {
+            id: format!("B{index}"),
+            source: FindingSource::Reviewer,
+            title: "z".repeat(160),
+            detail: String::new(),
+            severity: None,
+            area: None,
+            location: None,
+            line: None,
+            repro: None,
+        })
+        .collect();
+    let body = pr_body(&huge, Some(&receipt)).unwrap();
+    assert!(body.contains("…cut to fit a pull request body"), "not cut");
+    assert!(body.chars().count() <= MAX_BODY_CHARS + 200);
+    assert_eq!(
+        receipt_v1::open_receipt(body.as_bytes()).unwrap().envelope,
+        receipt.envelope
+    );
+
+    let mut unsigned = outcome();
+    unsigned.warnings.push(RunWarning {
+        code: "receipt_unavailable".into(),
+        message: "The run finished, but its receipt could not be signed: the key is unreadable."
+            .into(),
+    });
+    let body = pr_body(&unsigned, None).unwrap();
+    assert!(
+        body.contains(
+            "This run has no signed receipt (The run finished, but its receipt could not be signed"
+        ),
+        "{body}"
+    );
+    assert!(!body.contains(receipt_v1::PR_BLOCK_START));
+
+    let record = MemoryRecord::default();
+    assert!(load_receipt(&record, RUN).unwrap().is_none());
+    record
+        .receipts
+        .lock()
+        .unwrap()
+        .insert(RUN.into(), b"not a receipt".to_vec());
+    assert!(matches!(
+        load_receipt(&record, RUN),
+        Err(KeepPrError::Refused(message)) if message.contains("cannot be read")
+    ));
+    record.receipts.lock().unwrap().insert(
+        "run-other".into(),
+        receipt_v1::envelope_file_bytes(&receipt.envelope),
+    );
+    assert!(matches!(
+        load_receipt(&record, "run-other"),
+        Err(KeepPrError::Refused(message)) if message.contains(&format!("is of run {RUN}"))
+    ));
+    record.receipts.lock().unwrap().insert(
+        RUN.into(),
+        receipt_v1::envelope_file_bytes(&receipt.envelope),
+    );
+    assert_eq!(
+        load_receipt(&record, RUN).unwrap().unwrap().envelope,
+        receipt.envelope
     );
 }

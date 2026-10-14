@@ -198,6 +198,29 @@ xargs -0 -r sh -c '
     [ "$code" -le 1 ] || exit "$code"
   done
 ' sh < "$scratch/untracked" >> "$scratch/patch"
+# Every path whose state differs from HEAD, with its manifest line, whatever
+# the repository's size: what a run can have changed, as this capture saw it.
+# A path the differences name that the manifest does not hold is gone, and
+# is listed as deleted.
+if [ "$head_before" = unborn ]; then
+  : > "$scratch/differ"
+else
+  GIT_INDEX_FILE=$scratch/patch-index \
+    git diff --no-ext-diff --no-textconv --no-renames --name-only -z "$head_before" -- \
+    > "$scratch/differ"
+fi
+cat "$scratch/untracked" >> "$scratch/differ"
+xargs -0 -r sh -c '
+  for name do
+    printf "%s\n" "$(printf %s "$name" | base64 | tr -d "\n")"
+  done
+' sh < "$scratch/differ" | sort -u > "$scratch/differ-names"
+tab=$(printf '\t')
+awk -F "$tab" -v OFS="$tab" -v names="$scratch/differ-names" '
+  BEGIN { while ((getline name < names) > 0) wanted[name] = 1 }
+  ($1 in wanted) { print $1, $2, $3, $4; found[$1] = 1 }
+  END { for (name in wanted) if (!(name in found)) print name, "0", "deleted", "missing" }
+' "$scratch/before" | sort -u > "$scratch/differ-lines"
 entries > "$scratch/entries-after"
 tree "$scratch/entries-after" > "$scratch/after"
 cmp "$scratch/before" "$scratch/after"
@@ -209,7 +232,7 @@ head_after=$(git rev-parse --verify HEAD 2>/dev/null || printf unborn)
 [ "$head_before" = "$head_after" ]
 tree=$(sha256sum < "$scratch/before")
 patch=$(sha256sum < "$scratch/patch")
-printf 'format=1\nhead=%s\ntree=%s\n' "$head_before" "${tree%% *}"
+printf 'format=2\nhead=%s\ntree=%s\n' "$head_before" "${tree%% *}"
 printf 'manifest_bytes=%s\nmanifest_b64=' "$(wc -c < "$scratch/before" | tr -d ' ')"
 head -c 8192 "$scratch/before" | base64 | tr -d '\n'
 printf '\npatch_sha256=%s\npatch_bytes=%s\npatch_b64=' "${patch%% *}" "$(wc -c < "$scratch/patch" | tr -d ' ')"
@@ -243,3 +266,20 @@ case $capture_mode in
     rm -rf -- "$baseline"
     ;;
 esac
+# The lines of the paths that differ from HEAD, when the whole result still
+# fits the 768 KiB a capture's output may take: after the patch, the
+# manifest prefix and, comparing, the changed list, with 16 KiB to spare.
+# Beyond that, or beyond 10,000 paths, they are left out and say so.
+patch_size=$(wc -c < "$scratch/patch" | tr -d ' ')
+listed_size=0
+[ ! -f "$scratch/changed" ] || listed_size=$(wc -c < "$scratch/changed" | tr -d ' ')
+differ_count=$(wc -l < "$scratch/differ-lines" | tr -d ' ')
+differ_size=$(wc -c < "$scratch/differ-lines" | tr -d ' ')
+room=$((786432 - 16384 - (patch_size + 2) / 3 * 4 - 10924 - listed_size))
+if [ "$differ_count" -le 10000 ] && [ $(((differ_size + 2) / 3 * 4)) -le "$room" ]; then
+  printf 'changed_complete=1\nchanged_b64='
+  base64 < "$scratch/differ-lines" | tr -d '\n'
+  printf '\n'
+else
+  printf 'changed_complete=0\nchanged_b64=\n'
+fi
