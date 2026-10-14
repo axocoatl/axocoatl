@@ -827,9 +827,8 @@ and runs a restart ends are sealed the same way. Signing that fails adds the war
 the public key; `axocoatl receipt show|verify` read envelopes without a daemon. The
 composite action `actions/verify-receipt` runs `verify` in a pull request's workflow
 against the trusted keys of the base commit (read with `gh api`, never from the head) and
-requires the receipt to cover every file the pull request changes; it is verified
-locally against a stand-in for GitHub's API, and its first real pull request run is
-pending.
+requires the receipt to cover every file the pull request changes; it is tested
+locally against a stand-in for GitHub's API and was run on a real pull request.
 
 **Keep as PR.** For a passing run, host `git` commits exactly the run's attributed paths
 through a temporary `GIT_INDEX_FILE` seeded from HEAD (`update-index`, `write-tree`,

@@ -109,7 +109,7 @@ it offline against trusted key lines (`axocoatl receipt key`), a checkout and th
 It proves who signed which facts, not that the change is correct. The GitHub Action
 `axocoatl/axocoatl/actions/verify-receipt` checks a pull request's receipt against keys
 on its base branch (`.axocoatl/receipt-keys`) and that it covers every changed file
-(verified locally; first real pull request run pending). `--keep branch|pr` commits a
+`--keep branch|pr` commits a
 passing run to a new branch with host git (only the files its receipt covers, with
 `Axocoatl-Run` and `Axocoatl-Receipt` trailers) and, opt-in, opens a pull request with gh
 that carries the receipt; it never force-pushes and never pushes to the default branch.

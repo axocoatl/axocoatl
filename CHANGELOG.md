@@ -87,8 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   receipt**, or why the run has none. **Settings → Loadouts → Receipts → Signing key**
   shows the public key line with a Copy button and what a receipt does and does not
   prove.
-- **The `verify-receipt` GitHub Action (verified locally; its first run on a real pull
-  request is pending).** `axocoatl/axocoatl/actions/verify-receipt` installs the pinned
+- **The `verify-receipt` GitHub Action.** `axocoatl/axocoatl/actions/verify-receipt` installs the pinned
   Axocoatl release for a Linux x86_64 or ARM64 runner, checked against the release's
   `.sha256` file and an optional `sha256` input; reads the receipt from the pull
   request's description; reads the trusted keys from the base commit's
