@@ -26,7 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a body that offers a tool of a type the client does not run (tools pass only by
   client-run type: Anthropic custom, `bash_`, `text_editor_`, `computer_` and
   `memory_` tools; OpenAI `function`, `custom`, `local_shell`, `apply_patch`, local
-  `shell` and client-executed `tool_search`; Chat Completions `function` and `custom`;
+  `shell`, client-executed `tool_search` and a `namespace` whose tools all pass; Chat
+  Completions `function` and `custom`;
   Gemini function declarations; so xAI's `x_search` and `code_execution`, Mistral's
   `image_generation`, `document_library` and `connector`, and the Vercel AI Gateway's
   `vercel:*_search` and `vercel:browserbase_fetch` are refused with the rest), names
