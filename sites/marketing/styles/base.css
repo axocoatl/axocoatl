@@ -86,6 +86,12 @@ pre code { padding: 0; background: transparent; }
 
 .hero { display: grid; justify-items: center; gap: var(--s-5); padding-block: var(--s-9) var(--s-8); text-align: center; }
 .hero .lede { margin-inline: auto; }
+/* The second line of the home hero: the job, then the receipt. */
+.hero-kicker {
+  max-width: 30ch; margin-top: calc(-1 * var(--s-2)); color: var(--fg);
+  font-family: var(--font-display); font-size: clamp(1.4rem, 2.8vw, var(--t-32));
+  font-weight: 500; letter-spacing: -.012em; line-height: 1.25; text-wrap: balance;
+}
 .hero-actions, .cta-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s-3); }
 .hero-note { display: inline-flex; align-items: center; gap: var(--s-2); color: var(--muted); font-family: var(--font-mono); font-size: var(--t-13); }
 .hero-note::before { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); content: ''; }
@@ -212,7 +218,7 @@ ax-product-film.product-film-hero { margin-top: var(--s-5); }
 .step-list li > div { min-width: 0; }
 .step-list p { color: var(--muted); font-size: var(--t-14); }
 .step-list-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--s-7); }
-.run-summary { margin-top: var(--s-7); }
+.run-summary, .receipt-steps { margin-top: var(--s-7); }
 
 .fact-list { list-style: none; display: grid; gap: var(--s-3); padding: 0; }
 .fact-list li { position: relative; padding-left: 22px; color: var(--fg-soft); }
