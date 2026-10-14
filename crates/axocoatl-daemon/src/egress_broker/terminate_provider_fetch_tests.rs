@@ -16,6 +16,7 @@ const CLAUDE_WEB_SEARCH: &[u8] = include_bytes!("fixtures/claude-code-2.1.292-we
 const CODEX_RESPONSES: &[u8] = include_bytes!("fixtures/codex-0.160.1-responses.json");
 const CODEX_WEB_SEARCH_LIVE: &[u8] =
     include_bytes!("fixtures/codex-0.160.1-responses-web-search-live.json");
+const CODEX_CODE_MODE: &[u8] = include_bytes!("fixtures/codex-0.160.1-responses-code-mode.json");
 const E2E_GATEWAY_DEFAULT: &[u8] = include_bytes!("fixtures/e2e-0.18.0-ai-gateway-default.json");
 const E2E_GATEWAY_COMPATIBLE: &[u8] =
     include_bytes!("fixtures/e2e-0.18.0-ai-gateway-openai-compatible.json");
@@ -211,6 +212,18 @@ async fn the_codex_routes_send_codexs_requests_byte_for_byte_and_refuse_live_web
             [body.len().to_string().as_str()]
         );
 
+        // For a code_mode_only model (gpt-6.1-sol, gpt-6-luna) Codex offers
+        // its tools in namespaces: they reach the API byte for byte too.
+        let response = client
+            .sender
+            .send_request(post(path, &h.host_header(), CODEX_CODE_MODE))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "{host}");
+        let seen = h.upstream.seen();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[1].body, Bytes::from_static(CODEX_CODE_MODE), "{host}");
+
         // Codex 0.160.1 without web_search="disabled" offers OpenAI's
         // hosted web search with live access.
         let response = client
@@ -227,10 +240,10 @@ async fn the_codex_routes_send_codexs_requests_byte_for_byte_and_refuse_live_web
             "tool type web_search, which the provider runs itself"
         );
         assert!(json["hint"].as_str().unwrap().contains("codex writer"));
-        assert_eq!(h.upstream.seen().len(), 1, "{host}");
+        assert_eq!(h.upstream.seen().len(), 2, "{host}");
         let events = request_events(&sink);
         assert!(
-            refused_with(&events[1], "provider_fetch_refused"),
+            refused_with(&events[2], "provider_fetch_refused"),
             "{events:?}"
         );
     }

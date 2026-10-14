@@ -22,8 +22,9 @@
 //!   client runs pass: Anthropic custom tools (no `type`, or `custom`) and
 //!   the client tools `bash_*`, `text_editor_*`, `computer_*` and `memory_*`
 //!   (a date after the name); OpenAI `function`, `custom`, `local_shell`,
-//!   `apply_patch`, `shell` without a hosted environment, and `tool_search`
-//!   with `execution: "client"`; Chat Completions `function` and `custom`;
+//!   `apply_patch`, `shell` without a hosted environment, `tool_search`
+//!   with `execution: "client"`, and a `namespace` whose tools all pass;
+//!   Chat Completions `function` and `custom`;
 //!   Gemini tools with only `functionDeclarations`. Every other tool, such
 //!   as `web_search_*`, `web_fetch_*`, `code_execution_*`, `mcp`,
 //!   `file_search`, `code_interpreter`, `image_generation`,
@@ -681,12 +682,34 @@ impl<'a> Walk<'a> {
         };
         for (index, tool) in entries.iter().enumerate() {
             self.path.push(Step::Index(index));
-            if let Err(construct) = self.tool(tool) {
+            if self.dialect == Dialect::Responses
+                && tool.get("type").and_then(Value::as_str) == Some("namespace")
+            {
+                self.namespace(tool)?;
+            } else if let Err(construct) = self.tool(tool) {
                 return self.refuse(construct);
             }
             self.path.pop();
         }
         Ok(())
+    }
+
+    /// A Responses `namespace`: a named group of tools whose functions
+    /// OpenAI's tool search loads; the provider runs nothing for the
+    /// namespace itself (https://developers.openai.com/api/docs/guides/tools-tool-search).
+    /// Codex 0.160.1 offers its tools this way, in an `additional_tools`
+    /// input item, for the models its catalog marks `code_mode_only`
+    /// (`gpt-6.1-sol`, `gpt-6-luna`). It passes when every tool in it does.
+    fn namespace(&mut self, namespace: &'a Value) -> Result<(), Refused> {
+        match namespace.get("tools") {
+            Some(tools @ Value::Array(_)) => {
+                self.path.push(Step::Key("tools"));
+                self.tools(tools)?;
+                self.path.pop();
+                Ok(())
+            }
+            _ => self.refuse("a namespace without a list of tools, which the check does not read"),
+        }
     }
 
     /// Whether `tool` is one the client runs, by its type. Every type a

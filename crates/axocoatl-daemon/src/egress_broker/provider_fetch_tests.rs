@@ -26,6 +26,12 @@
 //! - `codex-0.160.1-responses-web-search-live.json`: the same call as Codex
 //!   0.160.1 sent it before, offering OpenAI's hosted `web_search` with
 //!   `external_web_access: true`.
+//! - `codex-0.160.1-responses-code-mode.json`: Codex's first model call for
+//!   `gpt-6.1-sol`, a model its catalog marks `code_mode_only`, run as
+//!   Axocoatl runs it in the codex recipe image against a local capture
+//!   server: no top-level tools, and its tools (the custom `exec` and its
+//!   functions) in namespaces in an `additional_tools` input item.
+//!   `gpt-6-luna` sends the same tools.
 //!
 //! The `e2e-0.18.0-*` fixtures are the first request of e2e 0.18.0's own
 //! model adapter (`createModelAdapter`, with its provider hints: a
@@ -53,6 +59,7 @@ const CLAUDE_WEB_SEARCH: &str = include_str!("fixtures/claude-code-2.1.292-web-s
 const CODEX_RESPONSES: &str = include_str!("fixtures/codex-0.160.1-responses.json");
 const CODEX_WEB_SEARCH_LIVE: &str =
     include_str!("fixtures/codex-0.160.1-responses-web-search-live.json");
+const CODEX_CODE_MODE: &str = include_str!("fixtures/codex-0.160.1-responses-code-mode.json");
 
 const E2E_GATEWAY_DEFAULT: &str = include_str!("fixtures/e2e-0.18.0-ai-gateway-default.json");
 const E2E_GATEWAY_COMPATIBLE: &str =
@@ -421,7 +428,6 @@ fn openai_tools_pass_only_when_the_client_runs_them() {
         (r#"{"type":"computer_use_preview","display_width":1,"display_height":1,"environment":"browser"}"#, "tool type computer_use_preview, which the provider runs itself"),
         (r#"{"type":"mcp","server_label":"x","server_url":"https://mcp.example"}"#, "tool type mcp, which the provider runs itself"),
         (r#"{"type":"mcp","server_label":"x","connector_id":"connector_gmail"}"#, "tool type mcp, which the provider runs itself"),
-        (r#"{"type":"namespace","name":"n","tools":[]}"#, "tool type namespace, which the provider runs itself"),
         (r#"{"type":"tool_search"}"#, "tool type tool_search without execution: client, which the provider runs itself"),
         (r#"{"type":"tool_search","execution":"server"}"#, "tool type tool_search without execution: client, which the provider runs itself"),
         (r#"{"type":"shell","environment":{"type":"container_auto"}}"#, "tool type shell with an environment the provider may host, which the check does not allow"),
@@ -437,6 +443,58 @@ fn openai_tools_pass_only_when_the_client_runs_them() {
         r#"{"input":[{"type":"tool_search_output","call_id":"c","tools":[{"type":"mcp","server_label":"x"}]}]}"#,
     );
     assert_eq!(refusal.at, "$.input[0].tools[0]");
+}
+
+#[test]
+fn a_namespace_passes_when_every_tool_in_it_does() {
+    // Codex 0.160.1's request for a code_mode_only model: its tools in
+    // namespaces, in an additional_tools input item.
+    passes(RESPONSES, CODEX_CODE_MODE);
+    passes(CHATGPT, CODEX_CODE_MODE);
+    assert!(CODEX_CODE_MODE.contains(r#""type":"additional_tools""#));
+    assert!(CODEX_CODE_MODE.contains(r#""type":"namespace","name":"functions""#));
+    for body in [
+        r#"{"tools":[{"type":"namespace","name":"crm","description":"d","tools":[{"type":"function","name":"get","defer_loading":true,"parameters":{"type":"object"}}]},{"type":"tool_search","execution":"client"}]}"#,
+        r#"{"tools":[{"type":"namespace","name":"empty","tools":[]}]}"#,
+        r#"{"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"outer","tools":[{"type":"namespace","name":"inner","tools":[{"type":"custom","name":"exec"}]}]}]}]}"#,
+    ] {
+        passes(RESPONSES, body);
+    }
+    for (body, at, construct) in [
+        (
+            r#"{"tools":[{"type":"namespace","name":"n","tools":[{"type":"function","name":"f"},{"type":"web_search"}]}]}"#,
+            "$.tools[0].tools[1]",
+            "tool type web_search, which the provider runs itself",
+        ),
+        (
+            r#"{"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"n","tools":[{"type":"namespace","name":"m","tools":[{"type":"mcp","server_label":"x"}]}]}]}]}"#,
+            "$.input[0].tools[0].tools[0].tools[0]",
+            "tool type mcp, which the provider runs itself",
+        ),
+        (
+            r#"{"tools":[{"type":"namespace","name":"n"}]}"#,
+            "$.tools[0]",
+            "a namespace without a list of tools, which the check does not read",
+        ),
+        (
+            r#"{"tools":[{"type":"namespace","name":"n","tools":{"type":"function"}}]}"#,
+            "$.tools[0]",
+            "a namespace without a list of tools, which the check does not read",
+        ),
+    ] {
+        let refusal = refused(RESPONSES, body);
+        assert_eq!(refusal.at, at, "{body}");
+        assert_eq!(refusal.construct, construct, "{body}");
+    }
+    // Only the Responses format has namespaces.
+    let refusal = refused(
+        "/v1/chat/completions",
+        r#"{"tools":[{"type":"namespace","name":"n","tools":[]}]}"#,
+    );
+    assert_eq!(
+        refusal.construct,
+        "tool type namespace, which the provider runs itself"
+    );
 }
 
 #[test]
