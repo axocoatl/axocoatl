@@ -4,8 +4,9 @@
 
 Claude Code, Codex or a local model works in a sandbox its model credential never
 enters. When it says it is done, the host runs your tests on the final files and a
-different model reviews the change. You get an exit code for CI and a checksummed
-record of every step. One open-source Rust executable; no Axocoatl account or telemetry.
+different model reviews the change. You get an exit code for CI, a checksummed record of
+every step, and a receipt signed on your computer of the files the run changed and what the
+host enforced. One open-source Rust executable; no Axocoatl account or telemetry.
 
 [![CI](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml/badge.svg)](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/axocoatl-cli.svg)](https://crates.io/crates/axocoatl-cli) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -38,13 +39,16 @@ Network: 0 recorded events, 0 allowed and 0 refused connections, 0 route request
 Record: run-7f3c9a2e-4b1d-4c8a-9e6f-2d5b8a1c0e47
 ```
 
-- **Claude Code or Codex as the writer.** The Claude Code CLI or the Codex CLI runs
-  inside the Session container as a non-root user, and the host runs the same checks and
-  review on what it leaves. `axocoatl connect claude-code` (it runs `claude setup-token`)
-  or `axocoatl connect codex` (your ChatGPT sign-in, in a browser) stores the credential
-  on your computer without showing it; the daemon adds it on the host to each model
-  request, and the container holds a placeholder. For now this takes a loadout you write:
-  see [External agents](https://docs.axocoatl.ai/configure/external-agents/).
+- **Claude Code or Codex as the writer, in one command.**
+  `axocoatl run fix-claude-code --task "…" --model reviewer=ollama:gpt-oss:120b` (or
+  `fix-codex`) runs the built-in `fix` with the pinned Claude Code CLI or Codex CLI as the
+  writer, inside the Session container as a non-root user, and the host runs the same
+  checks and review on what it leaves. `axocoatl connect claude-code` (it runs
+  `claude setup-token`) or `axocoatl connect codex` (your ChatGPT sign-in, in a browser)
+  stores the credential on your computer without showing it; the daemon adds it on the host
+  to each model request, and the container holds a placeholder. To change the model, the
+  budgets or the checks,
+  [write your own loadout](https://docs.axocoatl.ai/configure/external-agents/#write-your-own-loadout).
 
 <p align="center">
   <img src="sites/marketing/assets/og-home.png" alt="Axocoatl: run coding agents unattended. Claude Code, Codex or a local model in a sandbox; the host runs your checks on the final files; a different model reviews the change; an exit code for CI and a checksummed record." width="760">
@@ -58,9 +62,10 @@ the budgets and the prompt. `axocoatl run` hands one to the running daemon, whic
 it in a **Session**: one durable work item with its conversation, the sandbox its tools
 run in, and its record.
 
-- **Three built-in loadouts.** `fix` runs one writer, your check command as a required
+- **Five built-in loadouts.** `fix` runs one writer, your check command as a required
   check, and a required review by a different model for up to 3 rounds; the writer must
-  answer every finding with accept or reject and a reason. `qa` runs one browser explorer
+  answer every finding with accept or reject and a reason. `fix-claude-code` and
+  `fix-codex` are `fix` with Claude Code or Codex as the writer. `qa` runs one browser explorer
   whose findings carry Playwright reproductions the host re-runs. `audit` (opt-in: it
   runs only when named) plans areas, reads them with parallel read-only workers and
   merges the findings. Your own loadouts are YAML files in the `loadouts/` directory
@@ -81,13 +86,24 @@ run in, and its record.
   the checks, review, adjudications, findings and coverage. `--record` writes the whole
   run as one JSON Lines file ending with its line count and SHA-256, which
   `axocoatl record verify` checks; it is checksummed, not signed.
+- **A signed receipt.** Every finished run, passing or not, gets a receipt signed with an
+  Ed25519 key kept in your data directory: an in-toto statement in a DSSE envelope that
+  lists the files the run changed with their SHA-256 (as the required checks judged them,
+  when they ran), the sandbox and network policy, the checks, the review, the models and
+  the verdict. `--receipt` writes it. `axocoatl receipt verify` checks it offline against
+  the keys you trust (`axocoatl receipt key` prints yours) and, with `--repo`, against the
+  files in a checkout. It proves which key signed which facts, not that the change is
+  correct.
 - **Keep as PR.** `--keep branch` commits exactly the run's changed paths to a new branch
-  with your `git`, without touching your checkout; `--keep pr` also pushes it and opens a
-  pull request with `gh`.
+  with your `git`, without touching your checkout, with `Axocoatl-Run` and
+  `Axocoatl-Receipt` trailers; a path edited after the checks judged it is refused.
+  `--keep pr` also pushes it and opens a pull request with `gh` whose description carries
+  the receipt.
 
 Details: [Loadouts](https://docs.axocoatl.ai/configure/loadouts/),
 [`axocoatl run`](https://docs.axocoatl.ai/reference/run/),
-[Fix, QA and audit runs](https://docs.axocoatl.ai/workbench/fix-qa-audit/) and
+[Fix, QA and audit runs](https://docs.axocoatl.ai/workbench/fix-qa-audit/),
+[Signed receipts](https://docs.axocoatl.ai/workbench/receipts/) and
 [Keep as PR](https://docs.axocoatl.ai/workbench/keep-as-pr/).
 
 ## What we measured
@@ -125,7 +141,7 @@ more looks from the same model. That is one small benchmark with two local model
 a claim that Axocoatl makes agents better. Axocoatl lets each Agent use its own model,
 so a local writer can be reviewed by a stronger model, and the host still runs your
 checks and records every step. The reviewer we measured ran locally; reviewers through OpenRouter
-have not been measured, and neither have the built-in loadouts of 1.3. We do not claim
+have not been measured, and neither have the built-in loadouts. We do not claim
 the default team beats a single Agent; one Agent remains the cheaper choice for small
 tasks.
 

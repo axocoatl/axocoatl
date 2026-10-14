@@ -41,7 +41,7 @@
 
     <section class="container section section-rule" id="headless">
       <div class="split">
-        <div class="stack"><span class="eyebrow">Headless</span><h2>Run a loadout from a shell or CI.</h2><p>A loadout is a YAML recipe for one run: the Agents and their models, the checks that must pass, the reviewer, the network, the budgets and the prompt. <code>axocoatl run</code> hands one to a running daemon (<code>axocoatl dev</code>, <code>axocoatl serve</code> or the service) and never starts one. It prints a summary, writes JUnit and a record bundle when asked, and exits with a code a script or CI job can act on: 0 pass, 1 a check failed, 2 needs attention.</p><p>The built-in <code>fix</code> loadout runs one writer, your repository's check command and a review by the model you name as reviewer. A data directory an earlier Axocoatl used needs <code>axocoatl session upgrade --confirm</code> before its first run.</p><a href="https://docs.axocoatl.ai/reference/run/">axocoatl run reference →</a></div>
+        <div class="stack"><span class="eyebrow">Headless</span><h2>Run a loadout from a shell or CI.</h2><p>A loadout is a YAML recipe for one run: the Agents and their models, the checks that must pass, the reviewer, the network, the budgets and the prompt. <code>axocoatl run</code> hands one to a running daemon (<code>axocoatl dev</code>, <code>axocoatl serve</code> or the service) and never starts one. It prints a summary, writes JUnit, a record bundle and the run's signed receipt when asked, and exits with a code a script or CI job can act on: 0 pass, 1 a check failed, 2 needs attention.</p><p>The built-in <code>fix</code> loadout runs one writer, your repository's check command and a review by the model you name as reviewer. A data directory an earlier Axocoatl used needs <code>axocoatl session upgrade --confirm</code> before its first run.</p><a href="https://docs.axocoatl.ai/reference/run/">axocoatl run reference →</a></div>
         <div class="code-pane"><div class="code-pane-head">a fix run with two local models</div><pre><code><span class="code-key">axocoatl dev</span>    <span class="code-comment"># in one shell; leave it running</span>
 
 <span class="code-comment"># in another, in the repository</span>
@@ -49,20 +49,24 @@
   --model writer=<span class="code-string">ollama:qwen3-coder:30b</span> \
   --model reviewer=<span class="code-string">ollama:gpt-oss:120b</span> \
   --junit axocoatl-junit.xml \
-  --record run.axorecord.jsonl
-<span class="code-key">axocoatl record verify</span> run.axorecord.jsonl</code></pre></div>
+  --record run.axorecord.jsonl \
+  --receipt run.receipt.json
+<span class="code-key">axocoatl record verify</span> run.axorecord.jsonl
+<span class="code-key">axocoatl receipt verify</span> run.receipt.json \
+  --key <span class="code-string">"$(axocoatl receipt key)"</span> --repo .</code></pre></div>
       </div>
     </section>
 
     <section class="container section section-rule" id="external-agents">
-      <div class="section-head"><span class="eyebrow">Claude Code or Codex</span><h2>Put an external agent in the sandbox.</h2><p>The Claude Code CLI or the Codex CLI can be a loadout's writer. It runs inside the Session container as a non-root user; its credential stays on your computer, and the daemon adds it on the host to each model request the route allows.</p></div>
+      <div class="section-head"><span class="eyebrow">Claude Code or Codex</span><h2>Put an external agent in the sandbox.</h2><p>The built-in <code>fix-claude-code</code> and <code>fix-codex</code> run <code>fix</code> with the Claude Code CLI or the Codex CLI as the writer. It runs inside the Session container as a non-root user; its credential stays on your computer, and the daemon adds it on the host to each model request the route allows.</p></div>
       <ol class="step-list">
         <li><div><h3>Build the recipe image</h3><p><code>axocoatl recipe build claude-code</code> or <code>axocoatl recipe build codex</code> builds a Session image with the pinned CLI through Podman and records it in the data directory. Run it with the daemon's <code>--config</code> or <code>AXOCOATL_DATA_DIR</code>.</p></div></li>
         <li><div><h3>Sign in, without handling a token</h3><p><code>axocoatl connect claude-code</code> runs <code>claude setup-token</code> and stores the token it prints without showing it. <code>axocoatl connect codex</code> runs <code>codex login</code> in a throwaway container and stores your ChatGPT sign-in; with <code>--api-key</code> it also stores the OpenAI API key OpenAI issues with that sign-in, when it issues one.</p></div></li>
-        <li><div><h3>Write a loadout</h3><p>Save a loadout with <code>runtime: claude-code</code> or <code>runtime: codex</code> in the <code>loadouts</code> directory beside your configuration: <code class="wrap">~/Library/Application Support/Axocoatl/loadouts/</code> on macOS, <code>~/.config/axocoatl/loadouts/</code> on Linux. The docs have one to copy.</p></div></li>
         <li><div><h3>Run it</h3><pre><code>axocoatl run fix-claude-code --task "…" \
-  --model writer=anthropic:&lt;model&gt; \
-  --model reviewer=ollama:gpt-oss:120b</code></pre><p>The host runs the checks and the review on what the program leaves, as for any writer.</p></div></li>
+  --model reviewer=ollama:gpt-oss:120b
+axocoatl run fix-codex --task "…" \
+  --model reviewer=ollama:gpt-oss:120b</code></pre><p>The host runs the checks and the review on what the program leaves, as for any writer. <code>fix-codex</code> sends the OpenAI API key when one is stored, else your ChatGPT sign-in, and says which.</p></div></li>
+        <li><div><h3>Or write your own loadout</h3><p>To change the model, the budgets or the checks, save a loadout with <code>runtime: claude-code</code> or <code>runtime: codex</code> in the <code>loadouts</code> directory beside your configuration: <code class="wrap">~/Library/Application Support/Axocoatl/loadouts/</code> on macOS, <code>~/.config/axocoatl/loadouts/</code> on Linux. The docs have one to copy.</p></div></li>
       </ol>
       <p><a href="https://docs.axocoatl.ai/configure/external-agents/">Set up Claude Code or Codex →</a></p>
     </section>

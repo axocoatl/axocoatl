@@ -4,21 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Axocoatl — run coding agents unattended</title>
-  <meta name="description" content="Axocoatl runs Claude Code, Codex or a local model in a sandbox its model credential never enters. The host runs your tests on the final files, a different model reviews the change, and you get an exit code for CI and a checksummed record of every step.">
+  <meta name="description" content="Axocoatl runs Claude Code, Codex or a local model in a sandbox its model credential never enters. The host runs your tests on the final files, a different model reviews the change, and you get an exit code for CI, a checksummed record of every step and a receipt signed on your computer.">
   <meta name="theme-color" content="#3E7C5C">
   <link rel="canonical" href="https://axocoatl.ai/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Axocoatl">
   <meta property="og:url" content="https://axocoatl.ai/">
   <meta property="og:title" content="Axocoatl — run coding agents unattended">
-  <meta property="og:description" content="The host runs your tests on the final files, a different model reviews the change, and you get an exit code for CI and a checksummed record of every step.">
+  <meta property="og:description" content="The host runs your tests on the final files, a different model reviews the change, and you get an exit code for CI, a checksummed record of every step and a receipt signed on your computer.">
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Axocoatl: run coding agents unattended. Claude Code, Codex or a local model in a sandbox; the host runs your checks on the final files; a different model reviews the change; an exit code for CI and a checksummed record.">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Axocoatl — run coding agents unattended">
-  <meta name="twitter:description" content="The host runs your tests on the final files, a different model reviews the change, and you get an exit code for CI and a checksummed record of every step.">
+  <meta name="twitter:description" content="The host runs your tests on the final files, a different model reviews the change, and you get an exit code for CI, a checksummed record of every step and a receipt signed on your computer.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta name="twitter:image:alt" content="Axocoatl: run coding agents unattended. Claude Code, Codex or a local model in a sandbox; the host runs your checks on the final files; a different model reviews the change; an exit code for CI and a checksummed record.">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
@@ -42,9 +42,9 @@
 
   <main id="main-content">
     <section class="container hero">
-      <span class="hero-note">Axocoatl v1.3 · Apache-2.0 · local-first</span>
+      <span class="hero-note">Axocoatl v1.4 · Apache-2.0 · local-first</span>
       <h1>Run coding agents<br>unattended.</h1>
-      <p class="lede">Claude Code, Codex or a local model works in a sandbox its model credential never enters. When it says it is done, the host runs your tests on the final files and a different model reviews the change. You get an exit code for CI and a checksummed record of every step.</p>
+      <p class="lede">Claude Code, Codex or a local model works in a sandbox its model credential never enters. When it says it is done, the host runs your tests on the final files and a different model reviews the change. You get an exit code for CI, a checksummed record of every step, and a receipt signed on your computer of the files the run changed and what the host enforced.</p>
       <div class="hero-run">
         <ax-cli-snippet>curl -fsSL https://axocoatl.ai/install.sh | sh</ax-cli-snippet>
         <div class="code-pane">
@@ -56,7 +56,7 @@
   --junit junit.xml --record run.axorecord.jsonl
 <span class="code-comment"># exit 0 pass · 1 checks failed · 2 needs attention</span></code></pre>
         </div>
-        <p class="hero-run-note">Claude Code and Codex run as the writer through a loadout you write. <a href="https://docs.axocoatl.ai/configure/external-agents/">Set up an external agent →</a></p>
+        <p class="hero-run-note">Claude Code or Codex as the writer: <code>axocoatl run fix-claude-code</code> or <code>fix-codex</code>, with the same checks and review. <a href="https://docs.axocoatl.ai/configure/external-agents/">Set up Claude Code or Codex →</a></p>
       </div>
       <div class="hero-actions">
         <a class="btn btn-primary" href="/install">Install →</a>
@@ -81,13 +81,14 @@
     </section>
 
     <section class="container section section-rule" id="run">
-      <div class="section-head"><span class="eyebrow">New in 1.3 · axocoatl run</span><h2>The host decides when it is done.</h2><p>A loadout is a YAML recipe for one run: its Agents (the model-driven workers) and their models, the checks that must pass, the reviewer, the network, the budgets and the prompt. <code>axocoatl run</code> hands one to the running daemon and waits for the verdict.</p></div>
+      <div class="section-head"><span class="eyebrow">axocoatl run</span><h2>The host decides when it is done.</h2><p>A loadout is a YAML recipe for one run: its Agents (the model-driven workers) and their models, the checks that must pass, the reviewer, the network, the budgets and the prompt. <code>axocoatl run</code> hands one to the running daemon and waits for the verdict.</p></div>
       <ol class="step-list step-list-2">
         <li><div><h3>A sandbox with no direct network</h3><p>The daemon creates a Session for the repository (one durable work item: its conversation, the sandbox its tools run in, and its record) and runs its tools in a rootless Podman container as a non-root user. In a loadout run the container has no direct network access: it reaches the outside only through the daemon's egress proxy and routes, which decide and record every connection. By default a route to a model API reads each model call before it leaves, and refuses and records one that asks the provider to fetch a URL, search the web, run a tool itself or connect to an MCP server.</p></div></li>
         <li><div><h3>Checks on the final files</h3><p>After the writer finishes, the host runs the repository's check command on the exact final files, with a timeout. Whether the tests passed comes from the host, not from the model.</p></div></li>
         <li><div><h3>Review by a different model</h3><p>A reviewer on the model you name reads the result in a fresh conversation with read-only tools, and approves or asks for changes, for up to 3 rounds. The writer must accept or reject every finding with a reason; a finding left unanswered makes the run need attention. A reviewer on the writer's own model gets a warning, not a refusal.</p></div></li>
         <li><div><h3>A verdict CI can read</h3><p>Exit code 0 means pass, 1 a check failed, 2 the run needs attention; 3 to 7 cover usage errors, an unreachable daemon, infrastructure, an interrupt, and another run or Session turn holding the repository. <code>--junit</code> writes the checks, review, answers and findings as JUnit. <code>--record</code> writes the whole run as one file that ends with its line count and SHA-256, which <code>axocoatl record verify</code> checks. The record is checksummed, not signed.</p></div></li>
-        <li><div><h3>Keep as PR</h3><p>The changes stay in your working tree, uncommitted. <code>--keep branch</code> commits exactly the run's changed paths to a new branch with your <code>git</code>; <code>--keep pr</code> also pushes that branch and opens a pull request with <code>gh</code>. Your index, current branch and working tree stay as they were.</p></div></li>
+        <li><div><h3>A signed receipt</h3><p>When the run finishes, passing or not, the daemon signs a receipt with an Ed25519 key kept in your data directory: the files the run changed with their SHA-256, as the required checks judged them when they ran, and the sandbox and network policy, the checks, the review, the models and the verdict. <code>--receipt</code> writes it, and <code>axocoatl receipt verify</code> checks it offline against the keys you trust and the files in a checkout. It proves which key signed which facts, not that the change is correct.</p></div></li>
+        <li><div><h3>Keep as PR</h3><p>The changes stay in your working tree, uncommitted. <code>--keep branch</code> commits exactly the run's changed paths to a new branch with your <code>git</code>, with <code>Axocoatl-Run</code> and <code>Axocoatl-Receipt</code> trailers, and refuses a path edited after the checks judged it; <code>--keep pr</code> also pushes that branch and opens a pull request with <code>gh</code> whose description carries the receipt. Your index, current branch and working tree stay as they were.</p></div></li>
       </ol>
       <div class="stack run-summary">
         <div class="code-pane">
@@ -108,9 +109,9 @@
       </div>
 
       <div class="stack" id="loadouts" style="margin-top:var(--s-8)">
-        <h3>Three loadouts ship built in.</h3>
+        <h3>Five loadouts ship built in.</h3>
         <div class="grid-3">
-          <article class="card"><span class="card-kicker">fix</span><h3>Make a change</h3><p>One writer, the repository's check command as a required check, and a required review by another model for up to 3 rounds, with every finding answered.</p></article>
+          <article class="card"><span class="card-kicker">fix · fix-claude-code · fix-codex</span><h3>Make a change</h3><p>One writer, the repository's check command as a required check, and a required review by another model for up to 3 rounds, with every finding answered. <code>fix-claude-code</code> and <code>fix-codex</code> run it with Claude Code or Codex as the writer.</p></article>
           <article class="card"><span class="card-kicker">qa</span><h3>Explore an app</h3><p>One browser explorer. Each finding names a Playwright reproduction that the host re-runs on the build under test and, if you give one, a clean reference build: confirmed only when it fails on the first and passes on the second.</p></article>
           <article class="card"><span class="card-kicker">audit · opt-in</span><h3>Read a whole codebase</h3><p>A planner splits the scope into 2 to 8 areas, the host gives every file to one area, read-only workers read their areas in parallel, and an integrator merges the findings. Files nobody read are listed as not covered.</p></article>
         </div>
@@ -131,17 +132,18 @@
 <span class="code-key">axocoatl recipe build codex</span>
 <span class="code-key">axocoatl connect codex</span>
 
-<span class="code-comment"># then a loadout of yours names the runtime</span>
+<span class="code-comment"># then fix with the program as the writer</span>
 <span class="code-key">axocoatl run fix-claude-code</span> --task <span class="code-string">"…"</span> \
-  --model writer=<span class="code-string">anthropic:&lt;model&gt;</span> \
+  --model reviewer=<span class="code-string">ollama:gpt-oss:120b</span>
+<span class="code-key">axocoatl run fix-codex</span> --task <span class="code-string">"…"</span> \
   --model reviewer=<span class="code-string">ollama:gpt-oss:120b</span></code></pre>
         </div>
         <div class="stack">
           <span class="eyebrow">External agents</span>
           <h2>Claude Code and Codex, inside the sandbox.</h2>
-          <p>The Claude Code CLI or the Codex CLI can be a loadout's writer. It runs inside the Session container as the non-root writer user, not in your shell, and the host runs the same checks and review on what it leaves.</p>
+          <p>The built-in <code>fix-claude-code</code> and <code>fix-codex</code> run <code>fix</code> with the pinned Claude Code CLI or Codex CLI as the writer. It runs inside the Session container as the non-root writer user, not in your shell, and the host runs the same checks and review on what it leaves.</p>
           <p>Its credential stays on your computer. <code>axocoatl connect claude-code</code> runs <code>claude setup-token</code> and stores the token without showing it; <code>axocoatl connect codex</code> runs <code>codex login</code> in a throwaway container and stores your ChatGPT sign-in. The daemon adds the credential on the host to each model request the route allows, and the container holds a placeholder. Every model call is in the Session's network record, and the program's output is parsed into the Session record.</p>
-          <p>For now this takes a loadout you write; the docs have one to copy.</p>
+          <p>To change the model, the budgets or the checks, <a href="https://docs.axocoatl.ai/configure/external-agents/#write-your-own-loadout">write your own loadout</a> with <code>runtime: claude-code</code> or <code>runtime: codex</code>.</p>
           <a href="https://docs.axocoatl.ai/configure/external-agents/">Set up Claude Code or Codex →</a>
         </div>
       </div>
