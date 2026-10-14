@@ -1680,9 +1680,10 @@ async fn a_later_keep_continues_from_the_branch_an_earlier_keep_created() {
 
 #[test]
 fn the_persons_settings_are_passed_on_without_the_repositorys() {
-    let listing = b"global\0user.name\nPerson\0global\0includeif.gitdir:/w/.path\n/w.cfg\0global\0core.sshcommand\nssh -i ~/.ssh/work\0global\0credential.helper\nosxkeychain\0global\0credential.helper\n\0system\0http.sslverify\0local\0core.fsmonitor\n/evil\0command\0core.hookspath\n/dev/null\0";
+    let repo = std::path::Path::new("/w/repo");
+    let listing = b"global\0file:/h/.gitconfig\0user.name\nPerson\0global\0file:/h/.gitconfig\0includeif.gitdir:/w/.path\n/w.cfg\0global\0file:/h/.gitconfig\0core.sshcommand\nssh -i ~/.ssh/work\0global\0file:/h/.gitconfig\0credential.helper\nosxkeychain\0global\0file:/h/.gitconfig\0credential.helper\n\0system\0file:/etc/gitconfig\0http.sslverify\0local\0file:.git/config\0core.fsmonitor\n/evil\0command\0command line:\0core.hookspath\n/dev/null\0";
     assert_eq!(
-        git_host::person_settings(listing).unwrap(),
+        git_host::person_settings(listing, repo).unwrap(),
         vec![
             "user.name=Person",
             "core.sshcommand=ssh -i ~/.ssh/work",
@@ -1692,14 +1693,66 @@ fn the_persons_settings_are_passed_on_without_the_repositorys() {
         ]
     );
     assert_eq!(
-        git_host::person_settings(b"global\0url.a=b.insteadof\nx\0"),
+        git_host::person_settings(b"global\0file:/h/.gitconfig\0url.a=b.insteadof\nx\0", repo),
         None
     );
     assert_eq!(
-        git_host::person_settings(b"global\0user.name\n\xff\0"),
+        git_host::person_settings(b"global\0file:/h/.gitconfig\0user.name\n\xff\0", repo),
         None
     );
-    assert_eq!(git_host::person_settings(b""), Some(Vec::new()));
+    assert_eq!(git_host::person_settings(b"", repo), Some(Vec::new()));
+}
+
+/// Apple's git keeps `credential.helper=osxkeychain` in a configuration file
+/// of its installation that git lists with the scope `unknown`, and Keep's
+/// processes run with `GIT_CONFIG_NOSYSTEM`; that file's entries are passed on
+/// so a push to a private HTTPS remote finds the person's credential. An
+/// `unknown` entry from anywhere else, a relative or `..` path, a file inside
+/// the repository or one that resolves into it through a link, is not.
+#[test]
+fn installation_settings_outside_the_repository_are_passed_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let repo = root.join("repo");
+    let install = root.join("install");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::create_dir_all(&install).unwrap();
+    let installed = install.join("gitconfig");
+    std::fs::write(&installed, "[credential]\n\thelper = osxkeychain\n").unwrap();
+    let planted = repo.join(".git/planted");
+    std::fs::write(&planted, "[credential]\n\thelper = !evil\n").unwrap();
+    let linked = install.join("link-into-repo");
+    std::os::unix::fs::symlink(&planted, &linked).unwrap();
+    let entry = |origin: &str, value: &str| {
+        let mut bytes = b"unknown\0".to_vec();
+        bytes.extend_from_slice(origin.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(format!("credential.helper\n{value}").as_bytes());
+        bytes.push(0);
+        bytes
+    };
+    let mut listing = entry(&format!("file:{}", installed.display()), "osxkeychain");
+    for (origin, value) in [
+        (format!("file:{}", planted.display()), "!evil-inside"),
+        (format!("file:{}", linked.display()), "!evil-linked"),
+        (
+            format!("file:{}/../repo/.git/planted", install.display()),
+            "!evil-dots",
+        ),
+        ("file:.git/planted".to_string(), "!evil-relative"),
+        ("command line:".to_string(), "!evil-command"),
+        ("blob:HEAD:.gitconfig".to_string(), "!evil-blob"),
+        (
+            format!("file:{}", install.join("missing").display()),
+            "!evil-missing",
+        ),
+    ] {
+        listing.extend(entry(&origin, value));
+    }
+    assert_eq!(
+        git_host::person_settings(&listing, &repo).unwrap(),
+        vec!["credential.helper=osxkeychain"]
+    );
 }
 
 #[test]

@@ -72,7 +72,10 @@ rounds, a table of adjudications, the findings, everything not covered, the warn
 the run id with the command to verify its [record bundle](/reference/run/#record-bundle).
 
 `git` and `gh` run on your computer with your own credentials and configuration. Nothing
-runs in a container for this, and Axocoatl reads no credential. The daemon finds them on
+runs in a container for this, and Axocoatl reads no credential. Your global and system git
+settings apply, and so does the configuration your git installation carries beside them,
+such as Apple's `/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig`, which
+sets the `osxkeychain` credential helper; the repository's own settings never do. The daemon finds them on
 its own `PATH`: a service installed with `axocoatl service install` records the
 directories of the `git` and `gh` your shell found at install time, and a refusal names
 the `PATH` it searched.

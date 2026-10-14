@@ -108,6 +108,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [The Vercel AI Gateway](https://docs.axocoatl.ai/configure/e2e-check/#the-vercel-ai-gateway).
 
 ### Fixed
+- Keep as PR pushes to a private HTTPS remote with Apple's git. Apple's git sets its
+  `osxkeychain` credential helper in a configuration file of its installation, which Keep
+  left out with the system file, so the push could not authenticate (`could not read
+  Username for 'https://github.com'`). Keep now passes on entries from a configuration
+  file of the git installation outside the repository, and still never the repository's.
 - **A Session whose folder is gone no longer blocks other Sessions and runs, and can be
   deleted.** When the folder a Session works in was deleted, moved away, or replaced by
   a file or a symbolic link, every request that looked at that Session's attempt state
