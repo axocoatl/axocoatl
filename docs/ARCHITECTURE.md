@@ -46,6 +46,15 @@ for each distinct path, and the Session files are linked idempotently. The path-
 creation API remains compatible by finding or creating that Workspace; the browser uses the
 Workspace-scoped creation API so a New Session action cannot change folders implicitly.
 
+A directory moved to a new path (same device, inode and birth time, seen while the daemon
+runs) moves its Workspace's canonical path with it when the old path is no longer a
+directory; when the old path is a directory again, the new path is a new Workspace. A
+Session keeps its `working_dir`: one whose folder is gone, is a file or a link, or is no
+longer its Workspace's path is skipped by scans over Sessions (run admission, Workspace
+ownership, reconnect, shutdown, startup reconciliation), can be closed and deleted, and is
+refused for any use with the folder named. The folder is opened only through `SecureDir`,
+never created and never followed through a link.
+
 A request can execute as one session turn or as several isolated attempts with different
 agents and models. Attempts are checked and compared, one result is kept, and the resulting
 changes return to the session checkout for git review. See [PRODUCT.md](PRODUCT.md) for the

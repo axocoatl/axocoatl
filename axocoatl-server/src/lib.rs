@@ -928,6 +928,9 @@ async fn wait_for_shutdown_request(state: AppState) {
     state.read().await.begin_shutdown();
 }
 
+#[cfg(all(test, unix))]
+mod missing_workspace_tests;
+
 #[cfg(test)]
 mod tests {
     use super::{bind_listeners, is_loopback_host, local_token_mode, server_auth_config};

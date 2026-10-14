@@ -34,6 +34,8 @@ use session_history::HistoryMutation;
 mod runtime_volumes;
 #[path = "bootstrap_session_dispatch.rs"]
 pub(crate) mod session_dispatch;
+#[path = "bootstrap_session_folder.rs"]
+mod session_folder;
 #[path = "bootstrap_session_native_lifecycle.rs"]
 mod session_native_lifecycle;
 #[path = "bootstrap_session_network_policy.rs"]
@@ -3748,6 +3750,11 @@ pub struct AxocoatlDaemon {
     /// What holds each Workspace operation, for the busy refusals of
     /// requests that found it held (see [`workspace_operation`]).
     workspace_operation_labels: Arc<workspace_operation::WorkspaceOperationLabels>,
+    /// Sessions whose Workspace folder is gone, with the folder and why, so
+    /// the daemon log says so once rather than on every scan (see
+    /// [`session_folder`]).
+    unavailable_session_folders:
+        std::sync::Mutex<HashMap<String, (std::path::PathBuf, session_folder::FolderGone)>>,
     pub tool_executor: Arc<ToolExecutor>,
     shared_registry: Arc<axocoatl_memory::SharedBlockRegistry>,
     agent_handles: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
@@ -4177,12 +4184,14 @@ impl AxocoatlDaemon {
             // attempt metadata. Authority-labeled orphan discovery handles
             // any container whose host record has disappeared; do not make an
             // otherwise reviewable historical Session prevent startup merely
-            // because its drive is temporarily unavailable.
+            // because its drive is temporarily unavailable, or because its
+            // folder was moved or replaced by a file or a link (which is
+            // never followed).
             if !session.working_dir.is_absolute() || !session.working_dir.is_dir() {
                 continue;
             }
-            let Some(set) =
-                Self::read_current_attempt_set_host(&session.working_dir, &session.id).await?
+            let Ok(Some(set)) =
+                Self::probe_current_attempt_set_host(&session.working_dir, &session.id).await?
             else {
                 continue;
             };
@@ -5521,6 +5530,7 @@ impl AxocoatlDaemon {
             attempt_cancellations: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
             attempt_operations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             workspace_operation_labels: Arc::default(),
+            unavailable_session_folders: std::sync::Mutex::new(HashMap::new()),
             automation_store,
             pending_interrupts,
             run_store,
@@ -6331,12 +6341,36 @@ impl AxocoatlDaemon {
         path: &str,
         name: Option<&str>,
     ) -> Result<Workspace, DaemonError> {
+        self.register_workspace(path, name).await
+    }
+
+    /// Register `path` and mark its Workspace active. A Workspace whose
+    /// directory was moved to `path` moves with it (see
+    /// [`WorkspaceStore::register_reporting_move`]); its Sessions keep the
+    /// old path and are refused with what to do, so a stale path is never
+    /// used.
+    async fn register_workspace(
+        &self,
+        path: &str,
+        name: Option<&str>,
+    ) -> Result<Workspace, DaemonError> {
         let mut workspaces = self.workspace_store.lock().await;
-        let workspace = workspaces
-            .register(path, name)
+        let registered = workspaces
+            .register_reporting_move(path, name)
             .map_err(|error| DaemonError::Session(error.to_string()))?;
+        if let Some(previous) = &registered.moved_from {
+            tracing::warn!(
+                workspace = %registered.workspace.id,
+                from = %previous.display(),
+                to = %registered.workspace.canonical_path.display(),
+                "the Workspace's folder moved from {} to {}; its Sessions made in the old \
+                 folder cannot be used until the folder is moved back, and can be deleted",
+                previous.display(),
+                registered.workspace.canonical_path.display()
+            );
+        }
         workspaces
-            .touch(&workspace.id)
+            .touch(&registered.workspace.id)
             .map_err(|error| DaemonError::Session(error.to_string()))
     }
 
@@ -6441,15 +6475,7 @@ impl AxocoatlDaemon {
         setup_reviewed: bool,
     ) -> Result<Session, DaemonError> {
         validate_session_mode(&self.config, &mode)?;
-        let workspace = {
-            let mut workspaces = self.workspace_store.lock().await;
-            let workspace = workspaces
-                .register(working_dir, None)
-                .map_err(|error| DaemonError::Session(error.to_string()))?;
-            workspaces
-                .touch(&workspace.id)
-                .map_err(|error| DaemonError::Session(error.to_string()))?
-        };
+        let workspace = self.register_workspace(working_dir, None).await?;
         // A lifecycle action never waits for the Workspace: a busy one
         // refuses at once, naming who holds it.
         let _operation = self
@@ -6781,7 +6807,17 @@ impl AxocoatlDaemon {
 
     /// Close a Session: quiesce execution, pause a durable remote runtime (or
     /// stop its local runtime), and retain the Session for explicit Reopen.
+    ///
+    /// A Session whose Workspace folder is gone closes all the same, and the
+    /// log says the folder was already gone.
     pub async fn close_session(&self, id: &str) -> Result<(), DaemonError> {
+        let gone = self.session_folder_gone(id).await;
+        self.close_session_inner(id).await?;
+        self.after_session_folder_lifecycle(id, "closed", gone);
+        Ok(())
+    }
+
+    async fn close_session_inner(&self, id: &str) -> Result<(), DaemonError> {
         // A normal Session turn owns the same per-Session operation lease that
         // Close needs below. Request cooperative cancellation first so Close
         // waits only through an already-started tool's safe boundary, rather
@@ -6803,7 +6839,9 @@ impl AxocoatlDaemon {
         let (mut dispatch_cleanup, _named) = self
             .prepare_lifecycle_cleanup(id, &request, workspace)
             .await?;
-        let current_set = self.peek_current_attempt_set(id).await?.map(|set| set.id);
+        // A Session whose folder is gone still closes: there is nothing in
+        // the folder to stop, and the log says so once.
+        let current_set = self.peek_available_attempt_set(id).await?.map(|set| set.id);
         let (_operation, _cancellation_requested) = match dispatch_cleanup.take_operation() {
             Some(operation) => (operation, false),
             None => {
@@ -6869,6 +6907,11 @@ impl AxocoatlDaemon {
         self.require_runtime_admission()?;
         self.session_dispatch_lifecycles
             .require_session_reopenable(id)?;
+        // A Session whose folder is gone or moved stays closed, with what
+        // to do.
+        if let Some(session) = self.get_session(id).await {
+            self.require_session_folder(&session).await?;
+        }
         let _operation = self
             .take_session_lifecycle_operation(
                 id,
@@ -6912,7 +6955,19 @@ impl AxocoatlDaemon {
     /// JSON from disk. Memory tiers under `{data_dir}/memory/{session_id}` are
     /// left in place; a user that creates a new session pointing at the same
     /// directory gets a fresh memory slate (different session id).
+    ///
+    /// A Session whose Workspace folder is gone (deleted, moved away, or
+    /// replaced by a file or a link) is deleted all the same: only the
+    /// daemon's own records are removed, and the log says the folder was
+    /// already gone.
     pub async fn delete_session(&self, id: &str) -> Result<(), DaemonError> {
+        let gone = self.session_folder_gone(id).await;
+        self.delete_session_inner(id).await?;
+        self.after_session_folder_lifecycle(id, "deleted", gone);
+        Ok(())
+    }
+
+    async fn delete_session_inner(&self, id: &str) -> Result<(), DaemonError> {
         let native = self.uses_native_session_history();
         let known = self.get_session(id).await.is_some();
         if !native {
@@ -6941,8 +6996,10 @@ impl AxocoatlDaemon {
             .take_session_lifecycle_workspace(id, &request.refused, true)
             .await?;
         // Its own Ways are discarded under the Workspace Delete now holds.
+        // A Session whose folder is gone has no Ways to discard: Delete
+        // removes only the daemon's own records of it.
         if native && matches!(workspace, workspace_operation::LifecycleWorkspace::Taken(_)) {
-            if let Some(set) = self.peek_current_attempt_set(id).await? {
+            if let Some(set) = self.peek_available_attempt_set(id).await? {
                 self.discard_attempt_as(id, &set.id, true).await?;
             }
         }
@@ -6981,7 +7038,7 @@ impl AxocoatlDaemon {
                 .complete_session_cleanup(&dispatch_cleanup)?;
             return self.session_dispatch_lifecycles.forget_deleted_session(id);
         }
-        let current_set = self.peek_current_attempt_set(id).await?.map(|set| set.id);
+        let current_set = self.peek_available_attempt_set(id).await?.map(|set| set.id);
         let (_operation, _cancellation_requested) = match dispatch_cleanup.take_operation() {
             Some(operation) => (operation, false),
             None => {
@@ -7547,6 +7604,11 @@ impl AxocoatlDaemon {
         setup_approved: bool,
         setup_reviewed: bool,
     ) -> Result<Session, DaemonError> {
+        // A Session whose folder is gone or moved keeps its environment
+        // unchanged; the refusal says what to do.
+        if let Some(session) = self.get_session(id).await {
+            self.require_session_folder(&session).await?;
+        }
         if self.uses_native_session_history() {
             return self
                 .configure_native_session_environment(
@@ -7710,7 +7772,7 @@ impl AxocoatlDaemon {
             .await?;
         axocoatl_isolation::e2b::E2bSandbox::wait_for_owned_start(id).await;
         if self.active_session_turns.lock().await.contains_key(id)
-            || self.peek_current_attempt_set(id).await?.is_some()
+            || self.peek_available_attempt_set(id).await?.is_some()
         {
             return Err(DaemonError::SessionConflict(
                 "runtime cleanup cannot be confirmed while Session work is active or unresolved"
@@ -8546,17 +8608,17 @@ impl AxocoatlDaemon {
                         setup_results: Vec::new(),
                     }
                 })?;
-                let working_root = SecureDir::open(&session.working_dir).map_err(|error| {
-                    SessionEnvironmentPreparationError {
-                        error: DaemonError::Session(format!(
-                            "opening retained Session Workspace '{}': {error}",
-                            session.working_dir.display()
-                        )),
+                // Never a folder that is gone, replaced by a file or a link,
+                // or that its Workspace moved away from.
+                let working_root = self
+                    .require_session_folder(session)
+                    .await
+                    .map_err(|error| SessionEnvironmentPreparationError {
+                        error,
                         effective_image: None,
                         runtime: None,
                         setup_results: Vec::new(),
-                    }
-                })?;
+                    })?;
                 // The Session's own network: the global setting, or its
                 // loadout's (egress or none) for a loadout Session.
                 let network = self
@@ -8993,6 +9055,9 @@ impl AxocoatlDaemon {
     /// preparation lifecycle and ordinary product access must leave it alone.
     async fn ensure_sandbox(&self, session: &Session) -> Result<Arc<dyn Sandbox>, DaemonError> {
         self.require_runtime_admission()?;
+        // A Session whose folder is gone, replaced, or moved is refused with
+        // what to do, before any runtime is reused or started on its path.
+        self.require_session_folder(session).await?;
         self.require_no_unresolved_attempt(&session.id).await?;
         let start = {
             let mut starts = self.sandbox_starts.lock().await;
@@ -9877,12 +9942,7 @@ impl AxocoatlDaemon {
         let _runtime_admission = self.runtime_creation_lease().await?;
         self.ensure_deferred_local_cleanup().await?;
         self.verify_control_plane_roots()?;
-        let working_root = SecureDir::open(&session.working_dir).map_err(|error| {
-            DaemonError::Session(format!(
-                "opening retained recovery Workspace '{}': {error}",
-                session.working_dir.display()
-            ))
-        })?;
+        let working_root = self.require_session_folder(session).await?;
         let recovery_git = working_root.existing_child(".git").map_err(|error| {
             DaemonError::AttemptConflict(format!(
                 "attempt recovery requires a real, unlinked primary Git directory: {error}"
@@ -10582,38 +10642,14 @@ impl AxocoatlDaemon {
         // Derive a clean clone plan before creating a billable VM. Retain the
         // registered Workspace inode throughout inspection; an ambient
         // `.git.exists()` check would follow a replaced Workspace or symlink.
-        let registered_workspace = self
-            .workspace_store
-            .lock()
+        // A folder that is gone, replaced, or that the Workspace moved away
+        // from is refused with what to do.
+        let workspace_root = self
+            .require_session_folder(session)
             .await
-            .get(&session.workspace_id)
-            .ok_or_else(|| {
+            .map_err(|error| {
                 SessionEnvironmentPreparationError::e2b_creation(
-                    DaemonError::Session(format!(
-                        "Session '{}' references missing Workspace '{}'",
-                        session.id, session.workspace_id
-                    )),
-                    Some(effective_image.clone()),
-                    None,
-                )
-            })?;
-        if registered_workspace.canonical_path != session.working_dir {
-            return Err(SessionEnvironmentPreparationError::e2b_creation(
-                DaemonError::Session(format!(
-                    "Session '{}' Workspace path does not match registered Workspace '{}'",
-                    session.id, session.workspace_id
-                )),
-                Some(effective_image.clone()),
-                None,
-            ));
-        }
-        let workspace_root =
-            SecureDir::open(&registered_workspace.canonical_path).map_err(|error| {
-                SessionEnvironmentPreparationError::e2b_creation(
-                    DaemonError::Session(format!(
-                        "opening retained E2B Workspace '{}': {error}",
-                        registered_workspace.canonical_path.display()
-                    )),
+                    error,
                     Some(effective_image.clone()),
                     None,
                 )
@@ -11483,7 +11519,8 @@ impl AxocoatlDaemon {
             .map(|owner| (owner.workspace.clone(), owner))
             .collect::<HashMap<_, _>>();
         for session in self.list_sessions().await {
-            match Self::read_current_attempt_set_host(&session.working_dir, &session.id).await {
+            // A Session whose folder is gone owns nothing (logged once).
+            match self.available_attempt_set_of(&session).await {
                 Ok(Some(set)) => {
                     attempt_ownerships.insert(
                         session.workspace_id.clone(),
@@ -13627,14 +13664,31 @@ trap - 0 1 2 15
             .map_err(|_| DaemonError::Session("attempt metadata escaped Workspace".to_string()))
     }
 
+    /// Session `session_id`'s Workspace folder `workspace`, for its attempt
+    /// metadata. A folder that is gone is a refusal that names it and says
+    /// how to fix it.
+    fn open_attempt_workspace_host(
+        workspace: &std::path::Path,
+        session_id: &str,
+        what: &str,
+    ) -> Result<SecureDir, DaemonError> {
+        match session_folder::open_workspace_folder(workspace) {
+            Ok(Ok(root)) => Ok(root),
+            Ok(Err(gone)) => Err(DaemonError::Session(session_folder::folder_gone_message(
+                session_id, workspace, gone,
+            ))),
+            Err(error) => Err(DaemonError::Session(format!(
+                "opening Workspace attempt {what}: {error}"
+            ))),
+        }
+    }
+
     fn open_attempt_root_host(
         workspace: &std::path::Path,
         session_id: &str,
         set_id: &str,
     ) -> Result<SecureDir, DaemonError> {
-        let workspace_root = SecureDir::open(workspace).map_err(|error| {
-            DaemonError::Session(format!("opening Workspace attempt metadata: {error}"))
-        })?;
+        let workspace_root = Self::open_attempt_workspace_host(workspace, session_id, "metadata")?;
         let relative = Self::attempt_root_relative(workspace, session_id, set_id)?;
         workspace_root.existing_child(&relative).map_err(|error| {
             DaemonError::Session(format!("opening retained attempt metadata: {error}"))
@@ -13647,9 +13701,7 @@ trap - 0 1 2 15
         set_id: &str,
         index: usize,
     ) -> Result<SecureDir, DaemonError> {
-        let workspace_root = SecureDir::open(workspace).map_err(|error| {
-            DaemonError::Session(format!("opening Workspace attempt clone: {error}"))
-        })?;
+        let workspace_root = Self::open_attempt_workspace_host(workspace, session_id, "clone")?;
         let lane = crate::attempts::worktree_path(workspace, session_id, set_id, index);
         let relative = lane
             .strip_prefix(workspace)
@@ -13666,9 +13718,8 @@ trap - 0 1 2 15
         workspace: &std::path::Path,
         set: &crate::git::AttemptSet,
     ) -> Result<SecureDir, DaemonError> {
-        let workspace_root = SecureDir::open(workspace).map_err(|error| {
-            DaemonError::Session(format!("opening Workspace attempt metadata: {error}"))
-        })?;
+        let workspace_root =
+            Self::open_attempt_workspace_host(workspace, &set.session_id, "metadata")?;
         let attempt_relative = Self::attempt_root_relative(workspace, &set.session_id, &set.id)?;
         let attempt_root = workspace_root.child(&attempt_relative).map_err(|error| {
             DaemonError::Session(format!("opening retained attempt metadata: {error}"))
@@ -13728,13 +13779,40 @@ trap - 0 1 2 15
         Self::read_current_attempt_set_host(&session.working_dir, session_id).await
     }
 
+    /// The durable current-set pointer of `session_id` below `workspace`.
+    /// A Workspace folder that is gone (missing, a file or a link) is a
+    /// refusal that names it and says how to fix it; scans over Sessions use
+    /// [`Self::probe_current_attempt_set_host`] instead and skip it.
     async fn read_current_attempt_set_host(
         workspace: &std::path::Path,
         session_id: &str,
     ) -> Result<Option<crate::git::AttemptSet>, DaemonError> {
-        let workspace_root = SecureDir::open(workspace).map_err(|error| {
-            DaemonError::Session(format!("opening Workspace attempt metadata: {error}"))
-        })?;
+        Self::probe_current_attempt_set_host(workspace, session_id)
+            .await?
+            .map_err(|gone| {
+                DaemonError::Session(session_folder::folder_gone_message(
+                    session_id, workspace, gone,
+                ))
+            })
+    }
+
+    /// [`Self::read_current_attempt_set_host`], with a Workspace folder that
+    /// is gone as `Ok(Err(why))`. The folder is opened without following a
+    /// link and is never created.
+    pub(crate) async fn probe_current_attempt_set_host(
+        workspace: &std::path::Path,
+        session_id: &str,
+    ) -> Result<Result<Option<crate::git::AttemptSet>, session_folder::FolderGone>, DaemonError>
+    {
+        let workspace_root = match session_folder::open_workspace_folder(workspace) {
+            Ok(Ok(root)) => root,
+            Ok(Err(gone)) => return Ok(Err(gone)),
+            Err(error) => {
+                return Err(DaemonError::Session(format!(
+                    "opening Workspace attempt metadata: {error}"
+                )))
+            }
+        };
         let current = crate::attempts::session_attempts_root(workspace, session_id)
             .strip_prefix(workspace)
             .map_err(|_| DaemonError::Session("attempt metadata escaped Workspace".to_string()))?
@@ -13742,7 +13820,7 @@ trap - 0 1 2 15
         let Some(set) =
             Self::read_host_json_file::<crate::git::AttemptSet>(&workspace_root, &current)?
         else {
-            return Ok(None);
+            return Ok(Ok(None));
         };
         if set.session_id != session_id {
             return Err(DaemonError::Session(format!(
@@ -13750,7 +13828,7 @@ trap - 0 1 2 15
                 set.session_id
             )));
         }
-        Ok(Some(set))
+        Ok(Ok(Some(set)))
     }
 
     async fn current_attempt_set(
@@ -15092,7 +15170,7 @@ trap - 0 1 2 15
                 _ = tokio::time::sleep(Duration::from_millis(100)),
                     if expected_set_id.is_some() && !cancellation_requested =>
                 {
-                    let Some(set) = self.peek_current_attempt_set(session_id).await? else {
+                    let Some(set) = self.peek_available_attempt_set(session_id).await? else {
                         continue;
                     };
                     if !Self::attempt_is_interrupt_target(
@@ -15165,7 +15243,10 @@ trap - 0 1 2 15
         }
         drop(active);
         for owner in peers {
-            if let Some(set) = self.peek_current_attempt_set(&owner).await? {
+            // A peer whose folder is gone (deleted, moved away, replaced by
+            // a file or a link) has no attempt set anything can resolve, so
+            // it never stops this Workspace's other Sessions or runs.
+            if let Some(set) = self.peek_available_attempt_set(&owner).await? {
                 return Ok(Some((owner, set.id)));
             }
         }
@@ -15721,6 +15802,10 @@ trap - 0 1 2 15
     }
 
     async fn remove_variant_worktrees_locked(&self, session_id: &str) -> Result<(), DaemonError> {
+        // Delete: a folder that is gone holds no Ways to discard.
+        if self.peek_available_attempt_set(session_id).await?.is_none() {
+            return Ok(());
+        }
         let Some(set) = self.current_attempt_set(session_id).await? else {
             return Ok(());
         };
@@ -15728,7 +15813,8 @@ trap - 0 1 2 15
     }
 
     async fn quiesce_attempt_locked(&self, session_id: &str) -> Result<(), DaemonError> {
-        let Some(set) = self.peek_current_attempt_set(session_id).await? else {
+        // Close and shutdown: a folder that is gone holds no Ways to stop.
+        let Some(set) = self.peek_available_attempt_set(session_id).await? else {
             return Ok(());
         };
         if set.lanes.is_empty() || set.lanes.len() > 100 {
@@ -16053,6 +16139,9 @@ trap - 0 1 2 15
             });
         }
 
+        // Ways never start (nor stop the Workspace's other runtimes) for a
+        // Session whose folder is gone or moved; the refusal says what to do.
+        self.require_session_folder(&session).await?;
         self.require_no_unresolved_attempt(session_id).await?;
         if self.stream_bus.contains_run(session_id) {
             return Err(DaemonError::AttemptConflict(
@@ -20838,6 +20927,9 @@ trap - 0 1 2 15
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        // A turn never starts in a folder that is gone or that its
+        // Workspace moved away from; the refusal says what to do.
+        self.require_session_folder(&session).await?;
         let turn_already_exists = self.session_turn_store.lock().await.get(turn_id).is_some();
         let checkpoint_transaction =
             session_uses_checkpoint_transaction(&self.config, &session.mode);
@@ -22943,7 +23035,8 @@ trap - 0 1 2 15
                     continue;
                 }
             };
-            let current_set = match self.peek_current_attempt_set(&session.id).await {
+            // A Session whose folder is gone has no Ways to stop.
+            let current_set = match self.peek_available_attempt_set(&session.id).await {
                 Ok(set) => set.map(|set| set.id),
                 Err(error) => {
                     failures.push(format!("{}: reading Ways state: {error}", session.name));

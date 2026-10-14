@@ -357,7 +357,7 @@ impl AxocoatlDaemon {
             let holder = self.workspace_operation_labels.session(&key);
             let mut own_work = false;
             if holder.as_deref() == Some(id) {
-                if let Some(set) = self.peek_current_attempt_set(id).await? {
+                if let Some(set) = self.peek_available_attempt_set(id).await? {
                     if Self::attempt_state_is_interruptible(set.state) {
                         own_work = true;
                         match self.request_attempt_cancellation(id, &set.id).await {

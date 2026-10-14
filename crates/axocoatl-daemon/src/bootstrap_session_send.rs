@@ -239,6 +239,11 @@ impl AxocoatlDaemon {
         }
         self.require_no_unresolved_attempt(&source.session_id)
             .await?;
+        // A turn never starts in a folder that is gone or that its
+        // Workspace moved away from; the refusal says what to do.
+        if let Some(session) = self.get_session(&source.session_id).await {
+            self.require_session_folder(&session).await?;
+        }
         let model_selections = self
             .prepare_native_send_model_selection(&token, source, &turn_id)
             .await?;
