@@ -1050,6 +1050,14 @@ impl crate::loadout::RunHost for TestRunHost {
         Ok(self.daemon.loadout_network_summary(session_id).await)
     }
 
+    async fn seal(
+        &self,
+        run_id: &str,
+        outcome: &axocoatl_session::run_outcome::RunOutcome,
+    ) -> Result<(), String> {
+        self.daemon.seal_loadout_run(run_id, outcome).await
+    }
+
     async fn finish(
         &self,
         run_id: &str,
@@ -1623,6 +1631,81 @@ async fn pinned_run(
         assert_eq!(manifest.loadout.id, loadout_id, "{context}");
         assert!(manifest.loadout.builtin, "{context}");
         assert_eq!(manifest.params["writer_model"], writer_model, "{context}");
+    }
+    // The run's receipt, signed with this data root's key, names the
+    // external runtime, the program's pinned version and the stored
+    // credential its route sent (for `fix-codex`, the one `auto` chose),
+    // and says whether the route to its model API checked model-call
+    // bodies. It holds no credential value.
+    {
+        use axocoatl_session::receipt::{check_signature, open_receipt, PublicKey, SignatureCheck};
+        let bytes = daemon
+            .loadout_run_receipt(&accepted.run_id)
+            .unwrap_or_else(|error| panic!("no receipt: {error}\n{context}"));
+        let key = daemon.receipt_public_key().await.unwrap();
+        let opened = open_receipt(&bytes).unwrap();
+        assert_eq!(
+            check_signature(&opened, &[PublicKey::from_base64(&key.public_key).unwrap()]),
+            SignatureCheck::Trusted {
+                key_id: key.key_id.clone()
+            },
+            "{context}"
+        );
+        let predicate = &opened.statement.predicate;
+        assert_eq!(predicate.run.run_id, accepted.run_id, "{context}");
+        assert_eq!(predicate.verdict, outcome.verdict, "{context}");
+        assert_eq!(predicate.loadout.id, loadout_id, "{context}");
+        assert_eq!(predicate.loadout.builtin, builtin, "{context}");
+        let agent = predicate
+            .agents
+            .iter()
+            .find(|agent| agent.id == "writer")
+            .unwrap_or_else(|| panic!("no writer in the receipt\n{context}"));
+        assert_eq!(agent.runtime, recipe, "{context}");
+        assert_eq!(
+            agent.program_version.as_deref(),
+            Some(match runtime {
+                AgentRuntime::ClaudeCode => crate::external_agent::claude_code::CLAUDE_CODE_VERSION,
+                _ => crate::external_agent::codex::CODEX_VERSION,
+            }),
+            "{context}"
+        );
+        assert_eq!(agent.credential.as_deref(), Some(credential), "{context}");
+        assert_eq!(agent.provider, writer.model.provider, "{context}");
+        assert_eq!(agent.model, writer.model.model, "{context}");
+        assert_eq!(predicate.sandbox.network, "egress", "{context}");
+        let session_policy = predicate
+            .sandbox
+            .policies
+            .iter()
+            .find(|policy| policy.scope == "session")
+            .unwrap_or_else(|| panic!("no session policy in the receipt\n{context}"));
+        let checks = if web_search == Some(SearchRoute::Allow) {
+            "allow"
+        } else {
+            "refuse"
+        };
+        assert!(
+            session_policy
+                .routes
+                .iter()
+                .any(|route| route.host == host && route.provider_fetch.as_deref() == Some(checks)),
+            "{:?}\n{context}",
+            session_policy.routes
+        );
+        let text = String::from_utf8_lossy(&opened.payload).into_owned();
+        for value in std::iter::once(&secret).chain(hidden.iter()) {
+            assert!(!text.contains(value.as_str()), "{context}");
+        }
+        eprintln!(
+            "{recipe}: receipt writer {} {} {}:{} credential {:?}; session routes {:?}",
+            agent.runtime,
+            agent.program_version.as_deref().unwrap_or("-"),
+            agent.provider,
+            agent.model,
+            agent.credential,
+            session_policy.routes
+        );
     }
     // Claude Code reports what its run cost. Codex reports tokens but no
     // cost: the run's cost is computed from them at gpt-5.5's pinned list
