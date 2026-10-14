@@ -198,6 +198,15 @@
               model with the gateway's OpenAI-compatible API instead
               (<a href="https://docs.axocoatl.ai/configure/e2e-check/#the-vercel-ai-gateway">the e2e check</a>).</li>
         </ul>
+
+        <h3>Fixed</h3>
+        <ul>
+          <li>A Session whose folder was deleted, moved, or replaced by a file or a link no
+              longer blocks other Sessions and runs, and can be closed and deleted. The
+              daemon starts again when a Session folder became a symbolic link.</li>
+          <li>A run in a repository moved to another path works in the new path, not the old
+              one.</li>
+        </ul>
       </article>
 
       <article class="release">
