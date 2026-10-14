@@ -5,6 +5,58 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Built-in loadouts `fix-claude-code` and `fix-codex`: Claude Code or Codex through
+  Axocoatl with one command.** After `axocoatl recipe build claude-code` (or `codex`)
+  and `axocoatl connect claude-code` (or `connect codex`, or `connect codex --api-key`),
+  `axocoatl run fix-claude-code --task "…" --model reviewer=<provider:model>` (or
+  `fix-codex`) runs the built-in `fix` with the pinned Claude Code 2.1.292 or Codex
+  0.160.1 as the writer, inside the Session container from its recipe image: the same
+  required check (the repository's check command or `--check`, 3 minutes), the same
+  required review by the reviewer's model for up to 3 rounds, the same adjudications,
+  `network: egress` and the `hardened` workload. The writer's model is a parameter with
+  a default, `anthropic:sonnet` (an alias Claude Code 2.1.292 resolves to
+  `claude-sonnet-5-5`) or `openai:gpt-6.1-sol` (the first model of Codex 0.160.1's
+  bundled catalog, in Axocoatl's price table); `--model writer=` replaces it. The
+  reviewer is required and has no default. The writer's budget is 4 activations, 20,000,000
+  tokens and $10, with 400 invocations for Claude Code and 200 for Codex, which has no
+  spending stop of its own; the reviewer's is `fix`'s. The tokens hold one call of every
+  pinned model (1,000,000 for a 1M-window Claude model, 400,000 for Codex's), and leave
+  room for a program that reports its cached context on every request. These numbers are
+  choices, not measurements. Axocoatl's Podman tests run both built-ins end to end with
+  their default models from the recipe images against fake model APIs, with a reviewer
+  that asks for one change: Claude Code's requests named `claude-sonnet-5-5`, and Codex
+  ran `gpt-6.1-sol` in its code mode.
+- **A Codex writer's `credential` can be `auto` or a parameter.** `fix-codex` declares
+  `credential` as a `text` parameter with the default `auto`: when the run is admitted
+  it takes `codex-openai` when it is stored (as a secret or a configured credential),
+  else `codex-chatgpt`, and with neither it is refused before anything starts (exit code
+  3), saying to run `axocoatl connect codex` or `axocoatl connect codex --api-key`.
+  `--param credential=codex-openai` or `codex-chatgpt` chooses one. A user loadout can
+  write `credential: auto`, or `{param: name}`, too; a Claude Code writer's `auto` is
+  `claude-code-oauth`. Every external writer's run records the credential its route
+  sent: the run manifest's `credentials` (applied again, not chosen anew, after a daemon
+  restart), a `note` event that `axocoatl run` prints as the run starts, and the
+  Outcome's notes (summary, JUnit `run` case, Run outcome panel, record bundle); the
+  retained definition names it too.
+- `axocoatl loadouts show` ends with the run command as Settings shows it,
+  `--model ROLE=provider:model` for a `ROLE_model` parameter, leaving out parameters
+  with a default. A loadout's graph shows a parameter's default and an external
+  writer's credential.
+
+### Changed
+- **A user loadout that declares a built-in id no longer leaves the choice to
+  Axocoatl.** Such a file was listed with an error while a run of the id silently ran
+  the built-in. Now, while a file declares `fix`, `fix-claude-code`, `fix-codex`, `qa`
+  or `audit`, a run of that id is refused (exit code 3) naming the file, the built-in's
+  row in `axocoatl loadouts list`, `GET /api/loadouts` and Settings carries the warning
+  `user_loadout_uses_builtin_id`, and the file's row says how to keep it (another id,
+  such as `my-fix-claude-code`) or use the built-in (remove the file). The 1.3 external
+  agents documentation showed a `fix-claude-code` loadout to write yourself; that id is
+  now built in, and the messages say so.
+
 ## [1.3.2] - 2026-10-14
 
 ### Security

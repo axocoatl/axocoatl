@@ -523,7 +523,15 @@ pub async fn run_to_outcome_with(
         }
     }
     outcome.unreadable_findings = report.unreadable_findings.clone();
-    outcome.notes = report.notes.clone();
+    // Admission's notes (the credential each external writer's route
+    // sends), then the driver's.
+    outcome.notes = run
+        .resolved
+        .notes
+        .iter()
+        .chain(&report.notes)
+        .cloned()
+        .collect();
     outcome.warnings = warnings(run, &report, &report.turns);
     let events = host.recorded_events(&run.run_id).await.unwrap_or_default();
     outcome.usage = usage(&report.turns, &events);

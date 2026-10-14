@@ -19,14 +19,14 @@ axocoatl run <LOADOUT> (--task <TEXT> | --task-file <FILE|->)
 
 | Flag | Meaning |
 | --- | --- |
-| `<LOADOUT>` | A loadout id: `fix`, `qa`, `audit` or one of yours. Every run names its loadout, so the opt-in `audit` runs only when you ask for it here. |
+| `<LOADOUT>` | A loadout id: `fix`, `fix-claude-code`, `fix-codex`, `qa`, `audit` or one of yours. Every run names its loadout, so the opt-in `audit` runs only when you ask for it here. A built-in id that a file of yours also declares is refused, naming the file, until you rename or remove it (see [Where loadouts live](/configure/loadouts/#where-loadouts-live)). |
 | `--task <TEXT>` | The request, as you would type it in a Session. |
 | `--task-file <FILE>` | Read the request from a file; `-` reads standard input. |
 | `--repo <DIR>` | The repository; default the current directory. The daemon resolves it to a canonical path and uses the Workspace for it, creating one if needed. |
 | `--junit <FILE>` | Write the [JUnit file](#junit) of checks and findings. |
 | `--record <FILE>` | Write the [record bundle](#record-bundle). |
-| `--model <ROLE>=<PROVIDER:MODEL>` | Sets the parameter `<ROLE>_model`, such as `--model writer=ollama:qwen3-coder:30b`. Repeatable. |
-| `--param <NAME>=<VALUE>` | Sets a loadout parameter. Repeatable. An unknown name is a usage error. |
+| `--model <ROLE>=<PROVIDER:MODEL>` | Sets the parameter `<ROLE>_model`, such as `--model writer=ollama:qwen3-coder:30b`. Repeatable. A parameter with a default needs none: `fix-claude-code` and `fix-codex` need only `--model reviewer=…`. |
+| `--param <NAME>=<VALUE>` | Sets a loadout parameter, such as `--param credential=codex-chatgpt` for `fix-codex`. Repeatable. An unknown name is a usage error. |
 | `--check <CMD>` | The command a `detected: true` check runs, as `sh -c`, in place of the repository's detected check command. Needed when the repository has none. |
 | `--setup <CMD>` | The exact setup command this run approves, in place of the loadout's `environment.setup`. |
 | `--keep none\|branch\|pr` | What to do with a passing run's changes; default `none`. See [Keep as PR](/workbench/keep-as-pr/). |
@@ -77,7 +77,8 @@ on the repository is admitted. The Outcome keeps each turn as it was observed.
 ## What it prints
 
 1. Once the daemon has admitted the run: the run id, the Session id and any warnings, on
-   standard error. Admission prepares the Session's environment first; when that takes
+   standard error, then admission's notes, such as the stored credential an external
+   writer's route sends (`· note: Agent writer (codex) sends the stored credential …`). Admission prepares the Session's environment first; when that takes
    more than a few seconds, a line says the command is waiting. A refused run prints its
    reason and never says that it started.
 2. One line per phase, turn start and end, warning, not-covered entry and provider retry,
@@ -86,8 +87,9 @@ on the repository is admitted. The Outcome keeps each turn as it was observed.
    state, exit code and report counts; the review verdict and rounds; each adjudication
    (finding, decision, reason); the findings, each with its area, severity and location
    when known, and "fails on clean build" shown as such; every not-covered entry with its
-   reason; the notes (what was neither a gap nor a warning, such as what an audit
-   worker said it did not reach, or the files an audit gave to its area `rest`); the
+   reason; the notes (what was neither a gap nor a warning, such as the stored
+   credential an external writer's route sent and, for `credential: auto`, why, what an
+   audit worker said it did not reach, or the files an audit gave to its area `rest`); the
    warnings, including the same-model warning; usage (marked "known subtotal"
    when a call's usage is unknown, with the cost as "$X (includes cost computed from
    reported tokens at list prices)" when part of it is computed from a program's reported
@@ -119,7 +121,7 @@ writes `--junit` and `--record`, and exits with code 6.
 | 0 | Pass: every required check passed, the review (if any) approved, every review finding was answered, nothing is not covered, and no finding the loadout fails on. |
 | 1 | A required check failed or timed out on the final result. |
 | 2 | Needs attention: the review did not pass, a finding was not answered, something was not covered, an audit area's findings could not be read, a check never ran on the final result, a turn needs attention or was blocked, a budget or the wall clock ran out, findings the loadout fails on (`fail_on_findings`), or Keep failed. |
-| 3 | Usage: a bad flag; an unknown loadout or one that cannot be used; a missing or unknown parameter; a `detected` check with no detected command and no `--check`; a route credential that is neither configured nor stored, or a route that differs from one your configuration has for the same host; for `qa`, no `browser:` block or a URL the browser cannot reach; an e2e model that OpenRouter does not list with tool calls and image input; or budgets that cannot pay for the run's checks or review. |
+| 3 | Usage: a bad flag; an unknown loadout or one that cannot be used; a missing or unknown parameter; a built-in id that a file of yours also declares; a `detected` check with no detected command and no `--check`; a route credential that is neither configured nor stored, an external writer's `credential: auto` with none of its credentials stored, or a route that differs from one your configuration has for the same host; for `qa`, no `browser:` block or a URL the browser cannot reach; an e2e model that OpenRouter does not list with tool calls and image input; or budgets that cannot pay for the run's checks or review. |
 | 4 | The daemon could not be reached, or it refused the credential. |
 | 5 | Infrastructure: the Session environment failed, the Session could not run under egress with the `hardened` workload (rootful Podman, `backend: e2b`), a recipe image was not built, OpenRouter's catalog could not be read for an e2e check, a provider is not configured, or another daemon error. |
 | 6 | You interrupted the run. |
@@ -229,7 +231,7 @@ of a record still growing and carries the time it was read.
 
 ```text
 {"schema":"axocoatl.record-bundle/1","run_id":"run-…","session_id":"ses-…","created_at_ms":…,"axocoatl_version":"1.3.0"}
-{"section":"manifest","data":{…}}        the run's manifest: loadout, parameters, task, repository HEAD, dirty paths
+{"section":"manifest","data":{…}}        the run's manifest: loadout, parameters, the stored credential each external writer sent, task, repository HEAD, dirty paths
 {"section":"loadout","data":{"text":"…exact YAML…","digest":"…"}}
 {"section":"outcome","data":{…}}         the Outcome
 {"section":"session","data":{…}}         the Session record

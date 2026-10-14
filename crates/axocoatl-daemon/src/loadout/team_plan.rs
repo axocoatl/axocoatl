@@ -423,7 +423,10 @@ pub fn team_edit(
                 source: source(resolved, &format!("agent {}", agent.id)),
                 tools: agent.tools.clone(),
                 runtime: agent.runtime,
-                credential: agent.credential.clone(),
+                // The credential admission chose for an external writer
+                // (`credentials::choose`), so the retained definition names
+                // the one its route sends.
+                credential: resolved.agent_credentials.get(&agent.id).cloned(),
                 reasoning_effort: agent.reasoning_effort,
             }),
         });

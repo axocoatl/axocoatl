@@ -675,6 +675,30 @@ fn codex_shell_call(body: &serde_json::Value, command: &str) -> Option<(String, 
     }
 }
 
+/// Whether Codex offers `body`'s model its tools in code mode: one custom
+/// `exec` tool, in an `additional_tools` input item, that runs JavaScript
+/// whose `tools` object holds the nested tools (`exec_command`). Codex
+/// 0.160.1 does so for the models its catalog marks `code_mode_only`, such
+/// as `gpt-6.1-sol` and `gpt-6-luna`.
+fn codex_code_mode(body: &serde_json::Value) -> bool {
+    fn offers_exec(tools: &[serde_json::Value]) -> bool {
+        tools.iter().any(|tool| {
+            (tool["type"] == "custom" && tool["name"] == "exec")
+                || tool["tools"]
+                    .as_array()
+                    .is_some_and(|nested| offers_exec(nested))
+        })
+    }
+    body["input"].as_array().is_some_and(|input| {
+        input.iter().any(|item| {
+            item["type"] == "additional_tools"
+                && item["tools"]
+                    .as_array()
+                    .is_some_and(|tools| offers_exec(tools))
+        })
+    })
+}
+
 /// The Responses API's streamed answer to `body`.
 fn openai_answer(body: &serde_json::Value) -> (String, &'static str) {
     let input = body["input"].as_array().cloned().unwrap_or_default();
@@ -684,10 +708,17 @@ fn openai_answer(body: &serde_json::Value) -> (String, &'static str) {
             .is_some_and(|kind| kind.ends_with("call_output"))
     });
     let model = body["model"].as_str().unwrap_or("gpt").to_string();
-    let call = (!has_result)
+    let code_mode = !has_result && codex_code_mode(body);
+    let call = (!has_result && !code_mode)
         .then(|| codex_shell_call(body, PROGRAM_COMMAND))
         .flatten();
     let item = match &call {
+        _ if code_mode => serde_json::json!({"type": "custom_tool_call", "id": "ctc_axocoatl",
+        "call_id": "call_axocoatl_1", "name": "exec", "status": "completed",
+        "input": format!(
+            "const result = await tools.exec_command({{cmd: {}, login: false}});\ntext(result.output);",
+            serde_json::Value::from(PROGRAM_COMMAND)
+        )}),
         Some((name, arguments)) => serde_json::json!({"type": "function_call", "id": "fc_axocoatl",
             "call_id": "call_axocoatl_1", "name": name, "arguments": arguments,
             "status": "completed"}),
@@ -1089,7 +1120,7 @@ fn git(repo: &std::path::Path, args: &[&str]) {
 /// request `401`: the run needs attention, and its not-covered reason says
 /// the stored credential was rejected and how to store it again.
 async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_rejects: bool) {
-    pinned_run(runtime, reviewed, api_rejects, false, false, None).await
+    pinned_run(runtime, reviewed, api_rejects, false, false, None, false).await
 }
 
 /// [`pinned_run_child_body`]; with `chatgpt`, the Codex writer names
@@ -1105,6 +1136,13 @@ async fn pinned_run_child_body(runtime: AgentRuntime, reviewed: bool, api_reject
 /// switch's invalid token, which the fake backend answers `401`; the broker
 /// refreshes once after that `401`, and every later call carries the
 /// refreshed token.
+///
+/// With `builtin` (and `reviewed`), the run is the built-in `fix-claude-code`
+/// or `fix-codex` instead of a user loadout: the writer runs the loadout's
+/// default model (`anthropic:sonnet`, `openai:gpt-6.1-sol`), the run names
+/// only the reviewer and the check command, and a Codex writer's `auto`
+/// credential takes the one stored (`codex-chatgpt` with `chatgpt`, else
+/// `codex-openai`); the run's notes and manifest say which.
 async fn pinned_run(
     runtime: AgentRuntime,
     reviewed: bool,
@@ -1112,7 +1150,9 @@ async fn pinned_run(
     chatgpt: bool,
     stale_access: bool,
     web_search: Option<SearchRoute>,
+    builtin: bool,
 ) {
+    assert!(!builtin || reviewed, "a built-in fix loadout has a review");
     use axocoatl_session::network_record::{Decision, NetworkEvent};
     use axocoatl_session::run_outcome::{RunVerdict, TurnState};
     let (recipe, host, credential, placeholder, answer) = match (runtime, chatgpt) {
@@ -1188,11 +1228,24 @@ async fn pinned_run(
     } else {
         loadout_text
     };
-    std::fs::write(
-        home.path().join(format!("loadouts/{loadout_id}.yaml")),
-        loadout_text,
-    )
-    .unwrap();
+    // The built-in runs as itself; a user loadout from its file.
+    let (loadout_id, writer_model) = if builtin {
+        (
+            format!("fix-{recipe}"),
+            match runtime {
+                AgentRuntime::ClaudeCode => "anthropic:sonnet",
+                _ => "openai:gpt-6.1-sol",
+            },
+        )
+    } else {
+        std::fs::write(
+            home.path().join(format!("loadouts/{loadout_id}.yaml")),
+            loadout_text,
+        )
+        .unwrap();
+        (loadout_id, writer_model(runtime))
+    };
+    let program_model = writer_model.split_once(':').unwrap().1;
     let config = axocoatl_config::parse_config(&yaml, &config_file).unwrap();
     let daemon = Arc::new(AxocoatlDaemon::bootstrap_headless(config).await.unwrap());
     daemon.set_config_path(&config_file);
@@ -1308,7 +1361,9 @@ async fn pinned_run(
 
     let cleanup = PodmanCleanup(StdMutex::new(Vec::new()));
     let mut params = ParamValues::new();
-    params.insert("writer_model".into(), writer_model(runtime).into());
+    if !builtin {
+        params.insert("writer_model".into(), writer_model.into());
+    }
     if reviewed {
         params.insert("reviewer_model".into(), format!("ollama:{REVIEW_MODEL}"));
     }
@@ -1318,7 +1373,9 @@ async fn pinned_run(
         repo: repo.display().to_string(),
         params,
         keep: Default::default(),
-        check_command: None,
+        // The built-in's check is the repository's own command, which this
+        // repository does not have.
+        check_command: builtin.then(|| "test -f fixed.txt".to_string()),
         setup_command: None,
         request_id: loadout_id.clone(),
     };
@@ -1532,12 +1589,41 @@ async fn pinned_run(
     assert_eq!(
         writer.model,
         crate::loadout::team_plan::model_identity(
-            &axocoatl_config::loadout::ModelSpec::parse(writer_model(runtime)).unwrap(),
+            &axocoatl_config::loadout::ModelSpec::parse(writer_model).unwrap(),
             runtime
         ),
         "{context}"
     );
     assert_eq!(writer.model.runtime, recipe, "{context}");
+    // The credential the writer's route sent is recorded: the manifest
+    // keeps it, and a note says it (and, for `auto`, why).
+    let manifest = daemon
+        .loadout_runs
+        .store()
+        .unwrap()
+        .manifest(&accepted.run_id)
+        .unwrap();
+    assert_eq!(
+        manifest.credentials.get("writer").map(String::as_str),
+        Some(credential),
+        "{context}"
+    );
+    let note = outcome
+        .notes
+        .iter()
+        .find(|note| note.starts_with("Agent writer ("))
+        .unwrap_or_else(|| panic!("no credential note\n{context}"));
+    assert!(
+        note.contains(&format!("sends the stored credential {credential} (")),
+        "{note}"
+    );
+    let auto = builtin && runtime == AgentRuntime::Codex;
+    assert_eq!(note.contains("credential auto chose it"), auto, "{note}");
+    if builtin {
+        assert_eq!(manifest.loadout.id, loadout_id, "{context}");
+        assert!(manifest.loadout.builtin, "{context}");
+        assert_eq!(manifest.params["writer_model"], writer_model, "{context}");
+    }
     // Claude Code reports what its run cost. Codex reports tokens but no
     // cost: the run's cost is computed from them at gpt-5.5's pinned list
     // price, which the Outcome and the JUnit file say is a computation.
@@ -1568,6 +1654,7 @@ async fn pinned_run(
         let review = outcome.review.as_ref().expect("the run's review");
         assert!(review.passed, "{context}");
         assert_eq!(review.rounds.len(), 2, "{context}");
+        assert_eq!(review.max_rounds, if builtin { 3 } else { 2 }, "{context}");
         assert_eq!(reviews.load(Ordering::SeqCst), 2, "{context}");
         assert_eq!(outcome.adjudications.len(), 1, "{context}");
         assert_eq!(
@@ -1795,6 +1882,14 @@ async fn pinned_run(
     // The work log names the program, its exit and its model requests, and
     // previews its tool call and the usage it reported.
     let (program, tool, usage) = match runtime {
+        // Claude Code prices the fake API's tokens at its own list price of
+        // the model it runs: claude-haiku-4-5's, or for the built-in's
+        // sonnet, claude-sonnet-5-5's.
+        AgentRuntime::ClaudeCode if builtin => (
+            "@anthropic-ai/claude-code 2.1.292",
+            "[tool call] Bash: ",
+            "[usage] 240 input and 14 output tokens, $0.000620",
+        ),
         AgentRuntime::ClaudeCode => (
             "@anthropic-ai/claude-code 2.1.292",
             "[tool call] Bash: ",
@@ -1856,10 +1951,18 @@ async fn pinned_run(
         Some(SearchRoute::Default) => "[usage] 480 input and 28 output tokens, $0.000620",
         Some(SearchRoute::Allow) => "[usage] 480 input and 28 output tokens, $0.000775",
     };
+    // The model the program asked its API for: Claude Code resolves its
+    // alias (the built-in's sonnet) to the model it runs.
+    let requested = match (runtime, program_model) {
+        (AgentRuntime::ClaudeCode, "sonnet") => "claude-sonnet-5-5",
+        (_, model) => model,
+    };
+    for call in &calls {
+        assert_eq!(call.body["model"], requested, "{context}");
+    }
     for wanted in [
         format!(
-            "[external agent] {program}, model {}: exit 0, {} model request(s)",
-            program_model(runtime),
+            "[external agent] {program}, model {program_model}: exit 0, {} model request(s)",
             per_activation + stale_calls,
         ),
         tool.to_string(),
@@ -1966,7 +2069,7 @@ async fn actual_loadout_run_with_the_pinned_codex() {
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
 async fn actual_loadout_run_with_the_pinned_codex_signed_in_with_chatgpt() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run(AgentRuntime::Codex, false, false, true, false, None).await;
+        pinned_run(AgentRuntime::Codex, false, false, true, false, None, false).await;
         return;
     }
     run_child(
@@ -1986,7 +2089,7 @@ async fn actual_loadout_run_with_the_pinned_codex_signed_in_with_chatgpt() {
 #[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
 async fn the_pinned_codex_retries_a_401_after_the_stale_access_switch_and_the_run_passes() {
     if std::env::var_os(CHILD).is_some() {
-        pinned_run(AgentRuntime::Codex, false, false, true, true, None).await;
+        pinned_run(AgentRuntime::Codex, false, false, true, true, None, false).await;
         return;
     }
     run_child(
@@ -2014,6 +2117,7 @@ async fn the_pinned_claude_code_runs_without_web_search_on_the_route_axocoatl_ad
             false,
             false,
             Some(SearchRoute::Default),
+            false,
         )
         .await;
         return;
@@ -2040,6 +2144,7 @@ async fn the_pinned_claude_codes_web_search_reaches_the_api_on_a_route_that_allo
             false,
             false,
             Some(SearchRoute::Allow),
+            false,
         )
         .await;
         return;
@@ -2099,6 +2204,60 @@ async fn a_rejected_claude_code_credential_is_named_with_how_to_store_it_again()
     }
     run_child(
         "a_rejected_claude_code_credential_is_named_with_how_to_store_it_again",
+        None,
+        true,
+    )
+    .await;
+}
+
+/// The built-in `fix-claude-code` with the pinned Claude Code from its
+/// recipe image, as `axocoatl run fix-claude-code --model reviewer=…
+/// --check …` runs it: the default writer model (`anthropic:sonnet`, which
+/// Claude Code sends as `claude-sonnet-5-5`), the stored
+/// `claude-code-oauth`, the required check, and a native reviewer that asks
+/// for changes once (see [`pinned_run`]).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the claude-code recipe image"]
+async fn the_builtin_fix_claude_code_runs_the_pinned_claude_code() {
+    if std::env::var_os(CHILD).is_some() {
+        pinned_run(AgentRuntime::ClaudeCode, true, false, false, false, None, true).await;
+        return;
+    }
+    run_child(
+        "the_builtin_fix_claude_code_runs_the_pinned_claude_code",
+        None,
+        true,
+    )
+    .await;
+}
+
+/// The built-in `fix-codex` with the pinned Codex from its recipe image and
+/// only an OpenAI API key stored: `credential: auto` takes `codex-openai`
+/// and the program calls `api.openai.com` on the default writer model
+/// (`gpt-6.1-sol`), reviewed once (see [`pinned_run`]).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
+async fn the_builtin_fix_codex_takes_the_stored_api_key() {
+    if std::env::var_os(CHILD).is_some() {
+        pinned_run(AgentRuntime::Codex, true, false, false, false, None, true).await;
+        return;
+    }
+    run_child("the_builtin_fix_codex_takes_the_stored_api_key", None, true).await;
+}
+
+/// The built-in `fix-codex` with only a ChatGPT sign-in stored:
+/// `credential: auto` takes `codex-chatgpt`, the program calls the ChatGPT
+/// backend at `chatgpt.com`, and the daemon refreshes the sign-in (see
+/// [`pinned_run`]).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION) and the codex recipe image"]
+async fn the_builtin_fix_codex_takes_the_stored_chatgpt_sign_in() {
+    if std::env::var_os(CHILD).is_some() {
+        pinned_run(AgentRuntime::Codex, true, false, true, false, None, true).await;
+        return;
+    }
+    run_child(
+        "the_builtin_fix_codex_takes_the_stored_chatgpt_sign_in",
         None,
         true,
     )

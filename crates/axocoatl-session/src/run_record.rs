@@ -58,6 +58,12 @@ pub struct RunManifest {
     /// The exact loadout file text; its SHA-256 is `loadout.digest`.
     pub loadout_text: String,
     pub params: BTreeMap<String, String>,
+    /// The stored credential each external writer's route sends, by Agent
+    /// id, as admission chose it (a loadout's `auto` resolved to the one
+    /// that was stored). A restart applies it again rather than choosing
+    /// anew. Absent in records of runs without an external writer.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub credentials: BTreeMap<String, String>,
     pub task: String,
     /// Canonical repository path.
     pub repo: String,
@@ -521,6 +527,7 @@ mod tests {
             loadout: loadout_ref(),
             loadout_text: "schema: axocoatl.loadout/1\n".into(),
             params: BTreeMap::new(),
+            credentials: BTreeMap::new(),
             task: "fix it".into(),
             repo: "/repo".into(),
             repo_head: Some("0".repeat(40)),

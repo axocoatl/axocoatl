@@ -104,13 +104,19 @@ test('the loadout API lists built-in and user loadouts, shows a graph and valida
   const list = await json('/api/loadouts');
   assert.equal(list.status, 200, JSON.stringify(list.value));
   const ids = list.value.map((row) => row.id);
-  for (const id of ['fix', 'qa', 'audit', 'smoke', 'broken']) assert.ok(ids.includes(id), id);
+  for (const id of ['fix', 'fix-claude-code', 'fix-codex', 'qa', 'audit', 'smoke', 'broken']) assert.ok(ids.includes(id), id);
   assert.ok(list.value.find((row) => row.id === 'audit').opt_in);
   const broken = list.value.find((row) => row.id === 'broken');
   assert.match(broken.error, /mystery/);
   assert.equal(broken.path, path.join(await realpath(runtime.runRoot), 'loadouts', 'broken.yaml'));
   const shadow = list.value.find((row) => row.path?.endsWith('fix.yaml'));
   assert.match(shadow.error, /built-in/, 'a user file cannot take a built-in id');
+  assert.match(shadow.error, /my-fix/, 'and says how to rename it');
+  // The built-in it shadows says so too, and is still shown.
+  const builtinFix = list.value.find((row) => row.id === 'fix' && row.builtin);
+  assert.deepEqual(builtinFix.warnings.map((warning) => warning.code), ['user_loadout_uses_builtin_id']);
+  const codex = list.value.find((row) => row.id === 'fix-codex');
+  assert.deepEqual(codex.params.filter((param) => param.required).map((param) => param.name), ['reviewer_model']);
   const fix = await json('/api/loadouts/fix');
   assert.equal(fix.status, 200);
   assert.deepEqual(fix.value.graph.nodes.map((node) => node.id), ['agent:writer', 'check:tests', 'review']);
@@ -122,9 +128,14 @@ test('the loadout API lists built-in and user loadouts, shows a graph and valida
   assert.equal(invalid.value.valid, false);
   const unknown = await json('/api/runs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ loadout: 'nope', task: 't', repo: runtime.runRoot, request_id: 'unknown-loadout' }) });
   assert.equal(unknown.status, 404);
-  const missing = await json('/api/runs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ loadout: 'fix', task: 't', repo: runtime.runRoot, request_id: 'missing-model' }) });
+  // A run of a built-in id a user file also declares is refused, naming the
+  // file: neither one is chosen silently.
+  const shadowed = await json('/api/runs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ loadout: 'fix', task: 't', repo: runtime.runRoot, request_id: 'shadowed-fix' }) });
+  assert.equal(shadowed.status, 422);
+  assert.match(shadowed.value.error, /fix\.yaml also declares the id fix, so nothing was started/);
+  const missing = await json('/api/runs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ loadout: 'qa', task: 't', repo: runtime.runRoot, request_id: 'missing-model' }) });
   assert.equal(missing.status, 422);
-  assert.match(missing.value.error, /writer_model/);
+  assert.match(missing.value.error, /explorer_model/);
   assert.deepEqual((await json('/api/runs')).value, []);
 });
 
@@ -231,6 +242,7 @@ test('Settings → Loadouts lists loadouts, shows invalid files and keeps the gr
     // A loadout shows its YAML, parameters, the run command and the graph.
     await settings.locator('.side-row[data-key="fix"]').click();
     await settings.locator('pre.yaml').filter({ hasText: 'id: fix' }).waitFor();
+    assert.match(await settings.locator('.warning[data-code="user_loadout_uses_builtin_id"]').textContent(), /fix\.yaml/);
     assert.equal(await settings.locator('input[aria-label="axocoatl run command"]').inputValue(),
       'axocoatl run fix --task "..." --model reviewer=provider:model --model writer=provider:model');
     assert.ok(await settings.locator('table.params').textContent().then((text) => text.includes('writer_model')));

@@ -440,6 +440,7 @@ environment: { recipes: [claude-code] }
             loadout: binding("egress").loadout,
             loadout_text: resolved.loadout.text.clone(),
             params: resolved.params.clone(),
+            credentials: Default::default(),
             task: "fix it".into(),
             repo: "/repo".into(),
             repo_head: None,
@@ -756,6 +757,440 @@ async fn admission_child_body() {
     daemon.shutdown().await.unwrap();
 }
 
+/// The built-in loadouts `fix-claude-code` and `fix-codex` through
+/// admission, with a fake rootless Podman and test secrets in the child's
+/// own data root: the writer's runtime, default model and recipe image, the
+/// credential its route sends (fix-codex's `auto` with each combination of
+/// stored secrets, and `--param credential=`), the routes, the team, the
+/// record of the choice (manifest, note event, Outcome notes), the
+/// same-model warning, and a user file that declares a built-in id.
+async fn external_fix_admission_child_body() {
+    use crate::loadout::{credentials, egress, team_plan};
+    let server = model_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("axocoatl.yaml");
+    std::fs::write(
+        &path,
+        admission_yaml(&server.uri(), "{host: localhost, ports: [3000]}"),
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join(USER_LOADOUT_DIR)).unwrap();
+    let config = axocoatl_config::load_config(&path).await.unwrap();
+    let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
+    daemon.set_config_path(&path);
+    let data = daemon.data_root.path().to_path_buf();
+    let base = daemon.network_policy.current();
+
+    // Listed and shown like the other built-ins, with their defaults.
+    let listed = daemon.list_loadouts().await.unwrap();
+    for id in ["fix", "fix-claude-code", "fix-codex", "qa", "audit"] {
+        let row = listed.iter().find(|row| row.id == id).unwrap();
+        assert!(row.builtin && row.error.is_none(), "{row:?}");
+        assert!(row.warnings.is_empty(), "{row:?}");
+    }
+    let codex_row = listed.iter().find(|row| row.id == "fix-codex").unwrap();
+    let param = |name: &str| {
+        codex_row
+            .params
+            .iter()
+            .find(|param| param.name == name)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        param("writer_model").default.as_deref(),
+        Some("openai:gpt-6.1-sol")
+    );
+    assert!(!param("writer_model").required);
+    assert!(param("reviewer_model").required);
+    assert_eq!(param("credential").default.as_deref(), Some("auto"));
+    let view = daemon.loadout_view("fix-codex").await.unwrap();
+    let writer = &view.graph.nodes[0].detail;
+    assert_eq!(
+        writer[..3],
+        [
+            "param writer_model (default openai:gpt-6.1-sol)".to_string(),
+            "runtime codex".into(),
+            "credential param credential (default auto)".into()
+        ]
+    );
+    let view = daemon.loadout_view("fix-claude-code").await.unwrap();
+    assert_eq!(
+        view.graph.nodes[0].detail[..2],
+        [
+            "param writer_model (default anthropic:sonnet)".to_string(),
+            "runtime claude-code".into()
+        ]
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let holder = native_session(&daemon, repo.path(), None).await;
+    let operation = daemon
+        .attempt_operation_for_workspace(&holder.workspace_id)
+        .await;
+    let held = operation.clone().lock_owned().await;
+    let request = |loadout: &str, params: &[(&str, &str)], id: &str| RunRequest {
+        loadout: loadout.into(),
+        task: "Fix the failing test.".into(),
+        repo: repo.path().display().to_string(),
+        params: std::iter::once(("reviewer_model".to_string(), format!("ollama:{MODEL}")))
+            .chain(
+                params
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.to_string())),
+            )
+            .collect(),
+        keep: Default::default(),
+        check_command: Some("true".into()),
+        setup_command: None,
+        request_id: id.into(),
+    };
+    let admit = |request: RunRequest| {
+        let daemon = &daemon;
+        async move {
+            tokio::time::timeout(Duration::from_secs(60), daemon.admit_loadout_run(request))
+                .await
+                .expect("admission never waits")
+        }
+    };
+    let usage = |result: Result<(RunAccepted, RunContext), DaemonError>| match result {
+        Err(DaemonError::InvalidRequest(message)) => message,
+        Err(other) => panic!("expected a usage error, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    };
+    let busy = |result: Result<(RunAccepted, RunContext), DaemonError>| match result {
+        Err(DaemonError::WorkspaceBusy(message)) => message,
+        Err(other) => panic!("expected a busy Workspace, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    };
+    // The steps admission takes for a built-in, by themselves.
+    let resolved = |id: &str, params: &[(&str, &str)]| {
+        let loadout = builtin_loadouts()
+            .into_iter()
+            .map(Result::unwrap)
+            .find(|loadout| loadout.file.id == id)
+            .unwrap();
+        let request = request(id, params, "steps");
+        let mut resolved =
+            resolve_loadout(&loadout, &request.params, &request.task, "/repo").unwrap();
+        team_plan::fill_detected_checks(&mut resolved, Some("true"), None).unwrap();
+        let chosen = credentials::choose(&mut resolved, |name| {
+            egress::credential_available(&base, &data, name)
+        })
+        .unwrap();
+        (resolved, chosen)
+    };
+    let hosts = |resolved: &axocoatl_config::loadout::ResolvedLoadout| -> Vec<String> {
+        egress::loadout_overlay(&base, resolved, &data)
+            .unwrap()
+            .routes
+            .into_iter()
+            .map(|route| route.host)
+            .collect()
+    };
+
+    // fix-codex with nothing stored: auto finds no credential and says how
+    // to connect, before anything is created.
+    let message = usage(admit(request("fix-codex", &[], "codex-none")).await);
+    assert_eq!(
+        message,
+        "Agent writer (codex) has credential auto, and neither codex-openai nor codex-chatgpt \
+         is stored: run `axocoatl connect codex` to sign in with your ChatGPT plan (stored as \
+         codex-chatgpt), or `axocoatl connect codex --api-key` to also store the OpenAI API key \
+         OpenAI issues with that sign-in (as codex-openai), then run again"
+    );
+    // A credential that is none of Codex's is a parameter error.
+    let message = usage(admit(request("fix-codex", &[("credential", "codex")], "bogus")).await);
+    assert!(
+        message.starts_with(
+            "loadout parameter credential: a codex writer's route sends codex-openai or \
+             codex-chatgpt, or auto"
+        ),
+        "{message}"
+    );
+    // Named but not stored: the route's own refusal, with how to store it.
+    let message = usage(
+        admit(request(
+            "fix-codex",
+            &[("credential", "codex-openai")],
+            "named-none",
+        ))
+        .await,
+    );
+    assert!(
+        message.contains("credential \"codex-openai\"")
+            && message.contains("axocoatl connect codex --api-key"),
+        "{message}"
+    );
+
+    // Only the ChatGPT sign-in is stored (a test value, never a real one):
+    // auto takes it. Without the codex recipe image the run is refused,
+    // naming the build.
+    crate::secret_store::set_secret(&data, "codex-chatgpt", b"test-sign-in").unwrap();
+    match admit(request("fix-codex", &[], "codex-no-image")).await {
+        Err(DaemonError::Session(message)) => assert!(
+            message.contains("run `axocoatl recipe build codex`"),
+            "{message}"
+        ),
+        Err(other) => panic!("expected the missing image, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    }
+    for recipe in ["codex", "claude-code"] {
+        crate::external_agent::recipe_images::record_image(
+            &daemon.data_root,
+            crate::external_agent::recipe_images::record_for(
+                &[recipe.to_string()],
+                &format!("{:0>64}", if recipe == "codex" { "c0de" } else { "c1a0de" }),
+                1,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    // Everything resolves: the run reaches the Workspace, which another
+    // Session holds.
+    let message = busy(admit(request("fix-codex", &[], "codex-chatgpt-auto")).await);
+    assert!(message.contains(&holder.id), "{message}");
+    let (codex, chosen) = resolved("fix-codex", &[]);
+    assert_eq!(chosen["writer"], "codex-chatgpt");
+    assert_eq!(codex.agent_credentials["writer"], "codex-chatgpt");
+    assert_eq!(hosts(&codex), ["chatgpt.com"]);
+    assert_eq!(
+        codex.notes,
+        [
+            "Agent writer (codex) sends the stored credential codex-chatgpt (a ChatGPT sign-in, \
+          sent to chatgpt.com); credential auto chose it, the first of codex-openai and \
+          codex-chatgpt that is stored."
+        ]
+    );
+    assert_eq!(
+        codex.agent_models["writer"],
+        axocoatl_config::loadout::ModelSpec::parse("openai:gpt-6.1-sol").unwrap()
+    );
+    // The writer's slot runs Codex on the default model with the chosen
+    // credential; the checks and the three-round review are fix's.
+    let edit =
+        team_plan::team_edit(&codex, &team_plan::default_slots(&codex).unwrap(), true, 0).unwrap();
+    assert_eq!(edit.slots.len(), 1);
+    assert_eq!(
+        (
+            edit.slots[0].provider.as_str(),
+            edit.slots[0].model.as_str()
+        ),
+        ("openai", "gpt-6.1-sol")
+    );
+    let definition = edit.slots[0].definition.as_ref().unwrap();
+    assert_eq!(definition.runtime, AgentRuntime::Codex);
+    assert_eq!(definition.credential.as_deref(), Some("codex-chatgpt"));
+    assert_eq!(
+        edit.required_checks,
+        [vec!["sh".to_string(), "-c".into(), "true".into()]]
+    );
+    let review = edit.required_review.as_ref().unwrap();
+    assert_eq!(review.max_rounds, 3);
+    // Both stored: auto takes the API key; --param chooses either.
+    crate::secret_store::set_secret(&data, "codex-openai", b"test-api-key").unwrap();
+    let (codex, chosen) = resolved("fix-codex", &[]);
+    assert_eq!(chosen["writer"], "codex-openai");
+    assert_eq!(hosts(&codex), ["api.openai.com"]);
+    let (codex, chosen) = resolved("fix-codex", &[("credential", "codex-chatgpt")]);
+    assert_eq!(chosen["writer"], "codex-chatgpt");
+    assert_eq!(hosts(&codex), ["chatgpt.com"]);
+    assert_eq!(
+        codex.notes,
+        [
+            "Agent writer (codex) sends the stored credential codex-chatgpt (a ChatGPT sign-in, \
+          sent to chatgpt.com)."
+        ]
+    );
+    // Only the API key: auto takes it.
+    crate::secret_store::remove_secret(&data, "codex-chatgpt").unwrap();
+    let (codex, chosen) = resolved("fix-codex", &[]);
+    assert_eq!(chosen["writer"], "codex-openai");
+    assert_eq!(hosts(&codex), ["api.openai.com"]);
+    let message = busy(admit(request("fix-codex", &[], "codex-openai-auto")).await);
+    assert!(message.contains(&holder.id), "{message}");
+
+    // fix-claude-code: Claude Code's token must be stored.
+    let message = usage(admit(request("fix-claude-code", &[], "claude-none")).await);
+    assert!(
+        message.contains("credential \"claude-code-oauth\"")
+            && message.contains("axocoatl connect claude-code"),
+        "{message}"
+    );
+    crate::secret_store::set_secret(&data, "claude-code-oauth", b"test-oauth-token").unwrap();
+    let message = busy(admit(request("fix-claude-code", &[], "claude-stored")).await);
+    assert!(message.contains(&holder.id), "{message}");
+    let (claude, chosen) = resolved("fix-claude-code", &[]);
+    assert_eq!(chosen["writer"], "claude-code-oauth");
+    assert_eq!(hosts(&claude), ["api.anthropic.com"]);
+    assert_eq!(
+        claude.agent_models["writer"],
+        axocoatl_config::loadout::ModelSpec::parse("anthropic:sonnet").unwrap()
+    );
+    // The writer's tokens hold one call of the default model (sonnet runs
+    // claude-sonnet-5-5, whose 1M-token window one call can fill), and of
+    // any other pinned model.
+    for model in [
+        "anthropic:sonnet",
+        "anthropic:opus",
+        "anthropic:claude-fable-5-1",
+        "anthropic:haiku",
+    ] {
+        let (claude, _) = resolved("fix-claude-code", &[("writer_model", model)]);
+        team_plan::refuse_budgets_below_one_call(&claude, &Default::default()).unwrap();
+    }
+    for model in ["openai:gpt-6.1-sol", "openai:gpt-6-astra", "openai:gpt-5.5"] {
+        let (codex, _) = resolved("fix-codex", &[("writer_model", model)]);
+        team_plan::refuse_budgets_below_one_call(&codex, &Default::default()).unwrap();
+    }
+
+    // Without the held Workspace the run is admitted: its environment
+    // cannot start under the fake Podman, so it ends at once (exit 5), with
+    // its manifest, its note event and its Outcome recording the credential
+    // that was chosen.
+    drop(held);
+    let (accepted, _) = admit(request("fix-codex", &[], "codex-admitted"))
+        .await
+        .unwrap();
+    let store = daemon.loadout_runs.store().unwrap();
+    let manifest = store.manifest(&accepted.run_id).unwrap();
+    assert_eq!(manifest.loadout.id, "fix-codex");
+    assert!(manifest.loadout.builtin);
+    assert_eq!(manifest.params["credential"], "auto");
+    assert_eq!(manifest.params["writer_model"], "openai:gpt-6.1-sol");
+    assert_eq!(
+        manifest.credentials,
+        [("writer".to_string(), "codex-openai".to_string())]
+            .into_iter()
+            .collect()
+    );
+    let note = "Agent writer (codex) sends the stored credential codex-openai (an OpenAI API \
+                key, sent to api.openai.com); credential auto chose it, the first of \
+                codex-openai and codex-chatgpt that is stored.";
+    let events = daemon
+        .loadout_run_events(&accepted.run_id, None, 100)
+        .await
+        .unwrap();
+    assert!(
+        events.events.iter().any(|(_, event)| matches!(event,
+            RunEvent::Phase { phase, detail, .. } if phase == "note" && detail == note)),
+        "{events:?}"
+    );
+    let status = daemon.loadout_run(&accepted.run_id).await.unwrap();
+    let outcome = status.outcome.expect("the run ended at admission");
+    assert_eq!(outcome.exit_code, exit_code::INFRASTRUCTURE, "{outcome:?}");
+    assert_eq!(outcome.notes, [note], "{outcome:?}");
+    let junit = daemon.loadout_run_junit(&accepted.run_id).await.unwrap();
+    assert!(
+        junit.contains(&format!("note: {}", note.replace('\'', "&apos;"))),
+        "{junit}"
+    );
+
+    // A reviewer on the writer's model, through OpenRouter, is warned
+    // about at admission (Claude Code's sonnet is claude-sonnet-5-5).
+    let catalog = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": [
+                {"id": "anthropic/claude-sonnet-5.5", "context_length": 1000000}
+            ]})),
+        )
+        .mount(&catalog)
+        .await;
+    *daemon.loadout_runs.openrouter_catalog.lock().unwrap() = Some(catalog.uri());
+    let mut same = request("fix-claude-code", &[], "claude-same-model");
+    same.params.insert(
+        "reviewer_model".into(),
+        "openrouter:anthropic/claude-sonnet-5.5".into(),
+    );
+    let (accepted, _) = admit(same).await.unwrap();
+    assert!(
+        accepted
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "same_model_reviewer"),
+        "{:?}",
+        accepted.warnings
+    );
+
+    // A user file that declares a built-in id (the docs once showed one
+    // named fix-claude-code) is listed with why it is not used, the
+    // built-in carries a warning, the built-in is still shown, and a run of
+    // that id is refused: neither one is chosen silently.
+    let mine = dir.path().join(USER_LOADOUT_DIR).join("claude.yaml");
+    std::fs::write(
+        &mine,
+        builtin_loadouts()
+            .into_iter()
+            .map(Result::unwrap)
+            .find(|loadout| loadout.file.id == "fix-claude-code")
+            .unwrap()
+            .text
+            .replace("rounds: 3", "rounds: 2"),
+    )
+    .unwrap();
+    let listed = daemon.list_loadouts().await.unwrap();
+    let user_row = listed.iter().find(|row| !row.builtin).unwrap();
+    // The file as the daemon names it (its configuration directory, as it
+    // resolved it).
+    let shown = user_row.path.clone().unwrap();
+    assert!(shown.ends_with("/loadouts/claude.yaml"), "{shown}");
+    let builtin_row = listed
+        .iter()
+        .find(|row| row.id == "fix-claude-code" && row.builtin)
+        .unwrap();
+    assert_eq!(builtin_row.warnings.len(), 1, "{builtin_row:?}");
+    assert_eq!(builtin_row.warnings[0].code, "user_loadout_uses_builtin_id");
+    assert_eq!(
+        builtin_row.warnings[0].message,
+        format!(
+            "your loadout file {shown} also declares the id fix-claude-code, which is now \
+             built in: a run of fix-claude-code is refused until you give that file another id \
+             (such as my-fix-claude-code) or remove it"
+        )
+    );
+    assert_eq!(
+        user_row.error.as_deref(),
+        Some(
+            "\"fix-claude-code\" is now the id of a built-in loadout, so this file is not \
+             used: to keep running it, give it another id (such as my-fix-claude-code) and run \
+             that id; to use the built-in, remove this file"
+        )
+    );
+    let view = daemon.loadout_view("fix-claude-code").await.unwrap();
+    assert!(view.summary.builtin);
+    assert_eq!(view.summary.warnings, builtin_row.warnings);
+    let message = usage(admit(request("fix-claude-code", &[], "claude-clash")).await);
+    assert_eq!(
+        message,
+        format!(
+            "loadout fix-claude-code is now built into Axocoatl, and your loadout file {shown} \
+             also declares the id fix-claude-code, so nothing was started: Axocoatl does not \
+             choose between the two. To run your file, give it another id (such as \
+             my-fix-claude-code) and run that id; to run the built-in, remove {shown}",
+            shown = shown,
+        )
+    );
+    // Renamed, it runs as itself and the built-in runs again.
+    let renamed = std::fs::read_to_string(&mine)
+        .unwrap()
+        .replace("id: fix-claude-code", "id: my-fix-claude-code");
+    std::fs::write(&mine, renamed).unwrap();
+    let listed = daemon.list_loadouts().await.unwrap();
+    assert!(
+        listed
+            .iter()
+            .all(|row| row.error.is_none() && row.warnings.is_empty()),
+        "{listed:?}"
+    );
+    assert!(listed
+        .iter()
+        .any(|row| row.id == "my-fix-claude-code" && !row.builtin));
+    daemon.shutdown().await.unwrap();
+}
+
 /// Run `name` in a child process with its own data root and a fake Podman
 /// that reports `rootless`.
 async fn run_child(name: &str, rootless: bool) {
@@ -828,6 +1263,23 @@ async fn qa_admission_reads_the_live_lists_and_never_waits_for_a_held_workspace(
     }
     run_child(
         "bootstrap::loadout_runs::daemon_tests::qa_admission_reads_the_live_lists_and_never_waits_for_a_held_workspace",
+        true,
+    )
+    .await;
+}
+
+/// fix-claude-code and fix-codex through admission: writer runtime, model
+/// default, recipe image, routes and the credential (auto with each
+/// combination of stored test secrets), how the choice is recorded, the
+/// same-model warning, and a user file declaring a built-in id.
+#[tokio::test]
+async fn the_external_fix_builtins_resolve_their_writer_recipe_routes_and_credential() {
+    if std::env::var_os(CHILD).is_some() {
+        external_fix_admission_child_body().await;
+        return;
+    }
+    run_child(
+        "bootstrap::loadout_runs::daemon_tests::the_external_fix_builtins_resolve_their_writer_recipe_routes_and_credential",
         true,
     )
     .await;

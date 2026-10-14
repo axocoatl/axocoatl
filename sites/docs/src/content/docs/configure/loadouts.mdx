@@ -1,6 +1,6 @@
 ---
 title: Loadouts
-description: A versioned YAML file that declares a run's Agents and models, required checks, required review, network, budgets and prompt. Three are built in; axocoatl run runs them and Settings only displays them.
+description: A versioned YAML file that declares a run's Agents and models, required checks, required review, network, budgets and prompt. Five are built in; axocoatl run runs them and Settings only displays them.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -11,16 +11,20 @@ the Session may reach, its budgets and the prompt. [`axocoatl run`](/reference/r
 one headless against the running daemon and exits with a code a script or CI job can act
 on. Settings displays loadouts; nothing in the workbench runs one.
 
-Three loadouts are built in:
+Five loadouts are built in:
 
 | Id | What it runs | Parameters |
 | --- | --- | --- |
 | `fix` | One writer, the repository's check command as a required check, and a required review by another model for up to 3 rounds. The writer answers every finding with accept or reject and a reason. | `writer_model`, `reviewer_model` (both required) |
+| `fix-claude-code` | `fix` with the [Claude Code CLI](/configure/external-agents/) as the writer, from the `claude-code` recipe image, with the token `axocoatl connect claude-code` stores. | `reviewer_model` (required), `writer_model` (default `anthropic:sonnet`) |
+| `fix-codex` | `fix` with the [Codex CLI](/configure/external-agents/) as the writer, from the `codex` recipe image, with an OpenAI API key or a ChatGPT sign-in. | `reviewer_model` (required), `writer_model` (default `openai:gpt-6.1-sol`), `credential` (default `auto`) |
 | `qa` | One browser explorer. Every finding needs a Playwright reproduction, which the host re-runs on the build under test and, when given, a clean reference build. Areas it did not reach are listed as not covered. | `explorer_model` (required), `target_url` (default `http://localhost:3000`), `reference_url` |
 | `audit` | Opt-in: runs only when named. A planner splits the scope into 2 to 8 areas, the host gives every file of the repository to one area, one read-only worker per area reads its files in parallel with a fresh context (a worker that leaves files unread is asked again, up to twice), and an integrator merges the findings. | `planner_model`, `worker_model`, `integrator_model` (all required) |
 
-[Fix, QA and audit runs](/workbench/fix-qa-audit/) describes each one. The built-in
-ids `fix`, `qa` and `audit` are reserved: a user loadout cannot use them.
+[Fix, QA and audit runs](/workbench/fix-qa-audit/) describes each one, and
+[External agents](/configure/external-agents/) the two with an external writer. The
+built-in ids are reserved: a user loadout cannot use them (see
+[Where loadouts live](#where-loadouts-live)).
 
 ## Run one
 
@@ -56,6 +60,15 @@ admitted, so a new or changed file needs no restart. It reads at most 128 files,
 order, each a regular file (a symbolic link is refused) of at most 64 KiB. A file that
 does not parse or validate, or that reuses a built-in id, is still listed, with its path
 and the error, and cannot run.
+
+A file whose `id` is a built-in's (`fix`, `fix-claude-code`, `fix-codex`, `qa` or
+`audit`), whatever the file is called, is not used, and Axocoatl does not choose between
+it and the built-in: while the file declares that id, a run of the id is refused (exit
+code 3), naming the file, and the built-in's row in `axocoatl loadouts list` and Settings
+carries the warning `user_loadout_uses_builtin_id`. To keep running your file, give it
+another id (such as `my-fix-claude-code`) and run that id; to run the built-in, remove the
+file. Earlier versions of these docs showed a `fix-claude-code` loadout to write
+yourself; that id is now built in.
 
 Each loadout has a digest: the SHA-256 of its exact bytes. A run's record keeps the exact
 text it ran, so editing the file later never changes what a finished run says it ran.
@@ -169,7 +182,7 @@ Unknown fields are refused everywhere in the file.
 | Field | Type | Rules |
 | --- | --- | --- |
 | `schema` | string | Exactly `axocoatl.loadout/1`. |
-| `id` | string | 1-64 lowercase letters, digits or `-`, starting with a letter. Not `fix`, `qa` or `audit`. |
+| `id` | string | 1-64 lowercase letters, digits or `-`, starting with a letter. Not a built-in's: `fix`, `fix-claude-code`, `fix-codex`, `qa` or `audit`. |
 | `version` | integer | The loadout's own version, from 1. Shown as `id@version`. |
 | `name`, `description` | string | `name` must not be empty. |
 | `kind` | `fix`, `qa`, `audit` or `custom` | Selects how the run is driven; see [kinds](#kinds). |
@@ -195,7 +208,7 @@ Unknown fields are refused everywhere in the file.
 | `role` | `writer`, `explorer`, `planner`, `worker` or `integrator`. |
 | `model` | `{provider, model}`, or `{param: name}` naming a `model` parameter. An external program's model names the provider whose API it calls: `anthropic` for `claude-code`, `openai` for `codex`; any other is refused. |
 | `runtime` | `native` (the default), `claude-code` or `codex`. An external program runs only as the writer; see [External agents](/configure/external-agents/). |
-| `credential` | External writers only: the stored credential its route sends. For `codex`, `codex-openai` (the default, an OpenAI API key, from `axocoatl connect codex --api-key`) or `codex-chatgpt` (your ChatGPT sign-in, from `axocoatl connect codex`); for `claude-code`, only `claude-code-oauth`. Any other name, or one on a native Agent, is refused. See [Codex with a ChatGPT sign-in](/configure/external-agents/#codex-with-a-chatgpt-sign-in). |
+| `credential` | External writers only: the stored credential its route sends, written out or as `{param: name}` naming a `text` parameter. For `codex`, `codex-openai` (the default when left out: an OpenAI API key, from `axocoatl connect codex --api-key`) or `codex-chatgpt` (your ChatGPT sign-in, from `axocoatl connect codex`); for `claude-code`, only `claude-code-oauth`. `auto` takes, when the run is admitted, the first of these that is stored (for Codex, `codex-openai`, else `codex-chatgpt`), and refuses the run (exit code 3) saying how to connect when none is. Any other name, or one on a native Agent, is refused. The run records the credential it sent: in its manifest, a `note` line `axocoatl run` prints as it starts, and the Outcome's notes. See [Choose the Codex credential](/configure/external-agents/#choose-the-codex-credential). |
 | `tools` | Required for a native Agent; the exact tool list. Ignored for an external program. |
 | `writes` | Paths the Agent may change. Left out, every path, which only a writer may do. `[]` is read-only; planners, workers and integrators must be `[]`. |
 | `instructions`, `max_output_tokens`, `reasoning_effort` | As for an [Agent template](/configure/agents/#define-an-agent). |
@@ -239,8 +252,10 @@ budget, the run output and the record. It is a warning, not a refusal. See
 to `{kind, required, default, description}`. `kind` is `model` (`provider:model`), `text`
 or `url` (`http://` or `https://`). A required parameter has no default. Fields that
 accept `{param: name}` take a parameter of one kind: `agents[].model` and `review.model` a
-`model`; `checks[].run.shell`, `checks[].run.e2e.model` and `environment.setup` a `text`;
-`qa.target_url` and `qa.reference_url` a `url`.
+`model`; `agents[].credential`, `checks[].run.shell`, `checks[].run.e2e.model` and
+`environment.setup` a `text`; `qa.target_url` and `qa.reference_url` a `url`. A parameter
+with a default needs no value: `fix-claude-code` and `fix-codex` run with only
+`--model reviewer=…`.
 
 A run gives values with `--param name=value` and `--model role=provider:model`. An
 unknown parameter name is refused, so a typo never runs with a default, and a missing
