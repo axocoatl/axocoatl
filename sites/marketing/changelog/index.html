@@ -116,6 +116,53 @@
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
 
       <article class="release">
+        <span class="release-tag">v1.3.2</span>
+        <span class="release-date">2026-10-14</span>
+        <h2>Model calls through a route are read before they leave.</h2>
+
+        <p>A route checked a request's method, path and query and passed its body unread, so a
+          request the route allowed could ask the model provider to fetch a URL, search the web,
+          connect to an MCP server or run a tool on its own servers, reaching hosts the
+          Session's egress policy does not list. Claude Code's WebSearch tool sent such a
+          request through the route Axocoatl adds for it.</p>
+
+        <h3>Security</h3>
+        <ul>
+          <li>A route to <code>api.anthropic.com</code>, <code>api.openai.com</code>,
+              <code>chatgpt.com</code>, <code>openrouter.ai</code>,
+              <code>generativelanguage.googleapis.com</code>, <code>api.mistral.ai</code>,
+              <code>api.x.ai</code> or <code>ai-gateway.vercel.sh</code> reads each request
+              body before it adds the credential, and refuses with
+              <code>403 provider_fetch_refused</code>, recorded in the Session's network
+              record, one that offers a tool the provider runs, names MCP servers, turns on a
+              provider's web search or asks for content from a URL. An allowed body is sent
+              byte for byte.</li>
+          <li>The route to Ollama on this computer carries only inference and model listing,
+              and refuses a cloud model, which Ollama runs on <code>ollama.com</code>.</li>
+        </ul>
+
+        <h3>Added</h3>
+        <ul>
+          <li><code>provider_fetch</code> on a route: <code>refuse</code> turns the check on
+              for another host, <code>allow</code> turns it off, and validation warns about
+              <code>allow</code> on a model API host.</li>
+        </ul>
+
+        <h3>Changed</h3>
+        <ul>
+          <li>Claude Code runs without its WebSearch tool, and Codex without its hosted web
+              search and image generation, while the route to their model API checks
+              bodies.</li>
+          <li>An e2e check whose <code>e2e.config.ts</code> uses <code>gateway()</code> from
+              <code>ai</code>, as <code>e2e init</code> writes it, is refused by default on a
+              route to <code>ai-gateway.vercel.sh</code> with
+              <code>403 ai_sdk_gateway_refused</code>, and admission warns about it. Build the
+              model with the gateway's OpenAI-compatible API instead
+              (<a href="https://docs.axocoatl.ai/configure/e2e-check/#the-vercel-ai-gateway">the e2e check</a>).</li>
+        </ul>
+      </article>
+
+      <article class="release">
         <span class="release-tag">v1.3.1</span>
         <span class="release-date">2026-10-13</span>
         <h2>Codex runs with your ChatGPT plan, and the token stays on your computer.</h2>
