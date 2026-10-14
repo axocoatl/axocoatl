@@ -43,7 +43,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use axocoatl_config::loadout::{E2eCheck, ParamOr, ResolvedCheck, ResolvedLoadout};
-use axocoatl_config::types::EgressRouteYaml;
+use axocoatl_config::types::{EgressRouteYaml, ProviderFetchYaml};
 use axocoatl_session::check_options::{
     validate_check_options, CheckReportSpec, RequiredCheckOptions, CHECK_REPORT_DIR,
     MAX_CHECK_TIMEOUT_MS,
@@ -90,6 +90,10 @@ pub const OPENROUTER_API_BASE: &str = "https://openrouter.ai/api/v1";
 /// Warning code: an e2e check's model could not be checked for tool calls
 /// and image input.
 pub const E2E_MODEL_UNVERIFIED: &str = "e2e_model_capability_unverified";
+/// Warning code: an e2e check's model route to the Vercel AI Gateway
+/// refuses the AI SDK's own gateway protocol, which e2e's default client
+/// sends.
+pub const E2E_AI_SDK_GATEWAY_REFUSED: &str = "e2e_ai_sdk_gateway_refused";
 
 const MAX_E2E_ARGS: usize = 64;
 const MAX_E2E_ARG_BYTES: usize = 1024;
@@ -716,11 +720,38 @@ pub fn openrouter_model_capable(model: &str, catalog: &serde_json::Value) -> Res
     }
 }
 
+/// The warning for an e2e check whose model route goes to the Vercel AI
+/// Gateway and reads request bodies (`provider_fetch` not `allow`): the
+/// route refuses the AI SDK's own gateway protocol
+/// (`crate::egress_broker::provider_fetch::ai_sdk_gateway`), which
+/// `gateway()` of the `ai` package sends and `e2e init` configures by
+/// default. Admission cannot see which client the repository's
+/// `e2e.config.ts` builds, so it warns and does not refuse.
+pub fn ai_sdk_gateway_warning(name: &str, route: &EgressRouteYaml) -> Option<RunWarning> {
+    let checked = route.provider_fetch != Some(ProviderFetchYaml::Allow);
+    (route.host == crate::egress_broker::provider_fetch::VERCEL_AI_GATEWAY_HOST && checked).then(
+        || RunWarning {
+            code: E2E_AI_SDK_GATEWAY_REFUSED.into(),
+            message: format!(
+                "Check {name}: the route to {host} checks request bodies and refuses the AI \
+                 SDK's own gateway protocol, which e2e's default client sends (gateway() from \
+                 ai, as e2e init writes it). If e2e.config.ts uses it, build the model with \
+                 createOpenAICompatible from @ai-sdk/openai-compatible instead, with baseURL \
+                 process.env.AXOCOATL_E2E_BASE_URL and apiKey process.env.AXOCOATL_E2E_API_KEY, \
+                 and allow POST /v1/chat/completions on the route; a config that already does \
+                 is not affected.",
+                host = route.host
+            ),
+        },
+    )
+}
+
 /// The admission's check of every e2e check's model: an OpenRouter model
 /// must list tool calls and image input in OpenRouter's catalog (else a
 /// usage error, exit 3; an unreadable catalog is an infrastructure error,
 /// exit 5, never a silent pass). A model on any other route gets the
-/// warning [`E2E_MODEL_UNVERIFIED`].
+/// warning [`E2E_MODEL_UNVERIFIED`], and one on a body-checking route to
+/// the Vercel AI Gateway also [`E2E_AI_SDK_GATEWAY_REFUSED`].
 pub async fn verify_e2e_models(
     resolved: &ResolvedLoadout,
     catalog: &dyn ModelCatalog,
@@ -745,6 +776,7 @@ pub async fn verify_e2e_models(
                     .map_err(|reason| usage(format!("check {}: {reason}", check.name)))?;
             }
         } else {
+            warnings.extend(ai_sdk_gateway_warning(&check.name, route));
             warnings.push(RunWarning {
                 code: E2E_MODEL_UNVERIFIED.into(),
                 message: format!(
@@ -1812,6 +1844,69 @@ consolidation:
         assert!(matches!(error, RunError::Infrastructure(_)), "{error}");
         assert!(error.to_string().contains("connection refused"));
         assert!(openrouter_model_capable("a/b", &json!({})).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_body_checking_gateway_route_warns_about_e2es_default_client() {
+        let gateway_loadout = |provider_fetch: &str| {
+            let text = LOADOUT
+                .replace(
+                    "model_route: llm.example.test, model: vision-7b",
+                    "model_route: ai-gateway.vercel.sh, model: openai/gpt-6-luna-fast",
+                )
+                .replace(
+                    "  - host: llm.example.test\n    ports: [8443]\n    credential: local-llm\n",
+                    &format!(
+                        "  - host: ai-gateway.vercel.sh\n{provider_fetch}    credential: e2e-gateway\n"
+                    ),
+                );
+            assert!(text.contains("host: ai-gateway.vercel.sh"), "{text}");
+            let loadout = parse_loadout(&text, LoadoutSource::Builtin).expect("loadout parses");
+            resolve_loadout(&loadout, &ParamValues::new(), "check the checkout", "/repo")
+                .expect("resolves")
+        };
+        let capable = catalog(json!([row(
+            "anthropic/claude-sonnet-4.5",
+            &["tools"],
+            &["text", "image"]
+        )]));
+        for provider_fetch in ["", "    provider_fetch: refuse\n"] {
+            let warnings = verify_e2e_models(&gateway_loadout(provider_fetch), &capable)
+                .await
+                .unwrap();
+            let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
+            assert_eq!(
+                codes,
+                [E2E_AI_SDK_GATEWAY_REFUSED, E2E_MODEL_UNVERIFIED],
+                "{warnings:?}"
+            );
+            let message = &warnings[0].message;
+            for fragment in [
+                "Check local: the route to ai-gateway.vercel.sh checks request bodies",
+                "gateway() from ai, as e2e init writes it",
+                "createOpenAICompatible from @ai-sdk/openai-compatible",
+                "baseURL process.env.AXOCOATL_E2E_BASE_URL",
+                "apiKey process.env.AXOCOATL_E2E_API_KEY",
+                "allow POST /v1/chat/completions on the route",
+            ] {
+                assert!(message.contains(fragment), "{fragment}: {message}");
+            }
+        }
+        // provider_fetch: allow sends gateway() requests unread: no warning.
+        let warnings = verify_e2e_models(&gateway_loadout("    provider_fetch: allow\n"), &capable)
+            .await
+            .unwrap();
+        assert!(
+            warnings
+                .iter()
+                .all(|w| w.code != E2E_AI_SDK_GATEWAY_REFUSED),
+            "{warnings:?}"
+        );
+        // Other routes never get it.
+        let warnings = verify_e2e_models(&resolved(), &capable).await.unwrap();
+        assert!(warnings
+            .iter()
+            .all(|w| w.code != E2E_AI_SDK_GATEWAY_REFUSED));
     }
 
     #[tokio::test]

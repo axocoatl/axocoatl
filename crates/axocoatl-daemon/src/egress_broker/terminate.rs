@@ -899,6 +899,38 @@ impl Connection {
                     ),
                 )),
             };
+        // The AI SDK's own protocol to the Vercel AI Gateway is not a format
+        // the check reads; the refusal names the API it does read.
+        if provider_fetch::ai_sdk_gateway(&route.host, path) && !provider_fetch::blank(&bytes) {
+            let construct = "a request in the AI SDK's own Vercel AI Gateway protocol (what \
+                             gateway() of the ai package sends), whose body the check does not \
+                             read";
+            let mut refused = refusal(
+                StatusCode::FORBIDDEN,
+                provider_fetch::AI_SDK_GATEWAY_REFUSED,
+                format!(
+                    "the request uses the AI SDK's own gateway protocol ({}), which this route \
+                     cannot check for requests that ask the provider to reach other hosts or run \
+                     tools itself",
+                    facts.path
+                ),
+                route.ai_sdk_gateway_hint(),
+                false,
+            );
+            refused.details = vec![
+                ("construct", construct.to_string()),
+                ("json_path", "$".to_string()),
+            ];
+            tracing::info!(
+                session = %self.ctx.session,
+                conn = %self.ctx.conn,
+                host = %route.host,
+                method = %facts.method,
+                path = %facts.path,
+                "route request refused: the AI SDK's gateway protocol, which the check does not read"
+            );
+            return Err(self.refuse(facts, refused));
+        }
         let path = path.to_string();
         // The route to Ollama on this computer is checked by Ollama's own
         // endpoints and model names; any other route by the hosted APIs'.

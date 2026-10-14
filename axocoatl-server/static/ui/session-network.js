@@ -54,6 +54,7 @@ const REQUEST_REASONS = {
   route_not_for_binding: 'The route does not serve this kind of process.',
   request_too_large: 'The body was larger than the route allows.',
   provider_fetch_refused: 'The body asked the model provider to fetch a URL, search the web, connect to an MCP server or run a tool itself, or the route could not read it.',
+  ai_sdk_gateway_refused: 'The body was in the AI SDK\'s own Vercel AI Gateway protocol (gateway() from ai), which the route cannot check. Use the gateway\'s OpenAI-compatible API (createOpenAICompatible, https://ai-gateway.vercel.sh/v1), or set provider_fetch: allow on the route, which sends every body unread.',
   request_incomplete: 'The body did not arrive whole, so the route did not check or send it.',
   credential_unavailable: 'The daemon could not read the route\'s credential.',
   record_unavailable: 'The request could not be recorded, so it was not sent.',

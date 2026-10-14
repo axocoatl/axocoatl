@@ -745,7 +745,11 @@ the credential or writes the request event, and refuses with `403 provider_fetch
 recorded with that reason, a body that offers a tool the provider runs (tools pass by
 client-run type only), names MCP servers or enabled plugins, asks the provider to fetch a
 URL, names a web-searching model or a stored prompt, or cannot be read
-(`egress_broker::provider_fetch`); an allowed body goes upstream byte for byte. While the
+(`egress_broker::provider_fetch`); an allowed body goes upstream byte for byte. A body in
+the AI SDK's own Vercel AI Gateway protocol (`/v<N>/ai/…` on `ai-gateway.vercel.sh`,
+`provider_fetch::ai_sdk_gateway`) gets `403 ai_sdk_gateway_refused` and a hint naming
+the gateway's OpenAI-compatible API, and an e2e check routed there warns
+`e2e_ai_sdk_gateway_refused` at admission. While the
 route serving the program's model API refuses provider fetches (asked through
 `EgressAuthority::refuses_provider_fetch` when the activation runs), the program starts
 without its hosted tools (`external_agent::HostedTools`): Claude Code with

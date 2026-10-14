@@ -26,6 +26,23 @@
 //! - `codex-0.160.1-responses-web-search-live.json`: the same call as Codex
 //!   0.160.1 sent it before, offering OpenAI's hosted `web_search` with
 //!   `external_web_access: true`.
+//!
+//! The `e2e-0.18.0-*` fixtures are the first request of e2e 0.18.0's own
+//! model adapter (`createModelAdapter`, with its provider hints: a
+//! judgment with a schema and a 1×1 PNG) and of an AI SDK 7.0.139 call with
+//! one function tool, run with Node in the e2e recipe image with the
+//! environment Axocoatl's e2e check exports for a `model_route` of
+//! `ai-gateway.vercel.sh`, the prompts the capture's own:
+//!
+//! - `e2e-0.18.0-ai-gateway-default.json`: the config `e2e init --yes`
+//!   writes, `gateway('openai/gpt-6-luna-fast')` from `ai`, which sends it
+//!   to `/v4/ai/language-model` (`@ai-sdk/gateway` 4.0.112), with e2e's
+//!   `providerOptions.openai`.
+//! - `e2e-0.18.0-ai-gateway-openai-compatible.json` and
+//!   `e2e-0.18.0-ai-gateway-openai-compatible-tools.json`: the config the
+//!   e2e check's docs give instead, `createOpenAICompatible` of
+//!   `@ai-sdk/openai-compatible` 3.0.68 with `AXOCOATL_E2E_BASE_URL`, which
+//!   sends them to `/v1/chat/completions`.
 
 use super::*;
 
@@ -36,6 +53,12 @@ const CLAUDE_WEB_SEARCH: &str = include_str!("fixtures/claude-code-2.1.292-web-s
 const CODEX_RESPONSES: &str = include_str!("fixtures/codex-0.160.1-responses.json");
 const CODEX_WEB_SEARCH_LIVE: &str =
     include_str!("fixtures/codex-0.160.1-responses-web-search-live.json");
+
+const E2E_GATEWAY_DEFAULT: &str = include_str!("fixtures/e2e-0.18.0-ai-gateway-default.json");
+const E2E_GATEWAY_COMPATIBLE: &str =
+    include_str!("fixtures/e2e-0.18.0-ai-gateway-openai-compatible.json");
+const E2E_GATEWAY_COMPATIBLE_TOOLS: &str =
+    include_str!("fixtures/e2e-0.18.0-ai-gateway-openai-compatible-tools.json");
 
 const MESSAGES: &str = "/v1/messages";
 const RESPONSES: &str = "/v1/responses";
@@ -63,6 +86,46 @@ fn what_the_pinned_programs_send_passes() {
     assert!(CLAUDE_TOOL_REFERENCE.contains(r#"{"type":"tool_reference","tool_name":"WebSearch"}"#));
     assert!(CODEX_RESPONSES.contains(r#"{"type":"tool_search","execution":"client""#));
     assert!(!CODEX_RESPONSES.contains(r#""type":"web_search""#));
+}
+
+#[test]
+fn e2e_through_the_gateways_openai_compatible_api_passes_and_its_own_protocol_is_known() {
+    // The compatible client e2e's docs give: Chat Completions, a data: image,
+    // a JSON schema and a function tool.
+    passes("/v1/chat/completions", E2E_GATEWAY_COMPATIBLE);
+    passes("/v1/chat/completions", E2E_GATEWAY_COMPATIBLE_TOOLS);
+    assert!(E2E_GATEWAY_COMPATIBLE.contains(r#""image_url":{"url":"data:image/png;base64,"#));
+    assert!(E2E_GATEWAY_COMPATIBLE_TOOLS.contains(r#""tools":[{"type":"function""#));
+
+    // e2e init's default client speaks the AI SDK's own gateway protocol,
+    // which the broker refuses by its path before this check reads it, and
+    // which this check, given it, does not know either.
+    let path = "/v4/ai/language-model";
+    assert!(ai_sdk_gateway(VERCEL_AI_GATEWAY_HOST, path));
+    assert!(refused(path, E2E_GATEWAY_DEFAULT)
+        .construct
+        .contains("endpoint whose request format the check does not know"));
+    assert!(E2E_GATEWAY_DEFAULT.contains(r#""providerOptions":{"openai":"#));
+
+    for (host, path, expected) in [
+        (VERCEL_AI_GATEWAY_HOST, "/v4/ai/language-model", true),
+        (VERCEL_AI_GATEWAY_HOST, "/v3/ai/language-model", true),
+        (VERCEL_AI_GATEWAY_HOST, "/v1/ai/embedding-model", true),
+        (VERCEL_AI_GATEWAY_HOST, "/v12/ai/config", true),
+        (VERCEL_AI_GATEWAY_HOST, "/v1/chat/completions", false),
+        (VERCEL_AI_GATEWAY_HOST, "/v1/responses", false),
+        (VERCEL_AI_GATEWAY_HOST, "/v1/messages", false),
+        (VERCEL_AI_GATEWAY_HOST, "/v/ai/language-model", false),
+        (VERCEL_AI_GATEWAY_HOST, "/vx/ai/language-model", false),
+        (VERCEL_AI_GATEWAY_HOST, "/ai/language-model", false),
+        ("gateway.example.test", "/v4/ai/language-model", false),
+        ("api.openai.com", "/v4/ai/language-model", false),
+    ] {
+        assert_eq!(ai_sdk_gateway(host, path), expected, "{host}{path}");
+    }
+    assert!(blank(b" \r\n\t"));
+    assert!(blank(b""));
+    assert!(!blank(b"{}"));
 }
 
 #[test]

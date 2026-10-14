@@ -16,6 +16,11 @@ const CLAUDE_WEB_SEARCH: &[u8] = include_bytes!("fixtures/claude-code-2.1.292-we
 const CODEX_RESPONSES: &[u8] = include_bytes!("fixtures/codex-0.160.1-responses.json");
 const CODEX_WEB_SEARCH_LIVE: &[u8] =
     include_bytes!("fixtures/codex-0.160.1-responses-web-search-live.json");
+const E2E_GATEWAY_DEFAULT: &[u8] = include_bytes!("fixtures/e2e-0.18.0-ai-gateway-default.json");
+const E2E_GATEWAY_COMPATIBLE: &[u8] =
+    include_bytes!("fixtures/e2e-0.18.0-ai-gateway-openai-compatible.json");
+const E2E_GATEWAY_COMPATIBLE_TOOLS: &[u8] =
+    include_bytes!("fixtures/e2e-0.18.0-ai-gateway-openai-compatible-tools.json");
 
 /// The route Axocoatl adds for `runtime`'s writer sending `credential`, as
 /// a loadout Session compiles it, with its credential read from the test's
@@ -414,4 +419,136 @@ async fn bodies_the_check_cannot_read_are_refused_and_empty_ones_pass() {
         .filter(|event| refused_with(event, "provider_fetch_refused"))
         .count();
     assert_eq!(refused, 4);
+}
+
+/// A loadout's route to the Vercel AI Gateway, as the e2e check's docs
+/// write it: Chat Completions and the AI SDK's own protocol both allowed by
+/// its rules, the body check on by default.
+fn gateway_loadout_route() -> Arc<Route> {
+    let parsed: EgressRouteYaml = axocoatl_config::yaml::from_str(
+        "host: ai-gateway.vercel.sh\ncredential: test\n\
+         inject: {header: Authorization, format: \"Bearer {}\"}\n\
+         rules:\n  - {methods: [POST], path: /v1/chat/completions}\n  \
+         - {methods: [POST], path: \"/v4/ai/**\"}\n",
+    )
+    .unwrap();
+    let mut credentials = BTreeMap::new();
+    credentials.insert(
+        "test".to_string(),
+        CredentialSourceYaml {
+            env: Some(SECRET_ENV.into()),
+            file: None,
+        },
+    );
+    RouteTable::compile(&[parsed], &credentials, &[])
+        .unwrap()
+        .with_origins(&[RouteOrigin::Loadout])
+        .routes()[0]
+        .clone()
+}
+
+#[tokio::test]
+async fn e2es_default_gateway_client_is_refused_with_the_fix_and_the_compatible_api_passes() {
+    let route = gateway_loadout_route();
+    assert_eq!(route.host, "ai-gateway.vercel.sh");
+    assert_eq!(route.provider_fetch, ProviderFetch::Refused);
+    let h = harness(route).await;
+    let sink = Arc::new(MemorySink::default());
+    let mut client = h.client(sink.clone()).await;
+
+    // What `e2e init --yes` configures, gateway() from ai: refused unsent,
+    // naming the API the route reads and what allowing it gives up.
+    let response = client
+        .sender
+        .send_request(post(
+            "/v4/ai/language-model",
+            &h.host_header(),
+            E2E_GATEWAY_DEFAULT,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 403);
+    assert_eq!(
+        response.headers()["x-axocoatl-egress"],
+        "denied; reason=ai_sdk_gateway_refused"
+    );
+    let json = refusal_json(response).await;
+    assert_eq!(json["error"], "ai_sdk_gateway_refused");
+    assert_eq!(json["json_path"], "$");
+    assert_eq!(json["path"], "/v4/ai/language-model");
+    let reason = json["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("the AI SDK's own gateway protocol (/v4/ai/language-model)"),
+        "{reason}"
+    );
+    let hint = json["hint"].as_str().unwrap();
+    for fragment in [
+        "https://ai-gateway.vercel.sh/v1, POST /v1/chat/completions",
+        "e2e.config.ts with createOpenAICompatible from @ai-sdk/openai-compatible",
+        "baseURL process.env.AXOCOATL_E2E_BASE_URL",
+        "apiKey process.env.AXOCOATL_E2E_API_KEY, not gateway() from ai",
+        "set provider_fetch: allow on the loadout's route for ai-gateway.vercel.sh",
+        "sends every body to the gateway unread",
+        "fetch URLs, search the web, connect to MCP servers or run tools itself",
+    ] {
+        assert!(hint.contains(fragment), "{fragment}: {hint}");
+    }
+    assert!(h.upstream.seen().is_empty());
+    let events = request_events(&sink);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(
+        refused_with(&events[0], "ai_sdk_gateway_refused"),
+        "{events:?}"
+    );
+
+    // The connection goes on: the compatible client's judgment and tool
+    // call reach the gateway byte for byte, with the credential.
+    for body in [E2E_GATEWAY_COMPATIBLE, E2E_GATEWAY_COMPATIBLE_TOOLS] {
+        let response = client
+            .sender
+            .send_request(post("/v1/chat/completions", &h.host_header(), body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+    }
+    let seen = h.upstream.seen();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].body, Bytes::from_static(E2E_GATEWAY_COMPATIBLE));
+    assert_eq!(
+        seen[1].body,
+        Bytes::from_static(E2E_GATEWAY_COMPATIBLE_TOOLS)
+    );
+    assert_eq!(
+        seen[0].header("authorization"),
+        [format!("Bearer {}", secret()).as_str()]
+    );
+    let events = request_events(&sink);
+    assert!(matches!(&events[1], NetworkEvent::Request {
+        decision: Decision::Allow, credential: Some(name), .. } if name == "test"));
+
+    // A request without a body in that protocol, such as its model
+    // listing, is not refused by the check.
+    let response = client
+        .sender
+        .send_request(post("/v4/ai/language-model", &h.host_header(), b""))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+}
+
+#[test]
+fn the_gateway_hint_names_where_to_turn_the_check_off() {
+    let configured = route(
+        "host: ai-gateway.vercel.sh\ncredential: test\ninject: {header: Authorization, format: \"Bearer {}\"}\n\
+         rules:\n  - {methods: [POST], path: \"/v4/ai/**\"}\n",
+    );
+    let hint = configured.ai_sdk_gateway_hint();
+    assert!(
+        hint.contains("set provider_fetch: allow on sandbox.egress.routes[0] (ai-gateway.vercel.sh) and run axocoatl network reload"),
+        "{hint}"
+    );
+    assert!(
+        hint.contains("sends every body to the gateway unread"),
+        "{hint}"
+    );
 }

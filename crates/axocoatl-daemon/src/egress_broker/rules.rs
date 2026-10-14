@@ -966,6 +966,39 @@ impl Route {
         }
     }
 
+    /// What to do about a request in the AI SDK's own gateway protocol,
+    /// which this route refuses unread
+    /// ([`super::provider_fetch::ai_sdk_gateway`]): use the gateway's
+    /// OpenAI-compatible API, which the route checks, or turn the check
+    /// off, and what that gives up.
+    pub fn ai_sdk_gateway_hint(&self) -> String {
+        let host = &self.host;
+        let compatible = "Use the gateway's OpenAI-compatible API instead \
+                          (https://ai-gateway.vercel.sh/v1, POST /v1/chat/completions), whose \
+                          bodies the route checks: for an e2e check, build the model in \
+                          e2e.config.ts with createOpenAICompatible from \
+                          @ai-sdk/openai-compatible, baseURL process.env.AXOCOATL_E2E_BASE_URL \
+                          and apiKey process.env.AXOCOATL_E2E_API_KEY, not gateway() from ai.";
+        let gives_up = "sends every body to the gateway unread, so a request could then ask the \
+                        gateway or the provider behind it to fetch URLs, search the web, connect \
+                        to MCP servers or run tools itself";
+        match &self.origin {
+            RouteOrigin::ExternalWriter { runtime } => format!(
+                "{compatible} This is the route Axocoatl adds for the loadout's {runtime} \
+                 writer, which never sends bodies unread."
+            ),
+            RouteOrigin::Configured => format!(
+                "{compatible} Or set provider_fetch: allow on sandbox.egress.routes[{}] \
+                 ({host}) and run axocoatl network reload; the route then {gives_up}.",
+                self.index
+            ),
+            RouteOrigin::Loadout => format!(
+                "{compatible} Or set provider_fetch: allow on the loadout's route for {host}; \
+                 the route then {gives_up}."
+            ),
+        }
+    }
+
     /// Check one request whose path is already canonical.
     pub fn check(&self, method: &str, path: &CanonicalPath) -> RuleDecision {
         let label = self.label();

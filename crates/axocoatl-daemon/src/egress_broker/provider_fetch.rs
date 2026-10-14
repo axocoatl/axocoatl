@@ -69,6 +69,12 @@
 //! The route to Ollama on this computer (`sandbox.egress.host_ollama`) is
 //! checked by [`check_ollama`] instead: Ollama's own endpoints, its
 //! compatible ones by their formats, and a cloud model in `model`.
+//!
+//! The AI SDK's own protocol to the Vercel AI Gateway ([`ai_sdk_gateway`]),
+//! what `gateway()` of the `ai` package sends, is not one of the formats:
+//! the broker refuses a body in it with its own reason
+//! ([`AI_SDK_GATEWAY_REFUSED`]) and names the gateway's OpenAI-compatible
+//! API instead.
 
 use super::strict_json::{self, Value};
 
@@ -78,6 +84,43 @@ pub const MAX_CHECKED_BODY_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Deepest nesting of arrays and objects the check reads.
 pub const MAX_CHECKED_DEPTH: usize = 512;
+
+/// The Vercel AI Gateway's host.
+pub const VERCEL_AI_GATEWAY_HOST: &str = "ai-gateway.vercel.sh";
+
+/// The reason a request in the AI SDK's own gateway protocol is refused
+/// with ([`ai_sdk_gateway`]).
+pub const AI_SDK_GATEWAY_REFUSED: &str = "ai_sdk_gateway_refused";
+
+/// Whether a request to `path` (without its query) on `host` is in the AI
+/// SDK's own protocol to the Vercel AI Gateway: `/v<N>/ai/…` on
+/// `ai-gateway.vercel.sh`. `gateway()` of the `ai` package
+/// (`@ai-sdk/gateway`), and a plain model id string in the AI SDK, send
+/// `POST /v4/ai/language-model` with `@ai-sdk/gateway` 4.0.112 and `ai`
+/// 7.0.139, and `e2e init` writes that client into `e2e.config.ts` by
+/// default (e2e 0.18.0). Vercel documents the gateway's Chat Completions,
+/// Responses and Anthropic Messages APIs, not this protocol, whose version
+/// and body format change between releases of the package, so the check
+/// does not read it: such a body would otherwise be refused as a format the
+/// check does not know, and the broker refuses it naming the gateway's
+/// OpenAI-compatible API instead (`Route::ai_sdk_gateway_hint`).
+pub fn ai_sdk_gateway(host: &str, path: &str) -> bool {
+    if host != VERCEL_AI_GATEWAY_HOST {
+        return false;
+    }
+    let mut segments = path.strip_prefix('/').unwrap_or(path).split('/');
+    let version = segments.next().unwrap_or_default();
+    let numbered = version.strip_prefix('v').is_some_and(|number| {
+        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+    });
+    numbered && segments.next() == Some("ai")
+}
+
+/// Whether `body` holds nothing but JSON whitespace: the check passes it.
+pub fn blank(body: &[u8]) -> bool {
+    body.iter()
+        .all(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+}
 
 /// The request format of a model endpoint, from its path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,10 +186,7 @@ pub struct Refused {
 /// Check a request body sent to `path` on a route that checks bodies. An
 /// empty body passes.
 pub fn check(path: &str, body: &[u8]) -> Result<(), Refused> {
-    if body
-        .iter()
-        .all(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
-    {
+    if blank(body) {
         return Ok(());
     }
     // Mistral's Agents and Conversations APIs run its built-in tools
@@ -201,10 +241,7 @@ pub fn check_dialect(dialect: Dialect, body: &[u8]) -> Result<(), Refused> {
 /// fetch it (that takes `/api/pull` or `/api/create`, which the route does
 /// not allow).
 pub fn check_ollama(path: &str, body: &[u8]) -> Result<(), Refused> {
-    if body
-        .iter()
-        .all(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
-    {
+    if blank(body) {
         return Ok(());
     }
     let dialect = match path {

@@ -1,0 +1,1 @@
+{"model":"openai/gpt-6-luna-fast","messages":[{"role":"user","content":"Click Save."}],"tools":[{"type":"function","function":{"name":"click","description":"Click an element","parameters":{"type":"object","properties":{"ref":{"type":"string"}},"required":["ref"]}}}],"tool_choice":"auto"}

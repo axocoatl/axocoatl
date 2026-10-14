@@ -89,6 +89,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   above, a request with a body to an endpoint other than the model endpoints (a file
   upload, a batch, embeddings) and a compressed body are refused. Set
   `provider_fetch: allow` on a route that needs them.
+- **An e2e check whose `e2e.config.ts` uses `gateway()` from `ai` is refused by default
+  on a route to `ai-gateway.vercel.sh`.** That client, which `e2e init` writes by
+  default, sends the AI SDK's own gateway protocol (`POST /v4/ai/language-model` with
+  `ai` 7.0.139), which Vercel documents only through the AI SDK, not as an HTTP API, so
+  the route cannot check it. The route
+  refuses a body to `/v<N>/ai/…` on that host with `403 ai_sdk_gateway_refused`, recorded
+  with that reason, and its hint and **Session network** name the fix; admission warns
+  `e2e_ai_sdk_gateway_refused` for an e2e check whose `model_route` is that host and
+  checks bodies, and still runs it. Build the model with the gateway's OpenAI-compatible
+  API instead: `createOpenAICompatible` from `@ai-sdk/openai-compatible` 3.x with
+  `baseURL: process.env.AXOCOATL_E2E_BASE_URL`, `apiKey: process.env.AXOCOATL_E2E_API_KEY`
+  and `chatModel(process.env.AXOCOATL_E2E_MODEL)`, and allow `POST /v1/chat/completions`
+  on the route. Run through e2e 0.18.0's own model adapter in the e2e recipe image, its
+  judgments and tool calls pass the check. `provider_fetch: allow` on the route keeps
+  `gateway()` working and sends every body unread. See
+  [The Vercel AI Gateway](https://docs.axocoatl.ai/configure/e2e-check/#the-vercel-ai-gateway).
 
 ## [1.3.1] - 2026-10-13
 
