@@ -361,6 +361,48 @@ enum Rules {
     List(Vec<CompiledRule>),
 }
 
+/// A route's line in a recorded Session policy (the `rules` of a network
+/// record's `policy` event, as [`Route::policy_text`] renders it), read
+/// back: which route, to which host, and whether it checked request bodies.
+/// A receipt names each route's body check from the record this way, so it
+/// says what the policy the Session ran under recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedRoute {
+    /// `route#<n>`, or `host_ollama`.
+    pub id: String,
+    pub host: String,
+    pub provider_fetch: ProviderFetch,
+}
+
+impl RecordedRoute {
+    /// `text` read as a route's line; `None` for an allowlist line or any
+    /// other text.
+    pub fn parse(text: &str) -> Option<Self> {
+        let (host, rest) = text.split_once(':')?;
+        let (_, inside) = rest.split_once(" (")?;
+        let inside = inside.strip_suffix(')')?;
+        let id = &inside[..inside.find([':', ' '])?];
+        let numbered = id
+            .strip_prefix("route#")
+            .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()));
+        if host.is_empty() || !(numbered || id == "host_ollama") {
+            return None;
+        }
+        let provider_fetch = if inside.ends_with(", provider fetches refused") {
+            ProviderFetch::Refused
+        } else if inside.ends_with(", provider fetches allowed") {
+            ProviderFetch::Allowed
+        } else {
+            ProviderFetch::NotChecked
+        };
+        Some(Self {
+            id: id.to_string(),
+            host: host.to_string(),
+            provider_fetch,
+        })
+    }
+}
+
 /// Where a route's requests go once the broker has checked them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteUpstream {

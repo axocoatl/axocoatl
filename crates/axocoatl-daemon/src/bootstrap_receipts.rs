@@ -17,8 +17,8 @@ use axocoatl_config::loadout::{
 };
 use axocoatl_session::receipt::{
     self, sha256_hex, AdjudicationFacts, AgentFacts, CheckFacts, LoadoutFacts, NotCoveredFacts,
-    OpenedReceipt, PolicyFacts, Predicate, RepositoryFacts, ReviewFacts, RunFacts, SandboxFacts,
-    Statement, UsageFacts, PREDICATE_TYPE, STATEMENT_TYPE,
+    OpenedReceipt, PolicyFacts, Predicate, RepositoryFacts, ReviewFacts, RouteFacts, RunFacts,
+    SandboxFacts, Statement, UsageFacts, PREDICATE_TYPE, STATEMENT_TYPE,
 };
 use axocoatl_session::run_outcome::RunOutcome;
 use axocoatl_session::run_record::{RunEvent, RunManifest};
@@ -33,6 +33,25 @@ fn serde_name<T: serde::Serialize>(value: &T) -> String {
         Ok(serde_json::Value::String(name)) => name,
         _ => String::new(),
     }
+}
+
+/// The routes among a recorded policy's `rules`, each with whether it
+/// checked model-call bodies (`refuse`), sent them unread under
+/// `provider_fetch: allow` (`allow`), or reads no bodies (absent).
+fn receipt_routes(rules: &[String]) -> Vec<RouteFacts> {
+    rules
+        .iter()
+        .filter_map(|text| crate::egress_broker::rules::RecordedRoute::parse(text))
+        .map(|route| RouteFacts {
+            id: route.id,
+            host: route.host,
+            provider_fetch: match route.provider_fetch {
+                crate::egress_broker::rules::ProviderFetch::Refused => Some("refuse".into()),
+                crate::egress_broker::rules::ProviderFetch::Allowed => Some("allow".into()),
+                crate::egress_broker::rules::ProviderFetch::NotChecked => None,
+            },
+        })
+        .collect()
 }
 
 /// The `origin` remote as `https://host/path` without credentials, read
@@ -158,6 +177,7 @@ impl AxocoatlDaemon {
                     ..
                 } = line.event
                 {
+                    let routes = receipt_routes(&rules);
                     latest.insert(
                         scope.as_str().to_string(),
                         PolicyFacts {
@@ -165,6 +185,7 @@ impl AxocoatlDaemon {
                             revision,
                             digest,
                             rules,
+                            routes,
                         },
                     );
                 }

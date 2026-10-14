@@ -66,6 +66,7 @@ fn statement(signer: &receipt_key::SigningKey) -> Statement {
                     revision: 1,
                     digest: "c".repeat(64),
                     rules: Vec::new(),
+                    routes: Vec::new(),
                 }],
             },
             network: NetworkSummary::default(),

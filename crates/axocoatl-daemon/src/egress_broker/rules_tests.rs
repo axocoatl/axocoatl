@@ -630,3 +630,50 @@ fn the_routes_axocoatl_adds_for_external_writers_check_bodies() {
             .contains("refuses requests that ask the model provider to fetch URLs"));
     }
 }
+
+#[test]
+fn a_recorded_routes_line_reads_back_with_its_body_check() {
+    use super::RecordedRoute;
+    let checked = route_from(0, "{host: api.anthropic.com, access: full}");
+    let allowed = route_from(
+        1,
+        "{host: api.openai.com, access: full, provider_fetch: allow}",
+    );
+    let unchecked = route_from(2, "{host: registry.npmjs.org, access: read-only}");
+    for (route, host, expected) in [
+        (&checked, "api.anthropic.com", ProviderFetch::Refused),
+        (&allowed, "api.openai.com", ProviderFetch::Allowed),
+        (&unchecked, "registry.npmjs.org", ProviderFetch::NotChecked),
+    ] {
+        let text = route.policy_text();
+        assert_eq!(
+            RecordedRoute::parse(&text),
+            Some(RecordedRoute {
+                id: route.label(),
+                host: host.into(),
+                provider_fetch: expected,
+            }),
+            "{text}"
+        );
+    }
+    assert_eq!(
+        RecordedRoute::parse(
+            "ollama.host.axocoatl.internal:443 (host_ollama to 127.0.0.1:11434: 15 rules, for agent, provider fetches refused)"
+        ),
+        Some(RecordedRoute {
+            id: "host_ollama".into(),
+            host: "ollama.host.axocoatl.internal".into(),
+            provider_fetch: ProviderFetch::Refused,
+        })
+    );
+    // Allowlist lines and anything else are not routes.
+    for text in [
+        "registry.npmjs.org:443 (preset npm)",
+        "example.com:443",
+        "route#0",
+        "x:443 (route#: 1 rule, for agent)",
+        ":443 (route#0: 1 rule, for agent)",
+    ] {
+        assert_eq!(RecordedRoute::parse(text), None, "{text}");
+    }
+}

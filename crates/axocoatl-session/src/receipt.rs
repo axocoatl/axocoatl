@@ -225,6 +225,25 @@ pub struct PolicyFacts {
     /// The allowlist hosts and each route (host, ports, rules, credential
     /// name, who may use it), as the record renders them.
     pub rules: Vec<String>,
+    /// Each route of `rules`, and whether it checked model-call bodies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<RouteFacts>,
+}
+
+/// One route of a scope's network policy, as its recorded rules name it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteFacts {
+    /// `route#<n>`, or `host_ollama`.
+    pub id: String,
+    pub host: String,
+    /// `refuse`: the route read each request body before it left and
+    /// refused one that asked the model provider to reach other hosts or
+    /// run tools itself (fetch a URL, search the web, connect to an MCP
+    /// server, run a provider-hosted tool); `allow`: `provider_fetch:
+    /// allow` sent bodies unread. Absent for a route to a host that is not
+    /// a model API, whose bodies pass unread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_fetch: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1082,6 +1101,15 @@ pub fn describe(statement: &Statement) -> Vec<String> {
                 policy.rules.join("; ")
             }
         ));
+        for route in &policy.routes {
+            let check = match route.provider_fetch.as_deref() {
+                Some("refuse") => "model-call bodies checked, provider fetches refused",
+                Some("allow") => "model-call bodies sent unread (provider_fetch: allow)",
+                Some(_) => "model-call body check unknown",
+                None => "bodies not checked (not a model API)",
+            };
+            lines.push(format!("  {} {}: {check}", route.id, route.host));
+        }
     }
     lines.push(format!(
         "Sandbox: {}, network {}, {} workload",
@@ -1162,6 +1190,7 @@ mod tests {
                         revision: 1,
                         digest: "e".repeat(64),
                         rules: vec!["ollama.host.axocoatl.internal:443 (host_ollama to 127.0.0.1:11434: access full, for agent)".into()],
+                        routes: Vec::new(),
                     }],
                 },
                 network: NetworkSummary::default(),
@@ -1560,6 +1589,48 @@ mod tests {
             .unwrap()
             .problem
             .contains("symbolic link"));
+    }
+
+    #[test]
+    fn each_routes_body_check_is_in_the_statement_and_in_words() {
+        let key_pair = key(RFC8032_SEED);
+        let mut statement = statement(public_key_of(&key_pair).signer());
+        // Without routes the field is left out, so the fixed vector above
+        // is unchanged.
+        let bare = String::from_utf8(statement_bytes(&statement).unwrap()).unwrap();
+        assert!(bare.contains("access full, for agent)\"]}]}"), "{bare}");
+        statement.predicate.sandbox.policies[0].routes = vec![
+            RouteFacts {
+                id: "host_ollama".into(),
+                host: "ollama.host.axocoatl.internal".into(),
+                provider_fetch: Some("refuse".into()),
+            },
+            RouteFacts {
+                id: "route#0".into(),
+                host: "api.anthropic.com".into(),
+                provider_fetch: Some("allow".into()),
+            },
+            RouteFacts {
+                id: "route#1".into(),
+                host: "registry.npmjs.org".into(),
+                provider_fetch: None,
+            },
+        ];
+        let text = String::from_utf8(statement_bytes(&statement).unwrap()).unwrap();
+        assert!(text.contains(
+            "\"routes\":[{\"id\":\"host_ollama\",\"host\":\"ollama.host.axocoatl.internal\",\"provider_fetch\":\"refuse\"},{\"id\":\"route#0\",\"host\":\"api.anthropic.com\",\"provider_fetch\":\"allow\"},{\"id\":\"route#1\",\"host\":\"registry.npmjs.org\"}]"
+        ), "{text}");
+        let (envelope, _) = sign_statement(&key_pair, &statement).unwrap();
+        let opened = opened(&envelope).unwrap();
+        assert_eq!(opened.statement, statement);
+        let words = describe(&statement).join("\n");
+        for needle in [
+            "  host_ollama ollama.host.axocoatl.internal: model-call bodies checked, provider fetches refused",
+            "  route#0 api.anthropic.com: model-call bodies sent unread (provider_fetch: allow)",
+            "  route#1 registry.npmjs.org: bodies not checked (not a model API)",
+        ] {
+            assert!(words.contains(needle), "{needle}\n{words}");
+        }
     }
 
     #[test]
