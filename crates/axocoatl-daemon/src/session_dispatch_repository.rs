@@ -437,8 +437,23 @@ fn validate_reattachment_descriptions(
     previous
         .execution_identity
         .clone_from(&current.execution_identity);
+    // The Session's folder is its path. An owner is acquired only for a
+    // Session whose folder is its Workspace's current path, and a live owner
+    // refuses a directory replaced under it, so within one daemon the inode
+    // never changes here. Across a restart the directory at that same path can
+    // be another inode: a repository restored from a backup or copied to a new
+    // Mac, which the Workspace store also takes as the same Workspace by its
+    // path. Refusing it would end every later turn of the Session.
+    if previous.host_workspace_inode.is_empty() || current.host_workspace_inode.is_empty() {
+        return Err(error(
+            "repository reattachment has no actual Workspace directory identity",
+        ));
+    }
+    previous
+        .host_workspace_inode
+        .clone_from(&current.host_workspace_inode);
     if previous != current {
-        return Err(error("repository reattachment changed its durable Session, Workspace, environment, backend, runtime, path, or inode"));
+        return Err(error("repository reattachment changed its durable Session, Workspace, environment, backend, runtime, or path"));
     }
     Ok(())
 }
@@ -653,7 +668,7 @@ mod tests;
 mod reattachment_tests {
     use super::*;
     #[test]
-    fn reattachment_accepts_only_a_changed_execution_incarnation() {
+    fn reattachment_accepts_only_a_changed_execution_incarnation_or_folder_copy() {
         let metadata = serde_json::json!({"workspace_id":"workspace", "session_id":"session", "environment_generation":2,
             "backend":"podman", "runtime_id":"session", "execution_identity":"old-owner", "runtime_root":"/repo", "host_workspace_inode":"1:2"});
         let description = |value: &serde_json::Value| ActivationEvidenceContent::Repository {
@@ -664,6 +679,11 @@ mod reattachment_tests {
         let mut next = metadata.clone();
         next["execution_identity"] = "new-owner".into();
         assert!(validate_reattachment_descriptions(&original, &description(&next)).is_ok());
+        // The same folder path holding a copy (a restored backup, a migrated
+        // Mac) after a restart.
+        let mut copied = next.clone();
+        copied["host_workspace_inode"] = "7:9".into();
+        assert!(validate_reattachment_descriptions(&original, &description(&copied)).is_ok());
         for (field, value) in [
             ("workspace_id", serde_json::json!("other")),
             ("session_id", serde_json::json!("other")),
@@ -671,14 +691,16 @@ mod reattachment_tests {
             ("backend", serde_json::json!("e2b")),
             ("runtime_id", serde_json::json!("other")),
             ("runtime_root", serde_json::json!("/other")),
-            ("host_workspace_inode", serde_json::json!("1:3")),
+            ("host_workspace_inode", serde_json::json!("")),
         ] {
-            let mut foreign = next.clone();
-            foreign[field] = value;
-            assert!(
-                validate_reattachment_descriptions(&original, &description(&foreign)).is_err(),
-                "{field}"
-            );
+            for base in [&next, &copied] {
+                let mut foreign = base.clone();
+                foreign[field] = value.clone();
+                assert!(
+                    validate_reattachment_descriptions(&original, &description(&foreign)).is_err(),
+                    "{field}"
+                );
+            }
         }
         next["execution_identity"] = "".into();
         assert!(validate_reattachment_descriptions(&original, &description(&next)).is_err());
