@@ -46,7 +46,7 @@ agents:
   - id: strong-reviewer
     name: Strong reviewer
     provider: ollama
-    model: gpt-oss:120b
+    model: gpt-oss:20b
     role: worker
     tools: [read_file, list_dir, grep, glob, bash]
     writes: []
@@ -56,7 +56,9 @@ agents:
 
 Both models run on the same [native Ollama server](/configure/providers/#configure-ollama).
 Ollama has to hold both models: if they do not fit in memory together, it unloads one
-to load the other.
+to load the other. `qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) fit a 48 GB Mac
+that way. The measured reviewer, `gpt-oss:120b` (65 GB), needs a machine with roughly
+96 GB of memory or more.
 
 </TabItem>
 <TabItem label="Hosted model (OpenRouter)">

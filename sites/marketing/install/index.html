@@ -15,7 +15,7 @@
     <section class="container section section-rule">
       <div class="split">
         <div class="stack"><span class="eyebrow">Recommended</span><h2>Install the latest release.</h2><p>The installer detects GNU/Linux or macOS on x86_64 or ARM64, downloads the matching GitHub release, and requires and verifies its published SHA-256 file. Before download it requires Linux to report glibc 2.35 or newer and macOS to report version 11 or newer.</p><ax-cli-snippet>curl -fsSL https://axocoatl.ai/install.sh | sh</ax-cli-snippet><p class="small muted">Review the <a href="https://github.com/axocoatl/axocoatl/blob/main/scripts/install.sh">installer source</a> before piping it to a shell.</p></div>
-        <div class="card"><span class="card-kicker">Requirements</span><ul class="fact-list"><li>GNU/Linux with glibc 2.35+, or macOS 11+</li><li>Windows through WSL2</li><li>Rootless Podman for local Session sandboxes and loadout runs</li><li>A reviewed local Ollama or OpenRouter-credit profile for Axocoatl's own Agents</li><li>For Claude Code: the <code>claude</code> CLI on your computer, to sign in</li></ul></div>
+        <div class="card"><span class="card-kicker">Requirements</span><ul class="fact-list"><li>GNU/Linux with glibc 2.35+, or macOS 11+</li><li>Windows through WSL2</li><li>Rootless Podman for local Session sandboxes and loadout runs</li><li>For Axocoatl's own Agents: Ollama 0.40.6 or a later 0.40 release on this computer (GGUF models; <code>qwen3-coder:30b</code> and <code>gpt-oss:20b</code> fit 48 GB), or an OpenRouter-credit profile</li><li>For Claude Code: the <code>claude</code> CLI on your computer, to sign in</li></ul></div>
       </div>
     </section>
 
@@ -47,7 +47,7 @@
 <span class="code-comment"># in another, in the repository</span>
 <span class="code-key">axocoatl run fix</span> --task <span class="code-string">"…"</span> \
   --model writer=<span class="code-string">ollama:qwen3-coder:30b</span> \
-  --model reviewer=<span class="code-string">ollama:gpt-oss:120b</span> \
+  --model reviewer=<span class="code-string">ollama:gpt-oss:20b</span> \
   --junit axocoatl-junit.xml \
   --record run.axorecord.jsonl \
   --receipt run.receipt.json
@@ -63,9 +63,9 @@
         <li><div><h3>Build the recipe image</h3><p><code>axocoatl recipe build claude-code</code> or <code>axocoatl recipe build codex</code> builds a Session image with the pinned CLI through Podman and records it in the data directory. Run it with the daemon's <code>--config</code> or <code>AXOCOATL_DATA_DIR</code>.</p></div></li>
         <li><div><h3>Sign in, without handling a token</h3><p><code>axocoatl connect claude-code</code> runs <code>claude setup-token</code> and stores the token it prints without showing it. <code>axocoatl connect codex</code> runs <code>codex login</code> in a throwaway container and stores your ChatGPT sign-in; with <code>--api-key</code> it also stores the OpenAI API key OpenAI issues with that sign-in, when it issues one.</p></div></li>
         <li><div><h3>Run it</h3><pre><code>axocoatl run fix-claude-code --task "…" \
-  --model reviewer=ollama:gpt-oss:120b
+  --model reviewer=ollama:gpt-oss:20b
 axocoatl run fix-codex --task "…" \
-  --model reviewer=ollama:gpt-oss:120b</code></pre><p>The host runs the checks and the review on what the program leaves, as for any writer. <code>fix-codex</code> sends the OpenAI API key when one is stored, else your ChatGPT sign-in, and says which.</p></div></li>
+  --model reviewer=ollama:gpt-oss:20b</code></pre><p>The host runs the checks and the review on what the program leaves, as for any writer. <code>fix-codex</code> sends the OpenAI API key when one is stored, else your ChatGPT sign-in, and says which.</p></div></li>
         <li><div><h3>Or write your own loadout</h3><p>To change the model, the budgets or the checks, save a loadout with <code>runtime: claude-code</code> or <code>runtime: codex</code> in the <code>loadouts</code> directory beside your configuration: <code class="wrap">~/Library/Application Support/Axocoatl/loadouts/</code> on macOS, <code>~/.config/axocoatl/loadouts/</code> on Linux. The docs have one to copy.</p></div></li>
       </ol>
       <p><a href="https://docs.axocoatl.ai/configure/external-agents/">Set up Claude Code or Codex →</a></p>

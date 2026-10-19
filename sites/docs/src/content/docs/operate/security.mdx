@@ -435,9 +435,16 @@ What `egress` does not do:
   stored with your provider account, such as an OpenRouter account's default plugins,
   presets or Vercel AI Gateway routing rules, are not seen. The route to Ollama on this computer
   ([`sandbox.egress.host_ollama`](/reference/config/#sandboxegresshost_ollama)) carries
-  only Ollama's inference and model listing, and refuses a request for a cloud model;
-  pulling, creating and pushing models, Ollama's account endpoints and its web search
-  and fetch are refused, since those reach other hosts. A credential is added only as a header: query, path and body
+  only Ollama's inference and model listing, and refuses a request for a cloud model,
+  in a body or in the path of `GET /v1/models/<model>`; pulling, creating and pushing
+  models, Ollama's account endpoints and its web search and fetch are refused, since
+  those reach other hosts. Ollama 0.40 adds `/api/codex/…`, a proxy that forwards to
+  api.openai.com and chatgpt.com and checks only that the caller is on this computer,
+  even with Ollama's cloud features disabled; native Sessions never call it, and the
+  route refuses it like Ollama's other new endpoints (`/api/balance`, `/api/usage`,
+  `/v1/systemone`, …). A local copy of a cloud model (`ollama cp gpt-oss:20b-cloud
+  mygpt`) keeps its cloud host under a name the route cannot recognize, so the route is
+  opened only to an Ollama that reports its cloud features disabled. A credential is added only as a header: query, path and body
   credentials, request signing such as AWS SigV4, and OAuth token exchange are not
   supported. A tool that pins certificates or keeps its own trust store cannot use a
   route.

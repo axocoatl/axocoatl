@@ -33,8 +33,24 @@ You can instead run a second server, for example
 `OLLAMA_NO_CLOUD=1 OLLAMA_HOST=127.0.0.1:11436 ollama serve`, and set
 `providers.ollama.base_url` to it.
 
-**Ollama version other than 0.20.6**
-Native Sessions accept only the audited Ollama 0.20.6 server.
+**Ollama version refused**
+Native Sessions accept Ollama 0.40.6 or a later 0.40 release (the audited version is
+0.40.6). Ollama 0.20.6, pre-releases and 0.41 or later are refused, and `axocoatl
+doctor` says why: install Ollama 0.40.6 or later (`brew upgrade ollama`), or, for a newer
+minor release, upgrade Axocoatl. A Team reviewed on Ollama 0.20.6 asks to be reviewed
+again ("Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again").
+
+**Model refused as not GGUF, or run with MLX**
+Native Sessions run only GGUF models, which Ollama runs in llama.cpp's `llama-server`.
+On Apple silicon Ollama pulls the MLX variant of some models, and MLX does not hold
+`num_ctx` as a hard limit. `ollama pull --runner llamacpp <model>` (an undocumented
+Ollama flag) pulls the GGUF variant; `qwen3-coder:30b` and `gpt-oss:20b` are GGUF.
+
+**Model refused by a contract probe**
+When a Team is reviewed, Axocoatl checks on your server that a prompt longer than the
+model's context is refused before generation and that a call stops at its output limit.
+The error names the check that failed; Axocoatl cannot bound calls to that model on that
+Ollama, so use another model or Ollama release.
 
 ## Config
 

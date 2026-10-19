@@ -36,9 +36,13 @@ built-in ids are reserved: a user loadout cannot use them (see
 cd ~/src/my-app
 axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" \
   --model writer=ollama:qwen3-coder:30b \
-  --model reviewer=ollama:gpt-oss:120b \
+  --model reviewer=ollama:gpt-oss:20b \
   --junit axocoatl-junit.xml --record run.axorecord.jsonl
 ```
+
+`qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) fit a 48 GB Mac, one at a time;
+`gpt-oss:120b` (65 GB) is a stronger reviewer for a machine with roughly 96 GB of memory
+or more.
 
 `--model writer=…` is the same as `--param writer_model=…`. A model value is
 `provider:model`, split at the first `:`, so `ollama:qwen3:32b` and
@@ -151,7 +155,7 @@ description: One writer, the unit tests, and a review by another model.
 kind: custom
 params:
   writer_model:   { kind: model, required: true, description: provider:model of the writer }
-  reviewer_model: { kind: model, default: "ollama:gpt-oss:120b", description: provider:model of the reviewer }
+  reviewer_model: { kind: model, default: "ollama:gpt-oss:20b", description: provider:model of the reviewer }
 agents:
   - id: writer
     role: writer
