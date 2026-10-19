@@ -77,6 +77,19 @@ workbench path uses:
 - at least one configured model provider;
 - **Ollama** plus a pulled model for the simplest local first run.
 
+On macOS, Podman runs containers in a Linux virtual machine that you create once.
+After `brew install podman` (or the installer from podman.io), create and start it:
+
+```sh
+podman machine init --cpus 6 --memory 8192
+podman machine start
+```
+
+Axocoatl is tested on macOS with this size of machine; the Claude Code and Codex
+images and your project's checks run inside it, while Ollama runs on the Mac
+itself. Without a running machine, `axocoatl doctor` warns and prints these
+commands. On Linux, Podman runs containers directly and needs no machine.
+
 Native Sessions use Ollama **0.20.6** on this machine with its cloud features
 disabled. For a local Ollama setup, start the server with cloud disabled and pull
 a coding model:
