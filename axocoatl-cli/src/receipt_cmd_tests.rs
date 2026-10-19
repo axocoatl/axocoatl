@@ -82,6 +82,7 @@ fn statement(signer: &receipt_key::SigningKey) -> Statement {
                 provider: "ollama".into(),
                 model: "gpt-oss:20b".into(),
                 runtime: "native".into(),
+                program_version: None,
                 verdict: "approved".into(),
                 passed: true,
                 rounds: 1,

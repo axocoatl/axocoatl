@@ -1397,12 +1397,33 @@ async fn receipts_child_body() {
     let served = receipt_manifest(&session, &repo, &head);
     store.create(&served).unwrap();
     let mut outcome = ended_outcome(&served, "the environment failed".into(), Vec::new());
-    outcome.ollama_versions = [(
-        MODEL.to_string(),
-        vec![axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION.to_string()],
-    )]
+    outcome.ollama_versions = [
+        (
+            MODEL.to_string(),
+            vec![axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION.to_string()],
+        ),
+        (
+            OTHER.to_string(),
+            vec![
+                axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION.to_string(),
+                "0.40.7".to_string(),
+            ],
+        ),
+    ]
     .into_iter()
     .collect();
+    outcome.review = Some(axocoatl_session::run_outcome::ReviewOutcome {
+        reviewer: axocoatl_session::run_outcome::ModelIdentity {
+            provider: "ollama".into(),
+            model: OTHER.into(),
+            runtime: "native".into(),
+        },
+        max_rounds: 3,
+        rounds: Vec::new(),
+        passed: false,
+        state: "not_run".into(),
+        reason: "the environment failed".into(),
+    });
     daemon
         .seal_loadout_run(&served.run_id, &outcome)
         .await
@@ -1422,6 +1443,22 @@ async fn receipts_child_body() {
             "native ollama {}, ollama:{MODEL}",
             axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION
         ))));
+    // The reviewer's Ollama, upgraded during the run, names both versions.
+    assert_eq!(
+        opened
+            .statement
+            .predicate
+            .review
+            .as_ref()
+            .and_then(|review| review.program_version.as_deref()),
+        Some(
+            format!(
+                "ollama {}, 0.40.7",
+                axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION
+            )
+            .as_str()
+        )
+    );
     let recorded: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(
             daemon

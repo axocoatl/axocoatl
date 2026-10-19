@@ -53,7 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   records the version it checked right before each inference request. A loadout run's
   Outcome keeps them by model (`ollama_versions`), and its receipt names them in the
   native Agent's `program_version` (`ollama 0.40.6`), a field the 1.4.0 verifier already
-  reads, so receipts of this release still verify with `verify-receipt@v1.4.0`.
+  reads, and for a native reviewer in the new optional `review.program_version`, which
+  the 1.4.0 verifier ignores, so receipts of this release still verify with
+  `verify-receipt@v1.4.0`.
 - `axocoatl doctor` prints the Ollama version with the version policy's verdict and
   checks each configured model that is pulled the way native admission does
   (`POST /api/show`): a local GGUF completion model, with tool calling for an Agent that

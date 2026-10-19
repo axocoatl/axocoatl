@@ -329,6 +329,10 @@ impl AxocoatlDaemon {
                 provider: review.reviewer.provider.clone(),
                 model: review.reviewer.model.clone(),
                 runtime: review.reviewer.runtime.clone(),
+                program_version: (review.reviewer.runtime == "native"
+                    && review.reviewer.provider == "ollama")
+                    .then(|| ollama_program_version(outcome, &review.reviewer.model))
+                    .flatten(),
                 verdict: review.state.clone(),
                 passed: review.passed,
                 rounds: review.rounds.len() as u32,
