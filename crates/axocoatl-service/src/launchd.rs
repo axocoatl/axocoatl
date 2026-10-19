@@ -186,6 +186,10 @@ impl ServiceManager for LaunchdManager {
         self.log_path.display().to_string()
     }
 
+    fn last_start_failure(&self) -> Option<String> {
+        crate::last_start_failure(&crate::read_log_tail(&self.log_path).ok()?)
+    }
+
     fn uninstall(&self) -> Result<(), ServiceError> {
         // Best-effort bootout — the agent may not be loaded.
         let _ = self.launchctl(&["bootout", &format!("{}/{LABEL}", self.domain())]);

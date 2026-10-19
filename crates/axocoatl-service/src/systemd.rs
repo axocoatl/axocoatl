@@ -126,6 +126,24 @@ impl ServiceManager for SystemdManager {
         format!("journalctl --user -u {SERVICE_NAME}")
     }
 
+    fn last_start_failure(&self) -> Option<String> {
+        let output = Command::new("journalctl")
+            .args([
+                "--user",
+                "-u",
+                SERVICE_NAME,
+                "-n",
+                "500",
+                "--no-pager",
+                "-o",
+                "cat",
+            ])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())?;
+        crate::last_start_failure(&String::from_utf8_lossy(&output.stdout))
+    }
+
     fn uninstall(&self) -> Result<(), ServiceError> {
         // Stop + disable best-effort — the unit may already be inactive.
         let _ = self.systemctl(&["disable", "--now", SERVICE_NAME]);

@@ -876,6 +876,13 @@ fn cmd_service_status() {
             println!("  at login:  {}", if s.enabled { "yes" } else { "no" });
             println!("  detail:    {}", s.detail);
             println!("  logs:      {}", mgr.logs());
+            // A service that keeps restarting and failing is "not running"
+            // most of the time; say why it last failed.
+            if s.installed && !s.running {
+                if let Some(failure) = mgr.last_start_failure() {
+                    println!("  last start failed:\n    {failure}");
+                }
+            }
             if s.installed {
                 println!("\n{SERVICE_SIGN_IN_HINT}");
             }
@@ -1337,7 +1344,18 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
     // 5. Data dir writable
     let data_dir = std::env::var("AXOCOATL_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
     match probe_data_dir(std::path::Path::new(&data_dir)) {
-        Ok(()) => pass(&format!("Data dir writable: {data_dir}")),
+        Ok(()) => {
+            pass(&format!("Data dir writable: {data_dir}"));
+            // Read only, without a lease: a running daemon is unaffected.
+            let report = axocoatl_session::execution_ownership::inspect_format_ownership(&data_dir);
+            match format_ownership_doctor_line(&report) {
+                Ok(line) => pass(&line),
+                Err((line, hint)) => {
+                    hard_ok = false;
+                    fail(&line, &hint);
+                }
+            }
+        }
         Err(e) => {
             hard_ok = false;
             fail(
@@ -1453,6 +1471,66 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
         println!("Some required checks FAILED — see hints above.");
     }
     hard_ok
+}
+
+/// The `doctor` line for the data directory's format ownership record, as the
+/// daemon admits it when it starts. `Err` is a failure with its hint: the
+/// daemon would refuse to start on this directory.
+fn format_ownership_doctor_line(
+    report: &axocoatl_session::execution_ownership::FormatOwnershipReport,
+) -> Result<String, (String, String)> {
+    use axocoatl_session::execution_ownership::FormatOwnershipReport;
+    let interrupted = |interrupted: bool| {
+        if interrupted {
+            "; the next start also removes what an interrupted re-recording left"
+        } else {
+            ""
+        }
+    };
+    match report {
+        FormatOwnershipReport::Unrecorded => Ok(
+            "Data dir ownership: not recorded yet; the daemon records it when it first starts"
+                .to_string(),
+        ),
+        FormatOwnershipReport::Legacy => Ok(
+            "Data dir ownership: 1.0 format; `axocoatl session upgrade` converts it".to_string(),
+        ),
+        FormatOwnershipReport::Installed {
+            relocation: None,
+            interrupted_rebind,
+        } => Ok(format!(
+            "Data dir ownership: recorded for this directory{}",
+            interrupted(*interrupted_rebind)
+        )),
+        FormatOwnershipReport::Installed {
+            relocation: Some(relocation),
+            interrupted_rebind,
+        } => Ok(format!(
+            "Data dir ownership: copied or moved since it was recorded ({}); the next start \
+             records its new location and keeps its Sessions{}",
+            relocation.describe(),
+            interrupted(*interrupted_rebind)
+        )),
+        FormatOwnershipReport::Prepared {
+            relocation,
+            interrupted_rebind,
+        } => Ok(format!(
+            "Data dir ownership: an interrupted format conversion; the next start {}finishes it{}",
+            if relocation.is_some() {
+                "records the directory's new location and "
+            } else {
+                ""
+            },
+            interrupted(*interrupted_rebind)
+        )),
+        FormatOwnershipReport::Refused(reason) => Err((
+            format!("Data dir ownership: the daemon will not start on this directory ({reason})"),
+            "Restore the whole data directory from a cold backup with `cp -a` (see \
+             https://docs.axocoatl.ai/operate/data-backup/#restore), or start the newer \
+             Axocoatl that last used it."
+                .to_string(),
+        )),
+    }
 }
 
 /// The `doctor` line for what the running daemon did about leaked Session
@@ -4073,6 +4151,101 @@ mod tests {
         assert!(hint.starts_with("listing Session volumes"), "{hint}");
         let (line, _) = runtime_volume_doctor_line(None).unwrap_err();
         assert!(line.contains("does not report"), "{line}");
+    }
+
+    #[test]
+    fn doctor_reports_a_copied_or_moved_data_dir_and_fails_one_the_daemon_refuses() {
+        use axocoatl_session::execution_ownership::{FormatOwnershipReport, RecordedRelocation};
+        let copied = RecordedRelocation {
+            path_changed: false,
+            directory_changed: true,
+            lock_file_changed: true,
+        };
+        assert_eq!(
+            format_ownership_doctor_line(&FormatOwnershipReport::Installed {
+                relocation: None,
+                interrupted_rebind: false,
+            })
+            .unwrap(),
+            "Data dir ownership: recorded for this directory"
+        );
+        let line = format_ownership_doctor_line(&FormatOwnershipReport::Installed {
+            relocation: Some(copied),
+            interrupted_rebind: true,
+        })
+        .unwrap();
+        assert!(
+            line.starts_with("Data dir ownership: copied or moved since it was recorded (it is a copy at the same path"),
+            "{line}"
+        );
+        assert!(line.contains("the next start records its new location and keeps its Sessions"));
+        assert!(
+            line.ends_with("removes what an interrupted re-recording left"),
+            "{line}"
+        );
+        assert!(
+            format_ownership_doctor_line(&FormatOwnershipReport::Prepared {
+                relocation: Some(copied),
+                interrupted_rebind: false,
+            })
+            .unwrap()
+            .contains("records the directory's new location and finishes it")
+        );
+        assert!(
+            format_ownership_doctor_line(&FormatOwnershipReport::Unrecorded)
+                .unwrap()
+                .contains("records it when it first starts")
+        );
+        assert!(format_ownership_doctor_line(&FormatOwnershipReport::Legacy)
+            .unwrap()
+            .contains("axocoatl session upgrade"));
+        let (line, hint) = format_ownership_doctor_line(&FormatOwnershipReport::Refused(
+            "invalid or ambiguous format ownership: unsupported, incomplete, or differently owned manifest".into(),
+        ))
+        .unwrap_err();
+        assert!(line.contains("will not start on this directory"), "{line}");
+        assert!(line.contains("differently owned manifest"), "{line}");
+        assert!(hint.contains("cp -a"), "{hint}");
+        assert!(hint.contains("operate/data-backup/#restore"), "{hint}");
+    }
+
+    /// The real check on real directories: a restored copy is OK with its
+    /// note, and doctor changes nothing in it.
+    #[cfg(unix)]
+    #[test]
+    fn doctor_reads_a_restored_copy_without_changing_it() {
+        let parent = tempfile::tempdir().unwrap();
+        let data = parent.path().join("data");
+        axocoatl_daemon::AxocoatlDaemon::initialize_data_root(&data).unwrap();
+        let line = format_ownership_doctor_line(
+            &axocoatl_session::execution_ownership::inspect_format_ownership(&data),
+        )
+        .unwrap();
+        assert_eq!(line, "Data dir ownership: recorded for this directory");
+        let backup = parent.path().join("backup");
+        for (from, to) in [(&data, &backup), (&backup, &data)] {
+            if to == &data {
+                std::fs::remove_dir_all(&data).unwrap();
+            }
+            assert!(std::process::Command::new("cp")
+                .arg("-a")
+                .arg(from)
+                .arg(to)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let manifest = data.join(".axocoatl-daemon.lock/format.json");
+        let before = std::fs::read(&manifest).unwrap();
+        let line = format_ownership_doctor_line(
+            &axocoatl_session::execution_ownership::inspect_format_ownership(&data),
+        )
+        .unwrap();
+        assert!(
+            line.contains("copied or moved since it was recorded"),
+            "{line}"
+        );
+        assert_eq!(std::fs::read(&manifest).unwrap(), before);
     }
 
     #[test]
