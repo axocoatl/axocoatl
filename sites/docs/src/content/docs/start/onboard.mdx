@@ -38,9 +38,13 @@ and checks it before it writes anything. Native Sessions use an Ollama server
 only when it:
 
 - is reached at a loopback address on this machine, such as `localhost`;
-- runs Ollama **0.20.6**, the audited version;
+- runs Ollama **0.40.6 or a later 0.40 release** (the audited version is 0.40.6;
+  0.20.6, pre-releases and 0.41 or later are refused, each with what to do);
 - reports its cloud features disabled in `GET /api/status`
   (`"cloud": {"disabled": true}`).
+
+Install or upgrade Ollama from [ollama.com/download](https://ollama.com/download)
+or with `brew install ollama` / `brew upgrade ollama`.
 
 A URL that is not a loopback address is refused, and the wizard asks for the URL
 again. If the server fails another check, the wizard says which one and offers to
@@ -67,16 +71,23 @@ another name.
 
 - For Lead, it prefers a coding model: a Qwen3-Coder tag when one is installed,
   then the largest other coding model, then the largest general model.
-- For Reviewer, it prefers a different, larger model, gpt-oss when one is
-  installed, so a second model checks Lead's work (see
-  [Cross-model review](/configure/cross-model-review/)). Without a larger model,
+- For Reviewer, it prefers a different model so a second model checks Lead's work
+  (see [Cross-model review](/configure/cross-model-review/)): gpt-oss of any size
+  when one is installed, otherwise a different, larger model. Without one,
   Reviewer uses Lead's model.
-- Cloud models and embedding models are never suggested.
-- If the server has no local model, it suggests `qwen3-coder:30b`, a large
-  download.
+- Cloud models and embedding models are never suggested. Native Sessions run only
+  GGUF models, so a model Ollama lists as MLX or not GGUF (on Apple silicon, Ollama
+  pulls the MLX variant of some models) is not offered either, and the wizard says
+  why.
+- If the server has no suitable local model, it suggests `qwen3-coder:30b` (19 GB)
+  for Lead and `gpt-oss:20b` (14 GB) for Reviewer: two different models that fit a
+  48 GB Mac, one at a time. Both are large downloads.
 
 Scout and the chat Assistant use Lead's model. For a model that is not installed
-yet, the wizard offers to run `ollama pull` against that server.
+yet, the wizard offers to run `ollama pull` against that server, then reads the
+model again: if Ollama pulled a variant native Sessions refuse, it says so and
+names `ollama pull --runner llamacpp <model>`, which pulls the GGUF variant (Ollama
+does not document that flag).
 
 OpenRouter setup uses ordinary OpenRouter credits and asks you to confirm that no
 BYOK provider keys are connected. It suggests a non-reasoning text/tool model and sets
@@ -153,9 +164,10 @@ Doctor performs these checks against the resolved user configuration:
 | Configuration parses and validates | Required | Fix the reported field, then run `axocoatl validate`. |
 | Configured Ollama endpoint responds | Required when configured | Start Ollama or correct `providers.ollama.base_url`. |
 | The Ollama endpoint is a loopback address | Required when configured | Native Sessions use only an Ollama server on this machine; set `providers.ollama.base_url` to one. |
-| The Ollama server reports version 0.20.6 | Required when configured | Install Ollama 0.20.6, or point `providers.ollama.base_url` at a server that runs it. |
+| The Ollama server reports a version native Sessions accept (0.40.6 or a later 0.40 release) | Required when configured | Doctor prints the version and why it is refused. Install Ollama 0.40.6 or later (`brew upgrade ollama`), or point `providers.ollama.base_url` at a server that runs it; for a newer minor release, upgrade Axocoatl. |
 | The Ollama server reports its cloud features disabled (`GET /api/status`) | Required when configured | Add `{"disable_ollama_cloud": true}` to `~/.ollama/server.json` or start the server with `OLLAMA_NO_CLOUD=1`, then restart Ollama; or point `providers.ollama.base_url` at a cloud-disabled server. |
 | Every configured Ollama model is present | Required when configured | Run `ollama pull <model>`. |
+| Every present configured Ollama model is a local GGUF completion model, with tool calling for an Agent that lists tools (`POST /api/show`) | Required when configured | Choose another model, or pull the GGUF variant of an MLX model with `ollama pull --runner llamacpp <model>` (an undocumented Ollama flag). |
 | Data directory is writable | Required | Fix permissions or set `AXOCOATL_DATA_DIR`. |
 | Rust toolchain | Warning | Needed only to build from source. |
 | Hosted-provider key appears present | Warning | Supply the key during onboarding or export the referenced environment variable before using that Agent. OpenAI, Anthropic, Gemini, Mistral, and OpenRouter are checked when configured. |

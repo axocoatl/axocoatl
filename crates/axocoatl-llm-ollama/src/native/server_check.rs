@@ -1,6 +1,6 @@
 //! A read-only check of what native execution requires of an Ollama server
-//! before any model is chosen: a loopback endpoint, the audited server version
-//! and server-reported cloud-disabled mode. Native admission enforces the same
+//! before any model is chosen: a loopback endpoint, a server version the
+//! version policy accepts and server-reported cloud-disabled mode. Native admission enforces the same
 //! requirements again before inference; setup and `doctor` use this check to
 //! report them up front instead of after a Session is created.
 
@@ -9,10 +9,7 @@ use std::time::Duration;
 use axocoatl_llm::ProviderError;
 use serde_json::Value;
 
-use super::{local_client, metadata_request, require_loopback, VERSION};
-
-/// The Ollama server version native execution accepts.
-pub const NATIVE_OLLAMA_SERVER_VERSION: &str = VERSION;
+use super::{local_client, metadata_request, ollama_version_refusal, require_loopback};
 
 /// Bounds the whole check, so setup and `doctor` never wait on a hung server
 /// for the full inference response timeout.
@@ -71,9 +68,22 @@ pub struct NativeOllamaServerCheck {
 }
 
 impl NativeOllamaServerCheck {
-    /// The server runs the Ollama version native execution accepts.
+    /// The server runs an Ollama version native execution accepts.
     pub fn version_supported(&self) -> bool {
-        self.version.as_deref() == Some(VERSION)
+        self.version_refusal().is_none()
+    }
+
+    /// Why native execution refuses the server's version, or `None` when it
+    /// is accepted.
+    pub fn version_refusal(&self) -> Option<String> {
+        match self.version.as_deref() {
+            Some(version) => ollama_version_refusal(version),
+            None => Some(format!(
+                "Ollama did not report its version; native Sessions need Ollama {} or a later \
+                 0.40 release",
+                super::AUDITED_OLLAMA_VERSION
+            )),
+        }
     }
 
     /// The server reports that its cloud features are disabled.
@@ -125,6 +135,29 @@ pub async fn check_native_ollama_server(
         })?
 }
 
+/// `POST /api/show` for `model`, through the same loopback-only client native
+/// execution uses, within the check's time bound. [`crate::check_shown_model`]
+/// reads the answer the way native admission does.
+pub async fn show_native_ollama_model(base_url: &str, model: &str) -> Result<Value, ProviderError> {
+    let client = local_client(base_url)?;
+    tokio::time::timeout(
+        CHECK_TIMEOUT,
+        metadata_request(
+            &client,
+            base_url,
+            "api/show",
+            Some(serde_json::json!({"model": model})),
+        ),
+    )
+    .await
+    .map_err(|_| {
+        ProviderError::Network(format!(
+            "the Ollama server did not answer within {} seconds",
+            CHECK_TIMEOUT.as_secs()
+        ))
+    })?
+}
+
 fn reported_text(value: Option<&Value>) -> Option<String> {
     value
         .and_then(Value::as_str)
@@ -135,6 +168,7 @@ fn reported_text(value: Option<&Value>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::AUDITED_OLLAMA_VERSION;
     use serde_json::json;
     use wiremock::{
         matchers::{method, path},
@@ -160,12 +194,13 @@ mod tests {
     #[tokio::test]
     async fn a_cloud_disabled_audited_server_is_ready() {
         let server = server(
-            Some(json!({"version": "0.20.6"})),
+            Some(json!({"version": AUDITED_OLLAMA_VERSION})),
             Some(json!({"cloud": {"disabled": true, "source": "env"}})),
         )
         .await;
         let check = check_native_ollama_server(&server.uri()).await.unwrap();
-        assert_eq!(check.version.as_deref(), Some("0.20.6"));
+        assert_eq!(check.version.as_deref(), Some(AUDITED_OLLAMA_VERSION));
+        assert_eq!(check.version_refusal(), None);
         assert_eq!(
             check.cloud,
             OllamaCloudMode::Disabled {
@@ -177,10 +212,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_server_with_cloud_enabled_is_not_ready() {
-        // The exact reply of an Ollama 0.20.6 server started without
-        // OLLAMA_NO_CLOUD and without server.json.
+        // The exact reply of an Ollama server (0.20.6 and 0.40.6 alike)
+        // started without OLLAMA_NO_CLOUD and without server.json.
         let server = server(
-            Some(json!({"version": "0.20.6"})),
+            Some(json!({"version": AUDITED_OLLAMA_VERSION})),
             Some(json!({"cloud": {"disabled": false, "source": "none"}})),
         )
         .await;
@@ -197,8 +232,36 @@ mod tests {
         let check = check_native_ollama_server(&server.uri()).await.unwrap();
         assert_eq!(check.version.as_deref(), Some("0.12.3"));
         assert!(!check.version_supported());
+        assert!(check.version_refusal().unwrap().contains("upgrade Ollama"));
         assert_eq!(check.cloud, OllamaCloudMode::Unreported);
         assert!(!check.ready());
+    }
+
+    #[tokio::test]
+    async fn the_previously_audited_release_is_refused_with_its_own_reason() {
+        let server = server(
+            Some(json!({"version": "0.20.6"})),
+            Some(json!({"cloud": {"disabled": true, "source": "config"}})),
+        )
+        .await;
+        let check = check_native_ollama_server(&server.uri()).await.unwrap();
+        assert!(check.cloud_disabled());
+        assert!(!check.ready());
+        let refusal = check.version_refusal().unwrap();
+        assert!(refusal.contains("no longer supported"), "{refusal}");
+    }
+
+    #[tokio::test]
+    async fn a_later_patch_of_the_audited_line_is_ready() {
+        let server = server(
+            Some(json!({"version": "0.40.7"})),
+            Some(json!({"cloud": {"disabled": true, "source": "env"}})),
+        )
+        .await;
+        assert!(check_native_ollama_server(&server.uri())
+            .await
+            .unwrap()
+            .ready());
     }
 
     #[tokio::test]

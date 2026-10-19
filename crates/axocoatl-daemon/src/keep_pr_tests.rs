@@ -152,6 +152,7 @@ fn outcome() -> RunOutcome {
             retries: 1,
         },
         network: NetworkSummary::default(),
+        ollama_versions: Default::default(),
         keep: None,
         error: None,
     }

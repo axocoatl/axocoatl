@@ -90,22 +90,27 @@ images and your project's checks run inside it, while Ollama runs on the Mac
 itself. Without a running machine, `axocoatl doctor` warns and prints these
 commands. On Linux, Podman runs containers directly and needs no machine.
 
-Native Sessions use Ollama **0.20.6** on this machine with its cloud features
-disabled. For a local Ollama setup, start the server with cloud disabled and pull
-a coding model:
+Native Sessions use Ollama **0.40.6 or a later 0.40 release** on this machine with
+its cloud features disabled ([ollama.com/download](https://ollama.com/download), or
+`brew install ollama`). For a local Ollama setup, start the server with cloud disabled
+and pull a coding model and a different reviewer model:
 
 ```sh
 OLLAMA_NO_CLOUD=1 ollama serve
 ollama pull qwen3-coder:30b
+ollama pull gpt-oss:20b
 ```
 
 Run `ollama serve` in its own terminal or as its own service. If Ollama already
 runs as the macOS app or a Homebrew service, add
 `{"disable_ollama_cloud": true}` to `~/.ollama/server.json` instead and restart
-it. A coding model such as `qwen3-coder:30b` suits Lead, the Agent that writes;
-it is a large download, so pull a model that fits your machine's memory.
-Onboarding suggests models from the ones installed on your server; see
-[Configure Axocoatl](/start/onboard/#ollama).
+it. A coding model such as `qwen3-coder:30b` (19 GB) suits Lead, the Agent that
+writes, and `gpt-oss:20b` (14 GB) reviews its change; both fit a 48 GB Mac, one at a
+time. They are large downloads, so pull models that fit your machine's memory.
+Native Sessions run only GGUF models: on Apple silicon, Ollama pulls the MLX variant
+of some models, which Axocoatl refuses; `ollama pull --runner llamacpp <model>` (an
+undocumented Ollama flag) pulls the GGUF one. Onboarding suggests models from the
+ones installed on your server; see [Configure Axocoatl](/start/onboard/#ollama).
 
 ## Windows through WSL2
 

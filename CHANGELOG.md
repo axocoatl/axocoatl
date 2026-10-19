@@ -5,7 +5,71 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.4.1] - Unreleased
+## [1.5.0] - Unreleased
+
+### Changed
+- **Native Sessions run on Ollama 0.40.6 and later 0.40 releases; Ollama 0.20.6 is
+  refused.** Native execution accepted only an Ollama reporting exactly 0.20.6, while
+  Homebrew and ollama.com ship 0.40.6 and Ollama's registry refuses some models (gpt-oss,
+  gemma3) to 0.20.6 clients. The guarantees native execution relies on were audited
+  again in the Ollama 0.40.6 source, where every GGUF model runs in llama.cpp's
+  `llama-server`: a prompt longer than the context is refused before generation with
+  `truncate: false`, a positive `num_predict` stops generation, and `shift: false` never
+  slides the context. Native Sessions now accept `0.40.P` with `P` 6 or later
+  (`AUDITED_OLLAMA_VERSION` is 0.40.6) and refuse, each with what to do, pre-releases and
+  local builds, `0.0.0`, older releases (upgrade Ollama), a newer minor release (upgrade
+  Axocoatl) and any release on a compiled-in denylist (empty). Ollama 0.20.6 gets its own
+  message: its engine and model digests changed; install 0.40.6 or later, then review
+  Team & budget again. A Team reviewed on Ollama 0.20.6 by Axocoatl 1.4 says "Ollama was
+  upgraded from 0.20.6 to 0.40.6; review Team & budget again" instead of a generic error.
+- **GGUF only, MLX refused.** On Apple silicon, Ollama 0.40 runs some models with its MLX
+  runner, whose limit is the model's own maximum context, not `num_ctx`. A model Ollama
+  shows as non-GGUF or MLX, or loads (`/api/ps`) with any runner but `llama-server`, is
+  refused. Models with a legacy GGUF manifest (Ollama lists their runner as `ggml`, such
+  as `qwen3-coder:30b`) run in `llama-server` too and are accepted.
+- The context observation loads the model with `shift: false`, as every inference
+  request asks: Ollama 0.40 reloads a model whose context-shift setting differs. The
+  observation records the Ollama version it saw (schema 2).
+- `axocoatl onboard` suggests `qwen3-coder:30b` for Lead and `gpt-oss:20b` for Reviewer
+  when the server has no suitable model (a cross-model pair that fits a 48 GB Mac, one at
+  a time; it suggested `qwen3-coder:30b` for both before), prefers gpt-oss of any size as
+  Reviewer, leaves out MLX and non-GGUF models and says why, and after a pull reads the
+  model again and names `ollama pull --runner llamacpp <model>` (an undocumented Ollama
+  flag) when Ollama pulled a variant native Sessions refuse.
+- The README, the site and the docs use `gpt-oss:20b` as the reviewer in their commands
+  and configuration examples; `gpt-oss:120b` (65 GB) needs roughly 96 GB of memory or
+  more. The measured results still name the gpt-oss 120B reviewer they used.
+
+### Added
+- **Contract probes.** When Team & budget (or a loadout run's admission) observes an
+  Ollama model's context, Axocoatl sends two small requests to the person's own server
+  with that context and the settings every call uses: a prompt about four times longer
+  than the context, which must be refused before any generation, and a one-token
+  request, which must stop after one token with a prompt count inside the context. A
+  model that fails either is refused, and the error names the guarantee. Passes are kept
+  per server, Ollama version, model digest and context; when Ollama is upgraded to
+  another accepted version, the probes run again before it serves an existing Team.
+- **The Ollama version in the record and the receipt.** Each native Ollama provider
+  records the version it checked right before each inference request. A loadout run's
+  Outcome keeps them by model (`ollama_versions`), and its receipt names them in the
+  native Agent's `program_version` (`ollama 0.40.6`), a field the 1.4.0 verifier already
+  reads, and for a native reviewer in the new optional `review.program_version`, which
+  the 1.4.0 verifier ignores, so receipts of this release still verify with
+  `verify-receipt@v1.4.0`.
+- `axocoatl doctor` prints the Ollama version with the version policy's verdict and
+  checks each configured model that is pulled the way native admission does
+  (`POST /api/show`): a local GGUF completion model, with tool calling for an Agent that
+  lists tools.
+- **`axocoatl doctor` checks the data directory's ownership record**, read only and
+  without a lock, so a running daemon is unaffected: `[ OK ]` when it names this
+  directory; `[ OK ]` with a note when the directory was copied or moved and the next
+  start records its new location; `[FAIL]` with the reason and what to do when the daemon
+  would refuse to start on it.
+- **`axocoatl service status` shows why the service last failed to start.** When the
+  service is installed but not running and its log's last start attempt failed, it
+  prints that `Failed to bootstrap daemon: …` line, read from the end of
+  `~/Library/Logs/Axocoatl/daemon.log` on macOS or of the user journal on Linux.
+
 
 ### Fixed
 - **A copied or moved data directory starts again.** The data root's format ownership
@@ -41,16 +105,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment and the runtime must still be the same. A Session whose folder is gone or
   moved is still refused, naming the folder, as in 1.3.2.
 
-### Added
-- **`axocoatl doctor` checks the data directory's ownership record**, read only and
-  without a lock, so a running daemon is unaffected: `[ OK ]` when it names this
-  directory; `[ OK ]` with a note when the directory was copied or moved and the next
-  start records its new location; `[FAIL]` with the reason and what to do when the daemon
-  would refuse to start on it.
-- **`axocoatl service status` shows why the service last failed to start.** When the
-  service is installed but not running and its log's last start attempt failed, it
-  prints that `Failed to bootstrap daemon: …` line, read from the end of
-  `~/Library/Logs/Axocoatl/daemon.log` on macOS or of the user journal on Linux.
+### Security
+- **The route to Ollama on this computer refuses Ollama 0.40's new endpoints.** Its
+  exact-path allowlist already refused them; the tests now name them: `/api/codex/…` (a
+  proxy that forwards to api.openai.com and chatgpt.com, checks only that the caller is
+  on loopback, and is not gated by Ollama's cloud-disabled mode; native Sessions never
+  call it), `/api/balance`, `/api/usage`, `/api/experimental/model-recommendations`,
+  `/v1/systemone` and `/v1/responses/compact`.
+- `GET`/`HEAD /v1/models/<model>` has no body, and a cloud-enabled Ollama proxies it to
+  ollama.com for a cloud model: the route now refuses a cloud model named in that path
+  (percent-decoded), as it refuses one in a body.
+- A local copy of a cloud model (`ollama cp gpt-oss:20b-cloud mygpt`) keeps its cloud
+  host under a name no request check can recognize. A Session now opens the route only
+  when Ollama on its port reports its cloud features disabled (`GET /api/status`), and
+  `axocoatl network reload` refuses to turn the route on otherwise.
+- Dependencies move to zip 9 (calamine 0.37) for RUSTSEC-2026-0367, -0368 and -0369, flaws
+  in zip's `extract()`. candle-core 0.8, used for local embeddings, still depends on zip
+  1.1.4; it opens `.npz` and `.pth` archives entry by entry and never calls `extract()`,
+  and Axocoatl loads its embedding model from safetensors, so `.cargo/audit.toml` records
+  those three IDs as not reachable until candle-core moves to zip 9.
 
 ## [1.4.0] - 2026-10-14
 

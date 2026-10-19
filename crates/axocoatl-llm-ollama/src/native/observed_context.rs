@@ -2,12 +2,21 @@
 //! observations, not immutable model weights or a permanent server default.
 
 use super::{
-    invalid, local_client, metadata_request, reports_cloud_disabled, NativeOllamaConfig,
-    NativeOllamaProvider, VERSION,
+    accepted_server_version, check_shown_model,
+    contract_probe::{self, ProbeKey},
+    invalid, local_client, metadata_request, ollama_version_refusal, reports_cloud_disabled,
+    shown_name, NativeOllamaConfig, NativeOllamaProvider,
 };
 use axocoatl_llm::ProviderError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+/// The `schema_version` this Axocoatl writes. Version 2 (Ollama 0.40): the
+/// observed server version is recorded (not a constant), the model was loaded
+/// with `shift:false`, and the contract probes passed on that server version
+/// before the observation was returned. Version 1 (Axocoatl 1.4 and earlier)
+/// always recorded Ollama 0.20.6, which is refused now.
+pub const OBSERVATION_SCHEMA_VERSION: u32 = 2;
 
 /// Retain this alongside the native execution configuration. The context is the
 /// runner's reported per-request context, not the model's architectural maximum.
@@ -21,6 +30,8 @@ pub struct NativeOllamaContextObservation {
     pub requested_model: String,
     pub resolved_model: String,
     pub model_digest: String,
+    /// The Ollama version that reported this observation and passed the
+    /// contract probes with it.
     pub server_version: String,
     pub context_tokens: usize,
     pub observed_at_ms: u64,
@@ -35,7 +46,7 @@ struct ModelIdentity {
     digest: String,
 }
 
-// Ollama v0.20.6 types/model/name.go: ParseName merges these name defaults,
+// Ollama types/model/name.go (identical in v0.20.6 and v0.40.6): ParseName merges these name defaults,
 // EqualFold compares all four components, and DisplayShortest omits the default
 // host/namespace. This deliberately does not interpret @digest as a weight pin.
 fn model_key(value: &str) -> Result<String, ProviderError> {
@@ -128,6 +139,28 @@ fn loaded_context(value: &Value, expected: &ModelIdentity) -> Result<usize, Prov
     if record.pointer("/details/format").and_then(Value::as_str) != Some("gguf") {
         return Err(invalid("loaded runner is not the verified GGUF model"));
     }
+    // Ollama 0.40.6 names the process that serves a loaded model: llama.cpp's
+    // llama-server for every GGUF model (server/sched.go: "the loaded process
+    // is authoritative"), even when the manifest says the legacy `ggml`.
+    match record.get("runner").and_then(Value::as_str) {
+        Some("llamacpp") => {}
+        Some(runner) if runner.eq_ignore_ascii_case("mlx") => {
+            return Err(invalid(format!(
+                "Ollama loaded {} with its MLX runner, which holds the model's own maximum \
+                 context, not num_ctx, as its limit; native execution accepts only GGUF models \
+                 that Ollama runs in llama.cpp's llama-server",
+                shown_name(&expected.name)
+            )))
+        }
+        runner => {
+            return Err(invalid(format!(
+                "Ollama loaded {} with the runner {:?}, not llama.cpp's llama-server, which \
+                 native execution's guarantees were checked for",
+                shown_name(&expected.name),
+                runner.map(shown_name).unwrap_or_default()
+            )))
+        }
+    }
     let context = record
         .get("context_length")
         .and_then(Value::as_u64)
@@ -141,17 +174,22 @@ fn loaded_context(value: &Value, expected: &ModelIdentity) -> Result<usize, Prov
     Ok(context)
 }
 
+/// What the server and model reported before and after a load: the accepted
+/// Ollama version and the model's tool and thinking capabilities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Profile {
+    version: String,
+    tools: bool,
+    thinking: bool,
+}
+
 async fn profile(
     client: &reqwest::Client,
     base_url: &str,
     model: &str,
-) -> Result<(bool, bool), ProviderError> {
-    let version = metadata_request(client, base_url, "api/version", None).await?;
-    if version.get("version").and_then(Value::as_str) != Some(VERSION) {
-        return Err(invalid(
-            "native execution requires the audited Ollama 0.20.6 server",
-        ));
-    }
+) -> Result<Profile, ProviderError> {
+    let version =
+        accepted_server_version(&metadata_request(client, base_url, "api/version", None).await?)?;
     let status = metadata_request(client, base_url, "api/status", None).await?;
     if !reports_cloud_disabled(&status) {
         return Err(invalid(
@@ -160,30 +198,12 @@ async fn profile(
     }
     let shown =
         metadata_request(client, base_url, "api/show", Some(json!({"model": model}))).await?;
-    let remote = ["remote_host", "remote_model"].iter().any(|key| {
-        shown
-            .get(key)
-            .is_some_and(|value| value.as_str() != Some(""))
-    });
-    let caps = shown
-        .get("capabilities")
-        .and_then(Value::as_array)
-        .ok_or_else(|| invalid("model capabilities were not reported"))?;
-    if remote
-        || shown.pointer("/details/format").and_then(Value::as_str) != Some("gguf")
-        || !caps
-            .iter()
-            .any(|value| value.as_str() == Some("completion"))
-        || caps.iter().any(|value| value.as_str() == Some("image"))
-    {
-        return Err(invalid(
-            "context observation requires a local GGUF completion model",
-        ));
-    }
-    Ok((
-        caps.iter().any(|value| value.as_str() == Some("tools")),
-        caps.iter().any(|value| value.as_str() == Some("thinking")),
-    ))
+    let shown = check_shown_model(model, &shown)?;
+    Ok(Profile {
+        version,
+        tools: shown.tools,
+        thinking: shown.thinking,
+    })
 }
 
 fn load_acknowledgement(value: &Value, model: &str) -> Result<String, ProviderError> {
@@ -243,8 +263,11 @@ fn load_acknowledgement(value: &Value, model: &str) -> Result<String, ProviderEr
 }
 
 /// Load the already installed selected model without a prompt or generation,
-/// then observe its actual per-request context. No options, keep-alive override,
-/// model download, automatic retry, or server-configuration mutation is sent.
+/// then observe its actual per-request context, then run the contract probes
+/// with that context. Only `shift:false` is sent with the load (inference sends
+/// it too, and Ollama 0.40 reloads a model whose shift setting differs); no
+/// other option, keep-alive override, model download, automatic retry, or
+/// server-configuration mutation is sent.
 /// Aliases, tags and runner identity must agree across bounded metadata reads.
 /// Concurrent external model changes cannot be made atomic by these APIs; this
 /// is point-in-time evidence and any detected disagreement is refused.
@@ -260,12 +283,14 @@ pub async fn observe_native_ollama_context(
         model,
     )?;
     // GenerateHandler returns done_reason=load before tokenization/completion
-    // for the empty prompt. Omitting options preserves the server/model choice.
+    // for the empty prompt. Omitting options preserves the server/model choice
+    // of context; shift:false starts the runner without context shifting, as
+    // every inference request asks (v0.40.6 server/sched.go needsReload).
     let loaded = metadata_request(
         &client,
         base_url,
         "api/generate",
-        Some(json!({"model": first.name, "stream": false})),
+        Some(json!({"model": first.name, "stream": false, "shift": false})),
     )
     .await?;
     let load_acknowledged_at = load_acknowledgement(&loaded, &first.name)?;
@@ -275,7 +300,7 @@ pub async fn observe_native_ollama_context(
     )?;
     if profile(&client, base_url, model).await? != capabilities {
         return Err(invalid(
-            "local model capabilities changed during context observation",
+            "the Ollama version or local model capabilities changed during context observation",
         ));
     }
     let second = identity(
@@ -294,23 +319,34 @@ pub async fn observe_native_ollama_context(
     {
         return Err(invalid("loaded context changed during observation"));
     }
+    contract_probe::ensure_contract(
+        &client,
+        ProbeKey {
+            base_url: base_url.to_owned(),
+            server_version: capabilities.version.clone(),
+            model_digest: first.digest.clone(),
+            context_tokens: context,
+        },
+        model,
+    )
+    .await?;
     let observed_at_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
         .and_then(|value| u64::try_from(value.as_millis()).ok())
         .ok_or_else(|| invalid("local context observation clock is unavailable"))?;
     Ok(NativeOllamaContextObservation {
-        schema_version: 1,
+        schema_version: OBSERVATION_SCHEMA_VERSION,
         base_url: base_url.to_owned(),
         requested_model: model.to_owned(),
         resolved_model: first.name,
         model_digest: first.digest,
-        server_version: VERSION.into(),
+        server_version: capabilities.version,
         context_tokens: context,
         observed_at_ms,
         load_acknowledged_at,
-        tools_supported: capabilities.0,
-        thinking_supported: capabilities.1,
+        tools_supported: capabilities.tools,
+        thinking_supported: capabilities.thinking,
     })
 }
 
@@ -318,12 +354,13 @@ pub(super) async fn verify_identity(
     provider: &NativeOllamaProvider,
     observation: &NativeOllamaContextObservation,
 ) -> Result<(), ProviderError> {
-    if profile(
+    let current = profile(
         &provider.client,
         &observation.base_url,
         &observation.requested_model,
     )
-    .await?
+    .await?;
+    if (current.tools, current.thinking)
         != (observation.tools_supported, observation.thinking_supported)
     {
         return Err(invalid("observed local model capabilities changed"));
@@ -340,19 +377,80 @@ pub(super) async fn verify_identity(
     Ok(())
 }
 
+fn probe_key(observation: &NativeOllamaContextObservation, server_version: &str) -> ProbeKey {
+    ProbeKey {
+        base_url: observation.base_url.clone(),
+        server_version: server_version.to_owned(),
+        model_digest: observation.model_digest.clone(),
+        context_tokens: observation.context_tokens,
+    }
+}
+
+/// Before `server_version` serves an observed model: the contract probes have
+/// passed for it, from this process's cache or by running them now. The
+/// version the observation recorded passed them when it was made.
+pub(super) async fn ensure_probed(
+    provider: &NativeOllamaProvider,
+    observation: &NativeOllamaContextObservation,
+    server_version: &str,
+) -> Result<(), ProviderError> {
+    let key = probe_key(observation, server_version);
+    if server_version == observation.server_version {
+        contract_probe::remember_passed(key);
+        return Ok(());
+    }
+    contract_probe::ensure_contract(&provider.client, key, &observation.requested_model).await
+}
+
+/// Why a retained observation recorded on a server version this Axocoatl no
+/// longer accepts (every profile Axocoatl 1.4 or earlier recorded: Ollama
+/// 0.20.6) cannot be used, in words that say what to do.
+async fn retained_version_refusal(observation: &NativeOllamaContextObservation) -> ProviderError {
+    let recorded: String = observation.server_version.chars().take(64).collect();
+    let live = match local_client(&observation.base_url) {
+        Ok(client) => metadata_request(&client, &observation.base_url, "api/version", None)
+            .await
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .map(|text| text.chars().take(64).collect::<String>())
+            }),
+        Err(_) => None,
+    };
+    match live {
+        Some(live) => match ollama_version_refusal(&live) {
+            Some(refusal) => invalid(refusal),
+            None => invalid(format!(
+                "Ollama was upgraded from {recorded} to {live}; review Team & budget again"
+            )),
+        },
+        None => invalid(format!(
+            "this Team's Ollama profile was recorded with Ollama {recorded}, which native \
+             Sessions no longer accept; review Team & budget again"
+        )),
+    }
+}
+
 impl NativeOllamaProvider {
     /// Use a retained context observation with caller-owned finite output and
     /// byte limits. Reconnection does not reload or infer a new context default.
     /// Identity is checked now and before each inference, while the observed
     /// context is sent explicitly even if the server's default has since changed.
+    /// A server whose accepted version differs from the recorded one passes the
+    /// contract probes again before it serves.
     pub async fn connect_observed(
         observation: NativeOllamaContextObservation,
         max_output_tokens: usize,
         max_response_bytes: usize,
     ) -> Result<Self, ProviderError> {
-        if observation.schema_version != 1
-            || observation.server_version != VERSION
-            || model_key(&observation.requested_model)? != model_key(&observation.resolved_model)?
+        if observation.schema_version != OBSERVATION_SCHEMA_VERSION
+            || ollama_version_refusal(&observation.server_version).is_some()
+        {
+            return Err(retained_version_refusal(&observation).await);
+        }
+        if model_key(&observation.requested_model)? != model_key(&observation.resolved_model)?
             || observation.load_acknowledged_at.is_empty()
             || observation.load_acknowledged_at.len() > 128
             || observation
@@ -362,7 +460,7 @@ impl NativeOllamaProvider {
         {
             return Err(invalid("invalid retained native context observation"));
         }
-        let mut provider = Self::connect(NativeOllamaConfig {
+        let (mut provider, live_version) = Self::connect_verified(NativeOllamaConfig {
             base_url: observation.base_url.clone(),
             model: observation.requested_model.clone(),
             context_tokens: observation.context_tokens,
@@ -376,6 +474,7 @@ impl NativeOllamaProvider {
             return Err(invalid("observed local model capabilities changed"));
         }
         verify_identity(&provider, &observation).await?;
+        ensure_probed(&provider, &observation, &live_version).await?;
         provider.observed_context = Some(observation);
         Ok(provider)
     }

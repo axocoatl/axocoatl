@@ -1,13 +1,16 @@
 //! Ollama checks and model defaults for `onboard` and `doctor`.
 //!
-//! Native Sessions accept only a loopback Ollama server of the audited version
-//! that reports its cloud features disabled; `axocoatl_llm_ollama` owns that
-//! contract and this module reports it. Setup also reads the models installed
-//! on the chosen server to suggest the default team's models.
+//! Native Sessions accept only a loopback Ollama server whose version the
+//! version policy accepts (Ollama 0.40.6 or a later 0.40 release) and that
+//! reports its cloud features disabled, and only GGUF models that Ollama runs
+//! in llama.cpp's llama-server; `axocoatl_llm_ollama` owns that contract and
+//! this module reports it. Setup also reads the models installed on the
+//! chosen server to suggest the default team's models.
 
 use axocoatl_llm_ollama::{
-    check_native_ollama_server, validate_native_ollama_endpoint, NativeOllamaServerCheck,
-    OllamaCloudMode, NATIVE_OLLAMA_SERVER_VERSION,
+    check_native_ollama_server, check_shown_model, show_native_ollama_model,
+    validate_native_ollama_endpoint, NativeOllamaServerCheck, OllamaCloudMode,
+    AUDITED_OLLAMA_VERSION,
 };
 use serde_json::Value;
 
@@ -15,8 +18,18 @@ use serde_json::Value;
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
 
 /// The coding model setup suggests for Lead when the server has no local
-/// model installed.
+/// model installed (19 GB; it calls tools).
 pub const RECOMMENDED_LEAD_MODEL: &str = "qwen3-coder:30b";
+
+/// The model setup suggests for Reviewer when the server has no local model
+/// installed: a different model from Lead's, so a second model checks Lead's
+/// work (14 GB; it calls tools and thinks). Both fit a 48 GB Mac, one at a
+/// time.
+pub const RECOMMENDED_REVIEWER_MODEL: &str = "gpt-oss:20b";
+
+/// The flag of `ollama pull` that selects the GGUF variant of a model whose
+/// tag also has an MLX variant. Ollama does not document it.
+pub const LLAMACPP_PULL_FLAG: &str = "--runner llamacpp";
 
 /// The models the default team runs on. Lead, Scout and the chat Assistant
 /// use `lead`; Reviewer uses `reviewer`, which may be the same model.
@@ -27,10 +40,20 @@ pub struct TeamModels {
 }
 
 impl TeamModels {
+    #[cfg(test)]
     pub fn same(model: &str) -> Self {
         Self {
             lead: model.to_string(),
             reviewer: model.to_string(),
+        }
+    }
+
+    /// The pair setup suggests when nothing suitable is installed: two
+    /// different models, so review is cross-model by default.
+    pub fn recommended() -> Self {
+        Self {
+            lead: RECOMMENDED_LEAD_MODEL.to_string(),
+            reviewer: RECOMMENDED_REVIEWER_MODEL.to_string(),
         }
     }
 }
@@ -44,6 +67,10 @@ pub struct InstalledModel {
     parameter_size: String,
     families: Vec<String>,
     remote: bool,
+    /// `details.format` as reported (`gguf`, `safetensors`), lower case.
+    format: String,
+    /// `details.runner` as reported (`ggml`, `llamacpp`, `mlx`), lower case.
+    runner: String,
 }
 
 impl InstalledModel {
@@ -76,6 +103,8 @@ impl InstalledModel {
             size_bytes: record.get("size").and_then(Value::as_u64).unwrap_or(0),
             parameter_size: text("/details/parameter_size"),
             families,
+            format: text("/details/format").to_ascii_lowercase(),
+            runner: text("/details/runner").to_ascii_lowercase(),
             name,
         })
     }
@@ -131,10 +160,33 @@ impl InstalledModel {
         base.contains("code") || base.contains("devstral")
     }
 
-    /// May be offered as a default team model: it runs locally and generates
-    /// text. Native Sessions refuse a cloud model.
+    /// Why native Sessions refuse this model whatever it is used for, in
+    /// words; `None` when they may run it. A server that does not report a
+    /// format (an older one) is not refused here: the Session checks again.
+    pub fn refusal(&self) -> Option<String> {
+        if self.is_remote() {
+            return Some("a cloud model, which runs on ollama.com".into());
+        }
+        if self.runner == "mlx" || (!self.format.is_empty() && self.format != "gguf") {
+            return Some(format!(
+                "{} run by Ollama's MLX runner, which does not hold num_ctx as a hard limit; \
+                 native Sessions run only GGUF models (try `ollama pull {LLAMACPP_PULL_FLAG} {}`, \
+                 an undocumented Ollama flag)",
+                if self.format.is_empty() {
+                    "a model".to_string()
+                } else {
+                    format!("a {} model", self.format)
+                },
+                self.name
+            ));
+        }
+        None
+    }
+
+    /// May be offered as a default team model: it runs locally as GGUF and
+    /// generates text. Native Sessions refuse a cloud or MLX model.
     pub fn is_candidate(&self) -> bool {
-        !self.is_remote() && !self.is_embedding()
+        self.refusal().is_none() && !self.is_embedding()
     }
 
     /// The model as a choice in a list.
@@ -182,6 +234,17 @@ pub fn parse_tags(tags: &Value) -> Vec<InstalledModel> {
         .collect()
 }
 
+/// The installed local models native Sessions refuse, each with why, for
+/// setup to say why they are not offered. Cloud models are left out: they
+/// are not on this machine.
+pub fn refused_models(models: &[InstalledModel]) -> Vec<(String, String)> {
+    models
+        .iter()
+        .filter(|model| !model.is_remote() && !model.is_embedding())
+        .filter_map(|model| model.refusal().map(|why| (model.name.clone(), why)))
+        .collect()
+}
+
 /// The models offered as team choices, sorted by name.
 pub fn candidates(models: &[InstalledModel]) -> Vec<InstalledModel> {
     let mut candidates: Vec<_> = models
@@ -214,10 +277,11 @@ pub async fn installed_models(base_url: &str) -> Result<Vec<InstalledModel>, Str
 ///
 /// Lead gets a coding model when one is installed, preferring Qwen3-Coder,
 /// then the largest; without one, the largest text model. Reviewer gets a
-/// different, larger model when one is installed, preferring gpt-oss, so a
-/// second model checks Lead's work; otherwise it shares Lead's model. Cloud
-/// and embedding models are never suggested, and vision models only when
-/// nothing else fits. `None` when the server has no candidate.
+/// different model so a second model checks Lead's work: gpt-oss of any size
+/// when one is installed (the largest), otherwise a different, larger model;
+/// without one it shares Lead's model. Cloud, MLX and embedding models are
+/// never suggested, and vision models only when nothing else fits. `None`
+/// when the server has no candidate ([`TeamModels::recommended`] then).
 pub fn suggest_team_models(models: &[InstalledModel]) -> Option<TeamModels> {
     let candidates = candidates(models);
     let lead = candidates.iter().min_by(|a, b| {
@@ -228,7 +292,7 @@ pub fn suggest_team_models(models: &[InstalledModel]) -> Option<TeamModels> {
     })?;
     let reviewer = candidates
         .iter()
-        .filter(|m| m.name != lead.name && m.scale() > lead.scale())
+        .filter(|m| m.name != lead.name && (reviewer_tier(m) == 0 || m.scale() > lead.scale()))
         .min_by(|a, b| {
             reviewer_tier(a)
                 .cmp(&reviewer_tier(b))
@@ -339,10 +403,10 @@ impl Finding {
     }
 }
 
-/// How to turn Ollama's cloud features off. Verified against Ollama 0.20.6:
-/// `envconfig.NoCloud` is true when `OLLAMA_NO_CLOUD` parses as true or the
-/// server user's `~/.ollama/server.json` sets `disable_ollama_cloud`, and the
-/// server reads both once at start.
+/// How to turn Ollama's cloud features off. Verified against Ollama 0.20.6 and
+/// 0.40.6 (the same code in both): `envconfig.NoCloud` is true when
+/// `OLLAMA_NO_CLOUD` parses as true or the server user's `~/.ollama/server.json`
+/// sets `disable_ollama_cloud`, and the server reads both once at start.
 pub fn disable_cloud_steps(base_url: &str) -> Vec<String> {
     vec![
         "To disable Ollama's cloud features, do one of these and restart Ollama:".to_string(),
@@ -385,21 +449,24 @@ pub fn native_findings(
     };
 
     let mut findings = Vec::new();
-    findings.push(if check.version_supported() {
-        Finding::pass(format!(
-            "Ollama {NATIVE_OLLAMA_SERVER_VERSION} at {base_url}, the version native Sessions accept"
-        ))
-    } else {
-        Finding::fail(
+    findings.push(match check.version_refusal() {
+        None => Finding::pass(format!(
+            "Ollama {} at {base_url}, a version native Sessions accept ({AUDITED_OLLAMA_VERSION} or a later 0.40 release)",
+            check.version.as_deref().unwrap_or_default()
+        )),
+        Some(refusal) => Finding::fail(
             format!(
-                "Ollama at {base_url} reports version {}; native Sessions accept only Ollama {NATIVE_OLLAMA_SERVER_VERSION}",
+                "Ollama at {base_url} reports version {}; native Sessions refuse it",
                 check.version.as_deref().unwrap_or("(none)")
             ),
             vec![
-                format!("Install Ollama {NATIVE_OLLAMA_SERVER_VERSION} on this machine and restart it."),
+                format!("{refusal}."),
+                format!(
+                    "Install Ollama {AUDITED_OLLAMA_VERSION} or a later 0.40 release on this machine (https://ollama.com/download, or `brew upgrade ollama`) and restart it."
+                ),
                 alternative.to_string(),
             ],
-        )
+        ),
     });
     findings.push(match &check.cloud {
         OllamaCloudMode::Disabled { source } => Finding::pass(format!(
@@ -426,7 +493,7 @@ pub fn native_findings(
             ),
             [
                 vec![format!(
-                    "Native Sessions need Ollama {NATIVE_OLLAMA_SERVER_VERSION} with its cloud features off."
+                    "Native Sessions need Ollama {AUDITED_OLLAMA_VERSION} or a later 0.40 release with its cloud features off."
                 )],
                 disable_cloud_steps(base_url),
                 vec![alternative.to_string()],
@@ -435,6 +502,54 @@ pub fn native_findings(
         ),
     });
     findings
+}
+
+/// Whether a native Agent can run `model` on the server at `base_url`, read
+/// from `POST /api/show` the way native admission reads it: a local GGUF
+/// model that completes text, and, for an Agent with tools, calls tools.
+pub async fn model_finding(base_url: &str, model: &str, needs_tools: bool) -> Finding {
+    match show_native_ollama_model(base_url, model).await {
+        Ok(shown) => shown_model_finding(model, &shown, needs_tools),
+        Err(error) => Finding::fail(
+            format!("Could not read model '{model}' from Ollama at {base_url}"),
+            vec![error.to_string()],
+        ),
+    }
+}
+
+/// [`model_finding`] of a `POST /api/show` answer.
+pub fn shown_model_finding(model: &str, shown: &Value, needs_tools: bool) -> Finding {
+    match check_shown_model(model, shown) {
+        Err(error) => {
+            let mut hint = vec![error.to_string()];
+            if !matches!(
+                shown.pointer("/details/format").and_then(Value::as_str),
+                Some("gguf")
+            ) || shown.pointer("/details/runner").and_then(Value::as_str) == Some("mlx")
+            {
+                hint.push(format!(
+                    "Pull its GGUF variant with `ollama pull {LLAMACPP_PULL_FLAG} {model}` (an undocumented Ollama flag), or choose another model."
+                ));
+            }
+            Finding::fail(format!("Model '{model}' cannot run in native Sessions"), hint)
+        }
+        Ok(capabilities) if needs_tools && !capabilities.tools => Finding::fail(
+            format!("Model '{model}' does not report tool calling, and an Agent that uses it lists tools"),
+            vec!["Choose a model whose `ollama show` lists the tools capability, or remove the Agent's tools.".to_string()],
+        ),
+        Ok(capabilities) => Finding::pass(format!(
+            "Model '{model}' is a local GGUF model native Sessions can run ({})",
+            [
+                Some("completion"),
+                capabilities.tools.then_some("tools"),
+                capabilities.thinking.then_some("thinking"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(", ")
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -517,15 +632,112 @@ mod tests {
     }
 
     #[test]
-    fn the_reviewer_must_be_larger_than_the_lead_or_it_shares_the_lead() {
+    fn gpt_oss_of_any_size_reviews_so_the_default_pair_is_cross_model() {
         let installed = models(vec![
             tag("qwen3-coder:30b", "30.5B", 18556700761, "qwen3moe"),
             tag("gpt-oss:20b", "20.9B", 13780173839, "gptoss"),
         ]);
         assert_eq!(
             suggested(&installed),
+            ("qwen3-coder:30b".into(), "gpt-oss:20b".into())
+        );
+    }
+
+    #[test]
+    fn another_reviewer_must_be_larger_than_the_lead_or_it_shares_the_lead() {
+        let installed = models(vec![
+            tag("qwen3-coder:30b", "30.5B", 18556700761, "qwen3moe"),
+            tag("qwen3:8b", "8.2B", 5225388164, "qwen3"),
+        ]);
+        assert_eq!(
+            suggested(&installed),
             ("qwen3-coder:30b".into(), "qwen3-coder:30b".into())
         );
+    }
+
+    #[test]
+    fn nothing_installed_recommends_a_cross_model_pair_that_fits_48_gb() {
+        assert_eq!(
+            TeamModels::recommended(),
+            TeamModels {
+                lead: "qwen3-coder:30b".into(),
+                reviewer: "gpt-oss:20b".into(),
+            }
+        );
+    }
+
+    /// Ollama 0.40 lists a model's format and runner. On Apple silicon a
+    /// tag that also has an MLX variant pulls it: such a model is never
+    /// offered, and setup says why. GGUF of either runner is offered.
+    #[test]
+    fn mlx_and_non_gguf_models_are_not_offered_and_setup_says_why() {
+        let mut mlx = tag("qwen3.5:27b", "27B", 17_000_000_000, "qwen3_5");
+        mlx["details"]["format"] = json!("safetensors");
+        mlx["details"]["runner"] = json!("mlx");
+        let mut mlx_gguf = tag("gemma4:12b", "12B", 8_000_000_000, "gemma4");
+        mlx_gguf["details"]["runner"] = json!("mlx");
+        let mut legacy = tag("qwen3-coder:30b", "30.5B", 18556700761, "qwen3moe");
+        legacy["details"]["runner"] = json!("ggml");
+        let mut llamacpp = tag("gpt-oss:20b", "20.9B", 13780173839, "gptoss");
+        llamacpp["details"]["runner"] = json!("llamacpp");
+        let installed = models(vec![mlx, mlx_gguf, legacy, llamacpp]);
+        let offered: Vec<_> = candidates(&installed).into_iter().map(|m| m.name).collect();
+        assert_eq!(offered, ["gpt-oss:20b", "qwen3-coder:30b"]);
+        let refused = refused_models(&installed);
+        assert_eq!(
+            refused
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["qwen3.5:27b", "gemma4:12b"]
+        );
+        for (name, why) in &refused {
+            assert!(why.contains("MLX runner"), "{why}");
+            assert!(
+                why.contains(&format!("ollama pull --runner llamacpp {name}")),
+                "{why}"
+            );
+            assert!(why.contains("undocumented"), "{why}");
+        }
+        assert_eq!(
+            suggested(&installed),
+            ("qwen3-coder:30b".into(), "gpt-oss:20b".into())
+        );
+    }
+
+    #[test]
+    fn a_model_is_checked_the_way_native_admission_checks_it() {
+        let gguf = json!({"details":{"format":"gguf","runner":"llamacpp"},
+            "capabilities":["completion","tools","thinking"]});
+        let finding = shown_model_finding("gpt-oss:20b", &gguf, true);
+        assert!(finding.ok, "{finding:?}");
+        assert!(
+            finding.label.contains("completion, tools, thinking"),
+            "{finding:?}"
+        );
+        let no_tools = json!({"details":{"format":"gguf"},"capabilities":["completion"]});
+        assert!(shown_model_finding("plain:latest", &no_tools, false).ok);
+        let finding = shown_model_finding("plain:latest", &no_tools, true);
+        assert!(
+            !finding.ok && finding.label.contains("tool calling"),
+            "{finding:?}"
+        );
+        let mlx = json!({"details":{"format":"safetensors","runner":"mlx"},
+            "capabilities":["completion","tools"]});
+        let finding = shown_model_finding("qwen3.5:27b", &mlx, false);
+        assert!(!finding.ok);
+        let hint = finding.hint.join("\n");
+        assert!(hint.contains("MLX"), "{hint}");
+        assert!(
+            hint.contains("ollama pull --runner llamacpp qwen3.5:27b"),
+            "{hint}"
+        );
+        let remote = json!({"details":{"format":"gguf"},"capabilities":["completion"],
+            "remote_host":"https://ollama.com:443"});
+        let finding = shown_model_finding("gpt-oss:20b-cloud", &remote, false);
+        assert!(!finding.ok);
+        assert!(finding.hint[0].contains("cloud model"), "{finding:?}");
+        assert!(!finding.hint.join(" ").contains("--runner"), "{finding:?}");
     }
 
     #[test]
@@ -631,7 +843,7 @@ mod tests {
     fn cloud_enabled_fails_with_the_documented_ollama_settings() {
         let findings = native_findings(
             "http://localhost:11434",
-            &check("0.20.6", OllamaCloudMode::Enabled),
+            &check(AUDITED_OLLAMA_VERSION, OllamaCloudMode::Enabled),
             ALTERNATIVE,
         );
         assert_eq!(findings.len(), 2);
@@ -655,7 +867,7 @@ mod tests {
         let findings = native_findings(
             "http://127.0.0.1:11436",
             &check(
-                NATIVE_OLLAMA_SERVER_VERSION,
+                "0.40.7",
                 OllamaCloudMode::Disabled {
                     source: "config".into(),
                 },
@@ -678,8 +890,38 @@ mod tests {
         );
         assert!(findings.iter().all(|finding| !finding.ok), "{findings:?}");
         assert!(findings[0].label.contains("reports version 0.12.3"));
-        assert!(findings[0].label.contains("only Ollama 0.20.6"));
+        let hint = findings[0].hint.join("\n");
+        assert!(hint.contains("upgrade Ollama to 0.40.6 or later"), "{hint}");
+        assert!(hint.contains("brew upgrade ollama"), "{hint}");
         assert!(findings[1].label.contains("does not report its cloud mode"));
+    }
+
+    #[test]
+    fn the_previously_supported_and_a_newer_minor_version_say_what_to_do() {
+        let findings = native_findings(
+            "http://localhost:11434",
+            &check(
+                "0.20.6",
+                OllamaCloudMode::Disabled {
+                    source: "config".into(),
+                },
+            ),
+            ALTERNATIVE,
+        );
+        assert!(!findings[0].ok);
+        assert!(findings[0].hint[0].contains("0.20.6 is no longer supported"));
+        let findings = native_findings(
+            "http://localhost:11434",
+            &check(
+                "0.41.0",
+                OllamaCloudMode::Disabled {
+                    source: "config".into(),
+                },
+            ),
+            ALTERNATIVE,
+        );
+        assert!(!findings[0].ok);
+        assert!(findings[0].hint[0].contains("upgrade Axocoatl"));
     }
 
     #[test]

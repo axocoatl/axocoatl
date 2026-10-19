@@ -1,4 +1,7 @@
 use super::*;
+use crate::native::{
+    contract_probe::STOP_PROBE_PROMPT, OllamaServedVersions, AUDITED_OLLAMA_VERSION,
+};
 use axocoatl_llm::{ChatRequest, LlmProvider};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -12,6 +15,89 @@ use wiremock::{
 const DIGEST: &str = "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
 const OTHER_DIGEST: &str = "b80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
 
+/// A digest of its own, so a test's probes never find another test's pass in
+/// this process's probe cache.
+fn unique_digest(seed: u8) -> String {
+    format!("{seed:02x}{}", &DIGEST[2..])
+}
+
+/// How the test server answers the contract probes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Probes {
+    Pass,
+    AcceptOverLong,
+    IgnoreNumPredict,
+}
+
+/// `Some(true)` for the over-long probe, `Some(false)` for the stop probe.
+fn probe_kind(body: &[u8]) -> Option<bool> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    if value.pointer("/options/num_predict") != Some(&json!(1)) {
+        return None;
+    }
+    let content = value.pointer("/messages/0/content")?.as_str()?;
+    if content == STOP_PROBE_PROMPT {
+        Some(false)
+    } else if content.starts_with("x x ") {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+struct ProbeRequest;
+impl wiremock::Match for ProbeRequest {
+    fn matches(&self, request: &wiremock::Request) -> bool {
+        request.url.path() == "/api/chat" && probe_kind(&request.body).is_some()
+    }
+}
+
+fn ndjson(value: Value) -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_raw(format!("{value}\n"), "application/x-ndjson")
+}
+
+async fn probes(server: &MockServer, behavior: Probes) {
+    Mock::given(method("POST"))
+        .and(ProbeRequest)
+        .respond_with(move |request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            let model = body["model"].clone();
+            match (probe_kind(&request.body) == Some(true), behavior) {
+                (true, Probes::AcceptOverLong) => ndjson(json!({"model":model,
+                    "message":{"role":"assistant","content":"x"},"done":true,
+                    "done_reason":"length","prompt_eval_count":4095,"eval_count":1})),
+                (true, _) => ResponseTemplate::new(400).set_body_json(json!({"error":
+                    "the prompt is longer than the context length currently available to the model"})),
+                (false, Probes::IgnoreNumPredict) => ndjson(json!({"model":model,
+                    "message":{"role":"assistant","content":"ready, and more"},"done":true,
+                    "done_reason":"stop","prompt_eval_count":14,"eval_count":7})),
+                (false, _) => ndjson(json!({"model":model,
+                    "message":{"role":"assistant","content":"ready"},"done":true,
+                    "done_reason":"length","prompt_eval_count":14,"eval_count":1})),
+            }
+        })
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
+/// The probe requests and the other `/api/chat` requests the server received.
+async fn chats(server: &MockServer) -> (Vec<Value>, usize) {
+    let mut probes = Vec::new();
+    let mut other = 0;
+    for request in server.received_requests().await.unwrap() {
+        if request.url.path() != "/api/chat" {
+            continue;
+        }
+        if probe_kind(&request.body).is_some() {
+            probes.push(serde_json::from_slice(&request.body).unwrap());
+        } else {
+            other += 1;
+        }
+    }
+    (probes, other)
+}
+
 fn shown() -> Value {
     json!({"details":{"format":"gguf"}, "capabilities":["completion","tools"],
         "model_info":{"llama.context_length":131072}})
@@ -23,6 +109,7 @@ fn loaded(context: Value, digest: &str) -> Value {
     let mut value = listed(digest);
     value["models"][0]["details"] = json!({"format":"gguf"});
     value["models"][0]["context_length"] = context;
+    value["models"][0]["runner"] = json!("llamacpp");
     value
 }
 fn acknowledgement() -> Value {
@@ -59,10 +146,14 @@ async fn profile(server: &MockServer, version: &str, disabled: bool, show: Value
     fixed(server, "POST", "/api/show", show).await;
 }
 async fn standard(server: &MockServer) {
-    profile(server, "0.20.6", true, shown()).await;
-    fixed(server, "GET", "/api/tags", listed(DIGEST)).await;
-    fixed(server, "GET", "/api/ps", loaded(json!(4096), DIGEST)).await;
+    standard_with(server, AUDITED_OLLAMA_VERSION, DIGEST, Probes::Pass).await;
+}
+async fn standard_with(server: &MockServer, version: &str, digest: &str, behavior: Probes) {
+    profile(server, version, true, shown()).await;
+    fixed(server, "GET", "/api/tags", listed(digest)).await;
+    fixed(server, "GET", "/api/ps", loaded(json!(4096), digest)).await;
     fixed(server, "POST", "/api/generate", acknowledgement()).await;
+    probes(server, behavior).await;
 }
 async fn count(server: &MockServer, endpoint: &str) -> usize {
     server
@@ -95,17 +186,36 @@ async fn observed_runner_context_becomes_explicit_request_without_inventing_a_de
         .iter()
         .find(|request| request.url.path() == "/api/generate")
         .unwrap();
+    // The load starts the runner without context shifting, as inference asks,
+    // so the first inference does not reload the model.
     assert_eq!(
         serde_json::from_slice::<Value>(&preload.body).unwrap(),
-        json!({"model":"test-model:latest","stream":false})
+        json!({"model":"test-model:latest","stream":false,"shift":false})
     );
-    assert_eq!(count(&server, "/api/chat").await, 0);
+    assert_eq!(observation.schema_version, OBSERVATION_SCHEMA_VERSION);
+    assert_eq!(observation.server_version, AUDITED_OLLAMA_VERSION);
+    // The two contract probes ran with the observed context and the
+    // inference settings; nothing else was generated.
+    let (probe_bodies, other) = chats(&server).await;
+    assert_eq!(other, 0);
+    assert_eq!(probe_bodies.len(), 2);
+    for body in &probe_bodies {
+        assert_eq!(body["truncate"], false);
+        assert_eq!(body["shift"], false);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body.pointer("/options/num_ctx"), Some(&json!(4096)));
+        assert_eq!(body.pointer("/options/num_predict"), Some(&json!(1)));
+        assert_eq!(body["model"], "test-model");
+    }
+    let over_long = probe_bodies[0]["messages"][0]["content"].as_str().unwrap();
+    assert_eq!(over_long.len(), 4 * 4096);
+    assert_eq!(probe_bodies[1]["messages"][0]["content"], STOP_PROBE_PROMPT);
     assert_eq!(count(&server, "/api/pull").await, 0);
 
     // A later server default can differ; the accepted observation is explicit
     // request configuration. Connecting must not silently reload/re-resolve it.
     server.reset().await;
-    profile(&server, "0.20.6", true, shown()).await;
+    profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
     fixed(&server, "GET", "/api/tags", listed(DIGEST)).await;
     fixed(&server, "GET", "/api/ps", loaded(json!(8192), DIGEST)).await;
     fixed(
@@ -147,12 +257,18 @@ async fn cloud_remote_unknown_version_and_non_gguf_are_refused_before_load() {
     non_gguf["details"]["format"] = json!("safetensors");
     let mut image = shown();
     image["capabilities"] = json!(["completion", "image"]);
+    let mut mlx = shown();
+    mlx["details"]["runner"] = json!("mlx");
     for (version, disabled, show) in [
-        ("0.20.6", false, shown()),
+        (AUDITED_OLLAMA_VERSION, false, shown()),
+        ("0.20.6", true, shown()),
         ("0.20.7", true, shown()),
-        ("0.20.6", true, remote),
-        ("0.20.6", true, non_gguf),
-        ("0.20.6", true, image),
+        ("0.41.0", true, shown()),
+        ("0.40.7-rc0", true, shown()),
+        (AUDITED_OLLAMA_VERSION, true, remote),
+        (AUDITED_OLLAMA_VERSION, true, non_gguf),
+        (AUDITED_OLLAMA_VERSION, true, mlx),
+        (AUDITED_OLLAMA_VERSION, true, image),
     ] {
         let server = MockServer::start().await;
         profile(&server, version, disabled, show).await;
@@ -174,7 +290,7 @@ async fn missing_or_ambiguous_installed_identity_never_loads_or_downloads() {
     disagreement["models"][0]["model"] = json!("foreign:latest");
     for models in [json!({"models":[]}), ambiguous, disagreement] {
         let server = MockServer::start().await;
-        profile(&server, "0.20.6", true, shown()).await;
+        profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
         fixed(&server, "GET", "/api/tags", models).await;
         assert!(observe_native_ollama_context(&server.uri(), "test-model")
             .await
@@ -200,7 +316,7 @@ async fn load_requires_exact_generation_free_acknowledgement() {
     tool["tool_calls"] = json!([{"name":"unexpected"}]);
     for ack in [output, usage, prompt_usage, unfinished, wrong, tool] {
         let server = MockServer::start().await;
-        profile(&server, "0.20.6", true, shown()).await;
+        profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
         fixed(&server, "GET", "/api/tags", listed(DIGEST)).await;
         fixed(&server, "POST", "/api/generate", ack).await;
         assert!(observe_native_ollama_context(&server.uri(), "test-model")
@@ -224,7 +340,7 @@ async fn architecture_metadata_cannot_replace_missing_invalid_or_unloaded_contex
         json!(16777217),
     ] {
         let server = MockServer::start().await;
-        profile(&server, "0.20.6", true, shown()).await;
+        profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
         fixed(&server, "GET", "/api/tags", listed(DIGEST)).await;
         fixed(&server, "POST", "/api/generate", acknowledgement()).await;
         fixed(&server, "GET", "/api/ps", loaded(value, DIGEST)).await;
@@ -235,7 +351,7 @@ async fn architecture_metadata_cannot_replace_missing_invalid_or_unloaded_contex
         assert_eq!(count(&server, "/api/chat").await, 0);
     }
     let server = MockServer::start().await;
-    profile(&server, "0.20.6", true, shown()).await;
+    profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
     fixed(&server, "GET", "/api/tags", listed(DIGEST)).await;
     fixed(&server, "POST", "/api/generate", acknowledgement()).await;
     fixed(&server, "GET", "/api/ps", json!({"models":[]})).await;
@@ -265,7 +381,7 @@ async fn changed_digest_runner_or_context_never_becomes_an_observation() {
         ),
     ] {
         let server = MockServer::start().await;
-        profile(&server, "0.20.6", true, shown()).await;
+        profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
         sequence(&server, "GET", "/api/tags", tags).await;
         sequence(&server, "GET", "/api/ps", processes).await;
         fixed(&server, "POST", "/api/generate", acknowledgement()).await;
@@ -280,7 +396,13 @@ async fn changed_digest_runner_or_context_never_becomes_an_observation() {
 #[tokio::test]
 async fn changed_profile_after_load_is_refused_without_inference() {
     let server = MockServer::start().await;
-    fixed(&server, "GET", "/api/version", json!({"version":"0.20.6"})).await;
+    fixed(
+        &server,
+        "GET",
+        "/api/version",
+        json!({"version":AUDITED_OLLAMA_VERSION}),
+    )
+    .await;
     sequence(
         &server,
         "GET",
@@ -310,7 +432,7 @@ async fn retained_observation_rechecks_identity_before_connect_and_each_inferenc
         .await
         .unwrap();
     server.reset().await;
-    profile(&server, "0.20.6", true, shown()).await;
+    profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
     sequence(
         &server,
         "GET",
@@ -391,4 +513,253 @@ fn canonical_alias_matching_is_explicit_and_does_not_invent_digest_pinning() {
         model_key("other.host/library/test-model").unwrap(),
         model_key("test-model").unwrap()
     );
+}
+
+#[tokio::test]
+async fn the_observation_records_the_server_version_it_saw() {
+    let server = MockServer::start().await;
+    standard_with(&server, "0.40.7", &unique_digest(1), Probes::Pass).await;
+    let observation = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
+    assert_eq!(observation.server_version, "0.40.7");
+}
+
+#[tokio::test]
+async fn a_loaded_mlx_or_unknown_runner_is_refused_before_any_probe() {
+    for (runner, reason) in [
+        (json!("mlx"), "MLX runner"),
+        (json!("ggml"), "not llama.cpp's llama-server"),
+        (Value::Null, "not llama.cpp's llama-server"),
+    ] {
+        let server = MockServer::start().await;
+        let digest = unique_digest(2);
+        standard_with(&server, AUDITED_OLLAMA_VERSION, &digest, Probes::Pass).await;
+        let mut ps = loaded(json!(4096), &digest);
+        ps["models"][0]["runner"] = runner.clone();
+        Mock::given(method("GET"))
+            .and(path("/api/ps"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ps))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        let refusal = observe_native_ollama_context(&server.uri(), "test-model")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains(reason), "{runner}: {refusal}");
+        assert_eq!(chats(&server).await, (Vec::new(), 0));
+    }
+}
+
+/// A server that generates from an over-long prompt, or past num_predict,
+/// never becomes an observation: the refusal names the guarantee.
+#[tokio::test]
+async fn a_failed_contract_probe_refuses_the_model_and_names_the_guarantee() {
+    for (seed, behavior, guarantee) in [
+        (
+            3,
+            Probes::AcceptOverLong,
+            "over-long prompt refusal (truncate:false)",
+        ),
+        (4, Probes::IgnoreNumPredict, "output limit (num_predict)"),
+    ] {
+        let server = MockServer::start().await;
+        standard_with(
+            &server,
+            AUDITED_OLLAMA_VERSION,
+            &unique_digest(seed),
+            behavior,
+        )
+        .await;
+        let refusal = observe_native_ollama_context(&server.uri(), "test-model")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains(guarantee), "{refusal}");
+        assert!(refusal.contains("native Sessions refuse"), "{refusal}");
+        if behavior == Probes::IgnoreNumPredict {
+            assert!(refusal.contains("generated 7"), "{refusal}");
+        }
+        // No other inference ran.
+        assert_eq!(chats(&server).await.1, 0);
+    }
+}
+
+/// An over-long probe that is refused for another reason (the server is
+/// busy) proves nothing: the model is not accepted on it.
+#[tokio::test]
+async fn a_busy_server_does_not_pass_the_over_long_probe() {
+    let server = MockServer::start().await;
+    let digest = unique_digest(5);
+    profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
+    fixed(&server, "GET", "/api/tags", listed(&digest)).await;
+    fixed(&server, "GET", "/api/ps", loaded(json!(4096), &digest)).await;
+    fixed(&server, "POST", "/api/generate", acknowledgement()).await;
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(
+            ResponseTemplate::new(503)
+                .set_body_json(json!({"error":"server busy, please try again"})),
+        )
+        .mount(&server)
+        .await;
+    let refusal = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refusal.contains("not a refusal of the prompt's length"),
+        "{refusal}"
+    );
+}
+
+/// A retained profile on an upgraded, accepted Ollama is probed again on the
+/// new version before it serves, once; the inference names the new version.
+#[tokio::test]
+async fn an_upgraded_server_is_probed_again_before_a_retained_profile_serves() {
+    let server = MockServer::start().await;
+    let digest = unique_digest(6);
+    standard_with(&server, AUDITED_OLLAMA_VERSION, &digest, Probes::Pass).await;
+    let observation = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
+    server.reset().await;
+    standard_with(&server, "0.40.7", &digest, Probes::Pass).await;
+    fixed(
+        &server,
+        "POST",
+        "/api/chat",
+        json!({"model":"test-model",
+        "message":{"role":"assistant","content":"served"},
+        "done":true,"done_reason":"stop","prompt_eval_count":3,"eval_count":4}),
+    )
+    .await;
+    let served = Arc::new(OllamaServedVersions::default());
+    let provider = NativeOllamaProvider::connect_observed(observation.clone(), 32, 64 * 1024)
+        .await
+        .unwrap()
+        .with_served_versions(served.clone());
+    assert_eq!(chats(&server).await.0.len(), 2, "probed on 0.40.7");
+    assert_eq!(
+        provider
+            .chat(ChatRequest::simple("question"))
+            .await
+            .unwrap()
+            .content,
+        "served"
+    );
+    // The pass is cached for this server, version, digest and context.
+    let (probe_bodies, inferences) = chats(&server).await;
+    assert_eq!((probe_bodies.len(), inferences), (2, 1));
+    assert_eq!(served.versions(), ["0.40.7"]);
+    assert_eq!(count(&server, "/api/generate").await, 0);
+
+    // On a version that fails the probes, the retained profile is refused.
+    server.reset().await;
+    standard_with(&server, "0.40.8", &digest, Probes::IgnoreNumPredict).await;
+    let refusal = NativeOllamaProvider::connect_observed(observation, 32, 64 * 1024)
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(refusal.contains("output limit (num_predict)"), "{refusal}");
+}
+
+/// A profile Axocoatl 1.4 retained (schema 1, Ollama 0.20.6) says what
+/// happened and what to do, whatever the server runs now.
+#[tokio::test]
+async fn a_profile_retained_on_ollama_0_20_6_gets_a_specific_message() {
+    let server = MockServer::start().await;
+    standard_with(
+        &server,
+        AUDITED_OLLAMA_VERSION,
+        &unique_digest(7),
+        Probes::Pass,
+    )
+    .await;
+    let mut retained = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
+    retained.schema_version = 1;
+    retained.server_version = "0.20.6".into();
+    // Exactly the shape 1.4.0 wrote still reads.
+    let bytes = serde_json::to_vec(&retained).unwrap();
+    let retained: NativeOllamaContextObservation = serde_json::from_slice(&bytes).unwrap();
+    server.reset().await;
+    standard(&server).await;
+    let refusal = NativeOllamaProvider::connect_observed(retained.clone(), 32, 64 * 1024)
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        refusal.contains(&format!(
+            "Ollama was upgraded from 0.20.6 to {AUDITED_OLLAMA_VERSION}; review Team & budget again"
+        )),
+        "{refusal}"
+    );
+    server.reset().await;
+    standard_with(&server, "0.20.6", DIGEST, Probes::Pass).await;
+    let refusal = NativeOllamaProvider::connect_observed(retained.clone(), 32, 64 * 1024)
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        refusal.contains("0.20.6 is no longer supported"),
+        "{refusal}"
+    );
+    // A server that cannot be reached still gets the reason.
+    let unreachable = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mut moved = retained;
+    moved.base_url = format!("http://127.0.0.1:{unreachable}");
+    let refusal = NativeOllamaProvider::connect_observed(moved, 32, 64 * 1024)
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(refusal.contains("recorded with Ollama 0.20.6"), "{refusal}");
+    assert_eq!(chats(&server).await, (Vec::new(), 0));
+}
+
+/// An Ollama upgraded while a provider is connected is probed on its new
+/// version before the next inference is sent.
+#[tokio::test]
+async fn an_upgrade_between_inferences_is_probed_before_the_next_one() {
+    let server = MockServer::start().await;
+    let digest = unique_digest(8);
+    standard_with(&server, AUDITED_OLLAMA_VERSION, &digest, Probes::Pass).await;
+    let observation = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
+    let served = Arc::new(OllamaServedVersions::default());
+    let provider = NativeOllamaProvider::connect_observed(observation, 32, 64 * 1024)
+        .await
+        .unwrap()
+        .with_served_versions(served.clone());
+    server.reset().await;
+    standard_with(&server, "0.40.9", &digest, Probes::IgnoreNumPredict).await;
+    fixed(
+        &server,
+        "POST",
+        "/api/chat",
+        json!({"model":"test-model",
+        "message":{"role":"assistant","content":"never sent"},
+        "done":true,"done_reason":"stop","prompt_eval_count":3,"eval_count":4}),
+    )
+    .await;
+    let refusal = provider
+        .chat(ChatRequest::simple("question"))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refusal.contains("Ollama 0.40.9"), "{refusal}");
+    let (probe_bodies, inferences) = chats(&server).await;
+    assert_eq!((probe_bodies.len(), inferences), (2, 0));
+    assert!(served.versions().is_empty());
 }

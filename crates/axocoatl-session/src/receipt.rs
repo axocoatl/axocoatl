@@ -191,7 +191,10 @@ pub struct AgentFacts {
     pub role: String,
     /// `native`, `claude-code` or `codex`.
     pub runtime: String,
-    /// The pinned version of an external program.
+    /// The pinned version of an external program; for a native Agent on
+    /// Ollama, the Ollama server that served its calls (`ollama 0.40.6`;
+    /// several versions comma-separated when Ollama was upgraded during the
+    /// run).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub program_version: Option<String>,
     pub provider: String,
@@ -265,6 +268,11 @@ pub struct ReviewFacts {
     pub provider: String,
     pub model: String,
     pub runtime: String,
+    /// For a native reviewer on Ollama, the Ollama server that served its
+    /// calls (`ollama 0.40.6`), as [`AgentFacts::program_version`] says it.
+    /// Absent otherwise; a verifier that does not know the field ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program_version: Option<String>,
     /// `approved`, `changes`, ... (the Outcome's review state).
     pub verdict: String,
     pub passed: bool,
@@ -1019,9 +1027,14 @@ pub fn describe(statement: &Statement) -> Vec<String> {
     }
     match &predicate.review {
         Some(review) => lines.push(format!(
-            "Review by {}:{}: {} ({}), {} of {} rounds, {} findings",
+            "Review by {}:{}{}: {} ({}), {} of {} rounds, {} findings",
             review.provider,
             review.model,
+            review
+                .program_version
+                .as_deref()
+                .map(|version| format!(" ({version})"))
+                .unwrap_or_default(),
             review.verdict,
             if review.passed {
                 "passed"
@@ -1206,6 +1219,7 @@ mod tests {
                     provider: "ollama".into(),
                     model: "gpt-oss:20b".into(),
                     runtime: "native".into(),
+                    program_version: None,
                     verdict: "approved".into(),
                     passed: true,
                     rounds: 1,

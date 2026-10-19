@@ -66,6 +66,9 @@ pub(crate) struct LoadoutRuns {
     /// is written: the Session's first container already mounts
     /// `.e2e/cache` read-only.
     e2e_runs: StdMutex<HashSet<String>>,
+    /// Session id → the Ollama versions that served its native calls, for
+    /// the run's Outcome and receipt.
+    ollama_served: StdMutex<HashMap<String, Arc<crate::session_dispatch::OllamaServedLog>>>,
     /// Where a test's admission reads OpenRouter's model catalog.
     #[cfg(test)]
     pub(crate) openrouter_catalog: StdMutex<Option<String>>,
@@ -80,9 +83,38 @@ impl LoadoutRuns {
             drivers: StdMutex::new(HashSet::new()),
             stops: StdMutex::new(HashSet::new()),
             e2e_runs: StdMutex::new(HashSet::new()),
+            ollama_served: StdMutex::new(HashMap::new()),
             #[cfg(test)]
             openrouter_catalog: StdMutex::new(None),
         }
+    }
+
+    /// Where `session_id`'s native Ollama providers record the versions
+    /// that served them.
+    pub(crate) fn ollama_served(
+        &self,
+        session_id: &str,
+    ) -> Arc<crate::session_dispatch::OllamaServedLog> {
+        self.ollama_served
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .entry(session_id.to_owned())
+            .or_default()
+            .clone()
+    }
+
+    /// The Ollama versions that served `session_id`'s native calls, by
+    /// model; empty when none did.
+    pub(crate) fn ollama_versions(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<String>> {
+        self.ollama_served
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(session_id)
+            .map(|log| log.versions())
+            .unwrap_or_default()
     }
 
     pub(crate) fn store(&self) -> Result<&RunRecordStore, DaemonError> {
@@ -996,6 +1028,7 @@ fn ended_outcome(manifest: &RunManifest, error: String, warnings: Vec<RunWarning
         warnings,
         usage: RunUsage::default(),
         network: NetworkSummary::default(),
+        ollama_versions: Default::default(),
         keep: None,
         error: Some(error),
     };
@@ -2255,6 +2288,15 @@ impl AxocoatlDaemon {
 
     /// What `session_id`'s network record holds: events, allowed and refused
     /// connections, and route requests per host.
+    /// The Ollama versions that served the Session's native calls, by model
+    /// (the run's Outcome and receipt name them).
+    pub fn loadout_ollama_versions(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<String>> {
+        self.loadout_runs.ollama_versions(session_id)
+    }
+
     pub async fn loadout_network_summary(&self, session_id: &str) -> NetworkSummary {
         use axocoatl_session::network_record::{Decision, NetworkEvent};
         let mut summary = NetworkSummary::default();

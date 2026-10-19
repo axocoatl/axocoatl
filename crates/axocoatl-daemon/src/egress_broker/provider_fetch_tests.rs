@@ -829,6 +829,38 @@ fn ollama_bodies_are_checked_by_ollamas_endpoints() {
     passes_ollama("/api/chat", r#"{"model":"perplexity/sonar:online"}"#);
 }
 
+/// `GET /v1/models/{model}` has no body, and Ollama 0.40.6 proxies it to
+/// ollama.com for a cloud name: the name in the path is checked, decoded as
+/// Ollama's router decodes it.
+#[test]
+fn a_cloud_model_in_the_v1_models_path_is_refused() {
+    for path in [
+        "/v1/models/gpt-oss:120b-cloud",
+        "/v1/models/kimi-k2.5:CLOUD",
+        "/v1/models/gpt-oss%3A120b-cloud",
+        "/v1/models/gpt-oss%253A120b-cloud",
+        "/v1/models/kimi-k2.5%3Acloud",
+    ] {
+        let refusal = check_ollama(path, b"").unwrap_err();
+        assert_eq!(refusal.at, "path", "{path}");
+        assert!(
+            refusal
+                .construct
+                .contains("a cloud model, which Ollama runs on ollama.com"),
+            "{path}: {}",
+            refusal.construct
+        );
+    }
+    for path in [
+        "/v1/models",
+        "/v1/models/qwen3:8b",
+        "/v1/models/gpt-oss%3A20b",
+        "/v1/models/foo-cloud",
+    ] {
+        passes_ollama(path, "");
+    }
+}
+
 fn passes_ollama(path: &str, body: &str) {
     if let Err(refused) = check_ollama(path, body.as_bytes()) {
         panic!("{path} refused {body}: {refused:?}");

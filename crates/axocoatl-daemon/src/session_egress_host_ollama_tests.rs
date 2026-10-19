@@ -86,6 +86,10 @@ impl FakeOllama {
                                     StatusCode::OK,
                                     r#"{"message":{"role":"assistant","content":"ok"},"done":true}"#,
                                 ),
+                                "/api/status" => (
+                                    StatusCode::OK,
+                                    r#"{"cloud":{"disabled":true,"source":"env"}}"#,
+                                ),
                                 _ => (StatusCode::NOT_FOUND, r#"{"error":"not found"}"#),
                             };
                             let mut response = Response::new(Full::new(Bytes::from(body)));
@@ -419,10 +423,12 @@ async fn exchange(
 }
 
 /// Ollama's endpoints that reach other hosts or change its models, its
-/// account and web endpoints, and a body naming a cloud model (which Ollama
-/// 0.20.6 sends to ollama.com) are refused at the route, recorded with the
-/// reason and never reach Ollama; inference with a local model and model
-/// listing pass, the body byte for byte.
+/// account and web endpoints, the endpoints Ollama 0.40 added (among them
+/// `/api/codex/*`, which reaches api.openai.com and chatgpt.com even with
+/// cloud disabled), and a body or `/v1/models/{model}` path naming a cloud
+/// model (which Ollama sends to ollama.com) are refused at the route,
+/// recorded with the reason and never reach Ollama; inference with a local
+/// model and model listing pass, the body byte for byte.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_host_route_allows_only_inference_and_listing_and_refuses_cloud_models() {
     let ollama = FakeOllama::start().await;
@@ -463,6 +469,12 @@ async fn the_host_route_allows_only_inference_and_listing_and_refuses_cloud_mode
         ("POST", "/api/experimental/web_fetch"),
         ("POST", "/v1/images/generations"),
         ("GET", "/api/chat"),
+        ("POST", "/api/codex/v1/responses"),
+        ("GET", "/api/balance"),
+        ("GET", "/api/usage"),
+        ("GET", "/api/experimental/model-recommendations"),
+        ("POST", "/v1/systemone"),
+        ("POST", "/v1/responses/compact"),
     ] {
         let (status, body) = exchange(
             &mut sender,
@@ -526,6 +538,18 @@ async fn the_host_route_allows_only_inference_and_listing_and_refuses_cloud_mode
             "{answer}"
         );
     }
+    // A cloud model named in the path of the one bodyless model endpoint,
+    // which Ollama 0.40.6 proxies to ollama.com.
+    for path in [
+        "/v1/models/gpt-oss:120b-cloud",
+        "/v1/models/gpt-oss%3A120b-cloud",
+    ] {
+        let (status, answer) = exchange(&mut sender, "GET", path, "").await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}: {answer}");
+        let json: serde_json::Value = serde_json::from_str(&answer).unwrap();
+        assert_eq!(json["error"], "provider_fetch_refused", "{answer}");
+        assert_eq!(json["json_path"], "path");
+    }
     // And a server tool on a compatible endpoint, as on a hosted API.
     let (status, answer) = exchange(
         &mut sender,
@@ -549,7 +573,7 @@ async fn the_host_route_allows_only_inference_and_listing_and_refuses_cloud_mode
         matches!(
             event,
             NetworkEvent::Request {
-                seq_in_conn: 22,
+                seq_in_conn: 30,
                 ..
             }
         )
@@ -568,8 +592,10 @@ async fn the_host_route_allows_only_inference_and_listing_and_refuses_cloud_mode
             _ => None,
         })
         .collect();
-    assert_eq!(refusals.len(), 20, "{refusals:?}");
+    assert_eq!(refusals.len(), 28, "{refusals:?}");
     assert!(refusals.contains(&("/api/pull", "route_denied")));
+    assert!(refusals.contains(&("/api/codex/v1/responses", "route_denied")));
+    assert!(refusals.contains(&("/v1/models/gpt-oss:120b-cloud", "provider_fetch_refused")));
     assert!(refusals.contains(&("/api/experimental/web_search", "route_denied")));
     assert!(refusals.contains(&("/api/chat", "provider_fetch_refused")));
     assert!(refusals.contains(&("/v1/messages", "provider_fetch_refused")));
@@ -602,5 +628,54 @@ fn the_host_route_changes_the_digest_only_when_set() {
     assert_eq!(
         route.canonical()["upstream"],
         serde_json::json!({"host_loopback": 11434})
+    );
+}
+
+/// A Session's decision point opens with the route only to an Ollama that
+/// reports its cloud features off: a local copy of a cloud model keeps its
+/// cloud host under a name no request check can recognize.
+#[tokio::test]
+async fn the_route_needs_an_ollama_that_reports_cloud_disabled() {
+    let ollama = FakeOllama::start().await;
+    assert_eq!(
+        crate::session_egress::host_ollama_cloud_refusal(ollama.addr.port()).await,
+        None
+    );
+    for (status, found) in [
+        (
+            serde_json::json!({"cloud":{"disabled":false,"source":"none"}}),
+            "has its cloud features on",
+        ),
+        (serde_json::json!({}), "does not report its cloud mode"),
+    ] {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/status"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(status))
+            .mount(&server)
+            .await;
+        let port = server.address().port();
+        let refusal = crate::session_egress::host_ollama_cloud_refusal(port)
+            .await
+            .expect("refused");
+        assert!(refusal.contains(found), "{refusal}");
+        assert!(refusal.contains("sandbox.egress.host_ollama"), "{refusal}");
+        assert!(refusal.contains("OLLAMA_NO_CLOUD=1"), "{refusal}");
+        assert!(
+            refusal.contains("ollama cp gpt-oss:20b-cloud mygpt"),
+            "{refusal}"
+        );
+    }
+    let unused = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let refusal = crate::session_egress::host_ollama_cloud_refusal(unused)
+        .await
+        .expect("refused");
+    assert!(
+        refusal.contains("did not answer GET /api/status"),
+        "{refusal}"
     );
 }

@@ -577,6 +577,38 @@ fn hint(reason: &str, host: &str, port: u16) -> String {
     }
 }
 
+/// Why `sandbox.egress.host_ollama` cannot be used now, or `None` when the
+/// Ollama server on the route's port reports its cloud features disabled
+/// (`GET /api/status`). The route checks model names in request bodies, but
+/// a local copy of a cloud model (`ollama cp gpt-oss:20b-cloud mygpt`) keeps
+/// its cloud host under a name the route cannot recognize, and a cloud-enabled
+/// Ollama would send it to ollama.com. A Session's decision point is opened
+/// with the route only when Ollama reports cloud disabled.
+pub(crate) async fn host_ollama_cloud_refusal(port: u16) -> Option<String> {
+    use axocoatl_llm_ollama::OllamaCloudMode;
+    const TURN_OFF: &str = "Turn Ollama's cloud features off (start it with OLLAMA_NO_CLOUD=1, \
+         or add {\"disable_ollama_cloud\": true} to ~/.ollama/server.json of the user that runs \
+         it) and restart Ollama, or remove sandbox.egress.host_ollama and run axocoatl network \
+         reload";
+    let base = format!("http://127.0.0.1:{port}");
+    let found = match axocoatl_llm_ollama::check_native_ollama_server(&base).await {
+        Ok(check) => match check.cloud {
+            OllamaCloudMode::Disabled { .. } => return None,
+            OllamaCloudMode::Enabled => "has its cloud features on".to_string(),
+            OllamaCloudMode::Unreported => {
+                "does not report its cloud mode (GET /api/status)".to_string()
+            }
+        },
+        Err(error) => format!("did not answer GET /api/status ({error})"),
+    };
+    Some(format!(
+        "the route to Ollama on this computer (sandbox.egress.host_ollama) needs Ollama to report \
+         its cloud features off, and Ollama at 127.0.0.1:{port} {found}. With cloud on, a local \
+         copy of a cloud model (ollama cp gpt-oss:20b-cloud mygpt) runs on ollama.com under a name \
+         the route cannot recognize. {TURN_OFF}"
+    ))
+}
+
 fn bounded_host(host: &str) -> String {
     let host: String = host.chars().filter(|c| !c.is_control()).take(253).collect();
     if host.is_empty() {

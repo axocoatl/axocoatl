@@ -159,12 +159,11 @@ impl AxocoatlDaemon {
                 .register_host_invocation_tool(tool)
                 .map_err(native_error)?;
         }
+        let mut credentials = self.configured_native_provider_credentials();
+        let session_id = controller.owner_session_id().map_err(native_error)?;
+        credentials.ollama_served = Some(self.loadout_runs.ollama_served(&session_id));
         let native = controller
-            .native_provider_factory(
-                &self.data_root,
-                self.configured_native_provider_credentials(),
-                self.counter.clone(),
-            )
+            .native_provider_factory(&self.data_root, credentials, self.counter.clone())
             .map_err(native_error)?;
         // External definitions run their program; all others stay native.
         // A program that reports no cost is priced at the configuration's
@@ -247,6 +246,7 @@ impl AxocoatlDaemon {
                 .ollama
                 .as_ref()
                 .map(|p| p.base_url.clone()),
+            ollama_served: None,
             openrouter_api_key: self
                 .config
                 .providers

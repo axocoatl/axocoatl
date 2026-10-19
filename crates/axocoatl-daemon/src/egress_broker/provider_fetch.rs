@@ -69,7 +69,8 @@
 //!
 //! The route to Ollama on this computer (`sandbox.egress.host_ollama`) is
 //! checked by [`check_ollama`] instead: Ollama's own endpoints, its
-//! compatible ones by their formats, and a cloud model in `model`.
+//! compatible ones by their formats, and a cloud model in `model` or in the
+//! path of `GET /v1/models/{model}`.
 //!
 //! The AI SDK's own protocol to the Vercel AI Gateway ([`ai_sdk_gateway`]),
 //! what `gateway()` of the `ai` package sends, is not one of the formats:
@@ -225,23 +226,47 @@ pub fn check_dialect(dialect: Dialect, body: &[u8]) -> Result<(), Refused> {
     check_parsed(dialect, false, body)
 }
 
-/// Check a request body sent to `path` on the route to Ollama on this
-/// computer (`sandbox.egress.host_ollama`). An empty body passes.
+/// Check a request sent to `path` on the route to Ollama on this computer
+/// (`sandbox.egress.host_ollama`), by its body and, for the one allowed path
+/// that names a model (`GET`/`HEAD /v1/models/{model}`), by its path. An
+/// empty body passes.
 ///
-/// Ollama 0.20.6 with its cloud features on (the default) sends a request
-/// for a cloud model to `ollama.com`, prompt and all, without a pull first:
-/// on `/api/chat`, `/api/generate`, `/api/embed`, `/api/show` and its
-/// OpenAI- and Anthropic-compatible endpoints, for any model whose tag
-/// (after the last `:` past the last `/`), trimmed and in any case, is
-/// `cloud` or ends in `-cloud` (`gpt-oss:120b-cloud`, `kimi-k2.5:cloud`),
-/// whatever host or namespace the name has (seen by running the 0.20.6
-/// binary with its proxy pointed at a recorder). Such a `model` is refused
-/// anywhere in the body. The compatible endpoints get the checks of their
-/// formats besides; Ollama 0.20.6 itself refuses image and file URLs there.
-/// A name with another registry host does not make an inference request
-/// fetch it (that takes `/api/pull` or `/api/create`, which the route does
-/// not allow).
+/// Ollama (0.20.6 and 0.40.6 alike) with its cloud features on (the default)
+/// sends a request for a cloud model to `ollama.com`, prompt and all,
+/// without a pull first: on `/api/chat`, `/api/generate`, `/api/embed`,
+/// `/api/show` and its OpenAI- and Anthropic-compatible endpoints, for any
+/// model whose tag (after the last `:` past the last `/`), trimmed and in any
+/// case, is `cloud` or ends in `-cloud` (`gpt-oss:120b-cloud`,
+/// `kimi-k2.5:cloud`), whatever host or namespace the name has (seen by
+/// running the 0.20.6 binary with its proxy pointed at a recorder;
+/// `internal/modelref` is unchanged in 0.40.6). Such a `model` is refused
+/// anywhere in the body. `GET /v1/models/{model}` has no body: Ollama 0.40.6
+/// proxies it to ollama.com for a cloud name (`server/cloud_proxy.go`
+/// `cloudModelPathPassthroughMiddleware`), so a cloud name in the path,
+/// percent-decoded as Ollama decodes it, is refused too. The compatible
+/// endpoints get the checks of their formats besides; Ollama itself refuses
+/// image and file URLs there. A name with another registry host does not
+/// make an inference request fetch it (that takes `/api/pull` or
+/// `/api/create`, which the route does not allow). A local copy of a cloud
+/// model under a plain name is not seen here: the daemon opens the route
+/// only to an Ollama that reports its cloud features off.
 pub fn check_ollama(path: &str, body: &[u8]) -> Result<(), Refused> {
+    if let Some(name) = path.strip_prefix("/v1/models/") {
+        // Decoded once, as Ollama's router does, and once more, so that an
+        // escape of an escape is refused as well.
+        let once = percent_decoded(name);
+        let twice = percent_decoded(&once);
+        let cloud = [name, once.as_str(), twice.as_str()]
+            .into_iter()
+            .find(|model| ollama_cloud_model(model))
+            .map(|model| shown(model.trim()));
+        if let Some(model) = cloud {
+            return Err(Refused {
+                construct: format!("model {model}: a cloud model, which Ollama runs on ollama.com"),
+                at: "path".into(),
+            });
+        }
+    }
     if blank(body) {
         return Ok(());
     }
@@ -262,6 +287,29 @@ pub fn check_ollama(path: &str, body: &[u8]) -> Result<(), Refused> {
     check_parsed(dialect, true, body)
 }
 
+/// `text` with each `%XX` escape decoded; invalid UTF-8 is replaced.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if let Some(byte) = bytes
+                .get(index + 1..index + 3)
+                .and_then(|hex| std::str::from_utf8(hex).ok())
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn check_parsed(dialect: Dialect, ollama: bool, body: &[u8]) -> Result<(), Refused> {
     let value = strict_json::parse(body, MAX_CHECKED_DEPTH).map_err(|error| Refused {
         construct: format!(
@@ -278,8 +326,8 @@ fn check_parsed(dialect: Dialect, ollama: bool, body: &[u8]) -> Result<(), Refus
     walk.value(&value)
 }
 
-/// Whether Ollama 0.20.6 runs `model` on `ollama.com`: its tag, trimmed
-/// and in any case, is `cloud` or ends in `-cloud`.
+/// Whether Ollama (0.20.6 and 0.40.6 alike) runs `model` on `ollama.com`:
+/// its tag, trimmed and in any case, is `cloud` or ends in `-cloud`.
 pub fn ollama_cloud_model(model: &str) -> bool {
     let name = model.trim();
     let name = name.split('@').next().unwrap_or(name);

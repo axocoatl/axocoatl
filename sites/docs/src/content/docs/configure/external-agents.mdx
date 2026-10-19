@@ -64,7 +64,7 @@ daemon also keeps the access token current on your computer.
    ```sh
    cd ~/src/my-app
    axocoatl run fix-claude-code --task "Paging skips the last item when the total is a multiple of the page size" \
-     --model reviewer=ollama:gpt-oss:120b
+     --model reviewer=ollama:gpt-oss:20b
    axocoatl run fix-codex --task "…" --model reviewer=openrouter:qwen/qwen3-coder
    ```
 
@@ -580,7 +580,7 @@ environment:
 ```
 
 ```sh
-axocoatl run my-fix-claude-code --task "…" --model reviewer=ollama:gpt-oss:120b
+axocoatl run my-fix-claude-code --task "…" --model reviewer=ollama:gpt-oss:20b
 ```
 
 For Codex, the writer's `credential` says which stored credential its route sends:
@@ -607,7 +607,7 @@ environment:
 
 ```sh
 axocoatl run my-fix-codex --task "…" --model writer=openai:gpt-5.5 \
-  --model reviewer=ollama:gpt-oss:120b --param credential=codex-chatgpt
+  --model reviewer=ollama:gpt-oss:20b --param credential=codex-chatgpt
 ```
 
 A run whose credential is not stored is refused before it starts (exit code 3), with how

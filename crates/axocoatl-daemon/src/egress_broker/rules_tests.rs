@@ -577,6 +577,19 @@ fn the_route_to_ollama_allows_only_inference_and_model_listing() {
         ("GET", "/v1/models/hf.co/x"),
         ("GET", "/api/tags.git/info/refs"),
         ("GET", "/nothing"),
+        // Ollama 0.40's new endpoints: the Codex proxy reaches api.openai.com
+        // and chatgpt.com even with cloud disabled; the others are account,
+        // cloud or experimental endpoints.
+        ("POST", "/api/codex/v1/responses"),
+        ("GET", "/api/codex/v1/models"),
+        ("PUT", "/api/codex/x"),
+        ("DELETE", "/api/codex/x"),
+        ("GET", "/api/codex"),
+        ("GET", "/api/balance"),
+        ("GET", "/api/usage"),
+        ("GET", "/api/experimental/model-recommendations"),
+        ("POST", "/v1/systemone"),
+        ("POST", "/v1/responses/compact"),
     ] {
         assert!(!allowed(method, target), "{method} {target}");
     }

@@ -147,7 +147,7 @@ The reasons are listed under `attention` in the Outcome, in words.
 
 ```sh
 axocoatl run fix --task-file task.md \
-  --model writer=ollama:qwen3-coder:30b --model reviewer=ollama:gpt-oss:120b \
+  --model writer=ollama:qwen3-coder:30b --model reviewer=ollama:gpt-oss:20b \
   --junit axocoatl-junit.xml --record run.axorecord.jsonl
 case $? in
   0) echo "passed" ;;

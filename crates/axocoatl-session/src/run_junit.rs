@@ -988,6 +988,7 @@ mod tests {
             }],
             usage: RunUsage::default(),
             network: NetworkSummary::default(),
+            ollama_versions: Default::default(),
             keep: None,
             error: None,
         };

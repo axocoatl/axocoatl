@@ -19,9 +19,13 @@ axocoatl dev       # start the daemon and leave it running
 
 cd ~/src/my-app    # then, in another shell
 axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" \
-  --model writer=ollama:qwen3-coder:30b --model reviewer=ollama:gpt-oss:120b \
+  --model writer=ollama:qwen3-coder:30b --model reviewer=ollama:gpt-oss:20b \
   --junit axocoatl-junit.xml --record run.axorecord.jsonl
 ```
+
+`qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) fit a 48 GB Mac, one at a time, on
+Ollama 0.40.6 or later. The stronger reviewer in the measurements below, `gpt-oss:120b`
+(65 GB), needs a machine with roughly 96 GB of memory or more.
 
 An example of the summary a passing run prints on standard output, in the format
 `axocoatl run` prints it (progress goes to standard error):
@@ -31,7 +35,7 @@ Verdict: pass (exit 0)
 Loadout: fix@1 sha256:b579bd67515486bebaf28d2bbfc76853260abef7623a05d2d5f83c1593cc9b41
 Checks:
   tests            passed, exit 0
-Review: approved after 2 of 3 rounds by ollama:gpt-oss:120b
+Review: approved after 2 of 3 rounds by ollama:gpt-oss:20b
 Adjudications:
   round 1 F1   accept: the last page was dropped when total % size == 0; fixed, with a test
   round 1 F2   reject: Paginator.__init__ already refuses size 0 (pages.py:12)
@@ -41,7 +45,7 @@ Record: run-7f3c9a2e-4b1d-4c8a-9e6f-2d5b8a1c0e47
 ```
 
 - **Claude Code or Codex as the writer, in one command.**
-  `axocoatl run fix-claude-code --task "…" --model reviewer=ollama:gpt-oss:120b` (or
+  `axocoatl run fix-claude-code --task "…" --model reviewer=ollama:gpt-oss:20b` (or
   `fix-codex`) runs the built-in `fix` with the pinned Claude Code CLI or Codex CLI as the
   writer, inside the Session container as a non-root user, and the host runs the same
   checks and review on what it leaves. `axocoatl connect claude-code` (it runs
@@ -319,10 +323,15 @@ models included, paid with OpenRouter credits. OpenRouter requires
 `providers.openrouter_billing: credits`, a normal API key, and an account with no
 connected BYOK provider keys. BYOK is not supported. A compatible HTTP API alone does not establish a bound.
 The onboarding wizard offers Ollama and OpenRouter for native Sessions. For Ollama it
-checks that the server is a loopback Ollama 0.20.6 with its cloud features disabled
-(`OLLAMA_NO_CLOUD=1`, or `{"disable_ollama_cloud": true}` in `~/.ollama/server.json`),
-and suggests Lead and Reviewer models from those installed on it; `axocoatl doctor`
-reports the same requirements.
+checks that the server is a loopback Ollama 0.40.6 or a later 0.40 release with its
+cloud features disabled (`OLLAMA_NO_CLOUD=1`, or `{"disable_ollama_cloud": true}` in
+`~/.ollama/server.json`), and suggests Lead and Reviewer models from the GGUF models
+installed on it (`qwen3-coder:30b` and `gpt-oss:20b` when none is); `axocoatl doctor`
+reports the same requirements. Native Sessions run only GGUF models, which Ollama runs
+in llama.cpp's `llama-server`: on Apple silicon, a model Ollama runs with MLX is
+refused, because MLX does not hold `num_ctx` as a hard limit. When a Team is reviewed,
+two small contract probes on your server check that an over-long prompt is refused and
+that a call stops at its output limit.
 Direct OpenAI and Anthropic configurations remain available through manual YAML
 on their supported compatibility paths.
 The other configured provider adapters remain available through their supported legacy

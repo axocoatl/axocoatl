@@ -276,6 +276,23 @@ impl SessionEgressPoints {
                 EGRESS_NEEDS_NATIVE_SESSION.to_string(),
             ));
         }
+        // A Session's decision point opens once, when the Session first
+        // needs it: the route to Ollama on this computer is checked then.
+        if let Some(existing) = self.points.lock().await.get(session_id).cloned() {
+            return Ok(existing);
+        }
+        if let Some(route) = self
+            .policy_for(session_id, &self.policy.current())
+            .host_ollama
+        {
+            if let Some(refusal) =
+                crate::session_egress::host_ollama_cloud_refusal(route.port).await
+            {
+                return Err(DaemonError::Session(format!(
+                    "the Session's network cannot open: {refusal}"
+                )));
+            }
+        }
         // The Workspaces a route's `upstream_ca` must stay out of, read
         // before the decision points' lock is taken.
         self.workspaces.refresh().await;
@@ -479,6 +496,21 @@ impl AxocoatlDaemon {
         let current = self.network_policy.current();
         let policy = applicable_policy(started, &current, &next);
         let (changed, _) = live_changes(&current, &policy);
+        // Turning the route to Ollama on this computer on (or moving it) is
+        // checked like a Session's start: Ollama must report cloud off.
+        if let Some(route) = policy
+            .host_ollama
+            .as_ref()
+            .filter(|route| current.host_ollama.as_ref() != Some(*route))
+        {
+            if let Some(refusal) =
+                crate::session_egress::host_ollama_cloud_refusal(route.port).await
+            {
+                return Err(DaemonError::InvalidRequest(format!(
+                    "{refusal}; nothing was changed"
+                )));
+            }
+        }
         let points = self.egress_points.replace_and_list(policy.clone()).await;
         let mut reloaded = reload_points(points, SESSION_NETWORK_ACTOR).await;
         // Under `bridge` and `none` the browser has decision points of its

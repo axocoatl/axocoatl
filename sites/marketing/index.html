@@ -52,13 +52,13 @@
           <div class="code-pane-head">one run with Claude Code as the writer · with the daemon running (<code>axocoatl onboard</code>, then <code>axocoatl dev</code>)</div>
           <pre><code><span class="code-key">cd</span> ~/src/my-app
 <span class="code-key">axocoatl run fix-claude-code</span> --task <span class="code-string">"Paging skips the last item"</span> \
-  --model reviewer=<span class="code-string">ollama:gpt-oss:120b</span> --receipt receipt.json
+  --model reviewer=<span class="code-string">ollama:gpt-oss:20b</span> --receipt receipt.json
 <span class="code-comment"># exit 0 pass · 1 checks failed · 2 needs attention</span>
 
 <span class="code-key">axocoatl receipt verify</span> receipt.json --keys trusted-keys --repo .
 <span class="code-comment"># exit 0: signed by a key in trusted-keys, and the files match</span></code></pre>
         </div>
-        <p class="hero-run-note">Claude Code needs its image and sign-in first: <a href="https://docs.axocoatl.ai/configure/external-agents/">Set up Claude Code or Codex →</a><br>Local models only:<br><code class="wrap">axocoatl run fix --task "…" --model writer=ollama:qwen3-coder:30b<br>--model reviewer=ollama:gpt-oss:120b</code></p>
+        <p class="hero-run-note">Claude Code needs its image and sign-in first: <a href="https://docs.axocoatl.ai/configure/external-agents/">Set up Claude Code or Codex →</a><br>Local models only:<br><code class="wrap">axocoatl run fix --task "…" --model writer=ollama:qwen3-coder:30b<br>--model reviewer=ollama:gpt-oss:20b</code><br>Both fit a 48 GB Mac on Ollama 0.40.6 or later; <code>gpt-oss:120b</code> (65 GB) needs about 96 GB or more.</p>
       </div>
       <div class="hero-actions">
         <a class="btn btn-primary" href="/install">Install →</a>
@@ -130,7 +130,7 @@ Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211
 <span class="code-key">Loadout:</span> fix@1 sha256:b579bd67515486bebaf28d2bbfc76853260abef7623a05d2d5f83c1593cc9b41
 <span class="code-key">Checks:</span>
   tests            passed, exit 0
-<span class="code-key">Review:</span> approved after 2 of 3 rounds by ollama:gpt-oss:120b
+<span class="code-key">Review:</span> approved after 2 of 3 rounds by ollama:gpt-oss:20b
 <span class="code-key">Adjudications:</span>
   round 1 F1   accept: the last page was dropped when total % size == 0; fixed, with a test
   round 1 F2   reject: Paginator.__init__ already refuses size 0 (pages.py:12)
@@ -167,9 +167,9 @@ Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211
 
 <span class="code-comment"># then fix with the program as the writer</span>
 <span class="code-key">axocoatl run fix-claude-code</span> --task <span class="code-string">"…"</span> \
-  --model reviewer=<span class="code-string">ollama:gpt-oss:120b</span>
+  --model reviewer=<span class="code-string">ollama:gpt-oss:20b</span>
 <span class="code-key">axocoatl run fix-codex</span> --task <span class="code-string">"…"</span> \
-  --model reviewer=<span class="code-string">ollama:gpt-oss:120b</span></code></pre>
+  --model reviewer=<span class="code-string">ollama:gpt-oss:20b</span></code></pre>
         </div>
         <div class="stack">
           <span class="eyebrow">External agents</span>
@@ -215,14 +215,14 @@ Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211
     <section class="container section section-rule" id="cross-model-review">
       <div class="split reverse">
         <div class="code-pane">
-          <div class="code-pane-head">axocoatl.yaml · a stronger reviewer in the workbench</div>
+          <div class="code-pane-head">axocoatl.yaml · a different reviewer in the workbench</div>
           <pre><code><span class="code-key">agents</span>:
   - id: lead
     provider: ollama
     model: <span class="code-string">qwen3-coder:30b</span>
   - id: reviewer
     provider: ollama   <span class="code-comment"># or openrouter</span>
-    model: <span class="code-string">gpt-oss:120b</span>
+    model: <span class="code-string">gpt-oss:20b</span>   <span class="code-comment"># 120b: ~96 GB+</span>
     role: worker
     writes: []         <span class="code-comment"># read-only</span>
 

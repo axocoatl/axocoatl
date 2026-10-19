@@ -1050,6 +1050,13 @@ impl crate::loadout::RunHost for TestRunHost {
         Ok(self.daemon.loadout_network_summary(session_id).await)
     }
 
+    async fn ollama_versions(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<String>> {
+        self.daemon.loadout_ollama_versions(session_id)
+    }
+
     async fn seal(
         &self,
         run_id: &str,
@@ -2065,14 +2072,15 @@ async fn reviewer_model_server() -> (wiremock::MockServer, Arc<AtomicUsize>) {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     let server = MockServer::start().await;
+    crate::ollama_contract_test_support::mount_contract_probes(&server).await;
     let digest = "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
     let model = serde_json::json!({"name": REVIEW_MODEL, "model": REVIEW_MODEL,
-        "digest": digest, "details": {"format": "gguf"}, "context_length": 32768});
+        "digest": digest, "details": {"format": "gguf"}, "context_length": 32768, "runner": "llamacpp"});
     for (verb, route, body) in [
         (
             "GET",
             "/api/version",
-            serde_json::json!({"version": "0.20.6"}),
+            serde_json::json!({"version": axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION}),
         ),
         (
             "GET",

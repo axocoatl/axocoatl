@@ -19,12 +19,13 @@ const OTHER: &str = "other-model:latest";
 /// The audited local Ollama server the native provider admits.
 async fn model_server() -> MockServer {
     let server = MockServer::start().await;
+    crate::ollama_contract_test_support::mount_contract_probes(&server).await;
     let digest = "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
     for (verb, route, body) in [
         (
             "GET",
             "/api/version",
-            serde_json::json!({"version": "0.20.6"}),
+            serde_json::json!({"version": axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION}),
         ),
         (
             "GET",
@@ -48,9 +49,9 @@ async fn model_server() -> MockServer {
             "/api/ps",
             serde_json::json!({"models": [
                 {"name": MODEL, "model": MODEL, "digest": digest,
-                    "details": {"format": "gguf"}, "context_length": 32768},
+                    "details": {"format": "gguf"}, "context_length": 32768, "runner": "llamacpp"},
                 {"name": OTHER, "model": OTHER, "digest": digest,
-                    "details": {"format": "gguf"}, "context_length": 32768}]}),
+                    "details": {"format": "gguf"}, "context_length": 32768, "runner": "llamacpp"}]}),
         ),
     ] {
         Mock::given(method(verb))
@@ -1347,6 +1348,8 @@ async fn receipts_child_body() {
     assert_eq!(predicate.agents[0].provider, "ollama");
     assert_eq!(predicate.agents[0].model, MODEL);
     assert_eq!(predicate.agents[0].runtime, "native");
+    // No call of the model ran, so no Ollama served it.
+    assert_eq!(predicate.agents[0].program_version, None);
     assert_eq!(
         predicate.repository.base_commit.as_deref(),
         Some(head.as_str())
@@ -1387,6 +1390,91 @@ async fn receipts_child_body() {
     );
     // The same key signs the next run; the receipt is written once.
     assert!(store.write_receipt(&run_id, b"{}\n").is_err());
+
+    // A run whose model Ollama served: the Outcome records the version
+    // and the receipt names it in the Agent's program version, a field the
+    // 1.4.0 verifier already reads.
+    let served = receipt_manifest(&session, &repo, &head);
+    store.create(&served).unwrap();
+    let mut outcome = ended_outcome(&served, "the environment failed".into(), Vec::new());
+    outcome.ollama_versions = [
+        (
+            MODEL.to_string(),
+            vec![axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION.to_string()],
+        ),
+        (
+            OTHER.to_string(),
+            vec![
+                axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION.to_string(),
+                "0.40.7".to_string(),
+            ],
+        ),
+    ]
+    .into_iter()
+    .collect();
+    outcome.review = Some(axocoatl_session::run_outcome::ReviewOutcome {
+        reviewer: axocoatl_session::run_outcome::ModelIdentity {
+            provider: "ollama".into(),
+            model: OTHER.into(),
+            runtime: "native".into(),
+        },
+        max_rounds: 3,
+        rounds: Vec::new(),
+        passed: false,
+        state: "not_run".into(),
+        reason: "the environment failed".into(),
+    });
+    daemon
+        .seal_loadout_run(&served.run_id, &outcome)
+        .await
+        .unwrap();
+    daemon.finish_loadout_run(&served.run_id, &outcome).unwrap();
+    let opened = open_receipt(&daemon.loadout_run_receipt(&served.run_id).unwrap()).unwrap();
+    assert_eq!(
+        opened.statement.predicate.agents[0].program_version,
+        Some(format!(
+            "ollama {}",
+            axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION
+        ))
+    );
+    assert!(axocoatl_session::receipt::describe(&opened.statement)
+        .iter()
+        .any(|line| line.contains(&format!(
+            "native ollama {}, ollama:{MODEL}",
+            axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION
+        ))));
+    // The reviewer's Ollama, upgraded during the run, names both versions.
+    assert_eq!(
+        opened
+            .statement
+            .predicate
+            .review
+            .as_ref()
+            .and_then(|review| review.program_version.as_deref()),
+        Some(
+            format!(
+                "ollama {}, 0.40.7",
+                axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION
+            )
+            .as_str()
+        )
+    );
+    let recorded: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            daemon
+                .data_root
+                .path()
+                .join(axocoatl_session::run_record::RUN_RECORD_DIR)
+                .join(&served.run_id)
+                .join("outcome.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        recorded["ollama_versions"][MODEL],
+        serde_json::json!([axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION])
+    );
 
     // A run the daemon restarted during: a receipt its interrupted finish
     // left is replaced by the receipt of the Outcome the restart writes.
@@ -2013,6 +2101,13 @@ impl crate::loadout::RunHost for LiveHost {
 
     async fn network_summary(&self, session_id: &str) -> Result<NetworkSummary, RunError> {
         Ok(self.daemon.loadout_network_summary(session_id).await)
+    }
+
+    async fn ollama_versions(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<String>> {
+        self.daemon.loadout_ollama_versions(session_id)
     }
 
     async fn stop_requested(&self, run_id: &str) -> bool {

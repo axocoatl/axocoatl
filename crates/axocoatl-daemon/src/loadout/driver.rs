@@ -414,6 +414,7 @@ pub fn empty_outcome(run: &RunContext, started_at_ms: u64) -> RunOutcome {
         warnings: Vec::new(),
         usage: RunUsage::default(),
         network: Default::default(),
+        ollama_versions: Default::default(),
         keep: None,
         error: None,
     }
@@ -539,6 +540,7 @@ pub async fn run_to_outcome_with(
         .network_summary(&run.session_id)
         .await
         .unwrap_or_default();
+    outcome.ollama_versions = host.ollama_versions(&run.session_id).await;
     let final_state = report.turns.last().map(|turn| turn.state);
     let turn_needs_attention = match final_state {
         Some(TurnState::Completed) => false,

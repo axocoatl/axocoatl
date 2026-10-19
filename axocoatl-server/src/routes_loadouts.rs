@@ -644,6 +644,13 @@ impl RunHost for DaemonRunHost {
             .await)
     }
 
+    async fn ollama_versions(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<String>> {
+        self.state.read().await.loadout_ollama_versions(session_id)
+    }
+
     async fn stop_requested(&self, run_id: &str) -> bool {
         self.state.read().await.loadout_run_stop_requested(run_id)
     }

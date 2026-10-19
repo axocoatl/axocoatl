@@ -4,12 +4,15 @@
 use super::*;
 use axocoatl_core::{AgentConfig, AgentRole, OverflowPolicy, ResponseFormat};
 use axocoatl_llm::LlmProvider;
-use axocoatl_llm_ollama::{NativeOllamaContextObservation, NativeOllamaProvider};
+use axocoatl_llm_ollama::{
+    NativeOllamaContextObservation, NativeOllamaProvider, OllamaServedVersions,
+};
 use axocoatl_session::control_authority::GrantLimits;
 use axocoatl_session::execution_content::ExecutionContentStore;
 use axocoatl_token::TokenCounter;
 use axocoatl_tools::ToolExecutor;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 const NATIVE_RESPONSE_BYTES: usize = 1024 * 1024;
 
@@ -45,9 +48,41 @@ pub(crate) struct NativeOpenRouterRuntimeConfiguration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning: Option<axocoatl_llm_openai::NativeOpenRouterReasoningRequest>,
 }
+/// The Ollama versions that served one Session's native calls, by model, as
+/// each provider checked them right before each inference request. A loadout
+/// run's record and receipt name them.
+#[derive(Default)]
+pub(crate) struct OllamaServedLog(std::sync::Mutex<BTreeMap<String, Arc<OllamaServedVersions>>>);
+
+impl OllamaServedLog {
+    fn for_model(&self, model: &str) -> Arc<OllamaServedVersions> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .entry(model.to_owned())
+            .or_default()
+            .clone()
+    }
+
+    /// Each model that served at least one call, with the versions that
+    /// served it.
+    pub(crate) fn versions(&self) -> BTreeMap<String, Vec<String>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .iter()
+            .map(|(model, served)| (model.clone(), served.versions()))
+            .filter(|(_, versions)| !versions.is_empty())
+            .collect()
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct NativeProviderCredentials {
     pub(crate) ollama_base_url: Option<String>,
+    /// Where this Session's native Ollama providers record the versions that
+    /// served them; absent where nothing reads them.
+    pub(crate) ollama_served: Option<Arc<OllamaServedLog>>,
     pub(crate) openrouter_api_key: Option<String>,
     pub(crate) openrouter_credits_only: bool,
     pub(crate) openrouter_configuration_error: Option<String>,
@@ -321,6 +356,7 @@ impl NativeOllamaRuntimeConfiguration {
     pub(crate) async fn verify(
         &self,
         configured_base_url: Option<&str>,
+        served: Option<&OllamaServedLog>,
     ) -> Result<Arc<dyn LlmProvider>> {
         if configured_base_url.is_some_and(|configured| configured != self.observation.base_url) {
             return Err(error(
@@ -334,6 +370,12 @@ impl NativeOllamaRuntimeConfiguration {
         )
         .await
         .map_err(error)?;
+        let provider = match served {
+            Some(log) => {
+                provider.with_served_versions(log.for_model(&self.observation.requested_model))
+            }
+            None => provider,
+        };
         Ok(Arc::new(provider))
     }
 }

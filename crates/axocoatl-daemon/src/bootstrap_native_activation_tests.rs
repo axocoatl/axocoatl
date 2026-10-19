@@ -228,14 +228,16 @@ async fn server(
     delay: Option<Arc<tokio::sync::Notify>>,
 ) -> MockServer {
     let server = MockServer::start().await;
+    crate::ollama_contract_test_support::mount_contract_probes(&server).await;
     Mock::given(method("GET"))
         .and(path("/api/version"))
         .respond_with(move |_: &wiremock::Request| {
             if let Some(registry) = &close {
                 registry.close_all_admission().unwrap();
             }
-            let response =
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"version":"0.20.6"}));
+            let response = ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"version": axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION}),
+            );
             if let Some(started) = &delay {
                 started.notify_one();
                 response.set_delay(Duration::from_secs(1))
@@ -264,7 +266,7 @@ async fn server(
         (
             "GET",
             "/api/ps",
-            serde_json::json!({"models":[{"name":"test-model:latest","model":"test-model:latest","digest":DIGEST,"details":{"format":"gguf"},"context_length":2048}]}),
+            serde_json::json!({"models":[{"name":"test-model:latest","model":"test-model:latest","digest":DIGEST,"details":{"format":"gguf"},"context_length":2048,"runner":"llamacpp"}]}),
         ),
         (
             "POST",
@@ -286,7 +288,11 @@ async fn count(server: &MockServer, endpoint: &str) -> usize {
         .await
         .unwrap()
         .iter()
-        .filter(|request| request.url.path() == endpoint)
+        // The contract probes are checks, not inference.
+        .filter(|request| {
+            request.url.path() == endpoint
+                && !crate::ollama_contract_test_support::is_contract_probe(request)
+        })
         .count()
 }
 

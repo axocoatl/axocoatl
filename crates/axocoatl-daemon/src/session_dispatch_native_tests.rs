@@ -107,6 +107,7 @@ fn tree(root: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 async fn metadata_server() -> (MockServer, Arc<Mutex<Option<SessionDispatchController>>>) {
     let server = MockServer::start().await;
+    crate::ollama_contract_test_support::mount_contract_probes(&server).await;
     let revoke = Arc::new(Mutex::new(None::<SessionDispatchController>));
     let hook = revoke.clone();
     Mock::given(method("GET"))
@@ -119,7 +120,9 @@ async fn metadata_server() -> (MockServer, Arc<Mutex<Option<SessionDispatchContr
                     .revoke_grant("grant", state.authority.revision().unwrap())
                     .unwrap();
             }
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"version":"0.20.6"}))
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"version": axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION}),
+            )
         })
         .mount(&server)
         .await;
@@ -142,7 +145,7 @@ async fn metadata_server() -> (MockServer, Arc<Mutex<Option<SessionDispatchContr
         (
             "GET",
             "/api/ps",
-            serde_json::json!({"models":[{"name":"test-model:latest","model":"test-model:latest","digest":DIGEST,"details":{"format":"gguf"},"context_length":2048}]}),
+            serde_json::json!({"models":[{"name":"test-model:latest","model":"test-model:latest","digest":DIGEST,"details":{"format":"gguf"},"context_length":2048,"runner":"llamacpp"}]}),
         ),
         (
             "POST",
@@ -164,7 +167,11 @@ async fn calls(server: &MockServer, endpoint: &str) -> usize {
         .await
         .unwrap()
         .iter()
-        .filter(|request| request.url.path() == endpoint)
+        // The contract probes are checks, not inference.
+        .filter(|request| {
+            request.url.path() == endpoint
+                && !crate::ollama_contract_test_support::is_contract_probe(request)
+        })
         .count()
 }
 struct NativeFixture {

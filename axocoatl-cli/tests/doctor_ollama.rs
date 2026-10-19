@@ -4,14 +4,30 @@
 use std::path::Path;
 use std::process::Command;
 
+use axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION;
 use serde_json::{json, Value};
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
 
+/// What Ollama 0.40.6 shows for qwen3-coder:30b, a legacy GGUF manifest.
+fn gguf_with_tools() -> Value {
+    json!({"details": {"format": "gguf", "family": "qwen3moe"},
+        "capabilities": ["completion", "tools"]})
+}
+
 async fn ollama(version: Value, status: Option<Value>) -> MockServer {
+    ollama_showing(version, status, gguf_with_tools()).await
+}
+
+async fn ollama_showing(version: Value, status: Option<Value>, show: Value) -> MockServer {
     let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/show"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(show))
+        .mount(&server)
+        .await;
     let tags = json!({"models": [{
         "name": "qwen3-coder:30b",
         "model": "qwen3-coder:30b",
@@ -81,9 +97,9 @@ providers:
 
 #[tokio::test]
 async fn doctor_fails_an_ollama_server_with_cloud_models_enabled() {
-    // What an Ollama 0.20.6 server started without OLLAMA_NO_CLOUD reports.
+    // What an Ollama server started without OLLAMA_NO_CLOUD reports.
     let server = ollama(
-        json!({"version": "0.20.6"}),
+        json!({"version": AUDITED_OLLAMA_VERSION}),
         Some(json!({"cloud": {"disabled": false, "source": "none"}})),
     )
     .await;
@@ -112,7 +128,7 @@ async fn doctor_fails_an_ollama_server_with_cloud_models_enabled() {
 #[tokio::test]
 async fn doctor_passes_a_cloud_disabled_audited_server() {
     let server = ollama(
-        json!({"version": "0.20.6"}),
+        json!({"version": AUDITED_OLLAMA_VERSION}),
         Some(json!({"cloud": {"disabled": true, "source": "env"}})),
     )
     .await;
@@ -121,9 +137,18 @@ async fn doctor_passes_a_cloud_disabled_audited_server() {
 
     assert!(ok, "doctor must pass:\n{stdout}");
     let url = server.uri();
-    assert!(stdout.contains(&format!(
-        "[ OK ] Ollama 0.20.6 at {url}, the version native Sessions accept"
-    )));
+    assert!(
+        stdout.contains(&format!(
+            "[ OK ] Ollama {AUDITED_OLLAMA_VERSION} at {url}, a version native Sessions accept"
+        )),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "[ OK ] Model 'qwen3-coder:30b' is a local GGUF model native Sessions can run (completion, tools)"
+        ),
+        "{stdout}"
+    );
     assert!(
         stdout.contains(&format!(
             "[ OK ] Ollama cloud models disabled at {url} (OLLAMA_NO_CLOUD)"
@@ -142,11 +167,73 @@ async fn doctor_fails_a_server_without_cloud_status_or_the_audited_version() {
 
     assert!(!ok, "doctor must fail:\n{stdout}");
     assert!(
-        stdout.contains("reports version 0.12.3; native Sessions accept only Ollama 0.20.6"),
+        stdout.contains("reports version 0.12.3; native Sessions refuse it"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("upgrade Ollama to 0.40.6 or later"),
         "{stdout}"
     );
     assert!(
         stdout.contains("does not report its cloud mode (GET /api/status)"),
+        "{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn doctor_refuses_ollama_0_20_6_and_says_why() {
+    let server = ollama(
+        json!({"version": "0.20.6"}),
+        Some(json!({"cloud": {"disabled": true, "source": "config"}})),
+    )
+    .await;
+    let root = tempfile::tempdir().unwrap();
+    let (ok, stdout) = doctor(root.path(), &server.uri());
+    assert!(!ok, "doctor must fail:\n{stdout}");
+    assert!(
+        stdout.contains("reports version 0.20.6; native Sessions refuse it"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("0.20.6 is no longer supported"), "{stdout}");
+    assert!(stdout.contains("brew upgrade ollama"), "{stdout}");
+}
+
+#[tokio::test]
+async fn doctor_fails_an_mlx_model_and_names_the_gguf_pull() {
+    let server = ollama_showing(
+        json!({"version": AUDITED_OLLAMA_VERSION}),
+        Some(json!({"cloud": {"disabled": true, "source": "env"}})),
+        json!({"details": {"format": "safetensors", "runner": "mlx"},
+            "capabilities": ["completion", "tools"]}),
+    )
+    .await;
+    let root = tempfile::tempdir().unwrap();
+    let (ok, stdout) = doctor(root.path(), &server.uri());
+    assert!(!ok, "doctor must fail:\n{stdout}");
+    assert!(
+        stdout.contains("[FAIL] Model 'qwen3-coder:30b' cannot run in native Sessions"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("MLX runner"), "{stdout}");
+    assert!(
+        stdout.contains("ollama pull --runner llamacpp qwen3-coder:30b"),
+        "{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn doctor_fails_a_model_without_tools_for_an_agent_with_tools() {
+    let server = ollama_showing(
+        json!({"version": AUDITED_OLLAMA_VERSION}),
+        Some(json!({"cloud": {"disabled": true, "source": "env"}})),
+        json!({"details": {"format": "gguf"}, "capabilities": ["completion"]}),
+    )
+    .await;
+    let root = tempfile::tempdir().unwrap();
+    let (ok, stdout) = doctor(root.path(), &server.uri());
+    assert!(!ok, "doctor must fail:\n{stdout}");
+    assert!(
+        stdout.contains("[FAIL] Model 'qwen3-coder:30b' does not report tool calling"),
         "{stdout}"
     );
 }

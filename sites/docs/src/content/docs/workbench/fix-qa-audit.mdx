@@ -42,7 +42,7 @@ not covered.
 ```sh
 axocoatl run fix --task "…" \
   --model writer=ollama:qwen3-coder:30b \
-  --model reviewer=ollama:gpt-oss:120b
+  --model reviewer=ollama:gpt-oss:20b
 ```
 
 One turn with one writer, one required check and a required review:
@@ -76,8 +76,8 @@ approves that result, and every finding the host sent back was answered.
 ### With Claude Code or Codex as the writer
 
 ```sh
-axocoatl run fix-claude-code --task "…" --model reviewer=ollama:gpt-oss:120b
-axocoatl run fix-codex --task "…" --model reviewer=ollama:gpt-oss:120b
+axocoatl run fix-claude-code --task "…" --model reviewer=ollama:gpt-oss:20b
+axocoatl run fix-codex --task "…" --model reviewer=ollama:gpt-oss:20b
 ```
 
 `fix-claude-code` and `fix-codex` run the same turn with the pinned Claude Code or Codex
@@ -107,7 +107,9 @@ tokens.
 
 {/* /measured */}
 
-That reviewer was a local model on the same machine. A hosted reviewer through
+That reviewer was a local model on the same machine; `gpt-oss:120b` (65 GB) needs
+roughly 96 GB of memory or more, so the commands on this page use `gpt-oss:20b`
+(14 GB), which fits a 48 GB Mac with `qwen3-coder:30b`. A hosted reviewer through
 OpenRouter works the same way in Axocoatl but was not measured. See
 [What we measured](/understand/what-we-measured/).
 

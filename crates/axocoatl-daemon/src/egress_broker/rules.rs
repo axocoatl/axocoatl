@@ -44,13 +44,20 @@ const HOST_ROUTE_MAX_REQUEST_BYTES: u64 = 1 << 30;
 
 /// What the route to Ollama on this computer allows: Ollama's inference and
 /// read-only model listing, natively and through its OpenAI- and
-/// Anthropic-compatible API, as the Ollama 0.20.6 server serves them.
-/// Everything else is refused, among it what makes Ollama reach other hosts
-/// or change its models: `/api/pull`, `/api/push`, `/api/create`,
-/// `/api/copy`, `/api/delete`, `/api/blobs/*`, the account endpoints
-/// (`/api/me`, `/api/signout`, `/api/user/keys/*`) and web search and fetch
-/// (`/api/experimental/web_search`, `/api/experimental/web_fetch`), which
-/// 0.20.6 sends to `ollama.com` or to the registry a model name names.
+/// Anthropic-compatible API, as Ollama 0.20.6 and 0.40.6 serve them. The
+/// list is exact paths: everything else is refused, among it what makes
+/// Ollama reach other hosts or change its models: `/api/pull`, `/api/push`,
+/// `/api/create`, `/api/copy`, `/api/delete`, `/api/blobs/*`, the account
+/// endpoints (`/api/me`, `/api/signout`, `/api/user/keys/*`) and web search
+/// and fetch (`/api/experimental/web_search`, `/api/experimental/web_fetch`),
+/// which Ollama sends to `ollama.com` or to the registry a model name names.
+/// Ollama 0.40 adds endpoints that are refused the same way: `/api/codex/*`
+/// (a proxy to api.openai.com and chatgpt.com that only checks the caller is
+/// on loopback and is not gated by Ollama's cloud-disabled mode), `/api/balance`
+/// and `/api/usage` (ollama.com account), `/api/experimental/model-recommendations`,
+/// `/v1/systemone` (a cloud passthrough) and `/v1/responses/compact`. Bodies
+/// and the model in `GET /v1/models/{model}` are checked by
+/// `provider_fetch::check_ollama`.
 pub const HOST_OLLAMA_RULES: [(&[&str], &str); 17] = [
     (&["GET", "HEAD"], "/"),
     (&["GET", "HEAD"], "/api/version"),
