@@ -2933,24 +2933,35 @@ impl DataDirLease {
     fn acquire(data_root: &SecureDir) -> Result<Self, DaemonError> {
         use axocoatl_session::execution_ownership::{DataRootFormatOwnership, OwnershipError};
 
-        let ownership = DataRootFormatOwnership::acquire_for_root(data_root).map_err(|error| {
-            let context = match &error {
-                OwnershipError::Busy("controller (external lease)") => {
-                    "is already owned by another daemon/bootstrap"
-                }
-                OwnershipError::Busy("legacy controller (in-root lease)") => {
-                    "is owned by a legacy daemon/bootstrap"
-                }
-                OwnershipError::Busy("controller (data-root inode)") => {
-                    "failed locking opened data-directory inode"
-                }
-                _ => "failed data-directory format ownership admission",
-            };
-            DaemonError::Session(format!(
-                "Axocoatl data directory '{}' {context}: {error}",
-                data_root.path().display()
-            ))
-        })?;
+        let (ownership, relocation) =
+            DataRootFormatOwnership::acquire_for_root_reporting(data_root).map_err(|error| {
+                let context = match &error {
+                    OwnershipError::Busy("controller (external lease)") => {
+                        "is already owned by another daemon/bootstrap"
+                    }
+                    OwnershipError::Busy("legacy controller (in-root lease)") => {
+                        "is owned by a legacy daemon/bootstrap"
+                    }
+                    OwnershipError::Busy("controller (data-root inode)") => {
+                        "failed locking opened data-directory inode"
+                    }
+                    _ => "failed data-directory format ownership admission",
+                };
+                DaemonError::Session(format!(
+                    "Axocoatl data directory '{}' {context}: {error}",
+                    data_root.path().display()
+                ))
+            })?;
+        if let Some(relocation) = relocation {
+            tracing::warn!(
+                path_changed = relocation.path_changed,
+                directory_changed = relocation.directory_changed,
+                lock_file_changed = relocation.lock_file_changed,
+                "Axocoatl data directory '{}' was copied or moved since its ownership was recorded ({}); recorded its new location, ownership id unchanged",
+                data_root.path().display(),
+                relocation.describe()
+            );
+        }
         Ok(Self { ownership })
     }
 
@@ -23212,6 +23223,10 @@ mod session_network_reload_tests;
 #[cfg(all(test, unix))]
 #[path = "bootstrap_session_web_tests.rs"]
 mod session_web_tests;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_copied_data_root_tests.rs"]
+mod copied_data_root_tests;
 
 #[cfg(test)]
 mod tests {

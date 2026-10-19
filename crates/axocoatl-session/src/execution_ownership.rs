@@ -16,9 +16,20 @@
 //! validated boundary and its parent have been synced successfully.
 //! The existing data root and its ancestors must already be durably provisioned;
 //! syncing entries inside that root does not provision its own parent entry.
+//!
+//! A manifest records the root it was written for: the digest of its path,
+//! its directory inode, and the inode of the retained lock file. A copied root
+//! (a restored cold backup, a migrated Mac) has new inodes, and a moved root a
+//! new path. Daemon admission ([`DataRootFormatOwnership::acquire_for_root`])
+//! re-records such a manifest for the root it holds, keeping its ownership id,
+//! when every other field is exact and only those identities differ, and only
+//! once this process holds every lease. Exclusion never depended on the
+//! recorded identities: it is the external lease and the two in-root locks,
+//! all held before the manifest is read. The path-based reopen APIs stay
+//! exact and refuse such a manifest.
 
 use std::fs::File;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -30,7 +41,13 @@ use sha2::{Digest, Sha256};
 pub const LEGACY_LOCK_NAME: &str = ".axocoatl-daemon.lock";
 /// Prepared directory before exchange; retained original lock file afterwards.
 pub const RETIRED_LOCK_NAME: &str = ".axocoatl-daemon.lock.v1";
+/// Reserved data-root name of the manifest that re-records a copied or moved
+/// root. It is written and synced here, then renamed over the boundary's
+/// `format.json`, so a lock directory always holds exactly one complete
+/// manifest. Admission removes one an interrupted re-recording left behind.
+pub const REBIND_MANIFEST_NAME: &str = ".axocoatl-daemon.lock.rebind";
 const MANIFEST_NAME: &str = "format.json";
+const REFUSED_MANIFEST: &str = "unsupported, incomplete, or differently owned manifest";
 const FORMAT: &str = "axocoatl-execution-ownership";
 const SCHEMA_VERSION: u32 = 2;
 const MIGRATION_VERSION: u32 = 1;
@@ -112,25 +129,105 @@ enum RootFormat {
     Upgraded,
 }
 
+/// What admission re-recorded for a root copied or moved since its manifest
+/// was written. The ownership id, and every journal bound to it, is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecordedRelocation {
+    /// The root is at another path than the recorded one.
+    pub path_changed: bool,
+    /// The root is another directory than the recorded one: a copy (a
+    /// restored backup, a migrated Mac) or a volume mounted as another device.
+    pub directory_changed: bool,
+    /// The retained lock file is another file than the recorded one. A copy
+    /// replaces it; so does copying a backup's files back into the same
+    /// directory.
+    pub lock_file_changed: bool,
+}
+
+impl RecordedRelocation {
+    /// What happened to the root, for a log line or `doctor`.
+    pub fn describe(&self) -> &'static str {
+        match (
+            self.path_changed,
+            self.directory_changed,
+            self.lock_file_changed,
+        ) {
+            (true, true, _) => "it is a copy at another path",
+            (false, true, _) => {
+                "it is a copy at the same path, such as a restored backup or a migrated Mac"
+            }
+            (true, false, false) => "it is the same directory at another path",
+            (true, false, true) => {
+                "it is the same directory at another path, with its files copied back into it"
+            }
+            (false, false, _) => "its files were copied back into the same directory",
+        }
+    }
+}
+
+/// How a manifest compares with the root it is read from.
+enum Admission {
+    Exact,
+    Relocated(RecordedRelocation),
+    Refused,
+}
+
+/// The identities a manifest records, as they are for the root read now.
+struct CurrentIdentity {
+    root_authority: String,
+    root_inode: String,
+    lock_inode: String,
+}
+
+impl CurrentIdentity {
+    fn of_lease(lease: &RootLease) -> Result<Self, OwnershipError> {
+        Ok(Self {
+            root_authority: root_authority(&lease.root),
+            root_inode: lease.root.inode_identity()?,
+            lock_inode: file_identity(&lease.legacy_file)?,
+        })
+    }
+}
+
 impl DataRootFormatOwnership {
     /// Admit the exact already-open bootstrap root using independently opened
     /// lock descriptors. Format detection occurs under the external lease, so
     /// an unsupported/partial shape never reaches cleanup or ordinary stores.
+    /// A copied or moved root is re-recorded; see [`Self::acquire_for_root_reporting`].
     pub fn acquire_for_root(data_root: &SecureDir) -> Result<Self, OwnershipError> {
+        Self::acquire_for_root_reporting(data_root).map(|(owner, _)| owner)
+    }
+
+    /// [`Self::acquire_for_root`], saying whether the root's manifest was
+    /// re-recorded because the root was copied or moved since it was written.
+    ///
+    /// Only the three recorded identities are rewritten, only after every
+    /// lease is held, and only when every other field and the boundary's
+    /// shape are exact and the recorded identities are well formed. Holding
+    /// the leases is what excludes any other controller of this directory:
+    /// the root-inode lock, whatever path it is reached by, and the retained
+    /// lock file, which a 1.0 controller also takes.
+    pub fn acquire_for_root_reporting(
+        data_root: &SecureDir,
+    ) -> Result<(Self, Option<RecordedRelocation>), OwnershipError> {
         let (lease, format) = RootLease::acquire(data_root.path(), None, Some(data_root))?;
         match format {
             RootFormat::Legacy => {
+                let mut relocation = None;
                 if matches!(
                     leaf(&lease.root, RETIRED_LOCK_NAME)?,
                     Some(SecureLeaf::Directory)
                 ) {
-                    read_manifest(&lease.root, RETIRED_LOCK_NAME)?.validate(&lease)?;
+                    relocation = admit_manifest(&lease, RETIRED_LOCK_NAME)?.1;
                 }
-                Ok(Self::Legacy(LegacyFormatOwnership { lease }))
+                Ok((Self::Legacy(LegacyFormatOwnership { lease }), relocation))
             }
             RootFormat::Upgraded => {
-                let manifest = read_manifest(&lease.root, LEGACY_LOCK_NAME)?;
-                Ok(Self::Upgraded(Arc::new(finish_installed(lease, manifest)?)))
+                let (manifest, relocation) = admit_manifest(&lease, LEGACY_LOCK_NAME)?;
+                Ok((
+                    Self::Upgraded(Arc::new(finish_installed(lease, manifest)?)),
+                    relocation,
+                ))
             }
         }
     }
@@ -383,6 +480,182 @@ fn finish_installed(
     })
 }
 
+/// Read the manifest in `directory` (the installed boundary, or a complete
+/// preparation) for this held lease. One exact in every field but the
+/// identities of the root it was recorded for is re-recorded for this root
+/// first (see [`rebind`]); anything else is refused without any change.
+fn admit_manifest(
+    lease: &RootLease,
+    directory: &str,
+) -> Result<(FormatManifest, Option<RecordedRelocation>), OwnershipError> {
+    let manifest = read_manifest(&lease.root, directory)?;
+    let current = CurrentIdentity::of_lease(lease)?;
+    match manifest.classify(&current) {
+        Admission::Exact => {
+            remove_interrupted_rebind(&lease.root)?;
+            Ok((manifest, None))
+        }
+        Admission::Relocated(relocation) => Ok((
+            rebind(lease, directory, manifest, current)?,
+            Some(relocation),
+        )),
+        Admission::Refused => invalid(REFUSED_MANIFEST),
+    }
+}
+
+/// Re-record `manifest` for the root this lease holds, keeping its ownership
+/// id. Runs only while this process holds the external lease for this path,
+/// the in-root lock file and the root-inode lock, so no other controller can
+/// be using this directory, through this path or any other.
+///
+/// The lock directory always holds exactly one complete manifest: the new one
+/// is written and synced at [`REBIND_MANIFEST_NAME`] in the root, renamed over
+/// `<directory>/format.json`, and both directories are synced. A crash leaves
+/// the old manifest or the new one, and at most the reserved file, which the
+/// next admission removes. Nothing is ever unlinked from the lock directory.
+fn rebind(
+    lease: &RootLease,
+    directory: &str,
+    manifest: FormatManifest,
+    current: CurrentIdentity,
+) -> Result<FormatManifest, OwnershipError> {
+    lease.verify()?;
+    // The record names the lock file this process holds, so that must be the
+    // file at its name now.
+    let held = if directory == LEGACY_LOCK_NAME {
+        RETIRED_LOCK_NAME
+    } else {
+        LEGACY_LOCK_NAME
+    };
+    if file_identity(&lease.root.open_file_limited(held, MAX_MANIFEST_BYTES)?)?
+        != current.lock_inode
+    {
+        return invalid("held lock file differs from the one at its name");
+    }
+    let rebound = FormatManifest {
+        root_authority_sha256: current.root_authority,
+        root_inode: current.root_inode,
+        legacy_lock_inode: current.lock_inode,
+        ..manifest
+    };
+    let bytes = serde_json::to_vec(&rebound)?;
+    remove_interrupted_rebind(&lease.root)?;
+    let written = (|| -> Result<(), OwnershipError> {
+        let mut file = lease.root.create_new(REBIND_MANIFEST_NAME)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        let boundary = lease.root.existing_child(directory)?;
+        // Replaces the one regular `format.json` admitted above in one step;
+        // syncs the boundary, then the root.
+        lease
+            .root
+            .rename_leaf_to(REBIND_MANIFEST_NAME, &boundary, MANIFEST_NAME)?;
+        boundary.sync_all()?;
+        lease.root.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = written {
+        let _ = remove_interrupted_rebind(&lease.root);
+        return Err(error);
+    }
+    lease.verify()?;
+    let recorded = read_manifest(&lease.root, directory)?;
+    if recorded != rebound {
+        return invalid("re-recorded manifest differs from the one written");
+    }
+    recorded.validate(lease)?;
+    Ok(recorded)
+}
+
+/// Remove the reserved file an interrupted re-recording left in the root. A
+/// directory there, or a file with another link, is refused, not followed.
+fn remove_interrupted_rebind(root: &SecureDir) -> Result<(), OwnershipError> {
+    match root.remove_leaf(REBIND_MANIFEST_NAME) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// A data root's format ownership as `axocoatl doctor` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormatOwnershipReport {
+    /// No ownership boundary yet: the daemon records one when it first starts.
+    Unrecorded,
+    /// A 1.0 root, owned through its lock file alone.
+    Legacy,
+    /// A conversion that was prepared and interrupted; the next start resumes
+    /// it, after re-recording a copied or moved root.
+    Prepared {
+        relocation: Option<RecordedRelocation>,
+        interrupted_rebind: bool,
+    },
+    /// The installed boundary. With a relocation, the next start records the
+    /// root's new location.
+    Installed {
+        relocation: Option<RecordedRelocation>,
+        interrupted_rebind: bool,
+    },
+    /// The daemon refuses to start on this root, for this reason.
+    Refused(String),
+}
+
+/// What daemon admission would do with the root at `path`, read without
+/// taking any lease and without changing anything, so a running daemon is
+/// unaffected. The checks are those of [`DataRootFormatOwnership::acquire_for_root`]
+/// on the boundary's shape and manifest; a busy lease is not reported.
+pub fn inspect_format_ownership(path: impl AsRef<Path>) -> FormatOwnershipReport {
+    inspect(path.as_ref()).unwrap_or_else(|error| FormatOwnershipReport::Refused(error.to_string()))
+}
+
+fn inspect(path: &Path) -> Result<FormatOwnershipReport, OwnershipError> {
+    // The same normalized walk the lease takes, so the same path digest.
+    let root = SecureDir::open_existing_all(path)?;
+    #[cfg(unix)]
+    root.require_owner_and_private_writes(effective_uid())?;
+    let (directory, lock) = match (
+        leaf(&root, LEGACY_LOCK_NAME)?,
+        leaf(&root, RETIRED_LOCK_NAME)?,
+    ) {
+        (None, None) => return Ok(FormatOwnershipReport::Unrecorded),
+        (Some(SecureLeaf::Regular { .. }), None) => return Ok(FormatOwnershipReport::Legacy),
+        (Some(SecureLeaf::Regular { .. }), Some(SecureLeaf::Directory)) => {
+            (RETIRED_LOCK_NAME, LEGACY_LOCK_NAME)
+        }
+        (Some(SecureLeaf::Directory), Some(SecureLeaf::Regular { .. })) => {
+            (LEGACY_LOCK_NAME, RETIRED_LOCK_NAME)
+        }
+        _ => return invalid("expected a complete legacy/prepared or installed boundary"),
+    };
+    let manifest = read_manifest(&root, directory)?;
+    let current = CurrentIdentity {
+        root_authority: root_authority(&root),
+        root_inode: root.inode_identity()?,
+        lock_inode: file_identity(&root.open_file_limited(lock, MAX_MANIFEST_BYTES)?)?,
+    };
+    let relocation = match manifest.classify(&current) {
+        Admission::Exact => None,
+        Admission::Relocated(relocation) => Some(relocation),
+        Admission::Refused => return invalid(REFUSED_MANIFEST),
+    };
+    let interrupted_rebind = !matches!(
+        root.read_leaf_limited(REBIND_MANIFEST_NAME, MAX_MANIFEST_BYTES),
+        Ok(None)
+    );
+    Ok(if directory == LEGACY_LOCK_NAME {
+        FormatOwnershipReport::Installed {
+            relocation,
+            interrupted_rebind,
+        }
+    } else {
+        FormatOwnershipReport::Prepared {
+            relocation,
+            interrupted_rebind,
+        }
+    })
+}
+
 impl RootLease {
     fn acquire(
         path: &Path,
@@ -490,7 +763,15 @@ impl FormatManifest {
         })
     }
 
+    /// Exactly this held root's manifest: no re-recording here.
     fn validate(&self, lease: &RootLease) -> Result<(), OwnershipError> {
+        match self.classify(&CurrentIdentity::of_lease(lease)?) {
+            Admission::Exact => Ok(()),
+            Admission::Relocated(_) | Admission::Refused => invalid(REFUSED_MANIFEST),
+        }
+    }
+
+    fn classify(&self, current: &CurrentIdentity) -> Admission {
         if self.format != FORMAT
             || self.schema_version != SCHEMA_VERSION
             || self.migration_version != MIGRATION_VERSION
@@ -499,13 +780,45 @@ impl FormatManifest {
                 .ok()
                 .filter(|id| !id.is_nil() && id.to_string() == self.ownership_id)
                 .is_none()
-            || self.root_authority_sha256 != root_authority(&lease.root)
-            || self.root_inode != lease.root.inode_identity()?
-            || self.legacy_lock_inode != file_identity(&lease.legacy_file)?
         {
-            return invalid("unsupported, incomplete, or differently owned manifest");
+            return Admission::Refused;
         }
-        Ok(())
+        let relocation = RecordedRelocation {
+            path_changed: self.root_authority_sha256 != current.root_authority,
+            directory_changed: self.root_inode != current.root_inode,
+            lock_file_changed: self.legacy_lock_inode != current.lock_inode,
+        };
+        if !relocation.path_changed
+            && !relocation.directory_changed
+            && !relocation.lock_file_changed
+        {
+            return Admission::Exact;
+        }
+        if !self.has_recordable_identities() {
+            return Admission::Refused;
+        }
+        Admission::Relocated(relocation)
+    }
+
+    /// Whether the recorded identities have the shapes this module writes: a
+    /// lowercase SHA-256 and two `device:inode` pairs. Anything else is a
+    /// damaged manifest, not one written for another location.
+    fn has_recordable_identities(&self) -> bool {
+        let digest = self.root_authority_sha256.len() == 64
+            && self
+                .root_authority_sha256
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        let number = |part: &str| {
+            !part.is_empty() && part.len() <= 20 && part.bytes().all(|byte| byte.is_ascii_digit())
+        };
+        // A signed `dev_t` (macOS) can print with a sign.
+        let inode = |value: &str| {
+            value.split_once(':').is_some_and(|(device, inode)| {
+                number(device.strip_prefix('-').unwrap_or(device)) && number(inode)
+            })
+        };
+        digest && inode(&self.root_inode) && inode(&self.legacy_lock_inode)
     }
 }
 
