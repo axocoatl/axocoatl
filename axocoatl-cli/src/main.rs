@@ -1196,6 +1196,39 @@ async fn cmd_init(name: Option<String>) {
     println!("Tip: `axocoatl onboard` configures the installed product for this user instead.");
 }
 
+/// `doctor`'s check of each configured Ollama model that is pulled, read
+/// from `POST /api/show` the way native admission reads it: a local GGUF
+/// model that completes text and, when an Agent that uses it lists tools,
+/// calls tools. Only for a loopback server: native Sessions use no other.
+async fn doctor_ollama_model_findings(
+    config: &axocoatl_config::AxocoatlConfig,
+    ollama: &axocoatl_config::OllamaCredentials,
+    installed: &[ollama_setup::InstalledModel],
+) -> Vec<ollama_setup::Finding> {
+    if axocoatl_llm_ollama::validate_native_ollama_endpoint(&ollama.base_url).is_err() {
+        return Vec::new();
+    }
+    let mut needs_tools: std::collections::BTreeMap<String, bool> = Default::default();
+    for agent in config.agents.iter().filter(|a| a.provider == "ollama") {
+        let model = if agent.model.is_empty() {
+            ollama
+                .model
+                .clone()
+                .unwrap_or_else(|| "llama3.2".to_string())
+        } else {
+            agent.model.clone()
+        };
+        *needs_tools.entry(model).or_default() |= !agent.tools.is_empty();
+    }
+    let mut findings = Vec::new();
+    for (model, tools) in needs_tools {
+        if ollama_setup::is_installed(&model, installed) {
+            findings.push(ollama_setup::model_finding(&ollama.base_url, &model, tools).await);
+        }
+    }
+    findings
+}
+
 /// Run environment health checks. Returns true if all *hard* checks passed.
 async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
     let mut hard_ok = true;
@@ -1255,7 +1288,8 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
                 Ok(models) => {
                     pass(&format!("Ollama reachable at {}", ollama.base_url));
                     // Native Sessions refuse a server that is not on loopback,
-                    // not the audited version, or has its cloud features on.
+                    // whose version the version policy refuses, or that has
+                    // its cloud features on.
                     let check = ollama_setup::native_check(&ollama.base_url).await;
                     for finding in
                         ollama_setup::native_findings(&ollama.base_url, &check, DOCTOR_OTHER_OLLAMA)
@@ -1283,9 +1317,9 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
                             }
                         })
                         .collect();
-                    for m in wanted {
+                    for m in &wanted {
                         let have = models.iter().any(|installed| {
-                            installed.name == m || installed.name.starts_with(&format!("{m}:"))
+                            installed.name == *m || installed.name.starts_with(&format!("{m}:"))
                         });
                         if have {
                             pass(&format!("Model '{m}' is pulled"));
@@ -1295,6 +1329,15 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
                                 &format!("Model '{m}' not pulled"),
                                 &format!("Run: ollama pull {m}"),
                             );
+                        }
+                    }
+                    // 5. Can native Sessions run each pulled model?
+                    for finding in doctor_ollama_model_findings(config, ollama, &models).await {
+                        if finding.ok {
+                            pass(&finding.label);
+                        } else {
+                            hard_ok = false;
+                            fail(&finding.label, &hint_lines(&finding.hint));
                         }
                     }
                 }
@@ -2096,6 +2139,9 @@ async fn onboard_ollama() -> OnboardingSetup {
     };
 
     let candidates = ollama_setup::candidates(&models);
+    for (name, why) in ollama_setup::refused_models(&models) {
+        println!("  Not offered: {name}: {why}.");
+    }
     let suggested = ollama_setup::suggest_team_models(&models);
     match &suggested {
         Some(team) => println!(
@@ -2103,12 +2149,12 @@ async fn onboard_ollama() -> OnboardingSetup {
             team.lead, team.reviewer
         ),
         None => println!(
-            "No local model is installed on this server. {} is a coding model suited to Lead; it is a large download.",
-            ollama_setup::RECOMMENDED_LEAD_MODEL
+            "No suitable local model is installed on this server. Suggested: Lead {} (a coding model, 19 GB) and Reviewer {} (a different model, so a second model checks Lead's work; 14 GB). Both fit a 48 GB Mac, one at a time; they are large downloads.",
+            ollama_setup::RECOMMENDED_LEAD_MODEL,
+            ollama_setup::RECOMMENDED_REVIEWER_MODEL
         ),
     }
-    let suggested = suggested
-        .unwrap_or_else(|| ollama_setup::TeamModels::same(ollama_setup::RECOMMENDED_LEAD_MODEL));
+    let suggested = suggested.unwrap_or_else(ollama_setup::TeamModels::recommended);
     let lead = choose_ollama_model(
         "Model for Lead (writes the change; Scout and the chat Assistant use it too)",
         &candidates,
@@ -2146,12 +2192,25 @@ async fn onboard_ollama() -> OnboardingSetup {
                 .arg(model)
                 .env("OLLAMA_HOST", &base_url)
                 .status();
+            print_pulled_model_check(&base_url, model).await;
         }
     }
 
     OnboardingSetup::Ollama {
         base_url,
         models: ollama_setup::TeamModels { lead, reviewer },
+    }
+}
+
+/// After a pull, read the model again: on Apple silicon Ollama pulls the MLX
+/// variant of some models, which native Sessions refuse. Say so and how to
+/// pull the GGUF variant.
+async fn print_pulled_model_check(base_url: &str, model: &str) {
+    let finding = ollama_setup::model_finding(base_url, model, false).await;
+    if finding.ok {
+        println!("  ✓ {model} is a local GGUF model native Sessions can run");
+    } else {
+        print_findings(&[finding]);
     }
 }
 
@@ -4482,10 +4541,7 @@ mod tests {
     fn ollama_onboarding_writes_the_chosen_server_and_a_separate_reviewer_model() {
         let setup = OnboardingSetup::Ollama {
             base_url: "http://127.0.0.1:11436".to_string(),
-            models: ollama_setup::TeamModels {
-                lead: "qwen3-coder:30b".to_string(),
-                reviewer: "gpt-oss:120b".to_string(),
-            },
+            models: ollama_setup::TeamModels::recommended(),
         };
         let (yaml, missing_variable) = setup.configuration();
         assert_eq!(missing_variable, None);
@@ -4496,7 +4552,7 @@ mod tests {
             &config,
             "ollama",
             "qwen3-coder:30b",
-            "gpt-oss:120b",
+            "gpt-oss:20b",
             Some(4096),
         );
         assert_eq!(

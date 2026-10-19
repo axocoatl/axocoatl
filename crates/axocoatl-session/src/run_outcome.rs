@@ -7,6 +7,8 @@
 //! failure classes and not-covered entries; e2e: check reports; keep: keep
 //! results) but change their shape only through `core`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// `schema` of a serialized [`RunOutcome`].
@@ -656,6 +658,11 @@ pub struct RunOutcome {
     pub usage: RunUsage,
     #[serde(default)]
     pub network: NetworkSummary,
+    /// The Ollama server versions that served the run's native Ollama
+    /// calls, by model, as checked right before each inference request.
+    /// Absent when no native Ollama call ran.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ollama_versions: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep: Option<KeepResult>,
     /// The infrastructure error that ended the run, when the verdict is
@@ -920,6 +927,7 @@ mod tests {
             warnings: Vec::new(),
             usage: RunUsage::default(),
             network: NetworkSummary::default(),
+            ollama_versions: Default::default(),
             keep: None,
             error: None,
         }

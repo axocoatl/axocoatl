@@ -105,7 +105,7 @@ impl Respond for NativeReply {
 async fn server(tool: bool, json: bool) -> MockServer {
     let server = MockServer::start().await;
     for (route, body) in [
-        ("/api/version", serde_json::json!({"version":"0.20.6"})),
+        ("/api/version", serde_json::json!({"version": axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION})),
         (
             "/api/status",
             serde_json::json!({"cloud":{"disabled":true,"source":"env"}}),
@@ -305,10 +305,38 @@ async fn native_ollama_structured_usage_stays_incomplete_in_accepted_checkpoint(
     );
 }
 
+/// The provider a Session gets: the model's context observed (a load with
+/// `shift:false`, then the contract probes on this server and model), then
+/// connected from that observation.
+async fn live_observed_provider(
+    endpoint: &str,
+    model: &str,
+    output: usize,
+) -> (
+    NativeOllamaProvider,
+    axocoatl_llm_ollama::NativeOllamaContextObservation,
+) {
+    let observation = axocoatl_llm_ollama::observe_native_ollama_context(endpoint, model)
+        .await
+        .unwrap();
+    assert!(
+        axocoatl_llm_ollama::ollama_version_accepted(&observation.server_version),
+        "{observation:?}"
+    );
+    let provider =
+        NativeOllamaProvider::connect_observed(observation.clone(), output, 1024 * 1024)
+            .await
+            .unwrap();
+    (provider, observation)
+}
+
 /// Explicit local integration only: never starts a server or downloads a model.
-/// Set AXOCOATL_TEST_OLLAMA_URL to a local-only 0.20.6 server and select an
-/// installed model with AXOCOATL_TEST_OLLAMA_MODEL. JSON exercises the native
-/// structured-output path, whose aggregate token measurement remains incomplete.
+/// Set AXOCOATL_TEST_OLLAMA_URL to a local-only, cloud-disabled Ollama
+/// (0.40.6 or a later 0.40 release) and select an installed model with
+/// AXOCOATL_TEST_OLLAMA_MODEL. The provider is the one a Session gets: the
+/// observed context, after the contract probes. JSON exercises the native
+/// structured-output path, whose aggregate token measurement remains
+/// incomplete; AXOCOATL_TEST_OLLAMA_TOOLS=1 a tool round-trip.
 #[tokio::test]
 #[ignore = "requires an explicitly configured local-only Ollama server and installed model"]
 async fn native_ollama_real_model_through_durable_controller() {
@@ -317,15 +345,9 @@ async fn native_ollama_real_model_through_durable_controller() {
     let json = std::env::var("AXOCOATL_TEST_OLLAMA_JSON").as_deref() == Ok("1");
     let use_tool = std::env::var("AXOCOATL_TEST_OLLAMA_TOOLS").as_deref() == Ok("1");
     assert!(!(json && use_tool), "select one live proof case");
-    let context = 4096;
     let output = 1024;
-    let provider = NativeOllamaProvider::connect(NativeOllamaConfig {
-        context_tokens: context,
-        max_output_tokens: output,
-        ..native_config(endpoint, &model)
-    })
-    .await
-    .unwrap();
+    let (provider, observation) = live_observed_provider(&endpoint, &model, output).await;
+    let context = observation.context_tokens;
     let input = if use_tool {
         "Call the effect tool exactly once with {\"value\":\"actual\"}. After receiving its result, reply with the single word ready."
     } else if json {
@@ -397,10 +419,65 @@ async fn native_ollama_real_model_through_durable_controller() {
         "{}",
         serde_json::json!({
             "model":model,"json":json,"tools":use_tool,"reserved_tokens":bound,
+            "ollama_version":observation.server_version,"observed_context":context,
+            "model_digest":observation.model_digest,
             "observed_usage":usage.tokens,"provider_api_cost_microunits":usage.cost_microunits,
             "provider_api_cost_known":usage.cost_known,"calls":usage.calls,
             "accepted":settled.accepted,"checkpoint_reopened":true,"answer":answer,
             "tool_invocations":tool.count.load(Ordering::SeqCst),
+        })
+    );
+}
+
+/// Explicit local integration only, like the test above: the guarantees the
+/// contract probes check, through the provider a Session gets. A prompt
+/// longer than the observed context is refused before any generation, and a
+/// call stops at its output limit.
+#[tokio::test]
+#[ignore = "requires an explicitly configured local-only Ollama server and installed model"]
+async fn native_ollama_real_model_refuses_over_long_input_and_stops_at_its_limit() {
+    use axocoatl_llm::LlmProvider;
+    let endpoint = std::env::var("AXOCOATL_TEST_OLLAMA_URL").expect("explicit local test endpoint");
+    let model = std::env::var("AXOCOATL_TEST_OLLAMA_MODEL").expect("explicit installed test model");
+    let limit = 16;
+    let (provider, observation) = live_observed_provider(&endpoint, &model, limit).await;
+    let context = observation.context_tokens;
+
+    let over_long = axocoatl_llm::ChatRequest::simple("x ".repeat(context * 2));
+    let refused = provider.chat_with_accounting(over_long).await;
+    let status = match &refused.response {
+        Err(axocoatl_llm::ProviderError::ApiError { status, .. }) => *status,
+        other => panic!("an over-long prompt must be refused, got {other:?}"),
+    };
+    assert!((400..500).contains(&status), "{status}");
+    assert_eq!(refused.usage.usage.output_tokens, 0);
+
+    let mut long_answer = axocoatl_llm::ChatRequest::simple(
+        "Count from 1 to 300, one number per line, and nothing else.",
+    );
+    long_answer.max_tokens = Some(limit);
+    let stopped = provider.chat_with_accounting(long_answer).await;
+    // A thinking model may spend the whole limit on reasoning: the call then
+    // ends without final text, refused, but its usage is still observed.
+    assert!(
+        stopped.usage.usage.output_tokens <= limit,
+        "{:?}",
+        stopped.usage
+    );
+    assert!(stopped.usage.usage.output_tokens > 0, "{:?}", stopped.usage);
+    if let Ok(response) = &stopped.response {
+        assert_eq!(response.finish_reason, axocoatl_llm::FinishReason::MaxTokens);
+    }
+    println!(
+        "{}",
+        serde_json::json!({
+            "model":model,"ollama_version":observation.server_version,
+            "observed_context":context,"over_long_status":status,
+            "over_long_output_tokens":refused.usage.usage.output_tokens,
+            "limit":limit,"stopped_output_tokens":stopped.usage.usage.output_tokens,
+            "stopped_input_tokens":stopped.usage.usage.input_tokens,
+            "stopped":stopped.response.as_ref().map(|r| format!("{:?}", r.finish_reason))
+                .unwrap_or_else(|error| error.to_string()),
         })
     );
 }

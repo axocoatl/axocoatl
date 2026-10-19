@@ -37,7 +37,7 @@ fn show() -> Value {
 async fn valid_profile(server: &MockServer) {
     profile(
         server,
-        json!({"version":"0.20.6"}),
+        json!({"version":AUDITED_OLLAMA_VERSION}),
         json!({"cloud":{"disabled":true,"source":"env"}}),
         show(),
     )
@@ -153,7 +153,7 @@ async fn native_image_wire_uses_verified_vision_and_the_same_full_context_reserv
         .push(json!("vision"));
     profile(
         &server,
-        json!({"version":VERSION}),
+        json!({"version":AUDITED_OLLAMA_VERSION}),
         json!({"cloud":{"disabled":true}}),
         vision,
     )
@@ -213,7 +213,7 @@ async fn native_images_refuse_missing_or_changed_vision_and_external_or_invalid_
         .push(json!("vision"));
     profile(
         &server,
-        json!({"version":VERSION}),
+        json!({"version":AUDITED_OLLAMA_VERSION}),
         json!({"cloud":{"disabled":true}}),
         vision,
     )
@@ -248,51 +248,100 @@ async fn native_images_refuse_missing_or_changed_vision_and_external_or_invalid_
 
 #[tokio::test]
 async fn profile_refuses_unknown_version_missing_status_cloud_and_unsupported_models() {
-    let cases = vec![
-        (
-            json!({"version":"0.20.7"}),
+    let audited = json!({"version":AUDITED_OLLAMA_VERSION});
+    let mut cases = Vec::new();
+    for (version, reason) in [
+        ("0.20.6", "no longer supported"),
+        ("0.40.5", "older than native Sessions support"),
+        ("0.41.0", "newer than this Axocoatl supports"),
+        ("0.40.7-rc0", "pre-release"),
+        ("0.0.0", "development build"),
+    ] {
+        cases.push((
+            json!({"version":version}),
             json!({"cloud":{"disabled":true}}),
             show(),
-        ),
-        (json!({"version":"0.20.6"}), json!({}), show()),
+            reason,
+        ));
+    }
+    cases.extend([
+        (audited.clone(), json!({}), show(), "cloud-disabled"),
         (
-            json!({"version":"0.20.6"}),
+            audited.clone(),
             json!({"cloud":{"disabled":false}}),
             show(),
+            "cloud-disabled",
         ),
         (
-            json!({"version":"0.20.6"}),
+            audited.clone(),
             json!({"cloud":{"disabled":"true"}}),
             show(),
+            "cloud-disabled",
         ),
         (
-            json!({"version":"0.20.6"}),
+            audited.clone(),
             json!({"cloud":{"disabled":true}}),
             json!({"details":{"format":"safetensors"},"capabilities":["completion"]}),
+            "a safetensors model",
         ),
         (
-            json!({"version":"0.20.6"}),
+            audited.clone(),
+            json!({"cloud":{"disabled":true}}),
+            json!({"details":{"format":"gguf","runner":"mlx"},"capabilities":["completion"]}),
+            "MLX runner",
+        ),
+        (
+            audited.clone(),
             json!({"cloud":{"disabled":true}}),
             json!({"details":{"format":"gguf"},"capabilities":["embedding"]}),
+            "does not report text completion",
         ),
         (
-            json!({"version":"0.20.6"}),
+            audited.clone(),
             json!({"cloud":{"disabled":true}}),
             json!({"details":{"format":"gguf"},"capabilities":["completion"],"remote_host":"https://ollama.com"}),
+            "cloud model",
         ),
-    ];
-    for (version, status, show) in cases {
+    ]);
+    for (version, status, show, reason) in cases {
         let server = MockServer::start().await;
-        profile(&server, version, status, show).await;
-        assert!(NativeOllamaProvider::connect(config(&server))
+        profile(&server, version.clone(), status, show).await;
+        let refusal = NativeOllamaProvider::connect(config(&server))
             .await
-            .is_err());
+            .err()
+            .unwrap_or_else(|| panic!("{version} must be refused for {reason}"))
+            .to_string();
+        assert!(refusal.contains(reason), "{reason}: {refusal}");
         assert!(!server
             .received_requests()
             .await
             .unwrap()
             .iter()
             .any(|r| r.url.path() == "/api/chat"));
+    }
+}
+
+/// Both runners that report a GGUF model are accepted: Ollama 0.40.6 runs
+/// every GGUF model in llama-server, and a legacy manifest says `ggml`.
+#[tokio::test]
+async fn gguf_models_of_either_manifest_runner_are_accepted() {
+    for runner in [json!("ggml"), json!("llamacpp"), Value::Null] {
+        let server = MockServer::start().await;
+        let mut shown = show();
+        if !runner.is_null() {
+            shown["details"]["runner"] = runner.clone();
+        }
+        profile(
+            &server,
+            json!({"version":"0.40.7"}),
+            json!({"cloud":{"disabled":true}}),
+            shown,
+        )
+        .await;
+        assert!(
+            NativeOllamaProvider::connect(config(&server)).await.is_ok(),
+            "{runner}"
+        );
     }
 }
 
@@ -306,7 +355,7 @@ async fn profile_revalidation_refuses_changed_server_before_inference() {
     server.reset().await;
     profile(
         &server,
-        json!({"version":"0.20.6"}),
+        json!({"version":AUDITED_OLLAMA_VERSION}),
         json!({"cloud":{"disabled":false}}),
         show(),
     )

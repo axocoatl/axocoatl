@@ -7,6 +7,7 @@ import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
 import { REPOSITORY_ROOT, launchTestDaemon, newAuthorizedContext, resolveChromiumExecutable } from '../support/daemon.mjs';
+import { answerContractProbe, OLLAMA_VERSION } from '../support/ollama.mjs';
 
 // A stub of the audited local Ollama server: every chat answers "done".
 const MODEL = 'browser-test-model:latest';
@@ -55,6 +56,7 @@ function cli(args, env = {}) {
 before(async () => {
   modelServer = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
+    if (answerContractProbe(req.url, raw ? JSON.parse(raw) : null, res)) return;
     if (req.url === '/api/chat') {
       chats.push(raw ? JSON.parse(raw) : null);
       const reply = { model: MODEL, message: { role: 'assistant', content: 'done' }, done: true, done_reason: 'stop', prompt_eval_count: 12, eval_count: 3 };
@@ -63,10 +65,10 @@ before(async () => {
       return;
     }
     const responses = {
-      '/api/version': { version: '0.20.6' }, '/api/status': { cloud: { disabled: true } },
+      '/api/version': { version: OLLAMA_VERSION }, '/api/status': { cloud: { disabled: true } },
       '/api/show': { details: { format: 'gguf' }, capabilities: ['completion', 'tools'], model_info: { 'general.context_length': 32768 } },
       '/api/tags': { models: [{ name: MODEL, model: MODEL, digest: DIGEST }] },
-      '/api/ps': { models: [{ name: MODEL, model: MODEL, digest: DIGEST, details: { format: 'gguf' }, context_length: 32768 }] },
+      '/api/ps': { models: [{ name: MODEL, model: MODEL, digest: DIGEST, details: { format: 'gguf' }, context_length: 32768, runner: 'llamacpp' }] },
       '/api/generate': { model: MODEL, created_at: '2026-10-06T00:00:00Z', response: '', done: true, done_reason: 'load' },
     };
     res.writeHead(responses[req.url] ? 200 : 404, { 'content-type': 'application/json' });

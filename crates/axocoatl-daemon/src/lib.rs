@@ -18,6 +18,8 @@ pub mod loadout;
 #[cfg(all(test, unix))]
 mod lock_inheritance_tests;
 pub mod mcp_approval_hook;
+#[cfg(test)]
+pub(crate) mod ollama_contract_test_support;
 pub mod proactive;
 pub mod provider_retry;
 pub mod receipt_key;

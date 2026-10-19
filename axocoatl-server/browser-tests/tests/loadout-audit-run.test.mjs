@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { REPOSITORY_ROOT, launchTestDaemon } from '../support/daemon.mjs';
+import { answerContractProbe, OLLAMA_VERSION } from '../support/ollama.mjs';
 
 // The opt-in audit loadout end to end against a stub of the audited local
 // Ollama server: the planner splits the scope into two areas, one read-only
@@ -73,6 +74,7 @@ function answer(body) {
 before(async () => {
   modelServer = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
+    if (answerContractProbe(req.url, raw ? JSON.parse(raw) : null, res)) return;
     if (req.url === '/api/chat') {
       const body = raw ? JSON.parse(raw) : null;
       chats.push(body);
@@ -82,10 +84,10 @@ before(async () => {
       return;
     }
     const responses = {
-      '/api/version': { version: '0.20.6' }, '/api/status': { cloud: { disabled: true } },
+      '/api/version': { version: OLLAMA_VERSION }, '/api/status': { cloud: { disabled: true } },
       '/api/show': { details: { format: 'gguf' }, capabilities: ['completion', 'tools'], model_info: { 'general.context_length': 32768 } },
       '/api/tags': { models: [{ name: MODEL, model: MODEL, digest: DIGEST }] },
-      '/api/ps': { models: [{ name: MODEL, model: MODEL, digest: DIGEST, details: { format: 'gguf' }, context_length: 32768 }] },
+      '/api/ps': { models: [{ name: MODEL, model: MODEL, digest: DIGEST, details: { format: 'gguf' }, context_length: 32768, runner: 'llamacpp' }] },
       '/api/generate': { model: MODEL, created_at: '2026-10-06T00:00:00Z', response: '', done: true, done_reason: 'load' },
     };
     res.writeHead(responses[req.url] ? 200 : 404, { 'content-type': 'application/json' });

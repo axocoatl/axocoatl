@@ -76,6 +76,14 @@ async fn origin_url(repo: &std::path::Path) -> Option<String> {
     crate::git_host::normalize_to_https(&url)
 }
 
+/// The `program_version` of a native Agent on `model` that Ollama served:
+/// `ollama` and the versions the run's Outcome records for the model, or
+/// `None` when no call of the model ran.
+fn ollama_program_version(outcome: &RunOutcome, model: &str) -> Option<String> {
+    let versions = outcome.ollama_versions.get(model)?;
+    (!versions.is_empty()).then(|| format!("ollama {}", versions.join(", ")))
+}
+
 /// What the run status and the UI show of a receipt.
 pub(crate) fn receipt_view(bytes: &[u8]) -> Option<RunReceiptView> {
     let opened: OpenedReceipt = receipt::open_receipt(bytes).ok()?;
@@ -219,7 +227,13 @@ impl AxocoatlDaemon {
                     role: serde_name(&agent.role),
                     runtime: agent.runtime.id().to_string(),
                     program_version: match agent.runtime {
-                        AgentRuntime::Native => None,
+                        // The Ollama that served the Agent's model, as the
+                        // run's Outcome records it (`ollama 0.40.6`). An
+                        // existing field, so a 1.4.0 verifier reads it.
+                        AgentRuntime::Native => identity
+                            .as_ref()
+                            .filter(|identity| identity.provider == "ollama")
+                            .and_then(|identity| ollama_program_version(outcome, &identity.model)),
                         AgentRuntime::ClaudeCode => Some(
                             crate::external_agent::claude_code::CLAUDE_CODE_VERSION.to_string(),
                         ),

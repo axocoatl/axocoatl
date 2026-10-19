@@ -309,7 +309,14 @@ impl NativeRuntimeConfiguration {
         credentials: &NativeProviderCredentials,
     ) -> Result<Arc<dyn LlmProvider>> {
         match self {
-            Self::Ollama(runtime) => runtime.verify(credentials.ollama_base_url.as_deref()).await,
+            Self::Ollama(runtime) => {
+                runtime
+                    .verify(
+                        credentials.ollama_base_url.as_deref(),
+                        credentials.ollama_served.as_deref(),
+                    )
+                    .await
+            }
             Self::OpenRouter(runtime) => {
                 let key = credentials.openrouter_key()?;
                 let provider = with_provider_retry(|| {

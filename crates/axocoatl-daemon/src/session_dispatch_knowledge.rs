@@ -86,6 +86,17 @@ impl SessionDispatchController {
         state.reconcile_knowledge()
     }
 
+    /// The Session this controller executes for.
+    pub(crate) fn owner_session_id(&self) -> Result<String> {
+        Ok(self
+            .lock()?
+            .canonical
+            .owner()
+            .session_id
+            .as_str()
+            .to_owned())
+    }
+
     pub(crate) fn knowledge_workspace_id(&self) -> Result<String> {
         Ok(self
             .lock()?

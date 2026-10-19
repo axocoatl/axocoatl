@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { after, before, test } from 'node:test';
 import { launchTestDaemon } from '../support/daemon.mjs';
+import { answerContractProbe, isContractProbe, OLLAMA_VERSION } from '../support/ollama.mjs';
 
 let runtime, modelServer, unavailable=false;
 const observed=[];
@@ -10,11 +11,12 @@ before(async()=>{
   modelServer=createServer(async(req,res)=>{
     let raw='';for await(const chunk of req)raw+=chunk;observed.push({path:req.url,body:raw?JSON.parse(raw):null});
     if(unavailable){res.writeHead(503);res.end('{}');return;}
+    if(answerContractProbe(req.url,raw?JSON.parse(raw):null,res))return;
     const responses={
-      '/api/version':{version:'0.20.6'},'/api/status':{cloud:{disabled:true}},
+      '/api/version':{version:OLLAMA_VERSION},'/api/status':{cloud:{disabled:true}},
       '/api/show':{details:{format:'gguf'},capabilities:['completion']},
       '/api/tags':{models:[{name:model,model,digest}]},
-      '/api/ps':{models:[{name:model,model,digest,details:{format:'gguf'},context_length:2048}]},
+      '/api/ps':{models:[{name:model,model,digest,details:{format:'gguf'},context_length:2048,runner:'llamacpp'}]},
       '/api/generate':{model,created_at:'2026-09-15T00:00:00Z',response:'',done:true,done_reason:'load'},
     };
     res.writeHead(responses[req.url]?200:404,{'content-type':'application/json'});res.end(JSON.stringify(responses[req.url]||{}));
@@ -42,7 +44,7 @@ test('actual Session team routes authenticate whole-graph Apply, retain exact re
   const conflict=await call(id,'/apply',{...apply,edit:{...edit,slots:edit.slots.map(slot=>({...slot,instructions:'Different instructions under the same command'}))}});assert.equal(conflict.status,409);assert.equal(observed.length,before);
   const stale=await call(id,'/preview',{...edit,command_id:'stale-team-edit'});assert.equal(stale.status,409);assert.equal(observed.length,before);
   assert.equal((await call(id,'/cancel',{command_id:'cancel-team-draft'})).status,200);assert.deepEqual((await call(id)).value,saved.value,'Cancel cannot change saved team or grant');
-  assert.equal(observed.filter(request=>request.path==='/api/chat').length,0,'Preview and Apply never perform inference');
+  assert.equal(observed.filter(request=>request.path==='/api/chat'&&!isContractProbe(request.body)).length,0,'Preview and Apply never perform inference (the contract probes are checks)');
   for(const request of observed.filter(request=>request.path==='/api/generate'))assert.equal(request.body.prompt??'','','native preparation may only load/observe context');
 });
 

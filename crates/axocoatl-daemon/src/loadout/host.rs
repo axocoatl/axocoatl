@@ -3,6 +3,7 @@
 //! method named in its doc comment (whose file belongs to the workstream
 //! named there).
 
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -144,6 +145,13 @@ pub trait RunHost: Send + Sync {
     /// network record (core). A host without one reports nothing.
     async fn network_summary(&self, _session_id: &str) -> Result<NetworkSummary, RunError> {
         Ok(NetworkSummary::default())
+    }
+
+    /// The Ollama server versions that served the Session's native Ollama
+    /// calls, by model. Daemon: what each native provider recorded right
+    /// before each inference request. A host without native Ollama has none.
+    async fn ollama_versions(&self, _session_id: &str) -> BTreeMap<String, Vec<String>> {
+        BTreeMap::new()
     }
 
     /// Whether a person asked to stop the run (`POST /api/runs/{id}/stop`,

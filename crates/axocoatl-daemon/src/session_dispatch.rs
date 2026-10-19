@@ -135,6 +135,7 @@ pub(crate) use external_port::ExternalSettings;
 pub(crate) use external_port::RouteRequestSource;
 pub(crate) use native::{
     CapturedNativeDefinition, NativeDefinitionPreparation, NativeProviderCredentials,
+    OllamaServedLog,
 };
 #[path = "session_dispatch_native_turn.rs"]
 mod native_turn;

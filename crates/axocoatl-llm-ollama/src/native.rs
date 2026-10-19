@@ -1,16 +1,20 @@
 //! Explicit local Ollama execution under the shared provider/controller contract.
 //!
-//! The audited 0.20.6 GGUF runners reject oversized inputs with `truncate:false`
-//! and stop at positive `num_predict`. Thinking+structured output can run twice,
-//! so format requests reserve both full passes. Reported final metrics cover
-//! only the last pass and are consequently lower bounds for format requests.
+//! The audited Ollama 0.40.6 runs every GGUF model in llama.cpp's
+//! `llama-server`, which rejects oversized inputs with `truncate:false` and
+//! stops at a positive `num_predict`; the contract probes check both on the
+//! person's own server and model before a Team uses it. Thinking+structured
+//! output runs in one pass on 0.40, but format requests still reserve two full
+//! passes (a valid, loose bound). Reported final metrics cover only the last
+//! pass and are consequently lower bounds for format requests.
 //! This is an operator-configured server capability, not model-weight attestation.
 //! The existing OpenAI-compatible provider is intentionally unchanged.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     io::Write,
     pin::Pin,
+    sync::Arc,
 };
 
 use axocoatl_core::{
@@ -34,17 +38,27 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio_stream::{Stream, StreamExt};
 
+mod contract_probe;
+/// The stop probe's prompt, for test servers that stand in for Ollama and
+/// answer the contract probes. The over-long probe's message is `"x "`
+/// repeated.
+pub use contract_probe::STOP_PROBE_PROMPT as CONTRACT_STOP_PROBE_PROMPT;
 mod observed_context;
 mod server_check;
-pub use observed_context::{observe_native_ollama_context, NativeOllamaContextObservation};
+mod version_policy;
+pub use observed_context::{
+    observe_native_ollama_context, NativeOllamaContextObservation, OBSERVATION_SCHEMA_VERSION,
+};
 use server_check::reports_cloud_disabled;
 pub use server_check::{
-    check_native_ollama_server, validate_native_ollama_endpoint, NativeOllamaServerCheck,
-    OllamaCloudMode, NATIVE_OLLAMA_SERVER_VERSION,
+    check_native_ollama_server, show_native_ollama_model, validate_native_ollama_endpoint,
+    NativeOllamaServerCheck, OllamaCloudMode,
+};
+pub use version_policy::{
+    ollama_version_accepted, ollama_version_refusal, AUDITED_OLLAMA_VERSION, DENIED_OLLAMA_VERSIONS,
 };
 
 const PROVIDER: &str = "ollama";
-const VERSION: &str = "0.20.6";
 const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 // Reserved even when normal payload space is exhausted: one newly observed
@@ -73,6 +87,134 @@ pub struct NativeOllamaProvider {
     thinking_supported: bool,
     vision_supported: bool,
     observed_context: Option<NativeOllamaContextObservation>,
+    served: Option<Arc<OllamaServedVersions>>,
+}
+
+/// The Ollama versions that served a model's inference requests, as checked
+/// right before each request was sent. A run's record and receipt name them.
+#[derive(Debug, Default)]
+pub struct OllamaServedVersions(std::sync::Mutex<BTreeSet<String>>);
+
+impl OllamaServedVersions {
+    fn record(&self, version: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(version.to_owned());
+    }
+
+    /// The versions that served, in order.
+    pub fn versions(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .iter()
+            .cloned()
+            .collect()
+    }
+}
+
+/// What `GET /api/show` says about a model native execution may run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShownModel {
+    /// The model reports tool calling.
+    pub tools: bool,
+    /// The model reports thinking.
+    pub thinking: bool,
+    /// The model reports image input.
+    pub vision: bool,
+}
+
+/// A model name as a refusal shows it.
+fn shown_name(model: &str) -> String {
+    model
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(120)
+        .collect()
+}
+
+/// Refuse a model native execution cannot bound: a cloud model, a model that
+/// is not GGUF or that Ollama runs with MLX (MLX holds the model's own maximum
+/// context, not `num_ctx`, as its limit), one that does not complete text, and
+/// an image-generation model. Shared by admission, observation and the check
+/// before each inference.
+pub fn check_shown_model(model: &str, shown: &Value) -> Result<ShownModel, ProviderError> {
+    let name = shown_name(model);
+    let remote = ["remote_host", "remote_model"].iter().any(|key| {
+        shown
+            .get(key)
+            .is_some_and(|value| value.as_str() != Some(""))
+    });
+    if remote {
+        return Err(invalid(format!(
+            "{name} is a cloud model that Ollama runs remotely; native execution runs only local models"
+        )));
+    }
+    let format = shown
+        .pointer("/details/format")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let runner = shown
+        .pointer("/details/runner")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if runner.eq_ignore_ascii_case("mlx") || format != "gguf" {
+        return Err(invalid(format!(
+            "{name} is {}; native execution accepts only GGUF models, which Ollama runs in \
+             llama.cpp's llama-server. Ollama's MLX runner holds the model's own maximum context, \
+             not num_ctx, as its limit, so it cannot bound a call. On Apple silicon, Ollama pulls \
+             the MLX variant of some models by default",
+            if runner.eq_ignore_ascii_case("mlx") {
+                "run by Ollama's MLX runner".to_string()
+            } else if format.is_empty() {
+                "of an unreported format".to_string()
+            } else {
+                format!("a {} model", shown_name(format))
+            }
+        )));
+    }
+    let caps = shown
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("model capabilities were not reported"))?;
+    let has = |capability: &str| caps.iter().any(|v| v.as_str() == Some(capability));
+    if !has("completion") {
+        return Err(invalid(format!(
+            "{name} does not report text completion; native execution needs a local GGUF \
+             completion model"
+        )));
+    }
+    if has("image") {
+        return Err(invalid(format!(
+            "{name} is an image-generation model; native execution needs a local GGUF completion model"
+        )));
+    }
+    Ok(ShownModel {
+        tools: has("tools"),
+        thinking: has("thinking"),
+        vision: has("vision"),
+    })
+}
+
+/// The version `GET /api/version` reported, when the version policy accepts it.
+pub(crate) fn accepted_server_version(reported: &Value) -> Result<String, ProviderError> {
+    let version = reported
+        .get("version")
+        .and_then(Value::as_str)
+        .filter(|text| text.len() <= 64 && !text.chars().any(char::is_control))
+        .ok_or_else(|| invalid("the Ollama server did not report its version"))?;
+    match ollama_version_refusal(version) {
+        Some(refusal) => Err(invalid(refusal)),
+        None => Ok(version.to_owned()),
+    }
+}
+
+/// What the check before connecting and before each inference found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Verified {
+    version: String,
+    model: ShownModel,
 }
 
 fn invalid(message: impl Into<String>) -> ProviderError {
@@ -290,7 +432,17 @@ async fn metadata_request(
 }
 
 impl NativeOllamaProvider {
+    /// Connect after checking the server (loopback, accepted version,
+    /// cloud-disabled mode) and the model. Without a retained observation no
+    /// contract probe runs: [`Self::connect_observed`] is the Session path.
     pub async fn connect(config: NativeOllamaConfig) -> Result<Self, ProviderError> {
+        Self::connect_verified(config)
+            .await
+            .map(|(provider, _)| provider)
+    }
+
+    /// [`Self::connect`], with the Ollama version the check found.
+    async fn connect_verified(config: NativeOllamaConfig) -> Result<(Self, String), ProviderError> {
         validated_endpoint(&config.base_url, "api/chat", PROVIDER)?;
         if config.model.is_empty()
             || config.model.len() > 256
@@ -312,57 +464,41 @@ impl NativeOllamaProvider {
             thinking_supported: false,
             vision_supported: false,
             observed_context: None,
+            served: None,
         };
-        let (tools, thinking, vision) = provider.verify().await?;
-        provider.tools_supported = tools;
-        provider.thinking_supported = thinking;
-        provider.vision_supported = vision;
-        Ok(provider)
+        let verified = provider.verify().await?;
+        provider.tools_supported = verified.model.tools;
+        provider.thinking_supported = verified.model.thinking;
+        provider.vision_supported = verified.model.vision;
+        Ok((provider, verified.version))
+    }
+
+    /// Record in `log` the Ollama version checked right before each inference
+    /// request this provider sends: the version that served it.
+    pub fn with_served_versions(mut self, log: Arc<OllamaServedVersions>) -> Self {
+        self.served = Some(log);
+        self
     }
 
     async fn metadata(&self, path: &str, body: Option<Value>) -> Result<Value, ProviderError> {
         metadata_request(&self.client, &self.config.base_url, path, body).await
     }
 
-    async fn verify(&self) -> Result<(bool, bool, bool), ProviderError> {
-        let version = self.metadata("api/version", None).await?;
-        if version.get("version").and_then(Value::as_str) != Some(VERSION) {
-            return Err(invalid(
-                "native execution requires the audited Ollama 0.20.6 server",
-            ));
-        }
+    async fn verify(&self) -> Result<Verified, ProviderError> {
+        let version = accepted_server_version(&self.metadata("api/version", None).await?)?;
         let status = self.metadata("api/status", None).await?;
         if !reports_cloud_disabled(&status) {
             return Err(invalid(
                 "native execution requires server-reported cloud-disabled mode",
             ));
         }
-        let model = self
+        let shown = self
             .metadata("api/show", Some(json!({"model": self.config.model})))
             .await?;
-        let remote = ["remote_host", "remote_model"].iter().any(|key| {
-            model
-                .get(key)
-                .is_some_and(|value| value.as_str() != Some(""))
-        });
-        let caps = model
-            .get("capabilities")
-            .and_then(Value::as_array)
-            .ok_or_else(|| invalid("model capabilities were not reported"))?;
-        if remote
-            || model.pointer("/details/format").and_then(Value::as_str) != Some("gguf")
-            || !caps.iter().any(|v| v.as_str() == Some("completion"))
-            || caps.iter().any(|v| v.as_str() == Some("image"))
-        {
-            return Err(invalid(
-                "native execution requires a local GGUF completion model",
-            ));
-        }
-        Ok((
-            caps.iter().any(|v| v.as_str() == Some("tools")),
-            caps.iter().any(|v| v.as_str() == Some("thinking")),
-            caps.iter().any(|v| v.as_str() == Some("vision")),
-        ))
+        Ok(Verified {
+            version,
+            model: check_shown_model(&self.config.model, &shown)?,
+        })
     }
 
     fn prediction_limit(&self, request: &ChatRequest) -> usize {
@@ -405,10 +541,10 @@ impl NativeOllamaProvider {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>
     {
         let body = self.wire_request(&request)?;
-        let (tools, thinking, vision) = self.verify().await?;
-        if tools != self.tools_supported
-            || thinking != self.thinking_supported
-            || vision != self.vision_supported
+        let verified = self.verify().await?;
+        if verified.model.tools != self.tools_supported
+            || verified.model.thinking != self.thinking_supported
+            || verified.model.vision != self.vision_supported
         {
             return Err(invalid(
                 "local model capabilities changed; reconnect the execution profile",
@@ -416,6 +552,12 @@ impl NativeOllamaProvider {
         }
         if let Some(observation) = &self.observed_context {
             observed_context::verify_identity(self, observation).await?;
+            // An Ollama upgraded since the probes passed is probed again
+            // before it serves; the same version is a cached pass.
+            observed_context::ensure_probed(self, observation, &verified.version).await?;
+        }
+        if let Some(log) = &self.served {
+            log.record(&verified.version);
         }
         let url = validated_endpoint(&self.config.base_url, "api/chat", PROVIDER)?;
         let response =
@@ -775,8 +917,9 @@ fn validate_history(messages: &[ChatMessage]) -> Result<(), ProviderError> {
     Ok(())
 }
 
-// The audited runners expand multimodal inputs before their num_ctx check:
-// runner/{ollamarunner,llamarunner}/runner.go, NewSequence and inputs (v0.20.6).
+// llama-server counts each image's tokens in the prompt before its context
+// check (llama.cpp b11669, tools/server/server-common.cpp, the multimodal
+// input chunks; Ollama v0.40.6 sends images inline as base64 only).
 // truncate:false rejects the expanded prompt; num_predict bounds generation.
 // Images therefore consume the existing full context reservation, never an
 // estimated image-token allowance or an additional unbounded provider route.

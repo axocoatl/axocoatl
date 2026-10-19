@@ -603,6 +603,7 @@ mod tests {
             warnings: Vec::new(),
             usage: RunUsage::default(),
             network: NetworkSummary::default(),
+            ollama_versions: Default::default(),
             keep: None,
             error: None,
         }

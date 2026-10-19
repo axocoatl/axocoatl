@@ -706,6 +706,7 @@ fn outcome_of(report: &KindReport) -> RunOutcome {
         warnings: Vec::new(),
         usage: RunUsage::default(),
         network: NetworkSummary::default(),
+        ollama_versions: Default::default(),
         keep: None,
         error: None,
     };

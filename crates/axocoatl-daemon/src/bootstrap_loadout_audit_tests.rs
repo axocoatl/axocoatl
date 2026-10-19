@@ -470,12 +470,13 @@ impl wiremock::Respond for ScriptedAudit {
 /// `/api/chat` with [`ScriptedAudit`].
 async fn model_server(scenario: Scenario, audit: ScriptedAudit) -> MockServer {
     let server = MockServer::start().await;
+    crate::ollama_contract_test_support::mount_contract_probes(&server).await;
     let digest = "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
     for (verb, route, body) in [
         (
             "GET",
             "/api/version",
-            serde_json::json!({"version": "0.20.6"}),
+            serde_json::json!({"version": axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION}),
         ),
         (
             "GET",
@@ -498,7 +499,7 @@ async fn model_server(scenario: Scenario, audit: ScriptedAudit) -> MockServer {
             // A 131,072-token context: read_file's default window is a
             // quarter of it at one token per byte, 32 KiB.
             serde_json::json!({"models": [{"name": MODEL, "model": MODEL, "digest": digest,
-                "details": {"format": "gguf"}, "context_length": 131072}]}),
+                "details": {"format": "gguf"}, "context_length": 131072, "runner": "llamacpp"}]}),
         ),
     ] {
         Mock::given(method(verb))
@@ -662,6 +663,13 @@ impl crate::loadout::RunHost for AuditHost {
 
     async fn network_summary(&self, session_id: &str) -> Result<NetworkSummary, RunError> {
         Ok(self.daemon.loadout_network_summary(session_id).await)
+    }
+
+    async fn ollama_versions(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<String>> {
+        self.daemon.loadout_ollama_versions(session_id)
     }
 
     async fn stop_requested(&self, run_id: &str) -> bool {

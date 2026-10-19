@@ -191,7 +191,10 @@ pub struct AgentFacts {
     pub role: String,
     /// `native`, `claude-code` or `codex`.
     pub runtime: String,
-    /// The pinned version of an external program.
+    /// The pinned version of an external program; for a native Agent on
+    /// Ollama, the Ollama server that served its calls (`ollama 0.40.6`;
+    /// several versions comma-separated when Ollama was upgraded during the
+    /// run).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub program_version: Option<String>,
     pub provider: String,
