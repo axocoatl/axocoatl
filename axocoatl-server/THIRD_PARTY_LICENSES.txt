@@ -10754,7 +10754,7 @@ SOFTWARE.
 MIT License (MIT)
 
 Used by:
-- zip 8.6.0 (https://github.com/zip-rs/zip2)
+- zip 9.0.5 (https://github.com/zip-rs/zip2)
 
 The MIT License (MIT)
 
@@ -11024,7 +11024,8 @@ SOFTWARE.
 MIT License (MIT)
 
 Used by:
-- calamine 0.36.1 (https://github.com/tafia/calamine)
+- calamine 0.37.0 (https://github.com/tafia/calamine)
+- quick-xml 0.42.0 (https://github.com/tafia/quick-xml)
 
 The MIT License (MIT)
 

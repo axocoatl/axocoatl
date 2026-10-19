@@ -61,4 +61,4 @@ neural-embeddings = [
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 tempfile = "3.27"
-zip = { version = "8.6.0", default-features = false }
+zip = { version = "9.0.5", default-features = false }
