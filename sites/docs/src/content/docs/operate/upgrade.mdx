@@ -169,7 +169,8 @@ cannot be made, for example because the disk is full, the Session is not convert
 does not open; free the space and open it again.
 
 The copies stay until you remove them. They cover Session journals only: to return a
-whole data root to 1.2, restore the cold backup you made before upgrading.
+whole data root to 1.2, restore the cold backup you made before upgrading. A 1.2 daemon
+does not start on a restored copy either (see the caution above).
 
 To put a Session back as 1.2 left it:
 
