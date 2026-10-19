@@ -2476,6 +2476,18 @@ mod admission_tests;
 
 #[tokio::test]
 async fn recovered_repository_reattachment_preserves_inputs_and_uses_fresh_physical_owner() {
+    recovered_repository_reattachment(false).await;
+}
+
+/// After a restart, the Session's folder at the same path is another inode:
+/// a repository restored from a backup or copied to a new Mac. The turn is
+/// reattached all the same, and the proof records the new folder's inode.
+#[tokio::test]
+async fn recovered_repository_reattachment_accepts_a_copied_folder_at_the_same_path() {
+    recovered_repository_reattachment(true).await;
+}
+
+async fn recovered_repository_reattachment(copied_folder: bool) {
     use crate::bootstrap::session_dispatch::SessionDispatchRegistry;
     use axocoatl_session::control_authority::{AuthorityGrant, ExecutionProfile, GrantLimits};
     use axocoatl_session::execution_content::ActivationEvidenceContent;
@@ -2582,6 +2594,10 @@ async fn recovered_repository_reattachment_preserves_inputs_and_uses_fresh_physi
     ));
     let mut metadata = f.owner.metadata().clone();
     metadata.execution_identity.clone_from(&sandbox.incarnation);
+    if copied_folder {
+        assert_ne!(metadata.host_workspace_inode, "7:9");
+        metadata.host_workspace_inode = "7:9".into();
+    }
     let registered: Arc<dyn Sandbox> = sandbox.clone();
     f.owner
         .inner
@@ -2651,6 +2667,12 @@ async fn recovered_repository_reattachment_preserves_inputs_and_uses_fresh_physi
             assert_eq!(proof.original_resource, original_bytes);
             assert_ne!(proof.acquired_resource, original_bytes);
             assert_eq!(proof.content.original, original);
+            let ActivationEvidenceContent::Repository { description, .. } =
+                &proof.acquired_resource
+            else {
+                panic!("repository proof holds a repository description");
+            };
+            assert_eq!(description.contains("\"7:9\""), copied_folder);
             Ok(())
         })
         .unwrap();
