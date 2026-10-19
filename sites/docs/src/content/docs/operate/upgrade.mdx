@@ -130,7 +130,14 @@ axocoatl doctor --config /absolute/path/to/axocoatl.yaml
 There is no compatibility promise that an older binary can read state written
 by a newer one. Keep the pre-upgrade binary and cold backup together. If you
 must return, stop the new daemon and restore the matching binary, data root,
-config, environment, and Workspace copies as one set.
+config, environment, and Workspace copies as one set, as
+[Restore](/operate/data-backup/#restore) describes.
+
+A restored data root is a copy, and Axocoatl 1.1.0 through 1.4.0 do not start on a
+copied data root: they exit with `failed data-directory format ownership admission`.
+1.4.1 and later record a copied root's new location when they start. To return to
+1.4.0, restore the set, start Axocoatl 1.4.1 on the restored data root once and stop
+it, then start 1.4.0. Returning to a release before 1.4.0 this way has not been tested.
 </Aside>
 
 Future-version Session ledger or attachment schemas are rejected rather than
@@ -145,7 +152,7 @@ that field. Once a 1.4 daemon has recorded a capture in a data root, a 1.3 daemo
 not start on that data root, and says
 `could not recover canonical history for Session …: unknown field changed_manifest`.
 To go back to 1.3, restore the cold backup you made before upgrading, as described
-above.
+above. A 1.3 daemon does not start on a restored copy either (see the caution above).
 
 ## Sessions written by 1.2 and earlier
 

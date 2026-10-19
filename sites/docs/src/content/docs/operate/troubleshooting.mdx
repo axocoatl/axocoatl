@@ -51,6 +51,7 @@ workbench uses.
 | Expected Sessions are missing | The process uses an explicit `--config` or `AXOCOATL_DATA_DIR` different from the normal user paths | Start without the override, or inspect the exact explicit config and sibling/overridden data root |
 | “Address/socket already in use” | Another daemon owns HTTP or IPC | Stop the service/other process; do not run two default daemons |
 | “Data directory is already owned” | Another daemon or direct CLI bootstrap holds the same durable runtime authority | Use the running daemon or stop that process; never point two live Axocoatl processes at one data root |
+| “failed data-directory format ownership admission … differently owned manifest” | Axocoatl 1.1.0 through 1.4.0 on a data root that was copied (a restored backup, a migrated Mac) or moved | Start 1.4.1 or later: it records the new location and keeps the Sessions. `axocoatl doctor` says whether the next start will. See [Data and backup](/operate/data-backup/#restore) |
 | Non-loopback bind is refused | Authentication is absent | Configure API keys or bearer tokens; keep loopback for local use |
 | The browser shows **Sign in to Axocoatl** | This browser has no sign-in cookie for this daemon and port, the cookie expired, or the token was rotated | Run `axocoatl url` with the daemon's `--config` and `AXOCOATL_DATA_DIR`, and open the link |
 | A script or `curl` gets `401` | The local API requires the per-daemon token | Send `Authorization: Bearer <token>` with the contents of `local-api-token` in the data root |
@@ -134,6 +135,7 @@ tail -n 100 ~/Library/Logs/Axocoatl/daemon.log
 | Sessions started by the service say Podman is not installed, but `podman` works in your shell | The service definition was written before install recorded `PATH`, or Podman moved. Run `axocoatl service install` again from a shell where `podman` works, then `axocoatl service stop && axocoatl service start` |
 | The service uses a different Podman machine than your shell | Export `CONTAINER_CONNECTION` (or `CONTAINER_HOST`) before `axocoatl service install`; install records it in the definition |
 | The macOS service log is missing | The definition predates the log setting; reinstall and restart the service as above |
+| The service restarts every few seconds and is never up | Its start fails each time. `axocoatl service status` shows the line the last failed start logged (1.4.1 and later); fix that cause, such as a copied data root under 1.4.0 above |
 
 Re-run `axocoatl service install` when the binary, the user configuration path,
 or the Podman location or connection changes. Use `--config ...` only for an explicit advanced configuration.

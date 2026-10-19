@@ -88,10 +88,27 @@ consulted only through bounded exact-name recovery. New writes use the current
 portable namespace, and recovery does not delete the legacy source. Include both
 current and retained legacy files by copying the entire root.
 
-`.axocoatl-daemon.lock` is a compatibility ownership file, not application state.
-The per-root external lease lives in an owner-only operating-system temporary
-directory and is likewise not backup data. A cold restore creates or opens the
-needed lease state when Axocoatl starts.
+`.axocoatl-daemon.lock/format.json` records which Session format owns the root, and
+`.axocoatl-daemon.lock.v1` is the file a daemon locks while it owns the root. Copy both
+with the rest of the root. The record also names the directory it was written in: its
+path and the identity of the directory and of that lock file. A copy of the root (a
+restored backup, Migration Assistant, Time Machine) is a new directory, and a moved root
+has a new path. From 1.4.1, the daemon records the new location when it starts on such a
+root, keeps the root's ownership and every Session, and logs one warning that the data
+directory was copied or moved. It does so only after it holds every lock on the root, so
+it never shares a root with another daemon. The per-root external lease lives in an
+owner-only operating-system temporary directory and is not backup data; the daemon
+creates it when it starts.
+
+<Aside type="caution" title="1.1.0 through 1.4.0 do not start on a copied data root">
+Axocoatl 1.1.0 through 1.4.0 refuse a data root that was copied or moved since its
+ownership was recorded, including a restored backup and a root that Migration Assistant
+brought to a new Mac. `axocoatl serve` exits with `failed data-directory format
+ownership admission: invalid or ambiguous format ownership: unsupported, incomplete, or
+differently owned manifest`, and an installed service restarts and fails again every few
+seconds. Start 1.4.1 or later on that root once: it records the new location, and 1.4.0
+then starts on it too.
+</Aside>
 
 Attempts also create clones and manifests under `.axo-variants/` inside the
 Workspace repository. The repository itself, its uncommitted working tree, and
@@ -138,19 +155,55 @@ or every attachment/store required for restoration.
 
 ## Restore
 
-There is no schema-aware restore command. Use a compatible Axocoatl build,
-stop the daemon, place the copied directories back at explicit paths with the
-original ownership and permissions, restore the configuration/environment,
-then run `axocoatl validate` and `axocoatl doctor` for the normal user paths.
-For an explicit advanced configuration, run:
+There is no schema-aware restore command. A restore is the backup copied back, as one
+set, and started with Axocoatl 1.4.1 or later (see the caution above for earlier
+releases).
 
-```sh
-axocoatl validate /absolute/path/to/axocoatl.yaml
-axocoatl doctor --config /absolute/path/to/axocoatl.yaml
-```
+<Steps>
 
-Start the daemon and inspect Sessions, Automations, MCP permissions, and the
-Workspace Git state before resuming automatic triggers.
+1. Stop Axocoatl: `axocoatl service stop` for the service, or **Ctrl-C** in a
+   foreground terminal.
+2. Move the current data root aside rather than deleting it, until the restore is
+   verified. Copy the backup's data root back to the path the daemon uses, and, when you
+   restore them too, each Workspace repository back to its own path, keeping ownership
+   and permissions:
+
+   ```sh
+   mv /absolute/path/to/axocoatl-data /absolute/path/to/axocoatl-data.before-restore
+   cp -a /backup/2026-08-17/axocoatl-data /absolute/path/to/axocoatl-data
+   cp -a /backup/2026-08-17/axocoatl.yaml /absolute/path/to/axocoatl.yaml
+   mv /absolute/path/to/workspace /absolute/path/to/workspace.before-restore
+   cp -a /backup/2026-08-17/workspace /absolute/path/to/workspace
+   ```
+
+   The data root must be owned by the user who runs Axocoatl and must not be group or
+   world writable.
+3. Restore the configuration and the process environment, then check them:
+
+   ```sh
+   axocoatl validate /absolute/path/to/axocoatl.yaml
+   axocoatl doctor --config /absolute/path/to/axocoatl.yaml
+   ```
+
+   For a restored copy, doctor's `Data dir ownership` line says that the directory was
+   copied or moved since its ownership was recorded and that the next start records its
+   new location. A `[FAIL]` on that line means the daemon will not start on the
+   directory; its hint says what to do.
+4. Start the daemon the way it ran before. Its log says once that the data directory was
+   copied or moved and that its new location was recorded.
+5. Inspect Sessions, Automations, MCP permissions, and the Workspace Git state before
+   resuming automatic triggers.
+
+</Steps>
+
+The same applies to a data root brought to a new Mac by Migration Assistant or Time
+Machine, or moved to another path: start 1.4.1 or later on it. Sessions keep working in
+repositories that are at the same paths as before. A repository now at another path is
+another Workspace for new runs; a Session made in the old path refuses work and names
+that folder until you move the repository back or delete the Session.
+
+If an installed service keeps restarting, `axocoatl service status` shows the line its
+last failed start logged.
 
 Deletion does not currently promise immediate garbage collection of every
 content-addressed attachment blob. Do not use Session deletion or rewind as a

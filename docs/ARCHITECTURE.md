@@ -300,7 +300,13 @@ mandatory lock pathname. The original lock inode is retained. Unsupported atomic
 ambiguous manifests, and incomplete shapes fail closed. Reopening validates both sides and
 repairs durability before returning a non-Clone format-ownership guard. Existing storage
 ancestors must already be durably provisioned. This proves format ownership, not settlement of
-orphaned containers or external work. Only the canonical execution store can provision its
+orphaned containers or external work. The manifest records the root's path digest, directory
+inode and retained lock inode; a copied (restored, migrated) or moved root changes them. Daemon
+admission, once it holds every lease, re-records a manifest that is exact except for those three
+identities, keeping its ownership id (journals bind to it): the new manifest is synced at a
+reserved data-root name and renamed over `format.json`, so the lock directory always holds one
+complete manifest, and a leftover reserved file is removed at the next admission. The path-based
+reopen APIs stay exact. Only the canonical execution store can provision its
 internal Session directories through this guard. `DataRootFormatOwnership` acquires and detects
 the root format while holding the external lease; consuming legacy-to-upgraded handoff retains
 the original lock descriptors throughout. Live bootstrap now uses this format-aware acquisition.

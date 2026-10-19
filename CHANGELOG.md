@@ -5,6 +5,53 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - Unreleased
+
+### Fixed
+- **A copied or moved data directory starts again.** The data root's format ownership
+  record, `.axocoatl-daemon.lock/format.json`, names the directory it was written in: the
+  SHA-256 of its path, the device and inode of the directory, and those of the retained
+  lock file `.axocoatl-daemon.lock.v1`. A copy has new inodes and a moved directory a new
+  path, so 1.1.0 through 1.4.0 refused every data root that was restored from a cold
+  backup with `cp -a` (as [Data and backup](https://docs.axocoatl.ai/operate/data-backup/)
+  says to make one), brought to a new Mac by Migration Assistant or Time Machine, or moved:
+  `Failed to bootstrap daemon: … failed data-directory format ownership admission: invalid
+  or ambiguous format ownership: unsupported, incomplete, or differently owned manifest`.
+  An installed service restarted and failed every 10 seconds without end, while
+  `axocoatl doctor` passed. When only those identities differ and every other field and
+  the shape of the record are exact, the daemon now records the directory's new location
+  once it holds all of the root's locks (its external lease, the lock file and the lock on
+  the directory itself), keeps the ownership id that every Session's journals are bound
+  to, and logs one warning that the data directory was copied or moved. The new record is
+  written and synced at `.axocoatl-daemon.lock.rebind` in the data root, then renamed over
+  `format.json`, so the record's directory never holds anything but one complete record; a
+  start after an interruption removes the leftover file. Every other difference (another
+  format, schema, migration or protocol, a missing, nil or non-canonical ownership id,
+  identities this version would not write, an extra file, a symbolic link) is still
+  refused, and leaves the directory unchanged. The lock path stays a directory, so 1.0.0
+  still refuses the root. After a 1.4.1 start has recorded a copied root, 1.4.0 starts on
+  it too.
+- **A Session keeps working in a repository restored or copied at the same path.** After a
+  restart, the first turn sent to an existing Session checks that its repository is the
+  one its last turn recorded, by path and by the folder's device and inode. A repository
+  restored from a backup, or brought to a new Mac at the same path, is a new inode, so
+  every later turn of every Session in it was refused with `repository reattachment
+  changed its durable Session, Workspace, environment, backend, runtime, path, or inode`.
+  The folder's inode may now differ; its path, the Session, the Workspace, the
+  environment and the runtime must still be the same. A Session whose folder is gone or
+  moved is still refused, naming the folder, as in 1.3.2.
+
+### Added
+- **`axocoatl doctor` checks the data directory's ownership record**, read only and
+  without a lock, so a running daemon is unaffected: `[ OK ]` when it names this
+  directory; `[ OK ]` with a note when the directory was copied or moved and the next
+  start records its new location; `[FAIL]` with the reason and what to do when the daemon
+  would refuse to start on it.
+- **`axocoatl service status` shows why the service last failed to start.** When the
+  service is installed but not running and its log's last start attempt failed, it
+  prints that `Failed to bootstrap daemon: …` line, read from the end of
+  `~/Library/Logs/Axocoatl/daemon.log` on macOS or of the user journal on Linux.
+
 ## [1.4.0] - 2026-10-14
 
 ### Added
