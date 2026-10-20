@@ -47,38 +47,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for zsh on macOS, `~/.zshrc` on Linux; for bash the login file that exists on macOS,
   `~/.bashrc` on Linux; `fish_add_path` in fish's `config.fish`; `~/.profile` otherwise),
   and prints that line when it cannot ask. `AXOCOATL_MODIFY_PATH=yes` adds it without
-  asking and `=no` never asks. The next commands are printed with the binary's full path
-  unless the shell already finds it, and an earlier `axocoatl` on PATH is named.
+  asking and `=no` never asks; end of input at the question (Ctrl-D) counts as no. In a
+  GitHub Actions step it adds the directory to `$GITHUB_PATH` instead. The next commands
+  are printed with the binary's full path unless the shell already finds it, and an
+  earlier `axocoatl` on PATH is named. Without Podman, the installer says that onboarding
+  sets it up, on every platform, instead of an `apt-get` line on WSL alone.
+- **The installer can install a given release from a given place.**
+  `AXOCOATL_VERSION=v1.5.0` installs that release instead of the latest one, and
+  `AXOCOATL_INSTALL_BASE_URL` (`https://` or `file://`, with `AXOCOATL_VERSION`) names the
+  directory holding its archive and `.sha256` file, which is still required; both are
+  checked before any download.
 - **Every command on the home page, /install, the README, `llms.txt` and the docs'
   first-run pages runs as written.** The receipt check is
   `axocoatl receipt verify receipt.json --key "$(axocoatl receipt key)" --repo .` (the
   `--keys trusted-keys` it showed named a file no step created, exit 3); the local-models
   command is one copyable line (its `<br>` made a paste run without the reviewer, then
   `--model: command not found`); the home page's configuration snippet passes
-  `axocoatl validate`; and the commands use the writer and reviewer onboarding sets up.
+  `axocoatl validate`; and the quickstarts name the loadout that matches the writer chosen
+  in onboarding (`fix` for a local or OpenRouter writer, `fix-claude-code` or `fix-codex`
+  otherwise).
 - **The public pages say what has been tested.** End to end: macOS 26 on Apple silicon
   with rootless Podman 5.8; in CI: Ubuntu 24.04 on x86_64 with rootless Podman 4.9.3.
   Intel Macs, Podman 6, arm64 Linux, Ubuntu 22.04, Debian 12, Fedora with SELinux and WSL2
   are labelled "not yet verified", and the install command says it runs in macOS, Linux
   or WSL2, not PowerShell. The pages name the prerequisites (a Claude Pro or Max plan and
   the `claude` CLI for Claude Code, a reviewer model, Podman), the memory the local pair
-  was tested on (48 GB; with less, a reviewer through OpenRouter), what gets downloaded
+  was tested on (48 GB; with less, OpenRouter for the reviewer or both, or Claude Code or
+  Codex as the writer), what gets downloaded
   (including the 87 MB embedding model the first daemon start fetches from
-  huggingface.co), that Claude Code and Codex runs support Node repositories only for
-  now, and that Docker is not supported (Podman can run alongside it).
+  huggingface.co), that for now a run installs no project dependencies, so the
+  repository's check must run with what the sandbox image has (such as `node --test`),
+  and that Docker is not supported (Podman can run alongside it).
 - **Claims withdrawn from the site and docs.** The default reviewer, `gpt-oss:20b`, is
   "a different reviewer", not a stronger one: it is smaller than its writer and has not
   been measured. The example run summary is now the real output of one run. The why page
-  no longer says the executable keeps working if the project stops: native Ollama
-  Sessions accept only audited Ollama releases. `axocoatl run` is "from your shell", not
+  no longer says the executable keeps working if the project stops: a new major Ollama
+  release needs a newer Axocoatl. `axocoatl run` is "from your shell", not
   "a shell or a CI job", and only `axocoatl run` gets a receipt, not every run. The
   Codex API-key route (`connect codex --api-key`) is out of the quickstart and marked
   not yet tested live.
 - **The verify-receipt workflow in the docs no longer fails every pull request without a
   receipt.** Its example sets `require-receipt: false`, so pull requests from people,
   Dependabot and the one that adds the workflow pass with a notice; a strict variant
-  limited to Keep as PR's `axocoatl/` branches is shown separately with a warning. The
-  keys file is created with `mkdir -p .axocoatl` first and merged before the workflow.
+  limited to Keep as PR's `axocoatl/` branches is shown separately, as a whole workflow
+  file, with a warning. The keys file is created with `mkdir -p .axocoatl` first and
+  merged before the workflow.
+- **docs.axocoatl.ai pages show `verify-receipt@v1.4.0` as written.** Cloudflare's email
+  obfuscation turned it, and `e2e@0.18.0`, into "[email protected]" on the served page.
+  Every built docs page now wraps its body in `<!--email_off-->`, which Cloudflare leaves
+  alone, and the docs gate refuses a page without it.
 
 ### Added
 - **Contract probes.** When Team & budget (or a loadout run's admission) observes an
@@ -115,10 +132,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or placeholder, a line that starts with a flag, a dangling backslash, an unbalanced
   quote, an unknown `axocoatl` subcommand, `--keys FILE` that no earlier step creates,
   YAML that does not parse or a configuration snippet `axocoatl validate` would refuse
-  (with `AXOCOATL_COPY_PASTE_BIN`, the binary validates each one), "stronger" next to
-  `gpt-oss:20b`, `gpt-oss:120b` without its 96 GB note, the withdrawn claims, and WSL2,
-  Fedora, Debian 12 or Ubuntu 22.04 named on an install page without "not yet verified".
-  `--json` lists every block for a gate that runs them verbatim.
+  (the product browser gate runs it with the binary it builds, which validates each
+  configuration and loadout snippet), a GitHub workflow snippet without `on:` or `jobs:`,
+  "stronger" next to `gpt-oss:20b`, `gpt-oss:120b` without its 96 GB note, the withdrawn
+  claims, and WSL2, Fedora, Debian 12 or Ubuntu 22.04 named on an install page without
+  "not yet verified". `--json` lists every block for a gate that runs them verbatim.
 - **`axocoatl service status` shows why the service last failed to start.** When the
   service is installed but not running and its log's last start attempt failed, it
   prints that `Failed to bootstrap daemon: …` line, read from the end of
