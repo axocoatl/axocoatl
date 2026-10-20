@@ -574,6 +574,27 @@ for (const script of scripts) {
   if (source !== null && script.startsWith('components/')) checkRetiredPositioning(source, script);
 }
 
+// While the films are pending, /showcase shows only notes: it stays out of search
+// (noindex) and nothing links to it, so no visitor lands on twelve "recording
+// pending" placeholders.
+if (filmsPending) {
+  const showcase = readRequired(join(root, 'showcase/index.html'), 'showcase/index.html', 'utf8');
+  if (showcase !== null && !/<meta\s+name="robots"\s+content="noindex"/i.test(showcase)) {
+    fail('showcase/index.html', `films for ${productVersion} are pending; the showcase must carry <meta name="robots" content="noindex">`);
+  }
+  const linkers = [
+    ...pages.filter((page) => page !== 'showcase/index.html'),
+    'components/ax-site-nav.js', 'components/ax-footer.js', 'sitemap.xml',
+  ];
+  for (const linker of linkers) {
+    const path = join(root, linker);
+    if (!existsSync(path)) continue;
+    if (/\/showcase\b/.test(readFileSync(path, 'utf8'))) {
+      fail(linker, `films for ${productVersion} are pending; nothing may link to /showcase until they are recorded`);
+    }
+  }
+}
+
 const llmsLabel = 'llms.txt';
 const llmsPath = root === sourceRoot
   ? join(repositoryRoot, llmsLabel)
