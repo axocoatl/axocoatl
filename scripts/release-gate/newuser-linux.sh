@@ -476,7 +476,7 @@ fi
 
 # 9. The copy-paste lint, when the tree has it.
 if [ -f "$gate_repo/scripts/check-copy-paste.mjs" ]; then
-  gate_step "copy-paste lint (scripts/check-copy-paste.mjs)" -- node "$gate_repo/scripts/check-copy-paste.mjs"
+  gate_copy_paste_lint "$gate_repo" "$work/npm-cache"
 else
   gate_skip "copy-paste lint" "scripts/check-copy-paste.mjs is not in this tree" optional
 fi

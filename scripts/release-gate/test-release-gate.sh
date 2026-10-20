@@ -288,6 +288,69 @@ else
   fail "run plan line"
 fi
 
+# --- The copy-paste lint always has its YAML parser: when sites/docs has
+# not installed js-yaml, the gate runs npm ci there first (a stand-in npm and
+# a stand-in lint that loads js-yaml as scripts/check-copy-paste.mjs does).
+(
+  export HOME="$work/lint-home"
+  mkdir -p "$HOME"
+  unset NODE_PATH
+  # shellcheck source=scripts/release-gate/lib.sh
+  . "$script_dir/lib.sh"
+  lint_repo="$work/lint-repo"
+  mkdir -p "$lint_repo/scripts" "$lint_repo/sites/docs" "$work/lint-bin"
+  printf '{"name":"docs","private":true}\n' >"$lint_repo/sites/docs/package.json"
+  cat >"$lint_repo/scripts/check-copy-paste.mjs" <<'LINT'
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+try {
+  createRequire(join(dirname(fileURLToPath(import.meta.url)), '../sites/docs/package.json'))('js-yaml');
+  console.log('YAML checked');
+} catch {
+  console.log('cannot check YAML: js-yaml is not installed (run npm ci in sites/docs)');
+  process.exit(1);
+}
+LINT
+  cat >"$work/lint-bin/npm" <<NPM
+#!/bin/sh
+printf '%s|%s|%s\n' "\$(pwd -P)" "\$*" "\${npm_config_cache:-}" >>"$work/npm.log"
+[ -z "\${NPM_FAILS:-}" ] || { echo 'npm error network'; exit 1; }
+mkdir -p node_modules/js-yaml
+printf '{"name":"js-yaml","main":"index.js"}\n' >node_modules/js-yaml/package.json
+echo 'module.exports = {};' >node_modules/js-yaml/index.js
+NPM
+  chmod +x "$work/lint-bin/npm"
+  export PATH="$work/lint-bin:$PATH"
+  gate_begin "$work/evidence-lint" 1.5.0 "$(printf '9%.0s' $(seq 1 40))" A-lint A
+  export NPM_FAILS=1
+  gate_copy_paste_lint "$lint_repo" "$work/npm-cache" >/dev/null 2>&1
+  unset NPM_FAILS
+  gate_copy_paste_lint "$lint_repo" "$work/npm-cache" >/dev/null 2>&1
+  gate_copy_paste_lint "$lint_repo" "$work/npm-cache" >/dev/null 2>&1
+  docs=$(cd "$lint_repo/sites/docs" && pwd -P)
+  expected=$(printf '%s|ci --ignore-scripts --no-audit --no-fund|%s\n' "$docs" "$work/npm-cache" "$docs" "$work/npm-cache")
+  [ "$(cat "$work/npm.log")" = "$expected" ] || { echo "npm ran: $(cat "$work/npm.log")" >&2; exit 1; }
+  node -e '
+    const steps = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map(JSON.parse);
+    const got = steps.map((s) => `${s.name}: ${s.status}${s.required === false ? " (optional)" : ""}`);
+    const want = [
+      "install the lint\u0027s YAML parser (npm ci in sites/docs): fail",
+      "copy-paste lint (scripts/check-copy-paste.mjs): fail",
+      "install the lint\u0027s YAML parser (npm ci in sites/docs): pass",
+      "copy-paste lint (scripts/check-copy-paste.mjs): pass",
+      "copy-paste lint (scripts/check-copy-paste.mjs): pass",
+    ];
+    if (got.join("\n") !== want.join("\n")) { console.error(got.join("\n")); process.exit(1); }
+    if (!/js-yaml is not installed/.test(steps[1].detail)) { console.error(steps[1].detail); process.exit(1); }
+  ' "$GATE_STEPS" || exit 1
+  rm -rf -- "$GATE_TMP"
+)
+if [ "$?" = 0 ]; then
+  pass "copy-paste lint: npm ci in sites/docs when js-yaml is missing (its failure fails the step and the lint), nothing installed when present, the lint runs every time"
+else
+  fail "copy-paste lint's YAML parser"
+fi
 
 # The installer under test either prints the line that keeps axocoatl on a
 # new terminal's PATH (the gate then adds it and checks), or only an export

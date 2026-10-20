@@ -649,6 +649,27 @@ gate_check_image() {
   fi
 }
 
+# gate_copy_paste_lint REPO NPM_CACHE: scripts/check-copy-paste.mjs on REPO,
+# as the docs gate runs it. It parses YAML with js-yaml, a devDependency of
+# sites/docs; when REPO has not installed it, `npm ci` in sites/docs (as
+# verify-product-browser-gate.sh runs it) installs it first, as its own
+# step, with npm's cache in NPM_CACHE. A failed install fails that step and
+# the lint then fails every YAML block: nothing is skipped.
+gate_copy_paste_lint() {
+  if ! node -e '
+    const { createRequire } = require("module");
+    for (const base of process.argv.slice(1)) {
+      try { createRequire(base).resolve("js-yaml"); process.exit(0); } catch {}
+    }
+    process.exit(1);
+  ' "$1/sites/docs/package.json" "$1/scripts/package.json" >/dev/null 2>&1; then
+    gate_step "install the lint's YAML parser (npm ci in sites/docs)" -- /bin/bash -c \
+      'cd "$1/sites/docs" && npm_config_cache="$2" npm ci --ignore-scripts --no-audit --no-fund' \
+      gate-npm "$1" "$2"
+  fi
+  gate_step "copy-paste lint (scripts/check-copy-paste.mjs)" -- node "$1/scripts/check-copy-paste.mjs"
+}
+
 # gate_run_fixture FIXTURE COMMAND REPO_DIR [WRITER_LABEL]: run COMMAND (as
 # published, plus outputs) in a fresh copy of FIXTURE, then verify its
 # receipt with the documented command and its record. Records each check.

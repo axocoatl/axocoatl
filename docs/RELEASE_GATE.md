@@ -241,7 +241,9 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
      refused unless `GITHUB_ACTIONS=true`. The case runs only after both
      files are backed up and the copies match. If restoring them fails, the
      backup and the work directory are kept and the gate says where they are.
-9. `scripts/check-copy-paste.mjs`, when the tree has it.
+9. `scripts/check-copy-paste.mjs`, when the tree has it. When `sites/docs` has
+   not installed its YAML parser (js-yaml), the gate runs `npm ci` there first,
+   as its own step; the lint never runs without it.
 10. Ctrl+C stops `axocoatl dev` with exit 0 (recorded, not required).
 
 The ubuntu-22.04 leg (`--expect-refusal "Podman 3.4.4"`) checks only that
