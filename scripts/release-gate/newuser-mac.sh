@@ -3,11 +3,15 @@
 #
 # Run by a person, in the dedicated gate account (GATE_ACCOUNT, default
 # axo-newuser) right after reset-mac-account.sh, on the release candidate:
-# it installs with the staged site's own install command, runs onboarding
-# with every consent prompt answered live, and runs the site's and README's
-# commands as published. The whole session is recorded with script(1); each
-# step's wall time and download are measured. Evidence goes to
-# <evidence-root>/<version>/<commit>/<machine>-<path>.json and its folder.
+# it reads the staged site's commands and runs them as published: the
+# install command exactly as written, then (after checking the site shows
+# them) `axocoatl onboard` with every consent prompt answered live,
+# `axocoatl doctor` and `axocoatl dev`, then the site's and README's run
+# commands. Onboarding gets --start none: the gate starts the daemon itself,
+# so the sign-in link never reaches the transcript. The whole session is
+# recorded with script(1); each step's wall time and download are measured.
+# Evidence goes to <evidence-root>/<version>/<commit>/<machine>-<path>.json
+# and its folder.
 #
 # Usage:
 #   newuser-mac.sh --release-dir DIR --site DIR [options]
@@ -84,7 +88,12 @@ tarball=$(find "$release_dir" -maxdepth 1 -name "axocoatl-v*-$target.tar.gz" | h
 version=${tarball##*/axocoatl-v}
 version=${version%%-*}
 [ -n "$commit" ] || commit=$(git -C "$gate_repo" rev-parse HEAD)
-[ ${#commit} = 40 ] || gate_die "--commit must be a full commit SHA"
+gate_valid_commit "$commit" || gate_die "--commit must be a full 40-character commit SHA (lowercase hex)"
+gate_valid_version "$version" || gate_die "no X.Y.Z version in the tarball name ${tarball##*/}"
+# The staged site's own commands, read once and run as written.
+site_page=$site/index.html
+install_command=$(node "$gate_commands_js" install "$site_page" 2>/dev/null \
+  || node "$gate_commands_js" install "$site/install/index.html" 2>/dev/null) || install_command=''
 if [ -z "$paths" ]; then
   if [ "$machine" = C1 ]; then paths=local,claude-code,codex,openrouter,workbench; else paths=local,openrouter; fi
 fi
@@ -121,11 +130,8 @@ confirm() {
   esac
 }
 
-config_file() { printf '%s\n' "$HOME/Library/Application Support/Axocoatl/config.yaml"; }
-daemon_port() {
-  awk '/^server:/ { inside = 1; next } inside && /^[^[:space:]]/ { inside = 0 }
-       inside && /^[[:space:]]+port:/ { print $2; exit }' "$(config_file)" 2>/dev/null | tr -d '"'
-}
+config_file() { gate_config_path; }
+daemon_port() { gate_server_port "$(config_file)"; }
 daemon_up() { curl -fsS "http://127.0.0.1:${1:-$(daemon_port)}/health/live" >/dev/null 2>&1; }
 
 ensure_daemon() {
@@ -165,6 +171,9 @@ doctor_ready() {
     const failing = Object.values(doc.sections || {}).flat().filter((i) => i.status === "fail");
     process.exit(doc.ready === true && failing.length === 0 ? 0 : 1);
   ' "$GATE_ATTACH/doctor.json"
+  # As a new user reads it: the command the site shows, as written.
+  gate_step "axocoatl doctor (as the site shows it) exits 0" -- axocoatl doctor
+  gate_doctor_text_check "$GATE_ATTACH/logs/$(gate_slug "axocoatl doctor (as the site shows it) exits 0").log"
 }
 
 path_begin() {
@@ -196,20 +205,32 @@ install_once() {
     /bin/zsh -ilc 'command -v axocoatl' </dev/null 2>/dev/null | tail -n 1)
   gate_check "no axocoatl on this account's PATH before the install" \
     "$other is on this account's login PATH (another install); move it aside for the gate" -- test -z "$other"
+  if [ -z "$install_command" ]; then
+    gate_record "the staged site shows the install command" fail '' '' '' "no \`curl … install.sh | sh\` in $site_page or install/index.html"
+    return 1
+  fi
+  # The rest of the site's sequence, which the gate runs (onboard with
+  # --start none; doctor and dev as written).
+  gate_check "the staged site shows axocoatl onboard, doctor and dev" \
+    "$(node "$gate_commands_js" has "$site_page" 'axocoatl onboard' 'axocoatl doctor' 'axocoatl dev' 2>&1 | tr '\n' ' ')" -- \
+    node "$gate_commands_js" has "$site_page" 'axocoatl onboard' 'axocoatl doctor' 'axocoatl dev'
   local stage="$work/release"
   rm -rf "$stage"
   gate_stage_release "$tarball" "$stage" >/dev/null
-  gate_install_new_user "$stage" "$site"
+  gate_install_new_user "$stage" "$site" "$install_command"
 }
 
 onboard() {
-  # onboard NAME FLAG... : interactive unless --yes was given.
+  # onboard NAME FLAG... : interactive unless --yes was given. Either way
+  # --start none: Step 6's default would run `axocoatl dev` in the
+  # foreground (blocking the gate, and printing the sign-in link into the
+  # transcript); the gate starts the daemon itself.
   local name=$1
   shift
   if [ "$assume_yes" = 1 ]; then
     gate_step "$name (--yes)" -- axocoatl onboard --yes "$@" --start none
   else
-    gate_step "$name (interactive; every answer is in the transcript)" --interactive -- axocoatl onboard "$@"
+    gate_step "$name (interactive; every answer is in the transcript)" --interactive -- axocoatl onboard "$@" --start none
   fi
 }
 
@@ -219,6 +240,16 @@ run_published_on() {
   shift 2
   for fixture in "$@"; do
     gate_run_fixture "$fixture" "$command" "$work/repos/$label-$fixture" "$label-$fixture"
+  done
+}
+
+run_readme_on() {
+  # run_readme_on README_COMMAND LABEL FIXTURE...: the README's command, or a
+  # fixture's own (gate_fixture_command: node-plain, onboarding's sample).
+  local command=$1 label=$2 fixture
+  shift 2
+  for fixture in "$@"; do
+    gate_run_fixture "$fixture" "$(gate_fixture_command "$fixture" "$command")" "$work/repos/$label-$fixture" "$label-$fixture"
   done
 }
 
@@ -243,7 +274,7 @@ path_local() {
   local readme
   readme=$(node "$gate_commands_js" readme-run "$gate_repo/README.md")
   # shellcheck disable=SC2046
-  run_published_on "$readme" readme $(all_fixtures)
+  run_readme_on "$readme" readme $(all_fixtures)
   path_end
 }
 
@@ -336,10 +367,14 @@ path_codex() {
 path_openrouter() {
   path_begin openrouter
   install_once || { path_end; return; }
+  # The OpenRouter key comes from the browser sign-in (OAuth PKCE) into the
+  # secret store; nobody types, pastes or exports it. A --yes rerun signs in
+  # first and lets onboarding use the connected key.
   if [ "$assume_yes" = 1 ]; then
-    onboard "onboard --update --writer openrouter" --update --writer openrouter --openrouter-key-env OPENROUTER_API_KEY
-  else
+    gate_step "connect OpenRouter in the browser (axocoatl connect openrouter)" --interactive -- axocoatl connect openrouter
     onboard "onboard --update --writer openrouter" --update --writer openrouter
+  else
+    onboard "onboard --update --writer openrouter (connect in the browser when it asks)" --update --writer openrouter
   fi
   confirm "onboarding asked for different writer and reviewer models" "Did onboarding ask separately for the writer and the reviewer model, and refuse the same model for both?"
   doctor_ready
@@ -397,7 +432,7 @@ path_recovery() {
   gate_step "podman machine stop" -- podman machine stop
   local readme
   readme=$(node "$gate_commands_js" readme-run "$gate_repo/README.md")
-  run_published_on "$readme" recovery node-deps
+  run_readme_on "$readme" recovery node-deps
   gate_check "the run started the stopped machine" "the machine is not running" -- \
     sh -c 'podman machine inspect --format "{{.State}}" | grep -qi running'
   path_end
