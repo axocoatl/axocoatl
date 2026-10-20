@@ -35,6 +35,10 @@ pub(crate) const FILES: &[(&str, &str)] = &[
         "README.md",
         include_str!("../../assets/first-run/node-plain/README.md"),
     ),
+    (
+        ".gitignore",
+        include_str!("../../assets/first-run/node-plain/.gitignore"),
+    ),
 ];
 
 /// Write the sample repository into `directory`.
@@ -46,7 +50,42 @@ pub(crate) fn write_sample(directory: &Path) -> std::io::Result<()> {
         }
         std::fs::write(path, text)?;
     }
-    Ok(())
+    commit_sample(directory)
+}
+
+/// Make the sample a Git repository with one commit, as a person's own
+/// repository is: a run captures its change against `HEAD`, and without a
+/// commit the checks around the change establish nothing. The commit names
+/// a sample identity, so it needs no Git identity of the person's.
+fn commit_sample(directory: &Path) -> std::io::Result<()> {
+    let git = |args: &[&str]| -> std::io::Result<()> {
+        let output = std::process::Command::new("git")
+            .args([
+                "-c",
+                "init.defaultBranch=main",
+                "-c",
+                "user.name=Axocoatl sample",
+                "-c",
+                "user.email=sample@axocoatl.invalid",
+                "-c",
+                "commit.gpgSign=false",
+            ])
+            .args(args)
+            .current_dir(directory)
+            .output()?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )))
+        }
+    };
+    git(&["init", "-q"])?;
+    git(&["add", "-A"])?;
+    git(&["commit", "-q", "-m", "Sample repository for the first run"])
 }
 
 /// The `axocoatl run` arguments of the first run: the models named
@@ -508,6 +547,20 @@ mod tests {
         assert_eq!(package["scripts"]["test"], "node --test");
         let paging = std::fs::read_to_string(directory.path().join("src/paging.js")).unwrap();
         assert!(paging.contains("Math.floor(items.length / size)"));
+        // A committed Git repository with nothing left over, as a run needs.
+        let status = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert!(status.status.success());
+        assert_eq!(String::from_utf8_lossy(&status.stdout), "");
+        let head = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", "HEAD"])
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert!(head.status.success());
         if let Ok(output) = std::process::Command::new("node")
             .args(["--test", "--test-reporter=tap"])
             .current_dir(directory.path())
