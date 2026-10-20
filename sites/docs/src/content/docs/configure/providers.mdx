@@ -237,7 +237,8 @@ must stop after one token. A model that fails either is refused, and the error n
 the guarantee that failed. The result is kept per Ollama version, model digest and
 context; after an upgrade to another accepted Ollama version, the probes run again on
 it before it serves an existing Team, and a Team reviewed on Ollama 0.20.6 asks to be
-reviewed again.
+reviewed again. Axocoatl's own scheduled check runs the same two probes against each
+new Ollama release and release candidate, with a small model, as they are published.
 
 ```yaml
 agents:
