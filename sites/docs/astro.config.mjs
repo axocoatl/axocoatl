@@ -2,6 +2,7 @@
 import { defineConfig } from 'astro/config';
 import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
+import { emailOff } from './scripts/email-off.mjs';
 
 // https://astro.build/config
 export default defineConfig({
@@ -155,5 +156,7 @@ export default defineConfig({
         },
       ],
     }),
+    // Keep Cloudflare from rewriting `name@1.2.3` text in code into "[email protected]".
+    emailOff(),
   ],
 });

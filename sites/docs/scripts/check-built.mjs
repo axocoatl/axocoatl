@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isEmailOff } from './email-off.mjs';
 
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distRoot = path.join(docsRoot, 'dist');
@@ -34,6 +35,9 @@ if (!fs.existsSync(path.join(distRoot, 'favicon.png'))) {
 const htmlFiles = walk(distRoot).filter((file) => file.endsWith('.html'));
 for (const file of htmlFiles) {
   const html = fs.readFileSync(file, 'utf8');
+  if (/<body\b/i.test(html) && !isEmailOff(html)) {
+    failures.push(`${path.relative(docsRoot, file)} does not wrap its body in <!--email_off-->, so Cloudflare can rewrite text such as verify-receipt@v1.4.0 into "[email protected]"`);
+  }
   const pagePath = `/${path.relative(distRoot, file).replace(/index\.html$/, '').replaceAll(path.sep, '/')}`;
   for (const match of html.matchAll(/\b(?:href|src)=["']([^"']+)["']/g)) {
     const raw = match[1];

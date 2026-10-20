@@ -14,6 +14,10 @@ cd "$repo_root/sites/docs"
 npm ci
 node --test ./scripts/audit-gate.test.mjs
 node ./scripts/audit-gate.mjs
+# Every built page wraps its body in <!--email_off--> (check:links refuses one
+# that does not), so Cloudflare cannot turn verify-receipt@v1.4.0 into
+# "[email protected]".
+node --test ./scripts/email-off.test.mjs
 # Every first-run command and snippet in the README, llms.txt, the marketing
 # site and the docs' first-run pages runs as written, and the claims around them
 # hold (js-yaml is a devDependency of sites/docs, installed by the npm ci above).
