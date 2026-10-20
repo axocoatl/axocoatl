@@ -421,11 +421,10 @@ pub fn is_installed(name: &str, models: &[InstalledModel]) -> bool {
 }
 
 /// What `doctor` says to do about `name`, which is not installed under that
-/// exact name: pull it, or, when another tag of the same model is installed
-/// (`qwen3-coder:30b` for `qwen3-coder`, which Ollama reads as
-/// `qwen3-coder:latest`), name that tag exactly.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn not_pulled_hint(name: &str, models: &[InstalledModel]) -> String {
+/// exact name: `pull` (the pull command), or, when another tag of the same
+/// model is installed (`qwen3-coder:30b` for `qwen3-coder`, which Ollama
+/// reads as `qwen3-coder:latest`), that tag by its exact name.
+pub fn not_pulled_hint(name: &str, pull: &str, models: &[InstalledModel]) -> String {
     let base = name.split_once(':').map_or(name, |(base, _)| base);
     let tags: Vec<&str> = models
         .iter()
@@ -439,10 +438,9 @@ pub fn not_pulled_hint(name: &str, models: &[InstalledModel]) -> String {
         })
         .collect();
     match tags.as_slice() {
-        [] => format!("Run: ollama pull {name}"),
+        [] => pull.to_string(),
         tags => format!(
-            "Run: ollama pull {name}, or use the installed {} by its exact name (Ollama reads \
-             {name} as {})",
+            "{pull}, or use the installed {} by its exact name (Ollama reads {name} as {})",
             tags.join(", "),
             if name.contains(':') {
                 name.to_string()
@@ -1189,14 +1187,14 @@ mod tests {
         assert!(!is_installed("qwen3-coder:480b", &installed));
         // Not installed under that name: pull it, or name an installed tag.
         assert_eq!(
-            not_pulled_hint("qwen3-coder", &installed),
-            "Run: ollama pull qwen3-coder, or use the installed qwen3-coder:axocoatl-launch, \
+            not_pulled_hint("qwen3-coder", "ollama pull qwen3-coder", &installed),
+            "ollama pull qwen3-coder, or use the installed qwen3-coder:axocoatl-launch, \
              qwen3-coder:30b by its exact name (Ollama reads qwen3-coder as \
              qwen3-coder:latest)"
         );
         assert_eq!(
-            not_pulled_hint("mistral:7b", &installed),
-            "Run: ollama pull mistral:7b"
+            not_pulled_hint("mistral:7b", "ollama pull mistral:7b", &installed),
+            "ollama pull mistral:7b"
         );
     }
 

@@ -1,9 +1,11 @@
 //! Run admission on a live daemon: every problem of a run reported at once,
 //! usage problems before infrastructure ones, nothing created for a refused
 //! run and Podman never asked while a usage problem stands; the dry run;
-//! the `run.models` defaults; the context floor; Ollama's own reasons; and a
-//! stopped Podman machine started for a run. Each body runs in a child
-//! process with its own data root and a fake Podman that logs every call.
+//! the `run.models` defaults; the context floor; Ollama's own reasons; a
+//! stopped Podman machine started for a run; and a missing recipe image
+//! built after that start, or refused with `--no-build`. Each body runs in
+//! a child process with its own data root and a fake Podman that logs every
+//! call.
 use super::*;
 use axocoatl_config::loadout::ModelSpec;
 use std::os::unix::fs::PermissionsExt;
@@ -213,6 +215,14 @@ async fn hold(daemon: &AxocoatlDaemon, repo: &std::path::Path) -> tokio::sync::O
         .await
 }
 
+/// A stand-in Claude Code token in the daemon's secret store, never sent.
+fn store_claude_code_token(daemon: &AxocoatlDaemon) {
+    let secret = crate::secret_store::secret_path(daemon.data_root.path(), "claude-code-oauth");
+    std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
+    std::fs::write(&secret, "a stand-in, never sent").unwrap();
+    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
 /// Nothing exists for a refused run: no Workspace, Session or run record.
 async fn nothing_created(daemon: &AxocoatlDaemon) {
     assert!(daemon.list_workspaces().await.is_empty());
@@ -310,25 +320,25 @@ async fn usage_child_body() {
     );
 
     // Every problem of fix-claude-code at once: the Claude Code token,
-    // checked first, and the reviewer's provider (usage), then the image
-    // (infrastructure).
-    let message = usage(
-        admit(
-            &daemon,
-            request(
-                "fix-claude-code",
-                repo.path(),
-                &[("reviewer_model", "anthropic:opus")],
-                "claude-everything",
-            ),
+    // checked first, and the reviewer's provider. The claude-code image is
+    // not built, and that is no problem: a run builds it once nothing else
+    // stops it.
+    let claude_image =
+        axocoatl_isolation::recipes::image_name(&["claude-code".to_string()]).unwrap();
+    let claude = |id: &str| {
+        request(
+            "fix-claude-code",
+            repo.path(),
+            &[("reviewer_model", "anthropic:opus")],
+            id,
         )
-        .await,
-    );
+    };
+    let message = usage(admit(&daemon, claude("claude-everything")).await);
     let lines: Vec<&str> = message.lines().collect();
-    assert_eq!(lines.len(), 4, "{message}");
+    assert_eq!(lines.len(), 3, "{message}");
     assert_eq!(
         lines[0],
-        "3 problems stop this run, and nothing was started:"
+        "2 problems stop this run, and nothing was started:"
     );
     assert!(
         lines[1]
@@ -340,9 +350,29 @@ async fn usage_child_body() {
         lines[2].starts_with("  2. the reviewer runs anthropic:opus"),
         "{message}"
     );
+    // A run that may not build its image (--no-build) has a third usage
+    // problem: the image, with the command that builds it.
+    let mut no_build = claude("claude-no-build");
+    no_build.environment.build_images = false;
+    let message = usage(admit(&daemon, no_build.clone()).await);
+    let lines: Vec<&str> = message.lines().collect();
+    assert_eq!(lines.len(), 4, "{message}");
+    assert_eq!(
+        lines[0],
+        "3 problems stop this run, and nothing was started:"
+    );
     assert!(
-        lines[3].starts_with("  3. recipe images: no image is built from the recipes claude-code"),
+        lines[1].starts_with("  1. Agent writer (claude-code) needs the credential")
+            && lines[2].starts_with("  2. the reviewer runs anthropic:opus"),
         "{message}"
+    );
+    assert_eq!(
+        lines[3],
+        format!(
+            "  3. the run's image {claude_image} is not built on this computer, and building it \
+             was turned off (--no-build). Build it with `axocoatl recipe build claude-code`, \
+             then run again"
+        )
     );
 
     // Both missing parameters at once, with a missing check command, and
@@ -367,15 +397,9 @@ async fn usage_child_body() {
     assert_eq!(podman_calls(), Vec::<String>::new());
     nothing_created(&daemon).await;
 
-    // The dry run lists the same problems and asks Podman, read-only.
-    let preflight = daemon
-        .preflight_loadout_run(request(
-            "fix-claude-code",
-            repo.path(),
-            &[("reviewer_model", "anthropic:opus")],
-            "dry",
-        ))
-        .await;
+    // The dry run lists the same problems and asks Podman, read-only; it
+    // says a run builds the missing image first.
+    let preflight = daemon.preflight_loadout_run(claude("dry")).await;
     assert!(!preflight.ready);
     assert_eq!(preflight.exit_code, exit_code::USAGE);
     let codes: Vec<&str> = preflight
@@ -383,17 +407,39 @@ async fn usage_child_body() {
         .iter()
         .map(|problem| problem.code.as_str())
         .collect();
-    assert_eq!(codes[..3], ["credential", "model_provider", "recipe_image"]);
-    assert_eq!(preflight.problems[2].exit_code, exit_code::INFRASTRUCTURE);
+    assert_eq!(codes[..2], ["credential", "model_provider"]);
     if cfg!(target_os = "macos") {
         // A stopped machine is not a problem: a run starts it.
-        assert_eq!(codes.len(), 3, "{:?}", preflight.problems);
+        assert_eq!(codes.len(), 2, "{:?}", preflight.problems);
         assert_eq!(
             preflight.sandbox.as_deref(),
             Some("the Podman machine is stopped; a run starts it first")
         );
     }
+    assert!(
+        preflight.notes.contains(&format!(
+            "the run's image {claude_image} is not built on this computer; a run builds it \
+             first, the same as `axocoatl recipe build claude-code`"
+        )),
+        "{:?}",
+        preflight.notes
+    );
     assert_eq!(preflight.params["writer_model"], "anthropic:sonnet");
+    // With --no-build the dry run lists the image as the run does: a usage
+    // problem.
+    let preflight = daemon.preflight_loadout_run(no_build).await;
+    let codes: Vec<&str> = preflight
+        .problems
+        .iter()
+        .map(|problem| problem.code.as_str())
+        .collect();
+    assert_eq!(
+        codes[..3],
+        ["credential", "model_provider", "recipe_image"],
+        "{:?}",
+        preflight.problems
+    );
+    assert_eq!(preflight.problems[2].exit_code, exit_code::USAGE);
     assert!(!podman_calls().iter().any(|call| call == "machine start"));
     nothing_created(&daemon).await;
     daemon.shutdown().await.unwrap();
@@ -517,8 +563,11 @@ async fn defaults_child_body() {
             _ => None,
         })
         .collect();
+    // Then the note of the environment admission chose (image, toolchain,
+    // check and setup).
+    assert!(notes.len() >= 2, "{notes:?}");
     assert_eq!(
-        notes,
+        notes[..2],
         [
             format!(
                 "writer_model = {writer} (from your setup: run.models.writer in the \
@@ -576,6 +625,50 @@ async fn stopped_machine_child_body() {
         "{calls:?}"
     );
     drop(held);
+    daemon.shutdown().await.unwrap();
+}
+
+#[cfg(target_os = "macos")]
+async fn image_build_child_body() {
+    let server = ollama().await;
+    let (daemon, _dir) = daemon(&server.uri(), "").await;
+    let repo = tempfile::tempdir().unwrap();
+    let reviewer = format!("ollama:{REVIEWER}");
+    store_claude_code_token(&daemon);
+    forget_podman_calls();
+    // A run whose recipe image is missing builds it once nothing else stops
+    // it, after the stopped machine was started; a build that fails is
+    // infrastructure (exit code 5), naming the command that shows Podman's
+    // output, and nothing is created.
+    match admit(
+        &daemon,
+        request(
+            "fix-claude-code",
+            repo.path(),
+            &[("reviewer_model", &reviewer)],
+            "build",
+        ),
+    )
+    .await
+    {
+        Err(DaemonError::Session(message)) => assert!(
+            message.starts_with("building the run's image localhost/axocoatl-recipe-claude-code:")
+                && message.contains("Build it with `axocoatl recipe build claude-code` to see"),
+            "{message}"
+        ),
+        Err(other) => panic!("expected the failed build, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    }
+    let calls = podman_calls();
+    let start = calls
+        .iter()
+        .position(|call| call == "machine start")
+        .unwrap_or_else(|| panic!("{calls:?}"));
+    assert!(
+        calls[start..].iter().any(|call| call.starts_with("build ")),
+        "{calls:?}"
+    );
+    nothing_created(&daemon).await;
     daemon.shutdown().await.unwrap();
 }
 
@@ -637,38 +730,28 @@ async fn more_problems_child_body() {
     let reviewer = format!("ollama:{REVIEWER}");
     forget_podman_calls();
 
-    // Refused only for infrastructure (the recipe image is not built): the
-    // stopped Podman machine is asked about, never started.
-    let secret = crate::secret_store::secret_path(daemon.data_root.path(), "claude-code-oauth");
-    std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
-    std::fs::write(&secret, "a stand-in, never sent").unwrap();
-    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
-    match admit(
-        &daemon,
-        request(
-            "fix-claude-code",
-            repo.path(),
-            &[("reviewer_model", &reviewer)],
-            "image",
-        ),
-    )
-    .await
-    {
-        Err(DaemonError::Session(message)) => assert!(
-            message.contains("recipe images: no image is built from the recipes claude-code"),
-            "{message}"
-        ),
-        Err(other) => panic!("expected the missing image, got {other}"),
-        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
-    }
-    assert!(
-        !podman_calls().iter().any(|call| call == "machine start"),
-        "{:?}",
-        podman_calls()
+    // A missing recipe image a run may not build (--no-build) is a usage
+    // refusal naming the build, and Podman is not asked.
+    store_claude_code_token(&daemon);
+    let mut no_build = request(
+        "fix-claude-code",
+        repo.path(),
+        &[("reviewer_model", &reviewer)],
+        "image",
     );
+    no_build.environment.build_images = false;
+    let message = usage(admit(&daemon, no_build).await);
+    assert!(
+        message.starts_with("the run's image localhost/axocoatl-recipe-claude-code:")
+            && message.contains("building it was turned off (--no-build)")
+            && message.contains("Build it with `axocoatl recipe build claude-code`"),
+        "{message}"
+    );
+    assert_eq!(podman_calls(), Vec::<String>::new());
 
     // Ollama still busy after the retry: infrastructure (exit code 5) in
-    // Ollama's words, not a usage error.
+    // Ollama's words, not a usage error. Refused only for infrastructure,
+    // the stopped Podman machine is asked about, never started.
     let busy_model = format!("ollama:{BUSY}");
     match admit(
         &daemon,
@@ -692,6 +775,11 @@ async fn more_problems_child_body() {
         Err(other) => panic!("expected a busy Ollama, got {other}"),
         Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
     }
+    let calls = podman_calls();
+    assert!(
+        !calls.is_empty() && !calls.iter().any(|call| call == "machine start"),
+        "{calls:?}"
+    );
 
     // A credential the writer cannot send is named with a missing
     // parameter, not after it.
@@ -998,6 +1086,22 @@ async fn a_run_starts_a_stopped_podman_machine() {
     .await;
 }
 
+/// A run's missing recipe image is built once nothing else stops the run,
+/// after the stopped machine was started; a failed build is infrastructure.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn a_missing_recipe_image_is_built_after_the_machine_starts() {
+    if std::env::var_os(CHILD).is_some() {
+        image_build_child_body().await;
+        return;
+    }
+    run_child(
+        "bootstrap::loadout_runs::admission_tests::a_missing_recipe_image_is_built_after_the_machine_starts",
+        Podman::Stopped,
+    )
+    .await;
+}
+
 /// Without Podman a run is refused as infrastructure, naming the install.
 #[tokio::test]
 async fn without_podman_a_run_is_refused_as_infrastructure() {
@@ -1012,7 +1116,8 @@ async fn without_podman_a_run_is_refused_as_infrastructure() {
     .await;
 }
 
-/// A run refused only for infrastructure leaves a stopped Podman machine
+/// A missing image a run may not build is a usage refusal before Podman;
+/// a run refused only for infrastructure leaves a stopped Podman machine
 /// stopped; Ollama still busy after its retry is infrastructure; a
 /// credential is named with a missing parameter; a dry run may read
 /// Ollama's metadata only; one problem names every model under the context
