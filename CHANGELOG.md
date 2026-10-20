@@ -78,11 +78,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bundle's manifest is signed with the gate account's receipt key
   (`axocoatl receipt sign-evidence`, hidden) and checked against `.axocoatl/gate-keys`;
   the release workflow also runs the Linux new-user flow again on its own archives. The
-  only way past it is a manual run on the tag with a typed override phrase, which is
-  logged. CI runs the Linux flow on every pull request against the commit's release
-  archive, with a scripted Ollama-compatible model server and fixture repositories in
-  Node, Python, Rust and Go (`tests/fixtures/newuser`), plus an Ubuntu 22.04 leg that
-  must refuse cleanly.
+  only way past it is a manual run on the tag, started by a login listed in
+  `.axocoatl/gate-override-actors`, with a typed override phrase, which is logged. CI
+  runs the Linux flow on every pull request against the commit's release archive, with
+  a scripted Ollama-compatible model server and fixture repositories in Node, Python,
+  Rust and Go (`tests/fixtures/newuser`), plus an Ubuntu 22.04 leg that must refuse
+  cleanly. It also checks a new Mac user's install, `doctor` and `onboard --plan`
+  against a Podman stand-in in each Podman state on macOS runners (arm64 and Intel).
+  The browser regressions now also run on WebKit (Safari's engine) and on aarch64,
+  against the release build.
 
 
 ### Fixed
