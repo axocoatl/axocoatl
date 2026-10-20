@@ -2,9 +2,8 @@
 
 Tiny repository templates that the clean-machine new-user gate
 ([docs/RELEASE_GATE.md](../../../docs/RELEASE_GATE.md)) runs `axocoatl run fix`
-on, exactly as the README tells a new user to. Each one is the same bug in a
-different language, with one failing test and the language's standard test
-command:
+on, exactly as the published copy tells a new user to. Each has one failing
+test and the language's standard test command:
 
 | Fixture | Test command | Needs before the check |
 |---|---|---|
@@ -14,11 +13,18 @@ command:
 | `rust` | `cargo test` | a Rust toolchain |
 | `go` | `go test ./...` | a Go toolchain |
 
-The bug, in every fixture: paging skips the last item when the total is a
-multiple of the page size. That is the task the README's `axocoatl run fix`
-example names, so the README command runs on each fixture verbatim. Each
-fixture's README states the bug, the expected fix and how many tests pass
-after it.
+The gate's four fixtures (`node-deps`, `python-pytest`, `rust`, `go`) share
+one bug: paging skips the last item when the total is a multiple of the page
+size. That is the task the README's `axocoatl run fix` example names, so the
+README command runs on each of them verbatim. Each fixture's README states
+the bug, the expected fix and how many tests pass after it.
+
+`node-plain` is onboarding's first-run sample, made by the onboarding work.
+Its bug is another one (the last item is dropped when the count is not a
+multiple of the page size), so the README's task would describe the wrong
+bug on it. The gate runs the command from `node-plain/README.md` instead
+(`"command": "fixture-readme"` in `fixtures.json`), the one onboarding runs
+on it.
 
 ## Rules
 

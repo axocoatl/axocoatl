@@ -5,7 +5,10 @@
 #
 # Usage: test-fixtures.sh [fixture...]
 # A fixture whose toolchain this host lacks is skipped, unless
-# GATE_REQUIRE_ALL_TOOLCHAINS=1 (CI), which makes it a failure.
+# GATE_REQUIRE_ALL_TOOLCHAINS=1 (CI), which makes it a failure. A fixture
+# that another workstream owns (fixtures.json "owner") and that is not in
+# the tree yet is reported PENDING; the gate itself fails its runs until it
+# is there, so nothing passes without it.
 set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -88,6 +91,12 @@ checked=0
 for fixture in "${fixtures[@]}"; do
   source_dir="$fixtures_root/$fixture"
   if [[ ! -d "$source_dir" ]]; then
+    owner=$(node -e 'process.stdout.write(require(process.argv[1]).fixtures[process.argv[2]]?.owner ?? "")' \
+      "$fixtures_root/fixtures.json" "$fixture")
+    if [[ -n "$owner" ]]; then
+      echo "PENDING $fixture: made by $owner, not in this tree yet (the gate fails its runs until it is)"
+      continue
+    fi
     if [[ "${GATE_REQUIRE_ALL_TOOLCHAINS:-0}" == 1 ]]; then
       fail "fixture $fixture is listed in fixtures.json but missing"
     fi

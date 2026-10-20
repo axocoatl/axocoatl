@@ -1,9 +1,10 @@
 {
   "schema": "axocoatl.newuser-fixtures/1",
-  "note": "What the clean-machine new-user gate (docs/RELEASE_GATE.md) expects of each fixture. image_contains and setup_contains are matched against the run's start line and record; null means the run may choose none.",
+  "note": "What the clean-machine new-user gate (docs/RELEASE_GATE.md) expects of each fixture. image_contains and setup_contains are matched against the run's start line and record; null means the run may choose none. The gate runs the README's `axocoatl run fix` command on each fixture, except where command is fixture-readme: then the first `axocoatl run fix` command in the fixture's own README.md. A fixture with an owner is made by that workstream; until it is in the tree, test-fixtures.sh reports it PENDING and the gate fails its runs.",
   "fixtures": {
     "node-plain": {
       "owner": "onboarding (the first-run sample repository)",
+      "command": "fixture-readme",
       "language": "node",
       "test_command": "npm test",
       "host_setup": null,

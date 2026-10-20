@@ -28,10 +28,9 @@
     },
     {
       "fixture": "node-plain",
-      "provisional": "Written before onboarding's node-plain sample existed; correct probe, find and replace once it does (the stub-model-server test fails until they match).",
-      "probe": "pages.js",
-      "find": "Math.floor(total / size)",
-      "replace": "Math.ceil(total / size)"
+      "probe": "src/paging.js",
+      "find": "Math.floor(items.length / size)",
+      "replace": "Math.ceil(items.length / size)"
     }
   ]
 }
