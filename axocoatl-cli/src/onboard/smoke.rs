@@ -141,22 +141,91 @@ impl Drop for TemporaryDaemon {
     }
 }
 
+/// A new directory for the first run in the temporary directory: an
+/// unpredictable name, created (never reused) owner-only, so nothing another
+/// user placed in a shared `/tmp` is written through.
+pub(crate) fn first_run_directory(parent: &Path) -> std::io::Result<std::path::PathBuf> {
+    let base = parent.join(format!(
+        "axocoatl-first-run-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&base)?;
+    Ok(base)
+}
+
+/// How long a daemon that is starting (the service just started, or one
+/// already running) may take to answer: its first start downloads an
+/// embedding model.
+const DAEMON_START_WAIT: Duration = Duration::from_secs(300);
+/// How long a daemon that was already running may take to answer on the
+/// configured port before onboarding says it runs another configuration.
+const RUNNING_DAEMON_WAIT: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 15 });
+
+/// Wait until `url` answers, at most `wait`.
+async fn wait_healthy(url: &str, wait: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        if healthy(url).await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
 /// Step 7; `true` when the run passed and its receipt verified.
-pub(crate) async fn run(o: &mut Onboarding, writer: WriterChoice, choice: &Choice) -> bool {
-    let base = std::env::temp_dir().join(format!("axocoatl-first-run-{}", super::host::stamp()));
+/// `service_started`: Step 6 just started the Always-On Service, which
+/// this run then uses (never a second daemon beside it).
+pub(crate) async fn run(
+    o: &mut Onboarding,
+    writer: WriterChoice,
+    choice: &Choice,
+    service_started: bool,
+) -> bool {
+    if o.ui.plan() {
+        let args = run_args(
+            writer,
+            choice,
+            Path::new("<temporary directory>/repo"),
+            Path::new("<temporary directory>/receipt.json"),
+            Path::new("<temporary directory>/record.jsonl"),
+            &o.paths.config_path,
+        );
+        o.ui.say(format!(
+            "    would copy the sample repository to a temporary directory and run: axocoatl {}",
+            args.join(" ")
+        ));
+        o.ui.say("    would then run: axocoatl receipt verify <receipt> --key \"$(axocoatl receipt key)\" --repo <repository>");
+        return true;
+    }
+    // Tests keep it in their own temporary home.
+    let parent = if cfg!(test) {
+        o.host.home.clone()
+    } else {
+        std::env::temp_dir()
+    };
+    let base = match first_run_directory(&parent) {
+        Ok(base) => base,
+        Err(error) => {
+            o.step_left(format!(
+                "Could not create a directory for the first run: {error}"
+            ));
+            return false;
+        }
+    };
     let repo = base.join("repo");
     let receipt = base.join("receipt.json");
     let record = base.join("record.jsonl");
     let config = o.paths.config_path.clone();
     let args = run_args(writer, choice, &repo, &receipt, &record, &config);
-    if o.ui.plan() {
-        o.ui.say(format!(
-            "    would copy the sample repository to {} and run: axocoatl {}",
-            repo.display(),
-            args.join(" ")
-        ));
-        return true;
-    }
     if let Err(error) = write_sample(&repo) {
         o.step_left(format!("Could not write the sample repository: {error}"));
         return false;
@@ -169,9 +238,49 @@ pub(crate) async fn run(o: &mut Onboarding, writer: WriterChoice, choice: &Choic
         .map(|config| (config.server.host.clone(), config.server.port))
         .unwrap_or_else(|| ("127.0.0.1".to_string(), 8080));
     let url = health_url(&host, port);
+    let ipc_answers = axocoatl_daemon::ipc::IpcClient::connect(&o.socket_path)
+        .await
+        .is_ok();
     let _daemon = if healthy(&url).await {
         o.ui.ok(format!("Using the daemon running on port {port}"));
         None
+    } else if service_started || ipc_answers {
+        // A daemon is starting or runs already: a second one would contend
+        // for its port and its IPC socket. Wait for it instead.
+        let wait = if service_started {
+            o.ui.say(format!(
+                "  Waiting for the Always-On Service to answer on port {port} (its first start \
+                 downloads an 87 MB embedding model once)…"
+            ));
+            DAEMON_START_WAIT
+        } else {
+            RUNNING_DAEMON_WAIT
+        };
+        if !wait_healthy(&url, wait).await {
+            o.step_left(if service_started {
+                format!(
+                    "The Always-On Service did not answer at {url}: see `axocoatl service \
+                     status`, then run `axocoatl onboard --update --smoke-test` again"
+                )
+            } else {
+                format!(
+                    "An Axocoatl daemon is running but does not answer at {url}, the port this \
+                     configuration names: restart it so it reads {} (`axocoatl service stop && \
+                     axocoatl service start`, or stop `axocoatl dev` and start it again)",
+                    config.display()
+                )
+            });
+            return false;
+        }
+        o.ui.ok(format!("Using the daemon running on port {port}"));
+        None
+    } else if !super::host::port_free(port) {
+        o.step_left(format!(
+            "Port {port} is in use by another program, so no daemon can start for the first run: \
+             stop it, or set server.port in {}",
+            config.display()
+        ));
+        return false;
     } else {
         o.ui.say(format!(
             "  Starting a daemon for this run (axocoatl serve on port {port}; its first start \
@@ -202,7 +311,7 @@ pub(crate) async fn run(o: &mut Onboarding, writer: WriterChoice, choice: &Choic
                 return false;
             }
         };
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+        let deadline = tokio::time::Instant::now() + DAEMON_START_WAIT;
         let mut daemon = daemon;
         loop {
             if healthy(&url).await {
@@ -233,6 +342,7 @@ pub(crate) async fn run(o: &mut Onboarding, writer: WriterChoice, choice: &Choic
     // A SIGTERM or SIGHUP to onboarding stops the daemon it started, too
     // (Ctrl+C reaches both through the terminal).
     let run_cmd = Cmd::new(&exe, &arg_refs);
+    // The run is killed with onboarding's future if a signal ends it.
     let run = o.host.status(&run_cmd);
     let code = tokio::select! {
         code = run => match code {
@@ -402,6 +512,31 @@ mod tests {
                 "{printed}"
             );
         }
+    }
+
+    /// The first run's directory has an unpredictable name and is created
+    /// new and owner-only: a path someone else made (or a link) is never
+    /// written through.
+    #[cfg(unix)]
+    #[test]
+    fn the_first_run_directory_is_new_unpredictable_and_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = tempfile::tempdir().unwrap();
+        let one = first_run_directory(parent.path()).unwrap();
+        let two = first_run_directory(parent.path()).unwrap();
+        assert_ne!(one, two);
+        assert!(one
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("axocoatl-first-run-"));
+        assert_eq!(
+            std::fs::metadata(&one).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        // Creating over an existing path fails instead of reusing it.
+        let mut builder = std::fs::DirBuilder::new();
+        assert!(builder.recursive(false).create(&one).is_err());
     }
 
     #[test]

@@ -31,7 +31,19 @@ const INFO: &str = r#"{"host":{"security":{"rootless":true,"selinuxEnabled":fals
 /// `running`, `rootful`, `installed`. Read-only commands answer from the
 /// state; `machine init`, `start`, `stop` and `set` change it.
 fn podman_shim(shims: &Shims) {
+    podman_shim_named(shims, "podman-machine-default");
+}
+
+/// [`podman_shim`] whose one machine is called `name`: the commands that
+/// change it work only when they name it (Podman acts on
+/// `podman-machine-default` without a name).
+fn podman_shim_named(shims: &Shims, name: &str) {
     let dir = shims.dir.path().display().to_string();
+    let named = if name == "podman-machine-default" {
+        String::new()
+    } else {
+        format!(" {name}")
+    };
     shims.add(
         "podman",
         &format!(
@@ -46,18 +58,18 @@ case "$*" in
   "machine list --format json")
     if [ -f "$D/machine" ]; then
       r=false; [ -f "$D/running" ] && r=true
-      echo "[{{\"Name\":\"podman-machine-default\",\"Default\":true,\"Running\":$r,\"VMType\":\"applehv\",\"CPUs\":6,\"Memory\":\"8589934592\"}}]"
+      echo "[{{\"Name\":\"{name}\",\"Default\":true,\"Running\":$r,\"VMType\":\"applehv\",\"CPUs\":6,\"Memory\":\"8589934592\"}}]"
     else echo "[]"; fi ;;
-  "machine inspect podman-machine-default")
+  "machine inspect {name}")
     rf=false; [ -f "$D/rootful" ] && rf=true
-    echo "[{{\"Name\":\"podman-machine-default\",\"Rootful\":$rf,\"Resources\":{{\"CPUs\":6,\"Memory\":8192}}}}]" ;;
+    echo "[{{\"Name\":\"{name}\",\"Rootful\":$rf,\"Resources\":{{\"CPUs\":6,\"Memory\":8192}}}}]" ;;
   "machine info --format json") echo '{{"Host":{{"VMType":"applehv"}}}}' ;;
   "system connection list --format json")
-    if [ -f "$D/machine" ] || [ -f "$D/connection" ]; then echo '[{{"Name":"podman-machine-default"}}]'; else echo '[]'; fi ;;
+    if [ -f "$D/machine" ] || [ -f "$D/connection" ]; then echo '[{{"Name":"{name}"}}]'; else echo '[]'; fi ;;
   machine\ init*) touch "$D/machine" ;;
-  "machine start") touch "$D/running" ;;
-  "machine stop") rm -f "$D/running" ;;
-  "machine set --rootful=false") rm -f "$D/rootful" ;;
+  "machine start{named}") touch "$D/running" ;;
+  "machine stop{named}") rm -f "$D/running" ;;
+  "machine set --rootful=false{named}") rm -f "$D/rootful" ;;
   pull*) echo "pulled" ;;
   run*) echo 1000 ;;
   "system migrate") ;;
@@ -280,6 +292,7 @@ async fn facts(
         memory_bytes: Some(memory_gb * GIB),
         cpus: 18,
         disk_free_bytes: Some(400_000_000_000),
+        containers_free_bytes: None,
         root_user: false,
         user: "alex".to_string(),
         port_8080_free: true,
@@ -310,6 +323,8 @@ async fn facts(
         gh: None,
         windows_ollama: false,
         daemon_running: false,
+        daemon_version: None,
+        service_program: None,
         xdg_config_home: None,
         landlock_abi: Some(6),
     }
@@ -344,6 +359,8 @@ fn onboarding(shims: &Shims, ui: Ui, facts: Facts, mut args: OnboardArgs) -> Onb
         openrouter_api: "http://127.0.0.1:9/never".to_string(),
         socket_path: home.join("no-daemon.sock"),
         data_dir_override: Some(home.join("data")),
+        kept: Kept::default(),
+        step_keys: Default::default(),
     }
 }
 
@@ -437,8 +454,9 @@ esac"#,
         "{output}"
     );
     assert!(output.contains("This downloads about 0.9 GB and uses up to 8 GiB of memory"));
+    // The download plus a tenth for Ollama's temporary files.
     assert!(output
-        .contains("Pull qwen3-coder:30b (18.6 GB) and gpt-oss:20b (13.8 GB)? Needs 32.3 GB free"));
+        .contains("Pull qwen3-coder:30b (18.6 GB) and gpt-oss:20b (13.8 GB)? Needs 35.6 GB free"));
     assert!(
         output.contains("a fix run needs at least 16384"),
         "{output}"
@@ -824,30 +842,109 @@ fn tree(directory: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     entries
 }
 
-/// Below 48 GB no local pair is offered by default: the person is steered
-/// to OpenRouter, and nothing is pulled.
+/// Below 48 GB no local pair is offered by default. At the terminal the
+/// person is steered to OpenRouter (the menu's default) and nothing is
+/// pulled; with --yes an explicit `--writer ollama` is never turned into a
+/// hosted writer: naming the models is a step left.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_16_gb_computer_is_steered_to_openrouter_and_pulls_nothing() {
     let shims = Shims::new();
     ollama_shim(&shims);
     let ollama = FakeOllama::start("0.40.6", shims.home.path(), shims.dir.path(), &[]).await;
-    let facts = facts(
+    let missing_variable = format!("AXOCOATL_ONBOARD_TEST_NO_KEY_{}", std::process::id());
+    for interactive in [true, false] {
+        let facts = facts(
+            mac("26.6"),
+            16,
+            no_podman(),
+            &shims,
+            &ollama.url(),
+            OllamaService::Brew,
+        )
+        .await;
+        let ui = if interactive {
+            // The menu's default, then yes to credits, the default models.
+            Ui::scripted(vec![
+                Answer::Enter,
+                Answer::Yes,
+                Answer::Enter,
+                Answer::Enter,
+            ])
+        } else {
+            Ui::new(Mode::Yes, false, None)
+        };
+        let mut o = onboarding(
+            &shims,
+            ui,
+            facts,
+            OnboardArgs {
+                ollama_url: Some(ollama.url()),
+                podman: Some(PodmanChoice::Skip),
+                openrouter_key_env: Some(missing_variable.clone()),
+                yes: !interactive,
+                ..yes(WriterChoice::Ollama)
+            },
+        );
+        let mut choice = Choice::default();
+        ollama::writer_and_reviewer(&mut o, &mut choice).await;
+        let output = o.ui.output();
+        assert!(
+            !shims.calls().iter().any(|call| call.contains("pull")),
+            "{:?}",
+            shims.calls()
+        );
+        assert!(choice.writer_model.is_none());
+        if interactive {
+            assert!(
+                output.contains("No local pair has been tested on 16 GB of memory"),
+                "{output}"
+            );
+            assert!(
+                o.steps
+                    .iter()
+                    .any(|step| step.contains(&format!("Export {missing_variable}"))),
+                "{:?}",
+                o.steps
+            );
+        } else {
+            assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+            assert!(
+                o.steps[0].starts_with("No local pair has been tested on 16 GB of memory")
+                    && o.steps[0].contains("--writer-model ollama:MODEL"),
+                "{:?}",
+                o.steps
+            );
+            assert!(!output.contains("OpenRouter credits"), "{output}");
+        }
+    }
+}
+
+/// A pull that does not fit the disk is not started without a person:
+/// under --yes it is a step left with the size it needs.
+#[cfg(unix)]
+#[tokio::test]
+async fn yes_never_starts_a_pull_that_does_not_fit_the_disk() {
+    let shims = Shims::new();
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start("0.40.6", shims.home.path(), shims.dir.path(), &[]).await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    let mut facts = facts(
         mac("26.6"),
-        16,
+        48,
         no_podman(),
         &shims,
         &ollama.url(),
         OllamaService::Brew,
     )
     .await;
+    facts.disk_free_bytes = Some(12_500_000_000);
     let mut o = onboarding(
         &shims,
         Ui::new(Mode::Yes, false, None),
         facts,
         OnboardArgs {
             ollama_url: Some(ollama.url()),
-            podman: Some(PodmanChoice::Skip),
             ..yes(WriterChoice::Ollama)
         },
     );
@@ -855,22 +952,21 @@ async fn a_16_gb_computer_is_steered_to_openrouter_and_pulls_nothing() {
     ollama::writer_and_reviewer(&mut o, &mut choice).await;
     let output = o.ui.output();
     assert!(
-        output.contains("No local pair has been tested on 16 GB of memory"),
+        output.contains("Needs 35.6 GB free; 12.5 GB free here. no: it does not fit this disk"),
         "{output}"
     );
     assert!(
-        !shims.calls().iter().any(|call| call.contains("pull")),
+        !shims
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("ollama pull")),
         "{:?}",
         shims.calls()
     );
-    assert!(choice.writer_model.is_none());
-    assert!(
-        o.steps
-            .iter()
-            .any(|step| step.contains("OPENROUTER_API_KEY")),
-        "{:?}",
-        o.steps
-    );
+    assert!(o.steps.contains(
+        &"Free disk space for qwen3-coder:30b, then pull it: ollama pull qwen3-coder:30b"
+            .to_string()
+    ));
 }
 
 /// A failed pull shows Ollama's own error and leaves the pull as a step.
@@ -958,12 +1054,14 @@ async fn openrouter_writes_a_separate_reviewer_after_checking_key_and_models() {
         OllamaService::Manual,
     )
     .await;
+    shims.add("axocoatl", "exit 0");
     let mut o = onboarding(
         &shims,
         Ui::new(Mode::Yes, false, None),
         facts,
         OnboardArgs {
             openrouter_key_env: Some(variable.clone()),
+            start: Some(StartChoice::Dev),
             ..yes(WriterChoice::Openrouter)
         },
     );
@@ -971,6 +1069,15 @@ async fn openrouter_writes_a_separate_reviewer_after_checking_key_and_models() {
     let code = run(&mut o).await;
     let output = o.ui.output();
     assert_eq!(code, exit::READY, "{output}\n{:?}", o.steps);
+    // `axocoatl dev` runs as its own process, with the signals' defaults.
+    assert!(
+        shims.calls().contains(&format!(
+            "axocoatl dev --config {}",
+            o.paths.config_path.display()
+        )),
+        "{:?}",
+        shims.calls()
+    );
     let text = config_text(&o);
     let config = axocoatl_config::parse_config(&text, &o.paths.config_path).unwrap();
     let model = |id: &str| {
@@ -1025,6 +1132,17 @@ fn the_same_model_twice_is_a_usage_error() {
     }
     .check()
     .is_err());
+    // An OpenRouter writer's reviewer runs on OpenRouter: a local one is
+    // refused, never silently replaced.
+    let mixed = OnboardArgs {
+        writer: Some(WriterChoice::Openrouter),
+        reviewer: Some("ollama:gpt-oss:20b".into()),
+        ..OnboardArgs::default()
+    };
+    assert!(mixed
+        .check()
+        .unwrap_err()
+        .contains("with --writer openrouter the reviewer runs on OpenRouter too"));
 }
 
 /// Claude Code with --yes: the CLI found, the subscription said, the image
@@ -1271,7 +1389,8 @@ async fn an_interactive_reviewer_equal_to_the_writer_is_asked_again() {
     assert_eq!(choice.reviewer_model.unwrap().model, "z-ai/glm-4.6");
 }
 
-/// An existing configuration can be left alone: nothing is written.
+/// An existing configuration can be left alone: nothing is written, and
+/// it is checked as it is (exit 0 only when that check passes).
 #[tokio::test]
 async fn an_existing_configuration_can_be_left_unchanged() {
     let shims = Shims::new();
@@ -1292,9 +1411,19 @@ async fn an_existing_configuration_can_be_left_unchanged() {
     );
     std::fs::create_dir_all(&o.paths.config_dir).unwrap();
     std::fs::write(&o.paths.config_path, "agents: []\n").unwrap();
-    assert_eq!(run(&mut o).await, exit::READY);
+    assert_eq!(run(&mut o).await, exit::NOT_READY);
     assert_eq!(config_text(&o), "agents: []\n");
-    assert!(o.ui.output().contains("Configuration left unchanged"));
+    let output = o.ui.output();
+    assert!(output.contains("Configuration left unchanged"), "{output}");
+    assert!(output.contains("Checking it as it is"), "{output}");
+    assert!(output.contains("Not ready yet"), "{output}");
+    assert!(
+        o.steps
+            .iter()
+            .any(|step| step.contains("Podman is not installed")),
+        "{:?}",
+        o.steps
+    );
     assert!(shims.calls().is_empty());
 }
 
@@ -1461,4 +1590,760 @@ async fn a_stopped_ollama_nobody_can_start_is_a_step_without_waiting() {
         "{:?}",
         o.steps
     );
+}
+
+/// A machine with another name than `podman-machine-default`: onboarding
+/// starts it and switches it to rootless by name (without one, Podman acts
+/// on `podman-machine-default`).
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn a_machine_with_its_own_name_is_started_and_switched_by_name() {
+    let shims = Shims::new();
+    podman_shim_named(&shims, "dev");
+    podman_state(&shims, &["machine"]);
+    let report = podman_report(&shims).await;
+    assert_eq!(report.readiness, PodmanReadiness::MachineStopped);
+    let found = facts(
+        mac("26.6"),
+        48,
+        report,
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Manual,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        found,
+        OnboardArgs::default(),
+    );
+    assert!(sandbox::run(&mut o).await, "{}", o.ui.output());
+    let calls = shims.calls();
+    assert!(
+        calls.iter().any(|call| call == "podman machine start dev"),
+        "{calls:?}"
+    );
+    assert!(!calls.iter().any(|call| call == "podman machine start"));
+    assert!(o
+        .ui
+        .output()
+        .contains("Start dev now? (`podman machine start dev`)"));
+
+    let shims = Shims::new();
+    podman_shim_named(&shims, "dev");
+    podman_state(&shims, &["machine", "running", "rootful"]);
+    let report = podman_report(&shims).await;
+    let found = facts(
+        mac("26.6"),
+        48,
+        report,
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Manual,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::scripted(vec![Answer::Yes, Answer::Yes]),
+        found,
+        OnboardArgs::default(),
+    );
+    assert!(
+        sandbox::run(&mut o).await,
+        "{}\n{:?}",
+        o.ui.output(),
+        o.steps
+    );
+    let calls = shims.calls();
+    for expected in [
+        "podman machine stop dev",
+        "podman machine set --rootful=false dev",
+        "podman machine start dev",
+    ] {
+        assert!(calls.iter().any(|call| call == expected), "{calls:?}");
+    }
+}
+
+/// Through a `CONTAINER_CONNECTION` that is not a machine onboarding
+/// changes no machine: a rootful Podman there is a step that names the
+/// connection.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_podman_reached_through_another_connection_is_never_changed() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running", "rootful"]);
+    let report = axocoatl_isolation::podman_report::inspect_through(
+        &shims.dir.path().join("podman").display().to_string(),
+        axocoatl_isolation::podman::ConnectionOverride::Connection("remote".into()),
+    )
+    .await;
+    assert_eq!(report.readiness, PodmanReadiness::Ready);
+    assert!(report.machine_in_use().is_none());
+    let facts = facts(
+        mac("26.6"),
+        48,
+        report,
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Manual,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs::default(),
+    );
+    assert!(!sandbox::run(&mut o).await);
+    assert!(
+        !shims
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("podman machine stop")
+                || call.starts_with("podman machine set")
+                || call.starts_with("podman machine start")),
+        "{:?}",
+        shims.calls()
+    );
+    assert!(
+        o.steps[0].contains("reached through CONTAINER_CONNECTION=remote"),
+        "{:?}",
+        o.steps
+    );
+    assert!(!o.steps[0].contains("  "), "{:?}", o.steps);
+}
+
+/// `--plan` asks every question the Podman setup raises (a rootful
+/// machine here) and shows the service and the first run it would start,
+/// running only read-only commands and writing nothing.
+#[cfg(unix)]
+#[tokio::test]
+async fn plan_shows_the_rootful_switch_the_service_and_the_first_run() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running", "rootful"]);
+    let report = podman_report(&shims).await;
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start(
+        "0.40.6",
+        shims.home.path(),
+        shims.dir.path(),
+        &["qwen3-coder:30b", "gpt-oss:20b"],
+    )
+    .await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    std::fs::write(shims.dir.path().join("big-context"), "").unwrap();
+    let facts = facts(
+        mac("26.6"),
+        48,
+        report,
+        &shims,
+        &ollama.url(),
+        OllamaService::Brew,
+    )
+    .await;
+    let read_only = shims.calls().len();
+    let before = tree(shims.home.path());
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Plan, false, None),
+        facts,
+        OnboardArgs {
+            plan: true,
+            writer: Some(WriterChoice::Ollama),
+            ollama_url: Some(ollama.url()),
+            start: Some(StartChoice::Service),
+            smoke_test: true,
+            ..OnboardArgs::default()
+        },
+    );
+    assert_eq!(run(&mut o).await, exit::READY);
+    assert_eq!(tree(shims.home.path()), before);
+    assert_eq!(shims.calls().len(), read_only, "{:?}", shims.calls());
+    let output = o.ui.output();
+    for expected in [
+        "would ask: podman-machine-default runs containers as root",
+        "Switch it to rootless? This runs podman machine stop && podman machine set \
+         --rootful=false && podman machine start",
+        "would ask: Install the Always-On Service",
+        "would run: axocoatl service install && axocoatl service start",
+        "would copy the sample repository to a temporary directory and run: axocoatl run fix",
+        "Plan only: nothing was changed.",
+    ] {
+        assert!(output.contains(expected), "{expected}\n{output}");
+    }
+}
+
+/// Running onboarding again keeps the writer and the models the setup
+/// has: with `claude` installed, `--yes --update` on a local setup changes
+/// only the port it was asked to.
+#[cfg(unix)]
+#[tokio::test]
+async fn update_keeps_the_writer_and_the_models_the_setup_has() {
+    let shims = Shims::new();
+    shims.add("claude", "echo '2.1.292 (Claude Code)'");
+    shims.add("axocoatl", "exit 0");
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start(
+        "0.40.6",
+        shims.home.path(),
+        shims.dir.path(),
+        &["qwen3-coder:30b", "gpt-oss:20b", "qwen3:8b"],
+    )
+    .await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    std::fs::write(shims.dir.path().join("big-context"), "").unwrap();
+    let report = podman_report(&shims).await;
+    let mut facts = facts(
+        mac("26.6"),
+        48,
+        report,
+        &shims,
+        &ollama.url(),
+        OllamaService::Brew,
+    )
+    .await;
+    facts.claude = Some((shims.dir.path().join("claude"), Some("2.1.292".into())));
+    let port = free_port();
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            update: true,
+            port: Some(port),
+            writer: None,
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    let old = config::render(&config::ConfigPlan {
+        ollama_base_url: Some(ollama.url()),
+        openrouter_key: None,
+        lead: config::ModelRef::new(config::Provider::Ollama, "qwen3-coder:30b"),
+        reviewer: config::ModelRef::new(config::Provider::Ollama, "gpt-oss:20b"),
+        run_writer: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "qwen3-coder:30b",
+        )),
+        run_reviewer: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "gpt-oss:20b",
+        )),
+        port: free_port(),
+        note: "local Ollama setup".into(),
+        writer: "ollama",
+        codex_credential: None,
+    });
+    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    std::fs::write(&o.paths.config_path, &old).unwrap();
+    let code = run(&mut o).await;
+    let output = o.ui.output();
+    assert_eq!(code, exit::READY, "{output}\n{:?}", o.steps);
+    assert!(
+        output.contains("Writer: A local model on this computer (Ollama, no account, needs 48 GB memory or more) (kept from your configuration)"),
+        "{output}"
+    );
+    assert!(
+        !shims
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("axocoatl")),
+        "{:?}",
+        shims.calls()
+    );
+    let new = config_text(&o);
+    let changes = config::diff(&old, &new);
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    assert!(
+        changes[1].ends_with(&format!("port: {port}")),
+        "{changes:?}"
+    );
+}
+
+/// Updating an OpenRouter setup uses the key it has: under --yes the
+/// `${VARIABLE}` it names, with nothing to change; at the terminal, "no"
+/// to keeping it asks for a key at the hidden prompt, which replaces the
+/// reference in place and is never shown.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_openrouter_setup_keeps_its_key_or_replaces_it_in_place() {
+    let openrouter = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {}})))
+        .mount(&openrouter)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
+            {"id": "qwen/qwen3-coder"}, {"id": "openai/gpt-oss-120b"}
+        ]})))
+        .mount(&openrouter)
+        .await;
+    let variable = format!("AXOCOATL_ONBOARD_TEST_KEY_U_{}", std::process::id());
+    std::env::set_var(&variable, "sk-or-from-env");
+    let old_port = free_port();
+    let old = config::render(&config::ConfigPlan {
+        ollama_base_url: None,
+        openrouter_key: Some(config::KeyRef::Env(variable.clone())),
+        lead: config::ModelRef::new(config::Provider::OpenRouter, "qwen/qwen3-coder"),
+        reviewer: config::ModelRef::new(config::Provider::OpenRouter, "openai/gpt-oss-120b"),
+        run_writer: Some(config::ModelRef::new(
+            config::Provider::OpenRouter,
+            "qwen/qwen3-coder",
+        )),
+        run_reviewer: Some(config::ModelRef::new(
+            config::Provider::OpenRouter,
+            "openai/gpt-oss-120b",
+        )),
+        port: old_port,
+        note: "OpenRouter setup".into(),
+        writer: "openrouter",
+        codex_credential: None,
+    });
+    for interactive in [false, true] {
+        let shims = Shims::new();
+        podman_shim(&shims);
+        podman_state(&shims, &["machine", "running"]);
+        let report = podman_report(&shims).await;
+        let facts = facts(
+            mac("26.6"),
+            16,
+            report,
+            &shims,
+            "http://127.0.0.1:9",
+            OllamaService::Manual,
+        )
+        .await;
+        let ui = if interactive {
+            let mut answers = vec![
+                Answer::Pick(0), // update this setup
+                Answer::Enter,   // the writer it has
+                Answer::Yes,     // the sandbox check container
+                Answer::Yes,     // credits, no BYOK
+                Answer::No,      // keep reading the key from the variable
+            ];
+            if std::env::var("OPENROUTER_API_KEY").is_ok_and(|value| !value.trim().is_empty()) {
+                answers.push(Answer::No);
+            }
+            answers.extend([
+                Answer::Text("sk-or-typed-at-the-prompt".into()),
+                Answer::Yes,     // write the change
+                Answer::Pick(2), // start it later
+                Answer::No,      // no first run
+            ]);
+            Ui::scripted(answers)
+        } else {
+            Ui::new(Mode::Yes, false, None)
+        };
+        let mut o = onboarding(
+            &shims,
+            ui,
+            facts,
+            OnboardArgs {
+                yes: !interactive,
+                update: !interactive,
+                port: Some(old_port),
+                ..OnboardArgs::default()
+            },
+        );
+        o.openrouter_api = openrouter.uri();
+        std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+        std::fs::write(&o.paths.config_path, &old).unwrap();
+        let code = run(&mut o).await;
+        let output = o.ui.output();
+        assert_eq!(code, exit::READY, "{output}\n{:?}", o.steps);
+        let new = config_text(&o);
+        if interactive {
+            let config = axocoatl_config::parse_config(&new, &o.paths.config_path).unwrap();
+            assert_eq!(
+                config.providers.openrouter.unwrap().api_key.expose_secret(),
+                "sk-or-typed-at-the-prompt"
+            );
+            assert_eq!(new.matches("api_key:").count(), 1);
+            assert!(output.contains("+     api_key: (hidden)"), "{output}");
+            assert!(!output.contains("sk-or-typed-at-the-prompt"), "{output}");
+        } else {
+            assert_eq!(new, old);
+            assert!(output.contains("already has this setup"), "{output}");
+            assert!(output.contains(&format!("OpenRouter key: from ${variable}")));
+        }
+        assert!(!output.contains("sk-or-from-env"));
+    }
+    std::env::remove_var(&variable);
+}
+
+/// The first run never starts a second daemon beside one that is starting
+/// (the service Step 6 just started) or already running: it uses that one
+/// once it answers, or says it does not.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_first_run_uses_the_running_daemon_and_never_starts_another() {
+    let shims = Shims::new();
+    shims.add(
+        "axocoatl",
+        "case \"$1 $2\" in \"receipt key\") echo k-test ;; esac; exit 0",
+    );
+    let health = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .mount(&health)
+        .await;
+    let facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Manual,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs::default(),
+    );
+    let write = |o: &Onboarding, port: u16| {
+        std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+        std::fs::write(
+            &o.paths.config_path,
+            format!("agents: []\nserver:\n  port: {port}\n  host: \"127.0.0.1\"\n"),
+        )
+        .unwrap();
+    };
+    write(&o, health.address().port());
+    let choice = Choice {
+        writer_model: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "qwen3-coder:30b",
+        )),
+        reviewer_model: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "gpt-oss:20b",
+        )),
+        ..Choice::default()
+    };
+    assert!(
+        smoke::run(&mut o, WriterChoice::Ollama, &choice, true).await,
+        "{}\n{:?}",
+        o.ui.output(),
+        o.steps
+    );
+    let calls = shims.calls();
+    assert!(calls
+        .iter()
+        .any(|call| call.starts_with("axocoatl run fix --task")));
+    assert!(calls
+        .iter()
+        .any(|call| call.starts_with("axocoatl receipt verify")));
+    assert!(o.ui.output().contains("Using the daemon running on port"));
+
+    // A daemon answers on the IPC socket but not on this configuration's
+    // port: no second daemon, a step to restart it.
+    let _ipc = std::os::unix::net::UnixListener::bind(&o.socket_path).unwrap();
+    write(&o, free_port());
+    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false).await);
+    assert!(
+        o.steps
+            .iter()
+            .any(|step| step.starts_with("An Axocoatl daemon is running but does not answer")),
+        "{:?}",
+        o.steps
+    );
+    assert!(
+        !shims
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("axocoatl serve")),
+        "{:?}",
+        shims.calls()
+    );
+}
+
+/// Replacing a configuration never shows or logs the old file's secrets;
+/// the new file is shown with its key hidden.
+#[tokio::test]
+async fn replace_shows_the_new_file_and_none_of_the_old_secrets() {
+    let shims = Shims::new();
+    let facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Manual,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs::default(),
+    );
+    let old = "webhooks:\n  - name: ci\n    url: \"https://example.test/hook\"\n    secret: \"whsec-old\"\n    headers:\n      Authorization: \"Bearer tok-old\"\nserver:\n  auth:\n    api_keys:\n      - \"key-old\"\n    bearer_tokens: [\"tok-two\"]\n";
+    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    std::fs::write(&o.paths.config_path, old).unwrap();
+    let plan = config::ConfigPlan {
+        ollama_base_url: Some("http://localhost:11434".into()),
+        openrouter_key: Some(config::KeyRef::Value(zeroize::Zeroizing::new(
+            "sk-or-new-value".to_string(),
+        ))),
+        lead: config::ModelRef::new(config::Provider::Ollama, "qwen3-coder:30b"),
+        reviewer: config::ModelRef::new(config::Provider::OpenRouter, "openai/gpt-oss-120b"),
+        run_writer: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "qwen3-coder:30b",
+        )),
+        run_reviewer: Some(config::ModelRef::new(
+            config::Provider::OpenRouter,
+            "openai/gpt-oss-120b",
+        )),
+        port: 8231,
+        note: "local Ollama setup".into(),
+        writer: "ollama",
+        codex_credential: None,
+    };
+    assert!(write_config(
+        &mut o,
+        &plan,
+        &ExistingConfig::Replace(old.to_string())
+    ));
+    let output = o.ui.output();
+    for secret in [
+        "whsec-old",
+        "tok-old",
+        "key-old",
+        "tok-two",
+        "sk-or-new-value",
+    ] {
+        assert!(!output.contains(secret), "{secret}\n{output}");
+    }
+    assert!(output.contains("is replaced (the current file is kept as config.yaml.bak-"));
+    assert!(output.contains("+     api_key: (hidden)"), "{output}");
+    assert!(config_text(&o).contains("sk-or-new-value"));
+}
+
+/// Step 5 does not list again a problem an earlier step left: two models
+/// not pulled are two steps, not four.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_problem_is_listed_once_in_the_steps_left() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start("0.40.6", shims.home.path(), shims.dir.path(), &[]).await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    std::fs::write(shims.dir.path().join("big-context"), "").unwrap();
+    let report = podman_report(&shims).await;
+    let facts = facts(
+        mac("26.6"),
+        48,
+        report,
+        &shims,
+        &ollama.url(),
+        OllamaService::Brew,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            no_pull: true,
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    assert_eq!(run(&mut o).await, exit::NOT_READY);
+    assert_eq!(
+        o.steps,
+        [
+            "Pull qwen3-coder:30b: ollama pull qwen3-coder:30b",
+            "Pull gpt-oss:20b: ollama pull gpt-oss:20b"
+        ],
+        "{}",
+        o.ui.output()
+    );
+    assert!(o.ui.output().contains("Not ready yet, 2 steps left:"));
+}
+
+/// Enter leaves an existing Ollama `server.json` alone: turning cloud
+/// models off there is asked with No as the default.
+#[cfg(unix)]
+#[tokio::test]
+async fn enter_leaves_an_existing_ollama_configuration_alone() {
+    let shims = Shims::new();
+    shims.add("brew", "exit 0");
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start("0.40.6", shims.home.path(), shims.dir.path(), &[]).await;
+    let server_json = shims.home.path().join(".ollama/server.json");
+    std::fs::create_dir_all(server_json.parent().unwrap()).unwrap();
+    std::fs::write(&server_json, "{\"other\": 1}\n").unwrap();
+    let facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        &ollama.url(),
+        OllamaService::Brew,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::scripted(vec![Answer::Enter]),
+        facts,
+        OnboardArgs::default(),
+    );
+    assert_eq!(ollama::server(&mut o).await, None);
+    let output = o.ui.output();
+    assert!(
+        output.contains("The current file is backed up first. [y/N] Enter"),
+        "{output}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&server_json).unwrap(),
+        "{\"other\": 1}\n"
+    );
+    assert!(
+        o.steps[0].starts_with("Turn Ollama's cloud models off"),
+        "{:?}",
+        o.steps
+    );
+    assert!(!shims
+        .calls()
+        .iter()
+        .any(|call| call.starts_with("brew services")));
+}
+
+/// Doctor knows which writer the setup chose: a Claude Code setup without
+/// its image or its sign-in is not ready, and no `axocoatl run fix` line
+/// tells it to switch to a local writer.
+#[cfg(unix)]
+#[tokio::test]
+async fn doctor_fails_a_chosen_claude_code_writer_that_cannot_run() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    let home = shims.home.path();
+    let config_path = home.join("config.yaml");
+    std::fs::write(
+        &config_path,
+        config::render(&config::ConfigPlan {
+            ollama_base_url: None,
+            openrouter_key: Some(config::KeyRef::Value(zeroize::Zeroizing::new(
+                "sk-or-test".to_string(),
+            ))),
+            lead: config::ModelRef::new(config::Provider::OpenRouter, "openai/gpt-oss-120b"),
+            reviewer: config::ModelRef::new(config::Provider::OpenRouter, "openai/gpt-oss-120b"),
+            run_writer: None,
+            run_reviewer: Some(config::ModelRef::new(
+                config::Provider::OpenRouter,
+                "openai/gpt-oss-120b",
+            )),
+            port: free_port(),
+            note: "Claude Code writes".into(),
+            writer: "claude-code",
+            codex_credential: None,
+        }),
+    )
+    .unwrap();
+    let env = doctor_env(&shims);
+    let report = crate::doctor::collect(&config_path, &env).await;
+    assert!(!report.ready);
+    let claude: Vec<_> = report
+        .sections
+        .writers
+        .iter()
+        .filter(|item| item.name == "Claude Code")
+        .collect();
+    assert_eq!(claude.len(), 2, "{claude:?}");
+    assert!(claude
+        .iter()
+        .all(|item| item.status == crate::doctor::Status::Fail));
+    assert!(
+        !report
+            .ready_for
+            .iter()
+            .any(|path| path.command == "axocoatl run fix"),
+        "{:?}",
+        report.ready_for
+    );
+    let claude_path = report
+        .ready_for
+        .iter()
+        .find(|path| path.command == "axocoatl run fix-claude-code")
+        .unwrap();
+    assert!(!claude_path.ok);
+}
+
+/// With E2B for workbench Sessions, `axocoatl run` still needs Podman:
+/// doctor never says it is ready to run without it.
+#[cfg(unix)]
+#[tokio::test]
+async fn doctor_never_readies_runs_without_podman_under_e2b() {
+    let shims = Shims::new();
+    let home = shims.home.path();
+    let config_path = home.join("config.yaml");
+    let text = config::render(&config::ConfigPlan {
+        ollama_base_url: None,
+        openrouter_key: Some(config::KeyRef::Value(zeroize::Zeroizing::new(
+            "sk-or-test".to_string(),
+        ))),
+        lead: config::ModelRef::new(config::Provider::OpenRouter, "qwen/qwen3-coder"),
+        reviewer: config::ModelRef::new(config::Provider::OpenRouter, "openai/gpt-oss-120b"),
+        run_writer: Some(config::ModelRef::new(
+            config::Provider::OpenRouter,
+            "qwen/qwen3-coder",
+        )),
+        run_reviewer: Some(config::ModelRef::new(
+            config::Provider::OpenRouter,
+            "openai/gpt-oss-120b",
+        )),
+        port: free_port(),
+        note: "OpenRouter setup".into(),
+        writer: "openrouter",
+        codex_credential: None,
+    });
+    std::fs::write(
+        &config_path,
+        format!("{text}\nsandbox:\n  backend: e2b\n  network: bridge\n"),
+    )
+    .unwrap();
+    let report = crate::doctor::collect(&config_path, &doctor_env(&shims)).await;
+    let podman = &report.sections.sandbox[0];
+    assert_eq!(podman.status, crate::doctor::Status::Warn, "{podman:?}");
+    let run_fix = report
+        .ready_for
+        .iter()
+        .find(|path| path.command == "axocoatl run fix")
+        .unwrap_or_else(|| panic!("{:?}", report.ready_for));
+    assert!(!run_fix.ok, "{run_fix:?}");
+    assert!(run_fix.detail.contains("the sandbox is not ready"));
+}
+
+/// What doctor reads about this computer, in a test's home with its shims.
+fn doctor_env(shims: &Shims) -> crate::doctor::Environment {
+    let home = shims.home.path();
+    crate::doctor::Environment {
+        os: mac("26.6"),
+        user: "alex".to_string(),
+        memory_bytes: Some(48 * GIB),
+        cpus: 18,
+        home: home.to_path_buf(),
+        xdg_config_home: None,
+        host: shims.host(true),
+        load_models: false,
+        socket_path: home.join("no-daemon.sock"),
+        podman: shims.dir.path().join("podman").display().to_string(),
+        data_dir: Some(home.join("data")),
+        landlock_abi: Some(6),
+    }
 }

@@ -80,6 +80,27 @@ impl WriterChoice {
         }
     }
 
+    /// The name `--writer` takes and the configuration records.
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            WriterChoice::ClaudeCode => "claude-code",
+            WriterChoice::Codex => "codex",
+            WriterChoice::Ollama => "ollama",
+            WriterChoice::Openrouter => "openrouter",
+        }
+    }
+
+    fn from_id(id: &str) -> Option<Self> {
+        [
+            WriterChoice::ClaudeCode,
+            WriterChoice::Codex,
+            WriterChoice::Ollama,
+            WriterChoice::Openrouter,
+        ]
+        .into_iter()
+        .find(|writer| writer.id() == id)
+    }
+
     pub(crate) fn loadout(self) -> &'static str {
         match self {
             WriterChoice::ClaudeCode => "fix-claude-code",
@@ -267,6 +288,15 @@ impl OnboardArgs {
                 );
             }
         }
+        if let (Some(WriterChoice::Openrouter), Some(reviewer)) = (self.writer, &self.reviewer) {
+            if !reviewer.starts_with("openrouter:") {
+                return Err(format!(
+                    "--reviewer {reviewer:?}: with --writer openrouter the reviewer runs on \
+                     OpenRouter too (--reviewer openrouter:VENDOR/MODEL); for a local reviewer \
+                     use --writer ollama"
+                ));
+            }
+        }
         if let Some(url) = &self.ollama_url {
             axocoatl_llm_ollama::validate_native_ollama_endpoint(url.trim_end_matches('/'))
                 .map_err(|error| {
@@ -334,6 +364,65 @@ pub(crate) struct Onboarding {
     /// The data directory, when it is not the one the configuration selects
     /// (tests).
     pub(crate) data_dir_override: Option<PathBuf>,
+    /// What an existing configuration already has, kept by "Update this
+    /// setup".
+    pub(crate) kept: Kept,
+    /// What the steps left so far are about (`sandbox`, `ollama`,
+    /// `model:NAME`, `openrouter`, `writer:ID`), so Step 5 does not list
+    /// the same problem again from the check.
+    pub(crate) step_keys: std::collections::BTreeSet<String>,
+}
+
+/// The setup an existing configuration describes, which "Update this
+/// setup" keeps unless a flag says otherwise. (No `Debug`: it may hold the
+/// configured OpenRouter key.)
+#[derive(Clone, Default)]
+pub(crate) struct Kept {
+    pub(crate) writer: Option<WriterChoice>,
+    /// `run.models.writer`.
+    pub(crate) writer_model: Option<String>,
+    /// `run.models.reviewer`.
+    pub(crate) reviewer: Option<String>,
+    pub(crate) codex_credential: Option<String>,
+    /// `providers.openrouter.api_key` as written: a key, or `${NAME}`.
+    pub(crate) openrouter_key: Option<zeroize::Zeroizing<String>>,
+}
+
+impl Kept {
+    /// Read what `text` (an existing configuration) sets up.
+    pub(crate) fn from_config(text: &str) -> Self {
+        let run = config::run_models(text);
+        let marker = config::writer_marker(text);
+        let writer = marker
+            .as_ref()
+            .and_then(|marker| WriterChoice::from_id(&marker.writer))
+            .or_else(|| {
+                run.writer
+                    .as_deref()
+                    .and_then(|spec| ModelRef::parse(spec).ok())
+                    .map(|model| match model.provider {
+                        Provider::Ollama => WriterChoice::Ollama,
+                        Provider::OpenRouter => WriterChoice::Openrouter,
+                    })
+            });
+        let openrouter_key = config::read_existing(text)
+            .ok()
+            .and_then(|existing| existing.providers?.openrouter)
+            .and_then(|openrouter| {
+                openrouter
+                    .get("api_key")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|key| zeroize::Zeroizing::new(key.to_string()))
+            })
+            .filter(|key| !key.trim().is_empty() && !key.contains("your-key"));
+        Self {
+            writer,
+            writer_model: run.writer,
+            reviewer: run.reviewer,
+            codex_credential: marker.and_then(|marker| marker.credential),
+            openrouter_key,
+        }
+    }
 }
 
 impl Onboarding {
@@ -342,6 +431,16 @@ impl Onboarding {
         let text = text.into();
         self.ui.fail(&text);
         self.steps.push(text);
+    }
+
+    /// Mark the steps from `from` on as being about what `key` returns for
+    /// each.
+    fn key_steps_since(&mut self, from: usize, key: impl Fn(&str) -> Vec<String>) {
+        let keys: Vec<String> = self.steps[from.min(self.steps.len())..]
+            .iter()
+            .flat_map(|step| key(step))
+            .collect();
+        self.step_keys.extend(keys);
     }
 
     pub(crate) fn memory_gb(&self) -> Option<u64> {
@@ -372,11 +471,14 @@ impl Onboarding {
             host: self.host.clone(),
             load_models: true,
             socket_path: self.socket_path.clone(),
+            // The Podman the daemon will use: the one on PATH. None there is
+            // Podman not installed, as the daemon will find it.
             podman: self
                 .host
-                .find("podman")
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "podman".to_string()),
+                .find_on_path("podman")
+                .unwrap_or_else(|| PathBuf::from("/nonexistent/podman"))
+                .display()
+                .to_string(),
             data_dir: self.data_dir_override.clone(),
             landlock_abi: self.facts.landlock_abi,
         }
@@ -466,7 +568,17 @@ pub(crate) async fn cmd_onboard(args: OnboardArgs) -> i32 {
         .trim_end_matches('/')
         .to_string();
     ui.heading("Step 0 · This computer");
-    let facts = detect::detect(&host, &ollama_url).await;
+    let mut facts = detect::detect(&host, &ollama_url, args.port.is_none()).await;
+    if facts.daemon_running {
+        let (server_host, port) = std::fs::read_to_string(&paths.config_path)
+            .ok()
+            .and_then(|text| config::read_existing(&text).ok())
+            .and_then(|existing| existing.server?.port)
+            .map_or(("127.0.0.1".to_string(), 8080), |port| {
+                ("127.0.0.1".to_string(), port)
+            });
+        facts.daemon_version = crate::doctor::daemon_version(&server_host, port).await;
+    }
     for line in detect::summary(&facts) {
         ui.say(line);
     }
@@ -480,6 +592,8 @@ pub(crate) async fn cmd_onboard(args: OnboardArgs) -> i32 {
         openrouter_api: openrouter::OPENROUTER_API.to_string(),
         socket_path: axocoatl_daemon::ipc::default_socket_path(),
         data_dir_override: None,
+        kept: Kept::default(),
+        step_keys: Default::default(),
     };
     run(&mut onboarding).await
 }
@@ -548,19 +662,28 @@ pub(crate) async fn run(o: &mut Onboarding) -> i32 {
                     1 => ExistingConfig::Replace(text),
                     _ => {
                         o.ui.say(format!(
-                            "Configuration left unchanged: {}. `axocoatl doctor` checks it.",
+                            "Configuration left unchanged: {}. Checking it as it is:",
                             o.paths.config_path.display()
                         ));
-                        return exit::READY;
+                        o.ui.heading("Step 5 · Check");
+                        return if check(o).await {
+                            exit::READY
+                        } else {
+                            finish_not_ready(o)
+                        };
                     }
                 }
             }
         }
     };
+    if let ExistingConfig::Update(text) = &existing {
+        o.kept = Kept::from_config(text);
+    }
 
     // Step 1: who writes.
     o.ui.heading("Step 1 · Who writes the code");
     let writer = choose_writer(o);
+    keep_models(o, writer);
     o.ui.say(
         "Every fix run also needs a reviewer: a different model that only reads the change. \
          Claude Code and Codex can write but cannot review.",
@@ -568,10 +691,13 @@ pub(crate) async fn run(o: &mut Onboarding) -> i32 {
 
     // Step 2: the sandbox.
     o.ui.heading("Step 2 · The sandbox (rootless Podman)");
+    let from = o.steps.len();
     let sandbox_ready = sandbox::run(o).await;
+    o.key_steps_since(from, |_| vec!["sandbox".to_string()]);
 
     // Step 3: the writer and the reviewer.
     let mut choice = Choice::default();
+    let from = o.steps.len();
     match writer {
         WriterChoice::Ollama => {
             o.ui.heading("Step 3 · A local writer and reviewer (Ollama)");
@@ -590,6 +716,13 @@ pub(crate) async fn run(o: &mut Onboarding) -> i32 {
             writers::run(o, writer, sandbox_ready, &mut choice).await;
         }
     }
+    let models: Vec<String> = [&choice.writer_model, &choice.reviewer_model]
+        .into_iter()
+        .flatten()
+        .filter(|model| model.provider == Provider::Ollama)
+        .map(|model| model.model.clone())
+        .collect();
+    o.key_steps_since(from, |step| step_keys(step, writer, &models));
 
     // Step 4: the configuration.
     o.ui.heading("Step 4 · The configuration");
@@ -604,35 +737,134 @@ pub(crate) async fn run(o: &mut Onboarding) -> i32 {
     o.ui.heading("Step 5 · Check");
     if o.ui.plan() {
         o.ui.say("  would run the same checks as `axocoatl doctor` on the new configuration");
-        o.ui.say("\nPlan only: nothing was changed.");
-        return exit::READY;
-    }
-    let ready = check(o).await;
-    if !ready {
+    } else if !check(o).await {
         return finish_not_ready(o);
     }
 
     // Step 6 and 7.
     let start = choose_start(o);
     let mut code = exit::READY;
-    if start == StartChoice::Service && !start_service(o).await {
-        return finish_not_ready(o);
-    }
+    let service_started = if start == StartChoice::Service {
+        match start_service(o).await {
+            Some(started) => started,
+            None => return finish_not_ready(o),
+        }
+    } else {
+        false
+    };
     if wants_smoke_test(o, writer) {
         o.ui.heading("Step 7 · A first run");
-        if !smoke::run(o, writer, &choice).await {
+        if !smoke::run(o, writer, &choice, service_started).await {
             code = exit::NOT_READY;
         }
     }
     o.ui.say(format!("\n{}", next_command(writer, &choice)));
+    if o.ui.plan() {
+        if start == StartChoice::Dev {
+            o.ui.say(format!(
+                "  would start: axocoatl dev --config {}",
+                o.paths.config_path.display()
+            ));
+        }
+        o.ui.say("\nPlan only: nothing was changed.");
+        return exit::READY;
+    }
     if !o.steps.is_empty() {
         return finish_not_ready(o);
     }
     if start == StartChoice::Dev && code == exit::READY {
         o.ui.say("\nStarting `axocoatl dev` (Ctrl+C stops it).");
-        crate::cmd_dev(&o.paths.config_path).await;
+        start_dev(o).await;
     }
     code
+}
+
+/// `axocoatl dev` for this configuration, as its own process with the
+/// terminal (and the signals' default actions, which a first run's
+/// handlers in this process replaced). Ctrl+C reaches it from the
+/// terminal; onboarding waits for it to stop.
+async fn start_dev(o: &Onboarding) {
+    use tokio::signal::unix::{signal, SignalKind};
+    // Held while dev runs: Ctrl+C is dev's to answer.
+    let _interrupt = signal(SignalKind::interrupt());
+    let status = tokio::process::Command::new(&o.host.exe)
+        .arg("dev")
+        .arg("--config")
+        .arg(&o.paths.config_path)
+        .status()
+        .await;
+    if let Err(error) = status {
+        o.ui.fail(format!("`axocoatl dev` could not start: {error}"));
+    }
+}
+
+/// What a step from Step 3 is about: each Ollama model it names, else the
+/// writer's own service.
+fn step_keys(step: &str, writer: WriterChoice, models: &[String]) -> Vec<String> {
+    let named: Vec<String> = models
+        .iter()
+        .filter(|model| step.contains(model.as_str()))
+        .map(|model| format!("model:{model}"))
+        .collect();
+    if !named.is_empty() {
+        return named;
+    }
+    let lower = step.to_ascii_lowercase();
+    if lower.contains("openrouter") {
+        vec!["openrouter".to_string()]
+    } else if lower.contains("ollama") {
+        vec!["ollama".to_string()]
+    } else {
+        vec![format!("writer:{}", writer.id())]
+    }
+}
+
+/// What a check item is about, as [`step_keys`] names it.
+fn item_key(section: &str, item: &crate::doctor::Item) -> Option<String> {
+    match (section, item.name.as_str()) {
+        ("sandbox", _) => Some("sandbox".to_string()),
+        ("models", "Ollama") => Some("ollama".to_string()),
+        ("models", "OpenRouter") => Some("openrouter".to_string()),
+        ("models", name) => name
+            .strip_prefix("Model ")
+            .map(|model| format!("model:{model}")),
+        ("writers", "Claude Code") => Some("writer:claude-code".to_string()),
+        ("writers", "Codex") => Some("writer:codex".to_string()),
+        _ => None,
+    }
+}
+
+/// "Update this setup" keeps the models an existing configuration runs
+/// with, unless `--writer-model` or `--reviewer` names others or they do not
+/// fit the writer chosen now.
+fn keep_models(o: &mut Onboarding, writer: WriterChoice) {
+    let kept = o.kept.clone();
+    let writer_provider = match writer {
+        WriterChoice::Ollama => Some("ollama:"),
+        WriterChoice::Openrouter => Some("openrouter:"),
+        WriterChoice::ClaudeCode | WriterChoice::Codex => None,
+    };
+    if o.args.writer_model.is_none() {
+        if let (Some(model), Some(provider)) = (&kept.writer_model, writer_provider) {
+            if model.starts_with(provider) {
+                o.ui.say(format!(
+                    "  Writer model: {model} (kept from your configuration)"
+                ));
+                o.args.writer_model = Some(model.clone());
+            }
+        }
+    }
+    if o.args.reviewer.is_none() {
+        if let Some(reviewer) = &kept.reviewer {
+            let fits = writer != WriterChoice::Openrouter || reviewer.starts_with("openrouter:");
+            if fits && o.args.writer_model.as_deref() != Some(reviewer.as_str()) {
+                o.ui.say(format!(
+                    "  Reviewer model: {reviewer} (kept from your configuration)"
+                ));
+                o.args.reviewer = Some(reviewer.clone());
+            }
+        }
+    }
 }
 
 /// Print the steps left and return [`exit::NOT_READY`].
@@ -660,7 +892,10 @@ pub(crate) fn default_writer(facts: &Facts) -> WriterChoice {
         WriterChoice::ClaudeCode
     } else if facts.codex.is_some() {
         WriterChoice::Codex
-    } else if facts.memory_gb().is_some_and(|gb| gb >= 48) {
+    } else if facts
+        .memory_bytes
+        .is_some_and(|bytes| axocoatl_isolation::host::at_least_gb(bytes, 48))
+    {
         WriterChoice::Ollama
     } else {
         WriterChoice::Openrouter
@@ -672,13 +907,21 @@ fn choose_writer(o: &mut Onboarding) -> WriterChoice {
         o.ui.say(format!("  Writer: {} (--writer)", writer.label(&o.facts)));
         return writer;
     }
+    if let (Some(writer), Mode::Yes) = (o.kept.writer, o.ui.mode) {
+        o.ui.say(format!(
+            "  Writer: {} (kept from your configuration)",
+            writer.label(&o.facts)
+        ));
+        return writer;
+    }
     let choices = [
         WriterChoice::ClaudeCode,
         WriterChoice::Codex,
         WriterChoice::Ollama,
         WriterChoice::Openrouter,
     ];
-    let default = default_writer(&o.facts);
+    // Updating a setup starts from the writer it has.
+    let default = o.kept.writer.unwrap_or_else(|| default_writer(&o.facts));
     let items: Vec<String> = choices
         .iter()
         .map(|choice| choice.label(&o.facts))
@@ -702,20 +945,28 @@ fn config_plan(
     choice: &Choice,
     existing: &ExistingConfig,
 ) -> Option<ConfigPlan> {
+    // A step left already says why a model is missing (a declined key, a
+    // model OpenRouter does not list, the same model twice); one more
+    // would repeat it.
     let reviewer = choice.reviewer_model.clone();
     let Some(reviewer) = reviewer else {
-        o.step_left(
-            "Choose a reviewer model: run `axocoatl onboard` again, or pass --reviewer \
-             ollama:MODEL or --reviewer openrouter:VENDOR/MODEL",
-        );
+        if o.steps.is_empty() {
+            o.step_left(
+                "Choose a reviewer model: run `axocoatl onboard` again, or pass --reviewer \
+                 ollama:MODEL or --reviewer openrouter:VENDOR/MODEL",
+            );
+        }
         return None;
     };
     let (lead, run_writer, note) = match writer {
         WriterChoice::Ollama | WriterChoice::Openrouter => {
             let Some(model) = choice.writer_model.clone() else {
-                o.step_left(
-                    "Choose a writer model: run `axocoatl onboard` again, or pass --writer-model",
-                );
+                if o.steps.is_empty() {
+                    o.step_left(
+                        "Choose a writer model: run `axocoatl onboard` again, or pass \
+                         --writer-model",
+                    );
+                }
                 return None;
             };
             let note = if model.provider == Provider::Ollama {
@@ -765,6 +1016,8 @@ fn config_plan(
         run_reviewer: Some(reviewer),
         port,
         note,
+        writer: writer.id(),
+        codex_credential: choice.codex_credential,
     })
 }
 
@@ -786,16 +1039,26 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
         },
     };
     if let Some(old) = &old {
-        let changes = config::diff(old, &new);
-        if changes.is_empty() {
+        if config::diff(old, &new).is_empty() {
             o.ui.ok(format!("{} already has this setup", path.display()));
             return true;
         }
-        o.ui.say(format!("  Changes to {}:", path.display()));
-        for line in redact_diff(&changes) {
-            o.ui.say(format!("    {line}"));
-        }
         let backup = format!("config.yaml.bak-{}", host::stamp());
+        if matches!(existing, ExistingConfig::Replace(_)) {
+            // The old file is not echoed: it is kept as the backup.
+            o.ui.say(format!(
+                "  {} is replaced (the current file is kept as {backup}). The new file:",
+                path.display()
+            ));
+            for line in config::redacted_lines(&new) {
+                o.ui.say(format!("    + {line}"));
+            }
+        } else {
+            o.ui.say(format!("  Changes to {}:", path.display()));
+            for line in config::diff_redacted(old, &new) {
+                o.ui.say(format!("    {line}"));
+            }
+        }
         let question =
             format!("Write these changes? The current file is kept as {backup} next to it.");
         if o.ui.plan() {
@@ -819,8 +1082,8 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
         ));
     } else if o.ui.plan() {
         o.ui.say(format!("  would write {}:", path.display()));
-        for line in redact_diff(&config::diff("", &new)) {
-            o.ui.say(format!("    {line}"));
+        for line in config::redacted_lines(&new) {
+            o.ui.say(format!("    + {line}"));
         }
         return true;
     }
@@ -832,19 +1095,6 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
     o.ui.ok(format!("Configuration written: {}", path.display()));
     o.ui.ok(format!("Data: {}", o.paths.data_dir.display()));
     true
-}
-
-/// A diff with an API key's value hidden.
-fn redact_diff(lines: &[String]) -> Vec<String> {
-    lines
-        .iter()
-        .map(|line| match line.split_once("api_key:") {
-            Some((before, value)) if !value.contains("${") => {
-                format!("{before}api_key: (hidden)")
-            }
-            _ => line.clone(),
-        })
-        .collect()
 }
 
 fn write_backup(paths: &UserPaths, name: &str, text: &str) -> std::io::Result<()> {
@@ -864,23 +1114,28 @@ async fn check(o: &mut Onboarding) -> bool {
         }
     }
     let report = crate::doctor::collect(&o.paths.config_path, &env).await;
-    for item in report
-        .sections
-        .sandbox
-        .iter()
-        .chain(&report.sections.models)
-        .chain(&report.sections.writers)
-        .chain(&report.sections.daemon)
-    {
-        match item.status {
-            crate::doctor::Status::Ok => {}
-            crate::doctor::Status::Warn => o.ui.warn(item.line()),
-            crate::doctor::Status::Fail => o.ui.fail(item.line()),
-        }
-    }
-    for step in &report.steps_left {
-        if !o.steps.contains(step) {
-            o.steps.push(step.clone());
+    for (section, items) in [
+        ("sandbox", &report.sections.sandbox),
+        ("models", &report.sections.models),
+        ("writers", &report.sections.writers),
+        ("daemon", &report.sections.daemon),
+    ] {
+        for item in items {
+            match item.status {
+                crate::doctor::Status::Ok => {}
+                crate::doctor::Status::Warn => o.ui.warn(item.line()),
+                crate::doctor::Status::Fail => {
+                    o.ui.fail(item.line());
+                    // A problem an earlier step already left is not listed
+                    // twice.
+                    let covered =
+                        item_key(section, item).is_some_and(|key| o.step_keys.contains(&key));
+                    let step = item.step();
+                    if !covered && !o.steps.contains(&step) {
+                        o.steps.push(step);
+                    }
+                }
+            }
         }
     }
     if report.ready && o.steps.is_empty() {
@@ -897,7 +1152,7 @@ fn choose_start(o: &mut Onboarding) -> StartChoice {
     if let Some(start) = o.args.start() {
         return start;
     }
-    if o.ui.mode != Mode::Interactive {
+    if o.ui.mode == Mode::Yes {
         return StartChoice::None;
     }
     o.ui.heading("Step 6 · Start Axocoatl");
@@ -918,23 +1173,25 @@ fn choose_start(o: &mut Onboarding) -> StartChoice {
     }
 }
 
-/// Install and start the Always-On Service (asked for with Step 6).
-async fn start_service(o: &mut Onboarding) -> bool {
+/// Install and start the Always-On Service (asked for with Step 6):
+/// `Some(true)` when it was started, `Some(false)` when that was declined,
+/// `None` (with the step left) when it failed.
+async fn start_service(o: &mut Onboarding) -> Option<bool> {
     let config = std::fs::read_to_string(&o.paths.config_path).unwrap_or_default();
     if let Err(error) = crate::reject_uninherited_service_environment(&config) {
         o.step_left(format!("Cannot install the Always-On Service: {error}"));
-        return false;
+        return None;
     }
     if !o.ui.consent(
         "Install the Always-On Service (it starts Axocoatl at login and keeps it running)?",
         true,
         false,
     ) {
-        return true;
+        return Some(false);
     }
     if o.ui.plan() {
         o.ui.say("    would run: axocoatl service install && axocoatl service start");
-        return true;
+        return Some(true);
     }
     let config = o.paths.config_path.display().to_string();
     for args in [
@@ -944,16 +1201,16 @@ async fn start_service(o: &mut Onboarding) -> bool {
         let cmd = Cmd::new(&o.host.exe.display().to_string(), &args);
         if let Err(error) = o.host.run(&cmd).await {
             o.step_left(format!("{error}; see `axocoatl service status`"));
-            return false;
+            return None;
         }
     }
-    true
+    Some(true)
 }
 
 fn wants_smoke_test(o: &mut Onboarding, writer: WriterChoice) -> bool {
     match o.args.smoke_test() {
         Some(choice) => choice,
-        None if o.ui.mode != Mode::Interactive => false,
+        None if o.ui.mode == Mode::Yes => false,
         None => {
             let cost = match writer {
                 WriterChoice::Ollama => "runs locally",

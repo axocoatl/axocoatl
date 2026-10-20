@@ -87,11 +87,16 @@ impl std::fmt::Debug for KeyRef {
 }
 
 impl KeyRef {
-    fn yaml(&self) -> String {
+    /// What the configuration holds: the key, or `${NAME}`.
+    fn raw(&self) -> zeroize::Zeroizing<String> {
         match self {
-            KeyRef::Value(key) => yaml_string(key),
-            KeyRef::Env(name) => yaml_string(&format!("${{{name}}}")),
+            KeyRef::Value(key) => key.clone(),
+            KeyRef::Env(name) => zeroize::Zeroizing::new(format!("${{{name}}}")),
         }
+    }
+
+    fn yaml(&self) -> String {
+        yaml_string(&self.raw())
     }
 }
 
@@ -111,6 +116,13 @@ pub(crate) struct ConfigPlan {
     pub(crate) port: u16,
     /// A comment at the top, saying what the setup is for.
     pub(crate) note: String,
+    /// Who writes: `claude-code`, `codex`, `ollama` or `openrouter`,
+    /// recorded as a comment above `run:` ([`writer_marker`]) so `doctor`
+    /// and a later `onboard --update` know the path chosen, including for
+    /// Claude Code and Codex, which have no `run.models.writer`.
+    pub(crate) writer: &'static str,
+    /// The credential a Codex run uses (`codex-chatgpt` or `codex-openai`).
+    pub(crate) codex_credential: Option<&'static str>,
 }
 
 pub(crate) fn yaml_string(value: &str) -> String {
@@ -225,10 +237,21 @@ pub(crate) fn run_block(plan: &ConfigPlan) -> String {
     if plan.run_writer.is_none() && plan.run_reviewer.is_none() {
         return String::new();
     }
-    let mut text = String::from(
+    let loadout = match plan.writer {
+        "claude-code" => "fix-claude-code",
+        "codex" => "fix-codex",
+        _ => "fix",
+    };
+    let credential = plan
+        .codex_credential
+        .map(|credential| format!(" --param credential={credential}"))
+        .unwrap_or_default();
+    let mut text = format!(
         "# Defaults for `axocoatl run`: writer_model and reviewer_model.\n\
          # `--model writer=PROVIDER:MODEL` or `--model reviewer=…` overrides them.\n\
+         {WRITER_MARKER}{} (axocoatl run {loadout}{credential})\n\
          run:\n  models:\n",
+        plan.writer
     );
     if let Some(writer) = &plan.run_writer {
         text.push_str(&format!("    writer: {}\n", yaml_string(&writer.spec())));
@@ -240,6 +263,39 @@ pub(crate) fn run_block(plan: &ConfigPlan) -> String {
         ));
     }
     text
+}
+
+/// The comment line that records who writes ([`ConfigPlan::writer`]).
+pub(crate) const WRITER_MARKER: &str = "# Writer: ";
+
+/// Who writes, as onboarding recorded it: the writer path and, for Codex,
+/// the credential its runs use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WriterMarker {
+    pub(crate) writer: String,
+    pub(crate) credential: Option<String>,
+}
+
+/// The `# Writer: …` comment of a configuration onboarding wrote.
+pub(crate) fn writer_marker(text: &str) -> Option<WriterMarker> {
+    let rest = text
+        .lines()
+        .find_map(|line| line.strip_prefix(WRITER_MARKER))?;
+    let writer = rest.split_whitespace().next()?.to_string();
+    if !matches!(
+        writer.as_str(),
+        "claude-code" | "codex" | "ollama" | "openrouter"
+    ) {
+        return None;
+    }
+    let credential = rest.split_once("credential=").and_then(|(_, value)| {
+        let value: String = value
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        (!value.is_empty()).then_some(value)
+    });
+    Some(WriterMarker { writer, credential })
 }
 
 fn server_block(port: u16) -> String {
@@ -478,11 +534,36 @@ pub(crate) fn update(
             }
         }
     }
-    if let (Some(key), false) = (&plan.openrouter_key, has_openrouter) {
-        missing_providers.push(format!(
+    match (&plan.openrouter_key, has_openrouter) {
+        (Some(key), false) => missing_providers.push(format!(
             "  openrouter_billing: credits\n  openrouter:\n    api_key: {}",
             key.yaml()
-        ));
+        )),
+        (Some(key), true) => {
+            // This run chose a key (another variable, or a value typed at
+            // the hidden prompt): it replaces the configured one in place.
+            let configured = existing
+                .providers
+                .as_ref()
+                .and_then(|providers| providers.openrouter.as_ref())
+                .and_then(|openrouter| openrouter.get("api_key"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            if configured.as_deref() != Some(key.raw().as_str()) {
+                let line = format!("    api_key: {}", key.yaml());
+                if let Some(providers) = top_block(&lines, "providers") {
+                    if let Some(openrouter) = child_block(&lines, providers, "openrouter") {
+                        match (openrouter.0 + 1..openrouter.1)
+                            .find(|&index| lines[index].trim_start().starts_with("api_key:"))
+                        {
+                            Some(index) => lines[index] = line,
+                            None => lines.insert(openrouter.0 + 1, line),
+                        }
+                    }
+                }
+            }
+        }
+        (None, _) => {}
     }
     if !missing_providers.is_empty() {
         let addition = to_lines(&missing_providers.join("\n"));
@@ -549,6 +630,102 @@ pub(crate) fn update(
 /// A line diff of `old` and `new`: `-` removed, `+` added, unchanged lines
 /// left out.
 pub(crate) fn diff(old: &str, new: &str) -> Vec<String> {
+    let a: Vec<String> = old.lines().map(str::to_string).collect();
+    let b: Vec<String> = new.lines().map(str::to_string).collect();
+    diff_shown(old, new, &a, &b)
+}
+
+/// [`diff`] as it is shown and logged: every secret value the configuration
+/// can hold is hidden ([`redacted_lines`]), on both sides.
+pub(crate) fn diff_redacted(old: &str, new: &str) -> Vec<String> {
+    diff_shown(old, new, &redacted_lines(old), &redacted_lines(new))
+}
+
+/// The keys whose values are secrets (`SecretString` fields of the
+/// configuration, and the usual names for one).
+const SECRET_KEYS: &[&str] = &[
+    "api_key",
+    "secret",
+    "git_token",
+    "token",
+    "password",
+    "client_secret",
+    "authorization",
+];
+/// The keys whose every entry is a secret: server auth's `api_keys` and
+/// `bearer_tokens`, and a webhook's `headers`.
+const SECRET_BLOCKS: &[&str] = &["api_keys", "bearer_tokens", "headers"];
+
+/// `text`'s lines with every secret value replaced by `(hidden)`; a
+/// `${VARIABLE}` reference is not a secret and stays.
+pub(crate) fn redacted_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    // The indent of a secret block being read.
+    let mut secret_block: Option<usize> = None;
+    for line in text.lines() {
+        let indent = line.len() - line.trim_start().len();
+        let content = line.trim_start();
+        if let Some(block) = secret_block {
+            if content.is_empty() || content.starts_with('#') || indent > block {
+                lines.push(hide_entry(line));
+                continue;
+            }
+            secret_block = None;
+        }
+        let item = content.strip_prefix("- ").unwrap_or(content);
+        let Some((key, value)) = item.split_once(':') else {
+            lines.push(line.to_string());
+            continue;
+        };
+        let key_name = key
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_ascii_lowercase();
+        let value = value.trim();
+        let hidden = || {
+            let prefix = &line[..line.len() - content.len()];
+            let dash = if content.starts_with("- ") { "- " } else { "" };
+            format!("{prefix}{dash}{}: (hidden)", key.trim())
+        };
+        if SECRET_BLOCKS.contains(&key_name.as_str()) {
+            if value.is_empty() || value.starts_with('#') {
+                secret_block = Some(indent);
+                lines.push(line.to_string());
+            } else {
+                lines.push(hidden());
+            }
+        } else if SECRET_KEYS.contains(&key_name.as_str())
+            && !value.is_empty()
+            && !value.trim_matches('"').trim_matches('\'').starts_with("${")
+        {
+            lines.push(hidden());
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    lines
+}
+
+/// One entry of a secret block, hidden: `- (hidden)` or `Name: (hidden)`.
+fn hide_entry(line: &str) -> String {
+    let content = line.trim_start();
+    if content.is_empty() || content.starts_with('#') {
+        return line.to_string();
+    }
+    let prefix = &line[..line.len() - content.len()];
+    if content.starts_with('-') {
+        return format!("{prefix}- (hidden)");
+    }
+    match content.split_once(':') {
+        Some((key, _)) => format!("{prefix}{key}: (hidden)"),
+        None => format!("{prefix}(hidden)"),
+    }
+}
+
+/// The diff of `old` and `new`, each changed line shown as `shown_*` has it
+/// at the same index.
+fn diff_shown(old: &str, new: &str, shown_a: &[String], shown_b: &[String]) -> Vec<String> {
     let a: Vec<&str> = old.lines().collect();
     let b: Vec<&str> = new.lines().collect();
     let mut table = vec![vec![0usize; b.len() + 1]; a.len() + 1];
@@ -568,15 +745,15 @@ pub(crate) fn diff(old: &str, new: &str) -> Vec<String> {
             i += 1;
             j += 1;
         } else if table[i + 1][j] >= table[i][j + 1] {
-            lines.push(format!("- {}", a[i]));
+            lines.push(format!("- {}", shown_a[i]));
             i += 1;
         } else {
-            lines.push(format!("+ {}", b[j]));
+            lines.push(format!("+ {}", shown_b[j]));
             j += 1;
         }
     }
-    lines.extend(a[i..].iter().map(|line| format!("- {line}")));
-    lines.extend(b[j..].iter().map(|line| format!("+ {line}")));
+    lines.extend(shown_a[i..].iter().map(|line| format!("- {line}")));
+    lines.extend(shown_b[j..].iter().map(|line| format!("+ {line}")));
     lines
 }
 
@@ -605,6 +782,8 @@ mod tests {
             run_reviewer: Some(ModelRef::new(Provider::Ollama, "gpt-oss:20b")),
             port: 8080,
             note: "local Ollama setup".into(),
+            writer: "ollama",
+            codex_credential: None,
         }
     }
 
@@ -618,6 +797,8 @@ mod tests {
             run_reviewer: Some(ModelRef::new(Provider::OpenRouter, "openai/gpt-oss-120b")),
             port: 8081,
             note: "OpenRouter setup".into(),
+            writer: "openrouter",
+            codex_credential: None,
         }
     }
 
@@ -708,6 +889,7 @@ mod tests {
             run_writer: None,
             lead: ModelRef::new(Provider::Ollama, "gpt-oss:20b"),
             note: "Claude Code writes in `axocoatl run fix-claude-code`".into(),
+            writer: "claude-code",
             ..local_plan()
         };
         let text = render(&plan);
@@ -718,6 +900,104 @@ mod tests {
                 writer: None,
                 reviewer: Some("ollama:gpt-oss:20b".into()),
             }
+        );
+        assert_eq!(
+            writer_marker(&text),
+            Some(WriterMarker {
+                writer: "claude-code".into(),
+                credential: None
+            })
+        );
+        assert!(text.contains("# Writer: claude-code (axocoatl run fix-claude-code)\nrun:\n"));
+        // Codex records its credential, which its runs name.
+        let codex = render(&ConfigPlan {
+            writer: "codex",
+            codex_credential: Some("codex-chatgpt"),
+            ..plan
+        });
+        assert_eq!(
+            writer_marker(&codex),
+            Some(WriterMarker {
+                writer: "codex".into(),
+                credential: Some("codex-chatgpt".into())
+            })
+        );
+        assert_eq!(writer_marker("agents: []\n"), None);
+    }
+
+    /// Update with a key this run chose replaces the configured one in
+    /// place: a `${VARIABLE}` by a value typed at the hidden prompt, and
+    /// back; the same key changes nothing.
+    #[test]
+    fn update_replaces_the_configured_openrouter_key_with_the_one_chosen() {
+        let plan = openrouter_plan();
+        let written = render(&plan);
+        assert!(written.contains("api_key: \"${OPENROUTER_API_KEY}\""));
+        assert_eq!(
+            update(&written, &plan, Path::new("c.yaml")).unwrap(),
+            written
+        );
+        let typed = ConfigPlan {
+            openrouter_key: Some(KeyRef::Value(zeroize::Zeroizing::new(
+                "sk-or-v1-typed".to_string(),
+            ))),
+            ..plan.clone()
+        };
+        let updated = update(&written, &typed, Path::new("c.yaml")).unwrap();
+        let config = axocoatl_config::parse_config(&updated, Path::new("c.yaml")).unwrap();
+        assert_eq!(
+            config.providers.openrouter.unwrap().api_key.expose_secret(),
+            "sk-or-v1-typed"
+        );
+        assert_eq!(updated.matches("api_key:").count(), 1, "{updated}");
+        let shown = diff_redacted(&written, &updated);
+        assert_eq!(
+            shown,
+            [
+                "-     api_key: \"${OPENROUTER_API_KEY}\"",
+                "+     api_key: (hidden)"
+            ]
+        );
+        assert!(!shown.join("\n").contains("sk-or-v1-typed"));
+        let back = update(&updated, &plan, Path::new("c.yaml")).unwrap();
+        assert_eq!(back, written);
+    }
+
+    /// Every secret the configuration can hold is hidden in what onboarding
+    /// shows and logs: API keys, webhook secrets and headers, server auth
+    /// keys and bearer tokens, the E2B git token.
+    #[test]
+    fn shown_configurations_hide_every_secret() {
+        let text = "providers:\n  openrouter:\n    api_key: \"sk-or-v1-abc\"\n  anthropic:\n    api_key: \"${ANTHROPIC_API_KEY}\"\nwebhooks:\n  - name: ci\n    url: \"https://example.test/hook\"\n    secret: \"whsec-1\"\n    headers:\n      Authorization: \"Bearer tok-1\"\n      X-Other: \"v-1\"\nserver:\n  auth:\n    api_keys:\n      - \"key-1\"\n      - key-2\n    bearer_tokens: [\"tok-2\"]\n  port: 8080\nsandbox:\n  e2b:\n    git_token: \"ghp-1\"\n";
+        let shown = redacted_lines(text).join("\n");
+        for secret in [
+            "sk-or-v1-abc",
+            "whsec-1",
+            "tok-1",
+            "v-1",
+            "key-1",
+            "key-2",
+            "tok-2",
+            "ghp-1",
+        ] {
+            assert!(!shown.contains(secret), "{secret}:\n{shown}");
+        }
+        for kept in [
+            "api_key: \"${ANTHROPIC_API_KEY}\"",
+            "url: \"https://example.test/hook\"",
+            "  port: 8080",
+            "    secret: (hidden)",
+            "      Authorization: (hidden)",
+            "      - (hidden)",
+            "    bearer_tokens: (hidden)",
+        ] {
+            assert!(shown.contains(kept), "{kept}:\n{shown}");
+        }
+        assert_eq!(redacted_lines(text).len(), text.lines().count());
+        let removed = diff_redacted(text, "agents: []\n").join("\n");
+        assert!(
+            !removed.contains("whsec-1") && !removed.contains("key-1"),
+            "{removed}"
         );
     }
 

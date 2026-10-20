@@ -397,8 +397,11 @@ pub(crate) struct Facts {
     pub(crate) os: Os,
     pub(crate) memory_bytes: Option<u64>,
     pub(crate) cpus: u64,
-    /// Free space where `~/.ollama` and the containers live.
+    /// Free space where `~/.ollama` lives (the models).
     pub(crate) disk_free_bytes: Option<u64>,
+    /// Free space where Podman keeps its machine and images, when that is
+    /// another file system than the models'.
+    pub(crate) containers_free_bytes: Option<u64>,
     pub(crate) root_user: bool,
     pub(crate) user: String,
     pub(crate) port_8080_free: bool,
@@ -420,6 +423,10 @@ pub(crate) struct Facts {
     pub(crate) windows_ollama: bool,
     /// A daemon answers on this user's IPC socket.
     pub(crate) daemon_running: bool,
+    /// The running daemon's version (`GET /health`), when it answers.
+    pub(crate) daemon_version: Option<String>,
+    /// The program the installed Always-On Service runs.
+    pub(crate) service_program: Option<PathBuf>,
     pub(crate) xdg_config_home: Option<PathBuf>,
     /// The kernel's Landlock ABI (Linux; `None` elsewhere or without it).
     pub(crate) landlock_abi: Option<i64>,
@@ -437,8 +444,43 @@ fn first_word_version(text: &str) -> Option<String> {
         .map(|word| word.trim_end_matches(',').to_string())
 }
 
-/// Read this computer. `ollama_url` is the server native Sessions will use.
-pub(crate) async fn detect(host: &Host, ollama_url: &str) -> Facts {
+/// Where Podman keeps its machines and images for this user.
+pub(crate) fn containers_dir(home: &Path) -> PathBuf {
+    home.join(".local").join("share").join("containers")
+}
+
+/// The nearest existing path at or above `path`.
+fn existing_ancestor(path: &Path) -> Option<&Path> {
+    let mut existing = path;
+    while !existing.exists() {
+        existing = existing.parent()?;
+    }
+    Some(existing)
+}
+
+/// `a` and `b` are on one file system.
+fn same_file_system(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let device = |path: &Path| {
+            existing_ancestor(path)
+                .and_then(|path| std::fs::metadata(path).ok())
+                .map(|metadata| metadata.dev())
+        };
+        device(a).is_some() && device(a) == device(b)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (a, b);
+        true
+    }
+}
+
+/// Read this computer. `ollama_url` is the server native Sessions will use;
+/// `check_port_8080`: whether to see if port 8080 is free (not when
+/// `--port` names the port).
+pub(crate) async fn detect(host: &Host, ollama_url: &str, check_port_8080: bool) -> Facts {
     let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute());
@@ -524,13 +566,18 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str) -> Facts {
         axocoatl_daemon::ipc::IpcClient::connect(&axocoatl_daemon::ipc::default_socket_path())
             .await
             .is_ok();
+    let models_dir = host.home.join(".ollama");
+    let containers = containers_dir(&host.home);
     Facts {
         memory_bytes: axocoatl_isolation::host::memory_bytes(),
         cpus: axocoatl_isolation::host::cpu_count(),
-        disk_free_bytes: free_bytes(&host.home.join(".ollama")),
+        disk_free_bytes: free_bytes(&models_dir),
+        containers_free_bytes: (!same_file_system(&models_dir, &containers))
+            .then(|| free_bytes(&containers))
+            .flatten(),
         root_user: is_root(),
         user: current_user(),
-        port_8080_free: port_free(8080),
+        port_8080_free: !check_port_8080 || port_free(8080),
         git,
         brew,
         podman_path,
@@ -544,6 +591,8 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str) -> Facts {
         gh: host.find("gh"),
         windows_ollama: os.wsl().is_some() && host.find("ollama.exe").is_some(),
         daemon_running,
+        daemon_version: None,
+        service_program: crate::doctor::installed_service_program(&host.home, host.macos),
         xdg_config_home,
         landlock_abi: landlock_abi(),
         os,
@@ -648,8 +697,14 @@ pub(crate) fn summary(facts: &Facts) -> Vec<String> {
         });
     }
     computer.push(format!("{} cores", facts.cpus));
-    if let Some(free) = facts.disk_free_bytes {
-        computer.push(format!("{} free", gb(free)));
+    match (facts.disk_free_bytes, facts.containers_free_bytes) {
+        (Some(free), Some(containers)) => computer.push(format!(
+            "{} free for models, {} free for Podman",
+            gb(free),
+            gb(containers)
+        )),
+        (Some(free), None) => computer.push(format!("{} free", gb(free))),
+        (None, _) => {}
     }
     let mut found = Vec::new();
     let mut missing = Vec::new();
@@ -722,8 +777,21 @@ pub(crate) fn summary(facts: &Facts) -> Vec<String> {
         Some(version) => found.push(format!("git {version}")),
         None => missing.push("git".to_string()),
     }
-    if facts.daemon_running {
-        found.push("a running Axocoatl daemon".to_string());
+    match (facts.daemon_running, &facts.daemon_version) {
+        (true, Some(version)) => found.push(format!("a running Axocoatl {version} daemon")),
+        (true, None) => found.push("a running Axocoatl daemon".to_string()),
+        (false, _) => {}
+    }
+    if let Some(program) = &facts.service_program {
+        found.push(format!(
+            "the Always-On Service ({}, {})",
+            if facts.daemon_running {
+                "installed"
+            } else {
+                "installed, not running"
+            },
+            program.display()
+        ));
     }
     let mut lines = vec![format!("This computer: {}.", computer.join(", "))];
     if !found.is_empty() {

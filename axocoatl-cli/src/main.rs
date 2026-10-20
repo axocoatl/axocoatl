@@ -3829,10 +3829,12 @@ mod tests {
             openrouter_key: openrouter.then(|| KeyRef::Env("OPENROUTER_API_KEY".into())),
             run_writer: Some(lead.clone()),
             run_reviewer: Some(reviewer.clone()),
+            writer: lead.provider.id(),
             lead,
             reviewer,
             port: 8080,
             note: "test setup".into(),
+            codex_credential: None,
         }
     }
 

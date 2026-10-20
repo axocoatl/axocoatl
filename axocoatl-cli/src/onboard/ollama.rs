@@ -134,6 +134,16 @@ pub(crate) async fn writer_and_reviewer(o: &mut Onboarding, choice: &mut Choice)
         && flag_reviewer.is_none()
     {
         let gb = o.memory_gb().unwrap_or_default();
+        if o.ui.mode == super::ui::Mode::Yes {
+            // --yes never turns a local writer someone asked for into a
+            // hosted one, nor pulls an untested pair onto this computer.
+            o.step_left(format!(
+                "No local pair has been tested on {gb} GB of memory: name the models with \
+                 --writer-model ollama:MODEL and --reviewer ollama:MODEL (or \
+                 openrouter:VENDOR/MODEL), or use --writer openrouter"
+            ));
+            return;
+        }
         let items = vec![
             "OpenRouter for both the writer and the reviewer (hosted, credits)".to_string(),
             "A local writer and an OpenRouter reviewer".to_string(),
@@ -184,7 +194,7 @@ pub(crate) async fn writer_and_reviewer(o: &mut Onboarding, choice: &mut Choice)
     } else {
         for model in &models {
             o.steps.push(format!(
-                "Pull {model} once Ollama runs: ollama pull {model}"
+                "Pull {model} once Ollama is ready: ollama pull {model}"
             ));
         }
     }
@@ -204,7 +214,7 @@ pub(crate) async fn reviewer_only(o: &mut Onboarding, choice: &mut Choice) {
         }
     } else if let Some(reviewer) = &choice.reviewer_model {
         o.steps.push(format!(
-            "Pull {} once Ollama runs: ollama pull {}",
+            "Pull {} once Ollama is ready: ollama pull {}",
             reviewer.model, reviewer.model
         ));
     }
@@ -539,7 +549,7 @@ async fn cloud_off(o: &mut Onboarding) -> bool {
                      then `sudo systemctl daemon-reload && sudo systemctl restart ollama`? This \
                      also turns off Ollama web search; it asks for your password."
                 ),
-                true,
+                !o.host.at(&drop_in).exists(),
                 true,
             ) {
                 o.step_left(format!(
@@ -582,7 +592,9 @@ async fn cloud_off(o: &mut Onboarding) -> bool {
                         ""
                     }
                 ),
-                true,
+                // An existing server.json is an existing setup: Enter
+                // leaves it alone.
+                existing.is_none(),
                 false,
             ) {
                 o.step_left(format!(
@@ -832,16 +844,18 @@ async fn pull(o: &mut Onboarding, base_url: &str, models: &[String]) -> bool {
     let total: u64 = sizes.iter().flatten().sum();
     let all_known = sizes.iter().all(Option::is_some);
     let free = o.facts.disk_free_bytes;
+    // The download plus a tenth for Ollama's temporary files.
+    let needed = total + total / 10;
     let disk = match (all_known, free) {
         (true, Some(free)) => format!(
             " Needs {} free; {} free here.",
-            size_text(total),
+            size_text(needed),
             size_text(free)
         ),
-        (true, None) => format!(" Needs {} free.", size_text(total)),
+        (true, None) => format!(" Needs {} free.", size_text(needed)),
         (false, _) => String::new(),
     };
-    let fits_disk = free.is_none_or(|free| free as f64 >= total as f64 * 1.1);
+    let fits_disk = free.is_none_or(|free| free >= needed);
     let fits_ram = o.facts.memory_bytes.is_none_or(|memory| {
         sizes
             .iter()
@@ -854,6 +868,17 @@ async fn pull(o: &mut Onboarding, base_url: &str, models: &[String]) -> bool {
         ));
     }
     let question = format!("Pull {}?{disk}", described.join(" and "));
+    if !fits_disk && !o.ui.interactive() && o.args.pull() != Some(false) {
+        // Only a person at the terminal may start a download that does not
+        // fit this disk.
+        o.ui.say(format!("  {question} no: it does not fit this disk"));
+        for model in &missing {
+            o.step_left(format!(
+                "Free disk space for {model}, then pull it: ollama pull {model}"
+            ));
+        }
+        return false;
+    }
     let pull_now = match o.args.pull() {
         Some(choice) => {
             o.ui.say(format!(
@@ -1011,6 +1036,39 @@ async fn context(o: &mut Onboarding, base_url: &str, models: &[String]) {
     }
 }
 
+/// Homebrew's `brew services --help` says it reads a per-formula
+/// environment file (`$HOMEBREW_USER_CONFIG_HOME/services/formula.env`,
+/// with `formula` underlined at a terminal; older releases wrote
+/// `<formula>`). Releases without that sentence ignore the file.
+pub(crate) fn brew_services_read_env_files(help: &str) -> bool {
+    let plain = strip_ansi(help);
+    plain.split_whitespace().any(|word| {
+        let word = word.trim_matches(|c: char| matches!(c, '`' | '(' | ')' | ',' | '.' | ';'));
+        word.contains("services/") && word.contains("formula") && word.ends_with(".env")
+    })
+}
+
+/// `text` without terminal escape sequences (`ESC [ … letter`).
+fn strip_ansi(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        plain.push(c);
+    }
+    plain
+}
+
 /// `OLLAMA_CONTEXT_LENGTH` in an env file's text, replaced or added.
 pub(crate) fn with_context_length(existing: Option<&str>) -> String {
     let mut lines: Vec<String> = existing
@@ -1031,23 +1089,24 @@ async fn set_context(o: &mut Onboarding, problem: &str) -> bool {
                 .host
                 .probe("brew", &["services", "--help"])
                 .await
-                .is_some_and(|probe| probe.stdout.contains("services/<formula>.env"));
+                .is_some_and(|probe| brew_services_read_env_files(&probe.stdout));
             if !supported {
                 return false;
             }
             let path = brew_env_file(o);
+            let existing = std::fs::read_to_string(&path).ok();
             if !o.ui.consent(
                 &format!(
                     "{problem} Set OLLAMA_CONTEXT_LENGTH={CONTEXT_FIX_TOKENS} for the Ollama \
                      service in {} and restart it (`brew services restart ollama`)?",
                     path.display()
                 ),
-                true,
+                // An existing service environment is an existing setup.
+                existing.is_none(),
                 false,
             ) {
                 return false;
             }
-            let existing = std::fs::read_to_string(&path).ok();
             let text = with_context_length(existing.as_deref());
             let written = path
                 .parent()
@@ -1088,7 +1147,7 @@ async fn set_context(o: &mut Onboarding, problem: &str) -> bool {
                     "{problem} Set OLLAMA_CONTEXT_LENGTH={CONTEXT_FIX_TOKENS} for the Ollama \
                      service in {drop_in} and restart it? This asks for your password."
                 ),
-                true,
+                !o.host.at(&drop_in).exists(),
                 true,
             ) {
                 return false;
@@ -1120,6 +1179,31 @@ mod tests {
         assert_eq!(value["disable_ollama_cloud"], true);
         assert_eq!(merged_server_json(Some("[1]")), None);
         assert_eq!(merged_server_json(Some("not json")), None);
+    }
+
+    /// The sentence of Homebrew 7.0.10's `brew services --help`, verbatim,
+    /// piped and at a terminal (where `formula` is underlined), and the
+    /// `<formula>` form of older 4.x releases. A Homebrew without it does
+    /// not read the file.
+    #[test]
+    fn homebrew_service_environment_files_are_recognised_in_real_help_text() {
+        let piped = "Environment variables can be added or overridden for a service by creating\n\
+                     $HOMEBREW_USER_CONFIG_HOME/services/formula.env (defaults to\n\
+                     ~/.homebrew/services/formula.env). The file uses KEY=value format, one per\n\
+                     line; lines starting with # are comments. Changes take effect on the next\n\
+                     brew services restart and persist across upgrades.\n";
+        assert!(brew_services_read_env_files(piped));
+        let terminal =
+            "creating\n$HOMEBREW_USER_CONFIG_HOME/services/\u{1b}[4mformula\u{1b}[0m.env \
+                        (defaults to\n~/.homebrew/services/\u{1b}[4mformula\u{1b}[0m.env).";
+        assert!(brew_services_read_env_files(terminal));
+        assert!(brew_services_read_env_files(
+            "Environment variables can be added in `$HOMEBREW_USER_CONFIG_HOME/services/<formula>.env`"
+        ));
+        assert!(!brew_services_read_env_files(
+            "Usage: brew services [subcommand]\n\nManage background services with macOS' \
+             launchctl(1) daemon manager or Linux's\nsystemctl(1) service manager.\n"
+        ));
     }
 
     #[test]

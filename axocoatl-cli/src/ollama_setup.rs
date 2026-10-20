@@ -81,8 +81,8 @@ pub fn size_text(bytes: u64) -> String {
 /// what is known about it; `None` below 48 GB, where no local pair has been
 /// tested.
 pub fn recommended_pair(memory_bytes: u64) -> Option<(TeamModels, &'static str)> {
-    let gb = axocoatl_isolation::host::memory_gb(memory_bytes);
-    if gb >= 96 {
+    use axocoatl_isolation::host::at_least_gb;
+    if at_least_gb(memory_bytes, 96) {
         Some((
             TeamModels {
                 lead: RECOMMENDED_LEAD_MODEL.to_string(),
@@ -90,7 +90,7 @@ pub fn recommended_pair(memory_bytes: u64) -> Option<(TeamModels, &'static str)>
             },
             "recommended: gpt-oss 120B is the reviewer Axocoatl has measured",
         ))
-    } else if gb >= 48 {
+    } else if at_least_gb(memory_bytes, 48) {
         Some((
             TeamModels::recommended(),
             "runs end to end on 48 GB; this reviewer's quality has not been measured",
@@ -759,6 +759,56 @@ pub async fn observed_context(base_url: &str, model: &str) -> Result<(usize, Str
         .map_err(|error| error.to_string())
 }
 
+/// What a loaded model takes, from `GET /api/ps`: its size in memory and
+/// the part of it in GPU memory (bytes).
+pub async fn loaded_memory(base_url: &str, model: &str) -> Option<(u64, u64)> {
+    let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+    let ps: Value = client
+        .get(&url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    loaded_memory_in(&ps, model)
+}
+
+/// [`loaded_memory`] of an `/api/ps` answer.
+pub fn loaded_memory_in(ps: &Value, model: &str) -> Option<(u64, u64)> {
+    let entry = ps.get("models")?.as_array()?.iter().find(|entry| {
+        [entry.get("name"), entry.get("model")]
+            .into_iter()
+            .flatten()
+            .any(|name| name.as_str() == Some(model))
+    })?;
+    let size = entry.get("size")?.as_u64()?;
+    let vram = entry.get("size_vram").and_then(Value::as_u64).unwrap_or(0);
+    (size > 0).then_some((size, vram.min(size)))
+}
+
+/// `18.6 GB loaded, all in GPU memory` or `…, 12.0 GB in GPU memory and
+/// 6.6 GB in system memory`.
+pub fn loaded_memory_text(size: u64, vram: u64) -> String {
+    if vram >= size {
+        format!("{} loaded, all in GPU memory", size_text(size))
+    } else if vram == 0 {
+        format!("{} loaded, all in system memory (CPU)", size_text(size))
+    } else {
+        format!(
+            "{} loaded, {} in GPU memory and {} in system memory",
+            size_text(size),
+            size_text(vram),
+            size_text(size - vram)
+        )
+    }
+}
+
 /// Whether a native Agent can run `model` on the server at `base_url`, read
 /// from `POST /api/show` the way native admission reads it: a local GGUF
 /// model that completes text, and, for an Agent with tools, calls tools.
@@ -811,6 +861,35 @@ pub fn shown_model_finding(model: &str, shown: &Value, needs_tools: bool) -> Fin
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Doctor shows how a loaded model splits between GPU and system
+    /// memory, from `/api/ps`.
+    #[test]
+    fn the_loaded_size_and_gpu_share_are_read_from_ps() {
+        let ps = json!({"models": [
+            {"name": "qwen3-coder:30b", "model": "qwen3-coder:30b",
+             "size": 20_000_000_000u64, "size_vram": 20_000_000_000u64},
+            {"name": "gpt-oss:20b", "model": "gpt-oss:20b",
+             "size": 16_000_000_000u64, "size_vram": 12_000_000_000u64},
+            {"name": "small:1b", "model": "small:1b", "context_length": 4096}
+        ]});
+        let qwen = loaded_memory_in(&ps, "qwen3-coder:30b").unwrap();
+        assert_eq!(
+            loaded_memory_text(qwen.0, qwen.1),
+            "20.0 GB loaded, all in GPU memory"
+        );
+        let oss = loaded_memory_in(&ps, "gpt-oss:20b").unwrap();
+        assert_eq!(
+            loaded_memory_text(oss.0, oss.1),
+            "16.0 GB loaded, 12.0 GB in GPU memory and 4.0 GB in system memory"
+        );
+        assert_eq!(
+            loaded_memory_text(5, 0),
+            "0.0 GB loaded, all in system memory (CPU)"
+        );
+        assert_eq!(loaded_memory_in(&ps, "small:1b"), None);
+        assert_eq!(loaded_memory_in(&ps, "missing"), None);
+    }
 
     fn tag(name: &str, parameter_size: &str, size: u64, family: &str) -> Value {
         json!({

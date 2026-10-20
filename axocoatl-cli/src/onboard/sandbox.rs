@@ -10,7 +10,7 @@
 
 use axocoatl_isolation::podman::{
     machine_spec, MachineSpec, PodmanReadiness, MACHINE_DOWNLOAD, MACHINE_PROVIDER,
-    MACHINE_START_COMMAND, MIN_MACHINE_MEMORY_MIB, TESTED_MACHINE_MEMORY_MIB,
+    MIN_MACHINE_MEMORY_MIB, TESTED_MACHINE_MEMORY_MIB,
 };
 use axocoatl_isolation::podman_report::{
     self, rootless_switch_command, subordinate_ids_command, PodmanReport, MIN_PODMAN_VERSION,
@@ -101,9 +101,9 @@ pub(crate) async fn run(o: &mut Onboarding) -> bool {
             }
             PodmanReadiness::MachineStopped => {
                 let name = machine_name(&o.facts.podman);
-                let start = Cmd::new("podman", &["machine", "start"]);
+                let start = machine_cmd(&["start"], &name);
                 if !o.ui.consent(
-                    &format!("Start {name} now? (`{MACHINE_START_COMMAND}`)"),
+                    &format!("Start {name} now? (`{}`)", start.display()),
                     true,
                     false,
                 ) {
@@ -114,7 +114,7 @@ pub(crate) async fn run(o: &mut Onboarding) -> bool {
                     break;
                 }
                 if let Err(error) = o.ui.execute(&o.host, &start).await {
-                    o.step_left(format!("{error}; start it with `{MACHINE_START_COMMAND}`"));
+                    o.step_left(format!("{error}; start it with `{}`", start.display()));
                     return false;
                 }
                 assumed = 2;
@@ -142,25 +142,75 @@ pub(crate) async fn run(o: &mut Onboarding) -> bool {
         ));
         return false;
     }
-    let mut ready = true;
-    if !o.ui.plan() {
-        ready &= rootless(o).await;
-        ready &= machine_memory(o).await;
-        ready &= version(o);
-        ready &= subordinate_ids(o).await;
-        ready &= landlock(o);
-    }
+    // Each check only reads what Step 0 found and asks through the Ui, so
+    // --plan prints the question and the commands it would run.
+    let mut ready = on_path(o);
+    ready &= rootless(o).await;
+    ready &= machine_memory(o).await;
+    ready &= version(o);
+    ready &= subordinate_ids(o).await;
+    ready &= landlock(o);
     if ready {
         ready = proof(o).await;
     }
     ready
 }
 
+/// The daemon finds Podman on PATH, as `axocoatl dev` and the service run
+/// it: a Podman onboarding found only in Homebrew's or the installer's
+/// directory is a step left until that directory is on PATH.
+fn on_path(o: &mut Onboarding) -> bool {
+    if o.ui.plan() || o.host.find_on_path("podman").is_some() {
+        return true;
+    }
+    let Some(found) = o.host.find("podman") else {
+        return true;
+    };
+    let directory = found
+        .parent()
+        .map(|directory| directory.display().to_string())
+        .unwrap_or_default();
+    let how = if directory == "/opt/homebrew/bin" || directory == "/usr/local/bin" {
+        format!(" (for Homebrew: add `eval \"$({directory}/brew shellenv)\"` to ~/.zprofile)")
+    } else {
+        String::new()
+    };
+    o.step_left(format!(
+        "Podman is installed at {}, but {directory} is not on your PATH, so `axocoatl dev` and \
+         every run would not find it: add {directory} to PATH{how}, open a new terminal and run \
+         `axocoatl onboard` again",
+        found.display()
+    ));
+    false
+}
+
+/// The machine onboarding starts, stops or changes.
 fn machine_name(report: &PodmanReport) -> String {
     report
-        .machine()
+        .machine_in_use()
+        .or_else(|| report.machine())
         .map(|machine| machine.name.clone())
         .unwrap_or_else(|| "podman-machine-default".to_string())
+}
+
+/// `podman machine <verb…> [name]`: every machine command names the
+/// machine (Podman otherwise acts on `podman-machine-default`).
+fn machine_cmd(verb: &[&str], name: &str) -> Cmd {
+    let mut args = vec!["machine"];
+    args.extend_from_slice(verb);
+    if name != "podman-machine-default" {
+        args.push(name);
+    }
+    Cmd::new("podman", &args)
+}
+
+/// Why onboarding does not change the machine: Podman is reached through
+/// `CONTAINER_HOST`, or a `CONTAINER_CONNECTION` that is not a machine.
+fn not_our_machine(o: &Onboarding) -> Option<String> {
+    if o.facts.podman.machine_in_use().is_some() {
+        return None;
+    }
+    o.facts.podman.connection.describe()
 }
 
 async fn install(o: &mut Onboarding) -> bool {
@@ -279,7 +329,8 @@ async fn create_machine(o: &mut Onboarding) -> bool {
             .unwrap_or_default();
         if !existing.is_empty() {
             o.step_left(format!(
-                "Podman has connections ({}) but no machine answers: check `podman system                  connection list` and `podman machine list`, then run `axocoatl onboard` again",
+                "Podman has connections ({}) but no machine answers: check `podman system \
+                 connection list` and `podman machine list`, then run `axocoatl onboard` again",
                 existing.join(", ")
             ));
             return false;
@@ -389,11 +440,19 @@ async fn rootless(o: &mut Onboarding) -> bool {
         );
         return false;
     }
+    if let Some(connection) = not_our_machine(o) {
+        o.step_left(format!(
+            "Podman runs containers as root, which Axocoatl runs refuse, and it is reached \
+             through {connection}: point that at a rootless Podman machine, or unset it to use \
+             your own machine (onboarding does not change a Podman it reaches this way)"
+        ));
+        return false;
+    }
     let name = machine_name(&o.facts.podman);
     let commands = vec![
-        Cmd::new("podman", &["machine", "stop"]),
-        Cmd::new("podman", &["machine", "set", "--rootful=false"]),
-        Cmd::new("podman", &["machine", "start"]),
+        machine_cmd(&["stop"], &name),
+        machine_cmd(&["set", "--rootful=false"], &name),
+        machine_cmd(&["start"], &name),
     ];
     if o.ui.consent(
         &format!(
@@ -442,7 +501,7 @@ async fn machine_memory(o: &mut Onboarding) -> bool {
     if !o.facts.os.is_macos() {
         return true;
     }
-    let Some(machine) = o.facts.podman.machine().cloned() else {
+    let Some(machine) = o.facts.podman.machine_in_use().cloned() else {
         return true;
     };
     let Some(memory) = machine
@@ -454,9 +513,9 @@ async fn machine_memory(o: &mut Onboarding) -> bool {
     let target = spec(o).memory_mib;
     let target_text = target.to_string();
     let commands = vec![
-        Cmd::new("podman", &["machine", "stop"]),
-        Cmd::new("podman", &["machine", "set", "--memory", &target_text]),
-        Cmd::new("podman", &["machine", "start"]),
+        machine_cmd(&["stop"], &machine.name),
+        machine_cmd(&["set", "--memory", &target_text], &machine.name),
+        machine_cmd(&["start"], &machine.name),
     ];
     if o.ui.consent(
         &format!(

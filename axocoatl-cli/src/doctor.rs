@@ -35,14 +35,24 @@ pub(crate) struct Item {
 }
 
 impl Item {
-    /// The item as one line: its detail, after its name when the detail
-    /// does not already say what it is about.
+    /// The item as one line: its detail, after its name unless the detail
+    /// starts by saying what it is about.
     pub(crate) fn line(&self) -> String {
-        let key = self.name.trim_start_matches("Model ").to_ascii_lowercase();
-        if self.detail.to_ascii_lowercase().contains(&key) {
+        let name = self.name.to_ascii_lowercase();
+        let key = name.trim_start_matches("model ");
+        let detail = self.detail.to_ascii_lowercase().replace(['\'', '"'], "");
+        if detail.starts_with(&name) || detail.starts_with(key) {
             self.detail.clone()
         } else {
             format!("{}: {}", self.name, self.detail)
+        }
+    }
+
+    /// The item as a step left: the line and its fix.
+    pub(crate) fn step(&self) -> String {
+        match &self.fix {
+            Some(fix) => format!("{}: {}", self.line(), fix),
+            None => self.line(),
         }
     }
 
@@ -318,7 +328,10 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             sections.daemon.push(Item::fail(
                 "Config",
-                format!("No configuration at {}", config_path.display()),
+                format!(
+                    "Config missing: no configuration at {}",
+                    config_path.display()
+                ),
                 "Run `axocoatl onboard`",
             ));
             None
@@ -359,18 +372,36 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         .as_deref()
         .map(onboard_config::run_models)
         .unwrap_or_default();
+    // Who writes, as onboarding recorded it; else what `run.models.writer`
+    // implies.
+    let marker = text.as_deref().ok().and_then(onboard_config::writer_marker);
+    let chosen_writer = marker
+        .as_ref()
+        .map(|marker| marker.writer.clone())
+        .or_else(|| {
+            run.writer
+                .as_deref()
+                .and_then(|spec| ModelRef::parse(spec).ok())
+                .map(|model| model.provider.id().to_string())
+        });
 
     // ── Sandbox ──
     let report = podman_report::inspect_with(&env.podman).await;
     let e2b = config
         .as_ref()
         .is_some_and(|config| config.sandbox.backend == "e2b");
+    // `axocoatl run` always needs Podman, whatever runs workbench Sessions:
+    // whether it is ready is decided before an E2B setup softens the lines.
+    let mut podman_ok = true;
     for finding in podman_report::findings(&report, &env.platform()) {
         let mut status = level(finding.level);
         let mut detail = finding.detail;
-        if e2b && status == Status::Fail {
-            status = Status::Warn;
-            detail.push_str(" (workbench Sessions use E2B; axocoatl run still needs Podman)");
+        if status == Status::Fail {
+            podman_ok = false;
+            if e2b {
+                status = Status::Warn;
+                detail.push_str(" (workbench Sessions use E2B; axocoatl run still needs Podman)");
+            }
         }
         sections.sandbox.push(Item {
             name: finding.name.to_string(),
@@ -386,10 +417,11 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             wsl.is_some(),
         ));
     }
-    let sandbox_ok = !sections
-        .sandbox
-        .iter()
-        .any(|item| item.status == Status::Fail);
+    let sandbox_ok = podman_ok
+        && !sections
+            .sandbox
+            .iter()
+            .any(|item| item.status == Status::Fail);
     if let Some(config) = &config {
         sections.sandbox.push(Item::ok(
             "Sandbox network",
@@ -561,24 +593,46 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         }
     }
     let claude_code = writer_items(
-        "Claude Code",
-        "claude-code",
+        &WriterPath {
+            name: "Claude Code",
+            recipe: "claude-code",
+            credentials: &[axocoatl_daemon::external_agent::claude_code::CLAUDE_CODE_SECRET],
+            connect: "axocoatl connect claude-code",
+            chosen: chosen_writer.as_deref() == Some("claude-code"),
+        },
         images.contains("claude-code"),
-        &[axocoatl_daemon::external_agent::claude_code::CLAUDE_CODE_SECRET],
         &secrets,
-        "axocoatl connect claude-code",
         &mut sections.writers,
     );
-    let codex = writer_items(
-        "Codex",
-        "codex",
-        images.contains("codex"),
-        &[
+    // A Codex setup names its credential: that one must be stored.
+    let codex_credential = marker
+        .as_ref()
+        .filter(|marker| marker.writer == "codex")
+        .and_then(|marker| marker.credential.clone());
+    let codex_credentials: Vec<&str> = match codex_credential.as_deref() {
+        Some(credential) => vec![credential],
+        None => vec![
             axocoatl_daemon::external_agent::codex::CODEX_CHATGPT_SECRET,
             axocoatl_daemon::external_agent::codex::CODEX_SECRET,
         ],
+    };
+    let codex_connect = if codex_credential.as_deref()
+        == Some(axocoatl_daemon::external_agent::codex::CODEX_SECRET)
+    {
+        "axocoatl connect codex --api-key-only"
+    } else {
+        "axocoatl connect codex"
+    };
+    let codex = writer_items(
+        &WriterPath {
+            name: "Codex",
+            recipe: "codex",
+            credentials: &codex_credentials,
+            connect: codex_connect,
+            chosen: chosen_writer.as_deref() == Some("codex"),
+        },
+        images.contains("codex"),
         &secrets,
-        "axocoatl connect codex",
         &mut sections.writers,
     );
     match crate::connect_cmd::find_claude(
@@ -698,7 +752,11 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 "no daemon running; `axocoatl run` and the workbench need one",
                 Some("Start it with `axocoatl dev` (or `axocoatl service start`)".to_string()),
             ));
-            if is_loopback(&server_host) && !crate::onboard::host::port_free(port) {
+            // Without a configuration there is no port to ask about.
+            if config.is_some()
+                && is_loopback(&server_host)
+                && !crate::onboard::host::port_free(port)
+            {
                 sections.daemon.push(Item::warn(
                     "Port",
                     format!(
@@ -749,10 +807,9 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
     }
     if let Some(config) = &config {
         if config.webhooks.is_empty() {
-            sections.daemon.push(Item::ok(
-                "Webhooks",
-                "Outbound webhooks: none (no event egress)",
-            ));
+            sections
+                .daemon
+                .push(Item::ok("Webhooks", "none (no outbound event egress)"));
         } else {
             let names: Vec<&str> = config
                 .webhooks
@@ -763,7 +820,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             sections.daemon.push(Item::ok(
                 "Webhooks",
                 format!(
-                    "{} webhook(s) active; Skill events leave the box to: {}",
+                    "{} active; Skill events leave the box to: {}",
                     names.len(),
                     names.join(", ")
                 ),
@@ -808,7 +865,9 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             Some(spec) => model_ok(spec).err(),
         }
     };
-    if run.writer.is_some() || reviewer.is_some() {
+    let native_writer =
+        run.writer.is_some() || matches!(chosen_writer.as_deref(), Some("ollama" | "openrouter"));
+    if native_writer {
         let mut problems: Vec<String> = sandbox_blocker.iter().cloned().collect();
         match run.writer.as_deref() {
             None => problems.push(
@@ -829,11 +888,15 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             ),
         );
     }
+    let codex_command = match &codex_credential {
+        Some(credential) => format!("axocoatl run fix-codex --param credential={credential}"),
+        None => "axocoatl run fix-codex".to_string(),
+    };
     for (command, writer) in [
         ("axocoatl run fix-claude-code", &claude_code),
-        ("axocoatl run fix-codex", &codex),
+        (codex_command.as_str(), &codex),
     ] {
-        if writer.set_up_started {
+        if writer.set_up_started || writer.chosen {
             let mut problems: Vec<String> = sandbox_blocker.iter().cloned().collect();
             problems.extend(writer.missing.clone());
             problems.extend(reviewer_problem());
@@ -862,10 +925,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
     let steps_left: Vec<String> = sections
         .all()
         .filter(|item| item.status == Status::Fail)
-        .map(|item| match &item.fix {
-            Some(fix) => format!("{}: {}", item.line(), fix),
-            None => item.line(),
-        })
+        .map(Item::step)
         .collect();
     Report {
         ready: steps_left.is_empty(),
@@ -896,7 +956,7 @@ fn is_loopback(host: &str) -> bool {
 }
 
 /// What `GET /health` of the daemon on `host:port` says its version is.
-async fn daemon_version(host: &str, port: u16) -> Option<String> {
+pub(crate) async fn daemon_version(host: &str, port: u16) -> Option<String> {
     let url = crate::onboard::smoke::health_url(host, port);
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
@@ -948,61 +1008,92 @@ pub(crate) fn installed_service_program(home: &Path, macos: bool) -> Option<Path
     }
 }
 
+/// An external writer: Claude Code or Codex.
+struct WriterPath<'a> {
+    name: &'a str,
+    recipe: &'a str,
+    /// The credentials it runs with (any one of them).
+    credentials: &'a [&'a str],
+    connect: &'a str,
+    /// The configuration says this is the writer (onboarding chose it), so
+    /// what it lacks fails instead of warning.
+    chosen: bool,
+}
+
 /// What a writer path has and lacks.
 struct WriterState {
     /// Something of it is set up (an image or a credential), so doctor
     /// reports it.
     set_up_started: bool,
+    chosen: bool,
     missing: Vec<String>,
 }
 
 fn writer_items(
-    name: &str,
-    recipe: &str,
+    path: &WriterPath,
     image: bool,
-    credentials: &[&str],
     stored: &BTreeSet<String>,
-    connect: &str,
     items: &mut Vec<Item>,
 ) -> WriterState {
+    let WriterPath {
+        name,
+        recipe,
+        credentials,
+        connect,
+        chosen,
+    } = *path;
     let credential = credentials
         .iter()
         .find(|credential| stored.contains(**credential));
     let started = image || credential.is_some();
     let mut missing = Vec::new();
-    if !started {
+    if !started && !chosen {
         items.push(Item::ok(
             name,
             format!("not set up (`axocoatl onboard --update --writer {recipe}` sets it up)"),
         ));
         return WriterState {
             set_up_started: false,
+            chosen,
             missing: vec![format!(
                 "not set up: run `axocoatl onboard --update --writer {recipe}`"
             )],
         };
     }
+    let lacking = |detail: String, fix: String| {
+        if chosen {
+            Item::fail(name, detail, fix)
+        } else {
+            Item::warn(name, detail, Some(fix))
+        }
+    };
     items.push(if image {
         Item::ok(name, format!("{recipe} image built"))
     } else {
         missing.push(format!(
             "its image is not built: run `axocoatl recipe build {recipe}`"
         ));
-        Item::warn(
-            name,
+        lacking(
             format!("{recipe} image not built"),
-            Some(format!("axocoatl recipe build {recipe}")),
+            format!("axocoatl recipe build {recipe}"),
         )
     });
     items.push(match credential {
         Some(credential) => Item::ok(name, format!("signed in ({credential} stored)")),
         None => {
             missing.push(format!("not connected: run `{connect}`"));
-            Item::warn(name, "not connected", Some(connect.to_string()))
+            lacking(
+                match credentials {
+                    [only] => format!("not connected ({only} is not stored)"),
+                    _ => "not connected".to_string(),
+                },
+                connect.to_string(),
+            )
         }
     });
     WriterState {
         set_up_started: true,
+        chosen,
         missing,
     }
 }
@@ -1130,6 +1221,10 @@ async fn check_ollama(
                 }
                 Ok((context, _)) => {
                     parts.push(format!("{context}-token context, contract probes passed"));
+                    if let Some((loaded, vram)) = ollama_setup::loaded_memory(base_url, model).await
+                    {
+                        parts.push(ollama_setup::loaded_memory_text(loaded, vram));
+                    }
                 }
                 Err(error) => {
                     status = Status::Fail;
@@ -1332,6 +1427,36 @@ mod tests {
         assert!(ready.ends_with("Ready: yes\n"));
     }
 
+    /// A line names what it is about once: the item's name only when the
+    /// detail does not start with it.
+    #[test]
+    fn a_line_names_its_subject_once() {
+        let line = |name: &str, detail: &str| Item::ok(name, detail).line();
+        assert_eq!(
+            line(
+                "Codex",
+                "not set up (`axocoatl onboard --update --writer codex` sets it up)"
+            ),
+            "Codex: not set up (`axocoatl onboard --update --writer codex` sets it up)"
+        );
+        assert_eq!(line("Landlock", "Landlock ABI 6"), "Landlock ABI 6");
+        assert_eq!(
+            line("Model gpt-oss:20b", "gpt-oss:20b: GGUF"),
+            "gpt-oss:20b: GGUF"
+        );
+        assert_eq!(
+            line(
+                "Model qwen3-coder:30b",
+                "Model 'qwen3-coder:30b' cannot run in native Sessions"
+            ),
+            "Model 'qwen3-coder:30b' cannot run in native Sessions"
+        );
+        assert_eq!(
+            line("Daemon", "running (Axocoatl 1.5.0)"),
+            "Daemon: running (Axocoatl 1.5.0)"
+        );
+    }
+
     #[test]
     fn landlock_abi_decides_what_runs() {
         let debian = detect::OsRelease::parse("ID=debian\nVERSION_ID=12\n");
@@ -1388,16 +1513,19 @@ mod tests {
         );
     }
 
-    fn writer(image: bool, stored: &[&str]) -> (WriterState, Vec<Item>) {
+    fn writer(image: bool, stored: &[&str], chosen: bool) -> (WriterState, Vec<Item>) {
         let mut items = Vec::new();
         let stored: BTreeSet<String> = stored.iter().map(|s| s.to_string()).collect();
         let state = writer_items(
-            "Codex",
-            "codex",
+            &WriterPath {
+                name: "Codex",
+                recipe: "codex",
+                credentials: &["codex-chatgpt", "codex-openai"],
+                connect: "axocoatl connect codex",
+                chosen,
+            },
             image,
-            &["codex-chatgpt", "codex-openai"],
             &stored,
-            "axocoatl connect codex",
             &mut items,
         );
         (state, items)
@@ -1405,18 +1533,39 @@ mod tests {
 
     #[test]
     fn a_writer_path_is_reported_once_part_of_it_is_set_up() {
-        let (state, items) = writer(false, &[]);
+        let (state, items) = writer(false, &[], false);
         assert!(!state.set_up_started);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].status, Status::Ok);
-        let (state, items) = writer(true, &[]);
+        assert_eq!(
+            items[0].line(),
+            "Codex: not set up (`axocoatl onboard --update --writer codex` sets it up)"
+        );
+        let (state, items) = writer(true, &[], false);
         assert!(state.set_up_started);
         assert_eq!(
             state.missing,
             ["not connected: run `axocoatl connect codex`"]
         );
         assert_eq!(items[1].status, Status::Warn);
-        let (state, _) = writer(true, &["codex-openai"]);
+        let (state, _) = writer(true, &["codex-openai"], false);
         assert!(state.missing.is_empty());
+    }
+
+    /// The writer the configuration names fails when its image or its
+    /// sign-in is missing: doctor never says ready for a Claude Code or
+    /// Codex setup that cannot run.
+    #[test]
+    fn the_chosen_writer_fails_without_its_image_or_sign_in() {
+        let (state, items) = writer(false, &[], true);
+        assert!(state.chosen);
+        assert_eq!(
+            items.iter().map(|item| item.status).collect::<Vec<_>>(),
+            [Status::Fail, Status::Fail]
+        );
+        assert_eq!(items[0].fix.as_deref(), Some("axocoatl recipe build codex"));
+        assert_eq!(items[1].fix.as_deref(), Some("axocoatl connect codex"));
+        let (_, items) = writer(true, &["codex-chatgpt"], true);
+        assert!(items.iter().all(|item| item.status == Status::Ok));
     }
 }

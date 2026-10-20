@@ -176,11 +176,10 @@ impl Ui {
             Mode::Interactive => {
                 #[cfg(test)]
                 if let Some(answer) = self.next_answer() {
-                    let Answer::Pick(index) = answer else {
-                        if answer == Answer::Enter {
-                            return default;
-                        }
-                        panic!("{prompt}: expected a pick, got {answer:?}");
+                    let index = match answer {
+                        Answer::Pick(index) => index,
+                        Answer::Enter => default,
+                        other => panic!("{prompt}: expected a pick, got {other:?}"),
                     };
                     self.printed
                         .lock()

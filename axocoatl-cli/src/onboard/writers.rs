@@ -174,7 +174,20 @@ pub(crate) async fn run(
             "an OpenAI API key (needs an OpenAI Platform organization; billed at API rates)"
                 .to_string(),
         ];
-        let api_key = o.ui.select("Bill Codex runs to:", &items, 0) == 1;
+        let api_key = match o.kept.codex_credential.as_deref() {
+            Some(kept @ (CODEX_SECRET | CODEX_CHATGPT_SECRET)) => {
+                o.ui.say(format!(
+                    "  Codex runs bill to {} (kept from your configuration: {kept})",
+                    if kept == CODEX_SECRET {
+                        "an OpenAI API key"
+                    } else {
+                        "your ChatGPT plan"
+                    }
+                ));
+                kept == CODEX_SECRET
+            }
+            _ => o.ui.select("Bill Codex runs to:", &items, 0) == 1,
+        };
         let (credential, connect_args): (&'static str, Vec<&str>) = if api_key {
             (CODEX_SECRET, vec!["connect", "codex", "--api-key-only"])
         } else {
@@ -239,7 +252,10 @@ async fn reviewer(o: &mut Onboarding, choice: &mut Choice) {
         Some(spec) if spec.starts_with("openrouter:") => Provider::OpenRouter,
         Some(_) => Provider::Ollama,
         None => {
-            let big_enough = o.memory_gb().is_some_and(|gb| gb >= 48);
+            let big_enough = o
+                .facts
+                .memory_bytes
+                .is_some_and(|bytes| axocoatl_isolation::host::at_least_gb(bytes, 48));
             let items = vec![
                 "Local Ollama gpt-oss:20b (13.8 GB, needs 48 GB memory)".to_string(),
                 "OpenRouter (hosted, credits)".to_string(),

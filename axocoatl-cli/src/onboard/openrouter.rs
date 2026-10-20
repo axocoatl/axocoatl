@@ -80,8 +80,73 @@ fn flag_model(spec: &Option<String>) -> Option<String> {
         .map(|model| model.model)
 }
 
-/// The key: `--openrouter-key-env VAR`, else (at a terminal)
-/// `OPENROUTER_API_KEY` when set, else a hidden prompt.
+/// What "Update this setup" does with the key the configuration already
+/// has: `Some` to use it, `None` to ask for one (or, without a terminal,
+/// leave the step).
+fn kept_key(o: &mut Onboarding) -> Option<Option<(KeyRef, zeroize::Zeroizing<String>)>> {
+    let kept = o.kept.openrouter_key.clone()?;
+    let variable = kept
+        .strip_prefix("${")
+        .and_then(|rest| rest.strip_suffix('}'))
+        .map(str::to_string);
+    match variable {
+        Some(variable) => {
+            let value = std::env::var(&variable)
+                .ok()
+                .filter(|value| !value.trim().is_empty());
+            match value {
+                Some(value)
+                    if !o.ui.interactive()
+                        || o.ui.consent(
+                            &format!(
+                                "Keep reading the OpenRouter key from ${variable}, as your \
+                                 configuration does? (The Always-On Service cannot read shell \
+                                 variables; No stores the key itself in your owner-only \
+                                 configuration instead.)"
+                            ),
+                            true,
+                            false,
+                        ) =>
+                {
+                    o.ui.say(format!(
+                        "  OpenRouter key: from ${variable}, as your configuration says"
+                    ));
+                    Some(Some((
+                        KeyRef::Env(variable),
+                        zeroize::Zeroizing::new(value.trim().to_string()),
+                    )))
+                }
+                Some(_) => None,
+                None if o.ui.interactive() => None,
+                None => {
+                    o.step_left(format!(
+                        "Export {variable} with your OpenRouter key (your configuration reads it \
+                         from there) and run `axocoatl onboard` again, or run it in a terminal to \
+                         store the key itself"
+                    ));
+                    Some(None)
+                }
+            }
+        }
+        None => {
+            if o.ui.interactive()
+                && !o.ui.consent(
+                    "Keep the OpenRouter key in your configuration? (No asks for a new one.)",
+                    true,
+                    false,
+                )
+            {
+                return None;
+            }
+            o.ui.say("  OpenRouter key: the one in your configuration");
+            Some(Some((KeyRef::Value(kept.clone()), kept)))
+        }
+    }
+}
+
+/// The key: `--openrouter-key-env VAR`, else the one an existing
+/// configuration has, else (at a terminal) `OPENROUTER_API_KEY` when set,
+/// else a hidden prompt.
 fn key(o: &mut Onboarding) -> Option<(KeyRef, zeroize::Zeroizing<String>)> {
     if o.ui.plan() {
         let variable = o
@@ -97,6 +162,11 @@ fn key(o: &mut Onboarding) -> Option<(KeyRef, zeroize::Zeroizing<String>)> {
             KeyRef::Env(variable),
             zeroize::Zeroizing::new(String::new()),
         ));
+    }
+    if o.args.openrouter_key_env.is_none() {
+        if let Some(kept) = kept_key(o) {
+            return kept;
+        }
     }
     if let Some(variable) = o.args.openrouter_key_env.clone() {
         return match std::env::var(&variable)
@@ -121,9 +191,14 @@ fn key(o: &mut Onboarding) -> Option<(KeyRef, zeroize::Zeroizing<String>)> {
             }
         };
     }
+    let declined_kept_variable = o
+        .kept
+        .openrouter_key
+        .as_deref()
+        .is_some_and(|kept| kept == "${OPENROUTER_API_KEY}");
     if let Some(value) = std::env::var("OPENROUTER_API_KEY")
         .ok()
-        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !value.trim().is_empty() && !declined_kept_variable)
     {
         if o.ui.consent(
             "Use the OpenRouter key in $OPENROUTER_API_KEY? The configuration names the variable, \
@@ -213,7 +288,8 @@ pub(crate) async fn run(o: &mut Onboarding, choice: &mut Choice, with_writer: bo
             KeyCheck::Refused(status) => {
                 o.step_left(format!(
                     "OpenRouter refused the key ({status}): check it at \
-                     https://openrouter.ai/settings/keys, then run `axocoatl onboard` again"
+                     https://openrouter.ai/settings/keys, then run `axocoatl onboard --update` \
+                     in a terminal to enter another (or pass --openrouter-key-env VAR)"
                 ));
                 return;
             }

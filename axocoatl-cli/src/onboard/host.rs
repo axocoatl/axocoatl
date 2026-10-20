@@ -247,6 +247,15 @@ impl Host {
             .find(|candidate| is_executable(candidate))
     }
 
+    /// `name` on [`Host::path`] alone: where `axocoatl dev`, the service and
+    /// the daemon's own Podman calls find it.
+    pub(crate) fn find_on_path(&self, name: &str) -> Option<PathBuf> {
+        std::env::split_paths(&self.path)
+            .filter(|directory| directory.is_absolute())
+            .map(|directory| directory.join(name))
+            .find(|candidate| is_executable(candidate))
+    }
+
     pub(crate) fn log(&self, text: &str) {
         if let Some(log) = &self.log {
             log.line(text);
@@ -361,11 +370,12 @@ impl Host {
     }
 
     /// Run a command with this terminal and return its exit code (`None`
-    /// when a signal ended it).
+    /// when a signal ended it). Dropping the future (onboarding stopped by
+    /// a signal) kills the command.
     pub(crate) async fn status(&self, cmd: &Cmd) -> Result<Option<i32>, String> {
         self.log(&format!("$ {}", cmd.display()));
         let mut command = self.command(&cmd.program);
-        command.args(&cmd.args);
+        command.args(&cmd.args).kill_on_drop(true);
         for (name, value) in &cmd.env {
             command.env(name, value);
         }

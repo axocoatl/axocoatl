@@ -191,7 +191,12 @@ fn doctor_without_a_configuration_points_to_onboard() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(1), "{stdout}");
-    assert!(stdout.contains("[FAIL] No configuration at"), "{stdout}");
+    assert!(
+        stdout.contains("[FAIL] Config missing: no configuration at"),
+        "{stdout}"
+    );
+    // Without a configuration there is no port to look at.
+    assert!(!stdout.contains("Port"), "{stdout}");
     assert!(stdout.contains("Run `axocoatl onboard`"), "{stdout}");
     assert!(stdout.ends_with("Ready: no\n"), "{stdout}");
 }
