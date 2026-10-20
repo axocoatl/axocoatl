@@ -4,9 +4,15 @@
 #
 # It installs to /usr/local/bin when that directory is writable, else to
 # ~/.local/bin. When the directory is not on PATH it asks, on the terminal,
-# before adding one line to your shell's profile; without a terminal it only
-# prints that line. AXOCOATL_MODIFY_PATH=yes adds the line without asking;
-# AXOCOATL_MODIFY_PATH=no never changes a profile.
+# before adding one line to your shell's profile; without a terminal (or when
+# the answer is end of input) it only prints that line. In a GitHub Actions
+# step it adds the directory to $GITHUB_PATH instead, for the job's later steps.
+# AXOCOATL_MODIFY_PATH=yes adds the line without asking;
+# AXOCOATL_MODIFY_PATH=no never changes a profile or $GITHUB_PATH.
+# AXOCOATL_VERSION=v1.5.0 installs that release instead of the latest one, and
+# AXOCOATL_INSTALL_BASE_URL (https:// or file://, with AXOCOATL_VERSION) names
+# the directory that holds its archive and .sha256 file instead of the GitHub
+# release; the checksum is still required.
 # AXOCOATL_INSTALL_SYSTEM_DIR and AXOCOATL_INSTALL_TTY replace /usr/local/bin
 # and /dev/tty for scripts/test-install.sh.
 set -eu
@@ -21,6 +27,25 @@ modify_path="${AXOCOATL_MODIFY_PATH:-ask}"
 case "$modify_path" in
   ask|yes|no) ;;
   *) err "AXOCOATL_MODIFY_PATH must be ask, yes or no, not '$modify_path'" ;;
+esac
+# A release tag such as v1.5.0 (or 1.5.0), checked before any download.
+requested_tag="${AXOCOATL_VERSION:-}"
+case "$requested_tag" in
+  '') ;;
+  *[!A-Za-z0-9.-]*) err "AXOCOATL_VERSION must be a release tag such as v1.5.0, not '$requested_tag'" ;;
+  v[0-9]*) ;;
+  [0-9]*) requested_tag="v$requested_tag" ;;
+  *) err "AXOCOATL_VERSION must be a release tag such as v1.5.0, not '$requested_tag'" ;;
+esac
+base_url="${AXOCOATL_INSTALL_BASE_URL:-}"
+case "$base_url" in
+  '') ;;
+  https://*|file://*)
+    [ -n "$requested_tag" ] \
+      || err "AXOCOATL_INSTALL_BASE_URL needs AXOCOATL_VERSION, which names the release to install from it"
+    base_url="${base_url%/}"
+    ;;
+  *) err "AXOCOATL_INSTALL_BASE_URL must start with https:// or file://, not '$base_url'" ;;
 esac
 system_dir="${AXOCOATL_INSTALL_SYSTEM_DIR:-/usr/local/bin}"
 tty_device="${AXOCOATL_INSTALL_TTY:-/dev/tty}"
@@ -140,9 +165,9 @@ case "$os" in
   Linux)  os_part="unknown-linux-gnu" ;;
   Darwin) os_part="apple-darwin" ;;
   MINGW*|MSYS*|CYGWIN*|Windows_NT)
-    err "Axocoatl runs on Windows through WSL2, not natively (its session sandbox
-  is Podman and its service is systemd/launchd). Open a WSL2 distro (e.g. Ubuntu)
-  and run this same command there:
+    err "Axocoatl runs on Windows inside WSL2, not natively (its session sandbox
+  is Podman and its service is systemd/launchd); WSL2 is not yet verified. Open a
+  WSL2 distro (e.g. Ubuntu) and run this same command there:
 
       curl -fsSL https://axocoatl.ai/install.sh | sh
 
@@ -161,14 +186,19 @@ require_supported_glibc
 require_supported_macos
 target="${arch_part}-${os_part}"
 
-# --- Resolve latest release tag ---
-info "resolving latest release..."
-tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-  | grep '"tag_name"' | head -n1 | cut -d'"' -f4)"
-[ -n "$tag" ] || err "could not resolve latest release tag"
+# --- Resolve the release tag ---
+if [ -n "$requested_tag" ]; then
+  tag="$requested_tag"
+  info "installing the requested release ${tag}..."
+else
+  info "resolving latest release..."
+  tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+    | grep '"tag_name"' | head -n1 | cut -d'"' -f4)"
+  [ -n "$tag" ] || err "could not resolve latest release tag"
+fi
 
 tarball="${BIN}-${tag}-${target}.tar.gz"
-url="https://github.com/${REPO}/releases/download/${tag}/${tarball}"
+url="${base_url:-https://github.com/${REPO}/releases/download/${tag}}/${tarball}"
 sha_url="${url}.sha256"
 
 tmp="$(mktemp -d)"
@@ -223,39 +253,57 @@ info "installed ${BIN} ${tag} -> ${dest}/${BIN}"
 # --- Keep it on PATH for new terminals ---
 # A stock macOS PATH (/etc/paths) has no ~/.local/bin, and an `export` typed
 # in this shell is gone in the next Terminal window.
+offer_profile_line() {
+  choose_profile "$dest"
+  shown_dest="$(display_path "$dest")"
+  shown_profile="$(display_path "$profile")"
+  if [ -f "$profile" ] && grep -Fxq -- "$path_line" "$profile" 2>/dev/null; then
+    info "${shown_profile} already adds ${shown_dest} to PATH; new terminals find ${BIN}"
+    return 0
+  fi
+  answer=no
+  if [ "$modify_path" = "yes" ]; then
+    answer=yes
+  elif [ "$modify_path" = "ask" ] && can_ask; then
+    printf 'axocoatl-install: %s is not on your PATH. Add it in %s? [Y/n] ' \
+      "$shown_dest" "$shown_profile" >>"$tty_device"
+    reply=""
+    if read -r reply <"$tty_device"; then
+      case "$reply" in
+        ''|y|Y|yes|Yes|YES) answer=yes ;;
+        *) answer=no ;;
+      esac
+    else
+      # End of input (Ctrl-D, or a terminal that went away) is not consent.
+      printf '\n' 2>/dev/null >>"$tty_device" || true
+    fi
+  fi
+  if [ "$answer" = "yes" ] \
+    && mkdir -p "${profile%/*}" 2>/dev/null \
+    && printf '\n# Added by the Axocoatl installer\n%s\n' "$path_line" 2>/dev/null >>"$profile"; then
+    info "added to ${shown_profile}:  ${path_line}"
+    info "new terminals find ${BIN}; in this one, run:  ${path_line}"
+  else
+    [ "$answer" = "no" ] || info "could not write ${shown_profile}"
+    info "${shown_dest} is not on your PATH. For new terminals to find ${BIN}, add this line to ${shown_profile}:"
+    echo
+    echo "    ${path_line}"
+  fi
+}
+
 case ":${PATH}:" in
   *":${dest}:"*) ;;
   *)
-    choose_profile "$dest"
-    shown_dest="$(display_path "$dest")"
-    shown_profile="$(display_path "$profile")"
-    if [ -f "$profile" ] && grep -Fxq -- "$path_line" "$profile" 2>/dev/null; then
-      info "${shown_profile} already adds ${shown_dest} to PATH; new terminals find ${BIN}"
-    else
-      answer=no
-      if [ "$modify_path" = "yes" ]; then
-        answer=yes
-      elif [ "$modify_path" = "ask" ] && can_ask; then
-        printf 'axocoatl-install: %s is not on your PATH. Add it in %s? [Y/n] ' \
-          "$shown_dest" "$shown_profile" >>"$tty_device"
-        reply=""
-        read -r reply <"$tty_device" || true
-        case "$reply" in
-          ''|y|Y|yes|Yes|YES) answer=yes ;;
-          *) answer=no ;;
-        esac
-      fi
-      if [ "$answer" = "yes" ] \
-        && mkdir -p "${profile%/*}" 2>/dev/null \
-        && printf '\n# Added by the Axocoatl installer\n%s\n' "$path_line" 2>/dev/null >>"$profile"; then
-        info "added to ${shown_profile}:  ${path_line}"
-        info "new terminals find ${BIN}; in this one, run:  ${path_line}"
+    if [ -n "${GITHUB_PATH:-}" ] && [ "$modify_path" != "no" ]; then
+      # A GitHub Actions step: the job's later steps read $GITHUB_PATH, and
+      # there is no profile or new terminal to set up.
+      if printf '%s\n' "$dest" 2>/dev/null >>"$GITHUB_PATH"; then
+        info "added ${dest} to GITHUB_PATH; the job's later steps find ${BIN}"
       else
-        [ "$answer" = "no" ] || info "could not write ${shown_profile}"
-        info "${shown_dest} is not on your PATH. For new terminals to find ${BIN}, add this line to ${shown_profile}:"
-        echo
-        echo "    ${path_line}"
+        info "could not write GITHUB_PATH; add ${dest} to PATH in later steps"
       fi
+    else
+      offer_profile_line
     fi
     ;;
 esac
@@ -272,9 +320,9 @@ else
   fi
 fi
 
-# In WSL2 a fresh distro has no Podman, which sandboxed directory sessions need.
-if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && ! command -v podman >/dev/null 2>&1; then
-  info "WSL detected — install Podman for sandboxed sessions:  sudo apt-get install -y podman"
+# Every Session and run needs rootless Podman; onboarding sets it up.
+if ! command -v podman >/dev/null 2>&1; then
+  info "Podman, which every Session and run needs, is not installed yet; onboard (below) sets it up or says how, asking first"
 fi
 
 echo

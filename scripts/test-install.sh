@@ -164,6 +164,26 @@ done
 ln -s "$test_driver" "$fake_bin/sha256sum"
 ln -s "$test_driver" "$shasum_bin/shasum"
 
+# The real curl and checksum tools, for an install from a file:// release
+# directory exactly as a release gate runs it.
+real_bin="$work_dir/bin-real-download"
+mkdir -p "$real_bin"
+for tool in awk cut grep gzip head mkdir mktemp rm tar tr curl; do
+  tool_path="$(command -v "$tool")"
+  [ -n "$tool_path" ] || fail "required test host tool is missing: $tool"
+  ln -s "$tool_path" "$real_bin/$tool"
+done
+if command -v sha256sum >/dev/null 2>&1; then
+  ln -s "$(command -v sha256sum)" "$real_bin/sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+  ln -s "$(command -v shasum)" "$real_bin/shasum"
+else
+  fail "required test host tool is missing: sha256sum or shasum"
+fi
+for tool in getconf install sw_vers uname; do
+  ln -s "$test_driver" "$real_bin/$tool"
+done
+
 digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 case_count=0
 
@@ -195,6 +215,9 @@ run_case() {
   AXOCOATL_INSTALL_SYSTEM_DIR="$case_system" \
   AXOCOATL_INSTALL_TTY="$work_dir/no-terminal" \
   AXOCOATL_MODIFY_PATH=ask \
+  AXOCOATL_VERSION= \
+  AXOCOATL_INSTALL_BASE_URL= \
+  GITHUB_PATH= \
   SHELL=/bin/sh \
   TEST_WORK_DIR="$work_dir" \
   TEST_OS="$os" \
@@ -245,7 +268,7 @@ run_case darwin-old-macos fail "require macOS 11 or newer; detected macOS 10.15.
 run_case darwin-version-unavailable fail "cannot report its macOS version" Darwin x86_64 none unavailable unavailable valid "$fake_bin"
 run_case linux-old-glibc fail "require GNU libc 2.35 or newer" Linux x86_64 none "glibc 2.34" unavailable valid "$fake_bin"
 run_case linux-musl fail "Alpine/musl needs a source build" Linux x86_64 none "musl libc 1.2.5" unavailable valid "$fake_bin"
-run_case windows-native fail "runs on Windows through WSL2" Windows_NT x86_64 none unavailable unavailable valid "$fake_bin"
+run_case windows-native fail "runs on Windows inside WSL2, not natively" Windows_NT x86_64 none unavailable unavailable valid "$fake_bin"
 run_case unsupported-arch fail "unsupported architecture 'riscv64'" Linux riscv64 none "glibc 2.35" unavailable valid "$fake_bin"
 run_case checksum-missing fail "checksum download failed" Linux x86_64 none "glibc 2.35" unavailable missing "$fake_bin"
 run_case checksum-malformed fail "malformed checksum file" Linux x86_64 none "glibc 2.35" unavailable malformed "$fake_bin"
@@ -272,6 +295,11 @@ run_case checksum-tool-missing fail "neither sha256sum nor shasum is available" 
 #   P_TTY         none: no terminal; otherwise the answer typed (may be empty)
 #   P_MODIFY      the AXOCOATL_MODIFY_PATH value
 #   P_HOME_NAME   the home directory's last path segment
+#   P_GITHUB_PATH yes: GITHUB_PATH names a file, as in a GitHub Actions step
+#   P_PODMAN      yes: a podman command is on PATH (a stub that runs nothing)
+#   P_VERSION     the AXOCOATL_VERSION value
+#   P_BASE_URL    the AXOCOATL_INSTALL_BASE_URL value
+#   P_BIN         the directory of tools on PATH (default: the stubs)
 run_path_case() {
   name=$1
   case_count=$((case_count + 1))
@@ -289,7 +317,19 @@ run_path_case() {
     missing) case_system="$work_dir/$name-no-system-dir"; case_dest="$case_home/.local/bin" ;;
     *) fail "invalid P_SYSTEM for $name" ;;
   esac
-  case_path="$fake_bin"
+  case_path="${P_BIN:-$fake_bin}"
+  if [ "${P_PODMAN:-no}" = yes ]; then
+    podman_dir="$work_dir/$name-podman"
+    mkdir -p "$podman_dir"
+    printf '%s\n' '#!/bin/sh' 'exit 0' > "$podman_dir/podman"
+    chmod 0755 "$podman_dir/podman"
+    case_path="$case_path:$podman_dir"
+  fi
+  case_github_path=""
+  if [ "${P_GITHUB_PATH:-no}" = yes ]; then
+    case_github_path="$work_dir/$name.github-path"
+    : > "$case_github_path"
+  fi
   if [ "${P_SHADOW:-no}" = yes ]; then
     shadow_dir="$work_dir/$name-shadow"
     mkdir -p "$shadow_dir"
@@ -301,6 +341,9 @@ run_path_case() {
   case_tty="$work_dir/$name.tty"
   if [ "${P_TTY-none}" = none ]; then
     case_tty="$work_dir/$name.no-terminal"
+  elif [ "$P_TTY" = eof ]; then
+    # A terminal that answers with end of input, as Ctrl-D does.
+    case_tty=/dev/null
   else
     printf '%s\n' "$P_TTY" > "$case_tty"
   fi
@@ -309,6 +352,9 @@ run_path_case() {
   AXOCOATL_INSTALL_SYSTEM_DIR="$case_system" \
   AXOCOATL_INSTALL_TTY="$case_tty" \
   AXOCOATL_MODIFY_PATH="${P_MODIFY:-ask}" \
+  AXOCOATL_VERSION="${P_VERSION:-}" \
+  AXOCOATL_INSTALL_BASE_URL="${P_BASE_URL:-}" \
+  GITHUB_PATH="$case_github_path" \
   SHELL="${P_SHELL:-/bin/zsh}" \
   TEST_WORK_DIR="$work_dir" \
   TEST_OS="${P_OS:-Darwin}" \
@@ -379,6 +425,7 @@ path_expect_no_prompt() {
 
 reset_path_case() {
   P_OS=Darwin P_SHELL=/bin/zsh P_SYSTEM=missing P_ON_PATH=no P_SHADOW=no P_TTY=none P_MODIFY=ask P_HOME_NAME=home
+  P_GITHUB_PATH=no P_PODMAN=no P_VERSION='' P_BASE_URL='' P_BIN=''
 }
 
 # A stock Mac in a pipe with no terminal: ~/.local/bin, the persistent line
@@ -390,6 +437,7 @@ path_expect_installed_to "$case_home/.local/bin"
 path_expect_text "~/.local/bin is not on your PATH. For new terminals to find axocoatl, add this line to ~/.zprofile:"
 path_expect_text '    export PATH="$HOME/.local/bin:$PATH"'
 path_expect_text "Next:  $case_home/.local/bin/axocoatl onboard"
+path_expect_text "Podman, which every Session and run needs, is not installed yet; onboard (below) sets it up or says how, asking first"
 [ ! -e "$case_home/.zprofile" ] || fail "$name wrote ~/.zprofile without being asked"
 path_expect_next_runs
 
@@ -429,6 +477,17 @@ run_path_case path-mac-terminal-no
 path_expect_status 0
 path_expect_text 'add this line to ~/.zprofile:'
 [ ! -e "$case_home/.zprofile" ] || fail "$name wrote ~/.zprofile after the answer no"
+path_expect_next_runs
+
+# End of input at the question (Ctrl-D) is not consent: nothing is written,
+# and the line is printed instead.
+reset_path_case
+P_TTY=eof
+run_path_case path-mac-terminal-eof
+path_expect_status 0
+path_expect_text 'add this line to ~/.zprofile:'
+path_refuse_text 'added to ~/.zprofile'
+[ ! -e "$case_home/.zprofile" ] || fail "$name wrote ~/.zprofile on end of input"
 path_expect_next_runs
 
 # AXOCOATL_MODIFY_PATH=no never asks, even with a terminal.
@@ -529,5 +588,107 @@ path_expect_status 0
 path_expect_text "comes first on your PATH, so 'axocoatl' runs that copy"
 path_expect_text "Next:  $case_system/axocoatl onboard"
 path_expect_next_runs
+
+# A GitHub Actions step: the directory goes into $GITHUB_PATH for the job's
+# later steps, and no profile is asked about or written.
+reset_path_case
+P_GITHUB_PATH=yes P_TTY='y'
+run_path_case path-github-actions
+path_expect_status 0
+[ "$(cat "$case_github_path")" = "$case_home/.local/bin" ] \
+  || fail "$name did not add the install directory to GITHUB_PATH: $(cat "$case_github_path")"
+path_expect_text "added $case_home/.local/bin to GITHUB_PATH"
+path_expect_no_prompt
+path_refuse_text 'add this line to'
+[ ! -e "$case_home/.zprofile" ] || fail "$name wrote ~/.zprofile in a GitHub Actions step"
+found_in_job="$(PATH="$(cat "$case_github_path"):$fake_bin" /bin/sh -c 'command -v axocoatl')"
+[ "$found_in_job" = "$case_home/.local/bin/axocoatl" ] \
+  || fail "$name: a later step would find '$found_in_job'"
+path_expect_next_runs
+
+# AXOCOATL_MODIFY_PATH=no leaves GITHUB_PATH alone too.
+reset_path_case
+P_GITHUB_PATH=yes P_MODIFY=no
+run_path_case path-github-actions-modify-no
+path_expect_status 0
+[ ! -s "$case_github_path" ] || fail "$name wrote GITHUB_PATH with AXOCOATL_MODIFY_PATH=no"
+path_expect_text 'add this line to ~/.zprofile:'
+
+# With Podman on PATH there is no Podman note.
+reset_path_case
+P_PODMAN=yes
+run_path_case path-podman-present
+path_expect_status 0
+path_refuse_text 'Podman, which every Session and run needs'
+
+# --- Choosing the release ------------------------------------------------
+# AXOCOATL_VERSION installs that release without asking GitHub for the latest
+# one; a bare version gets its v.
+reset_path_case
+P_VERSION="$current_version"
+run_path_case version-pinned
+path_expect_status 0
+path_expect_text "installing the requested release $current_tag"
+grep -F '/releases/latest' "$curl_log" >/dev/null && fail "$name asked GitHub for the latest release"
+grep -Fx "https://github.com/axocoatl/axocoatl/releases/download/$current_tag/axocoatl-$current_tag-aarch64-apple-darwin.tar.gz" "$curl_log" >/dev/null \
+  || fail "$name did not download the pinned release: $(cat "$curl_log")"
+path_expect_next_runs
+
+# A malformed version, a base URL without a version, and a plain-http base URL
+# stop before any download.
+for invalid in 'v1.5.0;id' 'latest' '../v1.5.0'; do
+  reset_path_case
+  P_VERSION="$invalid"
+  run_path_case version-invalid
+  path_expect_status 1
+  path_expect_text "AXOCOATL_VERSION must be a release tag such as v1.5.0, not '$invalid'"
+  [ ! -s "$curl_log" ] || fail "$name ($invalid) reached the network stub"
+done
+
+reset_path_case
+P_BASE_URL='https://mirror.example/axocoatl'
+run_path_case base-url-without-version
+path_expect_status 1
+path_expect_text 'AXOCOATL_INSTALL_BASE_URL needs AXOCOATL_VERSION'
+[ ! -s "$curl_log" ] || fail "$name reached the network stub"
+
+reset_path_case
+P_VERSION="$current_tag" P_BASE_URL='http://mirror.example/axocoatl'
+run_path_case base-url-plain-http
+path_expect_status 1
+path_expect_text "AXOCOATL_INSTALL_BASE_URL must start with https:// or file://, not 'http://mirror.example/axocoatl'"
+[ ! -s "$curl_log" ] || fail "$name reached the network stub"
+
+# A file:// release directory, with the real curl and checksum tools: the
+# archive and its .sha256 come from there, and the checksum is still required.
+release_dir="$work_dir/local release"
+mkdir -p "$release_dir"
+local_archive="axocoatl-${current_tag}-aarch64-apple-darwin.tar.gz"
+cp "$fixture_archive" "$release_dir/$local_archive"
+if command -v sha256sum >/dev/null 2>&1; then
+  local_digest="$(sha256sum "$release_dir/$local_archive" | awk '{print $1}')"
+else
+  local_digest="$(shasum -a 256 "$release_dir/$local_archive" | awk '{print $1}')"
+fi
+release_url="file://$(printf '%s' "$release_dir" | sed 's/ /%20/g')"
+printf '%s  %s\n' "$local_digest" "$local_archive" > "$release_dir/$local_archive.sha256"
+reset_path_case
+P_VERSION="$current_tag" P_BASE_URL="$release_url/" P_BIN="$real_bin"
+run_path_case base-url-file
+path_expect_status 0
+path_expect_text 'checksum verified'
+path_expect_installed_to "$case_home/.local/bin"
+cmp -s "$case_home/.local/bin/axocoatl" "$fixture_dir/axocoatl" \
+  || fail "$name installed something other than the release directory's binary"
+path_expect_next_runs
+
+# The same directory with a wrong checksum is refused.
+printf '%064d  %s\n' 0 "$local_archive" > "$release_dir/$local_archive.sha256"
+reset_path_case
+P_VERSION="$current_tag" P_BASE_URL="$release_url" P_BIN="$real_bin"
+run_path_case base-url-file-mismatch
+path_expect_status 1
+path_expect_text 'checksum mismatch'
+[ ! -e "$case_home/.local/bin/axocoatl" ] || fail "$name installed a binary whose checksum did not match"
 
 echo "Installer regression contract: PASS ($case_count local simulations)"
