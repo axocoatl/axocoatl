@@ -630,6 +630,39 @@ test('workspace selector exposes every named Workspace while the rail lists only
   }
 });
 
+// The shell sets the home's agents and then its teams in one task when its
+// configuration reads finish, which can be just after the New Session picker
+// opened. Each re-renders the picker; focus must stay in the field the person
+// is typing in, not move to the dialog.
+test('the New Session picker keeps focus in Session name when agents and teams arrive together', async () => {
+  const { alpha } = runtime.fixtures;
+  const { context, page, assertNoBrowserErrors } = await openSession(alpha.sessions[0]);
+  try {
+    await page.evaluate((workspaceId) =>
+      document.querySelector('ax-session-home')?.newSession(workspaceId), alpha.workspace.id);
+    const sessionName = page.getByLabel('Session name');
+    await sessionName.waitFor({ state: 'visible' });
+    await page.locator('ax-session-home label[for="session-name-input"]').click();
+    await sessionName.fill('Typed before the configuration arrived');
+    await page.evaluate(() => {
+      const home = document.querySelector('ax-session-home');
+      const agents = home.agents;
+      const teams = home.teams;
+      home.agents = agents;
+      home.teams = teams;
+    });
+    await waitForTwoFrames(page);
+    assert.equal(await sessionName.evaluate((input) => input.getRootNode().activeElement === input), true);
+    assert.equal(await sessionName.inputValue(), 'Typed before the configuration arrived');
+    await page.keyboard.type(' and after');
+    assert.equal(await sessionName.inputValue(), 'Typed before the configuration arrived and after');
+    await page.locator('ax-session-home [data-action="picker-cancel"]').click();
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
+  }
+});
+
 test('an AwaitingApproval Session blocks work and routes runtime tools to the exact setup decision', async () => {
   const session = runtime.fixtures.alpha.sessions[1];
   const { context, page, browserRequests, assertNoBrowserErrors } = await openSession(session);
