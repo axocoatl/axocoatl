@@ -114,6 +114,15 @@ async fn build_image(o: &mut Onboarding, recipe: &str, size: &str, sandbox_ready
     }
 }
 
+/// Step 3's heading for Claude Code or Codex.
+pub(crate) fn heading(writer: WriterChoice) -> &'static str {
+    if writer == WriterChoice::ClaudeCode {
+        "Step 3 · Claude Code"
+    } else {
+        "Step 3 · Codex"
+    }
+}
+
 /// Steps 3B (Claude Code) and 3C (Codex).
 pub(crate) async fn run(
     o: &mut Onboarding,
@@ -258,10 +267,11 @@ async fn reviewer(o: &mut Onboarding, choice: &mut Choice) {
                 .facts
                 .memory_bytes
                 .is_some_and(|bytes| axocoatl_isolation::host::at_least_gb(bytes, 48));
-            let items = vec![
-                "Local Ollama gpt-oss:20b (13.8 GB, needs 48 GB memory)".to_string(),
-                "OpenRouter (hosted, credits)".to_string(),
-            ];
+            let local = match super::ollama::too_large(o, "gpt-oss:20b") {
+                Some(why) => format!("Local Ollama gpt-oss:20b (13.8 GB, {why})"),
+                None => "Local Ollama gpt-oss:20b (13.8 GB, needs 48 GB memory)".to_string(),
+            };
+            let items = vec![local, "OpenRouter (hosted, credits)".to_string()];
             if o.ui.select(
                 "Choose the reviewer",
                 &items,

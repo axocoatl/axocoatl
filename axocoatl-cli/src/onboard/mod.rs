@@ -9,8 +9,14 @@
 //! It asks once per change to the machine, showing the exact command and
 //! what it downloads or costs; the default is yes only for a change whose
 //! size is shown and that fits this computer, and no for anything that
-//! changes an existing setup. It ends either ready (exit 0) or with a
-//! numbered list of the steps left (exit 1); it never prints a ✓ banner
+//! changes a setup the person did not ask to change (an Ollama
+//! `server.json`, a service environment). Step 4 shows the configuration
+//! before writing it: what a new file sets (written without a question:
+//! the answers before chose it, and nothing existing changes), or the
+//! changes to an existing file, asked once with yes as the default, since
+//! the person chose to update or replace it. It ends either ready (exit 0)
+//! or with a numbered list of the steps left (exit 1), saying whether
+//! anything was saved; it never prints a ✓ banner
 //! after a failure. Without a terminal it needs `--yes` (exit 3 otherwise);
 //! `--plan` prints every action it would take and changes nothing. Every
 //! command it runs is written to a log under `~/Library/Logs/Axocoatl` on
@@ -459,9 +465,13 @@ impl Onboarding {
     }
 
     /// What Step 5's check (the code `doctor` runs) needs about this
-    /// computer.
-    fn doctor_env(&self) -> crate::doctor::Environment {
+    /// computer; `contexts`: the models Step 3 already loaded.
+    fn doctor_env(
+        &self,
+        contexts: &std::collections::BTreeMap<String, usize>,
+    ) -> crate::doctor::Environment {
         crate::doctor::Environment {
+            contexts_read: contexts.clone(),
             os: self.facts.os.clone(),
             user: self.facts.user.clone(),
             memory_bytes: self.facts.memory_bytes,
@@ -496,6 +506,9 @@ pub(crate) struct Choice {
     pub(crate) external_writer_model: Option<String>,
     /// The credential a Codex run uses, named on its command line.
     pub(crate) codex_credential: Option<&'static str>,
+    /// The Ollama models Step 3 loaded and read with enough context, and
+    /// that context: Step 5's check does not load them again.
+    pub(crate) contexts: std::collections::BTreeMap<String, usize>,
 }
 
 /// `axocoatl onboard`; returns the exit code.
@@ -666,7 +679,7 @@ pub(crate) async fn run(o: &mut Onboarding) -> i32 {
                             o.paths.config_path.display()
                         ));
                         o.ui.heading("Step 5 · Check");
-                        return if check(o).await {
+                        return if check(o, &Default::default()).await {
                             exit::READY
                         } else {
                             finish_not_ready(o)
@@ -682,7 +695,7 @@ pub(crate) async fn run(o: &mut Onboarding) -> i32 {
 
     // Step 1: who writes.
     o.ui.heading("Step 1 · Who writes the code");
-    let writer = choose_writer(o);
+    let mut writer = choose_writer(o);
     keep_models(o, writer);
     o.ui.say(
         "Every fix run also needs a reviewer: a different model that only reads the change. \
@@ -701,18 +714,26 @@ pub(crate) async fn run(o: &mut Onboarding) -> i32 {
     match writer {
         WriterChoice::Ollama => {
             o.ui.heading("Step 3 · A local writer and reviewer (Ollama)");
-            ollama::writer_and_reviewer(o, &mut choice).await;
+            // Too little memory for a tested local pair: the person may
+            // have chosen a hosted writer instead.
+            match ollama::writer_and_reviewer(o, &mut choice).await {
+                None => {}
+                Some(WriterChoice::Openrouter) => writer = WriterChoice::Openrouter,
+                Some(other) => {
+                    writer = other;
+                    // A kept or named local writer model is not theirs.
+                    o.args.writer_model = None;
+                    o.ui.heading(writers::heading(writer));
+                    writers::run(o, writer, sandbox_ready, &mut choice).await;
+                }
+            }
         }
         WriterChoice::Openrouter => {
             o.ui.heading("Step 3 · A hosted writer and reviewer (OpenRouter)");
             openrouter::run(o, &mut choice, true).await;
         }
         WriterChoice::ClaudeCode | WriterChoice::Codex => {
-            o.ui.heading(if writer == WriterChoice::ClaudeCode {
-                "Step 3 · Claude Code"
-            } else {
-                "Step 3 · Codex"
-            });
+            o.ui.heading(writers::heading(writer));
             writers::run(o, writer, sandbox_ready, &mut choice).await;
         }
     }
@@ -724,20 +745,19 @@ pub(crate) async fn run(o: &mut Onboarding) -> i32 {
         .collect();
     o.key_steps_since(from, |step| step_keys(step, writer, &models));
 
-    // Step 4: the configuration.
-    o.ui.heading("Step 4 · The configuration");
+    // Step 4: the configuration (its heading once there is one to show).
     let Some(plan) = config_plan(o, writer, &choice, &existing) else {
-        return finish_not_ready(o);
+        return finish_unsaved(o, &existing);
     };
     if !write_config(o, &plan, &existing) {
-        return finish_not_ready(o);
+        return finish_unsaved(o, &existing);
     }
 
     // Step 5: the same check as `axocoatl doctor`.
     o.ui.heading("Step 5 · Check");
     if o.ui.plan() {
         o.ui.say("  would run the same checks as `axocoatl doctor` on the new configuration");
-    } else if !check(o).await {
+    } else if !check(o, &choice.contexts).await {
         return finish_not_ready(o);
     }
 
@@ -836,7 +856,9 @@ fn item_key(section: &str, item: &crate::doctor::Item) -> Option<String> {
 
 /// "Update this setup" keeps the models an existing configuration runs
 /// with, unless `--writer-model` or `--reviewer` names others or they do not
-/// fit the writer chosen now.
+/// fit the writer chosen now. At a terminal, a local model too large for
+/// this computer's memory (as `doctor` judges it) is asked again instead:
+/// `doctor`'s fix for it is `axocoatl onboard --update`.
 fn keep_models(o: &mut Onboarding, writer: WriterChoice) {
     let kept = o.kept.clone();
     let writer_provider = match writer {
@@ -844,12 +866,34 @@ fn keep_models(o: &mut Onboarding, writer: WriterChoice) {
         WriterChoice::Openrouter => Some("openrouter:"),
         WriterChoice::ClaudeCode | WriterChoice::Codex => None,
     };
+    let keeps = |o: &Onboarding, role: &str, spec: &str| -> bool {
+        let too_large = spec
+            .strip_prefix("ollama:")
+            .and_then(|model| ollama::too_large(o, model));
+        match too_large {
+            Some(why) if o.ui.interactive() => {
+                o.ui.say(format!(
+                    "  {role} model in your configuration: {spec}, {why}; choose it again below"
+                ));
+                false
+            }
+            Some(why) => {
+                o.ui.warn(format!(
+                    "{role} model: {spec} (kept from your configuration; {why})"
+                ));
+                true
+            }
+            None => {
+                o.ui.say(format!(
+                    "  {role} model: {spec} (kept from your configuration)"
+                ));
+                true
+            }
+        }
+    };
     if o.args.writer_model.is_none() {
         if let (Some(model), Some(provider)) = (&kept.writer_model, writer_provider) {
-            if model.starts_with(provider) {
-                o.ui.say(format!(
-                    "  Writer model: {model} (kept from your configuration)"
-                ));
+            if model.starts_with(provider) && keeps(o, "Writer", model) {
                 o.args.writer_model = Some(model.clone());
             }
         }
@@ -857,18 +901,43 @@ fn keep_models(o: &mut Onboarding, writer: WriterChoice) {
     if o.args.reviewer.is_none() {
         if let Some(reviewer) = &kept.reviewer {
             let fits = writer != WriterChoice::Openrouter || reviewer.starts_with("openrouter:");
-            if fits && o.args.writer_model.as_deref() != Some(reviewer.as_str()) {
-                o.ui.say(format!(
-                    "  Reviewer model: {reviewer} (kept from your configuration)"
-                ));
+            if fits
+                && o.args.writer_model.as_deref() != Some(reviewer.as_str())
+                && keeps(o, "Reviewer", reviewer)
+            {
                 o.args.reviewer = Some(reviewer.clone());
             }
         }
     }
 }
 
+/// Print the steps left and return [`exit::NOT_READY`] when nothing was
+/// written in Step 4, saying so: running onboarding again asks again.
+fn finish_unsaved(o: &Onboarding, existing: &ExistingConfig) -> i32 {
+    print_steps(o);
+    o.ui.say(match existing {
+        _ if o.ui.plan() => "Plan only: nothing was changed.".to_string(),
+        ExistingConfig::None => "Nothing was saved: no configuration was written. Run `axocoatl \
+                                 onboard` again once the steps are done."
+            .to_string(),
+        ExistingConfig::Update(_) | ExistingConfig::Replace(_) => format!(
+            "Your configuration was not changed ({} is as it was). Run `axocoatl onboard` again \
+             once the steps are done.",
+            o.paths.config_path.display()
+        ),
+    });
+    exit::NOT_READY
+}
+
 /// Print the steps left and return [`exit::NOT_READY`].
 fn finish_not_ready(o: &Onboarding) -> i32 {
+    print_steps(o);
+    o.ui.say("Run `axocoatl onboard` again once they are done; it keeps what is already set up.");
+    exit::NOT_READY
+}
+
+/// "Not ready yet" and the numbered steps left.
+fn print_steps(o: &Onboarding) {
     let count = o.steps.len();
     if count == 0 {
         o.ui.say("\nNot ready yet.");
@@ -881,8 +950,6 @@ fn finish_not_ready(o: &Onboarding) -> i32 {
             o.ui.say(format!("  {}) {step}", index + 1));
         }
     }
-    o.ui.say("Run `axocoatl onboard` again once they are done; it keeps what is already set up.");
-    exit::NOT_READY
 }
 
 /// Step 1's default: Claude Code when `claude` is installed, else Codex
@@ -991,6 +1058,7 @@ fn config_plan(
             ),
         ),
     };
+    o.ui.heading("Step 4 · The configuration");
     let existing_port = match existing {
         ExistingConfig::Update(text) => config::read_existing(text)
             .ok()
@@ -1061,11 +1129,13 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
         }
         let question =
             format!("Write these changes? The current file is kept as {backup} next to it.");
+        // The person chose to update or replace this file, and every change
+        // shown follows from their answers: Enter writes it.
         if o.ui.plan() {
-            o.ui.consent(&question, false, false);
+            o.ui.consent(&question, true, false);
             return true;
         }
-        if !o.ui.consent(&question, false, false) {
+        if !o.ui.consent(&question, true, false) {
             o.step_left(format!(
                 "The configuration was not changed: run `axocoatl onboard` again to write it ({})",
                 path.display()
@@ -1086,6 +1156,13 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
             o.ui.say(format!("    + {line}"));
         }
         return true;
+    } else {
+        // A new file: what it sets, then it is written (nothing existing
+        // changes, and the answers before chose each setting).
+        o.ui.say("  The new configuration sets:");
+        for line in settings(plan) {
+            o.ui.say(format!("    {line}"));
+        }
     }
     if let Err(error) = crate::write_user_configuration(&o.paths, &new) {
         o.step_left(format!("Could not save the configuration: {error}"));
@@ -1103,10 +1180,56 @@ fn write_backup(paths: &UserPaths, name: &str, text: &str) -> std::io::Result<()
     directory.atomic_write(name, text.as_bytes())
 }
 
+/// What a new configuration sets, one line each, the key never shown.
+fn settings(plan: &ConfigPlan) -> Vec<String> {
+    let mut lines = Vec::new();
+    match (&plan.run_writer, &plan.run_reviewer) {
+        (Some(writer), Some(reviewer)) => lines.push(format!(
+            "`axocoatl run fix`: writer {}, reviewer {}",
+            writer.spec(),
+            reviewer.spec()
+        )),
+        (None, Some(reviewer)) => lines.push(format!(
+            "`axocoatl run fix-{}`: {} writes, reviewer {}{}",
+            plan.writer,
+            if plan.writer == "codex" {
+                "Codex"
+            } else {
+                "Claude Code"
+            },
+            reviewer.spec(),
+            plan.codex_credential
+                .map(|credential| format!(", billed through {credential}"))
+                .unwrap_or_default()
+        )),
+        _ => {}
+    }
+    lines.push(format!(
+        "Workbench Sessions: Lead, Scout and the chat Assistant on {}, Reviewer on {}",
+        plan.lead.spec(),
+        plan.reviewer.spec()
+    ));
+    if let Some(url) = &plan.ollama_base_url {
+        lines.push(format!("Ollama server: {url}"));
+    }
+    match &plan.openrouter_key {
+        Some(KeyRef::Env(variable)) => lines.push(format!(
+            "OpenRouter key: read from ${variable} when Axocoatl starts"
+        )),
+        Some(KeyRef::Value(_)) => {
+            lines.push("OpenRouter key: stored in this owner-only file (never shown)".to_string())
+        }
+        None => {}
+    }
+    lines.push(format!("Workbench port: {}", plan.port));
+    lines
+}
+
 /// Step 5: the same checks as `axocoatl doctor`. Prints what failed and
-/// what is ready; adds each failure to the steps left.
-async fn check(o: &mut Onboarding) -> bool {
-    let env = o.doctor_env();
+/// what is ready; adds each failure to the steps left. `contexts`: the
+/// models Step 3 loaded, which are not loaded again.
+async fn check(o: &mut Onboarding, contexts: &std::collections::BTreeMap<String, usize>) -> bool {
+    let env = o.doctor_env(contexts);
     if env.data_dir.is_none() {
         if let Err(error) = crate::configure_data_dir(&o.paths.config_path) {
             o.step_left(format!("Cannot select the data directory: {error}"));

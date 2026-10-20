@@ -2626,6 +2626,7 @@ fn doctor_env(shims: &Shims) -> crate::doctor::Environment {
         xdg_config_home: None,
         host: shims.host(true),
         load_models: false,
+        contexts_read: Default::default(),
         socket_path: home.join("no-daemon.sock"),
         podman: shims.dir.path().join("podman").display().to_string(),
         data_dir: Some(home.join("data")),
@@ -2681,3 +2682,5 @@ async fn a_mac_without_homebrew_is_pointed_to_the_podman_installer() {
         assert_eq!(tree(shims.home.path()), before);
     }
 }
+
+mod interactive;

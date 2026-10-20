@@ -108,6 +108,10 @@ pub(crate) struct RunPath {
     pub(crate) command: String,
     pub(crate) ok: bool,
     pub(crate) detail: String,
+    /// `false` for an optional writer (Claude Code, Codex) that nothing of
+    /// is set up and that the setup did not choose: not ready, but nothing
+    /// failed either.
+    pub(crate) set_up: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -138,6 +142,9 @@ pub(crate) struct Environment {
     pub(crate) host: crate::onboard::host::Host,
     /// Load each configured Ollama model to read its context.
     pub(crate) load_models: bool,
+    /// Models whose context was already read in this process (onboarding's
+    /// Step 3), with that context: not loaded again.
+    pub(crate) contexts_read: BTreeMap<String, usize>,
     /// The daemon's IPC socket.
     pub(crate) socket_path: PathBuf,
     /// The Podman client.
@@ -180,6 +187,7 @@ impl Environment {
                 .filter(|path| path.is_absolute()),
             host,
             load_models: true,
+            contexts_read: BTreeMap::new(),
             socket_path: axocoatl_daemon::ipc::default_socket_path(),
             podman: "podman".to_string(),
             data_dir: None,
@@ -878,7 +886,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
     let sandbox_blocker = (!sandbox_ok).then(|| "the sandbox is not ready".to_string());
     let mut ready_for = Vec::new();
     let reviewer = run.reviewer.as_deref();
-    let mut path = |command: &str, problems: Vec<String>, detail: String| {
+    let mut path = |command: &str, problems: Vec<String>, detail: String, set_up: bool| {
         ready_for.push(RunPath {
             command: command.to_string(),
             ok: problems.is_empty(),
@@ -887,6 +895,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             } else {
                 problems.join("; ")
             },
+            set_up,
         });
     };
     let reviewer_problem = || -> Option<String> {
@@ -920,6 +929,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 run.writer.as_deref().unwrap_or("-"),
                 reviewer.unwrap_or("-")
             ),
+            true,
         );
     }
     let codex_command = match &codex_credential {
@@ -933,7 +943,8 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         (codex_command.as_str(), &codex),
     ] {
         let mut problems = Vec::new();
-        if writer.set_up_started || writer.chosen {
+        let set_up = writer.set_up_started || writer.chosen;
+        if set_up {
             problems.extend(sandbox_blocker.iter().cloned());
             problems.extend(writer.missing.clone());
             problems.extend(reviewer_problem());
@@ -944,6 +955,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             command,
             problems,
             format!("reviewer {}", reviewer.unwrap_or("-")),
+            set_up,
         );
     }
     if let Some(config) = &config {
@@ -957,7 +969,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             if lead.provider == "ollama" || lead.provider == "openrouter" {
                 problems.extend(model_ok(&spec).err());
             }
-            path("workbench Sessions", problems, format!("Lead {spec}"));
+            path("workbench Sessions", problems, format!("Lead {spec}"), true);
         }
     }
 
@@ -1186,20 +1198,42 @@ async fn check_ollama(
             .find(|candidate| candidate.name() == model)
             .map(|candidate| candidate.size_bytes());
         if !ollama_setup::is_installed(model, &installed) {
-            let size = ollama_setup::known_size(model)
+            let known = ollama_setup::known_size(model);
+            let size = known
                 .map(|size| format!(" ({})", ollama_setup::size_text(size)))
                 .unwrap_or_default();
-            // Another tag of the same model does not count (Ollama reads an
-            // untagged name as `:latest`): the hint names it exactly.
-            items.push(Item::fail(
-                &name,
-                format!("{model} is not pulled"),
-                ollama_setup::not_pulled_hint(
-                    model,
-                    &format!("ollama pull {model}{size}"),
-                    &installed,
+            let too_large = match (known, env.memory_bytes) {
+                (Some(size), Some(memory)) if !ollama_setup::fits_memory(size, memory) => Some((
+                    ollama_setup::size_text(size),
+                    axocoatl_isolation::host::memory_gb(memory),
+                )),
+                _ => None,
+            };
+            // A pull would not help a model too large for this computer:
+            // the fix is the one onboarding gives for it.
+            items.push(match too_large {
+                Some((size, gb)) => Item::fail(
+                    &name,
+                    format!(
+                        "{model} is not pulled, and at {size} it is too large for this \
+                         computer's {gb} GB"
+                    ),
+                    "Choose a smaller model (`axocoatl onboard --update`), or use OpenRouter for it \
+                     (`axocoatl onboard --update --writer openrouter`)",
                 ),
-            ));
+                // Another tag of the same model does not count (Ollama
+                // reads an untagged name as `:latest`): the hint names it
+                // exactly.
+                None => Item::fail(
+                    &name,
+                    format!("{model} is not pulled"),
+                    ollama_setup::not_pulled_hint(
+                        model,
+                        &format!("ollama pull {model}{size}"),
+                        &installed,
+                    ),
+                ),
+            });
             states.insert(
                 model.clone(),
                 ModelState {
@@ -1247,9 +1281,16 @@ async fn check_ollama(
         }
         let mut model_ok = true;
         let mut why = String::new();
+        let read = env.contexts_read.get(model).copied();
         if env.load_models {
-            eprintln!("  (loading {model} once to read its context…)");
-            match ollama_setup::observed_context(base_url, model).await {
+            let observed = match read {
+                Some(tokens) => Ok((tokens, String::new())),
+                None => {
+                    eprintln!("  (loading {model} once to read its context…)");
+                    ollama_setup::observed_context(base_url, model).await
+                }
+            };
+            match observed {
                 Ok((context, _)) if context < ollama_setup::MIN_CONTEXT_TOKENS => {
                     status = Status::Fail;
                     model_ok = false;
@@ -1341,9 +1382,14 @@ pub(crate) fn summary(report: &Report) -> String {
                 .join(", ")
         ));
         for path in &report.ready_for {
+            // An optional writer not set up is not a failure: neutral.
             out.push_str(&format!(
                 "  {} {} ({})\n",
-                if path.ok { "✓" } else { "✗" },
+                match (path.ok, path.set_up) {
+                    (true, _) => "✓",
+                    (false, true) => "✗",
+                    (false, false) => "·",
+                },
                 path.command,
                 path.detail
             ));
@@ -1425,11 +1471,20 @@ mod tests {
                     command: "axocoatl run fix".into(),
                     ok: !fail,
                     detail: "writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b".into(),
+                    set_up: true,
                 },
                 RunPath {
                     command: "axocoatl run fix-codex".into(),
                     ok: false,
                     detail: "not connected: run `axocoatl connect codex`".into(),
+                    set_up: true,
+                },
+                RunPath {
+                    command: "axocoatl run fix-claude-code".into(),
+                    ok: false,
+                    detail: "not set up: run `axocoatl onboard --update --writer claude-code`"
+                        .into(),
+                    set_up: false,
                 },
             ],
         }
@@ -1469,6 +1524,19 @@ mod tests {
         ));
         assert!(ready
             .contains("  ✗ axocoatl run fix-codex (not connected: run `axocoatl connect codex`)"));
+        // An optional writer nothing of is set up is neutral, not a failure.
+        assert!(
+            ready.contains(
+                "  · axocoatl run fix-claude-code (not set up: run `axocoatl onboard --update \
+                 --writer claude-code`)"
+            ),
+            "{ready}"
+        );
+        assert!(!ready.contains("✗ axocoatl run fix-claude-code"), "{ready}");
+        assert_eq!(
+            serde_json::to_value(report(false)).unwrap()["ready_for"][2]["set_up"],
+            false
+        );
         assert!(ready.ends_with("Ready: yes\n"));
     }
 

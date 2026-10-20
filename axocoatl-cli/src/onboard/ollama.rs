@@ -18,7 +18,7 @@ use axocoatl_llm_ollama::{ollama_version_note, ollama_version_refusal};
 use super::config::{ModelRef, Provider};
 use super::detect::{self, OllamaServer, OllamaService, Wsl};
 use super::host::Cmd;
-use super::{Choice, Onboarding};
+use super::{Choice, Onboarding, WriterChoice};
 use crate::ollama_setup::{
     self, fits_memory, known_size, size_text, OllamaHost, TeamModels, CONTEXT_FIX_TOKENS,
     MIN_CONTEXT_TOKENS, PINNED_LINUX_INSTALL,
@@ -107,8 +107,13 @@ fn cloud_disabled(server: &OllamaServer) -> bool {
 
 /// The whole local path: the server, a writer and a reviewer on it, unless
 /// this computer is too small for a tested pair and the person chooses
-/// OpenRouter for one or both.
-pub(crate) async fn writer_and_reviewer(o: &mut Onboarding, choice: &mut Choice) {
+/// OpenRouter for one or both, or Claude Code or Codex to write. Returns
+/// the writer when it is no longer a local model: OpenRouter (set up
+/// here), or Claude Code or Codex (for the caller to set up).
+pub(crate) async fn writer_and_reviewer(
+    o: &mut Onboarding,
+    choice: &mut Choice,
+) -> Option<WriterChoice> {
     let flag_writer = o
         .args
         .writer_model
@@ -142,33 +147,35 @@ pub(crate) async fn writer_and_reviewer(o: &mut Onboarding, choice: &mut Choice)
                  --writer-model ollama:MODEL and --reviewer ollama:MODEL (or \
                  openrouter:VENDOR/MODEL), or use --writer openrouter"
             ));
-            return;
+            return None;
         }
+        o.ui.say(format!("  {}", tested_pair_fit(memory)));
         let items = vec![
-            "OpenRouter for both the writer and the reviewer (hosted, credits)".to_string(),
-            "A local writer and an OpenRouter reviewer".to_string(),
+            "OpenRouter writes and reviews (hosted, paid with OpenRouter credits)".to_string(),
+            "Claude Code writes (your Claude Pro or Max plan)".to_string(),
+            "Codex writes (your ChatGPT plan)".to_string(),
+            format!("A local writer, and OpenRouter reviews (not tested at {gb} GB)"),
             format!("Local models for both (not tested at {gb} GB)"),
         ];
         match o.ui.select(
             &format!(
-                "No local pair has been tested on {gb} GB of memory. Use OpenRouter for the \
-                 reviewer (or for both)?"
+                "No local pair has been tested on {gb} GB of memory. Who writes the code, and \
+                 who reviews it?"
             ),
             &items,
             0,
         ) {
-            0 => {
-                local_writer = false;
-                local_reviewer = false;
-            }
-            1 => local_reviewer = false,
+            0 => local_writer = false,
+            1 => return Some(WriterChoice::ClaudeCode),
+            2 => return Some(WriterChoice::Codex),
+            3 => local_reviewer = false,
             _ => {}
         }
     }
     if !local_writer {
         o.ui.say("  The writer and the reviewer run on OpenRouter.");
         super::openrouter::run(o, choice, true).await;
-        return;
+        return Some(WriterChoice::Openrouter);
     }
     let base_url = server(o).await;
     choice.ollama_base_url = Some(o.facts.ollama_url.clone());
@@ -189,15 +196,16 @@ pub(crate) async fn writer_and_reviewer(o: &mut Onboarding, choice: &mut Choice)
     models.dedup();
     if let Some(base_url) = base_url {
         if pull(o, &base_url, &models).await {
-            context(o, &base_url, &models).await;
+            let read = context(o, &base_url, &models).await;
+            choice.contexts.extend(read);
         }
     } else {
         for model in &models {
-            o.steps.push(format!(
-                "Pull {model} once Ollama is ready: ollama pull {model}"
-            ));
+            let step = pull_step(o, model, " once Ollama is ready");
+            o.steps.push(step);
         }
     }
+    None
 }
 
 /// The reviewer alone on Ollama (for Claude Code and Codex): the server and
@@ -210,19 +218,106 @@ pub(crate) async fn reviewer_only(o: &mut Onboarding, choice: &mut Choice) {
     if let (Some(base_url), Some(reviewer)) = (base_url, &choice.reviewer_model) {
         let models = vec![reviewer.model.clone()];
         if pull(o, &base_url, &models).await {
-            context(o, &base_url, &models).await;
+            let read = context(o, &base_url, &models).await;
+            choice.contexts.extend(read);
         }
     } else if let Some(reviewer) = &choice.reviewer_model {
-        o.steps.push(format!(
-            "Pull {} once Ollama is ready: ollama pull {}",
-            reviewer.model, reviewer.model
-        ));
+        let step = pull_step(o, &reviewer.model, " once Ollama is ready");
+        o.steps.push(step);
+    }
+}
+
+/// What the pair Axocoatl has tested needs, and which of its models fit a
+/// computer with `memory` (said when no tested pair fits it).
+fn tested_pair_fit(memory: Option<u64>) -> String {
+    let team = TeamModels::recommended();
+    let tested = format!(
+        "The local pair Axocoatl has tested, {} writing and {} reviewing, runs on 48 GB of \
+         memory",
+        described(&team.lead),
+        described(&team.reviewer)
+    );
+    let Some(memory) = memory else {
+        return format!("{tested}.");
+    };
+    let gb = axocoatl_isolation::host::memory_gb(memory);
+    let fits = |model: &str| known_size(model).is_none_or(|size| fits_memory(size, memory));
+    match (fits(&team.lead), fits(&team.reviewer)) {
+        (true, true) => format!(
+            "{tested}; each of its models fits this computer's {gb} GB, but the pair has not \
+             been tested at this size."
+        ),
+        (false, true) => format!(
+            "{tested}; {} fits this computer's {gb} GB, {} is too large for it.",
+            team.reviewer, team.lead
+        ),
+        (true, false) => format!(
+            "{tested}; {} fits this computer's {gb} GB, {} is too large for it.",
+            team.lead, team.reviewer
+        ),
+        (false, false) => format!(
+            "{tested}; both are too large for this computer's {gb} GB, so onboarding suggests \
+             no local model here. A model too large for the memory loads slowly or not at \
+             all."
+        ),
+    }
+}
+
+/// `qwen3-coder:30b (18.6 GB)`.
+fn described(model: &str) -> String {
+    match known_size(model) {
+        Some(size) => format!("{model} ({})", size_text(size)),
+        None => model.to_string(),
+    }
+}
+
+/// The size of `model`: as the server lists it when it is installed there,
+/// else as the Ollama library lists it.
+fn model_size(o: &Onboarding, model: &str) -> Option<u64> {
+    o.facts
+        .ollama_server
+        .models()
+        .iter()
+        .find(|installed| installed.name() == model && installed.size_bytes() > 0)
+        .map(|installed| installed.size_bytes())
+        .or_else(|| known_size(model))
+}
+
+/// `too large for this computer's 12 GB` (as `doctor` says it) when
+/// `model` is known not to fit this computer's memory.
+pub(crate) fn too_large(o: &Onboarding, model: &str) -> Option<String> {
+    let memory = o.facts.memory_bytes?;
+    let size = model_size(o, model)?;
+    (!fits_memory(size, memory)).then(|| {
+        format!(
+            "too large for this computer's {} GB",
+            axocoatl_isolation::host::memory_gb(memory)
+        )
+    })
+}
+
+/// The step left for a model that is not pulled: pull it, or, when it is
+/// too large for this computer, choose another (a pull would not help).
+fn pull_step(o: &Onboarding, model: &str, when: &str) -> String {
+    match too_large(o, model) {
+        Some(why) => format!(
+            "{model}{} is {why}, so it was not pulled: choose a smaller model with `axocoatl \
+             onboard --update`, or a hosted writer and reviewer with `axocoatl onboard --update \
+             --writer openrouter` (or claude-code, or codex)",
+            model_size(o, model)
+                .map(|size| format!(" ({})", size_text(size)))
+                .unwrap_or_default()
+        ),
+        None => format!("Pull {model}{when}: ollama pull {model}"),
     }
 }
 
 /// A native-ready Ollama server: installed, running, an accepted version,
 /// cloud models off. Returns its URL, or `None` with the steps left said.
 pub(crate) async fn server(o: &mut Onboarding) -> Option<String> {
+    if o.ui.interactive() && !reachable(&o.facts.ollama_server) {
+        other_server(o).await;
+    }
     let url = o.facts.ollama_url.clone();
     if o.facts.windows_ollama {
         o.ui.warn(
@@ -342,6 +437,57 @@ pub(crate) async fn server(o: &mut Onboarding) -> Option<String> {
     None
 }
 
+/// Nothing answers at the Ollama URL. Before installing or starting Ollama
+/// there, ask whether it already runs at another address on this computer
+/// (`--ollama-url` without a terminal), and use that one once it answers.
+async fn other_server(o: &mut Onboarding) {
+    let url = o.facts.ollama_url.clone();
+    let here = if o.facts.ollama_cli.is_none() {
+        "Install Ollama on this computer"
+    } else {
+        "Start Ollama"
+    };
+    let items = vec![
+        format!("{here} (onboarding asks before each change)"),
+        "It already runs at another address on this computer (enter it)".to_string(),
+    ];
+    let question = format!("Ollama does not answer at {url}. What should onboarding do?");
+    if o.ui.select(&question, &items, 0) != 1 {
+        return;
+    }
+    loop {
+        let entered = o.ui.input(
+            "Ollama's address, for example http://127.0.0.1:11435 (Enter to go back)",
+            "",
+        );
+        if entered.is_empty() {
+            return;
+        }
+        let candidate = if entered.contains("://") {
+            entered
+        } else {
+            format!("http://{entered}")
+        };
+        let candidate = candidate.trim_end_matches('/').to_string();
+        if let Err(error) = axocoatl_llm_ollama::validate_native_ollama_endpoint(&candidate) {
+            o.ui.fail(format!(
+                "{candidate}: {error}; native Sessions use only an Ollama server on this computer"
+            ));
+            continue;
+        }
+        if reachable(&OllamaServer::probe(&candidate).await) {
+            o.facts.ollama_url = candidate;
+            reprobe(o).await;
+            o.ui.ok(format!(
+                "Ollama answers at {} (the configuration will name it)",
+                o.facts.ollama_url
+            ));
+            return;
+        }
+        o.ui.fail(format!("Ollama does not answer at {candidate} either"));
+    }
+}
+
 async fn install(o: &mut Onboarding) -> bool {
     if o.facts.os.is_macos() {
         if o.facts.brew.is_none() {
@@ -402,13 +548,49 @@ async fn install(o: &mut Onboarding) -> bool {
             o.step_left(format!("Install Ollama: {script}"));
             return false;
         }
-        if let Err(error) = o.ui.execute(&o.host, &cmd).await {
-            o.step_left(format!(
-                "{error}; install Ollama, then run `axocoatl onboard` again"
-            ));
-            return false;
+        match o.ui.execute_showing_output(&o.host, &cmd).await {
+            Ok(output) => {
+                if let Some(note) = installer_gpu_note(&output) {
+                    o.ui.warn(note);
+                }
+                true
+            }
+            Err(error) => {
+                o.step_left(format!(
+                    "{error}; install Ollama, then run `axocoatl onboard` again"
+                ));
+                false
+            }
         }
-        true
+    }
+}
+
+/// What onboarding says after Ollama's Linux installer warns that it found
+/// no NVIDIA or AMD GPU.
+pub(crate) const CPU_ONLY: &str =
+    "Ollama found no NVIDIA or AMD GPU here, so it runs models on the CPU alone: a local \
+     model answers much more slowly than on a GPU or Apple silicon, and a fix run with local \
+     models can take a long time. A hosted writer and reviewer (OpenRouter, Claude Code \
+     or Codex) do not use this computer's processor for the model.";
+
+/// What onboarding says when Ollama's Linux installer could not look for a
+/// GPU (it needs `lspci` or `lshw`).
+pub(crate) const GPU_UNKNOWN: &str =
+    "Ollama's installer could not look for a GPU here (it needs lspci or lshw). Without an \
+     NVIDIA or AMD GPU, Ollama runs models on the CPU alone: a local model answers much more \
+     slowly than on a GPU or Apple silicon, and a fix run with local models can take a long \
+     time.";
+
+/// What to say about what Ollama's Linux installer printed about the GPU:
+/// `WARNING: No NVIDIA/AMD GPU detected. Ollama will run in CPU-only mode.`,
+/// or `WARNING: Unable to detect NVIDIA/AMD GPU. Install lspci or lshw …`.
+pub(crate) fn installer_gpu_note(output: &str) -> Option<&'static str> {
+    if output.contains("CPU-only mode") || output.contains("No NVIDIA/AMD GPU detected") {
+        Some(CPU_ONLY)
+    } else if output.contains("Unable to detect NVIDIA/AMD GPU") {
+        Some(GPU_UNKNOWN)
+    } else {
+        None
     }
 }
 
@@ -670,55 +852,79 @@ fn label(model: &ollama_setup::InstalledModel, memory: Option<u64>) -> String {
     label
 }
 
+/// One model for `prompt`: an installed candidate (each labelled with its
+/// size and whether it fits), the `suggested` model to pull, or a name
+/// entered. Only a model that fits this computer is preselected, never
+/// `avoid` (the writer, for the reviewer). `None` when no name is entered.
 fn choose_one(
     o: &mut Onboarding,
     prompt: &str,
     candidates: &[ollama_setup::InstalledModel],
-    suggested: &str,
-) -> String {
+    suggested: Option<&str>,
+    avoid: Option<&str>,
+) -> Option<String> {
+    let enter = |o: &mut Onboarding| {
+        let prompt = match suggested {
+            Some(_) => prompt.to_string(),
+            None => format!("{prompt}: a model name, or Enter for none"),
+        };
+        Some(o.ui.input(&prompt, suggested.unwrap_or_default())).filter(|name| !name.is_empty())
+    };
     if candidates.is_empty() {
-        return o.ui.input(prompt, suggested);
+        return enter(o);
     }
     let memory = o.facts.memory_bytes;
     let mut items: Vec<String> = candidates
         .iter()
         .map(|model| label(model, memory))
         .collect();
-    let suggested_fits = |model: &ollama_setup::InstalledModel| {
+    let fits = |model: &ollama_setup::InstalledModel| {
         memory
             .is_none_or(|memory| model.size_bytes() == 0 || fits_memory(model.size_bytes(), memory))
     };
-    let pull_label = format!(
-        "{suggested}{} (pull it)",
-        known_size(suggested)
-            .map(|size| format!(" ({})", size_text(size)))
-            .unwrap_or_default()
-    );
-    let installed_index = candidates
-        .iter()
-        .position(|model| model.name() == suggested && suggested_fits(model));
-    let default = match installed_index {
-        Some(index) => index,
-        None => {
-            items.push(pull_label);
-            items.len() - 1
+    let installed_index = suggested.and_then(|suggested| {
+        candidates
+            .iter()
+            .position(|model| model.name() == suggested && fits(model))
+    });
+    let pull_index = match (suggested, installed_index) {
+        (Some(suggested), None) => {
+            items.push(format!(
+                "{suggested}{} (pull it)",
+                known_size(suggested)
+                    .map(|size| format!(" ({})", size_text(size)))
+                    .unwrap_or_default()
+            ));
+            Some(items.len() - 1)
         }
+        _ => None,
     };
     items.push("Another model (enter its name)".to_string());
+    let other_index = items.len() - 1;
+    let default = installed_index
+        .or(pull_index)
+        .or_else(|| {
+            candidates
+                .iter()
+                .position(|model| fits(model) && Some(model.name()) != avoid)
+        })
+        .unwrap_or(other_index);
     let index = o.ui.select(prompt, &items, default);
     if index < candidates.len() {
-        candidates[index].name().to_string()
-    } else if installed_index.is_none() && index == candidates.len() {
-        suggested.to_string()
+        Some(candidates[index].name().to_string())
+    } else if Some(index) == pull_index {
+        suggested.map(str::to_string)
     } else {
-        o.ui.input(prompt, suggested)
+        enter(o)
     }
 }
 
 /// Choose the writer (when `want_writer`) and the reviewer (when
 /// `want_reviewer`): from `--writer-model` and `--reviewer`, else from the
 /// installed models that fit this computer, else the pair recommended for
-/// its memory. The reviewer must differ from the writer.
+/// its memory, each only when it fits this computer (`doctor` calls a larger
+/// one too large). The reviewer must differ from the writer. A role left
+/// without a model is a step left.
 async fn choose_models(
     o: &mut Onboarding,
     server_ready: bool,
@@ -743,54 +949,121 @@ async fn choose_models(
     };
     let flag_writer = flag(&o.args.writer_model);
     let flag_reviewer = flag(&o.args.reviewer);
-    let (suggested, why) = match memory
+    let fitting = |model: &str| {
+        let size = installed
+            .iter()
+            .find(|installed| installed.name() == model && installed.size_bytes() > 0)
+            .map(|installed| installed.size_bytes())
+            .or_else(|| known_size(model));
+        match (size, memory) {
+            (Some(size), Some(memory)) => fits_memory(size, memory),
+            _ => true,
+        }
+    };
+    let recommended = TeamModels::recommended();
+    let (lead, reviewer_suggestion, why) = match memory
         .and_then(|memory| ollama_setup::suggest_fitting_team_models(&installed, memory))
         .filter(|team| team.lead != team.reviewer)
     {
         Some(team) => (
-            team,
+            Some(team.lead),
+            Some(team.reviewer),
             "from the models on this server that fit this computer",
         ),
         None => match memory.and_then(ollama_setup::recommended_pair) {
-            Some((team, why)) => (team, why),
-            None => (TeamModels::recommended(), "not tested at this memory size"),
+            Some((team, why)) => (Some(team.lead), Some(team.reviewer), why),
+            // Below the tested sizes: only a model that fits is suggested.
+            None => (
+                fitting(&recommended.lead).then(|| recommended.lead.clone()),
+                fitting(&recommended.reviewer).then(|| recommended.reviewer.clone()),
+                "not tested at this memory size",
+            ),
         },
     };
-    if (want_writer && flag_writer.is_none()) || (want_reviewer && flag_reviewer.is_none()) {
+    let asks_writer = want_writer && flag_writer.is_none();
+    let asks_reviewer = want_reviewer && flag_reviewer.is_none();
+    let mut suggested = Vec::new();
+    let mut unfit = Vec::new();
+    for (asks, role, model, tested) in [
+        (asks_writer, "writer", &lead, &recommended.lead),
+        (
+            asks_reviewer,
+            "reviewer",
+            &reviewer_suggestion,
+            &recommended.reviewer,
+        ),
+    ] {
+        match (asks, model) {
+            (true, Some(model)) => suggested.push(format!("{role} {model}")),
+            (true, None) => unfit.push(described(tested)),
+            (false, _) => {}
+        }
+    }
+    if !suggested.is_empty() {
+        o.ui.say(format!("  Suggested: {} ({why}).", suggested.join(", ")));
+    }
+    if !unfit.is_empty() {
+        let gb = memory
+            .map(axocoatl_isolation::host::memory_gb)
+            .unwrap_or_default();
         o.ui.say(format!(
-            "  Suggested: writer {}, reviewer {} ({why}).",
-            suggested.lead, suggested.reviewer
+            "  Not suggested: {} {} too large for this computer's {gb} GB. Enter a smaller \
+             model's name to try one (not tested here), or leave the name empty and choose a \
+             hosted writer and reviewer later (`axocoatl onboard --writer openrouter`, or \
+             claude-code, or codex).",
+            unfit.join(" and "),
+            if unfit.len() == 1 { "is" } else { "are" }
         ));
     }
     let writer = if want_writer {
-        Some(match flag_writer {
-            Some(model) => model,
-            None => choose_one(
-                o,
-                "Model for the writer (Lead; Scout and the chat Assistant use it too)",
-                &candidates,
-                &suggested.lead,
-            ),
-        })
+        match flag_writer {
+            Some(model) => Some(model),
+            None => {
+                let chosen = choose_one(
+                    o,
+                    "Model for the writer (Lead; Scout and the chat Assistant use it too)",
+                    &candidates,
+                    lead.as_deref(),
+                    None,
+                );
+                if chosen.is_none() {
+                    o.step_left(
+                        "No writer model was chosen: name one with `axocoatl onboard \
+                         --writer-model ollama:MODEL`, or choose a hosted writer with `axocoatl \
+                         onboard --writer openrouter` (or claude-code, or codex)",
+                    );
+                    return (None, None);
+                }
+                chosen
+            }
+        }
     } else {
         None
     };
     if !want_reviewer {
         return (writer, None);
     }
-    let reviewer_default = if writer.as_deref() == Some(suggested.reviewer.as_str()) {
-        suggested.lead.clone()
+    let reviewer_default = if writer.is_some() && writer == reviewer_suggestion {
+        lead.clone()
     } else {
-        suggested.reviewer.clone()
+        reviewer_suggestion.clone()
     };
-    let mut reviewer = match flag_reviewer {
-        Some(model) => model,
+    let reviewer = match flag_reviewer {
+        Some(model) => Some(model),
         None => choose_one(
             o,
             "Model for the reviewer (a different model that only reads)",
             &candidates,
-            &reviewer_default,
+            reviewer_default.as_deref(),
+            writer.as_deref(),
         ),
+    };
+    let Some(mut reviewer) = reviewer else {
+        o.step_left(
+            "No reviewer model was chosen: name one with `axocoatl onboard --reviewer \
+             ollama:MODEL`, or `--reviewer openrouter:VENDOR/MODEL` for a hosted one",
+        );
+        return (writer, None);
     };
     if writer.as_deref() == Some(reviewer.as_str()) {
         o.ui.warn(format!(
@@ -802,10 +1075,12 @@ async fn choose_models(
                 o,
                 "Model for the reviewer (a different model)",
                 &candidates,
-                &reviewer_default,
-            );
+                reviewer_default.as_deref(),
+                writer.as_deref(),
+            )
+            .unwrap_or_default();
         }
-        if writer.as_deref() == Some(reviewer.as_str()) {
+        if writer.as_deref() == Some(reviewer.as_str()) || reviewer.is_empty() {
             o.step_left(
                 "Choose a reviewer model different from the writer: `axocoatl onboard --reviewer \
                  ollama:MODEL`",
@@ -856,26 +1131,54 @@ async fn pull(o: &mut Onboarding, base_url: &str, models: &[String]) -> bool {
         (false, _) => String::new(),
     };
     let fits_disk = free.is_none_or(|free| free >= needed);
-    let fits_ram = o.facts.memory_bytes.is_none_or(|memory| {
-        sizes
-            .iter()
-            .flatten()
-            .all(|size| fits_memory(*size, memory))
-    });
+    // As `doctor` judges a model's size against this computer's memory.
+    let unfit: Vec<&String> = missing
+        .iter()
+        .filter(|model| too_large(o, model).is_some())
+        .collect();
+    let fits_ram = unfit.is_empty();
+    let ram = match (unfit.as_slice(), o.facts.memory_bytes) {
+        ([], _) | (_, None) => String::new(),
+        (models, Some(memory)) => format!(
+            " {} {} too large for this computer's {} GB of memory: a model that does not fit \
+             loads slowly or not at all.",
+            models
+                .iter()
+                .map(|model| model.as_str())
+                .collect::<Vec<_>>()
+                .join(" and "),
+            if models.len() == 1 { "is" } else { "are" },
+            axocoatl_isolation::host::memory_gb(memory)
+        ),
+    };
     if !fits_disk {
         o.ui.warn(format!(
             "There is not enough free disk for these models.{disk}"
         ));
     }
-    let question = format!("Pull {}?{disk}", described.join(" and "));
+    let question = format!("Pull {}?{ram}{disk}", described.join(" and "));
     if !fits_disk && !o.ui.interactive() && o.args.pull() != Some(false) {
         // Only a person at the terminal may start a download that does not
         // fit this disk.
         o.ui.say(format!("  {question} no: it does not fit this disk"));
         for model in &missing {
-            o.step_left(format!(
-                "Free disk space for {model}, then pull it: ollama pull {model}"
-            ));
+            let step = match too_large(o, model) {
+                Some(_) => pull_step(o, model, ""),
+                None => format!("Free disk space for {model}, then pull it: ollama pull {model}"),
+            };
+            o.step_left(step);
+        }
+        return false;
+    }
+    if !fits_ram && !o.ui.interactive() && o.args.pull().is_none() {
+        // Nor one too large for this computer's memory, unless --pull says
+        // to.
+        o.ui.say(format!(
+            "  {question} no: it does not fit this computer's memory (--pull pulls it anyway)"
+        ));
+        for model in &missing {
+            let step = pull_step(o, model, "");
+            o.step_left(step);
         }
         return false;
     }
@@ -897,7 +1200,8 @@ async fn pull(o: &mut Onboarding, base_url: &str, models: &[String]) -> bool {
     };
     if !pull_now {
         for model in &missing {
-            o.step_left(format!("Pull {model}: ollama pull {model}"));
+            let step = pull_step(o, model, "");
+            o.step_left(step);
         }
         return false;
     }
@@ -976,10 +1280,13 @@ async fn pull(o: &mut Onboarding, base_url: &str, models: &[String]) -> bool {
 
 /// Load each model once and read its context; give the service
 /// `OLLAMA_CONTEXT_LENGTH` when one is below [`MIN_CONTEXT_TOKENS`].
-async fn context(o: &mut Onboarding, base_url: &str, models: &[String]) {
+/// Returns the models read with enough context and their context, which
+/// Step 5's check uses instead of loading them again.
+async fn context(o: &mut Onboarding, base_url: &str, models: &[String]) -> Vec<(String, usize)> {
+    let mut read = Vec::new();
     if o.ui.plan() {
         o.ui.say("  would load each model once to read its context and run the contract probes");
-        return;
+        return read;
     }
     let mut low = Vec::new();
     for model in models {
@@ -992,13 +1299,14 @@ async fn context(o: &mut Onboarding, base_url: &str, models: &[String]) {
                     ", contract probes passed".to_string()
                 };
                 o.ui.ok(format!("{model}: {tokens}-token context{unaudited}"));
+                read.push((model.clone(), tokens));
             }
             Ok((tokens, _)) => low.push((model.clone(), tokens)),
             Err(error) => o.step_left(format!("{model} cannot run in native Sessions: {error}")),
         }
     }
     if low.is_empty() {
-        return;
+        return read;
     }
     let described: Vec<String> = low
         .iter()
@@ -1012,15 +1320,18 @@ async fn context(o: &mut Onboarding, base_url: &str, models: &[String]) {
         let mut still = Vec::new();
         for (model, _) in &low {
             match ollama_setup::observed_context(base_url, model).await {
-                Ok((tokens, _)) if tokens >= MIN_CONTEXT_TOKENS => o.ui.ok(format!(
-                    "{model}: {tokens}-token context, contract probes passed"
-                )),
+                Ok((tokens, _)) if tokens >= MIN_CONTEXT_TOKENS => {
+                    o.ui.ok(format!(
+                        "{model}: {tokens}-token context, contract probes passed"
+                    ));
+                    read.push((model.clone(), tokens));
+                }
                 Ok((tokens, _)) => still.push(format!("{model} still loads with {tokens} tokens")),
                 Err(error) => still.push(format!("{model}: {error}")),
             }
         }
         if still.is_empty() {
-            return;
+            return read;
         }
         o.step_left(format!(
             "{}: Ollama may not have the memory for a {CONTEXT_FIX_TOKENS}-token context here; \
@@ -1034,6 +1345,7 @@ async fn context(o: &mut Onboarding, base_url: &str, models: &[String]) {
             ollama_host(o).context()
         ));
     }
+    read
 }
 
 /// Homebrew's `brew services --help` says it reads a per-formula

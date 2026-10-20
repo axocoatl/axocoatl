@@ -150,8 +150,9 @@ impl Ui {
                         other => panic!("{question}: expected yes or no, got {other:?}"),
                     };
                 }
+                // "[Y/n] " while it asks, "yes" once answered.
                 let answer = dialoguer::Confirm::new()
-                    .with_prompt(question)
+                    .with_prompt(fit_prompt(question, 7))
                     .default(default)
                     .interact()
                     .unwrap_or(false);
@@ -188,7 +189,7 @@ impl Ui {
                     return index;
                 }
                 let index = dialoguer::Select::new()
-                    .with_prompt(prompt)
+                    .with_prompt(fit_prompt(prompt, 1))
                     .items(items)
                     .default(default)
                     .interact()
@@ -201,7 +202,8 @@ impl Ui {
         }
     }
 
-    /// A line of text; `--yes` and `--plan` take `default`.
+    /// A line of text; `--yes` and `--plan` take `default`. An empty
+    /// `default` offers none: Enter then answers with an empty line.
     pub(crate) fn input(&self, prompt: &str, default: &str) -> String {
         match self.mode {
             Mode::Plan | Mode::Yes => {
@@ -217,9 +219,15 @@ impl Ui {
                         other => panic!("{prompt}: expected text, got {other:?}"),
                     };
                 }
-                let text = dialoguer::Input::<String>::new()
-                    .with_prompt(prompt)
-                    .default(default.to_string())
+                // ": " and the default in brackets while it asks.
+                let mut input = dialoguer::Input::<String>::new()
+                    .with_prompt(fit_prompt(prompt, default.chars().count() + 5));
+                input = if default.is_empty() {
+                    input.allow_empty(true)
+                } else {
+                    input.default(default.to_string())
+                };
+                let text = input
                     .interact_text()
                     .unwrap_or_else(|_| default.to_string());
                 if let Some(log) = &self.log {
@@ -243,8 +251,9 @@ impl Ui {
                 _ => None,
             };
         }
+        // ": [hidden]" once answered.
         dialoguer::Password::new()
-            .with_prompt(prompt)
+            .with_prompt(fit_prompt(prompt, 10))
             .allow_empty_password(true)
             .interact()
             .ok()
@@ -293,6 +302,32 @@ impl Ui {
         host.run(cmd).await
     }
 
+    /// [`Ui::execute`], returning the end of what the command printed (empty
+    /// with `--plan`).
+    pub(crate) async fn execute_showing_output(
+        &self,
+        host: &Host,
+        cmd: &Cmd,
+    ) -> Result<String, String> {
+        if self.plan() {
+            self.say(format!("    would run: {}", cmd.display()));
+            return Ok(String::new());
+        }
+        if cmd.uses_sudo() && self.mode == Mode::Yes && !self.allow_sudo {
+            return Err(format!(
+                "`{}` needs sudo, which --yes runs only with --allow-sudo",
+                cmd.display()
+            ));
+        }
+        self.say(format!("  $ {}", cmd.display()));
+        host.run_showing_output(cmd)
+            .await
+            .map_err(|(error, why)| match why.is_empty() {
+                true => error,
+                false => format!("{error}: {why}"),
+            })
+    }
+
     /// Run several changes in order, stopping at the first that fails.
     pub(crate) async fn execute_all(&self, host: &Host, cmds: &[Cmd]) -> Result<(), String> {
         for cmd in cmds {
@@ -308,6 +343,60 @@ pub(crate) fn joined(cmds: &[Cmd]) -> String {
         .map(Cmd::display)
         .collect::<Vec<_>>()
         .join(" && ")
+}
+
+/// The prompt for a dialoguer question, after printing all but its last
+/// row. dialoguer redraws an answered prompt by clearing only the row the
+/// cursor is on, so a prompt wider than the terminal left its first rows
+/// on the screen and printed them again. `reserve` is the room the prompt's
+/// row needs after it (the `[Y/n] ` of a question). Without a terminal size
+/// the prompt is returned whole.
+fn fit_prompt(prompt: &str, reserve: usize) -> String {
+    let term = dialoguer::console::Term::stderr();
+    let Some((_, columns)) = term.size_checked() else {
+        return prompt.to_string();
+    };
+    let mut rows = wrap_rows(prompt, usize::from(columns).saturating_sub(reserve + 1));
+    let last = rows.pop().unwrap_or_default();
+    for row in rows {
+        let _ = term.write_line(&row);
+    }
+    last
+}
+
+/// `text` in rows of at most `width` characters (at least 20), broken
+/// between words; a word longer than a row is split.
+pub(crate) fn wrap_rows(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(20);
+    let mut rows = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut row = String::new();
+        for word in paragraph.split(' ').filter(|word| !word.is_empty()) {
+            let mut word = word.to_string();
+            loop {
+                let used = row.chars().count();
+                let length = word.chars().count();
+                let gap = usize::from(used > 0);
+                if used + gap + length <= width {
+                    if gap == 1 {
+                        row.push(' ');
+                    }
+                    row.push_str(&word);
+                    break;
+                }
+                if used > 0 {
+                    rows.push(std::mem::take(&mut row));
+                    continue;
+                }
+                // A word longer than a whole row: split it.
+                let head: String = word.chars().take(width).collect();
+                word = word.chars().skip(width).collect();
+                rows.push(head);
+            }
+        }
+        rows.push(row);
+    }
+    rows
 }
 
 #[cfg(test)]
@@ -335,6 +424,31 @@ mod tests {
         assert_eq!(ui.input("Model", "qwen/qwen3-coder"), "qwen/qwen3-coder");
         assert!(ui.secret("Key").is_none());
         assert!(!ui.wait_for_enter("Open Ollama"));
+    }
+
+    /// A prompt wider than the terminal is broken between words into rows
+    /// that fit, so dialoguer only ever redraws the last one.
+    #[test]
+    fn a_long_prompt_is_broken_into_rows_that_fit() {
+        let question = "Check the sandbox with one throwaway container? This pulls \
+                        docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start \
+                        from, and runs it rootless with your user mapped in and no network.";
+        for width in [40, 72, 152] {
+            let rows = wrap_rows(question, width);
+            assert!(rows.len() > 1, "{width}: {rows:?}");
+            assert!(
+                rows.iter().all(|row| row.chars().count() <= width),
+                "{width}: {rows:?}"
+            );
+            assert_eq!(rows.join(" "), question);
+        }
+        assert_eq!(wrap_rows(question, 400), [question]);
+        assert_eq!(wrap_rows("Install Podman?", 80), ["Install Podman?"]);
+        // A word longer than a row (a path) is split, never wider.
+        let path = format!("Write {}? yes", "/x".repeat(40));
+        let rows = wrap_rows(&path, 30);
+        assert!(rows.iter().all(|row| row.chars().count() <= 30), "{rows:?}");
+        assert_eq!(rows.concat().replace(' ', ""), path.replace(' ', ""));
     }
 
     #[tokio::test]
