@@ -94,9 +94,10 @@ and they are checked before you sign in. The models above are examples. The comm
    (`--no-browser` only prints it). This is OpenRouter's
    [OAuth PKCE flow](https://openrouter.ai/docs/use-cases/oauth-pkce): when you allow
    Axocoatl to create a key, the browser returns to `http://127.0.0.1:<port>/callback`
-   on your computer, on a port the system picked. Axocoatl checks that the answer
-   carries this sign-in's state, then exchanges its code, with a verifier that never
-   left your computer, for a new key labeled `Axocoatl <date>`. The sign-in may take 10
+   on your computer, on a port the system picked. Axocoatl uses an answer only when it
+   carries this sign-in's state (any other request there is ignored, and the sign-in
+   goes on waiting), then exchanges its code, with a verifier that never left your
+   computer, for a new key labeled `Axocoatl <date>`. The sign-in may take 10
    minutes (`--sign-in-timeout MINUTES`, 1 to 60). Cancelling it in the browser,
    running out of time or pressing Ctrl-C stores nothing.
 4. Checks the key with OpenRouter (`GET /api/v1/key`) and shows its label, credit
@@ -106,7 +107,10 @@ and they are checked before you sign in. The models above are examples. The comm
    `axocoatl secret set` stores one; `--secret NAME` picks another name).
 6. Adds these lines under `providers:` in your configuration, leaving every other
    line as it was. A key written in the file before is taken out of it (it still
-   works in your OpenRouter account until you delete it there).
+   works in your OpenRouter account until you delete it there). On a computer with no
+   configuration yet, it writes a new one (`0600`) with only these lines and the
+   server's defaults: it has no Agents, since `axocoatl run` takes its models with
+   `--model`; `axocoatl onboard` adds a default team for workbench Sessions.
 
 ```yaml
 providers:
@@ -119,7 +123,9 @@ The daemon reads the key from the secret store when it starts, so restart a runn
 Axocoatl after connecting. `axocoatl connect openrouter --status` shows whether a key is
 stored, with its label, limit and usage from OpenRouter; `--remove` deletes the stored
 key and its line in the configuration (delete the key itself at
-[openrouter.ai/settings/keys](https://openrouter.ai/settings/keys)). `axocoatl doctor`
+[openrouter.ai/settings/keys](https://openrouter.ai/settings/keys)). While Agents in the
+file use OpenRouter, `--remove` keeps the line and names them, and `axocoatl doctor`
+reports the key missing until you connect again. `axocoatl doctor`
 checks that the secret is stored. When a configuration file cannot be edited this way
 (a `providers:` written in flow style, for example), the command stops before the
 sign-in and shows the lines to add; `--no-config` stores the key without editing the

@@ -94,18 +94,25 @@ BYOK provider keys are connected. It suggests a non-reasoning text/tool model an
 an explicit output limit; any eligible model id works, reasoning models included. Native Sessions do not support BYOK. Review the Session's **Team &
 budget** before execution; see [OpenRouter configuration](/configure/providers/#configure-openrouter).
 
-To connect OpenRouter without typing a key, run `axocoatl connect openrouter`: it signs
-you in to OpenRouter in the browser, stores the key OpenRouter issues in Axocoatl's
-secret store (not in the configuration) and adds OpenRouter to your configuration.
+With OpenRouter, you never need to type a key: leave the key blank when onboarding
+asks for it, then run `axocoatl connect openrouter`. It signs you in to OpenRouter in
+the browser, stores the key OpenRouter issues in Axocoatl's secret store (not in the
+configuration) and replaces the configuration's `${OPENROUTER_API_KEY}` placeholder
+with `api_key_secret: openrouter`. For the always-on service, run
+`axocoatl service install` after that, not `axocoatl onboard --install-daemon`: the
+configuration then holds no environment placeholder, so the service needs no
+variable.
 
-When using `axocoatl onboard --install-daemon` with a hosted provider, enter the
-key during onboarding. The generated service does not inherit shell environment
+When using `axocoatl onboard --install-daemon` with another hosted provider, enter
+the key during onboarding. The generated service does not inherit shell environment
 variables, so onboarding refuses to install it while the configuration still
 contains an environment placeholder.
 
 <Aside type="caution" title="The user configuration contains secrets">
-A supplied hosted-provider key is stored as plain text in a configuration file
-with owner-only permissions (`0600` on supported Unix systems). Axocoatl does
+A hosted-provider key typed during onboarding is stored as plain text in a
+configuration file with owner-only permissions (`0600` on supported Unix systems).
+A key `axocoatl connect openrouter` stores is in the secret store instead, and the
+configuration holds only its name. Axocoatl does
 not encrypt that file. Protect it and its backups. The wizard does not create a
 `.env.example` file, and Axocoatl does not load dotenv files automatically.
 </Aside>

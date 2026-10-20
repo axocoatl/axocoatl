@@ -233,12 +233,15 @@ providers:
     api_key_secret: openrouter   # written by `axocoatl connect openrouter`
 ```
 
-Hosted credential blocks accept `api_key` or `api_key_secret`, optional `base_url`,
-and optional one-target `fallback`. `api_key_secret` names a secret in the data root's
-secret store (`secrets/<name>`, the rule of `axocoatl secret set` names) that holds the
-key, so the key is not in the file; the daemon reads it when it starts. It cannot be
-combined with a non-empty `api_key`, and the receipt signing key and the
-`codex-chatgpt` sign-in are never sent as a provider key. `axocoatl connect openrouter`
+Hosted credential blocks need `api_key` or `api_key_secret` (a block with neither is
+refused), and accept optional `base_url` and optional one-target `fallback`.
+`api_key_secret` names a secret in the data root's secret store (`secrets/<name>`, the
+rule of `axocoatl secret set` names) that holds the key, so the key is not in the file;
+the daemon reads it when it starts. It holds a name, never the key: a value that reads
+as a key (`sk-…`, `AIza…`, or a long run mixing letters and digits) is refused without
+being repeated. It cannot be combined with a non-empty `api_key`, and the secrets
+other commands own are never sent as a provider key: the receipt signing key,
+`claude-code-oauth`, `codex-chatgpt`, and `codex-openai` except as OpenAI's. `axocoatl connect openrouter`
 stores OpenRouter's key as `openrouter` after a browser sign-in and writes
 `api_key_secret: openrouter`. The OpenAI adapter uses `base_url` for compatible
 servers. OpenRouter's runtime endpoint is fixed. Empty hosted keys, and a named secret
