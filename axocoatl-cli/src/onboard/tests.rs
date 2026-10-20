@@ -1431,3 +1431,40 @@ async fn plan_over_an_existing_configuration_changes_nothing() {
         o.ui.output()
     );
 }
+
+/// An Ollama that is installed but not running, and that only a person can
+/// start (the app, or `ollama serve`), is a step left at once under --yes,
+/// without waiting for it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stopped_ollama_nobody_can_start_is_a_step_without_waiting() {
+    let shims = Shims::new();
+    ollama_shim(&shims);
+    let port = free_port();
+    let url = format!("http://127.0.0.1:{port}");
+    let facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        &url,
+        OllamaService::Manual,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs::default(),
+    );
+    let started = std::time::Instant::now();
+    assert_eq!(ollama::server(&mut o).await, None);
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    assert!(
+        o.steps[0].starts_with(&format!(
+            "Start Ollama so it answers at {url}: run `OLLAMA_NO_CLOUD=1 ollama serve`"
+        )),
+        "{:?}",
+        o.steps
+    );
+}

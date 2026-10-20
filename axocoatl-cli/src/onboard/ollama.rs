@@ -238,15 +238,15 @@ pub(crate) async fn server(o: &mut Onboarding) -> Option<String> {
             ollama_host(o).start()
         ));
     }
-    if !o.ui.plan() && !reachable(&o.facts.ollama_server) {
-        start(o).await;
-        if !wait_until(o, reachable).await {
-            o.step_left(format!(
-                "Start Ollama so it answers at {url}: {}",
-                ollama_host(o).start()
-            ));
-            return None;
-        }
+    if !o.ui.plan()
+        && !reachable(&o.facts.ollama_server)
+        && (!start(o).await || !wait_until(o, reachable).await)
+    {
+        o.step_left(format!(
+            "Start Ollama so it answers at {url}: {}",
+            ollama_host(o).start()
+        ));
+        return None;
     }
     for _ in 0..3 {
         if o.ui.plan() {
@@ -402,37 +402,31 @@ async fn install(o: &mut Onboarding) -> bool {
     }
 }
 
-async fn start(o: &mut Onboarding) {
+/// Start the server the way it runs here; `false` when nothing was started
+/// (declined, or no one at a terminal to start it by hand).
+async fn start(o: &mut Onboarding) -> bool {
     match o.facts.ollama_service {
         OllamaService::Brew => {
             let cmd = Cmd::new("brew", &["services", "start", "ollama"]);
-            if o.ui.consent(
+            o.ui.consent(
                 "Ollama is not running. Start it with `brew services start ollama`?",
                 true,
                 false,
-            ) {
-                let _ = o.ui.execute(&o.host, &cmd).await;
-            }
+            ) && o.ui.execute(&o.host, &cmd).await.is_ok()
         }
         OllamaService::Systemd => {
             let cmd = Cmd::sudo("systemctl", &["start", "ollama"]);
-            if o.ui.consent(
+            o.ui.consent(
                 "Ollama is not running. Start it with `sudo systemctl start ollama`?",
                 true,
                 true,
-            ) {
-                let _ = o.ui.execute(&o.host, &cmd).await;
-            }
+            ) && o.ui.execute(&o.host, &cmd).await.is_ok()
         }
-        OllamaService::App => {
-            o.ui.wait_for_enter("Open the Ollama app.");
-        }
-        OllamaService::Manual => {
-            o.ui.wait_for_enter(&format!(
-                "Start Ollama in another terminal: OLLAMA_NO_CLOUD=1 OLLAMA_HOST={} ollama serve",
-                o.facts.ollama_url.trim_start_matches("http://")
-            ));
-        }
+        OllamaService::App => o.ui.wait_for_enter("Open the Ollama app."),
+        OllamaService::Manual => o.ui.wait_for_enter(&format!(
+            "Start Ollama in another terminal: OLLAMA_NO_CLOUD=1 OLLAMA_HOST={} ollama serve",
+            o.facts.ollama_url.trim_start_matches("http://")
+        )),
     }
 }
 
