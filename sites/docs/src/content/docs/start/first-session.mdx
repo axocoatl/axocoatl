@@ -113,7 +113,9 @@ hunk review, branch checkout, and commit as deliberate user actions.
 
 ## If creation fails
 
-- Run `axocoatl doctor` and resolve the Podman warning.
+- Run `axocoatl doctor` and resolve the Podman warning. When local Podman cannot
+  run the Session yet (no Podman machine, for example), **Create session** saves
+  nothing and says what to run; it starts a stopped machine itself.
 - Confirm the selected Agent exists in the active user configuration (or the
   explicit file passed with `--config`).
 - An image outside Axocoatl's curated presets is rejected unless

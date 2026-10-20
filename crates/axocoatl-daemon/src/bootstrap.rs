@@ -647,6 +647,23 @@ fn session_git_arguments_as(
     argv
 }
 
+/// A Session whose environment was planned once and never began preparing:
+/// a preparation records its runtime before any container exists, and a
+/// later plan has a later generation.
+fn never_prepared_local_session(session: &Session) -> bool {
+    let environment = &session.environment;
+    environment.generation == 1
+        && environment.runtime.is_none()
+        && environment.runtime_creation.is_none()
+        && environment.effective_image.is_none()
+        && environment.prepared_at.is_none()
+        && environment.setup_results.is_empty()
+        && matches!(
+            environment.state,
+            SessionEnvironmentState::Unprepared | SessionEnvironmentState::AwaitingApproval
+        )
+}
+
 /// Whether a `git rev-parse --is-inside-work-tree` result names a work tree;
 /// otherwise the refusal with the code [`NOT_A_REPOSITORY_CODE`].
 fn session_git_repository(probe: &ExecResult) -> Result<(), DaemonError> {
@@ -6705,6 +6722,12 @@ impl AxocoatlDaemon {
                 "attempt set '{set_id}' in session '{owner}' owns this Workspace; keep or discard it before opening another Session"
             )));
         }
+        self.require_local_runtime_for_new_session(
+            setup_command.as_deref(),
+            setup_approved,
+            setup_reviewed,
+        )
+        .await?;
         let session = {
             let mut sessions = self.session_store.lock().await;
             match &self._data_dir_lease.ownership {
@@ -6790,6 +6813,12 @@ impl AxocoatlDaemon {
                 "attempt set '{set_id}' in session '{owner}' owns this Workspace; keep or discard it before opening another Session"
             )));
         }
+        self.require_local_runtime_for_new_session(
+            setup_command.as_deref(),
+            setup_approved,
+            setup_reviewed,
+        )
+        .await?;
         self.workspace_store
             .lock()
             .await
@@ -7406,6 +7435,10 @@ impl AxocoatlDaemon {
             return Err(DaemonError::Session(format!(
                 "cannot verify E2B cleanup for Session '{id}' after daemon restart because its durable remote runtime identity is missing; check E2B for the older sandbox, then use Change runtime before closing or deleting this Session"
             )));
+        } else if session.as_ref().is_some_and(never_prepared_local_session) {
+            // No preparation of this Session ever began, so Podman holds no
+            // container or volume of it, and stopping or deleting it does not
+            // need Podman at all (it may not be installed yet).
         } else if self.config.sandbox.backend != "e2b" {
             // A failed/pre-runtime local Session may have created only the
             // deterministic container/volume before readiness evidence could
@@ -8548,6 +8581,41 @@ impl AxocoatlDaemon {
             return Ok(session);
         }
         self.prepare_session_environment(&session).await
+    }
+
+    /// Refuse a new Session that would be prepared at once while local Podman
+    /// cannot run it, before anything is persisted: without this the Session
+    /// was saved, its preparation failed before it could record an error,
+    /// and it stayed behind unprepared and unexplained. A Session that waits
+    /// for a setup decision is created as before; Podman is checked again
+    /// when it is prepared. A stopped Podman machine is started.
+    async fn require_local_runtime_for_new_session(
+        &self,
+        setup_command: Option<&str>,
+        setup_approved: bool,
+        setup_reviewed: bool,
+    ) -> Result<(), DaemonError> {
+        let has_command = setup_command.is_some_and(|command| !command.trim().is_empty());
+        let prepares_now = setup_reviewed && (!has_command || setup_approved);
+        if self.config.sandbox.backend == "e2b" || !prepares_now {
+            return Ok(());
+        }
+        let ready = if self.local_cleanup_pending.load(Ordering::Acquire) {
+            self.ensure_deferred_local_cleanup().await
+        } else {
+            axocoatl_isolation::podman::ensure_ready()
+                .await
+                .map_err(|error| DaemonError::Session(error.to_string()))
+        };
+        ready.map_err(|error| {
+            DaemonError::Session(format!(
+                "No Session was created: local Podman cannot run it yet. {}",
+                error
+                    .to_string()
+                    .trim_start_matches("Session error: ")
+                    .trim_start_matches("OCI container execution failed: ")
+            ))
+        })
     }
 
     /// Preserve the existing config-level postCreate trust decision for
@@ -23570,6 +23638,10 @@ mod session_web_tests;
 #[cfg(all(test, unix))]
 #[path = "bootstrap_session_team_budget_tests.rs"]
 mod session_team_budget_tests;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_session_podman_missing_tests.rs"]
+mod session_podman_missing_tests;
 
 #[cfg(all(test, unix))]
 #[path = "bootstrap_copied_data_root_tests.rs"]
