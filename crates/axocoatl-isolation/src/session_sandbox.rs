@@ -2028,6 +2028,9 @@ impl SessionSandbox {
         let dependency_mountpoint = node_dependency_volume
             .is_some()
             .then(|| crate::dependency_mountpoint::MountpointLease::acquire(&working_dir_path));
+        let dependency_mountpoint_labels = dependency_mountpoint
+            .as_ref()
+            .and_then(crate::dependency_mountpoint::MountpointLease::labels);
         let container_id = loop {
             Self::verify_start_authorities(working_dir, &policy.control_plane_roots)?;
             Self::verify_supervisor_policy(&effective_policy)?;
@@ -2038,9 +2041,9 @@ impl SessionSandbox {
                 &dir,
                 run_image,
                 node_dependency_volume.as_deref(),
-                dependency_mountpoint
+                dependency_mountpoint_labels
                     .as_ref()
-                    .and_then(crate::dependency_mountpoint::MountpointLease::label_value),
+                    .map(|labels| labels.as_slice()),
                 with_limits,
                 &publish,
                 &effective_policy,
@@ -3970,7 +3973,7 @@ impl SessionSandbox {
         dir: &str,
         image: &str,
         node_dependency_volume: Option<&str>,
-        dependency_mountpoint_label: Option<&str>,
+        dependency_mountpoint_labels: Option<&[String]>,
         with_limits: bool,
         ports: &[u16],
         policy: &SandboxPolicy,
@@ -3989,8 +3992,8 @@ impl SessionSandbox {
             read_only,
         );
         Self::insert_named_volume_mounts(&mut args, named_volumes);
-        if let Some(path) = dependency_mountpoint_label {
-            crate::dependency_mountpoint::insert_label(&mut args, path);
+        if let Some(labels) = dependency_mountpoint_labels {
+            crate::dependency_mountpoint::insert_labels(&mut args, labels);
         }
 
         let mut command = Command::new(PODMAN);
