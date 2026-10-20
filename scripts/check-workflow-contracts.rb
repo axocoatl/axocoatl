@@ -174,6 +174,9 @@ contracts = {
     'node --test "$repo_root/scripts/check-copy-paste.test.mjs"',
     'node "$repo_root/scripts/check-copy-paste.mjs"',
   ],
+  "scripts/verify-product-browser-gate.sh" => [
+    'node "$repo_root/scripts/check-copy-paste.mjs" --axocoatl "$binary"',
+  ],
   "scripts/verify-native-gate.sh" => [
     "cargo +1.88.0 check --locked --workspace --all-targets --all-features --jobs 1",
     "cargo clippy --locked --workspace --all-targets --all-features --jobs 1",

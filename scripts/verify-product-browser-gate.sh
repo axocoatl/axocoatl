@@ -48,4 +48,10 @@ binary=${AXO_BROWSER_BINARY:-$repo_root/target/debug/axocoatl}
 }
 (cd "$test_root" && AXOCOATL_E2E_BINARY="$binary" npm run test:no-build)
 
+# The configuration and loadout snippets a new user copies from the README, the
+# sites and the docs pass this build's own `validate` and `loadouts validate`
+# (the YAML parser is a devDependency of sites/docs).
+(cd "$repo_root/sites/docs" && npm ci --ignore-scripts --no-audit --no-fund)
+node "$repo_root/scripts/check-copy-paste.mjs" --axocoatl "$binary"
+
 echo 'Product browser gate: PASS'

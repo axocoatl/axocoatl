@@ -18,7 +18,8 @@ node ./scripts/audit-gate.mjs
 # site and the docs' first-run pages runs as written, and the claims around them
 # hold (js-yaml is a devDependency of sites/docs, installed by the npm ci above).
 # AXOCOATL_COPY_PASTE_BIN names an axocoatl binary that also validates the
-# configuration and loadout snippets.
+# configuration and loadout snippets; the product browser gate runs the same
+# check with the binary it builds.
 node --test "$repo_root/scripts/check-copy-paste.test.mjs"
 node "$repo_root/scripts/check-copy-paste.mjs"
 npm run check:content
