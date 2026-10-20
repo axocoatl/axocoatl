@@ -93,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   format, schema, migration or protocol, a missing, nil or non-canonical ownership id,
   identities this version would not write, an extra file, a symbolic link) is still
   refused, and leaves the directory unchanged. The lock path stays a directory, so 1.0.0
-  still refuses the root. After a 1.4.1 start has recorded a copied root, 1.4.0 starts on
+  still refuses the root. After a 1.5.0 start has recorded a copied root, 1.4.0 starts on
   it too.
 - **A Session keeps working in a repository restored or copied at the same path.** After a
   restart, the first turn sent to an existing Session checks that its repository is the

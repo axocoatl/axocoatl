@@ -93,7 +93,7 @@ current and retained legacy files by copying the entire root.
 with the rest of the root. The record also names the directory it was written in: its
 path and the identity of the directory and of that lock file. A copy of the root (a
 restored backup, Migration Assistant, Time Machine) is a new directory, and a moved root
-has a new path. From 1.4.1, the daemon records the new location when it starts on such a
+has a new path. From 1.5.0, the daemon records the new location when it starts on such a
 root, keeps the root's ownership and every Session, and logs one warning that the data
 directory was copied or moved. It does so only after it holds every lock on the root, so
 it never shares a root with another daemon. The per-root external lease lives in an
@@ -106,7 +106,7 @@ ownership was recorded, including a restored backup and a root that Migration As
 brought to a new Mac. `axocoatl serve` exits with `failed data-directory format
 ownership admission: invalid or ambiguous format ownership: unsupported, incomplete, or
 differently owned manifest`, and an installed service restarts and fails again every few
-seconds. Start 1.4.1 or later on that root once: it records the new location, and 1.4.0
+seconds. Start 1.5.0 or later on that root once: it records the new location, and 1.4.0
 then starts on it too.
 </Aside>
 
@@ -156,7 +156,7 @@ or every attachment/store required for restoration.
 ## Restore
 
 There is no schema-aware restore command. A restore is the backup copied back, as one
-set, and started with Axocoatl 1.4.1 or later (see the caution above for earlier
+set, and started with Axocoatl 1.5.0 or later (see the caution above for earlier
 releases).
 
 <Steps>
@@ -197,7 +197,7 @@ releases).
 </Steps>
 
 The same applies to a data root brought to a new Mac by Migration Assistant or Time
-Machine, or moved to another path: start 1.4.1 or later on it. Sessions keep working in
+Machine, or moved to another path: start 1.5.0 or later on it. Sessions keep working in
 repositories that are at the same paths as before. A repository now at another path is
 another Workspace for new runs; a Session made in the old path refuses work and names
 that folder until you move the repository back or delete the Session.
