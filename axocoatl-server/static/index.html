@@ -2498,11 +2498,15 @@ function initCockpitChrome() {
   }
   const fanout = $('#fanout-btn'); if (fanout) fanout.addEventListener('click', toggleFanoutPop);
   const viewNav = $('.cockpit-view-nav');
+  // Safari does not focus a clicked button. These controls focus themselves
+  // first, so a dialog one opens (the environment dialog of a Session that is
+  // not ready) returns focus to it when it closes, as in other browsers.
   if (viewNav) viewNav.addEventListener('click', (event) => {
     const view = event.target.closest('[data-session-view]');
-    if (view) { openModule(view.dataset.sessionView); return; }
+    if (view) { view.focus(); openModule(view.dataset.sessionView); return; }
   });
-  $('[data-session-action="terminal"]')?.addEventListener('click', () => {
+  $('[data-session-action="terminal"]')?.addEventListener('click', (event) => {
+    event.currentTarget.focus();
     if (S.cockpitLayout.termOpen) toggleTerminalsDrawer(false);
     else openSessionTerminal();
   });
@@ -2551,7 +2555,10 @@ function initCockpitChrome() {
     closePanesMenu(true);
   });
   $('#session-run-action')?.addEventListener('click', stopSessionTurn);
-  $('#session-environment-action')?.addEventListener('click', () => {
+  $('#session-environment-action')?.addEventListener('click', (event) => {
+    // Safari does not focus a clicked button; focus it so closing the
+    // environment dialog returns focus to it.
+    event.currentTarget.focus();
     if (!S.session.id) return;
     if (S.session.status === 'closed') {
       void reopenCurrentSession();
@@ -8881,7 +8888,9 @@ async function sessionLatticeBuild(session, graphTurnId = '', envelope = null) {
   if (envelope?.history_version === 'execution_v2') {
     const controls = document.createElement('button'); controls.type = 'button';
     controls.className = 'session-turn-controls btn btn-sm'; controls.textContent = 'Turn controls';
-    controls.addEventListener('click', () => { lat.deselectAll(); inspector.showTurnControls(); });
+    // Safari does not focus a clicked button; focus it so closing the
+    // inspector returns focus to the control that opened it.
+    controls.addEventListener('click', () => { controls.focus(); lat.deselectAll(); inspector.showTurnControls(); });
     host.prepend(controls);
   }
   lat.addEventListener('selection-change', (event) => {
