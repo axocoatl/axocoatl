@@ -582,6 +582,8 @@ async fn defaults_child_body() {
     daemon.shutdown().await.unwrap();
 }
 
+/// Only macOS has a Podman machine to start.
+#[cfg(target_os = "macos")]
 async fn stopped_machine_child_body() {
     let server = ollama().await;
     let (daemon, _dir) = daemon(&server.uri(), "").await;
