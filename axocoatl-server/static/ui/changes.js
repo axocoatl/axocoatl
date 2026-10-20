@@ -179,14 +179,17 @@ export class AxChanges extends HTMLElement {
         `/api/sessions/${encodeURIComponent(session)}/git/status`,
         { signal: controller.signal });
       const st = await response.json().catch(() => ({}));
-      if (!response.ok || st?.error) throw new Error(st?.error || `HTTP ${response.status}`);
-      if (!Array.isArray(st?.files)) throw new Error('Git status returned an invalid file list.');
+      // A folder that is not a Git repository has no changes to show here;
+      // Source Control offers to initialize it. Reading never does.
+      const notRepository = response.status === 409 && st?.code === 'not_a_repository';
+      if (!notRepository && (!response.ok || st?.error)) throw new Error(st?.error || `HTTP ${response.status}`);
+      if (!notRepository && !Array.isArray(st?.files)) throw new Error('Git status returned an invalid file list.');
       if (requestId !== this.#requestId || session !== this.session
           || this.suspended || !this.isConnected) return;
       // A turn card must never absorb pre-existing workspace dirt. The
       // canonical Git status projection marks only paths attributed to the
       // latest accepted turn; Source Control can still reveal the whole tree.
-      this.#files = st.files.filter((file) => file?.last_turn === true);
+      this.#files = notRepository ? [] : st.files.filter((file) => file?.last_turn === true);
       this.#phase = 'ready';
     } catch (error) {
       if (requestId !== this.#requestId || session !== this.session

@@ -213,6 +213,8 @@ pub async fn vendor_asset(Path(file): Path<String>) -> Response {
 pub struct HealthResponse {
     pub status: String,
     pub agents: usize,
+    /// The running Axocoatl's version.
+    pub version: &'static str,
 }
 
 pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
@@ -220,7 +222,19 @@ pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy".to_string(),
         agents: daemon.agent_count().await,
+        version: axocoatl_daemon::readiness::DAEMON_VERSION,
     })
+}
+
+/// `GET /api/readiness`: what a first Session needs, checked the way
+/// `axocoatl doctor` checks it (Podman, the Ollama server's version and
+/// cloud mode, pulled models, writers' sign-ins). The daemon is not held
+/// while the checks run.
+pub async fn readiness(
+    State(state): State<AppState>,
+) -> Json<axocoatl_daemon::readiness::ReadinessReport> {
+    let inputs = state.read().await.readiness_inputs().await;
+    Json(axocoatl_daemon::readiness::check_readiness(inputs).await)
 }
 
 pub async fn health_ready(State(state): State<AppState>) -> StatusCode {
@@ -805,6 +819,41 @@ pub async fn delete_session_ways_decision(
         .map(|_| StatusCode::NO_CONTENT)
         .map_err(attempt_err)
 }
+/// A Team and budget refusal as the person reads it: a native provider
+/// check's own message, without the layers it passed through
+/// ("Provider setup failed: Session dispatch: Invalid request for ollama: ").
+fn person_facing_team_message(message: &str) -> String {
+    let mut text = message
+        .strip_prefix("Provider setup failed: Session dispatch: ")
+        .unwrap_or(message);
+    if let Some(rest) = text.strip_prefix("Invalid request for ") {
+        if let Some((provider, reason)) = rest.split_once(": ") {
+            if !provider.is_empty()
+                && provider
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            {
+                text = reason;
+            }
+        }
+    }
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => message.to_string(),
+    }
+}
+
+fn team_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorResponse>) {
+    let (status, Json(ErrorResponse { error })) = attempt_err(error);
+    (
+        status,
+        Json(ErrorResponse {
+            error: person_facing_team_message(&error),
+        }),
+    )
+}
+
 pub async fn preview_session_team(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -816,7 +865,7 @@ pub async fn preview_session_team(
         .preview_session_team(&id, request)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(team_err)
 }
 pub async fn apply_session_team(
     State(state): State<AppState>,
@@ -829,7 +878,7 @@ pub async fn apply_session_team(
         .apply_session_team(&id, request)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(team_err)
 }
 pub async fn cancel_session_team(
     State(state): State<AppState>,
@@ -1488,6 +1537,12 @@ pub struct CreateWorkspaceBody {
     /// existing custom name when the canonical path is already registered.
     #[serde(default)]
     pub name: Option<String>,
+    /// The person confirmed a folder the daemon refused as too broad
+    /// (`workspace_too_broad`): the home folder, a folder above it, or one
+    /// that contains Axocoatl's own directories. It never opens one of
+    /// Axocoatl's own directories (`workspace_protected`).
+    #[serde(default)]
+    pub confirm_broad: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -1502,17 +1557,37 @@ pub async fn list_workspaces(
     Json(state.read().await.list_workspaces().await)
 }
 
+/// `POST /api/workspaces`: open a folder as a Workspace. A folder that is
+/// too broad is a 409 with the code `workspace_too_broad` until the request
+/// carries `confirm_broad: true`; one of Axocoatl's own directories is a 409
+/// with `workspace_protected`.
 pub async fn create_workspace(
     State(state): State<AppState>,
     Json(body): Json<CreateWorkspaceBody>,
-) -> Result<Json<axocoatl_session::Workspace>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<axocoatl_session::Workspace>, CodedRouteError> {
     state
         .read()
         .await
-        .create_workspace(&body.path, body.name.as_deref())
+        .open_workspace(&body.path, body.name.as_deref(), body.confirm_broad)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
+}
+
+/// `DELETE /api/workspaces/{id}`: remove a Workspace from the list. Its
+/// folder is never touched. A Workspace with open Sessions is a 409 with the
+/// code `workspace_has_open_sessions`.
+pub async fn remove_workspace(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<axocoatl_session::Workspace>, CodedRouteError> {
+    state
+        .read()
+        .await
+        .remove_workspace(&id)
+        .await
+        .map(Json)
+        .map_err(coded_err)
 }
 
 pub async fn get_workspace(
@@ -1685,7 +1760,10 @@ pub async fn get_session(
 /// Workspace, the answer is a `409` with the code `workspace_busy` at once,
 /// naming that Session, its loadout run and its turn, and no Session is
 /// created; another operation of the Workspace is waited for up to ten
-/// seconds first. Any other refusal is a `400`.
+/// seconds first. A folder too broad for a Workspace that was never opened
+/// with Open workspace… is a `409` with the code `workspace_too_broad`, and
+/// one of Axocoatl's own directories a `409` with `workspace_protected`.
+/// Any other refusal is a `400`.
 pub async fn create_session(
     State(state): State<AppState>,
     Json(body): Json<CreateSessionBody>,
@@ -1716,7 +1794,8 @@ pub async fn create_session(
         .await
         .map(Json)
         .map_err(|error| match error {
-            error @ axocoatl_daemon::DaemonError::WorkspaceBusy(_) => coded_err(error),
+            error @ (axocoatl_daemon::DaemonError::WorkspaceBusy(_)
+            | axocoatl_daemon::DaemonError::WorkspaceRefused { .. }) => coded_err(error),
             other => uncoded(err(StatusCode::BAD_REQUEST, other.to_string())),
         })
 }
@@ -2749,7 +2828,8 @@ fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorRe
     let status = match &error {
         axocoatl_daemon::DaemonError::AttemptConflict(_)
         | axocoatl_daemon::DaemonError::SessionConflict(_)
-        | axocoatl_daemon::DaemonError::WorkspaceBusy(_) => StatusCode::CONFLICT,
+        | axocoatl_daemon::DaemonError::WorkspaceBusy(_)
+        | axocoatl_daemon::DaemonError::WorkspaceRefused { .. } => StatusCode::CONFLICT,
         axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::UNPROCESSABLE_ENTITY,
         axocoatl_daemon::DaemonError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
         axocoatl_daemon::DaemonError::NotFound(_) => StatusCode::NOT_FOUND,
@@ -2765,7 +2845,10 @@ fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorRe
 
 /// An error body with a machine-readable `code` when the refusal has one:
 /// `{"error": "…", "code": "workspace_busy"}` for a Workspace that another
-/// run, Session turn or operation holds (409; retry later).
+/// run, Session turn or operation holds (409; retry later), and the 409s of
+/// Workspace scope: `workspace_too_broad` (open it only with
+/// `confirm_broad: true`), `workspace_protected` (never) and
+/// `workspace_has_open_sessions` (close them first).
 #[derive(Serialize)]
 pub struct CodedErrorResponse {
     pub error: String,
@@ -2775,12 +2858,11 @@ pub struct CodedErrorResponse {
 
 pub type CodedRouteError = (StatusCode, Json<CodedErrorResponse>);
 
-/// [`attempt_err`]'s statuses, with the `workspace_busy` code on a busy
-/// Workspace, so a client can tell "retry later" from any other conflict.
+/// [`attempt_err`]'s statuses, with the error's code (`workspace_busy` on a
+/// busy Workspace), so a client can tell "retry later" from any other
+/// conflict.
 pub(crate) fn coded_err(error: axocoatl_daemon::DaemonError) -> CodedRouteError {
-    let code = error
-        .is_workspace_busy()
-        .then_some(axocoatl_daemon::WORKSPACE_BUSY_CODE);
+    let code = error.code();
     let (status, Json(ErrorResponse { error })) = attempt_err(error);
     (status, Json(CodedErrorResponse { error, code }))
 }
@@ -2909,14 +2991,15 @@ async fn require_ready_session(state: &AppState, id: &str) -> Result<(), RouteEr
     }
 }
 
-/// GET /api/sessions/{id}/git/status
+/// GET /api/sessions/{id}/git/status. A folder that is not a Git repository
+/// is a 409 with the code `not_a_repository`; reading never initializes one.
 pub async fn git_status(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
-    daemon.git_status(&id).await.map(Json).map_err(attempt_err)
+    daemon.git_status(&id).await.map(Json).map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -2929,14 +3012,14 @@ pub async fn git_diff(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(q): Query<GitPathQuery>,
-) -> Result<Json<axocoatl_daemon::git::GitDiff>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitDiff>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_diff(&id, &q.path)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -2969,14 +3052,10 @@ pub async fn session_variant_diff(
 pub async fn git_branches(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<axocoatl_daemon::git::GitBranches>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitBranches>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
-    daemon
-        .git_branches(&id)
-        .await
-        .map(Json)
-        .map_err(attempt_err)
+    daemon.git_branches(&id).await.map(Json).map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -2988,19 +3067,45 @@ pub struct GitCommitBody {
     pub stage_all: bool,
 }
 
+/// GET /api/sessions/{id}/git/identity: who a commit from Source Control is
+/// by (`name`, `email`), whether the repository signs its commits, and the
+/// `problem` that refuses a commit, when one does.
+pub async fn git_commit_identity(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<axocoatl_daemon::git_person::CommitIdentity>, CodedRouteError> {
+    let daemon = state.read().await;
+    daemon
+        .git_commit_identity(&id)
+        .await
+        .map(Json)
+        .map_err(coded_err)
+}
+
+/// POST /api/sessions/{id}/git/init: make the Session's folder a Git
+/// repository at the person's request (only `git init`).
+pub async fn git_init(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
+    let daemon = state.read().await;
+    daemon.git_init(&id).await.map(Json).map_err(coded_err)
+}
+
 /// POST /api/sessions/{id}/git/commit
 pub async fn git_commit(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<GitCommitBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_commit(&id, body.message.as_deref().unwrap_or(""), body.stage_all)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -3028,14 +3133,14 @@ pub async fn git_hunks(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(q): Query<HunksQuery>,
-) -> Result<Json<Vec<axocoatl_daemon::git::Hunk>>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<Vec<axocoatl_daemon::git::Hunk>>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_hunks(&id, &q.path, q.staged)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -3056,14 +3161,14 @@ pub async fn git_apply_hunk(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<HunkBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_apply_hunk(&id, &body.path, body.index, body.stage)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 /// POST /api/sessions/{id}/git/stage
@@ -3071,14 +3176,14 @@ pub async fn git_stage(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<StageBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_stage(&id, &body.paths)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 /// POST /api/sessions/{id}/git/unstage
@@ -3086,14 +3191,14 @@ pub async fn git_unstage(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<StageBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_unstage(&id, &body.paths)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 /// POST /api/sessions/{id}/git/discard
@@ -3101,14 +3206,14 @@ pub async fn git_discard(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<GitDiscardBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_discard(&id, body.path.as_deref())
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -3128,14 +3233,14 @@ pub async fn git_revert_hunk(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<GitHunkDiscardBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_revert_hunk(&id, &body.path, body.index)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 /// POST /api/sessions/{id}/git/checkout
@@ -3143,14 +3248,14 @@ pub async fn git_checkout(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<GitCheckoutBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_checkout(&id, &body.reference)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 // ── Variants — parallel branch exploration ──────────────────────────────
@@ -4720,6 +4825,16 @@ pub struct FsListQuery {
 pub struct FsDirEntry {
     pub name: String,
     pub path: String,
+    /// The folder is a Git repository (it has a `.git` entry).
+    pub git: bool,
+}
+
+/// Why the listed folder cannot simply be opened as a Workspace, with the
+/// code `POST /api/workspaces` would answer.
+#[derive(Serialize)]
+pub struct FsWorkspaceScope {
+    pub code: &'static str,
+    pub message: String,
 }
 
 #[derive(Serialize)]
@@ -4727,6 +4842,20 @@ pub struct FsListResponse {
     pub path: String,
     pub parent: Option<String>,
     pub dirs: Vec<FsDirEntry>,
+    /// The listed folder itself is a Git repository.
+    pub git: bool,
+    /// Present when opening the listed folder as a Workspace would be
+    /// refused: `workspace_too_broad` (confirmation needed) or
+    /// `workspace_protected` (never).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_scope: Option<FsWorkspaceScope>,
+}
+
+/// Whether `directory` is a Git repository: it has a `.git` directory or a
+/// `.git` file (a worktree or submodule link). Never follows anything else.
+fn is_git_repository(directory: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(directory.join(".git"))
+        .is_ok_and(|metadata| metadata.is_dir() || metadata.is_file())
 }
 
 fn err(status: StatusCode, msg: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
@@ -4734,7 +4863,10 @@ fn err(status: StatusCode, msg: impl Into<String>) -> (StatusCode, Json<ErrorRes
 }
 
 /// List the subdirectories of a path — backs the folder picker. Read-only.
+/// Each folder says whether it is a Git repository, and the listed folder
+/// says whether it could be opened as a Workspace as it is.
 pub async fn fs_list_dirs(
+    State(state): State<AppState>,
     Query(q): Query<FsListQuery>,
 ) -> Result<Json<FsListResponse>, (StatusCode, Json<ErrorResponse>)> {
     let raw = q
@@ -4764,15 +4896,31 @@ pub async fn fs_list_dirs(
             }
             dirs.push(FsDirEntry {
                 name,
+                git: is_git_repository(&p),
                 path: p.to_string_lossy().to_string(),
             });
         }
     }
     dirs.sort_by_key(|a| a.name.to_lowercase());
+    let workspace_scope = match state.read().await.workspace_scope().check(&dir) {
+        Ok(()) => None,
+        Err(axocoatl_session::WorkspaceScopeRefusal::Broad(message)) => Some(FsWorkspaceScope {
+            code: axocoatl_daemon::WORKSPACE_TOO_BROAD_CODE,
+            message,
+        }),
+        Err(axocoatl_session::WorkspaceScopeRefusal::Protected(message)) => {
+            Some(FsWorkspaceScope {
+                code: axocoatl_daemon::WORKSPACE_PROTECTED_CODE,
+                message,
+            })
+        }
+    };
     Ok(Json(FsListResponse {
+        git: is_git_repository(&dir),
         path: dir.to_string_lossy().to_string(),
         parent: dir.parent().map(|p| p.to_string_lossy().to_string()),
         dirs,
+        workspace_scope,
     }))
 }
 
@@ -8122,6 +8270,32 @@ mod tests {
     }
 
     #[test]
+    fn team_refusals_lose_their_internal_layers() {
+        assert_eq!(
+            person_facing_team_message(
+                "Provider setup failed: Session dispatch: Invalid request for ollama: Ollama 0.20.6 is no longer supported"
+            ),
+            "Ollama 0.20.6 is no longer supported"
+        );
+        assert_eq!(
+            person_facing_team_message(
+                "Provider setup failed: Session dispatch: Invalid request for openrouter: the smallest call costs more"
+            ),
+            "The smallest call costs more"
+        );
+        assert_eq!(
+            person_facing_team_message(
+                "Provider setup failed: Provider 'openrouter' not configured"
+            ),
+            "Provider setup failed: Provider 'openrouter' not configured"
+        );
+        assert_eq!(
+            person_facing_team_message("Lead's token limit of 10,000 is too small"),
+            "Lead's token limit of 10,000 is too small"
+        );
+    }
+
+    #[test]
     fn live_checkout_http_handlers_call_the_ready_guard_before_daemon_work() {
         let source = include_str!("routes.rs");
         let handler_source = |handler: &str| {
@@ -8138,6 +8312,7 @@ mod tests {
             "git_diff",
             "git_branches",
             "git_commit",
+            "git_init",
             "git_hunks",
             "git_apply_hunk",
             "git_stage",

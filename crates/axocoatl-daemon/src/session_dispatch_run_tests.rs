@@ -243,8 +243,9 @@ async fn a_session_budget_short_of_a_tool_round_asks_for_the_answer_and_names_it
         .unwrap();
     assert!(!settled.accepted);
     assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
-    let expected = "The Session budget for this Agent is used up: 50 of its 50 tokens remain \
-                    and the next model call needs 100.";
+    let expected = "The Session budget for this Agent is used up: its whole token limit of 50 \
+                    cannot pay for one model call, which reserves 100. Raise its token limit in \
+                    Team and budget.";
     assert_eq!(settled.failure.as_deref(), Some(expected));
     assert_eq!(
         settled.output.content().output.text,

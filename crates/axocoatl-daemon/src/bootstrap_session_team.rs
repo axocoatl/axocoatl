@@ -30,6 +30,8 @@ fn team_error(value: impl std::fmt::Display) -> DaemonError {
 fn limit_error(value: impl std::fmt::Display) -> DaemonError {
     DaemonError::InvalidRequest(value.to_string())
 }
+/// The furthest a budget's expiry may be: a year from now.
+const MAX_BUDGET_EXPIRY_MS: u64 = 366 * 24 * 60 * 60 * 1000;
 fn digest(value: &impl Serialize) -> Result<String, DaemonError> {
     Ok(format!(
         "{:x}",
@@ -344,6 +346,64 @@ pub struct SessionTeamView {
     /// with `axocoatl_session::run_outcome::same_model_warning`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<axocoatl_session::run_outcome::RunWarning>,
+    /// Limits the app pre-fills for an Agent or a helper the person has not
+    /// budgeted yet. Absent for a legacy Session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_budget: Option<SuggestedBudget>,
+}
+
+/// The limits the app pre-fills for an Agent or a helper that has none yet:
+/// the built-in `fix` loadout's budgets (its Agents' for an Agent, its
+/// reviewer's for a helper), with no cost for a model of a provider in
+/// `free_providers` (a local Ollama model costs nothing), and an expiry 24
+/// hours from when the team was read. A suggestion: nothing is approved
+/// until the person applies the team, and Preview refuses limits that
+/// cannot pay for a turn.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct SuggestedBudget {
+    /// The loadout the limits come from.
+    pub from: &'static str,
+    pub agent: GrantLimits,
+    pub helper: GrantLimits,
+    /// Providers whose models cost nothing: their cost limit is 0.
+    pub free_providers: Vec<&'static str>,
+    pub expires_at_ms: u64,
+}
+
+/// How long a suggested budget lasts.
+const SUGGESTED_BUDGET_HOURS: u64 = 24;
+
+/// [`SuggestedBudget`] from the built-in `fix` loadout, read once.
+fn suggested_budget() -> Option<SuggestedBudget> {
+    static FIX: std::sync::OnceLock<Option<(GrantLimits, GrantLimits)>> =
+        std::sync::OnceLock::new();
+    let (agent, helper) = FIX
+        .get_or_init(|| {
+            let fix = axocoatl_config::loadout::builtin_loadouts()
+                .into_iter()
+                .flatten()
+                .find(|loadout| loadout.file.id == "fix")?;
+            let budgets = &fix.file.budgets;
+            let agent = crate::loadout::team_plan::grant_limits(&budgets.agent);
+            let helper = budgets
+                .reviewer
+                .as_ref()
+                .map(crate::loadout::team_plan::grant_limits)
+                .unwrap_or_else(|| agent.clone());
+            Some((agent, helper))
+        })
+        .clone()?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|time| time.as_millis() as u64)
+        .ok()?;
+    Some(SuggestedBudget {
+        from: "fix",
+        agent,
+        helper,
+        free_providers: vec!["ollama"],
+        expires_at_ms: now_ms.saturating_add(SUGGESTED_BUDGET_HOURS * 60 * 60 * 1000),
+    })
 }
 /// Whether a tools list names a web tool.
 fn lists_web_tool(tools: &[String]) -> bool {
@@ -860,6 +920,7 @@ impl AxocoatlDaemon {
                 web_templates: vec![],
                 web_slots: vec![],
                 warnings: vec![],
+                suggested_budget: None,
             });
         }
         let suggested_check = session
@@ -964,6 +1025,7 @@ impl AxocoatlDaemon {
                         web_templates: web_templates.clone(),
                         web_slots,
                         warnings,
+                        suggested_budget: suggested_budget(),
                     });
                 }
                 let selected: Vec<String> = match &session.mode {
@@ -1035,6 +1097,7 @@ impl AxocoatlDaemon {
                     web_templates,
                     web_slots,
                     warnings: vec![],
+                    suggested_budget: suggested_budget(),
                 })
             },
         )
@@ -1526,16 +1589,20 @@ impl AxocoatlDaemon {
                     "Enter explicit activation, invocation, token and cost limits for every Agent",
                 )
             })?;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|time| time.as_millis() as u64)
+                .unwrap_or(u64::MAX);
             let expires_at_ms = proposed
                 .expires_at_ms
-                .filter(|value| {
-                    *value
-                        > std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|time| time.as_millis() as u64)
-                            .unwrap_or(u64::MAX)
-                })
+                .filter(|value| *value > now_ms)
                 .ok_or_else(|| limit_error("Enter an explicit budget expiry for every Agent"))?;
+            if expires_at_ms > now_ms.saturating_add(MAX_BUDGET_EXPIRY_MS) {
+                return Err(limit_error(format!(
+                    "{}'s budget expiry is more than a year away; choose an expiry within a year",
+                    proposed.name
+                )));
+            }
             if limits.activations == 0 || limits.invocations == 0 || limits.tokens == 0 {
                 return Err(limit_error(
                     "Activation, invocation and token limits must be positive",
@@ -1649,6 +1716,7 @@ impl AxocoatlDaemon {
                 ))
                 .map_err(team_error)?,
             );
+            let floor_config = config.clone();
             let captured = if unchanged {
                 None
             } else {
@@ -1670,6 +1738,36 @@ impl AxocoatlDaemon {
                 .map(|value| value.definition.clone())
                 .or_else(|| prior.map(|slot| slot.definition.clone()))
                 .ok_or_else(|| team_error("Session definition is missing"))?;
+            // Every slot, changed or kept as it was, must afford a turn: one
+            // model call, and with tools the call and the one after it. A
+            // kept definition is not prepared again, so its retained profile
+            // is checked against the new limits here.
+            let too_small = self.session_dispatch_lifecycles.with_session_team_stores(
+                &token,
+                |canonical, content, _| {
+                    // A definition with no native profile (an external
+                    // program's) has no call floor to check here.
+                    let Ok(Some((_, profile))) =
+                        content.resolve_provider_profile(canonical, &definition.snapshot)
+                    else {
+                        return Ok(None);
+                    };
+                    Ok(crate::session_dispatch::retained_call_reservation(
+                        profile.configuration(),
+                        &floor_config,
+                    )
+                    .and_then(|reservation| {
+                        reservation.refusal(
+                            &proposed.name,
+                            limits.tokens,
+                            !floor_config.tools.is_empty(),
+                        )
+                    }))
+                },
+            )?;
+            if let Some(refusal) = too_small {
+                return Err(limit_error(refusal));
+            }
             let (budget, grant) = self.session_dispatch_lifecycles.with_session_team_stores(
                 &token,
                 |_, content, _| {

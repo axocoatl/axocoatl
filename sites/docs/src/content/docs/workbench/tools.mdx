@@ -19,9 +19,10 @@ under E2B, Files reads and writes the remote clone. A non-Ready Session returns
 a lifecycle conflict instead of falling back to host filesystem I/O.
 
 Local Podman also protects Axocoatl's own control-plane directories. If the data
-root or external daemon-lease root sits below the canonical Workspace, that exact
-directory is hidden behind a nested `tmpfs` for Files, Terminal, Git, and Agent
-tools. A Workspace equal to or below a protected root cannot become Ready. This
+root, external daemon-lease root, control-socket directory or per-user configuration
+directory sits below the canonical Workspace, that exact directory is hidden behind a
+nested `tmpfs` for Files, Terminal, Git, and Agent tools. A Workspace equal to or
+below a protected root cannot be opened or become Ready. This
 does not hide other sensitive files intentionally stored in the Workspace.
 
 For a root Node project on local Podman, a Session-owned Linux volume is mounted

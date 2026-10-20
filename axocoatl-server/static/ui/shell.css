@@ -252,6 +252,9 @@
   /* The one session surface fills the workbench. Inner modules own their
      scrolling so the permanent chat/workspace spine never leaves `/`. */
   .session-surface { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; position: relative; }
+  /* The first-run checklist belongs to the home surface, not an open Session. */
+  #session-surface.session-open > ax-readiness { display: none; }
+  #session-surface > ax-readiness { flex: 0 0 auto; max-height: 45vh; overflow-y: auto; }
   .mobile-home-rail-toggle { display: none; }
 
   /* Buttons & inputs */
@@ -375,6 +378,8 @@
     .mobile-home-rail-toggle:hover { background: var(--bg-3); }
     .mobile-home-rail-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
     #session-surface.session-open > .mobile-home-rail-toggle { display: none; }
+    /* Clear the floating Sessions toggle above the first-run checklist. */
+    #session-surface > ax-readiness { margin-top: 48px; }
     #session-cockpit .cockpit-bar { min-height: 82px; padding: 6px 8px; gap: 6px; }
     #session-cockpit .cockpit-bar #cockpit-back,
     #session-cockpit .cockpit-bar #cockpit-dir,

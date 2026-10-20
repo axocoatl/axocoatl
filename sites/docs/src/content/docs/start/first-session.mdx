@@ -31,9 +31,20 @@ metadata, but the repository remains the authority.
 1. Start the runtime with `axocoatl dev` from any directory and open the
    `Sign in:` link it prints. It uses the current user's configuration and data
    root. To print the link again, run `axocoatl url`; the browser keeps the
-   sign-in for 30 days.
+   sign-in for 30 days. The first screen checks what a Session needs, as
+   `axocoatl doctor` does: while something fails, a checklist names each step
+   left with its exact command (Podman's machine, the Ollama version and cloud
+   mode, a model to pull), and the status pill in the rail reads **N setup steps
+   left** until it reads **ready**; select it to see the checklist again. Without
+   Podman or its machine, **Create session** stays blocked with the fix. `axocoatl
+   dev` also logs a warning at start when native Sessions will refuse the
+   configured Ollama server.
 2. From the Workspace switcher, choose **Open workspace…** and navigate to the
-   repository.
+   repository. Folders that are Git repositories carry a **git** mark. The
+   dialog starts in your home folder, but Axocoatl does not open the home
+   folder, a folder above it, or a folder that contains Axocoatl's own
+   directories as a Workspace unless you type that folder's name to confirm;
+   Axocoatl's own directories never open.
 3. Confirm or edit the Workspace name. The canonical path remains visible as
    secondary context; renaming the Workspace never renames the folder.
 4. With that Workspace selected, choose **New session** beside **Sessions** and
@@ -50,12 +61,20 @@ metadata, but the repository remains the authority.
    defaults an exact devcontainer command to checked, that policy is visible;
    your checked or unchecked reviewed choice wins.
 8. Wait for the Session environment to report **Ready**.
-9. For a native Session, open **Team & budget**, switch to **Edit**, and select
-   the Agent. Enter its activation, invocation, token, cost, output, and expiry
-   limits. With the default team, Lead's panel also offers Scout and Reviewer as
-   read-only helpers. Lead works alone unless you select **Let this Agent delegate
-   to helpers** and enter their limits, which must fit within Lead's. Preview the
-   configuration, review it, and choose **Apply**.
+9. For a native Session, Send reads **Set budget** until the Session's team and
+   budget are applied; it opens **Team & budget**. Its limits come filled in from
+   the built-in `fix` loadout: 4 activations, 400 provider and tool invocations
+   and 4,000,000 tokens per Agent, $0 of cost for a local Ollama model (a hosted
+   model gets the loadout's $10 cap), and an expiry 24 hours from now. Switch to
+   **Edit** to review or change them, then **Preview** and **Apply**; nothing is
+   approved until you do. With the default team, Lead's panel also offers Scout and
+   Reviewer as read-only helpers. Lead works alone unless you select **Let this Agent
+   delegate to helpers**; their limits come filled in too (3 activations, 120
+   invocations, 1,500,000 tokens each), within Lead's. Preview refuses a token limit
+   a turn cannot use and names the minimum: each model call reserves the model's
+   whole context plus its output, and a turn with tools needs a call and the one
+   after it, for example 73,728 tokens for a 32,768-token context and 4,096 output
+   tokens. An expiry must be within a year.
 10. Send a bounded first request from Conversation.
 
 </Steps>
@@ -101,7 +120,9 @@ hunk review, branch checkout, and commit as deliberate user actions.
 
 ## If creation fails
 
-- Run `axocoatl doctor` and resolve what it reports for Podman.
+- Run `axocoatl doctor` and resolve what it reports for Podman. When local Podman
+  cannot run the Session yet (no Podman machine, for example), **Create session**
+  saves nothing and says what to run; it starts a stopped machine itself.
 - Confirm the selected Agent exists in the active user configuration (or the
   explicit file passed with `--config`).
 - An image outside Axocoatl's curated presets is rejected unless

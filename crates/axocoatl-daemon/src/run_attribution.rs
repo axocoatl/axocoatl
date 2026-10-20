@@ -132,6 +132,21 @@ impl RunAttribution {
         }
     }
 
+    /// The paths Source Control's Last turn marks for these turns, and why
+    /// they are not all known when an activation's captures cannot say what
+    /// it changed (such an activation is never read as having changed
+    /// nothing).
+    pub(crate) fn last_turn(self) -> (Vec<String>, Option<String>) {
+        let unattributed = (!self.unattributable.is_empty()).then(|| {
+            format!(
+                "Axocoatl cannot tell which files part of the last turn changed: {}. Review All \
+                 changes.",
+                self.unattributable.join("; ")
+            )
+        });
+        (self.paths.into_iter().collect(), unattributed)
+    }
+
     /// Add a turn recorded before repository captures: its file-tool writes
     /// (the "Last turn" attribution of that turn).
     pub fn add_legacy_turn(&mut self, turn_id: &str, touched: Vec<String>) {

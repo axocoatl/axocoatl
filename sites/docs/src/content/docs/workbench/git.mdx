@@ -19,8 +19,11 @@ Control** in the explorer column.
 | **Not staged** | Working-tree changes not in the index |
 
 Last turn filters the repository's current Git status and diff by the path names
-attributed to the latest durable turn. It is useful for narrowing review, but it
-is not a frozen per-turn diff. A later edit to an attributed path can appear in
+attributed to the latest durable turn. For a native turn those paths come from the
+repository captures recorded before and after each Agent activation, the same
+attribution receipts and **Keep as PR** use, and they are read again from the
+Session's history after the daemon restarts. It is useful for narrowing review,
+but it is not a frozen per-turn diff. A later edit to an attributed path can appear in
 the view, and a reverted change no longer appears. If several actors edit the
 same path, Last turn cannot separate their hunks by author.
 
@@ -44,6 +47,36 @@ path outside the authorized repository or touched a remote system.
 The same controls can unstage a file or hunk without changing its working-tree
 content. Branch checkout is available from Source Control; inspect status first
 and do not switch across unresolved work you do not intend to carry.
+
+## Who a commit is by
+
+A commit you make from Source Control is yours. Its author and committer are the
+`user.name` and `user.email` that Git on your computer uses for that repository
+(the repository's own setting, else your global one), the same identity **Keep as
+PR** commits with, and it is dated in your time zone. The line under the commit
+box shows it: **Commits as Your Name &lt;you@example.com&gt; · not signed ·
+repository hooks don't run**.
+
+- With no name or email set, the workbench refuses to commit and says so. Set them
+  in a terminal with `git config --global user.name "Your Name"` and
+  `git config --global user.email you@example.com`.
+- A repository that signs its commits (`commit.gpgSign`) is refused too: the
+  sandboxed Git cannot reach your signing key. Commit from your terminal there.
+- The repository's hooks (`pre-commit`, `commit-msg`) do not run for a commit made
+  here. Run them yourself, or commit from your terminal, when they matter.
+- When Git refuses a commit, the workbench shows Git's own message and nothing is
+  committed. With nothing staged, it says nothing was committed.
+
+Commits Axocoatl makes for itself, such as a Ways baseline and the attempt refs
+under `refs/axo/`, are by `Axocoatl <agent@axocoatl.local>`. Axocoatl never writes
+an identity into your repository's configuration.
+
+## A folder that is not a Git repository
+
+Reading Source Control never turns a folder into a Git repository. In a folder
+that is not one, Source Control says so and offers **Initialize Git here**, which
+runs `git init` and nothing else: nothing is staged or committed, and no identity
+is written. Stage and commit afterwards as usual.
 
 ## Discard carefully
 
@@ -74,8 +107,10 @@ not commit automatically.
 
 ## When Last turn is empty
 
-An empty Last turn can be correct when the last turn made no file changes. If
-you expected edits:
+An empty Last turn can be correct when the last turn made no file changes. When
+Axocoatl cannot tell what part of the last turn changed (an activation's capture
+is missing or too large to compare), Last turn says so instead of reporting no
+changes; review **All**. If you expected edits:
 
 - confirm the turn reached a durable terminal state;
 - switch to **All** to check for older or unattributed working changes;

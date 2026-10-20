@@ -60,6 +60,134 @@ fn validated_name(name: Option<&str>, path: &Path) -> Result<String, WorkspaceEr
     }
 }
 
+/// Why a folder cannot simply be opened as a Workspace.
+///
+/// A Session mounts its Workspace read-write into the sandbox, so the folder
+/// decides what the Session's Agents can read and change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceScopeRefusal {
+    /// The root of the file system, the folder that holds the home folders,
+    /// the home folder, or a folder that contains one of Axocoatl's own
+    /// directories. It can still be opened, but only after the person
+    /// confirms that this is the folder they mean.
+    Broad(String),
+    /// One of Axocoatl's own directories, or a folder inside one. It is never
+    /// a Workspace: no mount inside the sandbox could hide it again.
+    Protected(String),
+}
+
+impl WorkspaceScopeRefusal {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Broad(message) | Self::Protected(message) => message,
+        }
+    }
+}
+
+/// One of Axocoatl's own directories, named for the person.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProtectedRoot {
+    label: &'static str,
+    path: PathBuf,
+}
+
+/// The folders a Workspace must not be: the file system root, the home
+/// folder and the folders above it, and Axocoatl's own directories (its data,
+/// configuration, lease and control-socket directories) together with every
+/// folder inside or above them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceScope {
+    home: Option<PathBuf>,
+    protected: Vec<ProtectedRoot>,
+}
+
+/// The canonical form of `path`, or the path itself when it cannot be
+/// resolved (a missing directory still names the same place lexically).
+fn resolved(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+impl WorkspaceScope {
+    /// A scope for the person whose home folder is `home`.
+    pub fn new(home: Option<&Path>) -> Self {
+        Self {
+            home: home
+                .filter(|home| home.is_absolute())
+                .map(resolved)
+                .filter(|home| home.parent().is_some()),
+            protected: Vec::new(),
+        }
+    }
+
+    /// Also protect `path`, one of Axocoatl's own directories, which the
+    /// person knows as `label` (for example "data directory").
+    pub fn protect(mut self, label: &'static str, path: &Path) -> Self {
+        let path = resolved(path);
+        if path.is_absolute() && !self.protected.iter().any(|root| root.path == path) {
+            self.protected.push(ProtectedRoot { label, path });
+        }
+        self
+    }
+
+    /// Whether `path` may be opened as a Workspace as it is. `path` should be
+    /// canonical; it is resolved again here so an alias cannot slip past.
+    pub fn check(&self, path: &Path) -> Result<(), WorkspaceScopeRefusal> {
+        let path = resolved(path);
+        let shown = path.display();
+        for root in &self.protected {
+            if path == root.path || path.starts_with(&root.path) {
+                return Err(WorkspaceScopeRefusal::Protected(format!(
+                    "{shown} is inside Axocoatl's {} ({}). Axocoatl never opens its own state as \
+                     a Workspace; open a project folder instead.",
+                    root.label,
+                    root.path.display()
+                )));
+            }
+        }
+        if path.parent().is_none() {
+            return Err(WorkspaceScopeRefusal::Broad(format!(
+                "{shown} is the root of the file system. A Session there could read and change \
+                 every file your account can. Open a project folder instead."
+            )));
+        }
+        if let Some(home) = &self.home {
+            if &path == home {
+                return Err(WorkspaceScopeRefusal::Broad(format!(
+                    "{shown} is your home folder. A Session there could read and change \
+                     everything in it, including ~/.ssh, cloud credentials and shell startup \
+                     files. Open a project folder instead."
+                )));
+            }
+            if home.parent() == Some(path.as_path()) {
+                return Err(WorkspaceScopeRefusal::Broad(format!(
+                    "{shown} holds the home folders of this computer's users, yours included. \
+                     Open a project folder instead."
+                )));
+            }
+            if home.starts_with(&path) {
+                return Err(WorkspaceScopeRefusal::Broad(format!(
+                    "{shown} contains your home folder ({}). Open a project folder instead.",
+                    home.display()
+                )));
+            }
+        }
+        if let Some(root) = self
+            .protected
+            .iter()
+            .find(|root| root.path.starts_with(&path))
+        {
+            return Err(WorkspaceScopeRefusal::Broad(format!(
+                "{shown} contains Axocoatl's {} ({}). Sessions hide that directory from their \
+                 Agents, but everything else in {shown} is theirs to read and change. Open a \
+                 project folder instead.",
+                root.label,
+                root.path.display()
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// What [`WorkspaceStore::register_reporting_move`] registered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredWorkspace {
@@ -464,6 +592,26 @@ impl WorkspaceStore {
         Ok(snapshot)
     }
 
+    /// Forget Workspace `id`: its record is deleted and its folder is no
+    /// longer a Workspace. The folder itself is never touched. The caller
+    /// decides whether the Workspace's Sessions allow this.
+    pub fn remove(&mut self, id: &str) -> Result<Workspace, WorkspaceError> {
+        let workspace = self
+            .workspaces
+            .get(id)
+            .cloned()
+            .ok_or_else(|| WorkspaceError::NotFound(id.to_string()))?;
+        match self.secure_dir.remove_file(format!("{id}.json")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        self.workspaces.remove(id);
+        self.by_path.retain(|_, owner| owner != id);
+        self.by_identity.retain(|_, owner| owner != id);
+        Ok(workspace)
+    }
+
     pub fn len(&self) -> usize {
         self.workspaces.len()
     }
@@ -785,5 +933,109 @@ mod tests {
         let mut reopened = WorkspaceStore::new(store_dir).unwrap();
         reopened.load_all().unwrap();
         assert!(reopened.is_empty());
+    }
+
+    #[test]
+    fn removing_a_workspace_forgets_it_durably_and_keeps_its_folder() {
+        let data = tempdir().unwrap();
+        let project = tempdir().unwrap();
+        std::fs::write(project.path().join("keep.txt"), "kept").unwrap();
+        let mut store = WorkspaceStore::new(data.path().join("workspaces")).unwrap();
+        let workspace = store.register(project.path(), Some("Mine")).unwrap();
+
+        let removed = store.remove(&workspace.id).unwrap();
+        assert_eq!(removed, workspace);
+        assert!(store.get(&workspace.id).is_none());
+        assert!(store.get_by_path(&workspace.canonical_path).is_none());
+        assert!(matches!(
+            store.remove(&workspace.id),
+            Err(WorkspaceError::NotFound(_))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("keep.txt")).unwrap(),
+            "kept"
+        );
+
+        let mut reopened = WorkspaceStore::new(data.path().join("workspaces")).unwrap();
+        reopened.load_all().unwrap();
+        assert!(reopened.is_empty());
+        // Opening the folder again makes a new Workspace.
+        let again = reopened.register(project.path(), None).unwrap();
+        assert_ne!(again.id, workspace.id);
+    }
+
+    #[test]
+    fn scope_refuses_the_root_the_home_folder_and_the_folders_above_it() {
+        let root = tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let users = root.join("Users");
+        let home = users.join("alex");
+        let project = home.join("src").join("app");
+        std::fs::create_dir_all(&project).unwrap();
+        let scope = WorkspaceScope::new(Some(&home));
+
+        let broad = |path: &Path| match scope.check(path) {
+            Err(WorkspaceScopeRefusal::Broad(message)) => message,
+            other => panic!("{} should be broad, was {other:?}", path.display()),
+        };
+        assert!(broad(Path::new("/")).contains("root of the file system"));
+        assert!(broad(&home).contains("is your home folder"));
+        assert!(broad(&users).contains("home folders of this computer's users"));
+        assert!(broad(&root).contains("contains your home folder"));
+        assert_eq!(scope.check(&project), Ok(()));
+        assert_eq!(scope.check(&home.join("src")), Ok(()));
+    }
+
+    #[test]
+    fn scope_protects_axocoatl_directories_and_refuses_folders_that_contain_them() {
+        let home = tempdir().unwrap();
+        let home = home.path().canonicalize().unwrap();
+        let support = home.join("Library").join("Application Support");
+        let config = support.join("Axocoatl");
+        let data = config.join("data");
+        let ipc = home.join(".axocoatl").join("run");
+        let project = home.join("project");
+        for directory in [&data, &ipc, &project] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let scope = WorkspaceScope::new(Some(&home))
+            .protect("data directory", &data)
+            .protect("configuration directory", &config)
+            .protect("control socket directory", &ipc);
+
+        for inside in [&data, &data.join("sessions"), &config, &ipc] {
+            match scope.check(inside) {
+                Err(WorkspaceScopeRefusal::Protected(message)) => {
+                    assert!(message.contains("never opens its own state"), "{message}")
+                }
+                other => panic!("{} should be protected, was {other:?}", inside.display()),
+            }
+        }
+        match scope.check(&support) {
+            Err(WorkspaceScopeRefusal::Broad(message)) => {
+                assert!(message.contains("contains Axocoatl's"), "{message}");
+            }
+            other => panic!("Application Support should be broad, was {other:?}"),
+        }
+        assert!(matches!(
+            scope.check(&home.join(".axocoatl")),
+            Err(WorkspaceScopeRefusal::Broad(_))
+        ));
+        assert_eq!(scope.check(&project), Ok(()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scope_resolves_links_before_it_decides() {
+        let home = tempdir().unwrap();
+        let home = home.path().canonicalize().unwrap();
+        let elsewhere = tempdir().unwrap();
+        let link = elsewhere.path().join("home-link");
+        std::os::unix::fs::symlink(&home, &link).unwrap();
+        let scope = WorkspaceScope::new(Some(&home));
+        assert!(matches!(
+            scope.check(&link),
+            Err(WorkspaceScopeRefusal::Broad(_))
+        ));
     }
 }

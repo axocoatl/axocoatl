@@ -52,6 +52,11 @@ pub struct GitStatus {
     pub branch: String,
     pub files: Vec<GitFile>,
     pub clean: bool,
+    /// Why the files the last turn changed are not all known, when they are
+    /// not: its `last_turn` marks then name only the paths that could be
+    /// attributed, and an empty Last turn does not mean nothing changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_turn_unattributed: Option<String>,
 }
 
 /// One file's before/after content — fed straight to Monaco's diff editor.
@@ -855,6 +860,7 @@ pub fn parse_base_diff_status(branch: &str, name_status: &str, numstat: &str) ->
         branch: branch.trim().to_string(),
         clean: files.is_empty(),
         files,
+        last_turn_unattributed: None,
     };
     apply_numstat(&mut status, numstat);
     status
@@ -1009,6 +1015,7 @@ pub fn parse_status(stdout: &str) -> GitStatus {
         branch,
         files,
         clean,
+        last_turn_unattributed: None,
     }
 }
 
@@ -1257,6 +1264,7 @@ mod tests {
         let mut st = GitStatus {
             branch: "main".into(),
             clean: false,
+            last_turn_unattributed: None,
             files: vec![
                 GitFile {
                     path: "lib/a.ts".into(),
@@ -1307,6 +1315,7 @@ mod tests {
         let mut st = GitStatus {
             branch: "main".into(),
             clean: false,
+            last_turn_unattributed: None,
             files: vec![
                 GitFile {
                     path: "lib/new.ts".into(),

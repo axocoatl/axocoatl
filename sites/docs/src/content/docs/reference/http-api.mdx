@@ -89,7 +89,7 @@ asset URLs do not redirect.
 | GET | `/brand/{file}` | Canonical brand assets (public with the local token) |
 | GET | `/.axocoatl/preview-picker.js` on a Preview Host | Picker bridge for the dedicated Preview origin; communication is limited to source-and-origin-validated `postMessage` events |
 | GET | `/axo-tap.js` | Compatibility picker asset for the response-sandboxed legacy proxy (public with the local token) |
-| GET | `/health` | Overall status and Agent count (public) |
+| GET | `/health` | Overall status, Agent count and the running Axocoatl's `version` (public) |
 | GET | `/health/ready` | `200` when at least one Agent is spawned, otherwise `503` (public) |
 | GET | `/health/live` | Liveness probe (public) |
 
@@ -98,6 +98,7 @@ asset URLs do not redirect.
 | Method | Path | Request / behavior |
 | --- | --- | --- |
 | GET | `/api/llm-health` | Ollama-only reachability and missing-model summary |
+| GET | `/api/readiness` | What the first Session needs, checked as `axocoatl doctor` checks it: `{ready, version, sessions_blocked, sections: {sandbox, models, writers, daemon}}`, each item `{id, name, status, detail, fix}` with `status` `ok`, `warn` or `fail`. `ready` is true when nothing fails; a stopped Podman machine is `ok` because a Session starts it. `sessions_blocked` says why no Session can be created yet (Podman not installed, or no machine). Nothing on the machine changes |
 | GET | `/api/llm/models?agent=<id>` | Live Ollama list; curated hosted lists; current Agent model is always included |
 | GET | `/api/agents` | Config projection for every Agent; live status is separate |
 | GET | `/api/agents/{agent_id}/status` | Current actor status |
@@ -145,8 +146,8 @@ not permission to choose another activation or team.
 
 | Method | Path | Request / behavior |
 | --- | --- | --- |
-| GET | `/api/sessions/{id}/team` | Current team revision, selected templates, explicit limits, and expiry. `required_checks` lists the applied team's checks; `suggested_check` is the Session's detected check command as an argument array, offered only and never run unless an Apply includes it. `required_review` is the applied team's review setting, when it has one, and `reviewers` lists the templates that may review: read-only Workers. `warnings` lists warnings about the applied team, such as `{"code": "same_model_reviewer", "message": …}` when the required reviewer runs a writer's provider and model |
-| POST | `/api/sessions/{id}/team/preview` | Typed whole-team edit; resolves and reviews future-turn definitions and authority. A slot's `writes` is the whole list of paths that Agent may change: `null` allows any file and `[]` is read-only. Leaving it out keeps the scope of the template or current definition the slot starts from, so omitting it never widens what the Agent may change; the app always sends it. The edit's optional `required_checks` is an array of argument arrays, such as `[["sh", "-c", "npm test"]]`, that the host runs after every turn's required Agents finish; it is refused when no required Agent has `bash`. The optional `check_options` is aligned by index with `required_checks`, one `{name?, timeout_ms?, report?, egress?}` per check or none at all: `timeout_ms` is 1,000 to 1,800,000 (180,000 when omitted), `egress: true` gives the check's process its own egress credential under `network: egress` (an e2e check sets it; other checks have no network there), and `report` is `{format, path}`, with `format` `junit` or `e2e_report_json` and `path` under `/tmp/axocoatl-check-reports/`; a loadout run reads it for its e2e checks and parses it into the run's Outcome, bound to the check's run by the digest it prints (see [The e2e check](/configure/e2e-check/)), and a workbench turn does not read it. The optional `required_review` is `{"template_id", "max_rounds", "limits", "max_output_tokens"}`: a read-only Worker template the host runs after every turn's required Agents and checks, 1 to 3 rounds (2 when omitted), the reviewer's limits for all rounds of one turn, and its output bound per request (the template's when omitted). An edit whose limits cannot pay for what it names (a missing or zero limit, a missing or past expiry, a helper over its lead's limits, review rounds outside 1 to 3, or a check payer, reviewer or lead budget too small for its rounds) is refused with `422` and the reason alone; a stale configuration revision is `409` |
+| GET | `/api/sessions/{id}/team` | Current team revision, selected templates, explicit limits, and expiry. `required_checks` lists the applied team's checks; `suggested_check` is the Session's detected check command as an argument array, offered only and never run unless an Apply includes it. `required_review` is the applied team's review setting, when it has one, and `reviewers` lists the templates that may review: read-only Workers. `warnings` lists warnings about the applied team, such as `{"code": "same_model_reviewer", "message": …}` when the required reviewer runs a writer's provider and model. `suggested_budget` is `{from, agent, helper, free_providers, expires_at_ms}`: the limits the app fills in for an Agent or a helper that has none yet, from the built-in `fix` loadout (`cost_microunits` is 0 for a model of a provider in `free_providers`), with an expiry 24 hours after the read; it approves nothing |
+| POST | `/api/sessions/{id}/team/preview` | Typed whole-team edit; resolves and reviews future-turn definitions and authority. A slot's `writes` is the whole list of paths that Agent may change: `null` allows any file and `[]` is read-only. Leaving it out keeps the scope of the template or current definition the slot starts from, so omitting it never widens what the Agent may change; the app always sends it. The edit's optional `required_checks` is an array of argument arrays, such as `[["sh", "-c", "npm test"]]`, that the host runs after every turn's required Agents finish; it is refused when no required Agent has `bash`. The optional `check_options` is aligned by index with `required_checks`, one `{name?, timeout_ms?, report?, egress?}` per check or none at all: `timeout_ms` is 1,000 to 1,800,000 (180,000 when omitted), `egress: true` gives the check's process its own egress credential under `network: egress` (an e2e check sets it; other checks have no network there), and `report` is `{format, path}`, with `format` `junit` or `e2e_report_json` and `path` under `/tmp/axocoatl-check-reports/`; a loadout run reads it for its e2e checks and parses it into the run's Outcome, bound to the check's run by the digest it prints (see [The e2e check](/configure/e2e-check/)), and a workbench turn does not read it. The optional `required_review` is `{"template_id", "max_rounds", "limits", "max_output_tokens"}`: a read-only Worker template the host runs after every turn's required Agents and checks, 1 to 3 rounds (2 when omitted), the reviewer's limits for all rounds of one turn, and its output bound per request (the template's when omitted). An edit whose limits cannot pay for what it names (a missing or zero limit, a missing or past expiry or one more than a year away, a token limit below what a turn of that Agent reserves (one model call, and with tools a call and the one after it, named in tokens with the model's context and output), a helper over its lead's limits, review rounds outside 1 to 3, or a check payer, reviewer or lead budget too small for its rounds) is refused with `422` and the reason alone; a stale configuration revision is `409`. A refusal from a native provider check carries that check's message alone, without the internal "Provider setup failed: Session dispatch: Invalid request for ollama:" layers |
 | POST | `/api/sessions/{id}/team/apply` | `{edit, review_digest}`; exact reviewed future-turn edit |
 | POST | `/api/sessions/{id}/team/cancel` | Cancel the referenced team draft without changing current authority |
 | POST | `/api/sessions/{id}/turns/{turn_id}/control-commands` | Typed human action with exact command/activation/revision identities; returns the canonical receipt |
@@ -267,13 +268,14 @@ below.
 | --- | --- | --- |
 | GET | `/api/session-teams` | Config-owned Lattice teams available to Session creation; separate from mutable Automations |
 | GET | `/api/workspaces` | Every persisted named Workspace, including one with no Sessions |
-| POST | `/api/workspaces` | Register `{path, name?}`; canonical path is unique and an omitted name preserves an existing custom label |
+| POST | `/api/workspaces` | Register `{path, name?, confirm_broad?}`; canonical path is unique and an omitted name preserves an existing custom label. The file system root, the home folder, the folders above it and a folder that contains one of Axocoatl's own directories are a `409` with `"code": "workspace_too_broad"` unless `confirm_broad` is `true`; a folder at or below Axocoatl's data, lease, control-socket or per-user configuration directory is a `409` with `"code": "workspace_protected"` always |
 | GET | `/api/workspaces/{id}` | One Workspace |
 | PATCH | `/api/workspaces/{id}` | Rename with `{name}`; the filesystem path does not change |
+| DELETE | `/api/workspaces/{id}` | Remove the Workspace from the list and return it; its folder is never touched. A Workspace with a Session that is not closed is a `409` with `"code": "workspace_has_open_sessions"`. Its closed Sessions stay listed |
 | GET | `/api/workspaces/{id}/sessions` | Every Session owned by the Workspace, including closed records |
 | POST | `/api/workspaces/{id}/sessions` | Create from `{name, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}` under the Workspace's fixed path. While a Session's turn holds the Workspace, answers `409` at once with `"code": "workspace_busy"`, naming that Session, its run and its turn, and creates nothing (see [A busy Workspace](#a-busy-workspace)) |
 | GET | `/api/sessions` | Every persisted Session, including closed records |
-| POST | `/api/sessions` | Compatibility create from `{name, working_dir, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}`; finds or creates the matching Workspace. A busy Workspace is a `409` with `"code": "workspace_busy"` at once, as above; any other refusal is a `400` |
+| POST | `/api/sessions` | Compatibility create from `{name, working_dir, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}`; finds or creates the matching Workspace. A busy Workspace is a `409` with `"code": "workspace_busy"` at once, as above; a folder never opened as a Workspace that `POST /api/workspaces` would refuse is the same `409` with `workspace_too_broad` or `workspace_protected`; any other refusal is a `400` |
 | GET | `/api/sessions/{id}` | One persisted Session, or `404`; a Session a [loadout run](#loadouts-and-runs) created carries `loadout` |
 | PATCH | `/api/sessions/{id}` | Rename with `{name}` |
 | DELETE | `/api/sessions/{id}?force=false` | Close: stops the Session's containers and removes the Podman volumes its runtime fills again on start (`axo-egr-`, `axo-egi-`, `axo-svc-`, `axo-ca-`); the Node dependency volume stays for Reopen. `force=true` deletes the Session record and that volume too. While another Session's turn or any other operation holds the Workspace (another Session's file or Git change, Ways, creation or run admission), both answer `409` at once with `{"error": "…", "code": "workspace_busy"}`, naming that Session and turn or that operation, and change nothing. They wait only for this Session's own work, which they stop: its turn, until its command reaches a safe point (at most 30 seconds), and its running Ways or checks, which they interrupt (at most 15 seconds). A second Close or Delete of the Session while one is in progress is the same `409` at once. Another conflict is a `409` without `code` |
@@ -861,7 +863,9 @@ cookie; use it with a header credential.
 
 | Method | Path | Request / behavior |
 | --- | --- | --- |
-| GET | `/api/sessions/{id}/git/status` | Branch and staged/unstaged file state, including Last turn flags |
+| GET | `/api/sessions/{id}/git/status` | Branch and staged/unstaged file state, including Last turn flags. In a folder that is not a Git repository, this and every other Git route is a `409` with `"code": "not_a_repository"`; none of them initializes one |
+| POST | `/api/sessions/{id}/git/init` | Run `git init` in the Session's folder at the person's request; nothing is staged, committed or configured. Returns the status |
+| GET | `/api/sessions/{id}/git/identity` | `{name, email, signing, problem}`: who a commit from Source Control is by, as host Git reads it for the folder, and why a commit would be refused |
 | GET | `/api/sessions/{id}/git/diff?path=…` | One path's working diff |
 | GET | `/api/sessions/{id}/git/branches` | Current and available branches |
 | GET | `/api/sessions/{id}/git/hunks?path=…&staged=false` | Parsed staged or unstaged hunks |
@@ -871,7 +875,7 @@ cookie; use it with a header credential.
 | POST | `/api/sessions/{id}/git/hunk/discard` | `{path, index}`; destructive unstaged hunk discard |
 | POST | `/api/sessions/{id}/git/discard` | `{path?}`; omitted path discards all unstaged changes |
 | POST | `/api/sessions/{id}/git/checkout` | `{"ref":"branch-or-ref"}` |
-| POST | `/api/sessions/{id}/git/commit` | `{message?, stage_all?}`; default commits existing index |
+| POST | `/api/sessions/{id}/git/commit` | `{message?, stage_all?}`; default commits existing index. The commit is by the person's host Git identity; with none set, or in a repository that signs its commits, it is a `422` and nothing is committed. Nothing staged is a `422`; a Git failure is a `400` with Git's message |
 | PUT | `/api/sessions/{id}/check` | `{check_command}`; null/empty clears it |
 
 Discard and checkout can destroy or obscure working changes. API clients must
@@ -982,7 +986,7 @@ Workspace tree.
 
 | Method | Path | Request / behavior |
 | --- | --- | --- |
-| GET | `/api/fs/list?path=…&hidden=false` | List child directories for the Session folder picker |
+| GET | `/api/fs/list?path=…&hidden=false` | List child directories for the Workspace folder picker: `{path, parent, git, dirs: [{name, path, git}], workspace_scope?}`; `git` marks a Git repository and `workspace_scope` (`{code, message}`) says why `POST /api/workspaces` would refuse the listed folder |
 | GET | `/api/fs/project?path=…` | Probe devcontainer metadata and ancestor `AXOCOATL.md` files |
 | GET | `/.well-known/agent.json` | A2A discovery card |
 | POST | `/a2a/tasks` | Inbound A2A task dispatch to local `receiver_id` |

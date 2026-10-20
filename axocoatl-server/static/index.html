@@ -106,6 +106,7 @@
   import '/ui/source-control.js';
   import '/ui/mcp-approval.js';
   import '/ui/session-home.js';
+  import '/ui/readiness.js';
   import '/ui/session-context.js';
   import '/ui/session-team.js';
   import '/ui/session-guidance.js';
@@ -194,6 +195,9 @@
         aria-label="Open Sessions" aria-controls="rail" aria-expanded="false">
         <span aria-hidden="true">☰</span><span>Sessions</span>
       </button>
+      <!-- First-run checklist: what the first Session still needs, with the
+           exact commands. Shown on the home surface while a check fails. -->
+      <ax-readiness id="readiness" inline hidden></ax-readiness>
       <ax-session-home id="session-home"></ax-session-home>
 
       <!-- Cockpit -->
@@ -1066,21 +1070,51 @@ function activeSessionPearlText() {
   return agentCount > 0 ? `${name} · ${agentCount} ${agentCount === 1 ? 'agent' : 'agents'}` : name;
 }
 
+S.readiness = S.readiness || null;  // GET /api/readiness, once read
+
+function readinessPearl() {
+  const open = () => $('#readiness')?.open?.();
+  if (S.daemonHealth === 'error') return { key: 'health', dot: 'err', text: 'daemon unreachable' };
+  if (S.daemonHealth !== 'healthy') return { key: 'health', dot: 'mute', text: 'connecting…' };
+  const report = S.readiness;
+  if (!report) return { key: 'health', dot: 'mute', text: 'checking setup…', clickable: true, onClick: open };
+  const all = ['sandbox', 'models', 'writers', 'daemon'].flatMap(key => report.sections?.[key] || []);
+  const failing = all.filter(item => item.status === 'fail').length;
+  const notes = all.filter(item => item.status === 'warn').length;
+  if (failing) return { key: 'health', dot: 'err', clickable: true, onClick: open,
+    text: `${failing} setup ${failing === 1 ? 'step' : 'steps'} left` };
+  if (notes) return { key: 'health', dot: 'amber', clickable: true, onClick: open,
+    text: `ready · ${notes} ${notes === 1 ? 'note' : 'notes'}` };
+  return { key: 'health', dot: '', clickable: true, onClick: open, text: 'ready' };
+}
+
+// Read readiness, then let the home checklist, the pill and Session
+// creation follow it.
+async function refreshReadiness() {
+  const checklist = $('#readiness');
+  if (!checklist?.refresh) return;
+  await checklist.refresh();
+}
+document.addEventListener('readiness-change', (event) => {
+  const report = event.detail?.report || null;
+  if (!report) return;
+  S.readiness = report;
+  const checklist = $('#readiness');
+  if (checklist && event.target !== checklist) checklist.report = report;
+  if (checklist) checklist.hidden = report.ready;
+  const home = sessionHome();
+  if (home) home.readiness = report;
+  renderStatusPearls();
+});
+
 function renderStatusPearls() {
   const host = $('#status-pearls'); if (!host) return;
   const pearls = [];
 
-  // Daemon health — always present.  Color follows S.daemonHealth.
-  const dotClass = S.daemonHealth === 'healthy' ? '' :
-                   S.daemonHealth === 'starting' ? 'amber' :
-                   S.daemonHealth === 'error' ? 'err' : 'mute';
-  pearls.push({
-    key: 'health',
-    dot: dotClass,
-    text: S.daemonHealth === 'healthy' ? 'daemon healthy' :
-          S.daemonHealth === 'starting' ? 'daemon starting' :
-          S.daemonHealth === 'error' ? 'daemon unreachable' : 'connecting…',
-  });
+  // Readiness — always present. A reachable daemon is not enough: the pill
+  // follows what the first Session needs (GET /api/readiness), and opens the
+  // checklist with the exact commands.
+  pearls.push(readinessPearl());
 
   if (S.liveConnection === 'reconnecting') {
     pearls.push({ key: 'connection', dot: 'amber', text: 'live connection reconnecting…' });
@@ -6231,6 +6265,13 @@ function syncSessionComposerState() {
     send.textContent = 'Send…';
     send.classList.remove('danger');
     send.title = 'This turn needs attention: continue it with your message, or finish it as it is and send your message as a new request';
+  } else if (sessionNeedsBudget()) {
+    // A native Session sends nothing until its team and budget are applied;
+    // the button opens Team and budget instead of failing after a send.
+    send.disabled = false;
+    send.textContent = 'Set budget';
+    send.classList.remove('danger');
+    send.title = 'Review and apply this Session\'s Team and budget before the first request';
   } else {
     send.disabled = false;
     send.textContent = 'Send';
@@ -6250,8 +6291,19 @@ function stopSessionTurn() {
   syncSessionComposerState();
 }
 
+// A native Session whose team and budget were never applied: nothing can be
+// sent until they are.
+function sessionNeedsBudget(session = S.session) {
+  const team = session?.currentTeam;
+  return team?.history_version === 'execution_v2' && team.approved === false;
+}
+
 async function activateSessionComposer() {
   const guidance = $('#session-guidance');
+  if (!S.session.activeTurnId && guidance?.mode !== 'needs_attention' && sessionNeedsBudget()) {
+    void $('#session-team')?.open?.();
+    return;
+  }
   if (S.session.activeTurnId && guidance?.mode === 'running') {
     const text = $('#session-text').value;
     const sessionId = S.session.id;
@@ -10498,39 +10550,10 @@ async function init() {
   refreshTopStats();
   setInterval(refreshStatus, 5000);
   setInterval(refreshTopStats, 8000);
-  checkLlmHealth();
-}
-
-// First-run friendliness: probe configured LLM providers and surface a
-// one-time toast with concrete fix-up commands if anything's missing. The
-// localStorage flag clears on user dismiss + on each version bump so we
-// re-notify if the situation regresses.
-async function checkLlmHealth() {
-  try {
-    const r = await fetch('/api/llm-health');
-    if (!r.ok) return;
-    const d = await r.json();
-    if (!d.ollama || !d.ollama.configured) return;
-    if (d.ollama.reachable && (!d.ollama.missing_models || !d.ollama.missing_models.length)) {
-      try { localStorage.removeItem('axo.llm-health.warned'); } catch {}
-      return;
-    }
-    const key = 'axo.llm-health.warned:' + JSON.stringify({
-      r: d.ollama.reachable, m: d.ollama.missing_models || []
-    });
-    try { if (localStorage.getItem(key)) return; } catch {}
-    if (!d.ollama.reachable) {
-      toast('Ollama is not running',
-            `Start it with  ollama serve  — then pull a model:  ollama pull llama3.2`,
-            'err', 9000);
-    } else if (d.ollama.missing_models.length) {
-      const cmd = d.ollama.missing_models.map(m => 'ollama pull ' + m).join('  &&  ');
-      toast('Missing Ollama model' + (d.ollama.missing_models.length > 1 ? 's' : ''),
-            `Run:  ${cmd}`,
-            'err', 9000);
-    }
-    try { localStorage.setItem(key, '1'); } catch {}
-  } catch { /* network down — nothing useful to say */ }
+  // First-run readiness replaces the old Ollama-only toast: the checklist
+  // names the configured server and models and the exact fix for each.
+  void refreshReadiness();
+  setInterval(refreshReadiness, 120000);
 }
 
 // The component graph above is a deferred ES module. Starting the classic

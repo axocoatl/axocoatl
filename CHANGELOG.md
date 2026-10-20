@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.5.0] - Unreleased
 
+### Workbench first run
+- **The first screen shows readiness.** `GET /api/readiness` runs `axocoatl doctor`'s
+  shared checks (Podman, the Ollama server's version and cloud mode, pulled models, an
+  OpenRouter key, the external writers' sign-ins) in doctor's shape. The rail pill
+  follows it instead of an always-green "daemon healthy", the home surface lists each
+  step left with its commands, and Create session stays blocked while Podman is missing
+  or has no machine. It replaces the Ollama-only toast that suggested `llama3.2`.
+  `axocoatl dev` and `serve` log a warning at start when native Sessions will refuse
+  the configured Ollama server; `/health` names the version.
+- **Team & budget comes pre-filled.** A new Session's Agents (and helpers) start from the
+  built-in `fix` loadout's budget: 4 activations, 400 invocations, 4,000,000 tokens, $0 on
+  a local Ollama model, expiring in 24 hours. Until a team is applied, Send reads **Set
+  budget** and opens Team & budget. Preview refuses a token limit a turn cannot use, for
+  a kept slot too, and names the numbers ("Lead reserves 36,864 tokens per model call
+  (32,768 context + 4,096 output) ... at least 73,728"); an expiry must be within a year;
+  Team & budget errors lose their internal "Provider setup failed: Session dispatch:"
+  layers.
+- **Source Control's Last turn works for native turns**, from the repository captures
+  around each activation, and again after a restart; it says when a turn's files cannot
+  be attributed.
+- **Commits from the workbench are the person's.** Source Control commits as the Git
+  identity the host uses for the repository (as Keep as PR does), dated in the host's time
+  zone, refuses without one and in a repository that signs its commits, shows Git's own
+  message when a commit fails, and says nothing was committed when nothing was staged.
+  Reading Git never initializes a repository: a folder that is not one offers
+  **Initialize Git here** (`git init` only), and Ways no longer writes an identity into
+  the repository.
+- **Broad Workspaces are refused.** Open workspace refuses the file system root, the home
+  folder, the folders above it and any folder that contains Axocoatl's own directories
+  (`workspace_too_broad`, 409) until you type the folder's name, and never opens Axocoatl's
+  own directories (`workspace_protected`). The per-user configuration directory is hidden
+  from Sessions like the data root. The picker marks Git repositories, and **Remove from
+  list…** (`DELETE /api/workspaces/{id}`) forgets a Workspace that has no open Sessions,
+  never touching its folder.
+- **A failed Create session leaves nothing behind.** Without a usable Podman, Create
+  session saves no Session; a Session that never started preparing is closed and deleted
+  without Podman, so Ctrl+C exits cleanly; a failed environment change leaves the Session
+  as it was instead of "closing".
+
 ### Changed
 - **Native Sessions run on Ollama 0.40.6 and later 0.40 releases; Ollama 0.20.6 is
   refused.** Native execution accepted only an Ollama reporting exactly 0.20.6, while

@@ -664,6 +664,15 @@ pub(crate) fn grant_exhausted_message(
             group_digits(u64::from(limits.invocations))
         ));
     }
+    if reservation.tokens > limits.tokens {
+        // Nothing was used up: the whole limit cannot pay for one call.
+        return Some(format!(
+            "{BUDGET_USED_UP}its whole token limit of {} cannot pay for one model call, which \
+             reserves {}. Raise its token limit in Team and budget.",
+            group_digits(limits.tokens),
+            group_digits(reservation.tokens)
+        ));
+    }
     if usage.tokens.saturating_add(reservation.tokens) > limits.tokens {
         return Some(format!(
             "{BUDGET_USED_UP}{} of its {} tokens remain and the next model call needs {}.",

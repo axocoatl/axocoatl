@@ -93,7 +93,9 @@ use axocoatl_memory::legacy_conversation::{
     checkpoint_turn_minimum_bytes, SESSION_CHECKPOINT_MESSAGE_CAP,
 };
 use axocoatl_memory::{CheckpointPolicy, CheckpointStore, CheckpointTransactionResolution};
-use axocoatl_session::session_history::{HistoryVisibility, SessionHistory, SessionHistoryCatalog};
+use axocoatl_session::session_history::{
+    HistoryVisibility, SessionHistory, SessionHistoryCatalog, SessionHistoryEntry,
+};
 use axocoatl_session::{
     migrate_sessions_to_workspaces, BeginSessionTurn, CreateSessionAttachmentRef,
     RecordTurnExecution, Session, SessionAttachmentRef, SessionAttachmentStore,
@@ -101,13 +103,16 @@ use axocoatl_session::{
     SessionRuntimeRecoveryRecord, SessionSetupResult, SessionStore, SessionTranscriptMessage,
     SessionTranscriptRole, SessionTurn, SessionTurnContextReference, SessionTurnLifecycle,
     SessionTurnSearchHit, SessionTurnStore, TransitionSessionTurn, TurnContextScope, Workspace,
-    WorkspaceStore,
+    WorkspaceScope, WorkspaceScopeRefusal, WorkspaceStore,
 };
 use axocoatl_token::{ApproximateCounter, TokenCounter};
 use axocoatl_tools::ToolExecutor;
 use ractor::Actor;
 
-use crate::error::DaemonError;
+use crate::error::{
+    DaemonError, NOT_A_REPOSITORY_CODE, WORKSPACE_HAS_OPEN_SESSIONS_CODE, WORKSPACE_PROTECTED_CODE,
+    WORKSPACE_TOO_BROAD_CODE,
+};
 use crate::scheduler::ScheduleTable;
 
 /// Active E2B lease window. Live handles refresh this TTL; auto-pause preserves
@@ -613,18 +618,106 @@ fn append_hardened_git_command(argv: &mut Vec<String>) {
 }
 
 fn session_git_arguments(cwd: &str, args: &[&str]) -> Vec<String> {
+    session_git_arguments_as(cwd, None, args)
+}
+
+/// Session Git argv. With `person`, a commit it makes is the person's (see
+/// [`crate::git_person`]); without, Axocoatl's own identity applies, as it
+/// does to every internal commit.
+fn session_git_arguments_as(
+    cwd: &str,
+    person: Option<&crate::git_person::GitPerson>,
+    args: &[&str],
+) -> Vec<String> {
     let mut argv = hardened_git_environment(true);
+    if let Some(person) = person {
+        argv.extend(crate::git_person::person_environment(person));
+    }
     append_hardened_git_command(&mut argv);
-    argv.extend([
-        "-c".to_string(),
-        "user.email=agent@axocoatl.local".to_string(),
-        "-c".to_string(),
-        "user.name=Axocoatl".to_string(),
-        "-C".to_string(),
-        cwd.to_string(),
-    ]);
+    if person.is_none() {
+        argv.extend([
+            "-c".to_string(),
+            "user.email=agent@axocoatl.local".to_string(),
+            "-c".to_string(),
+            "user.name=Axocoatl".to_string(),
+        ]);
+    }
+    argv.extend(["-C".to_string(), cwd.to_string()]);
     argv.extend(args.iter().map(|arg| (*arg).to_string()));
     argv
+}
+
+/// A Session whose environment was planned once and never began preparing:
+/// a preparation records its runtime before any container exists, and a
+/// later plan has a later generation.
+fn never_prepared_local_session(session: &Session) -> bool {
+    let environment = &session.environment;
+    environment.generation == 1
+        && environment.runtime.is_none()
+        && environment.runtime_creation.is_none()
+        && environment.effective_image.is_none()
+        && environment.prepared_at.is_none()
+        && environment.setup_results.is_empty()
+        && matches!(
+            environment.state,
+            SessionEnvironmentState::Unprepared | SessionEnvironmentState::AwaitingApproval
+        )
+}
+
+/// How many times the Session's Git is probed when Git in the sandbox fails
+/// to read its configuration, and how long it waits between probes.
+const SESSION_GIT_PROBE_ATTEMPTS: usize = 8;
+const SESSION_GIT_PROBE_RETRY: Duration = Duration::from_millis(250);
+
+/// Whether a failed probe is Git in the sandbox failing to read its
+/// configuration files. Host Git replaces `.git/config` by rename (`git
+/// config user.name …` in the folder, which a refused commit asks for), and
+/// the container's view of the shared folder can hold the replaced file for
+/// a moment; the next look reads the new one.
+fn session_git_probe_unsettled(probe: &ExecResult) -> bool {
+    !probe.ok()
+        && probe
+            .stderr
+            .contains("error occurred while reading the configuration files")
+}
+
+/// Run the Session's Git probe, again while it fails only because the
+/// sandbox has not yet seen a file host Git just replaced, within a bound.
+async fn probe_session_git<F, Fut>(mut probe: F) -> Result<ExecResult, DaemonError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<ExecResult, DaemonError>>,
+{
+    let mut result = probe().await?;
+    for _ in 1..SESSION_GIT_PROBE_ATTEMPTS {
+        if !session_git_probe_unsettled(&result) {
+            break;
+        }
+        tokio::time::sleep(SESSION_GIT_PROBE_RETRY).await;
+        result = probe().await?;
+    }
+    Ok(result)
+}
+
+/// Whether a `git rev-parse --is-inside-work-tree` result names a work tree;
+/// otherwise the refusal with the code [`NOT_A_REPOSITORY_CODE`].
+fn session_git_repository(probe: &ExecResult) -> Result<(), DaemonError> {
+    if probe.ok() && probe.stdout.trim() == "true" {
+        return Ok(());
+    }
+    let stderr = probe.stderr.trim();
+    if probe.ok() || stderr.contains("not a git repository") {
+        return Err(DaemonError::WorkspaceRefused {
+            code: NOT_A_REPOSITORY_CODE,
+            message: "This Session's folder is not a Git repository. Choose Initialize Git here \
+                      in Source Control, or run `git init` in the folder yourself."
+                .to_string(),
+        });
+    }
+    Err(DaemonError::Session(format!(
+        "cannot read Git in the Session's folder: {}",
+        stderr.lines().next().unwrap_or("git rev-parse failed")
+    )))
 }
 
 fn passive_primary_git_config_key_allowed(key: &str) -> bool {
@@ -1896,6 +1989,30 @@ fn persisted_successful_write_paths(session: &Session, turn: &SessionTurn) -> Ve
 fn rehydrated_turn_touched_paths(session: &Session, turn: &SessionTurn) -> Vec<String> {
     persisted_turn_touched_paths(turn)
         .unwrap_or_else(|| persisted_successful_write_paths(session, turn))
+}
+
+/// The paths Source Control's Last turn marks, and why they are not all
+/// known when they are not.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct LastTurnFiles {
+    pub(crate) paths: Vec<String>,
+    pub(crate) unattributed: Option<String>,
+}
+
+/// What a native turn changed, from the repository captures recorded
+/// around each of its activations: the same attribution receipts and Keep as
+/// PR use. An activation whose captures cannot establish its changes is
+/// named rather than read as having changed nothing.
+pub(crate) fn native_turn_last_turn_files(
+    turn: &axocoatl_session::execution_content::ExecutionTurnView,
+) -> LastTurnFiles {
+    let mut attribution = crate::run_attribution::RunAttribution::default();
+    attribution.add_execution_turn(turn);
+    let (paths, unattributed) = attribution.last_turn();
+    LastTurnFiles {
+        paths,
+        unattributed,
+    }
 }
 
 fn session_write_paths(session: &Session, steps: &[crate::trajectory::Action]) -> Vec<String> {
@@ -3706,6 +3823,12 @@ pub struct AxocoatlDaemon {
     /// The configuration file this daemon loaded, canonical, once the CLI
     /// has said which one it was.
     config_path: StdMutex<Option<std::path::PathBuf>>,
+    /// The per-user configuration directory, canonical, when the CLI loaded
+    /// the per-user configuration file in it. It is one of Axocoatl's own
+    /// directories: never a Workspace, and hidden from a Session whose
+    /// Workspace contains it. A project's own configuration file, loaded by
+    /// explicit path, leaves this empty and keeps the warning instead.
+    user_config_dir: StdMutex<Option<std::path::PathBuf>>,
     /// `web_search` and `web_fetch`, and the managed SearXNG behind search.
     web_tools: Arc<crate::session_dispatch_web::WebTools>,
     /// The browser tools' runtime, present when `browser:` is configured.
@@ -3733,7 +3856,7 @@ pub struct AxocoatlDaemon {
     /// frames: "what did the agent just change" has to survive a reload, and a
     /// fact that only exists while a tab is open is not one a reviewer can rely
     /// on. Replaced wholesale each turn — it answers *last*, not *ever*.
-    session_last_turn: Arc<StdMutex<HashMap<String, Vec<String>>>>,
+    session_last_turn: Arc<StdMutex<HashMap<String, LastTurnFiles>>>,
     /// Ring buffer of the most recent event-feed events (capped at 200).
     pub event_log: Arc<StdMutex<VecDeque<FeedEvent>>>,
     /// The observability stream bus — flattened events + live agent tokens.
@@ -5566,6 +5689,7 @@ impl AxocoatlDaemon {
             egress_points,
             loadout_runs: Arc::new(loadout_runs::LoadoutRuns::open(&secure_data_dir_for_runs)),
             config_path: StdMutex::new(None),
+            user_config_dir: StdMutex::new(None),
             session_network_evidence: Arc::new(
                 crate::session_network_evidence::NetworkEvidenceIndex::default(),
             ),
@@ -6369,6 +6493,117 @@ impl AxocoatlDaemon {
         self.register_workspace(path, name).await
     }
 
+    /// Open a folder as a Workspace at a person's request (Open workspace).
+    /// A folder too broad to be a Workspace (the file system root, the home
+    /// folder and the folders above it, a folder that contains one of
+    /// Axocoatl's own directories) is refused with the code
+    /// [`WORKSPACE_TOO_BROAD_CODE`] unless the person confirmed it
+    /// (`confirm_broad`); one of Axocoatl's own directories, or a folder
+    /// inside one, is refused with [`WORKSPACE_PROTECTED_CODE`] always.
+    pub async fn open_workspace(
+        &self,
+        path: &str,
+        name: Option<&str>,
+        confirm_broad: bool,
+    ) -> Result<Workspace, DaemonError> {
+        self.check_workspace_scope(path, confirm_broad)?;
+        self.register_workspace(path, name).await
+    }
+
+    /// Refuse `path` as a Workspace when [`Self::workspace_scope`] does; a
+    /// broad folder passes once the person confirmed it. A path that does
+    /// not resolve is left to registration, which names it.
+    fn check_workspace_scope(&self, path: &str, confirm_broad: bool) -> Result<(), DaemonError> {
+        let Ok(canonical) = std::fs::canonicalize(path) else {
+            return Ok(());
+        };
+        match self.workspace_scope().check(&canonical) {
+            Ok(()) => Ok(()),
+            Err(WorkspaceScopeRefusal::Broad(_)) if confirm_broad => {
+                tracing::warn!(
+                    path = %canonical.display(),
+                    "a broad folder was opened as a Workspace after the person confirmed it"
+                );
+                Ok(())
+            }
+            Err(WorkspaceScopeRefusal::Broad(message)) => Err(DaemonError::WorkspaceRefused {
+                code: WORKSPACE_TOO_BROAD_CODE,
+                message,
+            }),
+            Err(WorkspaceScopeRefusal::Protected(message)) => Err(DaemonError::WorkspaceRefused {
+                code: WORKSPACE_PROTECTED_CODE,
+                message,
+            }),
+        }
+    }
+
+    /// Remove Workspace `id` from the list. Its folder is never touched. A
+    /// Workspace with a Session that is not closed is refused with the code
+    /// [`WORKSPACE_HAS_OPEN_SESSIONS_CODE`]. Its closed Sessions stay
+    /// reviewable among all Sessions; on a 1.0-format data root, whose
+    /// startup would make the Workspace again for them, they refuse too.
+    pub async fn remove_workspace(&self, id: &str) -> Result<Workspace, DaemonError> {
+        if self.get_workspace(id).await.is_none() {
+            return Err(DaemonError::NotFound(format!("workspace '{id}' not found")));
+        }
+        let _operation = self
+            .take_lifecycle_workspace_operation(
+                id,
+                workspace_operation::WorkspaceRequest {
+                    doing: "a Workspace being removed from the list".into(),
+                    refused: "The Workspace was not removed".into(),
+                },
+            )
+            .await?;
+        let sessions = self.session_store.lock().await.list_for_workspace(id);
+        let open = sessions
+            .iter()
+            .filter(|session| session.status != axocoatl_session::SessionStatus::Closed)
+            .count();
+        let legacy = matches!(
+            &self._data_dir_lease.ownership,
+            axocoatl_session::execution_ownership::DataRootFormatOwnership::Legacy(_)
+        );
+        if open > 0 {
+            return Err(DaemonError::WorkspaceRefused {
+                code: WORKSPACE_HAS_OPEN_SESSIONS_CODE,
+                message: format!(
+                    "This Workspace has {open} open {}. Close {} first; removing a Workspace \
+                     never deletes its folder.",
+                    if open == 1 { "Session" } else { "Sessions" },
+                    if open == 1 { "it" } else { "them" },
+                ),
+            });
+        }
+        if legacy && !sessions.is_empty() {
+            return Err(DaemonError::WorkspaceRefused {
+                code: WORKSPACE_HAS_OPEN_SESSIONS_CODE,
+                message: format!(
+                    "This Workspace has {} closed {} in a 1.0-format data directory, which \
+                     would list the Workspace again at the next start. Delete {} first, or run \
+                     `axocoatl session upgrade`.",
+                    sessions.len(),
+                    if sessions.len() == 1 {
+                        "Session"
+                    } else {
+                        "Sessions"
+                    },
+                    if sessions.len() == 1 { "it" } else { "them" },
+                ),
+            });
+        }
+        if let Some((owner, set_id)) = self.unresolved_attempt_owner_for_workspace_id(id).await? {
+            return Err(DaemonError::AttemptConflict(format!(
+                "attempt set '{set_id}' in session '{owner}' owns this Workspace; keep or discard it before removing the Workspace"
+            )));
+        }
+        self.workspace_store
+            .lock()
+            .await
+            .remove(id)
+            .map_err(|error| DaemonError::Session(error.to_string()))
+    }
+
     /// Register `path` and mark its Workspace active. A Workspace whose
     /// directory was moved to `path` moves with it (see
     /// [`WorkspaceStore::register_reporting_move`]); its Sessions keep the
@@ -6500,6 +6735,19 @@ impl AxocoatlDaemon {
         setup_reviewed: bool,
     ) -> Result<Session, DaemonError> {
         validate_session_mode(&self.config, &mode)?;
+        // This path names its folder directly. A folder already opened as a
+        // Workspace was accepted then, after confirmation when it is broad;
+        // any other broad folder must be opened with Open workspace… first.
+        let registered = match std::fs::canonicalize(working_dir) {
+            Ok(canonical) => self
+                .workspace_store
+                .lock()
+                .await
+                .get_by_path(&canonical)
+                .is_some(),
+            Err(_) => false,
+        };
+        self.check_workspace_scope(working_dir, registered)?;
         let workspace = self.register_workspace(working_dir, None).await?;
         // A lifecycle action never waits for the Workspace: a busy one
         // refuses at once, naming who holds it.
@@ -6520,6 +6768,12 @@ impl AxocoatlDaemon {
                 "attempt set '{set_id}' in session '{owner}' owns this Workspace; keep or discard it before opening another Session"
             )));
         }
+        self.require_local_runtime_for_new_session(
+            setup_command.as_deref(),
+            setup_approved,
+            setup_reviewed,
+        )
+        .await?;
         let session = {
             let mut sessions = self.session_store.lock().await;
             match &self._data_dir_lease.ownership {
@@ -6605,6 +6859,12 @@ impl AxocoatlDaemon {
                 "attempt set '{set_id}' in session '{owner}' owns this Workspace; keep or discard it before opening another Session"
             )));
         }
+        self.require_local_runtime_for_new_session(
+            setup_command.as_deref(),
+            setup_approved,
+            setup_reviewed,
+        )
+        .await?;
         self.workspace_store
             .lock()
             .await
@@ -7221,6 +7481,10 @@ impl AxocoatlDaemon {
             return Err(DaemonError::Session(format!(
                 "cannot verify E2B cleanup for Session '{id}' after daemon restart because its durable remote runtime identity is missing; check E2B for the older sandbox, then use Change runtime before closing or deleting this Session"
             )));
+        } else if session.as_ref().is_some_and(never_prepared_local_session) {
+            // No preparation of this Session ever began, so Podman holds no
+            // container or volume of it, and stopping or deleting it does not
+            // need Podman at all (it may not be installed yet).
         } else if self.config.sandbox.backend != "e2b" {
             // A failed/pre-runtime local Session may have created only the
             // deterministic container/volume before readiness evidence could
@@ -8365,6 +8629,42 @@ impl AxocoatlDaemon {
         self.prepare_session_environment(&session).await
     }
 
+    /// Refuse a new Session that would be prepared at once while local Podman
+    /// cannot run it, before anything is persisted: without this the Session
+    /// was saved, its preparation failed before it could record an error,
+    /// and it stayed behind unprepared and unexplained. A Session that waits
+    /// for a setup decision is created as before; Podman is checked again
+    /// when it is prepared. A stopped Podman machine is started.
+    async fn require_local_runtime_for_new_session(
+        &self,
+        setup_command: Option<&str>,
+        setup_approved: bool,
+        setup_reviewed: bool,
+    ) -> Result<(), DaemonError> {
+        let has_command = setup_command.is_some_and(|command| !command.trim().is_empty());
+        let prepares_now = setup_reviewed && (!has_command || setup_approved);
+        if self.config.sandbox.backend == "e2b" || !prepares_now {
+            return Ok(());
+        }
+        let refused = |reason: String| {
+            DaemonError::Session(format!(
+                "No Session was created: local Podman cannot run it yet. {}",
+                reason
+                    .trim_start_matches("OCI container setup failed: ")
+                    .trim_start_matches("OCI container execution failed: ")
+            ))
+        };
+        axocoatl_isolation::podman::ensure_ready()
+            .await
+            .map_err(|error| refused(error.to_string()))?;
+        if self.local_cleanup_pending.load(Ordering::Acquire) {
+            self.ensure_deferred_local_cleanup()
+                .await
+                .map_err(|error| refused(error.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Preserve the existing config-level postCreate trust decision for
     /// compatibility callers that have not reviewed the Session. Browser/API
     /// callers set `setup_reviewed`, so an explicit unchecked decision wins
@@ -8726,11 +9026,7 @@ impl AxocoatlDaemon {
                     require_resource_limits: sc.require_resource_limits,
                     passive_start: false,
                     runtime_authority: Some(self.local_runtime_authority.clone()),
-                    control_plane_dirs: vec![
-                        self.data_root.path().to_path_buf(),
-                        self._data_dir_lease.external_root().path().to_path_buf(),
-                        self.ipc_root.path().to_path_buf(),
-                    ],
+                    control_plane_dirs: self.control_plane_dir_paths(),
                     control_plane_roots: vec![
                         self.data_root.clone(),
                         self._data_dir_lease.external_root().clone(),
@@ -9986,11 +10282,7 @@ impl AxocoatlDaemon {
             require_resource_limits: config.require_resource_limits,
             passive_start: true,
             runtime_authority: Some(self.local_runtime_authority.clone()),
-            control_plane_dirs: vec![
-                self.data_root.path().to_path_buf(),
-                self._data_dir_lease.external_root().path().to_path_buf(),
-                self.ipc_root.path().to_path_buf(),
-            ],
+            control_plane_dirs: self.control_plane_dir_paths(),
             control_plane_roots: vec![
                 self.data_root.clone(),
                 self._data_dir_lease.external_root().clone(),
@@ -11188,6 +11480,63 @@ impl AxocoatlDaemon {
                 tracing::warn!(path = %path.display(), %error, "resolving the configuration file's path failed");
             }
         }
+    }
+
+    /// [`Self::set_config_path`] for the per-user configuration file (not a
+    /// project's own file loaded by explicit path): its directory is also
+    /// one of Axocoatl's own directories from now on. See
+    /// [`Self::control_plane_dir_paths`] and [`Self::workspace_scope`].
+    pub fn set_user_config_path(&self, path: &std::path::Path) {
+        self.set_config_path(path);
+        let directory = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .and_then(|parent| std::fs::canonicalize(parent).ok());
+        *self
+            .user_config_dir
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = directory;
+    }
+
+    /// The per-user configuration directory, when this daemon loaded the
+    /// per-user configuration file.
+    pub(crate) fn user_config_dir(&self) -> Option<std::path::PathBuf> {
+        self.user_config_dir
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    /// The host directories that hold this daemon's own state. A Session
+    /// sandbox hides each one below its Workspace and refuses a Workspace at
+    /// or below one.
+    pub fn control_plane_dir_paths(&self) -> Vec<std::path::PathBuf> {
+        let mut directories = vec![
+            self.data_root.path().to_path_buf(),
+            self._data_dir_lease.external_root().path().to_path_buf(),
+            self.ipc_root.path().to_path_buf(),
+        ];
+        directories.extend(self.user_config_dir());
+        directories
+    }
+
+    /// Which folders may be opened as a Workspace without the person's
+    /// explicit confirmation (see [`WorkspaceScope`]).
+    pub fn workspace_scope(&self) -> WorkspaceScope {
+        let home = std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(std::path::PathBuf::from);
+        let mut scope = WorkspaceScope::new(home.as_deref())
+            .protect("data directory", self.data_root.path())
+            .protect(
+                "lease directory",
+                self._data_dir_lease.external_root().path(),
+            )
+            .protect("control socket directory", self.ipc_root.path());
+        if let Some(config_dir) = self.user_config_dir() {
+            scope = scope.protect("configuration directory", &config_dir);
+        }
+        scope
     }
 
     /// The warning for a Session whose Workspace contains this daemon's
@@ -12524,18 +12873,68 @@ trap - EXIT HUP INT TERM
             .map_err(|e| DaemonError::Session(e.to_string()))
     }
 
-    /// Ensure the session directory is a git repo — initialize it with a
-    /// baseline commit if it isn't. Idempotent; a no-op for existing repos.
+    /// Refuse when the Session's folder is not a Git repository, with the
+    /// code [`NOT_A_REPOSITORY_CODE`]. Reading Git, and the person's own Git
+    /// actions, never make a folder a repository: only [`Self::git_init`]
+    /// does, at the person's request.
     pub async fn ensure_session_git(&self, session_id: &str) -> Result<(), DaemonError> {
-        let probe = self
-            .session_git(session_id, &["rev-parse", "--is-inside-work-tree"])
-            .await?;
-        if probe.ok() && probe.stdout.trim() == "true" {
-            return Ok(());
-        }
+        let probe = probe_session_git(|| {
+            self.session_git(session_id, &["rev-parse", "--is-inside-work-tree"])
+        })
+        .await?;
+        session_git_repository(&probe)
+    }
+
+    /// Make the Session's folder a Git repository, at the person's request
+    /// (Initialize Git here). Only `git init`: no identity is written into
+    /// the repository and nothing is staged or committed. A folder that is
+    /// already a repository is left as it is.
+    pub async fn git_init(&self, session_id: &str) -> Result<crate::git::GitStatus, DaemonError> {
         let writer = self.session_writer(session_id).await?;
-        self.ensure_session_git_with_writer(session_id, &writer)
+        let probe = probe_session_git(|| {
+            self.session_git_with_writer(
+                &writer,
+                session_id,
+                &["rev-parse", "--is-inside-work-tree"],
+            )
+        })
+        .await?;
+        // Only a folder that is not a repository is initialized; a Git that
+        // cannot be read is reported, never initialized over.
+        if let Err(refusal) = session_git_repository(&probe) {
+            if refusal.code() != Some(NOT_A_REPOSITORY_CODE) {
+                return Err(refusal);
+            }
+            let init = self
+                .session_git_with_writer(&writer, session_id, &["init", "-q"])
+                .await?;
+            if !init.ok() {
+                return Err(DaemonError::Session(format!(
+                    "initializing Git in the Session's folder failed: {}",
+                    init.stderr.trim()
+                )));
+            }
+        }
+        drop(writer);
+        self.git_status(session_id).await
+    }
+
+    /// Who a commit from Source Control would be by, as host Git reads it
+    /// for this Session's folder, and why one would be refused.
+    pub async fn git_commit_identity(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::git_person::CommitIdentity, DaemonError> {
+        let session = self
+            .get_session(session_id)
             .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        crate::git_person::CommitIdentity::read(
+            &crate::git_host::HostTools::default(),
+            &session.working_dir,
+        )
+        .await
+        .map_err(DaemonError::Session)
     }
 
     /// Working-tree status (current branch + changed files).
@@ -12587,7 +12986,8 @@ trap - EXIT HUP INT TERM
             crate::git::apply_numstat(&mut status, &n.stdout);
         }
         let last_turn = self.session_last_turn_files_for_status(session_id).await;
-        crate::git::mark_last_turn(&mut status, &last_turn);
+        crate::git::mark_last_turn(&mut status, &last_turn.paths);
+        status.last_turn_unattributed = last_turn.unattributed;
         Ok(status)
     }
 
@@ -12973,8 +13373,14 @@ trap - EXIT HUP INT TERM
         Ok(crate::git::parse_branches(&cur.stdout, &list.stdout))
     }
 
-    /// Commit. Returns the fresh status. A no-op commit (nothing staged) is not
-    /// an error — the status just comes back unchanged.
+    /// Commit, as the person: the author and committer are the identity
+    /// host Git reads for the Session's folder (see [`crate::git_person`]),
+    /// dated in the host's time zone. Without that identity, or in a
+    /// repository that signs its commits, nothing is committed and the
+    /// refusal says what to do. Returns the fresh status.
+    ///
+    /// Nothing to commit is refused as such (no commit was made), and any
+    /// other failure carries Git's own message; neither reads as success.
     ///
     /// `stage_all` decides which of two different acts this is. `false` commits
     /// the index exactly as the user built it, which is the whole point of
@@ -12988,22 +13394,58 @@ trap - EXIT HUP INT TERM
         message: &str,
         stage_all: bool,
     ) -> Result<crate::git::GitStatus, DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let tools = crate::git_host::HostTools::default();
+        let identity = crate::git_person::CommitIdentity::read(&tools, &session.working_dir)
+            .await
+            .map_err(DaemonError::Session)?;
+        let date = crate::git_person::host_commit_date(&tools, &session.working_dir).await;
+        let person = identity.person(date).map_err(DaemonError::InvalidRequest)?;
         let writer = self.session_writer(session_id).await?;
         self.ensure_session_git_with_writer(session_id, &writer)
             .await?;
         if stage_all {
-            self.session_git_with_writer(&writer, session_id, &["add", "-A"])
+            let staged = self
+                .session_git_with_writer(&writer, session_id, &["add", "-A"])
                 .await?;
+            if !staged.ok() {
+                return Err(DaemonError::Session(format!(
+                    "staging every change failed: {}",
+                    staged.stderr.trim()
+                )));
+            }
         }
         let msg = if message.trim().is_empty() {
             "axocoatl: snapshot"
         } else {
             message
         };
-        let _ = self
-            .session_git_with_writer(&writer, session_id, &["commit", "-q", "-m", msg])
-            .await;
-        self.git_status(session_id).await
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let argv = session_git_arguments_as(
+            &sandbox.root().to_string_lossy(),
+            Some(&person),
+            &["commit", "-q", "-m", msg],
+        );
+        let result = writer
+            .exec(sandbox, argv, None, Duration::from_secs(60))
+            .await?;
+        drop(writer);
+        match crate::git_person::commit_outcome(result.exit_code, &result.stdout, &result.stderr)
+        {
+            crate::git_person::CommitOutcome::Committed => self.git_status(session_id).await,
+            crate::git_person::CommitOutcome::NothingToCommit => {
+                Err(DaemonError::InvalidRequest(
+                    "Nothing was committed: no change is staged. Stage a file or a hunk first, or use Stage all and commit."
+                        .to_string(),
+                ))
+            }
+            crate::git_person::CommitOutcome::Failed(message) => Err(DaemonError::Session(
+                format!("Nothing was committed: {message}"),
+            )),
+        }
     }
 
     /// Discard one hunk of a file's unstaged diff, in the working tree.
@@ -13360,16 +13802,11 @@ trap - EXIT HUP INT TERM
             )
             .await?;
             if !probe.ok() || probe.stdout.trim() != "true" {
+                // Axocoatl's identity comes with each command; none is
+                // written into the person's repository, whose later commits
+                // stay theirs.
                 for (args, action) in [
                     (vec!["init", "-q"], "initializing Git for Ways"),
-                    (
-                        vec!["config", "user.email", "agent@axocoatl.local"],
-                        "setting the Ways Git email",
-                    ),
-                    (
-                        vec!["config", "user.name", "Axocoatl"],
-                        "setting the Ways Git name",
-                    ),
                     (vec!["add", "-A"], "capturing the initial Git baseline"),
                     (
                         vec!["commit", "-q", "-m", "axocoatl: baseline", "--allow-empty"],
@@ -14227,11 +14664,7 @@ trap - 0 1 2 15
             require_resource_limits: config.require_resource_limits,
             passive_start: false,
             runtime_authority: Some(self.local_runtime_authority.clone()),
-            control_plane_dirs: vec![
-                self.data_root.path().to_path_buf(),
-                self._data_dir_lease.external_root().path().to_path_buf(),
-                self.ipc_root.path().to_path_buf(),
-            ],
+            control_plane_dirs: self.control_plane_dir_paths(),
             control_plane_roots: vec![
                 self.data_root.clone(),
                 self._data_dir_lease.external_root().clone(),
@@ -18421,6 +18854,7 @@ trap - 0 1 2 15
                 branch,
                 files: Vec::new(),
                 clean: false,
+                last_turn_unattributed: None,
             },
             review_error: Some(error.into()),
             model: lane.model.clone(),
@@ -19533,6 +19967,7 @@ trap - 0 1 2 15
             branch: "HEAD".to_string(),
             files,
             clean: false,
+            last_turn_unattributed: None,
         }
     }
 
@@ -22021,11 +22456,21 @@ trap - 0 1 2 15
         self.remember_session_last_turn_files(&session.id, touched);
     }
 
-    fn remember_session_last_turn_files(&self, session_id: &str, mut touched: Vec<String>) {
-        touched.sort();
-        touched.dedup();
+    fn remember_session_last_turn_files(&self, session_id: &str, touched: Vec<String>) {
+        self.remember_session_last_turn(
+            session_id,
+            LastTurnFiles {
+                paths: touched,
+                unattributed: None,
+            },
+        );
+    }
+
+    pub(crate) fn remember_session_last_turn(&self, session_id: &str, mut files: LastTurnFiles) {
+        files.paths.sort();
+        files.paths.dedup();
         if let Ok(mut last_turn) = self.session_last_turn.lock() {
-            last_turn.insert(session_id.to_string(), touched);
+            last_turn.insert(session_id.to_string(), files);
         }
     }
 
@@ -22246,29 +22691,42 @@ trap - 0 1 2 15
         self.session_last_turn
             .lock()
             .ok()
-            .and_then(|s| s.get(session_id).cloned())
+            .and_then(|s| s.get(session_id).map(|files| files.paths.clone()))
             .unwrap_or_default()
     }
 
-    async fn session_last_turn_files_for_status(&self, session_id: &str) -> Vec<String> {
+    async fn session_last_turn_files_for_status(&self, session_id: &str) -> LastTurnFiles {
         if let Ok(last_turn) = self.session_last_turn.lock() {
-            if let Some(paths) = last_turn.get(session_id) {
-                return paths.clone();
+            if let Some(files) = last_turn.get(session_id) {
+                return files.clone();
             }
         }
 
-        // Keep is a real Session turn, so its exact affected paths belong in
-        // the durable turn ledger. Rehydrate the process-local filter after a
-        // daemon restart instead of making Last turn mysteriously empty.
-        let session = self.get_session(session_id).await;
-        let turn = self.session_turn_store.lock().await.list(session_id).pop();
-        let touched = session
-            .as_ref()
-            .zip(turn.as_ref())
-            .map(|(session, turn)| rehydrated_turn_touched_paths(session, turn))
-            .unwrap_or_default();
-        self.remember_session_last_turn_files(session_id, touched.clone());
-        touched
+        // The latest visible turn of the Session's history says what it
+        // changed: a native turn by its repository captures, a legacy one
+        // (Keep included) by its recorded paths. Rehydrate the process-local
+        // filter after a daemon restart instead of making Last turn
+        // mysteriously empty.
+        let files = match self.versioned_session_history_snapshot(session_id).await {
+            Ok(history) => match history.entries(HistoryVisibility::Visible).last() {
+                Some(SessionHistoryEntry::ExecutionV2(turn)) => native_turn_last_turn_files(turn),
+                Some(SessionHistoryEntry::LegacyV1(turn)) => LastTurnFiles {
+                    paths: self
+                        .get_session(session_id)
+                        .await
+                        .map(|session| rehydrated_turn_touched_paths(&session, turn))
+                        .unwrap_or_default(),
+                    unattributed: None,
+                },
+                None => LastTurnFiles::default(),
+            },
+            Err(error) => LastTurnFiles {
+                paths: Vec::new(),
+                unattributed: Some(format!("the Session's history could not be read ({error})")),
+            },
+        };
+        self.remember_session_last_turn(session_id, files.clone());
+        files
     }
 
     /// Drive one agent run, forwarding its stream chunks to the bus as frames
@@ -23218,6 +23676,16 @@ trap - 0 1 2 15
     }
 
     /// Number of running agents.
+    /// What `GET /api/readiness` checks, copied so the checks run without
+    /// holding the daemon.
+    pub async fn readiness_inputs(&self) -> crate::readiness::ReadinessInputs {
+        crate::readiness::ReadinessInputs {
+            config: self.config.clone(),
+            data_dir: self.data_root.path().to_path_buf(),
+            agents_running: self.agent_count().await,
+        }
+    }
+
     pub async fn agent_count(&self) -> usize {
         self.agent_registry.count().await
     }
@@ -23234,6 +23702,14 @@ mod session_network_reload_tests;
 #[cfg(all(test, unix))]
 #[path = "bootstrap_session_web_tests.rs"]
 mod session_web_tests;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_session_team_budget_tests.rs"]
+mod session_team_budget_tests;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_session_podman_missing_tests.rs"]
+mod session_podman_missing_tests;
 
 #[cfg(all(test, unix))]
 #[path = "bootstrap_copied_data_root_tests.rs"]
@@ -26013,6 +26489,194 @@ agents:
             "-d".to_string(),
             "refs/axo/attempts/set-a/base".to_string(),
         ]));
+    }
+
+    /// Run one Session Git argv on the host, as the sandbox would.
+    fn run_session_git_argv(argv: Vec<String>) -> ExecResult {
+        let output = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .output()
+            .unwrap();
+        ExecResult {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            exit_code: output.status.code().unwrap_or(-1),
+        }
+    }
+
+    #[test]
+    fn a_commit_the_person_makes_is_theirs_and_internal_commits_stay_axocoatl() {
+        let repo = tempfile::tempdir().unwrap();
+        let dir = repo.path().to_string_lossy().to_string();
+        let git = |args: &[&str]| run_session_git_argv(session_git_arguments(&dir, args));
+        assert!(git(&["init", "-q"]).ok());
+        std::fs::write(repo.path().join("a.txt"), "a\n").unwrap();
+        assert!(git(&["add", "a.txt"]).ok());
+        let person = crate::git_person::GitPerson {
+            name: "Ada Lovelace".into(),
+            email: "ada@example.com".into(),
+            date: Some("1700000000 +0530".into()),
+        };
+        let committed = run_session_git_argv(session_git_arguments_as(
+            &dir,
+            Some(&person),
+            &["commit", "-q", "-m", "first"],
+        ));
+        assert_eq!(
+            crate::git_person::commit_outcome(
+                committed.exit_code,
+                &committed.stdout,
+                &committed.stderr
+            ),
+            crate::git_person::CommitOutcome::Committed,
+            "{committed:?}"
+        );
+        let log = git(&[
+            "log",
+            "-1",
+            "--date=raw",
+            "--format=%an <%ae>|%cn <%ce>|%ad|%cd",
+        ]);
+        assert_eq!(
+            log.stdout.trim(),
+            "Ada Lovelace <ada@example.com>|Ada Lovelace <ada@example.com>|1700000000 +0530|1700000000 +0530"
+        );
+        // Nothing about Axocoatl, or the person, was written into the
+        // repository's own configuration.
+        let config = std::fs::read_to_string(repo.path().join(".git/config")).unwrap();
+        assert!(!config.contains("[user]"), "{config}");
+
+        // An internal commit is Axocoatl's.
+        std::fs::write(repo.path().join("b.txt"), "b\n").unwrap();
+        assert!(git(&["add", "b.txt"]).ok());
+        assert!(git(&["commit", "-q", "-m", "internal"]).ok());
+        let log = git(&["log", "-1", "--format=%an <%ae>"]);
+        assert_eq!(log.stdout.trim(), "Axocoatl <agent@axocoatl.local>");
+
+        // Nothing staged is no commit, and says so.
+        let empty = run_session_git_argv(session_git_arguments_as(
+            &dir,
+            Some(&person),
+            &["commit", "-q", "-m", "empty"],
+        ));
+        assert_eq!(
+            crate::git_person::commit_outcome(empty.exit_code, &empty.stdout, &empty.stderr),
+            crate::git_person::CommitOutcome::NothingToCommit
+        );
+
+        // A held index lock is a failure carrying Git's own message.
+        std::fs::write(repo.path().join("c.txt"), "c\n").unwrap();
+        assert!(git(&["add", "c.txt"]).ok());
+        std::fs::write(repo.path().join(".git/index.lock"), "").unwrap();
+        let locked = run_session_git_argv(session_git_arguments_as(
+            &dir,
+            Some(&person),
+            &["commit", "-q", "-m", "locked"],
+        ));
+        match crate::git_person::commit_outcome(locked.exit_code, &locked.stdout, &locked.stderr) {
+            crate::git_person::CommitOutcome::Failed(message) => {
+                assert!(message.contains("index.lock"), "{message}")
+            }
+            other => panic!("a held index lock must fail the commit: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_folder_that_is_not_a_repository_is_refused_and_left_alone() {
+        let folder = tempfile::tempdir().unwrap();
+        let dir = folder.path().to_string_lossy().to_string();
+        let probe = run_session_git_argv(session_git_arguments(
+            &dir,
+            &["rev-parse", "--is-inside-work-tree"],
+        ));
+        match session_git_repository(&probe) {
+            Err(DaemonError::WorkspaceRefused { code, message }) => {
+                assert_eq!(code, NOT_A_REPOSITORY_CODE);
+                assert!(message.contains("Initialize Git here"), "{message}");
+            }
+            other => panic!("a plain folder must be refused: {other:?}"),
+        }
+        assert!(!folder.path().join(".git").exists());
+
+        assert!(run_session_git_argv(session_git_arguments(&dir, &["init", "-q"])).ok());
+        let probe = run_session_git_argv(session_git_arguments(
+            &dir,
+            &["rev-parse", "--is-inside-work-tree"],
+        ));
+        assert!(session_git_repository(&probe).is_ok());
+        // An unreadable Git is reported as such, not as "not a repository".
+        let broken = ExecResult {
+            stdout: String::new(),
+            stderr: "fatal: detected dubious ownership in repository".into(),
+            exit_code: 128,
+        };
+        assert!(matches!(
+            session_git_repository(&broken),
+            Err(DaemonError::Session(message)) if message.contains("dubious ownership")
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_that_cannot_read_git_configuration_yet_is_looked_at_again() {
+        let unsettled = || ExecResult {
+            stdout: String::new(),
+            stderr: "fatal: unknown error occurred while reading the configuration files".into(),
+            exit_code: 128,
+        };
+        let work_tree = || ExecResult {
+            stdout: "true\n".into(),
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        // Right after host Git rewrote .git/config: the next look reads it.
+        let probes = std::sync::atomic::AtomicUsize::new(0);
+        let probe = probe_session_git(|| {
+            let seen = probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let result = if seen < 2 { unsettled() } else { work_tree() };
+            async move { Ok(result) }
+        })
+        .await
+        .unwrap();
+        assert!(session_git_repository(&probe).is_ok());
+        assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        // A Git that stays unreadable is reported after a bounded wait.
+        probes.store(0, std::sync::atomic::Ordering::SeqCst);
+        let probe = probe_session_git(|| {
+            probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { Ok(unsettled()) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            probes.load(std::sync::atomic::Ordering::SeqCst),
+            SESSION_GIT_PROBE_ATTEMPTS
+        );
+        assert!(matches!(
+            session_git_repository(&probe),
+            Err(DaemonError::Session(message)) if message.contains("reading the configuration files")
+        ));
+
+        // Any other answer is taken at once.
+        for answer in [
+            ExecResult {
+                stdout: String::new(),
+                stderr: "fatal: not a git repository (or any of the parent directories): .git"
+                    .into(),
+                exit_code: 128,
+            },
+            work_tree(),
+        ] {
+            probes.store(0, std::sync::atomic::Ordering::SeqCst);
+            let answer = &answer;
+            probe_session_git(|| {
+                probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move { Ok(answer.clone()) }
+            })
+            .await
+            .unwrap();
+            assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
     }
 
     #[test]

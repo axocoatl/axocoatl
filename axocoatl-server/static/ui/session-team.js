@@ -1,5 +1,5 @@
 import { adopt } from './sheets.js';
-import { offeredHelpers, renderDelegationApproval, validateDelegationApproval } from './session-team-delegation.js';
+import { offeredHelpers, renderDelegationApproval, suggestedLimits, validateDelegationApproval } from './session-team-delegation.js';
 
 const clone = value => structuredClone(value);
 const node = (tag, text, attrs = {}) => { const element = document.createElement(tag); if (text != null) element.textContent = text; for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, value); return element; };
@@ -17,6 +17,10 @@ const sameArgv = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 // before Apply. Three invocations a round cover a reviewer with bash.
 const REVIEW_DEFAULTS = { max_rounds: 2, limits: { activations: 2, invocations: 6, tokens: 65536, cost_microunits: 0 }, max_output_tokens: 4096 };
 const limitsText = limits => `${limits.activations} activations, ${limits.invocations} invocations, ${limits.tokens} tokens, $${limits.cost_microunits / 1e6}`;
+// A budget expires within a year; the daemon refuses a later expiry too.
+const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+const localInputValue = ms => { const date = new Date(ms); return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
+const grouped = value => Number(value).toLocaleString('en-US');
 // The daemon's same-model warning (axocoatl_session::run_outcome::same_model_warning),
 // computed here for a draft the daemon has not seen yet. A slot that may
 // change files (writes not []) is a writer.
@@ -89,15 +93,35 @@ export class AxSessionTeam extends HTMLElement {
       for (const section of this.shadowRoot.querySelectorAll('.checks,.review-setting')) section.hidden = false;
       this.q('.add-template').replaceChildren(...view.templates.map(template => node('option', templateText(template), { value: template.template_id })));
       this.draft = { command_id: `team-edit-${crypto.randomUUID()}`, expected_configuration_revision: view.configuration_revision, slots: clone(view.slots), dependencies: clone(view.dependencies), layout: clone(view.layout), required_checks: clone(view.required_checks || []), ...(view.required_review ? { required_review: clone(view.required_review) } : {}) };
+      // A slot without limits or an expiry starts from the daemon's
+      // suggestion; the person reviews every value before Apply.
+      const suggested = this.draft.slots.filter(slot => this.prefill(slot)).length > 0;
       const lead = this.draft.slots.find(slot => slot.slot_id === view.proposed_delegation?.slot_id), offered = offeredHelpers(view, lead);
       this.undo = []; this.redo = []; this.review = null; this.writesModes = {}; this.selected = this.draft.slots[0]?.slot_id || null;
       const pending = JSON.parse(localStorage.getItem(this.storageKey) || 'null');
       if (pending?.edit && typeof pending.review_digest === 'string') { this.draft = pending.edit; this.review = pending; this.status('An Apply reply was not received. Retry that exact Apply to obtain its saved result.'); this.mode = 'view'; }
       else if (view.approved) this.status(`Saved Session configuration ${view.configuration_revision}. Select Edit to make changes.`);
+      else if (suggested) this.status(`${this.suggestionText()} Select Edit to review or change them, then Preview and Apply before the first request.${offered ? ` ${lead.name} works alone. To let it delegate to the read-only ${offered.count > 1 ? 'helpers' : 'helper'} ${offered.names}, select Let this Agent delegate to helpers; their limits are filled in too.` : ''}`);
       else this.status(`Approve explicit budgets before sending the first request. Select Edit, then choose an Agent to enter its limits.${offered ? ` ${lead.name} works alone. To let it delegate to the read-only ${offered.count > 1 ? 'helpers' : 'helper'} ${offered.names}, select Let this Agent delegate to helpers and enter each helper's limits too.` : ''}`);
       this.renderGraph(); this.setMode(this.mode);
     } catch (error) { if (epoch === this.epoch) this.status(error.message, true); }
     finally { this.busy = false; this.controls(); }
+  }
+  // Fill a slot's missing limits and expiry from the daemon's suggestion.
+  // Returns whether anything was filled.
+  prefill(slot) {
+    const budget = this.view?.suggested_budget;
+    if (!budget || !slot) return false;
+    let filled = false;
+    if (!slot.limits) { slot.limits = suggestedLimits(this.view, slot.provider, 'agent'); filled = Boolean(slot.limits); }
+    if (slot.expires_at_ms == null && Number.isSafeInteger(budget.expires_at_ms)) { slot.expires_at_ms = budget.expires_at_ms; filled = true; }
+    return filled;
+  }
+  suggestionText() {
+    const budget = this.view?.suggested_budget; if (!budget) return '';
+    const agent = budget.agent, free = (budget.free_providers || []).join(', ');
+    const hours = Math.round((budget.expires_at_ms - Date.now()) / 3600000);
+    return `Suggested limits are filled in from the built-in ${budget.from} loadout: ${agent.activations} activations, ${grouped(agent.invocations)} invocations and ${grouped(agent.tokens)} tokens per Agent, $${agent.cost_microunits / 1e6} of cost${free ? ` ($0 for a ${free} model)` : ''}, expiring in ${hours > 0 ? hours : 24} hours.`;
   }
   setMode(mode) { if (this.busy) return; if (mode === 'edit' && localStorage.getItem(this.storageKey)) { this.status('Resolve the pending Apply before editing this team.', true); return; } this.mode = mode; this.q('ax-lattice').setAttribute('mode', mode); for (const button of this.shadowRoot.querySelectorAll('[data-mode]')) button.setAttribute('aria-pressed', String(button.dataset.mode === mode)); for (const item of this.q('ax-lattice').querySelectorAll('ax-node')) { if (mode === 'edit') item.removeAttribute('draggable'); else item.setAttribute('draggable', 'false'); } this.renderPanel(); this.controls(); }
   controls() {
@@ -208,7 +232,7 @@ export class AxSessionTeam extends HTMLElement {
   action(action) {
     if (this.busy || this.mode !== 'edit' || !this.draft) return; const lattice = this.q('ax-lattice');
     if (action === 'undo' || action === 'redo') { const from = action === 'undo' ? this.undo : this.redo, to = action === 'undo' ? this.redo : this.undo; if (!from.length) return; to.push(clone(this.draft)); this.draft = from.pop(); this.review = null; this.q('.review').hidden = true; this.renderGraph(); this.controls(); return; }
-    if (action === 'add') { const template = this.view.templates.find(item => item.template_id === this.q('.add-template').value); if (!template) return; const slot = clone(template); slot.slot_id = `slot-${crypto.randomUUID()}`; const next = clone(this.draft); next.slots.push(slot); this.changed(next); this.selected = slot.slot_id; this.renderGraph(); return; }
+    if (action === 'add') { const template = this.view.templates.find(item => item.template_id === this.q('.add-template').value); if (!template) return; const slot = clone(template); slot.slot_id = `slot-${crypto.randomUUID()}`; this.prefill(slot); const next = clone(this.draft); next.slots.push(slot); this.changed(next); this.selected = slot.slot_id; this.renderGraph(); return; }
     if (action === 'layout') lattice.autoLayout({ direction: 'LR' }); else lattice[action]?.();
     queueMicrotask(() => this.syncGraph());
   }
@@ -227,13 +251,19 @@ export class AxSessionTeam extends HTMLElement {
     for (const [key, label, min] of [['activations', 'Activation limit', 1], ['invocations', 'Provider and tool invocation limit', 1], ['tokens', 'Total token limit', 1], ['cost_microunits', 'Cost limit (USD)', 0]]) {
       const wrapper = node('label', label), input = node('input', null, { type: 'number', min, step: key === 'cost_microunits' ? '0.000001' : '1', required: '' }); input.value = slot.limits?.[key] == null ? '' : key === 'cost_microunits' ? slot.limits[key] / 1e6 : slot.limits[key]; input.disabled = this.mode !== 'edit'; input.oninput = () => { const limits = { ...this.draft.slots.find(item => item.slot_id === slot.slot_id)?.limits }; limits[key] = input.value === '' ? null : key === 'cost_microunits' ? Math.round(Number(input.value) * 1e6) : Number(input.value); update('limits', limits); slot.limits = limits; }; wrapper.append(input); panel.append(wrapper);
     }
-    const expiryLabel = node('label', 'Budget expires (your local time)'), expiry = node('input', null, { type: 'datetime-local', required: '' }); if (slot.expires_at_ms) { const date = new Date(slot.expires_at_ms); expiry.value = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } expiry.disabled = this.mode !== 'edit'; expiry.oninput = () => update('expires_at_ms', expiry.value ? new Date(expiry.value).getTime() : null); expiryLabel.append(expiry); panel.append(expiryLabel);
+    const expiryLabel = node('label', 'Budget expires (your local time)'), expiry = node('input', null, { type: 'datetime-local', required: '', min: localInputValue(Date.now()), max: localInputValue(Date.now() + YEAR_MS) }); if (slot.expires_at_ms) expiry.value = localInputValue(slot.expires_at_ms); expiry.disabled = this.mode !== 'edit'; expiry.oninput = () => { const ms = expiry.value ? new Date(expiry.value).getTime() : null; update('expires_at_ms', Number.isFinite(ms) ? ms : null); }; expiryLabel.append(expiry); panel.append(expiryLabel);
     renderDelegationApproval(this, panel, slot, update);
     for (const [key, text] of [['required', 'Required for the result'], ['reset_history', 'Start a new conversation for this Agent']]) { const label = node('label', text, { class: 'check' }), checkbox = node('input', null, { type: 'checkbox' }); checkbox.checked = slot[key]; checkbox.disabled = this.mode !== 'edit'; checkbox.onchange = () => update(key, checkbox.checked); label.prepend(checkbox); panel.append(label); }
     if (this.mode === 'edit') { const remove = node('button', 'Remove from future team', { type: 'button' }); remove.onclick = () => { const next = clone(this.draft); next.slots = next.slots.filter(item => item.slot_id !== slot.slot_id); next.dependencies = next.dependencies.filter(edge => edge.parent !== slot.slot_id && edge.child !== slot.slot_id); next.layout = next.layout.filter(item => item.slot_id !== slot.slot_id); this.changed(next); this.renderGraph(); }; panel.append(remove); }
   }
   validate() {
-    for (const slot of this.draft.slots) { if (!slot.limits || !['activations','invocations','tokens','cost_microunits'].every(key => Number.isSafeInteger(slot.limits[key]) && slot.limits[key] >= (key === 'cost_microunits' ? 0 : 1)) || !Number.isSafeInteger(slot.expires_at_ms) || slot.expires_at_ms <= Date.now()) { this.selected = slot.slot_id; this.renderPanel(); throw new Error(`Enter all limits and a future expiry for ${slot.name}.`); } if (this.writesModes[slot.slot_id] === 'paths' && !slot.writes?.length) { this.selected = slot.slot_id; this.renderPanel(); throw new Error(`Enter at least one path ${slot.name} may change, or choose Nothing – read-only helper.`); } validateDelegationApproval(slot); }
+    for (const slot of this.draft.slots) {
+      const refuse = message => { this.selected = slot.slot_id; this.renderPanel(); throw new Error(message); };
+      if (!slot.limits || !['activations','invocations','tokens','cost_microunits'].every(key => Number.isSafeInteger(slot.limits[key]) && slot.limits[key] >= (key === 'cost_microunits' ? 0 : 1))) refuse(`Enter all four limits for ${slot.name}: activations, invocations and tokens of at least 1, and a cost of $0 or more.`);
+      if (!Number.isSafeInteger(slot.expires_at_ms)) refuse(`Enter a valid budget expiry for ${slot.name}, in your local time.`);
+      if (slot.expires_at_ms <= Date.now()) refuse(`${slot.name}'s budget expiry has passed; choose a time in the future.`);
+      if (slot.expires_at_ms > Date.now() + YEAR_MS) refuse(`${slot.name}'s budget expiry is more than a year away; choose one within a year.`);
+      if (this.writesModes[slot.slot_id] === 'paths' && !slot.writes?.length) { this.selected = slot.slot_id; this.renderPanel(); throw new Error(`Enter at least one path ${slot.name} may change, or choose Nothing – read-only helper.`); } validateDelegationApproval(slot); }
     const review = this.draft.required_review;
     if (review) {
       this.q('.review-setting').open = true;

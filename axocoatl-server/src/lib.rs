@@ -42,6 +42,7 @@ pub fn build_router(
         .route("/health/ready", get(routes::health_ready))
         .route("/health/live", get(routes::health_live))
         .route("/api/llm-health", get(routes::llm_health))
+        .route("/api/readiness", get(routes::readiness))
         .route("/api/agents", get(routes::list_agents))
         .route(
             "/api/agents/{agent_id}/execute",
@@ -126,7 +127,9 @@ pub fn build_router(
         )
         .route(
             "/api/workspaces/{id}",
-            get(routes::get_workspace).patch(routes::rename_workspace),
+            get(routes::get_workspace)
+                .patch(routes::rename_workspace)
+                .delete(routes::remove_workspace),
         )
         .route(
             "/api/workspaces/{id}/sessions",
@@ -301,6 +304,11 @@ pub fn build_router(
         .route("/api/sessions/{id}/git/diff", get(routes::git_diff))
         .route("/api/sessions/{id}/git/branches", get(routes::git_branches))
         .route("/api/sessions/{id}/git/commit", post(routes::git_commit))
+        .route(
+            "/api/sessions/{id}/git/identity",
+            get(routes::git_commit_identity),
+        )
+        .route("/api/sessions/{id}/git/init", post(routes::git_init))
         .route(
             "/api/sessions/{id}/check",
             axum::routing::put(routes::set_session_check),
@@ -936,6 +944,9 @@ async fn wait_for_shutdown_request(state: AppState) {
 
 #[cfg(all(test, unix))]
 mod missing_workspace_tests;
+
+#[cfg(all(test, unix))]
+mod workspace_scope_tests;
 
 #[cfg(test)]
 mod tests {

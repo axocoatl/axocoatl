@@ -227,7 +227,13 @@ project-local `--config` uses a sibling `data` directory unless
 `AXOCOATL_DATA_DIR` overrides it. If a protected data or lease root is a
 descendant of the canonical Workspace, local Podman places an exact nested
 `tmpfs` over it. A Workspace equal to or below a protected root is rejected
-instead. This boundary prevents repository tools from reaching Axocoatl
+instead, when it is opened and again when its environment starts. The per-user
+configuration directory is protected the same way when the daemon loaded the
+per-user configuration file; a project's own file loaded with `--config` is not,
+and a Session whose Workspace contains it shows a warning. Opening the home
+folder, a folder above it, or a folder that contains a protected root as a
+Workspace needs a typed confirmation, because a Session can read and change
+everything in its Workspace that is not protected. This boundary prevents repository tools from reaching Axocoatl
 control-plane state; it does not protect secrets deliberately placed elsewhere
 in the read-write Workspace.
 

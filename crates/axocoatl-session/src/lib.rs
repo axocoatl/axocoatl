@@ -57,7 +57,10 @@ pub use turn_ledger::{
     SessionTurnError, SessionTurnExecutionEvent, SessionTurnLifecycle, SessionTurnSearchHit,
     SessionTurnStore, TransitionSessionTurn, TurnContextScope, TurnSearchField,
 };
-pub use workspace::{RegisteredWorkspace, Workspace, WorkspaceError, WorkspaceStore};
+pub use workspace::{
+    RegisteredWorkspace, Workspace, WorkspaceError, WorkspaceScope, WorkspaceScopeRefusal,
+    WorkspaceStore,
+};
 
 use axocoatl_core::{SecureDir, SecureEntryType};
 use serde::{Deserialize, Serialize};

@@ -52,12 +52,18 @@ native dependency tree. The workspace is still mounted read-write: an approved
 command may change tracked or untracked project files, and nested package
 directories are not given an additional dependency-volume boundary.
 
-Axocoatl automatically protects its control-plane data root and external daemon-lease
-root from that bind. It canonicalizes the Workspace before mounting it. If either
-protected root is below the Workspace, Podman overlays that exact directory with a
-nested `tmpfs`; if the Workspace is equal to or below a protected root, environment
+Axocoatl automatically protects its control-plane data root, external daemon-lease
+root, control-socket directory and, when it loaded the per-user configuration file,
+that file's directory from that bind. It canonicalizes the Workspace before mounting
+it. If a protected root is below the Workspace, Podman overlays that exact directory
+with a nested `tmpfs`; if the Workspace is equal to or below a protected root, environment
 startup fails with an overlap error. A symlink alias cannot bypass the comparison.
 There is no YAML switch to weaken this boundary.
+
+**Open workspace…** applies the same roots earlier. It refuses a folder equal to or
+below one of them (`workspace_protected`), and it refuses the file system root, your
+home folder, the folders above it, and any folder that contains a protected root
+(`workspace_too_broad`) until you type the folder's name to confirm.
 
 Session startup never invokes a host package manager and never creates a Podman
 VM. If Podman is absent or its VM has not been initialized, Axocoatl fails with

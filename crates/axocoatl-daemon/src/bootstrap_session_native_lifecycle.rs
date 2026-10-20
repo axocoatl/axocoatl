@@ -278,15 +278,36 @@ impl AxocoatlDaemon {
         let _environment_change = self
             .stream_bus
             .begin_session_environment_change(id, current.environment.generation);
-        self.stop_session_actors_checked(id).await?;
-        self.remove_session_sandbox_with_dependencies_checked(id, true)
-            .await?;
-        let configured = self
-            .session_store
-            .lock()
-            .await
-            .configure_environment(id, image, setup_command, setup_approved, setup_reviewed)
-            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        let changed = async {
+            self.stop_session_actors_checked(id).await?;
+            self.remove_session_sandbox_with_dependencies_checked(id, true)
+                .await?;
+            self.session_store
+                .lock()
+                .await
+                .configure_environment(id, image, setup_command, setup_approved, setup_reviewed)
+                .map_err(|error| DaemonError::Session(error.to_string()))
+        }
+        .await;
+        let configured = match changed {
+            Ok(configured) => configured,
+            Err(error) => {
+                // Nothing changed: return the Session to what it was, so it
+                // is not left answering "Session is closing".
+                if let Err(restore) = self
+                    .session_dispatch_lifecycles
+                    .complete_session_cleanup(&cleanup)
+                    .and_then(|()| self.restore_native_lifecycle_history(&current, false))
+                {
+                    tracing::warn!(
+                        session = %id,
+                        error = %restore,
+                        "a failed environment change could not restore the Session's history ownership"
+                    );
+                }
+                return Err(error);
+            }
+        };
         self.close_session_network(id).await;
         self.session_dispatch_lifecycles
             .complete_session_cleanup(&cleanup)?;
