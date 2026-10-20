@@ -248,7 +248,7 @@ fi
     done
     seen="$seen $fixture"
   done <"$script_dir/testdata/run-plan-lines.txt"
-  [ "$(printf '%s\n' $seen | sort)" = "$(gate_fixture_names | sort)" ] \
+  [ "$(printf '%s' "$seen" | tr ' ' '\n' | sed '/^$/d' | sort)" = "$(gate_fixture_names | sort)" ] \
     || { echo "run-plan-lines.txt covers$seen, not every fixture in fixtures.json" >&2; exit 1; }
   printf "· building the run's image localhost/axocoatl-recipe-node:3b267c748259 (node, from …)\nVerdict: pass (exit 0)\n" >"$work/plan-none.log"
   printf 'image: node:20-slim · check: detected · setup: none\n' >"$work/plan-retired.log"
@@ -282,7 +282,8 @@ fi
   ' "$GATE_STEPS" "$seen" || exit 1
   rm -rf -- "$GATE_TMP"
 )
-if [ "$?" = 0 ]; then
+plan_status=$?
+if [ "$plan_status" = 0 ]; then
   pass "run plan line: the image is read from each line CI printed (as a note and under Notes:) and must name the fixture's language; a wrong image, no plan line or the retired 'image:' form fails"
 else
   fail "run plan line"
@@ -346,7 +347,8 @@ NPM
   ' "$GATE_STEPS" || exit 1
   rm -rf -- "$GATE_TMP"
 )
-if [ "$?" = 0 ]; then
+lint_status=$?
+if [ "$lint_status" = 0 ]; then
   pass "copy-paste lint: npm ci in sites/docs when js-yaml is missing (its failure fails the step and the lint), nothing installed when present, the lint runs every time"
 else
   fail "copy-paste lint's YAML parser"
