@@ -144,6 +144,7 @@ contracts = {
     "./scripts/verify-cross-linux-gate.sh build",
     "cargo check --locked --workspace --all-targets --all-features --jobs 1",
     "./scripts/release-gate/newuser-linux.sh",
+    "./scripts/release-gate/newuser-mac-ci.sh",
     "./scripts/release-gate/test-release-gate.sh",
     "node --test scripts/release-gate/*.test.mjs",
   ],

@@ -319,6 +319,57 @@ if [ "$(uname -s)" != Linux ]; then
   fi
 fi
 
+# --- Tier B's Podman stand-in answers each state as Podman does, and only
+# `machine start` changes anything.
+(
+  set -e
+  shim="$script_dir/podman-shim.sh"
+  export PODMAN_SHIM_STATE="$work/shim.state" PODMAN_SHIM_LOG="$work/shim.log"
+  json() { node -e 'const v = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(String(eval(process.argv[1])))' "$1"; }
+  echo no-machine >"$PODMAN_SHIM_STATE"
+  [ "$(sh "$shim" machine list --format json)" = '[]' ]
+  if sh "$shim" info --format json >/dev/null 2>&1; then echo "info answered without a machine" >&2; exit 1; fi
+  echo stopped >"$PODMAN_SHIM_STATE"
+  [ "$(sh "$shim" machine list --format json | json 'v[0].Running')" = false ]
+  if sh "$shim" info --format json >/dev/null 2>&1; then echo "info answered with the machine stopped" >&2; exit 1; fi
+  sh "$shim" machine start >/dev/null
+  [ "$(cat "$PODMAN_SHIM_STATE")" = running ]
+  [ "$(sh "$shim" info --format json | json 'v.host.security.rootless')" = true ]
+  echo rootful >"$PODMAN_SHIM_STATE"
+  [ "$(sh "$shim" info --format json | json 'v.host.security.rootless')" = false ]
+  [ "$(sh "$shim" machine inspect podman-machine-default | json 'v[0].Rootful')" = true ]
+  echo podman6 >"$PODMAN_SHIM_STATE"
+  [ "$(sh "$shim" --version)" = 'podman version 6.1.4' ]
+  [ "$(sh "$shim" machine list --format json | json 'typeof v[0].Memory')" = number ]
+  [ "$(sh "$shim" machine info --format json | json 'v.Host.VMType')" = libkrun ]
+  if sh "$shim" machine init >/dev/null 2>&1; then echo "machine init succeeded" >&2; exit 1; fi
+  grep -qx 'machine init' "$PODMAN_SHIM_LOG"
+)
+shim_status=$?
+if [ "$shim_status" = 0 ]; then
+  pass "podman-shim.sh: no machine, stopped (machine start runs it), rootful, Podman 6; anything else fails and is logged"
+else
+  fail "podman-shim.sh"
+fi
+out=$("$script_dir/newuser-mac-ci.sh" --help 2>&1)
+status=$?
+if [ "$status" = 2 ] && printf '%s' "$out" | grep -q -- '--no-plan'; then
+  pass "newuser-mac-ci.sh --help"
+else
+  fail "newuser-mac-ci.sh --help (exit $status)"
+fi
+case "$(uname -s)" in
+  Darwin) expected='--tarball must be' ;;
+  *) expected='macOS plumbing gate' ;;
+esac
+out=$("$script_dir/newuser-mac-ci.sh" --tarball "$work/nonexistent.tar.gz" 2>&1)
+status=$?
+if [ "$status" = 2 ] && printf '%s' "$out" | grep -q -- "$expected"; then
+  pass "newuser-mac-ci.sh refuses before doing anything ($expected)"
+else
+  fail "newuser-mac-ci.sh refusal (exit $status): $out"
+fi
+
 # --- newuser-linux.sh end to end against a stand-in axocoatl (it follows
 # the shared onboard/doctor/run contract) and the real stub model server.
 # GATE_SIMULATION=1 marks the path failed on purpose: never evidence.
