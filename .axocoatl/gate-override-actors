@@ -1,0 +1,8 @@
+# GitHub logins that may override the new-user gate (docs/RELEASE_GATE.md,
+# "The override"). release.yml accepts the override phrase only from a
+# manual run that one of these logins both started and ran (github.actor and
+# github.triggering_actor), so knowing the phrase is not enough.
+#
+# One login per line; `#` starts a comment. Add or remove a login only in a
+# reviewed commit. Nobody is listed yet, so nobody can override until the
+# founder adds his own login here.

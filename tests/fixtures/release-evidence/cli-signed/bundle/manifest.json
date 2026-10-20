@@ -1,0 +1,24 @@
+{
+  "schema": "axocoatl.release-evidence/1",
+  "version": "1.5.0",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "created_at": "2026-10-20T00:24:30.181Z",
+  "paths": {
+    "A-x86": {
+      "file": "A-x86.json",
+      "pass": true
+    }
+  },
+  "files": [
+    {
+      "path": "A-x86.json",
+      "sha256": "29a7773552c203f0ac8d76661e1b8b01fd85fcf23be1e6884547b21a9bf63e0e",
+      "bytes": 593
+    },
+    {
+      "path": "A-x86/transcript.txt",
+      "sha256": "d36e35df0c640a6cca771baa09c905540daa2a27504e46fab6d3e13586c6e159",
+      "bytes": 28
+    }
+  ]
+}

@@ -138,6 +138,26 @@ with_change refused 'an action using an undeclared input' \
   "ruby -EUTF-8:UTF-8 -e 'p = \"actions/verify-receipt/action.yml\"; s = File.read(p); s.sub!(%q(inputs.keys-file }}), %q(inputs.keyfile }})) or abort(\"no anchor\"); File.write(p, s)'" \
   actions/verify-receipt/action.yml
 
+with_change refused 'a build that does not wait for the new-user evidence' \
+  'build.needs is' \
+  "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); s.sub!(\"product-browser, new-user-evidence]\", \"product-browser]\") or abort(\"no anchor\"); File.write(p, s)'" \
+  .github/workflows/release.yml
+
+with_change refused 'a publish job that no longer checks the new-user evidence' \
+  'the release job must run node scripts/release-gate/check-evidence.mjs before' \
+  "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); i = s.rindex(\"node scripts/release-gate/check-evidence.mjs\") or abort(\"no anchor\"); s[i, 44] = \"echo the new-user evidence check was removed\"; File.write(p, s)'" \
+  .github/workflows/release.yml
+
+with_change refused 'the override input expanded in a script' \
+  'expands an input in its script' \
+  "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); s.sub!(%q(--override \"\${NEW_USER_GATE_OVERRIDE:-}\"), %q(--override \"\${{ inputs.new_user_gate_override }}\")) or abort(\"no anchor\"); File.write(p, s)'" \
+  .github/workflows/release.yml
+
+with_change refused 'an evidence check that no longer names who ran the override' \
+  'must pass --actor and --triggering-actor' \
+  "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); s.sub!(%q(--triggering-actor \"\$TRIGGERING_ACTOR\"), %q(--triggering-actor \"\$ACTOR\")) or abort(\"no anchor\"); File.write(p, s)'" \
+  .github/workflows/release.yml
+
 if ((failures)); then
   echo "Workflow contract self-test: FAIL ($failures failed, $pass_count passed)" >&2
   exit 1

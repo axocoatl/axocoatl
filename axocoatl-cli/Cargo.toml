@@ -58,6 +58,9 @@ chrono = { workspace = true }
 # in unpadded base64url.
 getrandom = "0.4"
 sha2 = { workspace = true }
+# `axocoatl receipt sign-evidence`: the signed gate manifest's DSSE envelope
+# (and, in tests, unsigned JWTs for the fake ChatGPT sign-ins `connect codex
+# --refresh` and `--status` are tested with).
 base64 = { workspace = true }
 
 [features]

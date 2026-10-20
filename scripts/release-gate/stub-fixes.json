@@ -1,0 +1,36 @@
+{
+  "schema": "axocoatl.gate-stub-fixes/1",
+  "note": "How the gate's scripted model server fixes each tests/fixtures/newuser fixture: it reads `probe` with read_file, and when the file holds `find` it calls edit_file to replace it with `replace`. `find` must appear exactly once in `probe` and must not contain quotes, backslashes or newlines. stub-model-server.test.mjs checks every entry against the fixtures.",
+  "fixes": [
+    {
+      "fixture": "node-deps",
+      "probe": "src/paginate.js",
+      "find": "const length = page < count - 1 ? size : items.length % size;",
+      "replace": "const length = page < count - 1 ? size : items.length - start;"
+    },
+    {
+      "fixture": "python-pytest",
+      "probe": "pages.py",
+      "find": "length = size if page < count - 1 else len(items) % size",
+      "replace": "length = size if page < count - 1 else len(items) - start"
+    },
+    {
+      "fixture": "rust",
+      "probe": "src/lib.rs",
+      "find": "items.len() % size",
+      "replace": "items.len() - start"
+    },
+    {
+      "fixture": "go",
+      "probe": "pages.go",
+      "find": "length = len(items) % size",
+      "replace": "length = len(items) - start"
+    },
+    {
+      "fixture": "node-plain",
+      "probe": "src/paging.js",
+      "find": "Math.floor(items.length / size)",
+      "replace": "Math.ceil(items.length / size)"
+    }
+  ]
+}

@@ -1,11 +1,33 @@
 #!/usr/bin/env bash
 # Build and exercise the visible embedded browser product on this host.
+#
+# AXO_BROWSER_ENGINE=chromium (default) or webkit (the Safari engine) picks
+# the Playwright engine every test runs on. AXO_BROWSER_PROFILE=debug
+# (default) or release picks the build the tests drive; AXO_BROWSER_BINARY
+# names another binary.
 set -euo pipefail
 
 [[ $# -eq 0 ]] || {
   echo 'Usage: verify-product-browser-gate.sh' >&2
   exit 2
 }
+
+engine=${AXO_BROWSER_ENGINE:-chromium}
+case "$engine" in
+  chromium | webkit) ;;
+  *)
+    echo "product-browser-gate: AXO_BROWSER_ENGINE must be chromium or webkit, not $engine" >&2
+    exit 2
+    ;;
+esac
+profile=${AXO_BROWSER_PROFILE:-debug}
+case "$profile" in
+  debug | release) ;;
+  *)
+    echo "product-browser-gate: AXO_BROWSER_PROFILE must be debug or release, not $profile" >&2
+    exit 2
+    ;;
+esac
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
@@ -30,12 +52,10 @@ git -C "$repo_root" ls-files --error-unmatch \
   axocoatl-server/browser-tests/tests/workbench.test.mjs >/dev/null
 
 # WebKit (the Safari engine, the default browser on a Mac) is opt-in until it
-# has passed this gate: with AXO_BROWSER_WEBKIT=true the gate installs
+# has passed this gate: with the webkit engine the gate installs
 # Playwright's WebKit and the journeys that run per engine must pass in it
 # too (AXOCOATL_E2E_WEBKIT=1 makes a missing WebKit a failure).
-browsers=(chromium)
-if [[ "${AXO_BROWSER_WEBKIT:-false}" == true ]]; then
-  browsers+=(webkit)
+if [[ "$engine" == webkit ]]; then
   export AXOCOATL_E2E_WEBKIT=1
 fi
 
@@ -44,19 +64,23 @@ fi
   npm ci
   npm audit --audit-level=high
   if [[ "${AXO_BROWSER_INSTALL_WITH_DEPS:-false}" == true ]]; then
-    npx --no-install playwright install --with-deps "${browsers[@]}"
+    npx --no-install playwright install --with-deps "$engine"
   else
-    npx --no-install playwright install "${browsers[@]}"
+    npx --no-install playwright install "$engine"
   fi
 )
 
-(cd "$repo_root" && cargo build --locked -p axocoatl-cli)
-binary=${AXO_BROWSER_BINARY:-$repo_root/target/debug/axocoatl}
+if [[ "$profile" == release ]]; then
+  (cd "$repo_root" && cargo build --locked --release -p axocoatl-cli)
+else
+  (cd "$repo_root" && cargo build --locked -p axocoatl-cli)
+fi
+binary=${AXO_BROWSER_BINARY:-$repo_root/target/$profile/axocoatl}
 [[ -x "$binary" ]] || {
   echo "product-browser-gate: built binary is missing or not executable: $binary" >&2
   exit 1
 }
-(cd "$test_root" && AXOCOATL_E2E_BINARY="$binary" npm run test:no-build)
+(cd "$test_root" && AXO_BROWSER_ENGINE="$engine" AXOCOATL_E2E_BINARY="$binary" npm run test:no-build)
 
 # The configuration and loadout snippets a new user copies from the README, the
 # sites and the docs pass this build's own `validate` and `loadouts validate`
@@ -64,4 +88,4 @@ binary=${AXO_BROWSER_BINARY:-$repo_root/target/debug/axocoatl}
 (cd "$repo_root/sites/docs" && npm ci --ignore-scripts --no-audit --no-fund)
 node "$repo_root/scripts/check-copy-paste.mjs" --axocoatl "$binary"
 
-echo 'Product browser gate: PASS'
+echo "Product browser gate: PASS ($engine, $profile build)"

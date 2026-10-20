@@ -1,0 +1,11 @@
+# Signing keys of the clean-machine new-user gate accounts (docs/RELEASE_GATE.md).
+#
+# release.yml publishes a version only when its evidence bundle's manifest is
+# signed by one of these keys. Make a gate account's key once, in that
+# account, with `scripts/release-gate/collect-evidence.sh --init-signer`
+# (it lives in ~/.axocoatl-gate-signer, which resets never touch), and add
+# the line it prints, as it prints it, in a reviewed commit:
+#
+#   ed25519 <base64 public key> axocoatl@<host> <short id>
+#
+# No key is listed yet, so no release can pass the gate until one is.

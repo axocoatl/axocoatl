@@ -3,7 +3,9 @@
 //! `show` and `verify` are pure: they read a receipt (a DSSE envelope, or a
 //! pull request body holding one) and never need a daemon, Podman or the
 //! network. `key` reads, makes or replaces this data root's signing key and
-//! prints only its public line.
+//! prints only its public line. The hidden `sign-evidence` signs a
+//! clean-machine gate bundle's manifest with that same key, under its own
+//! DSSE payload type (docs/RELEASE_GATE.md).
 //!
 //! `verify` exit codes: 0 valid and signed by a trusted key (and the files
 //! and record match, when asked); 1 malformed or the signature does not
@@ -77,7 +79,32 @@ pub enum ReceiptCommands {
         #[arg(short, long, default_value_os_t = crate::default_config_path_for_clap())]
         config: PathBuf,
     },
+    /// Sign a release-evidence manifest with this computer's receipt key
+    /// (the clean-machine new-user gate, docs/RELEASE_GATE.md)
+    #[command(hide = true)]
+    SignEvidence {
+        /// The evidence bundle's manifest.json
+        manifest: PathBuf,
+        /// Where to write the signed envelope [default: manifest.dsse.json
+        /// beside the manifest]
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+        /// Config file used to find the data directory
+        #[arg(short, long, default_value_os_t = crate::default_config_path_for_clap())]
+        config: PathBuf,
+    },
 }
+
+/// The DSSE payload type of a signed release-evidence manifest. A receipt's
+/// payload type is another, and DSSE signs the type with the payload, so a
+/// signed manifest never verifies as a receipt, nor a receipt as a manifest.
+pub const EVIDENCE_PAYLOAD_TYPE: &str = "application/vnd.axocoatl.release-evidence+json";
+/// The `schema` a release-evidence manifest declares.
+pub const EVIDENCE_SCHEMA: &str = "axocoatl.release-evidence/1";
+/// The file name of the signed manifest in an evidence bundle.
+pub const EVIDENCE_ENVELOPE_FILE: &str = "manifest.dsse.json";
+/// The largest manifest `sign-evidence` signs.
+const MAX_EVIDENCE_MANIFEST_BYTES: usize = 1024 * 1024;
 
 /// Run `axocoatl receipt ...`; returns the process exit code.
 pub async fn cmd_receipt(command: ReceiptCommands) -> i32 {
@@ -103,6 +130,11 @@ pub async fn cmd_receipt(command: ReceiptCommands) -> i32 {
             report.exit_code
         }
         ReceiptCommands::Key { rotate, config } => key(&config, rotate),
+        ReceiptCommands::SignEvidence {
+            manifest,
+            out,
+            config,
+        } => sign_evidence_command(&manifest, out.as_deref(), &config),
     }
 }
 
@@ -565,6 +597,122 @@ fn key(config: &Path, rotate: bool) -> i32 {
             exit::FAILURE
         }
     }
+}
+
+/// Check that `bytes` are a release-evidence manifest: at most
+/// [`MAX_EVIDENCE_MANIFEST_BYTES`] of JSON whose `schema` is
+/// [`EVIDENCE_SCHEMA`]. `sign-evidence` signs nothing else.
+fn check_evidence_manifest(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > MAX_EVIDENCE_MANIFEST_BYTES {
+        return Err(format!(
+            "larger than {MAX_EVIDENCE_MANIFEST_BYTES} bytes; a manifest lists files, it does not \
+             hold them"
+        ));
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|error| format!("not JSON: {error}"))?;
+    match value.get("schema") {
+        Some(serde_json::Value::String(schema)) if schema == EVIDENCE_SCHEMA => Ok(()),
+        Some(serde_json::Value::String(schema)) => Err(format!(
+            "its schema is {:?}, not {EVIDENCE_SCHEMA}; only a release-evidence manifest is signed",
+            schema.chars().take(80).collect::<String>()
+        )),
+        Some(_) => Err(format!(
+            "its schema is not a string, so it is not {EVIDENCE_SCHEMA}; only a release-evidence \
+             manifest is signed"
+        )),
+        None => Err(format!(
+            "it has no schema, so it is not {EVIDENCE_SCHEMA}; only a release-evidence manifest is \
+             signed"
+        )),
+    }
+}
+
+/// A DSSE envelope of the exact manifest bytes, signed with `key` over
+/// DSSE's pre-authentication encoding with [`EVIDENCE_PAYLOAD_TYPE`].
+pub fn sign_evidence(key: &receipt_key::SigningKey, manifest: &[u8]) -> Result<Envelope, String> {
+    use base64::Engine as _;
+    check_evidence_manifest(manifest)?;
+    let signature = key
+        .key_pair()
+        .sign(&receipt::pae(EVIDENCE_PAYLOAD_TYPE, manifest));
+    let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(Envelope {
+        payload_type: EVIDENCE_PAYLOAD_TYPE.into(),
+        payload: encode(manifest),
+        signatures: vec![receipt::EnvelopeSignature {
+            keyid: key.public().key_id(),
+            sig: encode(signature.as_ref()),
+        }],
+    })
+}
+
+/// `axocoatl receipt sign-evidence`: sign a gate bundle's manifest with this
+/// data root's existing receipt key, never a new one.
+fn sign_evidence_command(manifest: &Path, out: Option<&Path>, config: &Path) -> i32 {
+    let data_dir = match crate::secret_cmd::data_dir(config) {
+        Ok(data_dir) => data_dir,
+        Err(error) => {
+            eprintln!("axocoatl receipt: {error}");
+            return exit::FAILURE;
+        }
+    };
+    match sign_evidence_file(&data_dir, manifest, out) {
+        Ok((written, key)) => {
+            println!(
+                "Signed {} with receipt key {}: {}",
+                manifest.display(),
+                key.short_id(),
+                written.display()
+            );
+            println!("{}", key.line(&receipt_key::host_comment()));
+            exit::VALID
+        }
+        Err((code, problem)) => {
+            eprintln!("axocoatl receipt: {problem}");
+            code
+        }
+    }
+}
+
+/// Sign the manifest at `manifest` with the receipt key of `data_dir` and
+/// write the envelope to `out` (default: [`EVIDENCE_ENVELOPE_FILE`] beside
+/// the manifest). Returns where it wrote and the key that signed, or the
+/// exit code and why not.
+fn sign_evidence_file(
+    data_dir: &Path,
+    manifest: &Path,
+    out: Option<&Path>,
+) -> Result<(PathBuf, PublicKey), (i32, String)> {
+    let bytes = std::fs::read(manifest)
+        .map_err(|error| (exit::USAGE, format!("{}: {error}", manifest.display())))?;
+    check_evidence_manifest(&bytes)
+        .map_err(|problem| (exit::USAGE, format!("{}: {problem}", manifest.display())))?;
+    let key = match receipt_key::load(data_dir) {
+        Ok(Some(key)) => key,
+        Ok(None) => {
+            return Err((
+                exit::USAGE,
+                format!(
+                    "{} has no receipt key yet: run `axocoatl receipt key` and add the line it \
+                     prints to .axocoatl/gate-keys before signing gate evidence",
+                    data_dir.display()
+                ),
+            ))
+        }
+        Err(error) => return Err((exit::FAILURE, error)),
+    };
+    let envelope = sign_evidence(&key, &bytes)
+        .map_err(|problem| (exit::USAGE, format!("{}: {problem}", manifest.display())))?;
+    let out = out.map(Path::to_path_buf).unwrap_or_else(|| {
+        manifest
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(EVIDENCE_ENVELOPE_FILE)
+    });
+    std::fs::write(&out, receipt::envelope_file_bytes(&envelope))
+        .map_err(|error| (exit::FAILURE, format!("{}: {error}", out.display())))?;
+    Ok((out, key.public()))
 }
 
 #[cfg(test)]

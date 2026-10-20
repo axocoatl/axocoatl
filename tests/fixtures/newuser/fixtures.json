@@ -1,0 +1,43 @@
+{
+  "schema": "axocoatl.newuser-fixtures/1",
+  "note": "What the clean-machine new-user gate (docs/RELEASE_GATE.md) expects of each fixture. image_contains and setup_contains are matched against the run's start line and record; null means the run may choose none. The gate runs the README's `axocoatl run fix` command on each fixture, except where command is fixture-readme: then the first `axocoatl run fix` command in the fixture's own README.md. A fixture with an owner is made by that workstream; until it is in the tree, test-fixtures.sh reports it PENDING and the gate fails its runs.",
+  "fixtures": {
+    "node-plain": {
+      "owner": "onboarding (the first-run sample repository)",
+      "command": "fixture-readme",
+      "language": "node",
+      "test_command": "npm test",
+      "host_setup": null,
+      "image_contains": "node",
+      "setup_contains": null
+    },
+    "node-deps": {
+      "language": "node",
+      "test_command": "npm test",
+      "host_setup": "npm ci --ignore-scripts --no-audit --no-fund",
+      "image_contains": "node",
+      "setup_contains": "npm ci"
+    },
+    "python-pytest": {
+      "language": "python",
+      "test_command": "pytest",
+      "host_setup": "pip install -e .[test]",
+      "image_contains": "python",
+      "setup_contains": "pip install"
+    },
+    "rust": {
+      "language": "rust",
+      "test_command": "cargo test",
+      "host_setup": null,
+      "image_contains": "rust",
+      "setup_contains": null
+    },
+    "go": {
+      "language": "go",
+      "test_command": "go test ./...",
+      "host_setup": null,
+      "image_contains": "go",
+      "setup_contains": null
+    }
+  }
+}

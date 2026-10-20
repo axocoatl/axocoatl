@@ -58,7 +58,26 @@ npx --no-install playwright install --with-deps chromium
 
 On macOS the harness prefers the installed Google Chrome binary, so a browser
 download is not required. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to test another
-Chromium-family executable. Set `AXOCOATL_E2E_BINARY` to select a binary other
+Chromium-family executable.
+
+## WebKit (Safari)
+
+`AXO_BROWSER_ENGINE=webkit` runs every test on WebKit, the engine Safari
+uses, with no change to the tests: `support/browser-engine.mjs` (which
+`npm test` loads with `--import` when the variable is set) makes the tests'
+`chromium` import WebKit and drops the Chromium-only launch options
+(`executablePath`, `args`, `channel`, `chromiumSandbox`).
+`tests/browser-engine.test.mjs` checks the switch without a browser.
+
+```bash
+npx playwright install webkit
+AXO_BROWSER_ENGINE=webkit npm test
+```
+
+`scripts/verify-product-browser-gate.sh` takes the same variable, installs
+that engine, and with `AXO_BROWSER_PROFILE=release` drives the release
+build. CI runs the release build in Chromium on x86_64 and aarch64 and in
+WebKit on x86_64. Set `AXOCOATL_E2E_BINARY` to select a binary other
 than `target/debug/axocoatl`; `npm run test:no-build` deliberately skips the
 Cargo build and uses that selected or default binary as-is.
 

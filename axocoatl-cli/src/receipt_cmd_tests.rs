@@ -409,3 +409,165 @@ fn a_pull_request_body_holding_the_block_is_a_receipt() {
         3
     );
 }
+
+const MANIFEST: &[u8] =
+    br#"{"schema":"axocoatl.release-evidence/1","version":"1.5.0","commit":"0123456789abcdef0123456789abcdef01234567"}"#;
+
+fn decode(text: &str) -> Vec<u8> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(text)
+        .unwrap()
+}
+
+#[test]
+fn a_signed_evidence_manifest_carries_its_exact_bytes_and_verifies_with_the_receipt_key() {
+    let fixture = Fixture::new();
+    let envelope = sign_evidence(&fixture.key, MANIFEST).unwrap();
+    assert_eq!(envelope.payload_type, EVIDENCE_PAYLOAD_TYPE);
+    assert_eq!(decode(&envelope.payload), MANIFEST);
+    assert_eq!(envelope.signatures.len(), 1);
+    let signature = decode(&envelope.signatures[0].sig);
+    let key = fixture.key.public();
+    assert_eq!(envelope.signatures[0].keyid, key.key_id());
+    assert!(key.verifies(&receipt::pae(EVIDENCE_PAYLOAD_TYPE, MANIFEST), &signature));
+    // One changed byte of the manifest no longer verifies.
+    let mut changed = MANIFEST.to_vec();
+    let at = changed.len() - 3;
+    changed[at] = b'8';
+    assert!(!key.verifies(&receipt::pae(EVIDENCE_PAYLOAD_TYPE, &changed), &signature));
+    // Another key's signature does not verify either.
+    let other = Fixture::new();
+    assert!(!other
+        .key
+        .public()
+        .verifies(&receipt::pae(EVIDENCE_PAYLOAD_TYPE, MANIFEST), &signature));
+}
+
+#[test]
+fn a_signed_manifest_is_never_a_receipt_and_a_receipt_signature_never_signs_a_manifest() {
+    let fixture = Fixture::new();
+    let envelope = sign_evidence(&fixture.key, MANIFEST).unwrap();
+    let error = receipt::open_envelope(envelope.clone()).unwrap_err();
+    assert!(error.to_string().contains("payload type"), "{error}");
+    let path = fixture.dir.join("manifest.dsse.json");
+    std::fs::write(&path, receipt::envelope_file_bytes(&envelope)).unwrap();
+    let report = verify(&VerifyRequest {
+        file: path.display().to_string(),
+        key: vec![fixture.line()],
+        ..VerifyRequest::default()
+    });
+    assert_eq!(report.exit_code, exit::INVALID, "{report:?}");
+    assert_eq!(report.result, "malformed");
+    // A receipt's signature covers its own payload type: relabelled as
+    // evidence, it does not verify.
+    let receipt_payload = decode(&fixture.envelope.payload);
+    let receipt_signature = decode(&fixture.envelope.signatures[0].sig);
+    assert!(fixture.key.public().verifies(
+        &receipt::pae(receipt::PAYLOAD_TYPE, &receipt_payload),
+        &receipt_signature
+    ));
+    assert!(!fixture.key.public().verifies(
+        &receipt::pae(EVIDENCE_PAYLOAD_TYPE, &receipt_payload),
+        &receipt_signature
+    ));
+}
+
+#[test]
+fn only_a_release_evidence_manifest_is_signed() {
+    let fixture = Fixture::new();
+    for (bytes, expected) in [
+        (b"not json".to_vec(), "not JSON"),
+        (
+            br#"{"schema":"other/1"}"#.to_vec(),
+            "only a release-evidence manifest",
+        ),
+        (
+            br#"["axocoatl.release-evidence/1"]"#.to_vec(),
+            "only a release-evidence manifest",
+        ),
+        (
+            format!(
+                r#"{{"schema":"axocoatl.release-evidence/1","pad":"{}"}}"#,
+                "x".repeat(1024 * 1024)
+            )
+            .into_bytes(),
+            "larger than",
+        ),
+    ] {
+        let error = sign_evidence(&fixture.key, &bytes).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+/// The refusal names the schema as the file has it, never as Rust debug
+/// output (`Some("…")` or `None`).
+#[test]
+fn a_refused_manifest_names_its_schema_plainly() {
+    let fixture = Fixture::new();
+    for (bytes, expected) in [
+        (
+            br#"{"schema":"other/1"}"#.to_vec(),
+            r#"its schema is "other/1", not axocoatl.release-evidence/1"#,
+        ),
+        (
+            br#"{"version":"1.5.0"}"#.to_vec(),
+            "it has no schema, so it is not axocoatl.release-evidence/1",
+        ),
+        (br#"{"schema":7}"#.to_vec(), "its schema is not a string"),
+    ] {
+        let error = sign_evidence(&fixture.key, &bytes).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+        assert!(
+            !error.contains("Some(") && !error.contains("None"),
+            "{error}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sign_evidence_writes_the_envelope_beside_the_manifest_and_needs_an_existing_key() {
+    let fixture = Fixture::new();
+    let bundle = fixture.dir.join("bundle");
+    std::fs::create_dir(&bundle).unwrap();
+    let manifest = bundle.join("manifest.json");
+    std::fs::write(&manifest, MANIFEST).unwrap();
+    let (written, key) = sign_evidence_file(&fixture.dir.join("data"), &manifest, None).unwrap();
+    assert_eq!(written, bundle.join(EVIDENCE_ENVELOPE_FILE));
+    assert_eq!(key, fixture.key.public());
+    let envelope: Envelope = serde_json::from_slice(&std::fs::read(&written).unwrap()).unwrap();
+    assert_eq!(decode(&envelope.payload), MANIFEST);
+    // --out names another file.
+    let elsewhere = fixture.dir.join("signed.json");
+    let (written, _) =
+        sign_evidence_file(&fixture.dir.join("data"), &manifest, Some(&elsewhere)).unwrap();
+    assert_eq!(written, elsewhere);
+    // A data root without a key is told to make one; nothing is made.
+    let empty = fixture.dir.join("empty-data");
+    std::fs::create_dir(&empty).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&empty, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let (code, problem) = sign_evidence_file(&empty, &manifest, None).unwrap_err();
+    assert_eq!(code, exit::USAGE);
+    assert!(problem.contains("axocoatl receipt key"), "{problem}");
+    assert!(receipt_key::load(&empty).unwrap().is_none());
+    // A missing or non-evidence manifest is a usage error.
+    let (code, _) = sign_evidence_file(
+        &fixture.dir.join("data"),
+        &bundle.join("missing.json"),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(code, exit::USAGE);
+    std::fs::write(&manifest, br#"{"schema":"axocoatl.receipt/1"}"#).unwrap();
+    let (code, problem) =
+        sign_evidence_file(&fixture.dir.join("data"), &manifest, None).unwrap_err();
+    assert_eq!(code, exit::USAGE);
+    assert!(
+        problem.contains("only a release-evidence manifest"),
+        "{problem}"
+    );
+}

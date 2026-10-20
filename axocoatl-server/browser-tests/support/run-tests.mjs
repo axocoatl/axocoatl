@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { REPOSITORY_ROOT, TEST_ROOT } from './daemon.mjs';
 
@@ -25,6 +26,18 @@ const skipBuild = arguments_.length === 1 && arguments_[0] === '--no-build';
 if (arguments_.length > 0 && !skipBuild) {
   console.error(`Unknown browser test runner argument: ${arguments_.join(' ')}`);
   process.exit(2);
+}
+
+// AXO_BROWSER_ENGINE=webkit runs every file on WebKit (support/browser-engine.mjs).
+const engine = process.env.AXO_BROWSER_ENGINE || 'chromium';
+if (!['chromium', 'webkit'].includes(engine)) {
+  console.error(`AXO_BROWSER_ENGINE=${engine} is not chromium or webkit`);
+  process.exit(2);
+}
+if (engine !== 'chromium') {
+  const hook = pathToFileURL(path.join(TEST_ROOT, 'support', 'browser-engine.mjs')).href;
+  process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, `--import=${hook}`].filter(Boolean).join(' ');
+  console.log(`Browser regressions on ${engine}`);
 }
 
 let ownedModelCache = null;
