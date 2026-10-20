@@ -149,9 +149,24 @@ jobs:
         run: cargo check --locked --workspace --all-targets --all-features --jobs 1
 
   product-browser:
-    name: Product browser regressions
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # The release build, as users get it, on x86_64 and aarch64 in Chromium,
+    # and on x86_64 in WebKit, the Safari engine (docs/RELEASE_GATE.md).
+    name: Product browser regressions (${{ matrix.leg }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: x86_64, Chromium
+            runner: ubuntu-24.04
+            engine: chromium
+          - leg: aarch64, Chromium
+            runner: ubuntu-24.04-arm
+            engine: chromium
+          - leg: x86_64, WebKit
+            runner: ubuntu-24.04
+            engine: webkit
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-23
@@ -159,7 +174,7 @@ jobs:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: product-browser
+          shared-key: product-browser-${{ matrix.runner }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
@@ -168,6 +183,8 @@ jobs:
       - name: Build and exercise the visible product surface
         env:
           AXO_BROWSER_INSTALL_WITH_DEPS: 'true'
+          AXO_BROWSER_ENGINE: ${{ matrix.engine }}
+          AXO_BROWSER_PROFILE: release
         run: ./scripts/verify-product-browser-gate.sh
 
   cross-aarch64-linux:
