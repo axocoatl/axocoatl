@@ -337,9 +337,12 @@ impl OllamaInstall {
     /// outside tests.
     pub fn detect(home: Option<&std::path::Path>, root: &std::path::Path, macos: bool) -> Self {
         if macos {
+            // Homebrew names the LaunchAgent `sh.brew.ollama` since Homebrew 5,
+            // `homebrew.mxcl.ollama` before.
             if home.is_some_and(|home| {
-                home.join("Library/LaunchAgents/homebrew.mxcl.ollama.plist")
-                    .is_file()
+                ["sh.brew.ollama.plist", "homebrew.mxcl.ollama.plist"]
+                    .iter()
+                    .any(|name| home.join("Library/LaunchAgents").join(name).is_file())
             }) {
                 return Self::Brew;
             }
@@ -682,6 +685,10 @@ mod tests {
             "",
         )
         .unwrap();
+        assert_eq!(detect(true), OllamaInstall::Brew);
+        std::fs::remove_file(home.join("Library/LaunchAgents/homebrew.mxcl.ollama.plist")).unwrap();
+        assert_eq!(detect(true), OllamaInstall::App);
+        std::fs::write(home.join("Library/LaunchAgents/sh.brew.ollama.plist"), "").unwrap();
         assert_eq!(detect(true), OllamaInstall::Brew);
         std::fs::create_dir_all(root.path().join("etc/systemd/system")).unwrap();
         std::fs::write(root.path().join("etc/systemd/system/ollama.service"), "").unwrap();

@@ -253,7 +253,7 @@ esac"#,
 fn brew_service_on(shims: &Shims, url: &str) {
     let agents = shims.home.path().join("Library/LaunchAgents");
     std::fs::create_dir_all(&agents).unwrap();
-    std::fs::write(agents.join("homebrew.mxcl.ollama.plist"), "<plist/>").unwrap();
+    std::fs::write(agents.join("sh.brew.ollama.plist"), "<plist/>").unwrap();
     let services = shims.home.path().join(".homebrew/services");
     std::fs::create_dir_all(&services).unwrap();
     std::fs::write(

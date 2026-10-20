@@ -248,12 +248,19 @@ pub(crate) fn variable_in(text: &str, name: &str) -> Option<String> {
     Some(after[start..start + end].trim().to_string())
 }
 
-/// The brew service's LaunchAgent.
+/// The LaunchAgent names Homebrew gives the Ollama service: `sh.brew.*` since
+/// Homebrew 5, `homebrew.mxcl.*` before.
+pub(crate) const BREW_OLLAMA_PLISTS: [&str; 2] =
+    ["sh.brew.ollama.plist", "homebrew.mxcl.ollama.plist"];
+
+/// The brew service's LaunchAgent: the one that exists, else the current name.
 pub(crate) fn brew_plist(host: &Host) -> PathBuf {
-    host.home
-        .join("Library")
-        .join("LaunchAgents")
-        .join("homebrew.mxcl.ollama.plist")
+    let agents = host.home.join("Library").join("LaunchAgents");
+    BREW_OLLAMA_PLISTS
+        .iter()
+        .map(|name| agents.join(name))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| agents.join(BREW_OLLAMA_PLISTS[0]))
 }
 
 /// The Ollama app, if installed.
