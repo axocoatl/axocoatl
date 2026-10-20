@@ -903,26 +903,42 @@ async fn external_fix_admission_child_body() {
     };
 
     // fix-codex with nothing stored: auto finds no credential and says how
-    // to connect, and the codex image is not built either: both at once,
-    // before anything is created.
+    // to connect, before anything is created. The codex image is not built,
+    // which is no problem for a run that may build it (it builds it once
+    // nothing else stops it); with --no-build it is one more: both at once.
+    let no_credential = "Agent writer (codex) has credential auto, and neither codex-openai \
+                         nor codex-chatgpt is stored: run `axocoatl connect codex` to sign in \
+                         with your ChatGPT plan (stored as codex-chatgpt), or `axocoatl \
+                         connect codex --api-key` to also store the OpenAI API key OpenAI \
+                         issues with that sign-in (as codex-openai), then run again";
     let message = usage(admit(request("fix-codex", &[], "codex-none")).await);
+    assert_eq!(message, no_credential);
+    let no_build = |params: &[(&str, &str)], id: &str| {
+        let mut request = request("fix-codex", params, id);
+        request.environment.build_images = false;
+        request
+    };
+    let codex_image = axocoatl_isolation::recipes::image_name(&["codex".to_string()]).unwrap();
+    let image_problem = format!(
+        "the run's image {codex_image} is not built on this computer, and building it was \
+         turned off (--no-build). Build it with `axocoatl recipe build codex`, then run again"
+    );
+    let message = usage(admit(no_build(&[], "codex-none-no-build")).await);
     assert_eq!(
         message,
-        "2 problems stop this run, and nothing was started:\n  1. Agent writer (codex) has \
-         credential auto, and neither codex-openai nor codex-chatgpt is stored: run `axocoatl \
-         connect codex` to sign in with your ChatGPT plan (stored as codex-chatgpt), or \
-         `axocoatl connect codex --api-key` to also store the OpenAI API key OpenAI issues \
-         with that sign-in (as codex-openai), then run again\n  2. recipe images: no image is \
-         built from the recipes codex; run `axocoatl recipe build codex`"
+        format!(
+            "2 problems stop this run, and nothing was started:\n  1. {no_credential}\n  2. \
+             {image_problem}"
+        )
     );
     // A credential that is none of Codex's is a parameter error, reported
-    // with the image that is not built.
-    let message = usage(admit(request("fix-codex", &[("credential", "codex")], "bogus")).await);
+    // with the image a run may not build.
+    let message = usage(admit(no_build(&[("credential", "codex")], "bogus")).await);
     assert!(
         message.contains(
             "\n  1. loadout parameter credential: a codex writer's route sends codex-openai or \
              codex-chatgpt, or auto"
-        ) && message.contains("\n  2. recipe images: no image is built"),
+        ) && message.contains(&format!("\n  2. {image_problem}")),
         "{message}"
     );
     // Named but not stored: the route's own refusal, with how to store it.

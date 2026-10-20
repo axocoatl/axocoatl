@@ -130,6 +130,15 @@ fn doctor(root: &Path, base_url: &str) -> (bool, String) {
 fn doctor_with_model(root: &Path, base_url: &str, model: &str) -> (bool, String) {
     let config = root.join("axocoatl.yaml");
     let bin = ready_podman(root);
+    // Doctor also looks for the ollama CLI in /opt/homebrew/bin and
+    // /usr/local/bin; this one, found first, answers no version, as if this
+    // computer had none, so the host's own Ollama never decides.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let ollama = bin.join("ollama");
+        std::fs::write(&ollama, "#!/bin/sh\nexit 127\n").unwrap();
+        std::fs::set_permissions(&ollama, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -338,21 +347,22 @@ async fn doctor_fails_an_untagged_model_that_only_another_tag_satisfies() {
     let root = tempfile::tempdir().unwrap();
     let (ok, stdout) = doctor_with_model(root.path(), &server.uri(), "qwen3-coder");
     assert!(!ok, "doctor must fail:\n{stdout}");
+    let hint = "ollama pull qwen3-coder, or use the installed qwen3-coder:30b by its exact name \
+                (Ollama reads qwen3-coder as qwen3-coder:latest)";
     assert!(
-        stdout.contains("[FAIL] Model 'qwen3-coder' not pulled"),
+        stdout.contains(&format!(
+            "[FAIL] qwen3-coder is not pulled\n         → {hint}\n"
+        )),
         "{stdout}"
     );
+    // The step that is left says the same.
     assert!(
-        stdout.contains(
-            "Run: ollama pull qwen3-coder, or use the installed qwen3-coder:30b by its exact \
-             name (Ollama reads qwen3-coder as qwen3-coder:latest)"
-        ),
+        stdout.contains(&format!("1) qwen3-coder is not pulled: {hint}\n")),
         "{stdout}"
     );
-    assert!(
-        !stdout.contains("[ OK ] Model 'qwen3-coder' is pulled"),
-        "{stdout}"
-    );
+    assert!(stdout.ends_with("Ready: no\n"), "{stdout}");
+    // The installed tag is never checked in its place.
+    assert!(!stdout.contains("[ OK ] qwen3-coder"), "{stdout}");
 }
 
 /// A newer Ollama minor passes doctor with a warning once the contract

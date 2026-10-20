@@ -1155,10 +1155,16 @@ async fn check_ollama(
             let size = ollama_setup::known_size(model)
                 .map(|size| format!(" ({})", ollama_setup::size_text(size)))
                 .unwrap_or_default();
+            // Another tag of the same model does not count (Ollama reads an
+            // untagged name as `:latest`): the hint names it exactly.
             items.push(Item::fail(
                 &name,
                 format!("{model} is not pulled"),
-                format!("ollama pull {model}{size}"),
+                ollama_setup::not_pulled_hint(
+                    model,
+                    &format!("ollama pull {model}{size}"),
+                    &installed,
+                ),
             ));
             states.insert(
                 model.clone(),
