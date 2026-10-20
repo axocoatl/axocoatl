@@ -136,11 +136,34 @@ pub fn list_args() -> Vec<String> {
         args.push("--filter".into());
         args.push(format!("name={prefix}"));
     }
+    // JSON, not a Go template: Podman 6's `volume ls` template no longer
+    // indexes `.Labels`, while every supported Podman prints the labels as
+    // an object in JSON.
     args.push("--format".into());
-    args.push(format!(
-        "{{{{.Name}}}}\t{{{{index .Labels \"{RUNTIME_AUTHORITY_LABEL}\"}}}}"
-    ));
+    args.push("json".into());
     args
+}
+
+/// [`list_args`]' JSON output as the lines [`parse_listing`] reads: each
+/// volume's name and its authority label, tab-separated.
+pub fn listing_from_json(stdout: &str) -> Result<String, String> {
+    let volumes: Vec<serde_json::Value> = if stdout.trim().is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(stdout).map_err(|error| format!("unreadable listing: {error}"))?
+    };
+    Ok(volumes
+        .iter()
+        .filter_map(|volume| {
+            let name = volume.get("Name")?.as_str()?;
+            let authority = volume
+                .get("Labels")
+                .and_then(|labels| labels.get(RUNTIME_AUTHORITY_LABEL))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            Some(format!("{name}\t{authority}\n"))
+        })
+        .collect())
 }
 
 /// Parse [`list_args`]' output. Podman's name filter matches anywhere in
@@ -274,7 +297,10 @@ async fn list() -> Result<Vec<ListedVolume>, IsolationError> {
             "listing Session volumes: the listing was too long to read whole".to_string(),
         ));
     }
-    Ok(parse_listing(&String::from_utf8_lossy(&output.stdout)))
+    let lines = listing_from_json(&String::from_utf8_lossy(&output.stdout)).map_err(|error| {
+        IsolationError::OciContainerFailed(format!("listing Session volumes: {error}"))
+    })?;
+    Ok(parse_listing(&lines))
 }
 
 /// Which of `names` Podman still lists.
@@ -353,12 +379,27 @@ mod tests {
             "{args}"
         );
         assert!(args.contains(" --filter name=axo-ses- "), "{args}");
-        assert!(
-            args.ends_with(&format!(
-                "--format {{{{.Name}}}}\t{{{{index .Labels \"{RUNTIME_AUTHORITY_LABEL}\"}}}}"
-            )),
-            "{args}"
+        assert!(args.ends_with("--format json"), "{args}");
+    }
+
+    /// Podman 4.9, 5.8 and 6 print `volume ls --format json` with `Labels`
+    /// as an object (or null): the authority label is read from it.
+    #[test]
+    fn the_json_listing_reads_names_and_authorities() {
+        let ours = "a".repeat(64);
+        let json = format!(
+            r#"[{{"Name":"axo-ses-ses-1-node-modules","Labels":{{"io.axocoatl.role":"node-dependencies","{RUNTIME_AUTHORITY_LABEL}":"{ours}"}}}},
+               {{"Name":"axo-egr-ses-2","Labels":null}},
+               {{"Name":"axo-svc-ses-3"}}]"#
         );
+        let listed = parse_listing(&listing_from_json(&json).unwrap());
+        assert_eq!(listed.len(), 3);
+        assert_eq!(listed[0].authority.as_deref(), Some(ours.as_str()));
+        assert_eq!(listed[0].owner_id, "ses-1");
+        assert_eq!(listed[1].authority, None);
+        assert_eq!(listed[2].authority, None);
+        assert_eq!(listing_from_json("").unwrap(), "");
+        assert!(listing_from_json("not json").is_err());
     }
 
     #[test]
