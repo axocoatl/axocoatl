@@ -212,28 +212,40 @@ pub enum ConnectionOverride {
     /// macOS, the default machine).
     #[default]
     None,
-    /// `CONTAINER_HOST=…`: a Podman service reached by URL, never a machine
-    /// Axocoatl manages.
+    /// `CONTAINER_HOST=…` without `CONTAINER_CONNECTION`: a Podman service
+    /// reached by URL, never a machine Axocoatl manages.
     Host(String),
-    /// `CONTAINER_CONNECTION=NAME`: a named connection, which is a machine
-    /// of that name when `podman machine list` lists one.
+    /// `CONTAINER_CONNECTION=NAME`, whether or not `CONTAINER_HOST` is set
+    /// too: a named connection, which is a machine of that name when
+    /// `podman machine list` lists one.
     Connection(String),
 }
 
 impl ConnectionOverride {
-    /// What `CONTAINER_HOST` and `CONTAINER_CONNECTION` say (`CONTAINER_HOST`
-    /// first, as Podman reads it).
+    /// The connection `CONTAINER_CONNECTION` and `CONTAINER_HOST` select,
+    /// read as Podman reads them: a non-empty `CONTAINER_CONNECTION` wins
+    /// over `CONTAINER_HOST` when both are set, and an empty value counts
+    /// as unset (`setupRemoteConnection` in Podman's `cmd/podman/root.go`
+    /// switches on `connEnv != ""` before `hostEnv != ""` in 4.9.3, 5.6.0
+    /// and 6.1.4).
     pub fn from_env() -> Self {
-        let read = |name: &str| {
-            std::env::var(name)
-                .ok()
-                .map(|value| value.trim().to_string())
+        Self::from_values(
+            std::env::var_os("CONTAINER_CONNECTION").as_deref(),
+            std::env::var_os("CONTAINER_HOST").as_deref(),
+        )
+    }
+
+    /// [`ConnectionOverride::from_env`] given the two values.
+    fn from_values(connection: Option<&std::ffi::OsStr>, host: Option<&std::ffi::OsStr>) -> Self {
+        let set = |value: Option<&std::ffi::OsStr>| {
+            value
                 .filter(|value| !value.is_empty())
+                .map(|value| value.to_string_lossy().into_owned())
         };
-        if let Some(host) = read("CONTAINER_HOST") {
-            ConnectionOverride::Host(host)
-        } else if let Some(name) = read("CONTAINER_CONNECTION") {
+        if let Some(name) = set(connection) {
             ConnectionOverride::Connection(name)
+        } else if let Some(host) = set(host) {
+            ConnectionOverride::Host(host)
         } else {
             ConnectionOverride::None
         }
@@ -986,6 +998,18 @@ esac"#,
                 named_down,
             ),
             (
+                "CONTAINER_CONNECTION names a stopped machine, a stale CONTAINER_HOST is set too",
+                vec![named("axocoatl"), host, machines(NAMED_STOPPED)],
+                "MachineStopped",
+                named_down,
+            ),
+            (
+                "both are set and Podman answers",
+                vec![named("remote-box"), host, machines(NO_MACHINE), answers],
+                "Ready",
+                "Ready",
+            ),
+            (
                 "no override, the default machine runs and answers",
                 vec![machines(RUNNING), answers],
                 "Ready",
@@ -1024,13 +1048,50 @@ esac"#,
                 detected, reported,
                 "{case}: the daemon and onboarding disagree"
             );
-            if env.iter().any(|(name, _)| *name == "CONTAINER_HOST") {
+            // CONTAINER_CONNECTION wins over CONTAINER_HOST, as in Podman.
+            if env.iter().any(|(name, _)| *name == "CONTAINER_HOST")
+                && !env.iter().any(|(name, _)| *name == "CONTAINER_CONNECTION")
+            {
                 assert!(
                     !detect_calls.iter().any(|call| call.starts_with("machine")),
                     "{case}: a CONTAINER_HOST setup never asks about machines: {detect_calls:?}"
                 );
             }
         }
+    }
+
+    /// Podman reads `CONTAINER_CONNECTION` before `CONTAINER_HOST`, and an
+    /// empty value as unset (`setupRemoteConnection`, `cmd/podman/root.go`,
+    /// 4.9.3 to 6.1.4); so does Axocoatl.
+    #[test]
+    fn container_connection_wins_over_container_host_as_in_podman() {
+        use std::ffi::OsStr;
+        let read = |connection: Option<&str>, host: Option<&str>| {
+            ConnectionOverride::from_values(connection.map(OsStr::new), host.map(OsStr::new))
+        };
+        assert_eq!(
+            read(Some("axocoatl"), Some("unix:///run/x.sock")),
+            ConnectionOverride::Connection("axocoatl".into())
+        );
+        assert_eq!(
+            read(None, Some("unix:///run/x.sock")),
+            ConnectionOverride::Host("unix:///run/x.sock".into())
+        );
+        assert_eq!(
+            read(Some(""), Some("unix:///run/x.sock")),
+            ConnectionOverride::Host("unix:///run/x.sock".into())
+        );
+        assert_eq!(
+            read(Some("axocoatl"), Some("")),
+            ConnectionOverride::Connection("axocoatl".into())
+        );
+        assert_eq!(read(Some(""), Some("")), ConnectionOverride::None);
+        assert_eq!(read(None, None), ConnectionOverride::None);
+        // Podman does not trim either: such a name is not found, and says so.
+        assert_eq!(
+            read(Some(" axocoatl"), None),
+            ConnectionOverride::Connection(" axocoatl".into())
+        );
     }
 
     /// The machine `ensure_ready` starts is named: the one
