@@ -1,0 +1,367 @@
+// node --test scripts/release-gate/evidence.test.mjs
+//
+// The release decision against throwaway git repositories, bundles signed
+// with throwaway Ed25519 keys, and one bundle signed by the real CLI
+// (tests/fixtures/release-evidence/cli-signed). To regenerate that one: in a
+// fresh HOME, write a bundle with `evidence.mjs add-step`/`path-file`/
+// `manifest`, run `axocoatl receipt key > gate-keys` and
+// `axocoatl receipt sign-evidence manifest.json`, then replace the key
+// line's comment.
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import {
+  mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { after, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import {
+  ENVELOPE_FILE, MANIFEST_FILE, PATH_SCHEMA, PAYLOAD_TYPE, buildManifest, commitMatches,
+  compareTotals, decideRelease, overridePhrase, pae, parseKeys, parseRequiredPaths,
+  sixteenGbMentions, stepsPass, verifyBundle,
+} from './evidence.mjs';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const REPO = path.resolve(HERE, '..', '..');
+const VERSION = '1.5.0';
+const scratch = mkdtempSync(path.join(tmpdir(), 'axocoatl-evidence-test-'));
+after(() => rmSync(scratch, { recursive: true, force: true }));
+
+const REQUIRED = `# Release gate
+
+<!-- release-gate:required-paths:start -->
+- \`A-x86\`: Tier A on x86_64
+- \`C1-local\`: Tier C, local models
+- \`C2-local\` (when the public copy names 16 GB): the small-memory Mac
+<!-- release-gate:required-paths:end -->
+`;
+
+function makeKey() {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const raw = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url');
+  return { privateKey, line: `ed25519 ${raw.toString('base64')} gate@test`, keyId: `sha256:${digest(raw)}` };
+}
+
+const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+let counter = 0;
+function git(root, ...args) {
+  return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
+}
+
+/** A repository whose first commit is the product; returns its root and commit. */
+function makeRepo({ readme = '# product\n' } = {}) {
+  counter += 1;
+  const root = path.join(scratch, `repo-${counter}`);
+  mkdirSync(path.join(root, 'docs'), { recursive: true });
+  mkdirSync(path.join(root, '.axocoatl'), { recursive: true });
+  writeFileSync(path.join(root, 'README.md'), readme);
+  writeFileSync(path.join(root, 'docs', 'RELEASE_GATE.md'), REQUIRED);
+  git(scratch, 'init', '-q', '-b', 'main', root);
+  git(root, 'config', 'user.name', 'Gate Test');
+  git(root, 'config', 'user.email', 'gate@example.invalid');
+  git(root, 'add', '.');
+  git(root, 'commit', '-qm', 'product');
+  return { root, commit: git(root, 'rev-parse', 'HEAD') };
+}
+
+function pathEvidence(name, commit, { pass = true, steps } = {}) {
+  const recorded = steps ?? [{ name: 'run fix node-deps', status: pass ? 'pass' : 'fail', required: true, exit_code: pass ? 0 : 1 }];
+  return { schema: PATH_SCHEMA, path: name, tier: name[0], version: VERSION, commit, pass: stepsPass(recorded), steps: recorded };
+}
+
+function signManifest(dir, key) {
+  const bytes = readFileSync(path.join(dir, MANIFEST_FILE));
+  const envelope = {
+    payloadType: PAYLOAD_TYPE,
+    payload: bytes.toString('base64'),
+    signatures: [{ keyid: key.keyId, sig: sign(null, pae(PAYLOAD_TYPE, bytes), key.privateKey).toString('base64') }],
+  };
+  writeFileSync(path.join(dir, ENVELOPE_FILE), `${JSON.stringify(envelope)}\n`);
+}
+
+/** Write (and sign with `key`) a bundle for `commit` with `paths`. */
+function writeBundle(root, commit, paths, key, { version = VERSION, extra = {} } = {}) {
+  const dir = path.join(root, 'release-evidence', version, commit);
+  mkdirSync(dir, { recursive: true });
+  for (const [name, evidence] of Object.entries(paths)) {
+    writeFileSync(path.join(dir, `${name}.json`), `${JSON.stringify(evidence, null, 2)}\n`);
+    mkdirSync(path.join(dir, name), { recursive: true });
+    writeFileSync(path.join(dir, name, 'transcript.txt'), `${name} transcript\n`);
+  }
+  for (const [file, content] of Object.entries(extra)) writeFileSync(path.join(dir, file), content);
+  const manifest = buildManifest(dir, { version, commit });
+  writeFileSync(path.join(dir, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
+  if (key) signManifest(dir, key);
+  return dir;
+}
+
+function trust(root, ...keys) {
+  writeFileSync(path.join(root, '.axocoatl', 'gate-keys'), `# gate account keys\n${keys.map((key) => key.line).join('\n')}\n`);
+}
+
+function commitAll(root, message = 'evidence') {
+  git(root, 'add', '-A');
+  git(root, 'commit', '-qm', message);
+  return git(root, 'rev-parse', 'HEAD');
+}
+
+function decide(root, tagCommit, extra = {}) {
+  return decideRelease({
+    root, version: VERSION, tagCommit,
+    keysFile: path.join(root, '.axocoatl', 'gate-keys'),
+    requiredFile: path.join(root, 'docs', 'RELEASE_GATE.md'),
+    ...extra,
+  });
+}
+
+const passingPaths = (commit) => ({
+  'A-x86': pathEvidence('A-x86', commit),
+  'C1-local': pathEvidence('C1-local', commit),
+});
+
+test('the required paths come from the block in RELEASE_GATE.md, the 16 GB ones conditionally', () => {
+  assert.deepEqual(parseRequiredPaths(REQUIRED), [
+    { name: 'A-x86', when: 'always' }, { name: 'C1-local', when: 'always' }, { name: 'C2-local', when: 'sixteen-gb' },
+  ]);
+  assert.throws(() => parseRequiredPaths('# nothing'), /required-paths block/);
+  const real = parseRequiredPaths(readFileSync(path.join(REPO, 'docs', 'RELEASE_GATE.md'), 'utf8'));
+  const always = real.filter((entry) => entry.when === 'always').map((entry) => entry.name);
+  assert.deepEqual(always, ['A-x86', 'A-arm', 'C1-local', 'C1-claude-code', 'C1-codex', 'C1-openrouter', 'C1-workbench-webkit', 'D1']);
+  assert.ok(real.some((entry) => entry.name.startsWith('C2-') && entry.when === 'sixteen-gb'));
+});
+
+test('a tag with no evidence is refused, naming every missing path', () => {
+  const { root, commit } = makeRepo();
+  trust(root, makeKey());
+  const tag = commitAll(root, 'trust a key');
+  const decision = decide(root, tag);
+  assert.equal(decision.ok, false);
+  assert.equal(decision.status, 'fail');
+  assert.match(decision.lines[0], /FAIL for v1\.5\.0/);
+  assert.ok(decision.lines.includes('Missing evidence for: A-x86, C1-local'), decision.lines.join('\n'));
+  assert.ok(decision.lines.some((line) => line.includes('no evidence bundle exists under release-evidence/1.5.0/')));
+  assert.notEqual(commit, tag);
+});
+
+test('a signed bundle that passes every required path lets the tag publish, from the evidence commit on top (which may also add the gate key)', () => {
+  const { root, commit } = makeRepo();
+  const key = makeKey();
+  trust(root, key);
+  writeBundle(root, commit, passingPaths(commit), key);
+  const tag = commitAll(root);
+  const decision = decide(root, tag);
+  assert.equal(decision.ok, true, decision.lines.join('\n'));
+  assert.equal(decision.status, 'pass');
+  assert.match(decision.lines[0], /^New-user gate: PASS for v1\.5\.0/);
+  assert.ok(decision.lines.includes('  A-x86: pass'));
+  assert.equal(commitMatches(root, commit, tag).ok, true);
+  // The same bundle is evidence for its own commit too.
+  assert.equal(commitMatches(root, commit, commit).ok, true);
+});
+
+test('a product change after the tested commit makes its bundle no evidence for the tag', () => {
+  const { root, commit } = makeRepo();
+  const key = makeKey();
+  trust(root, key);
+  writeBundle(root, commit, passingPaths(commit), key);
+  writeFileSync(path.join(root, 'README.md'), '# product, changed after the gate ran\n');
+  const tag = commitAll(root);
+  const decision = decide(root, tag);
+  assert.equal(decision.ok, false);
+  assert.ok(decision.lines.some((line) => /outside release-evidence\/ and \.axocoatl\/gate-keys: .*README\.md/.test(line)), decision.lines.join('\n'));
+});
+
+test('evidence for a commit that is not an ancestor of the tag is refused', () => {
+  const { root, commit } = makeRepo();
+  const key = makeKey();
+  git(root, 'checkout', '-q', '-b', 'side');
+  writeFileSync(path.join(root, 'side.txt'), 'side\n');
+  const side = commitAll(root, 'side');
+  git(root, 'checkout', '-q', 'main');
+  trust(root, key);
+  writeBundle(root, side, passingPaths(side), key);
+  const tag = commitAll(root);
+  const decision = decide(root, tag);
+  assert.equal(decision.ok, false);
+  assert.ok(decision.lines.some((line) => line.includes('is not an ancestor of')), decision.lines.join('\n'));
+  assert.notEqual(side, commit);
+});
+
+test('a bundle signed by a key not in .axocoatl/gate-keys, or not signed, is refused', () => {
+  const { root, commit } = makeRepo();
+  const trusted = makeKey();
+  const stranger = makeKey();
+  trust(root, trusted);
+  writeBundle(root, commit, passingPaths(commit), stranger);
+  const tag = commitAll(root);
+  const decision = decide(root, tag);
+  assert.equal(decision.ok, false);
+  assert.ok(decision.lines.some((line) => line.includes('no signature in manifest.dsse.json verifies with a key in the gate keys')), decision.lines.join('\n'));
+
+  const unsigned = makeRepo();
+  trust(unsigned.root, trusted);
+  writeBundle(unsigned.root, unsigned.commit, passingPaths(unsigned.commit), null);
+  const unsignedDecision = decide(unsigned.root, commitAll(unsigned.root));
+  assert.ok(unsignedDecision.lines.some((line) => line.includes('manifest.dsse.json is missing')), unsignedDecision.lines.join('\n'));
+});
+
+test('without any gate key nothing verifies', () => {
+  const { root, commit } = makeRepo();
+  const key = makeKey();
+  writeFileSync(path.join(root, '.axocoatl', 'gate-keys'), '# no key yet\n');
+  writeBundle(root, commit, passingPaths(commit), key);
+  const decision = decide(root, commitAll(root));
+  assert.equal(decision.ok, false);
+  assert.ok(decision.lines.some((line) => line.includes('lists no key: no gate key is trusted')), decision.lines.join('\n'));
+  rmSync(path.join(root, '.axocoatl', 'gate-keys'));
+  assert.ok(decide(root, git(root, 'rev-parse', 'HEAD')).lines.some((line) => line.includes('gate-keys is missing')));
+});
+
+test('a file changed, added or replaced by a link after signing breaks the bundle', () => {
+  const key = makeKey();
+  for (const [tamper, expected] of [
+    [(dir) => writeFileSync(path.join(dir, 'A-x86', 'transcript.txt'), 'edited\n'), 'A-x86/transcript.txt changed after the manifest was signed'],
+    [(dir) => writeFileSync(path.join(dir, 'A-x86', 'extra.txt'), 'unlisted\n'), 'A-x86/extra.txt is in the bundle but not in the signed manifest'],
+    [(dir) => rmSync(path.join(dir, 'C1-local', 'transcript.txt')), 'C1-local/transcript.txt is in the signed manifest but missing'],
+    [(dir) => writeFileSync(path.join(dir, MANIFEST_FILE), '{"schema":"axocoatl.release-evidence/1"}\n'), 'manifest.json differs from the signed manifest'],
+    [(dir) => { rmSync(path.join(dir, 'A-x86', 'transcript.txt')); symlinkSync('/etc/hosts', path.join(dir, 'A-x86', 'transcript.txt')); }, 'A-x86/transcript.txt is a symbolic link'],
+  ]) {
+    const { root, commit } = makeRepo();
+    trust(root, key);
+    const dir = writeBundle(root, commit, passingPaths(commit), key);
+    tamper(dir);
+    const decision = decide(root, commitAll(root));
+    assert.equal(decision.ok, false, expected);
+    assert.ok(decision.lines.some((line) => line.includes(expected)), `${expected}\n${decision.lines.join('\n')}`);
+  }
+});
+
+test('a failed, skipped or self-contradicting path is refused by name', () => {
+  const key = makeKey();
+  const cases = [
+    [(commit) => pathEvidence('C1-local', commit, { pass: false }), 'step "run fix node-deps" failed'],
+    [(commit) => pathEvidence('C1-local', commit, { steps: [{ name: 'workbench in Safari', status: 'skip', required: true }] }), 'step "workbench in Safari" was skipped'],
+    [(commit) => ({ ...pathEvidence('C1-local', commit, { pass: false }), pass: true }), 'says it passed, but required steps did not'],
+    [(commit) => ({ ...pathEvidence('C1-local', commit), commit: 'f'.repeat(40) }), `commit "${'f'.repeat(40)}"`],
+    [(commit) => ({ ...pathEvidence('C1-local', commit), path: 'C1-codex' }), 'the file is evidence of "C1-codex"'],
+  ];
+  for (const [make, expected] of cases) {
+    const { root, commit } = makeRepo();
+    trust(root, key);
+    const dir = path.join(root, 'release-evidence', VERSION, commit);
+    mkdirSync(dir, { recursive: true });
+    const evidence = make(commit);
+    writeFileSync(path.join(dir, 'A-x86.json'), JSON.stringify(pathEvidence('A-x86', commit)));
+    writeFileSync(path.join(dir, 'C1-local.json'), JSON.stringify(evidence));
+    const manifest = {
+      schema: 'axocoatl.release-evidence/1', version: VERSION, commit, created_at: 'now',
+      paths: { 'A-x86': { file: 'A-x86.json', pass: true }, 'C1-local': { file: 'C1-local.json', pass: evidence.pass } },
+      files: ['A-x86.json', 'C1-local.json'].map((file) => ({ path: file, sha256: digest(readFileSync(path.join(dir, file))) })),
+    };
+    writeFileSync(path.join(dir, MANIFEST_FILE), JSON.stringify(manifest));
+    signManifest(dir, key);
+    const decision = decide(root, commitAll(root));
+    assert.equal(decision.ok, false, expected);
+    assert.ok(decision.lines.some((line) => line.includes(expected)), `${expected}\n${decision.lines.join('\n')}`);
+  }
+});
+
+test('optional steps may fail without failing the path', () => {
+  assert.equal(stepsPass([{ name: 'a', status: 'pass' }, { name: 'timing', status: 'fail', required: false }]), true);
+  assert.equal(stepsPass([{ name: 'a', status: 'skip' }]), false);
+  assert.equal(stepsPass([]), false);
+});
+
+test('naming 16 GB anywhere in the public copy makes the C2 paths required', () => {
+  const { root, commit } = makeRepo({ readme: '# product\n\nRuns on a 16 GB Mac.\n' });
+  assert.deepEqual(sixteenGbMentions(root), ['README.md:3']);
+  const key = makeKey();
+  trust(root, key);
+  writeBundle(root, commit, passingPaths(commit), key);
+  const tag = commitAll(root);
+  const without = decide(root, tag);
+  assert.equal(without.ok, false);
+  assert.ok(without.lines.some((line) => line.includes('names 16 GB (README.md:3)')), without.lines.join('\n'));
+  assert.ok(without.lines.includes('Missing evidence for: C2-local'), without.lines.join('\n'));
+  rmSync(path.join(root, 'release-evidence'), { recursive: true });
+  writeBundle(root, commit, { ...passingPaths(commit), 'C2-local': pathEvidence('C2-local', commit) }, key);
+  const withC2 = decide(root, commitAll(root, 'C2 evidence'));
+  assert.equal(withC2.ok, true, withC2.lines.join('\n'));
+});
+
+test('the override passes a failing gate only from workflow_dispatch with the exact phrase, and says so loudly', () => {
+  const { root } = makeRepo();
+  trust(root, makeKey());
+  const tag = commitAll(root);
+  assert.equal(overridePhrase(VERSION), 'publish v1.5.0 without the new-user gate');
+  const pushed = decide(root, tag, { override: overridePhrase(VERSION), event: 'push' });
+  assert.equal(pushed.ok, false);
+  assert.match(pushed.lines[0], /only from a manual workflow_dispatch run/);
+  const wrong = decide(root, tag, { override: 'publish anyway', event: 'workflow_dispatch' });
+  assert.equal(wrong.ok, false);
+  assert.match(wrong.lines[0], /does not match/);
+  const otherVersion = decide(root, tag, { override: overridePhrase('1.4.9'), event: 'workflow_dispatch' });
+  assert.equal(otherVersion.ok, false);
+  const overridden = decide(root, tag, { override: overridePhrase(VERSION), event: 'workflow_dispatch', actor: 'founder' });
+  assert.equal(overridden.ok, true);
+  assert.equal(overridden.status, 'overridden');
+  assert.match(overridden.lines[0], /OVERRIDDEN for v1\.5\.0 .* by founder, who typed the override phrase/);
+  assert.ok(overridden.lines.includes('Missing evidence for: A-x86, C1-local'));
+});
+
+test('check-evidence.mjs exits 0, 1 or 2 and writes the job summary', () => {
+  const { root, commit } = makeRepo();
+  const key = makeKey();
+  trust(root, key);
+  writeBundle(root, commit, passingPaths(commit), key);
+  const tag = commitAll(root);
+  const summary = path.join(scratch, `summary-${counter}.md`);
+  const run = (...args) => spawnSync(process.execPath, [path.join(HERE, 'check-evidence.mjs'), '--root', root, ...args], {
+    encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: summary },
+  });
+  const pass = run('--version', 'v1.5.0', '--tag-commit', tag);
+  assert.equal(pass.status, 0, pass.stdout + pass.stderr);
+  assert.match(readFileSync(summary, 'utf8'), /## New-user gate: pass/);
+  const refused = run('--version', '1.5.1', '--tag-commit', tag);
+  assert.equal(refused.status, 1, refused.stdout);
+  assert.match(refused.stdout, /::error title=New-user gate::New-user gate: FAIL for v1\.5\.1/);
+  const overridden = run('--version', '1.5.1', '--tag-commit', tag, '--override', overridePhrase('1.5.1'), '--event', 'workflow_dispatch', '--actor', 'founder');
+  assert.equal(overridden.status, 0, overridden.stdout);
+  assert.match(overridden.stdout, /::warning title=New-user gate overridden::/);
+  assert.match(readFileSync(summary, 'utf8'), /## New-user gate: OVERRIDDEN/);
+  assert.equal(run('--version', '1.5.0').status, 2);
+  assert.equal(run('--tag-commit', tag, '--version', '1.5.0', '--bogus', 'x').status, 2);
+});
+
+test('a bundle signed by the real `axocoatl receipt sign-evidence` verifies here', () => {
+  const fixture = path.join(REPO, 'tests', 'fixtures', 'release-evidence', 'cli-signed');
+  const keys = parseKeys(readFileSync(path.join(fixture, 'gate-keys'), 'utf8'));
+  const result = verifyBundle(path.join(fixture, 'bundle'), { keys, version: VERSION, commit: '0123456789abcdef0123456789abcdef01234567' });
+  assert.deepEqual(result.problems, []);
+  assert.equal(result.paths.get('A-x86').pass, true);
+  assert.equal(result.key.shortId, '4625eb31a212abb0');
+  // Another key does not verify it.
+  const other = verifyBundle(path.join(fixture, 'bundle'), { keys: parseKeys(makeKey().line) });
+  assert.ok(other.problems[0].includes('no signature'));
+});
+
+test('buildManifest refuses evidence of another version or commit', () => {
+  const dir = path.join(scratch, 'mismatch');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, 'A-x86.json'), JSON.stringify(pathEvidence('A-x86', 'a'.repeat(40))));
+  assert.throws(() => buildManifest(dir, { version: VERSION, commit: 'b'.repeat(40) }), /not 1\.5\.0 at b{40}/);
+  assert.throws(() => buildManifest(dir, { version: 'v1', commit: 'b'.repeat(40) }), /invalid version/);
+});
+
+test('time and download are compared with the previous release, flagging growth over 20%', () => {
+  const run = (version, seconds, bytes) => ({ path: 'C1-local', version, steps: [{ name: 'a', status: 'pass', seconds, bytes_downloaded: bytes }, { name: 'b', status: 'pass' }] });
+  const lines = compareTotals(run('1.4.0', 100, 1000), run('1.5.0', 130, 1100));
+  assert.equal(lines[0], 'C1-local: 1.4.0 -> 1.5.0');
+  assert.match(lines[1], /100\.0s -> 130\.0s \(\+30%\) REGRESSION/);
+  assert.match(lines[2], /1000 bytes -> 1100 bytes \(\+10%\)$/);
+  assert.match(compareTotals({}, run('1.5.0', 5, 0))[1], /no previous figure/);
+});

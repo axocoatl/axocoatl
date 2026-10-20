@@ -1,0 +1,29 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "A-x86",
+  "tier": "A",
+  "version": "1.5.0",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "pass": true,
+  "started_at": "2026-10-19T00:00:00Z",
+  "finished_at": "2026-10-19T00:10:00Z",
+  "steps": [
+    {
+      "name": "install",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 3
+    },
+    {
+      "name": "run fix node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 41
+    }
+  ],
+  "attachments": [
+    "A-x86/transcript.txt"
+  ]
+}
