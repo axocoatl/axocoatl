@@ -39,7 +39,7 @@ function teamView({ approved = false } = {}) {
       agent: { activations: 4, invocations: 400, tokens: 4000000, cost_microunits: 10000000 },
       helper: { activations: 3, invocations: 120, tokens: 1500000, cost_microunits: 3000000 },
       free_providers: ['ollama'],
-      expires_at_ms: Date.now() + DAY_MS,
+      expires_in_ms: DAY_MS,
     },
   };
 }
@@ -92,6 +92,8 @@ for (const engine of engines) {
     const { page, errors, calls, close } = await fixture(engine);
     try {
       await page.getByText('Suggested limits are filled in from the built-in fix loadout', { exact: false }).waitFor();
+      // The suggested expiry is a lifetime; the app fixes the instant when it fills the slot in.
+      await page.getByText('expiring in 24 hours.', { exact: false }).waitFor();
       assert.equal(await page.getByLabel('Activation limit', { exact: true }).inputValue(), '4');
       assert.equal(await page.getByLabel('Provider and tool invocation limit', { exact: true }).inputValue(), '400');
       assert.equal(await page.getByLabel('Total token limit', { exact: true }).inputValue(), '4000000');

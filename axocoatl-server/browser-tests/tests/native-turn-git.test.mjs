@@ -137,7 +137,7 @@ test('the first native turn on the suggested budget fills Last turn, across a re
       ...slot,
       max_output_tokens: 4096,
       limits: { ...budget.agent, cost_microunits: budget.free_providers.includes(slot.provider) ? 0 : budget.agent.cost_microunits },
-      expires_at_ms: budget.expires_at_ms,
+      expires_at_ms: Date.now() + budget.expires_in_ms,
     })),
     dependencies: view.dependencies, layout: view.layout,
   };

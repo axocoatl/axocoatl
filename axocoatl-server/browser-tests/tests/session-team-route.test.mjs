@@ -43,7 +43,12 @@ test('actual Session team routes authenticate whole-graph Apply, retain exact re
   const repeated=await call(id,'/apply',apply);assert.equal(repeated.status,200,JSON.stringify(repeated.value));assert.equal(repeated.value.review_digest,preview.value.review_digest);assert.equal(observed.length,before,'saved Apply is resolved before model availability checks');
   const conflict=await call(id,'/apply',{...apply,edit:{...edit,slots:edit.slots.map(slot=>({...slot,instructions:'Different instructions under the same command'}))}});assert.equal(conflict.status,409);assert.equal(observed.length,before);
   const stale=await call(id,'/preview',{...edit,command_id:'stale-team-edit'});assert.equal(stale.status,409);assert.equal(observed.length,before);
-  assert.equal((await call(id,'/cancel',{command_id:'cancel-team-draft'})).status,200);assert.deepEqual((await call(id)).value,saved.value,'Cancel cannot change saved team or grant');
+  // Cancel changes nothing a read returns: the saved team and grant, and the
+  // suggested budget, whose expiry is a lifetime the app fixes when it fills
+  // a slot in, so two reads of an unchanged team are equal.
+  assert.equal(saved.value.suggested_budget.expires_in_ms,86400000);assert.equal(saved.value.suggested_budget.expires_at_ms,undefined);
+  assert.equal((await call(id,'/cancel',{command_id:'cancel-team-draft'})).status,200);
+  assert.deepEqual((await call(id)).value,saved.value,'Cancel cannot change saved team or grant');
   assert.equal(observed.filter(request=>request.path==='/api/chat'&&!isContractProbe(request.body)).length,0,'Preview and Apply never perform inference (the contract probes are checks)');
   for(const request of observed.filter(request=>request.path==='/api/generate'))assert.equal(request.body.prompt??'','','native preparation may only load/observe context');
 });
