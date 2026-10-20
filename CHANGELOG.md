@@ -380,6 +380,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   do outside it; creating block devices stays refused. Landlock ABI 1 cannot handle
   `REFER`, so on Linux 5.13 to 5.18 such renames are still refused, and the probe names
   them. The embedded execution supervisors were rebuilt with this change.
+- **One upstream error from the reviewer's model no longer ends a run.** When a required
+  reviewer's model call failed after its response had started (an HTTP 502 from
+  OpenRouter, seen live), the provider retry did not apply, the review recorded "The
+  reviewer did not finish" and the run ended needing attention. When the reviewer's
+  call fails with a transient error (a 429, a 5xx, a timeout or a reset connection,
+  the same policy as provider retries), the host now runs that review round again,
+  once per round in an epoch, with the same prompt about the same result. The run
+  takes a round, as asking again for a verdict does, so it happens only while a round
+  remains. A second transient failure, a 400, 401, 402 or 403, a refusal, a safety stop
+  or a failure whose cause is not recorded ends the review as before. The run record
+  lists the retry as a provider retry of the reviewer with its HTTP status, and the
+  Outcome counts it.
 - A run that ended at admission (a failed environment or setup) reported "0 recorded
   events" in its network summary; it now counts what the Session's record holds.
 - The `sandbox.egress` warning under `sandbox.network: bridge` said `allow` was

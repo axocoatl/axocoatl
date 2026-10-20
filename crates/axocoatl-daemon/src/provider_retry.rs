@@ -188,6 +188,86 @@ pub fn retry_status(note: &str) -> Option<u16> {
         .ok()
 }
 
+/// How the host words a failed activation's provider error: the first line
+/// of its terminal output.
+const PROVIDER_FAILURE_LINE: &str = "Activation failed: LLM provider error: ";
+
+/// The transient provider failure that ended an activation, read from the
+/// host-written first line of its recorded failure (`Activation failed: LLM
+/// provider error: ...`) and judged by the same policy as [`decide`]: a 429,
+/// a 5xx, a timeout or a reset connection. `None` for anything else: a 400,
+/// 401, 402 or 403, a refusal or a safety stop, a failure that is not the
+/// provider's, or one whose cause the line does not state. The model's own
+/// text after that line never decides.
+pub fn transient_failure_of_text(text: &str) -> Option<ProviderFailure> {
+    let line = text.lines().next()?;
+    let view = axocoatl_session::execution_content::classify_activation_failure(line)?;
+    let rest = line.strip_prefix(PROVIDER_FAILURE_LINE)?;
+    if view.refusal || view.class != "provider_error" {
+        return None;
+    }
+    let failure = if let Some(status) = view.http_status {
+        ProviderFailure::Status {
+            status,
+            retry_after: retry_after_hint(rest),
+        }
+    } else if rest.starts_with("Rate limited by ") {
+        ProviderFailure::Status {
+            status: 429,
+            retry_after: None,
+        }
+    } else if rest.starts_with("Network error: ") || rest.starts_with("Streaming error: ") {
+        if names_timeout(rest) {
+            ProviderFailure::Timeout
+        } else if names_reset(rest) {
+            ProviderFailure::ConnectionReset
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+    matches!(decide(&failure, 0), RetryDecision::RetryAfter(_)).then_some(failure)
+}
+
+/// The note recording that the host ran review round `round` again after
+/// the reviewer's model call failed with the transient `failure`. It starts
+/// with `HTTP <status>` when the failure was a provider status, which
+/// [`retry_status`] reads back.
+pub fn review_retry_note(failure: &ProviderFailure, round: u32) -> String {
+    let what = match failure {
+        ProviderFailure::Status { status, .. } => {
+            format!("HTTP {status}: the reviewer's model call failed with HTTP {status}")
+        }
+        ProviderFailure::Timeout => "The reviewer's model call timed out".to_owned(),
+        ProviderFailure::ConnectionReset => {
+            "The reviewer's model provider closed the connection".to_owned()
+        }
+        ProviderFailure::Refusal | ProviderFailure::Other(_) => {
+            "The reviewer's model call failed".to_owned()
+        }
+    };
+    format!("{what}; its review round {round} was run again, once, on the same result")
+}
+
+/// Whether `next` is the host's run again of the review round `previous`
+/// failed in: the same reviewer in the same epoch, the next generation, with
+/// the same input. The review admits nothing else of that shape: a new round
+/// is told its own round number, and a re-ask carries the host's note.
+pub fn reruns_review_round(
+    previous: &axocoatl_session::turn_contract::ContractActivation,
+    next: &axocoatl_session::turn_contract::ContractActivation,
+) -> bool {
+    previous.state == axocoatl_session::turn_contract::ActivationState::Failed
+        && previous.activation.node_id == next.activation.node_id
+        && previous.activation.execution_epoch_id == next.activation.execution_epoch_id
+        && previous.activation.generation.checked_add(1) == Some(next.activation.generation)
+        && previous.input.guidance == next.input.guidance
+        && previous.input.attachments == next.input.attachments
+        && previous.input.repository == next.input.repository
+        && previous.input.revision_context == next.input.revision_context
+}
+
 /// One [`RunEvent::ProviderRetry`] for each provider retry the turn's
 /// control-plane projection records, in node and activation order: the
 /// retries this policy made and the 1.2 retry of a stream that ended
@@ -418,6 +498,59 @@ mod tests {
             with_retry_after("x".into(), None),
             "x",
             "no header, no suffix"
+        );
+    }
+
+    /// Only the host-written first line decides, by the same table as
+    /// [`decide`]: a transient status, timeout or reset is read; a
+    /// rejection, a refusal and anything that is not the provider's are not.
+    #[test]
+    fn recorded_failures_are_transient_only_by_the_retry_policy() {
+        let line = |rest: &str| format!("Activation failed: LLM provider error: {rest}");
+        for (text, failure) in [
+            (
+                line("openrouter API error: 502 - <html>bad gateway</html>"),
+                status(502),
+            ),
+            (line("openrouter API error: 429 - slow down"), status(429)),
+            (
+                line("Rate limited by openrouter. Retry after None s"),
+                status(429),
+            ),
+            (
+                line("Network error: operation timed out"),
+                ProviderFailure::Timeout,
+            ),
+            (
+                line("Streaming error: connection reset by peer"),
+                ProviderFailure::ConnectionReset,
+            ),
+        ] {
+            assert_eq!(transient_failure_of_text(&text), Some(failure), "{text}");
+        }
+        for text in [
+            line("openrouter API error: 401 - unauthorized"),
+            line("openrouter API error: 400 - bad request"),
+            line("openrouter API error: 402 - payment required"),
+            line("openrouter API error: 403 - forbidden"),
+            line("Authentication failed for openrouter"),
+            line("Content filtered by openrouter: safety"),
+            line("openrouter API error: 503 - Content filtered by openrouter"),
+            line("Network error: dns error: no such host"),
+            line("openrouter API error: 429 - busy (Retry-After: 3600 s)"),
+            "Activation failed: LLM provider stream ended early".to_owned(),
+            "Activation failed: Tool call failed: API error: 502 - timed out".to_owned(),
+            format!("Something else\n{}", line("openrouter API error: 502 - x")),
+            String::new(),
+        ] {
+            assert_eq!(transient_failure_of_text(&text), None, "{text}");
+        }
+        let note = review_retry_note(&status(502), 1);
+        assert_eq!(retry_status(&note), Some(502));
+        assert!(note.contains("its review round 1 was run again"), "{note}");
+        assert_eq!(
+            retry_status(&review_retry_note(&ProviderFailure::Timeout, 2)),
+            None
         );
     }
 

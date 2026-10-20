@@ -244,6 +244,9 @@ struct Scenario {
     verdicts: Vec<String>,
     /// The lead's first generation loses its provider connection.
     lead_fails_first: bool,
+    /// How each reviewer generation's model call fails after its stream
+    /// started, by generation (index 0 is generation 1); `None` answers.
+    reviewer_failures: Vec<Option<ReviewerFailure>>,
     lead_requests: std::sync::Mutex<Vec<(ActivationRef, String)>>,
     reviewer_requests: std::sync::Mutex<Vec<(ActivationRef, String)>>,
 }
@@ -252,6 +255,7 @@ impl Scenario {
         Arc::new(Self {
             verdicts: verdicts.iter().map(|verdict| verdict.to_string()).collect(),
             lead_fails_first: false,
+            reviewer_failures: vec![],
             lead_requests: std::sync::Mutex::new(vec![]),
             reviewer_requests: std::sync::Mutex::new(vec![]),
         })
@@ -263,6 +267,29 @@ impl Scenario {
             .iter()
             .map(|(activation, _)| activation.generation)
             .collect()
+    }
+}
+
+/// How a reviewer's model call fails once its stream has started, past the
+/// provider boundary's own retry of a failure before anything was yielded.
+#[derive(Clone, Copy)]
+enum ReviewerFailure {
+    Status(u16),
+    Refusal,
+}
+impl ReviewerFailure {
+    fn error(self) -> ProviderError {
+        match self {
+            Self::Status(status) => ProviderError::ApiError {
+                provider: "ollama".into(),
+                status,
+                message: "upstream failure".into(),
+            },
+            Self::Refusal => ProviderError::ContentFiltered {
+                provider: "ollama".into(),
+                reason: "safety".into(),
+            },
+        }
     }
 }
 
@@ -318,6 +345,20 @@ impl LlmProvider for ScriptedProvider {
                 .lock()
                 .unwrap()
                 .push((self.activation.clone(), text));
+            if let Some(failure) = self
+                .scenario
+                .reviewer_failures
+                .get(generation as usize - 1)
+                .copied()
+                .flatten()
+            {
+                return Ok(Box::pin(tokio_stream::iter(vec![
+                    Ok(StreamEvent::TextDelta {
+                        delta: "Reviewing".into(),
+                    }),
+                    Err(failure.error()),
+                ])));
+            }
             self.scenario
                 .verdicts
                 .get(generation as usize - 1)
@@ -1099,4 +1140,160 @@ async fn actual_required_checks_and_review_complete_the_turn() {
         assert_eq!(review.round, Some(rounds as u32));
         assert!(review.current);
     }
+}
+
+/// A scenario whose reviewer's model calls fail as `failures` says, by
+/// generation, and answer `verdicts` otherwise.
+fn failing_reviewer(failures: &[Option<ReviewerFailure>], verdicts: &[&str]) -> Arc<Scenario> {
+    Arc::new(Scenario {
+        reviewer_failures: failures.to_vec(),
+        ..Arc::into_inner(Scenario::new(verdicts)).unwrap()
+    })
+}
+
+/// The run events of the reviewer's provider retries, as a loadout run's
+/// record reads them.
+fn review_retries(run: &Run) -> Vec<axocoatl_session::run_record::RunEvent> {
+    crate::provider_retry::run_events(&run.controller.control_plane().unwrap())
+        .into_iter()
+        .filter(|event| {
+            matches!(event, axocoatl_session::run_record::RunEvent::ProviderRetry { node_id, .. }
+                if node_id == REVIEW_NODE_ID)
+        })
+        .collect()
+}
+
+/// A reviewer whose model call fails with a transient HTTP 502 after its
+/// stream started runs the same round again, once, with the same prompt in
+/// its next generation, and that run's approval completes the turn. The run
+/// record shows the retry with its status.
+#[tokio::test]
+async fn a_transient_reviewer_failure_runs_its_round_again_once() {
+    let fixture = review_fixture(3).await;
+    let scenario = failing_reviewer(
+        &[Some(ReviewerFailure::Status(502))],
+        &["", "VERDICT: APPROVE\nNothing must change."],
+    );
+    let run = run_turn(&fixture, scenario.clone()).await;
+    let contract = run.outcome.snapshot.contract();
+    assert_eq!(
+        contract.state(),
+        Some(LogicalTurnState::Completed),
+        "{contract:?}"
+    );
+    assert_eq!(scenario.lead_generations(), vec![1]);
+    assert_eq!(contract.epochs().len(), 1);
+    let requests = scenario.reviewer_requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].0.generation, 1);
+    assert_eq!(requests[1].0.generation, 2);
+    // The same round about the same result: the same prompt and round text.
+    assert_eq!(requests[0].1, requests[1].1);
+    assert!(
+        requests[1].1.contains("review round 1 of 3"),
+        "{}",
+        requests[1].1
+    );
+    let reviewer: Vec<_> = contract
+        .activations()
+        .iter()
+        .filter(|item| item.activation.node_id == reviewer_node())
+        .collect();
+    assert_eq!(reviewer.len(), 2);
+    assert_eq!(reviewer[0].state, ActivationState::Failed);
+    assert_eq!(reviewer[0].input.guidance, reviewer[1].input.guidance);
+    let observations = review_observations(&run);
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].0.outcome, ConditionOutcome::Passed);
+    assert_eq!(observations[0].1["verdict"], "approve");
+    assert_eq!(observations[0].1["reviewer"]["generation"], 2);
+    let retries = review_retries(&run);
+    assert_eq!(retries.len(), 1, "{retries:?}");
+    let axocoatl_session::run_record::RunEvent::ProviderRetry {
+        status,
+        reason,
+        at_ms,
+        ..
+    } = &retries[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(*status, Some(502));
+    assert!(*at_ms > 0);
+    assert!(
+        reason.contains("the reviewer's model call failed with HTTP 502")
+            && reason.contains("its review round 1 was run again"),
+        "{reason}"
+    );
+}
+
+/// A second transient failure of the same round ends the review as any
+/// reviewer that did not finish does: the turn needs attention and the
+/// person decides. The one retry is still on the record.
+#[tokio::test]
+async fn a_second_transient_reviewer_failure_ends_the_review() {
+    let fixture = review_fixture(3).await;
+    let scenario = failing_reviewer(
+        &[
+            Some(ReviewerFailure::Status(502)),
+            Some(ReviewerFailure::Status(503)),
+        ],
+        &["VERDICT: APPROVE"],
+    );
+    let run = run_turn(&fixture, scenario.clone()).await;
+    let contract = run.outcome.snapshot.contract();
+    assert_eq!(contract.state(), Some(LogicalTurnState::NeedsAttention));
+    assert!(run.outcome.finalized.is_none());
+    assert_eq!(scenario.reviewer_requests.lock().unwrap().len(), 2);
+    let observations = review_observations(&run);
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].0.outcome, ConditionOutcome::Failed);
+    assert_eq!(observations[0].1["round"], 2);
+    let reason = observations[0].1["reason"].as_str().unwrap();
+    assert!(
+        reason.starts_with("The reviewer did not finish, so nothing approved this result."),
+        "{reason}"
+    );
+    assert_eq!(review_retries(&run).len(), 1);
+}
+
+/// A rejection or a refusal is not transient: the reviewer is not run again
+/// and the review ends as it did before.
+#[tokio::test]
+async fn a_rejected_or_refused_reviewer_call_is_not_run_again() {
+    for failure in [
+        ReviewerFailure::Status(401),
+        ReviewerFailure::Status(400),
+        ReviewerFailure::Refusal,
+    ] {
+        let fixture = review_fixture(3).await;
+        let scenario = failing_reviewer(&[Some(failure)], &["VERDICT: APPROVE"]);
+        let run = run_turn(&fixture, scenario.clone()).await;
+        let contract = run.outcome.snapshot.contract();
+        assert_eq!(contract.state(), Some(LogicalTurnState::NeedsAttention));
+        assert_eq!(scenario.reviewer_requests.lock().unwrap().len(), 1);
+        let observations = review_observations(&run);
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].1["round"], 1);
+        assert!(observations[0].1["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("The reviewer did not finish"));
+        assert!(review_retries(&run).is_empty());
+    }
+}
+
+/// A transient failure in the last round is not run again: the retry takes a
+/// round, as asking again for a verdict does, and none remains.
+#[tokio::test]
+async fn a_transient_failure_in_the_last_round_is_not_run_again() {
+    let fixture = review_fixture(1).await;
+    let scenario = failing_reviewer(&[Some(ReviewerFailure::Status(502))], &["VERDICT: APPROVE"]);
+    let run = run_turn(&fixture, scenario.clone()).await;
+    assert_eq!(
+        run.outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::NeedsAttention)
+    );
+    assert_eq!(scenario.reviewer_requests.lock().unwrap().len(), 1);
+    assert!(review_retries(&run).is_empty());
 }

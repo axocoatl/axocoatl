@@ -917,6 +917,14 @@ impl DispatchState {
             ActivationState::Failed
             | ActivationState::Interrupted
             | ActivationState::Superseded => {
+                // One transient provider failure of this round's model call
+                // does not end the review: the round runs again, once.
+                if current_round
+                    && self.transient_review_failure(&snapshot, &criterion, &latest)?
+                    && self.rerun_review_round(&snapshot, &latest)?
+                {
+                    return Ok(true);
+                }
                 let reason = if latest.activation.execution_epoch_id == epoch {
                     "The reviewer did not finish, so nothing approved this result. Select the \
                      reviewer and Continue to run it again, or Finish."
@@ -933,6 +941,93 @@ impl DispatchState {
                 Ok(true)
             }
         }
+    }
+
+    /// Whether the reviewer activation `failed` ended because its model call
+    /// failed transiently (a 429, a 5xx, a timeout or a reset connection, as
+    /// [`crate::provider_retry`] judges them) and its round may run again:
+    /// it has not already run again in this epoch, and a round remains, as
+    /// the host asks again for a verdict only while one remains. A cause the
+    /// recorded failure does not state is not transient.
+    fn transient_review_failure(
+        &self,
+        snapshot: &DurableTurnSnapshot,
+        criterion: &ReviewCriterion,
+        failed: &ContractActivation,
+    ) -> Result<bool> {
+        if failed.state != ActivationState::Failed
+            || failed.activation.generation >= criterion.max_rounds
+            || snapshot
+                .contract()
+                .activations()
+                .iter()
+                .any(|item| crate::provider_retry::reruns_review_round(item, failed))
+        {
+            return Ok(false);
+        }
+        let Some(reservation) = self
+            .content
+            .activation_output_reservation(snapshot, &failed.activation)
+            .map_err(error)?
+        else {
+            return Ok(false);
+        };
+        let Some(settled) = self
+            .content
+            .activation_output_settlement(&reservation)
+            .map_err(error)?
+        else {
+            return Ok(false);
+        };
+        Ok(failed.failure.as_ref() == Some(settled.reference())
+            && crate::provider_retry::transient_failure_of_text(&settled.content().output.text)
+                .is_some())
+    }
+
+    /// Run the review round `failed` ended in again: the next generation of
+    /// the reviewer with the same input, so the same prompt about the same
+    /// result. The reviewer is read-only, so nothing it did is undone.
+    /// Whether it started; a run the contract would refuse is not started.
+    fn rerun_review_round(
+        &mut self,
+        snapshot: &DurableTurnSnapshot,
+        failed: &ContractActivation,
+    ) -> Result<bool> {
+        let digest = step_digest(&(
+            "host-review-rerun-v1",
+            snapshot.journal_id(),
+            &failed.activation,
+        ))?;
+        let mut input = failed.input.clone();
+        input.manifest_id =
+            InputManifestId::new(format!("review-input-{}", &digest[..48])).map_err(error)?;
+        input.activation.activation_id =
+            ActivationId::new(format!("review-activation-{}", &digest[..48])).map_err(error)?;
+        input.activation.generation = failed
+            .activation
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| error("review round overflow"))?;
+        let event = TurnContractEvent::StartActivation {
+            input: Box::new(input),
+        };
+        let command = format!("host-review-rerun-{}", &digest[..48]);
+        let mut preview = snapshot.contract().clone();
+        let envelope = TurnContractEnvelope {
+            schema_version: TURN_CONTRACT_SCHEMA_VERSION,
+            command_id: CommandId::new(command.as_str()).map_err(error)?,
+            expected_revision: preview.revision(),
+            session_id: snapshot.owner().session_id.clone(),
+            turn_id: snapshot.turn_id().clone(),
+            event: event.clone(),
+        };
+        if preview.apply(&envelope).is_err() {
+            return Ok(false);
+        }
+        let appended = self.append(&command, event);
+        self.fail_closed(appended)?;
+        self.changed.notify_waiters();
+        Ok(true)
     }
 
     /// Record the verdict of the accepted reviewer `item`, which was shown

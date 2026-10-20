@@ -361,6 +361,8 @@ impl SessionTurnControlPlane {
         let graph = contract
             .graph()
             .ok_or(ExecutionContentError::Invalid("snapshot has no graph"))?;
+        let reviewer =
+            axocoatl_session::turn_review::review_node(graph).map(|node| node.node_id.clone());
         let mut nodes = vec![];
         let mut edges = vec![];
         for node in &graph.nodes {
@@ -582,6 +584,54 @@ impl SessionTurnControlPlane {
                         ),
                         details: bounded_json(json!(observation.content)),
                     });
+                }
+                // The host ran this review round again after the reviewer's
+                // model call failed transiently: recorded as the provider
+                // retry it is, at the time the failure was recorded.
+                if reviewer.as_ref() == Some(&node.node_id) {
+                    let previous = execution
+                        .activations
+                        .iter()
+                        .filter(|other| other.activation.activation.node_id == node.node_id)
+                        .take_while(|other| other.activation.activation != activation.activation)
+                        .last()
+                        .filter(|previous| {
+                            crate::provider_retry::reruns_review_round(
+                                &previous.activation,
+                                activation,
+                            )
+                        });
+                    let failed = previous.and_then(|previous| {
+                        let failure = previous.activation.failure.as_ref()?;
+                        previous
+                            .reserved_outputs
+                            .iter()
+                            .find(|output| output.reference == *failure)
+                            .map(|output| (previous, output))
+                    });
+                    if let Some((previous, output)) = failed {
+                        if let Some(failure) = crate::provider_retry::transient_failure_of_text(
+                            &output.content.output.text,
+                        ) {
+                            evidence.push(ControlPlaneEvidence {
+                                kind: "provider_retry".into(),
+                                reference: EvidenceValue::available(
+                                    output.reference.as_str().into(),
+                                ),
+                                summary: bounded_text(&crate::provider_retry::review_retry_note(
+                                    &failure,
+                                    previous.activation.activation.generation,
+                                )),
+                                recorded_at: EvidenceValue::available(
+                                    output.content.output.recorded_at_unix_ms,
+                                ),
+                                details: EvidenceValue::available(json!({
+                                    "failed": previous.activation.activation,
+                                    "rerun": activation.activation,
+                                })),
+                            });
+                        }
+                    }
                 }
                 activations.push(ControlPlaneActivation {
                     reference: ControlPlaneActivationRef::Exact {
