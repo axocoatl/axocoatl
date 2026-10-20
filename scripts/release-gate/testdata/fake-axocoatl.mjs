@@ -71,6 +71,9 @@ async function main() {
       return 0;
     }
     case 'doctor': {
+      // Log lines go to standard error, as the real daemon's tracing does;
+      // the gate must read the JSON document from standard output alone.
+      err('INFO axocoatl doctor: checking the sandbox, models, writers and daemon');
       const config = readConfig();
       const ready = Boolean(config) && onPath('podman') && !process.env.FAKE_NO_SUBUID;
       const doc = {

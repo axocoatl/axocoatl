@@ -159,12 +159,12 @@ stop_daemon() {
 }
 
 doctor_ready() {
-  gate_step "doctor --json says ready" -- axocoatl doctor --json
+  gate_doctor_json "doctor --json says ready" 0 "$GATE_ATTACH/doctor.json"
   gate_check "doctor: ready, no FAIL" "doctor --json is not ready or has a FAIL item" -- node -e '
     const doc = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     const failing = Object.values(doc.sections || {}).flat().filter((i) => i.status === "fail");
     process.exit(doc.ready === true && failing.length === 0 ? 0 : 1);
-  ' "$GATE_ATTACH/logs/$(gate_slug "doctor --json says ready").log"
+  ' "$GATE_ATTACH/doctor.json"
 }
 
 path_begin() {

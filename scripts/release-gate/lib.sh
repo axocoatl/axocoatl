@@ -158,6 +158,13 @@ gate_step() {
   return 1
 }
 
+# gate_doctor_json NAME EXPECT FILE: run `axocoatl doctor --json` as step
+# NAME, expecting exit EXPECT, with its standard output (the document) in
+# FILE and its standard error in the step's log.
+gate_doctor_json() {
+  gate_step "$1" --expect "$2" -- sh -c 'axocoatl doctor --json >"$1"' gate-doctor "$3"
+}
+
 # gate_finish [--json KEY=FILE]... : write <bundle>/<path>.json; its exit is
 # 0 when the path passed.
 gate_finish() {

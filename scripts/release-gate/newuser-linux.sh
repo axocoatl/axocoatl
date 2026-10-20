@@ -221,12 +221,12 @@ if [ -n "$expect_refusal" ]; then
   else
     gate_record "onboard names $expect_refusal" fail '' '' '' "the refusal does not mention $expect_refusal"
   fi
-  gate_step "doctor --json is not ready" --expect 1 -- axocoatl doctor --json
+  gate_doctor_json "doctor --json is not ready" 1 "$GATE_ATTACH/doctor-refusal.json"
   if node -e '
       const doc = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
       const items = Object.values(doc.sections || {}).flat();
       process.exit(doc.ready === false && items.some((i) => i.status === "fail" && JSON.stringify(i).includes(process.argv[2])) ? 0 : 1);
-    ' "$GATE_ATTACH/logs/$(gate_slug "doctor --json is not ready").log" "$expect_refusal" 2>/dev/null; then
+    ' "$GATE_ATTACH/doctor-refusal.json" "$expect_refusal" 2>/dev/null; then
     gate_record "doctor fails Podman, naming $expect_refusal" pass '' '' '' ''
   else
     gate_record "doctor fails Podman, naming $expect_refusal" fail '' '' '' "no failing item naming $expect_refusal"
@@ -256,7 +256,7 @@ else
   gate_check "config.yaml uses the free port $port" "server.port is not $port" -- \
     grep -Eq "^[[:space:]]*port:[[:space:]]*$port([^0-9]|$)" "${config:-/dev/null}"
 fi
-gate_step "doctor --json says ready" -- axocoatl doctor --json
+gate_doctor_json "doctor --json says ready" 0 "$GATE_ATTACH/doctor.json"
 if node -e '
     const doc = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     const sections = doc.sections || {};
@@ -265,7 +265,7 @@ if node -e '
     if (doc.ready !== true || missing.length || failing.length) {
       console.log(JSON.stringify({ ready: doc.ready, missing, failing }));
       process.exit(1);
-    }' "$GATE_ATTACH/logs/$(gate_slug "doctor --json says ready").log" >"$work/doctor-check.txt" 2>&1; then
+    }' "$GATE_ATTACH/doctor.json" >"$work/doctor-check.txt" 2>&1; then
   gate_record "doctor: ready, no FAIL in sandbox, models, writers, daemon" pass '' '' '' ''
 else
   gate_record "doctor: ready, no FAIL in sandbox, models, writers, daemon" fail '' '' '' "$(cut -c1-500 "$work/doctor-check.txt")"
@@ -383,8 +383,8 @@ if [ "$live" = 0 ]; then
     gate_check "onboard did not run sudo for the subuid range" "$(head -n 2 "$work/guard.log" | tr '\n' ' ')" -- \
       test ! -s "$work/guard.log"
     # ...and doctor, on the configured user from step 4, fails the sandbox.
-    gate_step "doctor --json without a subuid range" --expect 1 -- axocoatl doctor --json
-    log="$GATE_ATTACH/logs/$(gate_slug "doctor --json without a subuid range").log"
+    gate_doctor_json "doctor --json without a subuid range" 1 "$GATE_ATTACH/doctor-no-subuid.json"
+    log="$GATE_ATTACH/doctor-no-subuid.json"
     if node -e '
         const doc = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
         const items = Object.values(doc.sections || {}).flat();
