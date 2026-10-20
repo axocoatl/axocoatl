@@ -87,6 +87,12 @@ pub async fn cmd_recipe(command: RecipeCommands) -> i32 {
                     return FAILURE;
                 }
             };
+            // A stopped machine is started; a missing Podman or machine is
+            // named with its fix instead of `podman build`'s own error.
+            if let Err(error) = crate::podman_preflight().await {
+                eprintln!("✗ {error}");
+                return FAILURE;
+            }
             eprintln!(
                 "Building {image} with Podman. This downloads the pinned base image and the \
                  pinned packages of: {}",

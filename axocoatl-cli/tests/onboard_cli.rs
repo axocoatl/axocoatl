@@ -228,3 +228,67 @@ fn dev_says_a_port_is_taken_before_it_says_it_runs() {
     assert!(started.elapsed() < std::time::Duration::from_secs(30));
     drop(holder);
 }
+
+/// `recipe build` without Podman says what is missing and how to set it
+/// up, instead of `podman build`'s "No such file or directory".
+#[test]
+fn recipe_build_without_podman_names_the_setup() {
+    let home = tempfile::tempdir().unwrap();
+    let empty = tempfile::tempdir().unwrap();
+    let output = axocoatl(home.path())
+        .args(["recipe", "build", "claude-code", "--config"])
+        .arg(home.path().join("config.yaml"))
+        .env("PATH", empty.path())
+        .env("AXOCOATL_DATA_DIR", home.path().join("data"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(5), "{stderr}");
+    assert!(stderr.contains("podman is required"), "{stderr}");
+    assert!(stderr.contains("axocoatl onboard"), "{stderr}");
+    assert!(!stderr.contains("os error 2"), "{stderr}");
+}
+
+/// After a reboot the machine is stopped: `recipe build` starts it before
+/// it builds (a shim Podman records the order and builds nothing).
+#[cfg(target_os = "macos")]
+#[test]
+fn recipe_build_starts_a_stopped_machine_first() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let bin = home.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let podman = bin.join("podman");
+    std::fs::write(
+        &podman,
+        format!(
+            r#"#!/bin/sh
+D="{bin}"
+echo "$*" >> "$D/calls"
+case "$*" in
+  "--version") echo "podman version 5.8.2" ;;
+  "info --format json") if [ -f "$D/running" ]; then echo '{{"host":{{}}}}'; else exit 125; fi ;;
+  "machine list --format json") if [ -f "$D/running" ]; then r=true; else r=false; fi; echo "[{{\"Name\":\"podman-machine-default\",\"Running\":$r}}]" ;;
+  "machine start") touch "$D/running" ;;
+  *) echo "shim: no $1" >&2; exit 125 ;;
+esac
+"#,
+            bin = bin.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = axocoatl(home.path())
+        .args(["recipe", "build", "claude-code", "--config"])
+        .arg(home.path().join("config.yaml"))
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("AXOCOATL_DATA_DIR", home.path().join("data"))
+        .output()
+        .unwrap();
+    let calls = std::fs::read_to_string(bin.join("calls")).unwrap();
+    let start = calls.find("machine start").expect(&calls);
+    let build = calls.find("build ").expect(&calls);
+    assert!(start < build, "{calls}");
+    // The shim builds nothing, so the build itself fails.
+    assert_eq!(output.status.code(), Some(5));
+}

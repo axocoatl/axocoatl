@@ -1528,6 +1528,19 @@ fn start_cli_ipc(
     axocoatl_daemon::ipc::serve_ipc_listener(reservation.listener, state)
 }
 
+/// Prepare Podman before a command that needs it (`recipe build`, `connect
+/// codex`): start an existing stopped machine, or say exactly what is
+/// missing and how to set it up. It never installs Podman or creates a
+/// machine; `axocoatl onboard` does, after asking.
+pub(crate) async fn podman_preflight() -> Result<(), String> {
+    axocoatl_isolation::podman::ensure_ready()
+        .await
+        .map_err(|error| match error {
+            axocoatl_isolation::IsolationError::OciSetupFailed(message) => message,
+            other => other.to_string(),
+        })
+}
+
 /// What `dev` and `serve` say when they cannot listen on `host:port`.
 fn bind_failure_message(
     host: &str,

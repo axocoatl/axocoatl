@@ -822,6 +822,10 @@ async fn cmd_connect_codex(
                     return exit::USAGE;
                 }
             }
+            if let Err(error) = crate::podman_preflight().await {
+                eprintln!("✗ {error}");
+                return exit::USAGE;
+            }
             let image = match codex_container::recipe_image(&data_dir).await {
                 Ok(image) => image,
                 Err(Failure { code, message }) => {
