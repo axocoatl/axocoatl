@@ -46,6 +46,17 @@ function teamView({ approved = false } = {}) {
 
 async function fixture(engine) {
   const browser = await engine.launch();
+  // A fixture that does not open closes its browser: a browser left running
+  // keeps this file's process, and so the suite, waiting forever.
+  try {
+    return await openFixture(browser);
+  } catch (error) {
+    await browser.close();
+    throw error;
+  }
+}
+
+async function openFixture(browser) {
   const context = await newAuthorizedContext(browser, { viewport: { width: 1100, height: 820 } });
   const page = await context.newPage();
   const errors = [];
@@ -139,16 +150,18 @@ test('until a native Session team is applied, Send reads Set budget and opens Te
   if (!runtime.fixtures) { t.skip('needs a fixture daemon'); return; }
   const [engine] = engines;
   const browser = await engine.launch();
-  const context = await newAuthorizedContext(browser, { viewport: { width: 1280, height: 820 } });
-  const page = await context.newPage();
-  const errors = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
-  session.status = 'active';
-  session.environment = { ...session.environment, state: 'ready', error: null, setup_results: [] };
-  let view = { ...teamView(), slots: teamView().slots.map((slot) => ({ ...slot, slot_id: 'slot-lead' })) };
-  let sends = 0;
+  // From here every failure closes the browser.
+  let context;
   try {
+    context = await newAuthorizedContext(browser, { viewport: { width: 1280, height: 820 } });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+    session.status = 'active';
+    session.environment = { ...session.environment, state: 'ready', error: null, setup_results: [] };
+    let view = { ...teamView(), slots: teamView().slots.map((slot) => ({ ...slot, slot_id: 'slot-lead' })) };
+    let sends = 0;
     for (const url of ['**/api/sessions', `**/api/workspaces/${session.workspace_id}/sessions`]) {
       await page.route(url, (route) => route.request().method() === 'GET' ? route.fulfill({ json: [session] }) : route.fallback());
     }
@@ -183,7 +196,7 @@ test('until a native Session team is applied, Send reads Set budget and opens Te
     await page.waitForFunction(() => document.querySelector('#session-send')?.textContent === 'Send');
     assert.deepEqual(errors, []);
   } finally {
-    await context.close();
+    await context?.close();
     await browser.close();
   }
 });

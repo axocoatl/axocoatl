@@ -103,6 +103,23 @@ described after this list.
   SameSite=Strict, `Path=/`, 30 days) and redirects to the same page without
   the token, with `Referrer-Policy: no-referrer`. Request logs show the
   parameter as `token=REDACTED`.
+- The link also sets `axocoatl-token-<port>-signed-in=1` (HttpOnly,
+  SameSite=Lax, `Path=/`, 30 days). It holds no secret and is never a
+  credential. Safari leaves a SameSite=Strict cookie off a navigation that was
+  redirected from another site, and `127.0.0.1` and `localhost` are different
+  sites, so a `127.0.0.1` bookmark or link reached `localhost` without the
+  token cookie. When a navigation you started yourself (a typed address, a
+  bookmark, a link opened from another app: `Sec-Fetch-Site: none`) reaches
+  `/` without the token cookie but with this one, the daemon answers with a
+  page that opens the same address again from `localhost` itself, which every
+  browser sends the token cookie with. That page clears the cookie, so it does
+  this at most once; the next workbench load sets it again. Chromium already
+  sends the token cookie on these navigations, so no browser is signed in on
+  one that Chromium would refuse. A link or form on another site still gets
+  the sign-in page. Code on a Preview origin cannot set this cookie through
+  the Preview proxy; in Safari on macOS it can set a `Domain=localhost`
+  cookie from the page, and the most a forged one does is send a navigation
+  you started to that page once.
 - Scripts send the token as `Authorization: Bearer <token>` or
   `x-api-key: <token>`. Comparisons are constant time.
 - The cookie counts only on same-origin requests, typed navigations, and

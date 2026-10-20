@@ -35,10 +35,16 @@ Cookie: axocoatl-token-<port>=<token>
 Browsers get the cookie by opening the sign-in link that `axocoatl dev`,
 `axocoatl serve`, or `axocoatl url` prints. `GET /?token=<token>` answers
 `303 See Other` to the same path and query without `token`, sets the cookie
-(HttpOnly, SameSite=Strict, `Path=/`, `Max-Age=2592000`), and sends
-`Referrer-Policy: no-referrer` and `Cache-Control: no-store`. A wrong token,
-or `/` without a credential, returns `401` with a short sign-in page. The cookie
-is ignored on requests marked `Sec-Fetch-Site: cross-site` or `same-site`.
+(HttpOnly, SameSite=Strict, `Path=/`, `Max-Age=2592000`) and a secret-free
+`axocoatl-token-<port>-signed-in=1` (HttpOnly, SameSite=Lax, same path and
+age), and sends `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
+A wrong token, or `/` without a credential, returns `401` with a short sign-in
+page. One exception: a `GET /` navigation marked `Sec-Fetch-Site: none` that
+carries the signed-in cookie but not the token cookie (Safari after the
+redirect from `127.0.0.1`) returns `200` with a page that opens the same
+address again from its own origin and clears the signed-in cookie. The token
+cookie is ignored on requests marked `Sec-Fetch-Site: cross-site` or
+`same-site`; the signed-in cookie is never a credential.
 Public paths in this mode: `/health`, `/health/ready`, `/health/live`, `/ui/*`,
 `/vendor/*`, `/lattice/*`, `/brand/*`, `/axo-tap.js`, and the sign-in page at
 `/`. `server.auth.allow_unauthenticated: true` turns the token off but keeps

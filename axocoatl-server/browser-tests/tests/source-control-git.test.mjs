@@ -25,8 +25,19 @@ const STAGED = {
   files: [{ path: 'calc.py', state: 'modified', staged: true, unstaged: false, last_turn: true, added: 1, removed: 1 }],
 };
 
-async function fixture(engine, { identity, status = STAGED, commit = null, init = null, scope = null }) {
+async function fixture(engine, options) {
   const browser = await engine.launch();
+  // A fixture that does not open closes its browser: a browser left running
+  // keeps this file's process, and so the suite, waiting forever.
+  try {
+    return await openFixture(browser, options);
+  } catch (error) {
+    await browser.close();
+    throw error;
+  }
+}
+
+async function openFixture(browser, { identity, status = STAGED, commit = null, init = null, scope = null }) {
   const context = await newAuthorizedContext(browser, { viewport: { width: 420, height: 720 } });
   const page = await context.newPage();
   const errors = [];

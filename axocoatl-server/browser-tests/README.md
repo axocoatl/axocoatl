@@ -31,9 +31,21 @@ harness reads that file and registers the daemon for the test process:
   unless the caller set a credential, and the `/` redirect from `127.0.0.1` to
   `localhost` is followed with the header kept;
 - `newAuthorizedContext(browser, options)` (or `authorizeContext(context)`)
-  adds the `axocoatl-token-<port>` cookie for `localhost` and `127.0.0.1`,
-  exactly as the sign-in link would;
+  adds the `axocoatl-token-<port>` cookie and the secret-free
+  `axocoatl-token-<port>-signed-in` cookie for `localhost` and `127.0.0.1`,
+  exactly as the sign-in link would. In WebKit a journey that opens `/` at
+  `127.0.0.1` then passes the daemon's one same-origin retry page (Safari
+  leaves the Strict cookie off the redirect to `localhost`), so wait for the
+  workbench (`waitForFunction`, a locator) rather than reading the page right
+  after `goto`;
 - Node `WebSocket` clients pass the header explicitly with `runtime.token`.
+
+Two helpers keep journeys engine-neutral. `settleTransitions(page)` waits two
+frames and then until no CSS transition runs, before a test reads computed
+colors. `isWebKitLoadDiagnostic(error)` recognizes the console lines WebKit
+reports as page errors for a load it refused or cancelled, or for a
+cross-origin frame read that returned null; an unhandled rejection or an
+uncaught `SecurityError` is reported separately and still fails a journey.
 
 `runtime.fetchWithoutToken`, `runtime.signInUrl`, and a plain
 `browser.newContext()` exercise the signed-out paths; `local-api-token.test.mjs`

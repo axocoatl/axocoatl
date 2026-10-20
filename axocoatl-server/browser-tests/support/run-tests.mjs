@@ -61,9 +61,14 @@ try {
   // One genuinely cold daemon downloads and verifies the pinned embedding
   // model. Subsequent isolated fixtures copy artifacts, never control state.
   process.env.AXOCOATL_E2E_STARTUP_TIMEOUT_MS ||= '300000';
+  // --test-force-exit: a file ends when its tests have, even if a browser or
+  // daemon a journey launched is still running, so one leak cannot keep the
+  // suite waiting until CI cancels it. Playwright closes the browsers it
+  // launched when the process exits; support/daemon.mjs kills a daemon left
+  // running and fails that file.
   await run(
     process.execPath,
-    ['--test', '--test-concurrency=1', ...testFiles],
+    ['--test', '--test-force-exit', '--test-concurrency=1', ...testFiles],
     TEST_ROOT,
   );
 } catch (error) {

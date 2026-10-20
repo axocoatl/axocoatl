@@ -4,7 +4,9 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
-import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext } from '../support/daemon.mjs';
+import {
+  launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext, settleTransitions, isWebKitLoadDiagnostic,
+} from '../support/daemon.mjs';
 
 test('a reconnect snapshot preserves its already-owned cold runtime preparation request', async () => {
   const session = readySessionFixture(runtime.fixtures.alpha.sessions[0]);
@@ -73,9 +75,13 @@ function requestPathname(request) {
   try { return new URL(request.url).pathname; } catch { return ''; }
 }
 
+// How a request the page aborted fails: `net::ERR_ABORTED` in Chromium,
+// `cancelled` in WebKit on macOS, `Load request cancelled` in WebKit on Linux.
+const ABORTED_REQUEST_ERRORS = ['net::ERR_ABORTED', 'cancelled', 'Load request cancelled'];
+
 function isAbortedGet(request, pathname) {
   return request.method === 'GET'
-    && request.error === 'net::ERR_ABORTED'
+    && ABORTED_REQUEST_ERRORS.includes(request.error)
     && requestPathname(request) === pathname;
 }
 
@@ -126,13 +132,26 @@ async function openSession(
   beforeGoto = null,
 ) {
   const context = await newAuthorizedContext(browser, { viewport });
+  try {
+    return await openSessionInContext(context, session, targetRuntime, beforeGoto);
+  } catch (error) {
+    // A Session that did not open closes its page, so nothing keeps
+    // reconnecting to a daemon the caller is about to stop.
+    await context.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function openSessionInContext(context, session, targetRuntime, beforeGoto) {
   const page = await context.newPage();
   const browserErrors = [];
   const browserRequests = [];
   const browserResponses = [];
   const requestFailures = [];
   const consoleMessages = [];
-  page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`));
+  page.on('pageerror', (error) => {
+    if (!isWebKitLoadDiagnostic(error)) browserErrors.push(`pageerror: ${error.message}`);
+  });
   page.on('console', (message) => {
     if (message.type() === 'error' || message.type() === 'warning') {
       consoleMessages.push(`${message.type()}: ${message.text()}`);
@@ -456,7 +475,9 @@ test('enabled composer controls inherit readable light and dark theme tokens', a
 
     for (const theme of ['dark', 'light']) {
       await page.evaluate((selectedTheme) => setThemePref(selectedTheme), theme);
-      await page.waitForTimeout(200);
+      // Controls ease their colors (`transition: color .15s`): read them once
+      // every transition the theme change started has ended.
+      await settleTransitions(page);
       const colors = await page.evaluate(() => {
         const resolveColor = (token) => {
           const probe = document.createElement('span');
@@ -558,19 +579,35 @@ test('workspace selector exposes every named Workspace while the rail lists only
     ]);
     assert.equal((await railSessionLabels(page)).includes('Beta Only Session'), false);
 
+    // A picker renders again as each of its reads arrives, and so does the
+    // New Session picker when the shell's configuration reads finish; a
+    // render replaces its controls, so a click whose mousedown and mouseup
+    // straddle one is lost (seen in WebKit when readiness arrived
+    // mid-click). Click the labels once those reads are in. The shell's own
+    // reads finish first, so the next ones of each path are the picker's.
+    await page.waitForFunction(() => (document.querySelector('ax-session-home')?.agents?.length || 0) > 0
+      && document.querySelector('#readiness')?.report);
+    const pickerReads = (pathnames) => Promise.all(pathnames.map((pathname) =>
+      page.waitForResponse((response) => new URL(response.url()).pathname === pathname)));
+    const folderRead = pickerReads(['/api/fs/list']);
     await page.locator('ax-rail #open-workspace').click();
     const workspaceName = page.getByLabel('Workspace name');
     await workspaceName.waitFor({ state: 'visible' });
     assert.equal(await workspaceName.getAttribute('id'), 'workspace-name-input');
+    await folderRead;
+    await waitForTwoFrames(page);
     await page.locator('ax-session-home label[for="workspace-name-input"]').click();
     assert.equal(await workspaceName.evaluate((input) => input.getRootNode().activeElement === input), true);
     await page.locator('ax-session-home [data-action="picker-cancel"]').click();
 
+    const newSessionReads = pickerReads(['/api/skills', '/api/readiness', '/api/fs/project']);
     await page.evaluate((workspaceId) =>
       document.querySelector('ax-session-home')?.newSession(workspaceId), alpha.workspace.id);
     const sessionName = page.getByLabel('Session name');
     await sessionName.waitFor({ state: 'visible' });
     assert.equal(await sessionName.getAttribute('id'), 'session-name-input');
+    await newSessionReads;
+    await waitForTwoFrames(page);
     await page.locator('ax-session-home label[for="session-name-input"]').click();
     assert.equal(await sessionName.evaluate((input) => input.getRootNode().activeElement === input), true);
     await page.locator('ax-session-home [data-action="picker-cancel"]').click();
@@ -603,6 +640,39 @@ test('workspace selector exposes every named Workspace while the rail lists only
       'Alpha Second Session',
     ]);
     assert.equal((await railSessionLabels(page)).includes('Beta Only Session'), false);
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
+  }
+});
+
+// The shell sets the home's agents and then its teams in one task when its
+// configuration reads finish, which can be just after the New Session picker
+// opened. Each re-renders the picker; focus must stay in the field the person
+// is typing in, not move to the dialog.
+test('the New Session picker keeps focus in Session name when agents and teams arrive together', async () => {
+  const { alpha } = runtime.fixtures;
+  const { context, page, assertNoBrowserErrors } = await openSession(alpha.sessions[0]);
+  try {
+    await page.evaluate((workspaceId) =>
+      document.querySelector('ax-session-home')?.newSession(workspaceId), alpha.workspace.id);
+    const sessionName = page.getByLabel('Session name');
+    await sessionName.waitFor({ state: 'visible' });
+    await page.locator('ax-session-home label[for="session-name-input"]').click();
+    await sessionName.fill('Typed before the configuration arrived');
+    await page.evaluate(() => {
+      const home = document.querySelector('ax-session-home');
+      const agents = home.agents;
+      const teams = home.teams;
+      home.agents = agents;
+      home.teams = teams;
+    });
+    await waitForTwoFrames(page);
+    assert.equal(await sessionName.evaluate((input) => input.getRootNode().activeElement === input), true);
+    assert.equal(await sessionName.inputValue(), 'Typed before the configuration arrived');
+    await page.keyboard.type(' and after');
+    assert.equal(await sessionName.inputValue(), 'Typed before the configuration arrived and after');
+    await page.locator('ax-session-home [data-action="picker-cancel"]').click();
     assertNoBrowserErrors();
   } finally {
     await context.close();
@@ -2667,13 +2737,18 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
             });
             const compressed = await fetch('/compressed.json').then((response) => response.json());
             globalThis.__fixtureStage = 'encoding';
-            let controlWritable = false;
+            // A blind write gets a network error (Chromium refuses it) or an
+            // opaque response the Preview cannot read (WebKit sends it and the
+            // main-origin guard refuses it with 403, asserted below); never a
+            // response the Preview can read.
+            let controlWrite = 'rejected';
             try {
               const response = await fetch(${JSON.stringify(`${runtime.baseUrl}${rebuildPath}`)}, {
                 method: 'POST', mode: 'no-cors', body: 'blind-write',
               });
               await response.text();
-              controlWritable = true;
+              controlWrite = response.type === 'opaque' && response.status === 0
+                ? 'opaque' : 'readable ' + response.type + ' ' + response.status;
             } catch {}
             globalThis.__fixtureStage = 'control-write';
             let controlReadable = false;
@@ -2712,7 +2787,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
                 moduleValue, fetched, xhr, form, asset, compressed, hmr,
                 storage, styled,
                 sourceHasHostCookie,
-                parentReadable, controlReadable, controlWritable, crossPreviewWritable,
+                parentReadable, controlReadable, controlWrite, crossPreviewWritable,
                 origin: location.origin,
               };
               globalThis.__fixtureStage = 'done';
@@ -2823,7 +2898,9 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
       ].join('\n'));
     }
 
-    assert.deepEqual(await previewFrame.evaluate(() => globalThis.__previewFunctionalResult), {
+    const { controlWrite, ...previewResult } = await previewFrame.evaluate(() => globalThis.__previewFunctionalResult);
+    assert.ok(['rejected', 'opaque'].includes(controlWrite), `a blind control write gave the Preview: ${controlWrite}`);
+    assert.deepEqual(previewResult, {
       moduleValue: 'module-ok',
       fetched: { method: 'POST', body: 'fetch-body' },
       xhr: 'xhr-ok',
@@ -2836,7 +2913,6 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
       sourceHasHostCookie: false,
       parentReadable: false,
       controlReadable: false,
-      controlWritable: false,
       crossPreviewWritable: false,
       origin: previewOrigin,
     });
@@ -2864,6 +2940,8 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
       'the no-CORS blind write must reach the main-origin guard',
     );
     assert.ok(controlResponses.every((status) => status === 403));
+    // Where the write was sent, the guard answered it, with 403.
+    if (controlWrite === 'opaque') assert.deepEqual(controlResponses, [403]);
 
     await page.locator('[data-session-view="browser"]').click();
     await page.locator('#bx-pick').click();
@@ -5412,19 +5490,30 @@ test('operator devcontainer policy is visible and reversible while package-lock 
   // the primary suite is pinned to port 8080, policy requests must reach this
   // fixture's listener rather than the first daemon's healthy endpoint.
   const policyRuntime = await launchTestDaemon({ allowPostCreateCommand: true, port: 0 });
-  assert.notEqual(policyRuntime.baseUrl, runtime.baseUrl, 'different daemon configurations need independent listeners');
   const markerName = '.axocoatl-policy-marker';
   const postCreateCommand = `touch ${markerName}`;
-  const policyProject = await policyRuntime.createProjectWorkspace(
-    'operator-policy-project',
-    'Operator Policy Workspace',
-    { packageLock: false, devcontainer: { postCreateCommand } },
-  );
-  const { context, page, browserRequests, assertNoBrowserErrors } = await openSession(
-    policyRuntime.fixtures.alpha.sessions[0],
-    { width: 1280, height: 800 },
-    policyRuntime,
-  );
+  // Until the journey's own try below owns it, a failure stops this second
+  // daemon here: a running daemon would keep this file's process (and the
+  // whole suite) waiting forever.
+  let policyProject;
+  let opened;
+  try {
+    assert.notEqual(policyRuntime.baseUrl, runtime.baseUrl, 'different daemon configurations need independent listeners');
+    policyProject = await policyRuntime.createProjectWorkspace(
+      'operator-policy-project',
+      'Operator Policy Workspace',
+      { packageLock: false, devcontainer: { postCreateCommand } },
+    );
+    opened = await openSession(
+      policyRuntime.fixtures.alpha.sessions[0],
+      { width: 1280, height: 800 },
+      policyRuntime,
+    );
+  } catch (error) {
+    await policyRuntime.stop();
+    throw error;
+  }
+  const { context, page, browserRequests, assertNoBrowserErrors } = opened;
   try {
     // A detected package-lock command is only a suggestion even when the
     // operator has enabled the separate devcontainer post-create policy.

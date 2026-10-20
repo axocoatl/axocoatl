@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { writeSync } from 'node:fs';
 import { createServer } from 'node:net';
 import {
   access,
@@ -21,6 +22,21 @@ export const TEST_ROOT = path.resolve(SUPPORT_DIR, '..');
 export const REPOSITORY_ROOT = path.resolve(TEST_ROOT, '..', '..');
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+// Every fixture daemon this process started that is still running. A test
+// file that finishes with one running would wait on it forever; the runner
+// passes --test-force-exit, so the file ends anyway, and here the daemon is
+// killed, named, and the file fails, so a journey that does not stop its
+// daemon on every path is caught instead of hanging the suite.
+const runningDaemons = new Map();
+process.on('exit', () => {
+  for (const [child, label] of runningDaemons) {
+    if (child.exitCode !== null || child.signalCode !== null) continue;
+    try { child.kill('SIGKILL'); } catch {}
+    writeSync(2, `browser test teardown: the fixture daemon ${label} was still running when this file ended; it was killed. A journey that launches a daemon must stop it on every path.\n`);
+    process.exitCode = 1;
+  }
+});
 
 async function freeLoopbackPort() {
   const server = createServer();
@@ -134,8 +150,10 @@ function unregisterDaemon(port) {
   if (authorizedDaemons.size === 0) globalThis.fetch = unauthenticatedFetch;
 }
 
-// Give a Playwright context the sign-in cookie of every daemon running in this
-// process, exactly as `/?token=` would set it. Component-mode runtimes
+// Give a Playwright context the sign-in cookies of every daemon running in
+// this process, exactly as `/?token=` would set them: the token cookie and the
+// secret-free "signed in" cookie, with which `/` gets Safari (WebKit) past the
+// `127.0.0.1` -> `localhost` redirect. Component-mode runtimes
 // (AXOCOATL_COMPONENT_BASE_URL) register nothing, so this is then a no-op.
 export async function authorizeContext(context) {
   const cookies = [];
@@ -147,6 +165,12 @@ export async function authorizeContext(context) {
         url: `http://${host}:${port}/`,
         httpOnly: true,
         sameSite: 'Strict',
+      }, {
+        name: `axocoatl-token-${port}-signed-in`,
+        value: '1',
+        url: `http://${host}:${port}/`,
+        httpOnly: true,
+        sameSite: 'Lax',
       });
     }
   }
@@ -157,6 +181,40 @@ export async function authorizeContext(context) {
 // `browser.newContext(options)` with the sign-in cookies already in place.
 export async function newAuthorizedContext(browser, options) {
   return authorizeContext(await browser.newContext(options));
+}
+
+// WebKit logs a refused or cancelled load ("Fetch API cannot load <url> due
+// to access control checks.") and a cross-origin frame read that returned
+// null ("Blocked a frame with origin … from accessing a frame with origin
+// …") to the console, and Playwright reports each line as a page error even
+// when the page handled it. They are diagnostics, not exceptions: an
+// unhandled rejection or an uncaught SecurityError is reported separately
+// ("Unhandled Promise Rejection", "SecurityError") and still counts.
+// Playwright splits these lines at the URL's colon, so the diagnostic is in
+// the error's name.
+export function isWebKitLoadDiagnostic(error) {
+  return /^(Fetch API cannot load|XMLHttpRequest cannot load|Blocked a frame with origin) /.test(error?.name || '');
+}
+
+// Wait until no CSS transition runs in the page or in any shadow root, so
+// computed colors are read at their end values. Controls ease their colors,
+// and the components' reduced-motion sheet makes every property change a
+// 0.001 ms transition, which WebKit reports at its start value until the
+// next rendering update; a fixed delay can still read a busy machine
+// mid-transition. Two frames let the change start (or, in WebKit, apply)
+// its transitions, then the wait covers any that are still running.
+export async function settleTransitions(page) {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await page.waitForFunction(() => {
+    const roots = [document];
+    for (let index = 0; index < roots.length; index += 1) {
+      for (const element of roots[index].querySelectorAll('*')) {
+        if (element.shadowRoot) roots.push(element.shadowRoot);
+      }
+    }
+    return roots.every((root) => root.getAnimations()
+      .every((animation) => !(animation instanceof CSSTransition) || animation.playState !== 'running'));
+  });
 }
 
 async function api(baseUrl, method, pathname, body) {
@@ -478,6 +536,9 @@ consolidation:
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    const started = child;
+    runningDaemons.set(started, `pid ${started.pid} at ${baseUrl} (${runRoot})`);
+    started.once('exit', () => runningDaemons.delete(started));
     child.stdout.on('data', (chunk) => { stdout = boundedLog(stdout, chunk); });
     child.stderr.on('data', (chunk) => { stderr = boundedLog(stderr, chunk); });
     await waitForHealth(baseUrl, child, logs);

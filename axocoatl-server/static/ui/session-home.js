@@ -275,6 +275,14 @@ function deepActiveElement() {
 
 const MODAL_FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+/** What the New Session picker shows of a readiness report: the Podman step
+ *  that blocks Create session, or nothing. */
+function pickerReadinessView(report) {
+  if (!report?.sessions_blocked) return '';
+  const podman = (report.sections?.sandbox || []).find((item) => item.id === 'podman');
+  return podman ? JSON.stringify([podman.detail || '', podman.fix || '']) : '';
+}
+
 function sessionDirectory(session) {
   return typeof session?.working_dir === 'string' ? session.working_dir : '';
 }
@@ -429,6 +437,9 @@ export class AxSessionHome extends HTMLElement {
   #navigationGeneration = 0;
   #picker = null;
   #pickerReturnFocus = null;
+  // The control a picker render will return focus to, from the render until
+  // its focus restore runs (see #renderPicker).
+  #pickerFocusKey = null;
   #menu = null;
   #dialog = null;
   #notice = null;
@@ -515,8 +526,18 @@ export class AxSessionHome extends HTMLElement {
    *  Create session with the exact fix. */
   get readiness() { return this.#readiness; }
   set readiness(value) {
-    this.#readiness = value && typeof value === 'object' ? value : null;
-    this.#renderPicker();
+    const report = value && typeof value === 'object' ? value : null;
+    // The report this component read itself comes back through the shell's
+    // readiness-change listener, and #loadPickerReadiness renders the picker
+    // once for it. Rendering it here too, before that render returned focus
+    // to the field the person was in, could send focus to the dialog: a
+    // click into Session name while readiness loaded ended on the dialog.
+    if (report === this.#readiness) return;
+    const shown = pickerReadinessView(this.#readiness);
+    this.#readiness = report;
+    // Every picker render replaces its controls, so a click that lands while
+    // they are replaced is lost: render only when the picker would change.
+    if (pickerReadinessView(report) !== shown) this.#renderPicker();
   }
 
   session(id) { return this.#sessions.find((item) => item.id === id) || null; }
@@ -1177,11 +1198,13 @@ export class AxSessionHome extends HTMLElement {
     try {
       const report = await this.#request('/api/readiness');
       if (this.#picker !== picker || !report || typeof report !== 'object') return;
+      const shown = pickerReadinessView(this.#readiness);
       this.#readiness = report;
       this.dispatchEvent(new CustomEvent('readiness-change', {
         detail: { report }, bubbles: true, composed: true,
       }));
-      this.#renderPicker();
+      // Only a change to the Podman step the picker shows needs a render.
+      if (pickerReadinessView(report) !== shown) this.#renderPicker();
     } catch { /* The daemon refuses creation itself when Podman cannot run it. */ }
   }
 
@@ -1305,13 +1328,21 @@ export class AxSessionHome extends HTMLElement {
     if (!host) return;
     const active = this.#root.activeElement;
     const focusWasModal = active?.classList?.contains('modal');
+    // A second render in the same task (the shell sets `agents` and then
+    // `teams` when its configuration reads finish) runs after the first one
+    // removed the focused control and before that render returned focus to
+    // it, so nothing here has focus: it keeps the first render's target.
+    // Without this, focus left the field the person was typing in for the
+    // dialog.
     const focusKey = active && host.contains(active) && !focusWasModal
       ? {
         action: active.dataset.action || '', field: active.dataset.field || '',
         path: active.dataset.path || '', value: active.value || '',
       }
-      : null;
-    host.replaceChildren(); const picker = this.#picker; if (!picker) return;
+      : (active ? null : this.#pickerFocusKey);
+    this.#pickerFocusKey = focusKey;
+    host.replaceChildren(); const picker = this.#picker;
+    if (!picker) { this.#pickerFocusKey = null; return; }
     const overlay = element('div', 'overlay'); overlay.dataset.action = 'picker-backdrop';
     const modal = element('div', 'modal'); modal.setAttribute('role', 'dialog'); modal.setAttribute('aria-modal', 'true');
     modal.setAttribute('aria-labelledby', 'session-picker-title');
@@ -1428,6 +1459,7 @@ export class AxSessionHome extends HTMLElement {
     foot.append(cancel, use); modal.append(foot); overlay.append(modal); host.append(overlay);
     queueMicrotask(() => {
       if (this.#picker !== picker || !modal.isConnected) return;
+      this.#pickerFocusKey = null;
       let target = null;
       if (focusKey) {
         target = Array.from(modal.querySelectorAll(MODAL_FOCUSABLE)).find((candidate) =>

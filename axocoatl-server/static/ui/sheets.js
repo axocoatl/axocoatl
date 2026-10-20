@@ -33,7 +33,12 @@ export function sharedSheet(url) {
           return r.text();
         })
         .then((css) => {
-          const sheet = new CSSStyleSheet();
+          // Relative URLs in the sheet (the codicon font's `./codicon.ttf`)
+          // resolve against the sheet's own URL, as they would in a <link>.
+          // Without a baseURL they resolve against the document, and WebKit,
+          // which loads @font-face rules in shadow roots, requested
+          // /codicon.ttf and got a 404 on every page.
+          const sheet = new CSSStyleSheet({ baseURL: new URL(url, document.baseURI).href });
           sheet.replaceSync(css);
           return sheet;
         }),

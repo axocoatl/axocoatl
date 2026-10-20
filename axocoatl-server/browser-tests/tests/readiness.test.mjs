@@ -80,11 +80,12 @@ test('GET /api/readiness names a missing Podman machine and a refused Ollama ver
 for (const engine of engines) {
   test(`${engine.name}: the first screen lists what is left, with the exact commands, and blocks Create session`, async () => {
     const browser = await engine.launch();
-    const context = await newAuthorizedContext(browser, { viewport: { width: 1280, height: 860 } });
-    const page = await context.newPage();
-    const errors = [];
-    page.on('pageerror', (error) => errors.push(error.message));
+    let context;
     try {
+      context = await newAuthorizedContext(browser, { viewport: { width: 1280, height: 860 } });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', (error) => errors.push(error.message));
       await page.goto(`${runtime.baseUrl}/`, { waitUntil: 'domcontentloaded' });
       const checklist = page.locator('#readiness');
       await page.waitForFunction(() => document.querySelector('#readiness')?.report);
@@ -130,7 +131,7 @@ for (const engine of engines) {
       }
       assert.deepEqual(errors, []);
     } finally {
-      await context.close();
+      await context?.close();
       await browser.close();
     }
   });

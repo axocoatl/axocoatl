@@ -468,6 +468,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The folder's inode may now differ; its path, the Session, the Workspace, the
   environment and the runtime must still be the same. A Session whose folder is gone or
   moved is still refused, naming the folder, as in 1.3.2.
+- **Safari opens the workbench from a `127.0.0.1` bookmark or sign-in link.** The
+  workbench moves `127.0.0.1` to `localhost`, a different site, and Safari leaves the
+  SameSite=Strict sign-in cookie off a navigation redirected from another site, and off
+  its reloads: since the per-daemon token (1.1.2), Safari showed "Sign in to Axocoatl"
+  there while Chromium opened the workbench. A sign-in now also sets
+  `axocoatl-token-<port>-signed-in=1` (HttpOnly, SameSite=Lax, no secret, never a
+  credential). When a navigation you started yourself (`Sec-Fetch-Site: none`) reaches
+  `/` with it but without the token cookie, the daemon answers with a page that opens the
+  same address again from `localhost` itself, which sends the token cookie, and clears
+  the signed-in cookie so this happens at most once. The token cookie is unchanged, and a
+  link from another site still gets the sign-in page.
 
 ### Security
 - **The route to Ollama on this computer refuses Ollama 0.40's new endpoints.** Its
