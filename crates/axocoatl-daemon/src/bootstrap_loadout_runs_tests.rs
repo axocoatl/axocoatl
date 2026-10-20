@@ -929,7 +929,7 @@ async fn external_fix_admission_child_body() {
         .await,
     );
     assert!(
-        message.contains("credential \"codex-openai\"")
+        message.contains("needs the credential codex-openai (")
             && message.contains("axocoatl connect codex --api-key"),
         "{message}"
     );
@@ -1025,7 +1025,7 @@ async fn external_fix_admission_child_body() {
     // fix-claude-code: Claude Code's token must be stored.
     let message = usage(admit(request("fix-claude-code", &[], "claude-none")).await);
     assert!(
-        message.contains("credential \"claude-code-oauth\"")
+        message.contains("needs the credential claude-code-oauth (")
             && message.contains("axocoatl connect claude-code"),
         "{message}"
     );
