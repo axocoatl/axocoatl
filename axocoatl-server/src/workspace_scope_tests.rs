@@ -326,6 +326,22 @@ async fn workspace_scope_routes_body() {
     assert_eq!(kept["status"], "closed");
     assert!(project.join(".git").is_dir());
 
+    // The readiness report: Podman (the fake) is ready, the configured
+    // Ollama is not reachable, and /health names the version.
+    let (status, report) = call(&router, Method::GET, "/api/readiness", None).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["ready"], false, "{report}");
+    assert_eq!(report["sections"]["sandbox"][0]["id"], "podman");
+    assert_eq!(report["sections"]["sandbox"][0]["status"], "ok", "{report}");
+    assert_eq!(
+        report["sections"]["models"][0]["status"], "fail",
+        "{report}"
+    );
+    assert!(report["sessions_blocked"].is_null(), "{report}");
+    let (status, health) = call(&router, Method::GET, "/health", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(health["version"], report["version"]);
+
     state.read().await.shutdown().await.unwrap();
 }
 

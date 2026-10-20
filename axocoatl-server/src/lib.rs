@@ -42,6 +42,7 @@ pub fn build_router(
         .route("/health/ready", get(routes::health_ready))
         .route("/health/live", get(routes::health_live))
         .route("/api/llm-health", get(routes::llm_health))
+        .route("/api/readiness", get(routes::readiness))
         .route("/api/agents", get(routes::list_agents))
         .route(
             "/api/agents/{agent_id}/execute",

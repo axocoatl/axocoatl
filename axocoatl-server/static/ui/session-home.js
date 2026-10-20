@@ -237,9 +237,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .runtime-cleanup code { overflow-wrap: anywhere; color: var(--text); font: var(--fs-xs) var(--font-mono); }
 .runtime-cleanup .check { align-items: flex-start; overflow-wrap: anywhere; line-height: 1.4; }
 .inline-error { padding: var(--sp-2) var(--sp-4); border-top: 1px solid var(--border); color: var(--err); font-size: var(--fs-sm); }
+.picker-blocked code { display: block; margin-top: 4px; color: var(--text); font: var(--fs-xs) var(--font-mono); white-space: pre-wrap; }
 .modal-foot { display: flex; align-items: center; gap: var(--sp-2); padding: 11px var(--sp-4); border-top: 1px solid var(--border); }
 .dialog-body { padding: var(--sp-4) 18px; color: var(--muted); }
-.dialog-body p { margin: 0; white-space: pre-wrap; }
+.dialog-body p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dialog-body .config-label { display: block; margin-top: var(--sp-3); }
 .dialog-input { width: 100%; margin-top: var(--sp-3); }
 @media (max-width: 760px) {
   .finder { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
@@ -430,6 +432,7 @@ export class AxSessionHome extends HTMLElement {
   #menu = null;
   #dialog = null;
   #notice = null;
+  #readiness = null;
   #started = false;
   #outsidePointer;
   #viewportChange;
@@ -506,6 +509,15 @@ export class AxSessionHome extends HTMLElement {
   get selectedWorkspaceId() { return this.#selectedWorkspaceId; }
   set selectedWorkspaceId(value) { this.selectWorkspace(value, { scope: this.#scope }); }
   get currentPath() { return this.#currentPath; }
+
+  /** GET /api/readiness, as the shell last read it. A report whose
+   *  `sessions_blocked` is set (Podman missing or without a machine) blocks
+   *  Create session with the exact fix. */
+  get readiness() { return this.#readiness; }
+  set readiness(value) {
+    this.#readiness = value && typeof value === 'object' ? value : null;
+    this.#renderPicker();
+  }
 
   session(id) { return this.#sessions.find((item) => item.id === id) || null; }
   workspace(id) { return this.#workspaces.find((item) => item.id === id) || null; }
@@ -1131,6 +1143,7 @@ export class AxSessionHome extends HTMLElement {
     this.#renderPicker();
     if (kind === 'session') {
       void this.#loadPickerSkills();
+      void this.#loadPickerReadiness();
       void this.#probePickerProject(this.#picker, initialPath, 0);
     } else {
       void this.#pickerNavigate(initialPath || '');
@@ -1155,6 +1168,21 @@ export class AxSessionHome extends HTMLElement {
     form.runtimeCreationToken = session.environment?.runtime_creation?.token || '';
     this.#renderPicker();
     void this.#probePickerProject(this.#picker, sessionDirectory(session), 0);
+  }
+
+  /** Read readiness again as a Session is about to be created: Podman may
+   *  have been set up since the last read. */
+  async #loadPickerReadiness() {
+    const picker = this.#picker; if (!picker) return;
+    try {
+      const report = await this.#request('/api/readiness');
+      if (this.#picker !== picker || !report || typeof report !== 'object') return;
+      this.#readiness = report;
+      this.dispatchEvent(new CustomEvent('readiness-change', {
+        detail: { report }, bubbles: true, composed: true,
+      }));
+      this.#renderPicker();
+    } catch { /* The daemon refuses creation itself when Podman cannot run it. */ }
   }
 
   async #loadPickerSkills() {
@@ -1347,6 +1375,15 @@ export class AxSessionHome extends HTMLElement {
     } else {
       modal.append(this.#environmentPickerConfig(picker, targetSession));
     }
+    const podman = picker.kind === 'session' && this.#readiness?.sessions_blocked
+      ? (this.#readiness.sections?.sandbox || []).find((item) => item.id === 'podman') : null;
+    if (podman) {
+      const blocked = element('div', 'inline-error picker-blocked');
+      blocked.setAttribute('role', 'alert');
+      blocked.append(element('strong', '', 'No Session can run yet. '), document.createTextNode(`${podman.detail} `));
+      if (podman.fix) blocked.append(element('code', '', podman.fix.replaceAll('`', '')));
+      modal.append(blocked);
+    }
     if (picker.error && picker.phase !== 'error') modal.append(element('div', 'inline-error', picker.error));
     const foot = element('div', 'modal-foot');
     if (picker.kind === 'session' && picker.form.modeKind === 'single_agent') {
@@ -1380,7 +1417,7 @@ export class AxSessionHome extends HTMLElement {
       && !this.#teams.some((team) => team.id === selectedLatticeTeamId);
     const protectedFolder = picker.kind === 'workspace' && picker.scope?.code === 'workspace_protected';
     use.disabled = picker.busy || picker.phase !== 'ready' || !picker.path || nameMissing
-      || protectedFolder
+      || protectedFolder || Boolean(podman)
       || (environmentKind && picker.probePending)
       || projectProbeFailureBlocksCreation
       || malformedDevcontainerBlocksCreation

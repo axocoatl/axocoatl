@@ -89,7 +89,7 @@ asset URLs do not redirect.
 | GET | `/brand/{file}` | Canonical brand assets (public with the local token) |
 | GET | `/.axocoatl/preview-picker.js` on a Preview Host | Picker bridge for the dedicated Preview origin; communication is limited to source-and-origin-validated `postMessage` events |
 | GET | `/axo-tap.js` | Compatibility picker asset for the response-sandboxed legacy proxy (public with the local token) |
-| GET | `/health` | Overall status and Agent count (public) |
+| GET | `/health` | Overall status, Agent count and the running Axocoatl's `version` (public) |
 | GET | `/health/ready` | `200` when at least one Agent is spawned, otherwise `503` (public) |
 | GET | `/health/live` | Liveness probe (public) |
 
@@ -98,6 +98,7 @@ asset URLs do not redirect.
 | Method | Path | Request / behavior |
 | --- | --- | --- |
 | GET | `/api/llm-health` | Ollama-only reachability and missing-model summary |
+| GET | `/api/readiness` | What the first Session needs, checked as `axocoatl doctor` checks it: `{ready, version, sessions_blocked, sections: {sandbox, models, writers, daemon}}`, each item `{id, name, status, detail, fix}` with `status` `ok`, `warn` or `fail`. `ready` is true when nothing fails; a stopped Podman machine is `ok` because a Session starts it. `sessions_blocked` says why no Session can be created yet (Podman not installed, or no machine). Nothing on the machine changes |
 | GET | `/api/llm/models?agent=<id>` | Live Ollama list; curated hosted lists; current Agent model is always included |
 | GET | `/api/agents` | Config projection for every Agent; live status is separate |
 | GET | `/api/agents/{agent_id}/status` | Current actor status |

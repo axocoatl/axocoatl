@@ -31,7 +31,14 @@ metadata, but the repository remains the authority.
 1. Start the runtime with `axocoatl dev` from any directory and open the
    `Sign in:` link it prints. It uses the current user's configuration and data
    root. To print the link again, run `axocoatl url`; the browser keeps the
-   sign-in for 30 days.
+   sign-in for 30 days. The first screen checks what a Session needs, as
+   `axocoatl doctor` does: while something fails, a checklist names each step
+   left with its exact command (Podman's machine, the Ollama version and cloud
+   mode, a model to pull), and the status pill in the rail reads **N setup steps
+   left** until it reads **ready**; select it to see the checklist again. Without
+   Podman or its machine, **Create session** stays blocked with the fix. `axocoatl
+   dev` also logs a warning at start when native Sessions will refuse the
+   configured Ollama server.
 2. From the Workspace switcher, choose **Open workspace…** and navigate to the
    repository. Folders that are Git repositories carry a **git** mark. The
    dialog starts in your home folder, but Axocoatl does not open the home

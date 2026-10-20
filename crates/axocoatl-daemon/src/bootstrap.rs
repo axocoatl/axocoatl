@@ -23618,6 +23618,16 @@ trap - 0 1 2 15
     }
 
     /// Number of running agents.
+    /// What `GET /api/readiness` checks, copied so the checks run without
+    /// holding the daemon.
+    pub async fn readiness_inputs(&self) -> crate::readiness::ReadinessInputs {
+        crate::readiness::ReadinessInputs {
+            config: self.config.clone(),
+            data_dir: self.data_root.path().to_path_buf(),
+            agents_running: self.agent_count().await,
+        }
+    }
+
     pub async fn agent_count(&self) -> usize {
         self.agent_registry.count().await
     }

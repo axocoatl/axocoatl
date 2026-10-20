@@ -213,6 +213,8 @@ pub async fn vendor_asset(Path(file): Path<String>) -> Response {
 pub struct HealthResponse {
     pub status: String,
     pub agents: usize,
+    /// The running Axocoatl's version.
+    pub version: &'static str,
 }
 
 pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
@@ -220,7 +222,19 @@ pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy".to_string(),
         agents: daemon.agent_count().await,
+        version: axocoatl_daemon::readiness::DAEMON_VERSION,
     })
+}
+
+/// `GET /api/readiness`: what a first Session needs, checked the way
+/// `axocoatl doctor` checks it (Podman, the Ollama server's version and
+/// cloud mode, pulled models, writers' sign-ins). The daemon is not held
+/// while the checks run.
+pub async fn readiness(
+    State(state): State<AppState>,
+) -> Json<axocoatl_daemon::readiness::ReadinessReport> {
+    let inputs = state.read().await.readiness_inputs().await;
+    Json(axocoatl_daemon::readiness::check_readiness(inputs).await)
 }
 
 pub async fn health_ready(State(state): State<AppState>) -> StatusCode {
