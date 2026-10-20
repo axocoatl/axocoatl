@@ -304,12 +304,17 @@ async fn a_copied_or_moved_data_root_starts_and_keeps_its_sessions() {
     succeeded(&child(&root, "create", &data, &repo).await);
     let id = ownership_id(&data);
 
-    // A cold backup restored in place.
+    // A cold backup restored in place. The restored copy is made while the
+    // original still exists, then put in its place: a filesystem that
+    // reuses a deleted directory's inodes at once (ext4) would otherwise
+    // give the copy the original's identity.
     let backup = root.join("backup");
     std::fs::create_dir(&backup).unwrap();
     copy_tree(&data, &backup.join("data"));
+    let restored = root.join("data.restored");
+    copy_tree(&backup.join("data"), &restored);
     std::fs::remove_dir_all(&data).unwrap();
-    copy_tree(&backup.join("data"), &data);
+    std::fs::rename(&restored, &data).unwrap();
     let output = succeeded(&child(&root, "restored", &data, &repo).await);
     assert!(
         output.contains("was copied or moved since its ownership was recorded"),

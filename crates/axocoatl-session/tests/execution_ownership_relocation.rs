@@ -187,8 +187,13 @@ fn a_cold_backup_restored_in_place_is_re_recorded_and_keeps_its_ownership_id() {
     let (root, original) = installed_root(parent.path(), "data");
     let backup = parent.path().join("backup");
     copy_tree(&root, &backup);
+    // The restored copy is made while the original still exists, then put
+    // in its place: a filesystem that reuses a deleted directory's inodes at
+    // once (ext4) would otherwise give the copy the original's identity.
+    let restored = parent.path().join("data.restored");
+    copy_tree(&backup, &restored);
     fs::remove_dir_all(&root).unwrap();
-    copy_tree(&backup, &root);
+    fs::rename(&restored, &root).unwrap();
     assert_eq!(written_manifest(&root), original);
     // What 1.4.0 refused at every start: the strict reopen still refuses it
     // and changes nothing.
