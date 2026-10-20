@@ -584,9 +584,23 @@ pub enum OpenRouterBilling {
     Byok,
 }
 
+/// A hosted provider's block under `providers:`. It must give `api_key`
+/// (an empty one is accepted: the provider is then not registered) or
+/// `api_key_secret`; a block with neither is refused when it is read, as a
+/// missing `api_key` always was.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "ProviderCredentialsFile")]
 pub struct ProviderCredentials {
+    /// The key itself, or `${VARIABLE}` for one in the environment. Empty
+    /// (or absent) with [`ProviderCredentials::api_key_secret`] set.
     pub api_key: SecretString,
+    /// The name of a secret in Axocoatl's secret store (`{data root}/secrets/<name>`)
+    /// that holds the key, in place of `api_key`: the daemon reads it when it
+    /// starts, so the key is never in this file. `axocoatl connect openrouter`
+    /// stores OpenRouter's key as `openrouter` and writes
+    /// `api_key_secret: openrouter`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_secret: Option<String>,
     /// Optional base URL override for OpenAI-compatible servers (LM Studio,
     /// MLX/oMLX, vLLM, etc.). When set on the `openai` provider, requests go
     /// here instead of api.openai.com. Must include the API version suffix
@@ -601,6 +615,41 @@ pub struct ProviderCredentials {
     /// may select independently. A bare `"provider"` uses the backup's own
     /// default model. Not a credential.
     pub fallback: Option<String>,
+}
+
+/// [`ProviderCredentials`] as the file gives it, `api_key` possibly absent.
+#[derive(Deserialize)]
+struct ProviderCredentialsFile {
+    api_key: Option<SecretString>,
+    #[serde(default)]
+    api_key_secret: Option<String>,
+    #[serde(default)]
+    base_url: Option<String>,
+    fallback: Option<String>,
+}
+
+/// The refusal of a hosted provider block that names no key at all.
+pub const PROVIDER_BLOCK_WITHOUT_KEY: &str = "missing field `api_key`: a hosted provider's \
+     block needs api_key (the key, or \"${VARIABLE}\" for one in the environment) or \
+     api_key_secret (the name of the secret that holds it; `axocoatl connect openrouter` writes \
+     it for OpenRouter, `axocoatl secret set NAME` stores one for another provider)";
+
+impl TryFrom<ProviderCredentialsFile> for ProviderCredentials {
+    type Error = &'static str;
+
+    fn try_from(file: ProviderCredentialsFile) -> Result<Self, Self::Error> {
+        let api_key = match (file.api_key, &file.api_key_secret) {
+            (Some(api_key), _) => api_key,
+            (None, Some(_)) => SecretString::default(),
+            (None, None) => return Err(PROVIDER_BLOCK_WITHOUT_KEY),
+        };
+        Ok(Self {
+            api_key,
+            api_key_secret: file.api_key_secret,
+            base_url: file.base_url,
+            fallback: file.fallback,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

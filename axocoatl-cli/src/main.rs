@@ -1357,7 +1357,21 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
                 }
             }
         }
-        let cred_check = |name: &str, key: &str| {
+        let data_dir = std::env::var("AXOCOATL_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+        let cred_check = |name: &str, credentials: &axocoatl_config::ProviderCredentials| {
+            // A key in the secret store (`api_key_secret`) is checked there.
+            if let Some(line) = connect_cmd::openrouter::doctor_key_line(
+                name,
+                credentials,
+                std::path::Path::new(&data_dir),
+            ) {
+                match line {
+                    Ok(line) => pass(&line),
+                    Err((line, hint)) => warn(&line, &hint),
+                }
+                return;
+            }
+            let key = credentials.api_key.expose_secret();
             if key.is_empty() || key.contains("your-key") || key.starts_with("${") {
                 warn(
                     &format!("{name} API key not set"),
@@ -1368,19 +1382,19 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
             }
         };
         if let Some(c) = &config.providers.openai {
-            cred_check("OpenAI", c.api_key.expose_secret());
+            cred_check("OpenAI", c);
         }
         if let Some(c) = &config.providers.anthropic {
-            cred_check("Anthropic", c.api_key.expose_secret());
+            cred_check("Anthropic", c);
         }
         if let Some(c) = &config.providers.gemini {
-            cred_check("Gemini", c.api_key.expose_secret());
+            cred_check("Gemini", c);
         }
         if let Some(c) = &config.providers.mistral {
-            cred_check("Mistral", c.api_key.expose_secret());
+            cred_check("Mistral", c);
         }
         if let Some(c) = &config.providers.openrouter {
-            cred_check("OpenRouter", c.api_key.expose_secret());
+            cred_check("OpenRouter", c);
         }
     }
 
@@ -5246,7 +5260,10 @@ providers:
                 vec!["codex", api_key_equals.as_str()],
                 "--api-key takes no value",
             ),
-            (vec![key], "axocoatl connect connects claude-code or codex"),
+            (
+                vec![key],
+                "axocoatl connect connects claude-code, codex or openrouter",
+            ),
             (
                 vec!["claude-code", key],
                 "axocoatl connect was given an argument it does not take",

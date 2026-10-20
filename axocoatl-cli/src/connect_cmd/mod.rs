@@ -30,11 +30,19 @@
 //! opened for it. `axocoatl connect codex --refresh` and `--status`
 //! ([`codex_sign_in`]) refresh the stored ChatGPT sign-in through the
 //! running daemon, and show what is stored, without a token.
+//!
+//! `axocoatl connect openrouter` ([`openrouter`]) signs in to OpenRouter in
+//! the browser through its OAuth PKCE flow and stores the key OpenRouter
+//! issues as the secret `openrouter`, which the configuration then names.
 
 mod browser;
 mod codex;
 mod codex_container;
 mod codex_sign_in;
+pub(crate) mod openrouter;
+mod openrouter_api;
+mod openrouter_config;
+mod openrouter_pkce;
 mod redact;
 mod relay;
 mod screen;
@@ -42,6 +50,8 @@ mod verify;
 
 #[cfg(test)]
 mod ink_model;
+#[cfg(test)]
+mod openrouter_tests;
 #[cfg(test)]
 mod tests;
 
@@ -192,6 +202,62 @@ pub enum ConnectCommands {
         /// A value given on the command line (`connect codex --api-key
         /// "$KEY"`): refused without being shown, since clap's own
         /// "unexpected argument" error would print it.
+        #[arg(hide = true, value_name = "VALUE")]
+        on_command_line: Vec<String>,
+    },
+    /// Sign in to OpenRouter in the browser (OAuth PKCE), store the key it
+    /// issues (never shown) as the secret openrouter, check it, and point
+    /// providers.openrouter at it with openrouter_billing: credits
+    Openrouter {
+        /// Path to config file (selects the data directory; providers.openrouter
+        /// is written here, and at the default path a new file when there is
+        /// none)
+        #[arg(short, long, default_value_os_t = crate::default_config_path_for_clap())]
+        config: PathBuf,
+        /// Name of the secret to store the key as
+        #[arg(long, value_name = "NAME", default_value = openrouter::OPENROUTER_SECRET)]
+        secret: String,
+        /// The writer's OpenRouter model (vendor/model), checked in
+        /// OpenRouter's catalog before the sign-in
+        #[arg(long, value_name = "MODEL", conflicts_with_all = ["status", "remove"])]
+        writer: Option<String>,
+        /// The reviewer's OpenRouter model (vendor/model, not the writer's),
+        /// checked in OpenRouter's catalog before the sign-in
+        #[arg(long, value_name = "MODEL", conflicts_with_all = ["status", "remove"])]
+        reviewer: Option<String>,
+        /// Do not open the sign-in page in this computer's browser; only print
+        /// its address (the browser must still reach 127.0.0.1 on this
+        /// computer)
+        #[arg(long, conflicts_with_all = ["status", "remove"])]
+        no_browser: bool,
+        /// Minutes the browser sign-in may take, 1 to 60 (default 10)
+        #[arg(
+            long,
+            value_name = "MINUTES",
+            value_parser = clap::value_parser!(u64).range(1..=60),
+            conflicts_with_all = ["status", "remove"]
+        )]
+        sign_in_timeout: Option<u64>,
+        /// Answer yes to the billing question without a terminal: this
+        /// OpenRouter account pays with credits and has no BYOK provider keys
+        /// connected
+        #[arg(long, conflicts_with_all = ["status", "remove"])]
+        credits_only: bool,
+        /// Store the key without changing the configuration (the lines to add
+        /// are printed); with --remove, leave the configuration as it is
+        #[arg(long, conflicts_with = "status")]
+        no_config: bool,
+        /// Show whether a key is stored, its label, credit limit, usage and
+        /// free-tier status (from OpenRouter), and what the configuration
+        /// says; never the key
+        #[arg(long, conflicts_with = "remove")]
+        status: bool,
+        /// Remove the stored key and the configuration's reference to it (the
+        /// key stays in your OpenRouter account until you delete it there)
+        #[arg(long)]
+        remove: bool,
+        /// A value given on the command line (`connect openrouter "$KEY"`):
+        /// refused without being shown.
         #[arg(hide = true, value_name = "VALUE")]
         on_command_line: Vec<String>,
     },
@@ -604,11 +670,11 @@ pub(crate) fn unknown_argument(starts_with: Option<&str>, suggested: Option<&str
     message
 }
 
-/// The refusal of a `connect` target that is neither `claude-code` nor
-/// `codex`, which never repeats it.
+/// The refusal of a `connect` target that is not `claude-code`, `codex` or
+/// `openrouter`, which never repeats it.
 pub(crate) const UNKNOWN_TARGET: &str =
-    "axocoatl connect connects claude-code or codex, and what was given is neither, so nothing \
-     was run or stored (it is not repeated here, in case it is a key or token).";
+    "axocoatl connect connects claude-code, codex or openrouter, and what was given is none of \
+     them, so nothing was run or stored (it is not repeated here, in case it is a key or token).";
 
 /// Any other `connect` command line clap refuses whose error would repeat
 /// a value given on it.
@@ -628,6 +694,39 @@ pub async fn cmd_connect(command: ConnectCommands) -> i32 {
         }
     }
     let (config, secret, no_verify, claude) = match command {
+        ConnectCommands::Openrouter {
+            on_command_line, ..
+        } if !on_command_line.is_empty() => {
+            eprintln!("✗ {}", openrouter::VALUE_ON_COMMAND_LINE);
+            return exit::USAGE;
+        }
+        ConnectCommands::Openrouter {
+            config,
+            secret,
+            writer,
+            reviewer,
+            no_browser,
+            sign_in_timeout,
+            credits_only,
+            no_config,
+            status,
+            remove,
+            on_command_line: _,
+        } => {
+            return openrouter::cmd_connect_openrouter(openrouter::Flags {
+                config,
+                secret,
+                writer,
+                reviewer,
+                no_browser,
+                sign_in_timeout,
+                credits_only,
+                no_config,
+                status,
+                remove,
+            })
+            .await;
+        }
         ConnectCommands::ClaudeCode {
             config,
             secret,

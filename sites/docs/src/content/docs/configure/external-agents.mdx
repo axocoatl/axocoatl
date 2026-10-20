@@ -99,7 +99,11 @@ daemon also keeps the access token current on your computer.
 The reviewer is one of Axocoatl's own Agents, on a provider your configuration defines
 and native Sessions accept, Ollama or OpenRouter (see [Providers](/configure/providers/)).
 A run uses the reviewer onboarding set up; `--model reviewer=…`, such as
-`--model reviewer=ollama:gpt-oss:20b`, names another for one run. Choose a model other
+`--model reviewer=ollama:gpt-oss:20b`, names another for one run. For a reviewer on
+OpenRouter, connect it once by signing in in the browser:
+`axocoatl connect openrouter --reviewer <vendor/model>` checks the model, stores the key
+OpenRouter issues without showing it and adds OpenRouter to your configuration (see
+[Configure OpenRouter](/configure/providers/#configure-openrouter)). Choose a model other
 than the writer's: a reviewer on the writer's model, through any provider, is warned
 about (`same_model_reviewer`), not refused (see [Choose the models](#choose-the-models)).
 

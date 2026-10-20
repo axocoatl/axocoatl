@@ -22,6 +22,7 @@ pub mod mcp_approval_hook;
 pub(crate) mod ollama_contract_test_support;
 pub mod proactive;
 pub mod provider_retry;
+pub mod provider_secrets;
 pub mod receipt_key;
 pub mod run_attribution;
 pub mod scheduler;

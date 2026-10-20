@@ -635,6 +635,7 @@ mod tests {
         // A changed secret is named by its key, never by its value.
         let key = |value: &str| axocoatl_config::ProviderCredentials {
             api_key: value.into(),
+            api_key_secret: None,
             base_url: None,
             fallback: None,
         };

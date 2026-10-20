@@ -98,6 +98,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alone, and the docs gate refuses a page without it.
 
 ### Added
+- **`axocoatl connect openrouter`: OpenRouter through a browser sign-in, with no key to
+  paste.** It runs OpenRouter's OAuth PKCE flow: a loopback server on `127.0.0.1` (a
+  port the system picks), OpenRouter's sign-in page opened in the browser and printed
+  (`--no-browser` only prints it), the browser's return checked against the sign-in's
+  state (any other request to the loopback server is ignored, so a stray or forged one
+  cannot end the sign-in), and the code exchanged with a verifier that never leaves the
+  computer for a new key. The key is checked with `GET /api/v1/key` (its label, credit limit, usage
+  and free-tier status are shown, never the key), stored in the secret store as
+  `openrouter`, and the configuration gains `openrouter_billing: credits` and
+  `openrouter: {api_key_secret: openrouter}`, every other line kept; on a computer with
+  no configuration yet it writes one with only those entries. Models named with
+  `--writer` and `--reviewer` are checked in OpenRouter's public catalog before the
+  sign-in, and must differ. It asks onboarding's BYOK question first; cancelling in the
+  browser, a 10-minute sign-in time (`--sign-in-timeout`) or Ctrl-C stores nothing.
+  `--status` shows the stored key's label and limits (it sends only an `sk-or-` value);
+  `--remove` deletes it and its line in the configuration, keeping the line while
+  Agents still use OpenRouter. It never stores into, sends or removes a secret another
+  command owns (`claude-code-oauth`, `codex-chatgpt`, `codex-openai`, the receipt key).
+  Onboarding can call its sign-in, which leaves signal handling to the process. Not
+  yet run against a real OpenRouter account: its tests
+  use a fake OpenRouter, and the live checks reached only OpenRouter's public catalog,
+  its sign-in page and the refusal of a code it never issued.
+- **`api_key_secret` for hosted providers.** `providers.<name>.api_key_secret` names a
+  secret in the data root's store in place of `api_key`, so the key is not in the
+  configuration file; the daemon reads it when it starts and logs, without a value,
+  a named secret that is not stored. `axocoatl doctor` checks that it is stored. A
+  value there that reads as a key is refused and never repeated in a message, and a
+  hosted provider block with neither `api_key` nor `api_key_secret` is refused, as a
+  missing `api_key` was before.
 - **Contract probes.** When Team & budget (or a loadout run's admission) observes an
   Ollama model's context, Axocoatl sends two small requests to the person's own server
   with that context and the settings every call uses: a prompt about four times longer
