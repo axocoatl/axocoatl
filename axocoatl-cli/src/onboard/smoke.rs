@@ -94,6 +94,14 @@ pub(crate) fn run_args(
     args
 }
 
+/// Arguments as a person would type them (quoted where the shell needs it).
+fn shown(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| super::host::shell_quote(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// `GET /health` of the daemon on `host:port` (public, no token).
 pub(crate) fn health_url(host: &str, port: u16) -> String {
     format!(
@@ -201,7 +209,7 @@ pub(crate) async fn run(
         );
         o.ui.say(format!(
             "    would copy the sample repository to a temporary directory and run: axocoatl {}",
-            args.join(" ")
+            shown(&args)
         ));
         o.ui.say("    would then run: axocoatl receipt verify <receipt> --key \"$(axocoatl receipt key)\" --repo <repository>");
         return true;
@@ -338,7 +346,7 @@ pub(crate) async fn run(
 
     let exe = o.host.exe.display().to_string();
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    o.ui.say(format!("  $ axocoatl {}", args.join(" ")));
+    o.ui.say(format!("  $ axocoatl {}", shown(&args)));
     // A SIGTERM or SIGHUP to onboarding stops the daemon it started, too
     // (Ctrl+C reaches both through the terminal).
     let run_cmd = Cmd::new(&exe, &arg_refs);
@@ -560,6 +568,7 @@ mod tests {
             ..Choice::default()
         };
         let args = run_args(WriterChoice::Ollama, &local, repo, receipt, record, config);
+        assert!(shown(&args).starts_with("run fix --task 'Paging skips the last item' --repo"));
         assert_eq!(
             args.join(" "),
             "run fix --task Paging skips the last item --repo /tmp/f/repo --receipt \

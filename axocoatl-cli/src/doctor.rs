@@ -892,20 +892,25 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         Some(credential) => format!("axocoatl run fix-codex --param credential={credential}"),
         None => "axocoatl run fix-codex".to_string(),
     };
+    // Claude Code and Codex are listed even when not set up, with the
+    // command that sets them up.
     for (command, writer) in [
         ("axocoatl run fix-claude-code", &claude_code),
         (codex_command.as_str(), &codex),
     ] {
+        let mut problems = Vec::new();
         if writer.set_up_started || writer.chosen {
-            let mut problems: Vec<String> = sandbox_blocker.iter().cloned().collect();
+            problems.extend(sandbox_blocker.iter().cloned());
             problems.extend(writer.missing.clone());
             problems.extend(reviewer_problem());
-            path(
-                command,
-                problems,
-                format!("reviewer {}", reviewer.unwrap_or("-")),
-            );
+        } else {
+            problems.extend(writer.missing.clone());
         }
+        path(
+            command,
+            problems,
+            format!("reviewer {}", reviewer.unwrap_or("-")),
+        );
     }
     if let Some(config) = &config {
         if let Some(lead) = config.agents.iter().find(|agent| agent.id == "lead") {

@@ -2310,6 +2310,17 @@ async fn doctor_fails_a_chosen_claude_code_writer_that_cannot_run() {
         .find(|path| path.command == "axocoatl run fix-claude-code")
         .unwrap();
     assert!(!claude_path.ok);
+    // A writer not set up is listed with the command that sets it up.
+    let codex_path = report
+        .ready_for
+        .iter()
+        .find(|path| path.command == "axocoatl run fix-codex")
+        .unwrap();
+    assert!(!codex_path.ok);
+    assert_eq!(
+        codex_path.detail,
+        "not set up: run `axocoatl onboard --update --writer codex`"
+    );
 }
 
 /// With E2B for workbench Sessions, `axocoatl run` still needs Podman:
