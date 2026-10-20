@@ -198,10 +198,15 @@ test('the audit loadout plans two areas, runs a read-only worker per area and in
   assert.deepEqual(outcome.not_covered, [], failed);
   assert.match(result.stderr, /note: worker-code listed as not reached: docs; src\/main\.rs; a note: the host decides coverage from the files its workers read/);
   // The note is in the Outcome and the JUnit verdict too, not only in the
-  // progress lines.
-  assert.equal(outcome.notes.length, 1, JSON.stringify(outcome.notes));
-  assert.match(outcome.notes[0], /^worker-code listed as not reached: docs; src\/main\.rs;/);
-  assert.match(await readFile(junitPath, 'utf8'), /<testcase classname="axocoatl.run" name="verdict">\n {6}<system-out>note: worker-code listed /);
+  // progress lines. The run's first note is the environment it chose (the
+  // audit loadout names no image, toolchain or check), recorded when its
+  // Session was created.
+  const environment = 'image docker.io/library/alpine:3.20 · no toolchain (the loadout runs no repository check) · no repository check · setup none';
+  assert.equal(outcome.notes.length, 2, JSON.stringify(outcome.notes));
+  assert.equal(outcome.notes[0], environment, JSON.stringify(outcome.notes));
+  assert.match(outcome.notes[1], /^worker-code listed as not reached: docs; src\/main\.rs;/);
+  assert.ok((await readFile(junitPath, 'utf8')).includes(
+    `<testcase classname="axocoatl.run" name="verdict">\n      <system-out>note: ${environment}\nnote: worker-code listed `));
   assert.equal(outcome.findings.length, 1, JSON.stringify(outcome.findings));
   assert.equal(outcome.findings[0].title, 'README has no usage section');
   assert.equal(outcome.findings[0].area, 'docs');
