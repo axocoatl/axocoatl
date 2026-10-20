@@ -1443,17 +1443,32 @@ impl AxocoatlDaemon {
         resolved.notes.push(plan.summary());
         let mut toolchain_failure = None;
         if session.environment.state == SessionEnvironmentState::Ready {
-            if let Some(setup) = &plan.setup {
+            if let (Some(setup), Some(toolchain)) = (&plan.setup, plan.toolchain) {
                 let setup_run = self
-                    .run_toolchain_setup(&session.id, &run_id, &loadout.file.sandbox.network, setup)
+                    .run_toolchain_setup(
+                        &session.id,
+                        &run_id,
+                        toolchain,
+                        &loadout.file.sandbox.network,
+                        setup,
+                    )
                     .await;
                 resolved
                     .notes
-                    .push(loadout_toolchain::setup_note(&setup_run.facts));
+                    .push(loadout_toolchain::setup_note(&setup_run));
                 toolchain_failure = setup_run.failure;
                 environment_facts.setup = Some(setup_run.facts);
             }
-            if let (None, Some((check, _))) = (&toolchain_failure, &plan.check) {
+            if request.environment.no_probe && plan.check.is_some() {
+                resolved.notes.push(
+                    "the check was not probed before the first model call (--no-probe)".into(),
+                );
+            }
+            let probe_check = plan
+                .check
+                .as_ref()
+                .filter(|_| toolchain_failure.is_none() && !request.environment.no_probe);
+            if let Some((check, _)) = probe_check {
                 let timeout = resolved
                     .checks
                     .iter()
@@ -1461,13 +1476,17 @@ impl AxocoatlDaemon {
                     .map(|check| check.timeout_secs)
                     .max()
                     .unwrap_or(180);
-                let setup_note = environment_facts
-                    .setup
-                    .as_ref()
-                    .map(|facts| format!("`{}` exited {:?}", facts.command, facts.exit_code));
+                let setup_note = environment_facts.setup.as_ref().map(|facts| {
+                    format!(
+                        "`{}`: {}",
+                        facts.command,
+                        loadout_toolchain::setup_outcome(facts)
+                    )
+                });
                 match self
                     .probe_loadout_check(
                         &session.id,
+                        &run_id,
                         &plan,
                         check,
                         timeout,
@@ -1484,7 +1503,10 @@ impl AxocoatlDaemon {
                     Err(error) => {
                         tracing::warn!(session = %session.id, %error, "the check probe could not run")
                     }
-                    Ok(loadout_toolchain::ProbeRun::Refused(refusal)) => {
+                    Ok(loadout_toolchain::ProbeRun::Refused {
+                        message,
+                        environment,
+                    }) => {
                         // Not admitted: the run's Session goes with it.
                         if let Err(error) = self.close_session(&session.id).await {
                             tracing::warn!(session = %session.id, %error, "closing the refused run's Session failed");
@@ -1494,7 +1516,11 @@ impl AxocoatlDaemon {
                             .lock()
                             .unwrap_or_else(|poison| poison.into_inner())
                             .remove(&run_id);
-                        return Err(DaemonError::InvalidRequest(refusal));
+                        return Err(if environment {
+                            DaemonError::Session(message)
+                        } else {
+                            DaemonError::InvalidRequest(message)
+                        });
                     }
                 }
             }

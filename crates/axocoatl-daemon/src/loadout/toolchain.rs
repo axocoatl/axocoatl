@@ -26,6 +26,10 @@
 //! Without a toolchain (`--toolchain none`) a run is what it was before
 //! toolchains: the setup runs through the Session's environment with only
 //! the configured egress lists.
+//!
+//! Rust is refused for now ([`RUST_BLOCKED`]): a loadout Session is always
+//! hardened, and the hardened supervisor's Landlock domain refuses the
+//! cross-directory renames cargo and rustc make for every build.
 
 use std::path::Path;
 
@@ -48,6 +52,10 @@ pub struct EnvironmentRequest {
     /// Run no setup, not even the detected install.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_setup: bool,
+    /// Do not probe the check before the first model call: a check the
+    /// probe takes for one that cannot run still gets its run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_probe: bool,
     /// Build a missing toolchain image during admission. `false` refuses
     /// the run instead, naming the `axocoatl recipe build` command.
     #[serde(default = "build_images_default", skip_serializing_if = "is_true")]
@@ -68,6 +76,7 @@ impl Default for EnvironmentRequest {
             toolchain: None,
             image: None,
             no_setup: false,
+            no_probe: false,
             build_images: true,
         }
     }
@@ -112,6 +121,9 @@ pub struct SetupPlan {
     pub script: String,
     /// The registry hosts and ports the setup alone may reach.
     pub registries: Vec<(String, Vec<u16>)>,
+    /// The detected install's [`detect::setup_key`]: when the Workspace's
+    /// cache holds it from an earlier setup, the setup does not run.
+    pub key: Option<String>,
 }
 
 impl SetupPlan {
@@ -143,6 +155,28 @@ pub struct EnvironmentPlan {
     /// without one): `--setup` or the loadout's, with the configured egress
     /// lists only.
     pub plain_setup: Option<String>,
+    /// The loadout's `sandbox.network`: under `none` no registry opens for
+    /// the setup.
+    pub network: String,
+    /// What the check probe reads the check's output with.
+    pub probe: ProbeHints,
+}
+
+/// What the check probe needs, read from the repository on the host, to
+/// tell a check that cannot run in the image from one that runs and fails.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProbeHints {
+    /// The check's own program (looked up with `command -v`).
+    pub program: Option<String>,
+    /// The program of the `package.json` script the check runs
+    /// (`npm test` running `mocha`).
+    pub script_program: Option<String>,
+    /// The module of `python -m <module>`.
+    pub runner_module: Option<String>,
+    /// The Python packages the repository declares (normalized names).
+    pub declared_packages: Vec<String>,
+    /// The repository's test files for the run's toolchain (some of them).
+    pub test_files: Vec<String>,
 }
 
 impl EnvironmentPlan {
@@ -177,6 +211,12 @@ impl EnvironmentPlan {
             None => "no repository check".into(),
         };
         let setup = match (&self.setup, &self.plain_setup) {
+            (Some(setup), _) if self.network != "egress" => format!(
+                "setup {} ({}; no registry: the loadout's network is {})",
+                setup.command,
+                setup.source.as_str(),
+                self.network
+            ),
             (Some(setup), _) => format!(
                 "setup {} ({}; registries {} open for it alone)",
                 setup.command,
@@ -320,6 +360,13 @@ pub fn plan(repo: &Path, input: PlanInput<'_>) -> Result<EnvironmentPlan, String
     } else {
         nonempty(input.loadout_setup).map(|setup| (setup.to_string(), SetupSource::Loadout))
     };
+    let network = file.sandbox.network.clone();
+    let probe = probe_hints(
+        &dir,
+        &root,
+        toolchain,
+        check.as_ref().map(|(c, _)| c.as_str()),
+    );
     let Some(toolchain) = toolchain else {
         return Ok(EnvironmentPlan {
             toolchain: None,
@@ -335,8 +382,13 @@ pub fn plan(repo: &Path, input: PlanInput<'_>) -> Result<EnvironmentPlan, String
             check,
             setup: None,
             plain_setup: explicit_setup.map(|(setup, _)| setup),
+            network,
+            probe,
         });
     };
+    if toolchain == Toolchain::Rust && RUST_BLOCKED {
+        return Err(rust_refusal(&reason));
+    }
     let mut recipes: Vec<String> = environment
         .recipes
         .iter()
@@ -349,10 +401,11 @@ pub fn plan(repo: &Path, input: PlanInput<'_>) -> Result<EnvironmentPlan, String
     let check_command = check.as_ref().map(|(check, _)| check.as_str());
     let setup = match explicit_setup {
         Some((command, source)) => Some(SetupPlan {
-            script: detect::setup_script(toolchain, &command, None),
+            script: detect::setup_script(toolchain, &command),
             command,
             source,
             registries: Vec::new(),
+            key: None,
         }),
         None if request.no_setup => None,
         None => detect::install_for(&dir, &root, toolchain, check_command).map(|install| {
@@ -366,10 +419,11 @@ pub fn plan(repo: &Path, input: PlanInput<'_>) -> Result<EnvironmentPlan, String
                 )
             });
             SetupPlan {
-                script: detect::setup_script(toolchain, &install.command, key.as_deref()),
+                script: detect::setup_script(toolchain, &install.command),
                 command: install.command,
                 source: SetupSource::Detected,
                 registries: Vec::new(),
+                key,
             }
         }),
     };
@@ -395,16 +449,79 @@ pub fn plan(repo: &Path, input: PlanInput<'_>) -> Result<EnvironmentPlan, String
         check,
         setup,
         plain_setup: None,
+        network,
+        probe,
     })
+}
+
+/// Whether a loadout run refuses the Rust toolchain. Every loadout Session
+/// is hardened, and the hardened supervisor's Landlock domain
+/// (`axocoatl_exec::supervisor`, `DOMAIN_ONLY`) does not grant
+/// `LANDLOCK_ACCESS_FS_REFER`, so the kernel refuses every rename or link
+/// into another directory with EXDEV ("Invalid cross-device link"). cargo
+/// and rustc make such renames for every build (rustc writes its metadata
+/// and archives in a temporary directory and moves them out), so no Rust
+/// check can pass: refusing at admission spends no download, setup or
+/// model call on it. Set to `false` with the supervisor change that grants
+/// REFER.
+pub const RUST_BLOCKED: bool = true;
+
+/// The usage error of a run whose toolchain is Rust while [`RUST_BLOCKED`].
+pub fn rust_refusal(reason: &str) -> String {
+    format!(
+        "this run would use the rust toolchain ({reason}), and Rust checks cannot run in a \
+         loadout run's hardened Session yet: its sandbox refuses the cross-directory renames \
+         cargo and rustc make for every build (\"Invalid cross-device link\"), so the run is \
+         refused before any download or model call. Rust repositories are not supported by \
+         `axocoatl run` in this release; a repository that also has another language's files \
+         can choose it with --toolchain node|python|go"
+    )
+}
+
+/// The probe's hints for `check`, read on the host.
+fn probe_hints(
+    dir: &SecureDir,
+    root: &RootFiles,
+    toolchain: Option<Toolchain>,
+    check: Option<&str>,
+) -> ProbeHints {
+    let Some(check) = check else {
+        return ProbeHints::default();
+    };
+    let program = detect::check_program(check);
+    let language = toolchain
+        .or_else(|| program.as_deref().and_then(detect::toolchain_for_program))
+        .or_else(|| detect::choose(&detect::candidates(root), Some(check)).toolchain());
+    ProbeHints {
+        script_program: detect::package_script_program(dir, check),
+        runner_module: detect::python_module_of(check),
+        declared_packages: if detect::has_python_files(root) {
+            detect::declared_python_packages(dir, root)
+        } else {
+            Vec::new()
+        },
+        test_files: language
+            .map(|language| detect::test_files(dir, language))
+            .unwrap_or_default(),
+        program,
+    }
 }
 
 /// Why a check cannot run in the run's image, found by the probe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeMissing {
-    /// A program the check runs is not on the writer's PATH.
+    /// The check's program, or the test runner it starts, is not on the
+    /// writer's PATH.
     Program(String),
-    /// A Python module the check imports is not installed.
+    /// The Python module the check runs (`python -m <module>`), or a
+    /// package the repository declares, is not installed.
     Module(String),
+    /// The check ran no test although the repository has test files: it
+    /// does not find them, so no change can make it pass.
+    NoTests { files: Vec<String> },
+    /// The Session's sandbox refuses what the check does (a cross-directory
+    /// rename under the hardened supervisor's Landlock domain).
+    Sandbox(String),
 }
 
 impl ProbeMissing {
@@ -414,7 +531,19 @@ impl ProbeMissing {
             ProbeMissing::Module(module) => {
                 format!("the Python module `{module}` is not installed")
             }
+            ProbeMissing::NoTests { files } => format!(
+                "it ran no test, although the repository has test files ({}{})",
+                files.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
+                if files.len() > 3 { ", ..." } else { "" }
+            ),
+            ProbeMissing::Sandbox(what) => format!("the Session's sandbox refuses it: {what}"),
         }
+    }
+
+    /// Whether the refusal is the environment's (exit 5) rather than the
+    /// run's request (exit 3).
+    pub fn is_environment(&self) -> bool {
+        matches!(self, ProbeMissing::Sandbox(_))
     }
 }
 
@@ -469,34 +598,115 @@ fn task_names(task: &str, module: &str) -> bool {
         .any(|word| word.eq_ignore_ascii_case(top))
 }
 
+/// Whether the output says the check ran no test at all: unittest's `Ran 0
+/// tests`, pytest's exit 5 (`no tests ran`), mocha's, jest's and vitest's
+/// "no test files".
+fn ran_no_tests(exit_code: Option<i32>, output: &str) -> bool {
+    output.lines().any(|line| {
+        let line = line.trim();
+        (line.starts_with("Ran 0 tests in ") && exit_code != Some(0))
+            || line.starts_with("Error: No test files found")
+            || line.starts_with("No tests found, exiting with code")
+            || line.starts_with("No test files found, exiting with code")
+    }) || (exit_code == Some(5)
+        && (output.contains("no tests ran") || output.contains("collected 0 items")))
+}
+
+/// What the probe reads a check's output with.
+#[derive(Debug, Clone, Copy)]
+pub struct ProbeContext<'a> {
+    pub hints: &'a ProbeHints,
+    /// The run's task: a module it names is missing by design.
+    pub task: &'a str,
+}
+
 /// What the probe's check run on the untouched tree says: `Some` when the
-/// check cannot run in this image. A check that runs and fails is what a fix
-/// run is for, and is not a refusal.
+/// check cannot run (or cannot pass) in this image, whatever the writer
+/// changes in the repository. A check that runs and fails is what a fix run
+/// is for, and is not a refusal: a missing program counts only when it is
+/// the check's own, the test runner its `package.json` script starts, or a
+/// known toolchain or test-runner program (never a path, which the writer
+/// may create); a missing module only when it is the one `python -m` runs
+/// or a package the repository declares (never a typo or a module the task
+/// creates).
 pub fn classify_probe(
     exit_code: Option<i32>,
     stdout: &str,
     stderr: &str,
-    check_program: Option<&str>,
-    task: &str,
+    context: ProbeContext<'_>,
 ) -> Option<ProbeMissing> {
-    for line in stderr.lines().chain(stdout.lines()) {
+    let hints = context.hints;
+    let lines = || stderr.lines().chain(stdout.lines());
+    if exit_code != Some(0) && lines().any(|line| line.contains("Invalid cross-device link")) {
+        return Some(ProbeMissing::Sandbox(
+            "a rename into another directory failed with \"Invalid cross-device link\"".into(),
+        ));
+    }
+    let named = |program: &str| {
+        hints.program.as_deref() == Some(program)
+            || hints.script_program.as_deref() == Some(program)
+            || detect::toolchain_for_program(program).is_some()
+    };
+    for line in lines() {
         if let Some(program) = shell_not_found(line) {
-            return Some(ProbeMissing::Program(program));
+            if !program.contains('/') && named(&program) {
+                return Some(ProbeMissing::Program(program));
+            }
         }
     }
-    for line in stderr.lines().chain(stdout.lines()) {
+    for line in lines() {
         if let Some(module) = missing_module(line) {
-            if !task_names(task, &module) {
+            let top = module.split('.').next().unwrap_or(&module);
+            let runner = hints
+                .runner_module
+                .as_deref()
+                .is_some_and(|runner| runner.split('.').next() == Some(top));
+            let declared = hints
+                .declared_packages
+                .contains(&detect::normalize_package(top));
+            if runner || (declared && !task_names(context.task, &module)) {
                 return Some(ProbeMissing::Module(module));
             }
         }
     }
     if exit_code == Some(127) {
-        return Some(ProbeMissing::Program(
-            check_program.unwrap_or("the check's program").to_string(),
-        ));
+        if let Some(program) = hints.program.as_deref().filter(|p| !p.contains('/')) {
+            if !lines().any(|line| shell_not_found(line).is_some()) {
+                return Some(ProbeMissing::Program(program.to_string()));
+            }
+        }
+    }
+    if !hints.test_files.is_empty() && ran_no_tests(exit_code, &format!("{stdout}\n{stderr}")) {
+        return Some(ProbeMissing::NoTests {
+            files: hints.test_files.clone(),
+        });
     }
     None
+}
+
+/// Programs no setup can install: a setup runs as the Session's non-root
+/// writer, with only the language's package registries open.
+fn system_program(program: &str) -> bool {
+    matches!(
+        program,
+        "make"
+            | "gcc"
+            | "cc"
+            | "g++"
+            | "clang"
+            | "cmake"
+            | "bash"
+            | "curl"
+            | "wget"
+            | "zip"
+            | "unzip"
+            | "java"
+            | "ruby"
+            | "php"
+            | "perl"
+            | "docker"
+            | "podman"
+    )
 }
 
 /// The usage error of a check that cannot run in the run's image.
@@ -510,32 +720,76 @@ pub fn probe_refusal(
         Some(toolchain) => format!("the {} toolchain ({})", toolchain.name(), plan.reason),
         None => format!("no toolchain ({})", plan.reason),
     };
+    let declare = match plan.toolchain {
+        Some(Toolchain::Node) => "declare it in package.json's devDependencies",
+        Some(Toolchain::Python) => {
+            "declare it in pyproject.toml's dependencies or test extra, or in a requirements file"
+        }
+        Some(Toolchain::Go) => "declare it in go.mod",
+        Some(Toolchain::Rust) => "declare it in Cargo.toml",
+        None => "declare it in the project's dependencies",
+    };
     let mut fixes = Vec::new();
-    match (plan.toolchain, missing) {
-        (_, ProbeMissing::Module(module)) => fixes.push(format!(
-            "--setup \"pip install <the package that provides {module}>\" (or declare it in \
-             the project's test dependencies)"
-        )),
-        (Some(_), ProbeMissing::Program(program)) => fixes.push(format!(
-            "--setup \"<command that installs {program}>\" (or declare it in the project's \
-             dependencies, such as package.json devDependencies)"
-        )),
-        (None, ProbeMissing::Program(_)) => {}
-    }
-    if plan.toolchain.is_none() {
-        fixes.push(
-            "--toolchain node|python|rust|go for Axocoatl's image of the repository's language"
+    match missing {
+        // Without a toolchain no setup reaches a package registry.
+        ProbeMissing::Module(_) if plan.toolchain.is_none() => fixes.push(
+            "pass --toolchain python for Axocoatl's Python image, whose setup installs the \
+             project's dependencies"
                 .into(),
-        );
-    } else {
-        fixes.push("--toolchain <another language> when the check runs another one".into());
+        ),
+        ProbeMissing::Module(module) => fixes.push(format!(
+            "{declare} (the package that provides {module}), or give its install with --setup \
+             \"pip install <package>\""
+        )),
+        ProbeMissing::Program(program) if system_program(program) => fixes.push(format!(
+            "pass --check \"<command>\" for a check that does not need {program}, or --image \
+             <ref> of an image that has it ({program} is a system program no setup can install)"
+        )),
+        ProbeMissing::Program(program) if plan.toolchain.is_some() => fixes.push(format!(
+            "{declare}, or give its install with --setup \"<command that installs {program}>\""
+        )),
+        ProbeMissing::NoTests { .. } => fixes.push(
+            "pass --check \"<command>\" (or write a `Check command:` line in AXOCOATL.md) \
+             with the command that runs the repository's tests"
+                .into(),
+        ),
+        ProbeMissing::Sandbox(_) => fixes.push(
+            "pass --check \"<command>\" for a check that does not need it; this is a limit of \
+             Axocoatl's sandbox, not of the repository"
+                .into(),
+        ),
+        ProbeMissing::Program(_) => {}
     }
-    fixes.push("--image <ref> of an image that has it".into());
-    fixes.push("--check \"<command>\" for a check this image can run".into());
-    fixes.push("or a loadout whose environment provides it".into());
+    if !matches!(
+        missing,
+        ProbeMissing::NoTests { .. } | ProbeMissing::Sandbox(_)
+    ) {
+        if plan.toolchain.is_none() {
+            // A missing module already named the Python toolchain.
+            if !matches!(missing, ProbeMissing::Module(_)) {
+                fixes.push(
+                    "pass --toolchain node|python|go for Axocoatl's image of the repository's \
+                     language"
+                        .into(),
+                );
+            }
+        } else {
+            fixes
+                .push("pass --toolchain <another language> when the check runs another one".into());
+        }
+        fixes.push("pass --image <ref> of an image that has it".into());
+        fixes.push("pass --check \"<command>\" for a check this image can run".into());
+        fixes.push("use a loadout whose environment provides it".into());
+    }
+    fixes.push("or pass --no-probe to run anyway when the probe is wrong about this check".into());
+    let cannot = match missing {
+        ProbeMissing::NoTests { .. } => "can never pass in this run",
+        ProbeMissing::Sandbox(_) => "cannot run in this run's Session",
+        _ => "cannot run in this run's image",
+    };
     format!(
-        "the check `{check}` cannot run in this run's image: {}. Image: {}, with {toolchain}.{} \
-         No writer or reviewer turn ran. Fix it with {}",
+        "the check `{check}` {cannot}: {}. Image: {}, with {toolchain}.{} No writer or reviewer \
+         turn ran. To fix it: {}",
         missing.describe(),
         plan.image_text(),
         setup_note
@@ -610,7 +864,8 @@ mod tests {
             "npm ci --prefer-offline --no-audit --no-fund"
         );
         assert_eq!(setup.source, SetupSource::Detected);
-        assert_eq!(setup.script, setup.command, "node keeps no stamp");
+        assert_eq!(setup.script, setup.command);
+        assert_eq!(setup.key, None, "node keeps no stamp");
         assert_eq!(setup.registry_hosts(), ["registry.npmjs.org"]);
         assert_eq!(plan.build_command().unwrap(), "axocoatl recipe build node");
         let summary = plan.summary();
@@ -641,7 +896,15 @@ mod tests {
             );
             let setup = plan.setup.unwrap();
             assert_eq!(setup.command, "pip install -e . pytest");
-            assert!(setup.script.contains("key="), "python keeps a stamp");
+            assert_eq!(
+                setup.key.as_deref().map(str::len),
+                Some(32),
+                "python keeps a stamp"
+            );
+            assert!(
+                !setup.script.contains("stamp"),
+                "root keeps it, not the script"
+            );
             assert_eq!(
                 setup.registry_hosts(),
                 ["pypi.org", "files.pythonhosted.org"]
@@ -731,6 +994,20 @@ mod tests {
         assert_eq!(no_setup.setup, None);
         assert_eq!(no_setup.toolchain, Some(Toolchain::Node));
         // --toolchain names one explicitly.
+        let go = run_plan(
+            dir.path(),
+            "fix",
+            EnvironmentRequest {
+                toolchain: Some("go".into()),
+                ..Default::default()
+            },
+            Some("go test ./..."),
+            None,
+        )
+        .unwrap();
+        assert_eq!(go.toolchain, Some(Toolchain::Go));
+        assert_eq!(go.reason, "--toolchain go");
+        // TC-NU-3: Rust is refused before any download or model call.
         let rust = run_plan(
             dir.path(),
             "fix",
@@ -741,9 +1018,9 @@ mod tests {
             Some("cargo test"),
             None,
         )
-        .unwrap();
-        assert_eq!(rust.toolchain, Some(Toolchain::Rust));
-        assert_eq!(rust.reason, "--toolchain rust");
+        .unwrap_err();
+        assert!(rust.contains("--toolchain rust"), "{rust}");
+        assert!(rust.contains("Invalid cross-device link"), "{rust}");
         let error = run_plan(
             dir.path(),
             "fix",
@@ -809,100 +1086,282 @@ mod tests {
         let dir = repo(&[
             (
                 "AXOCOATL.md",
-                "# Notes\n\nCheck command: `cargo test --lib`\n",
+                "# Notes\n\nCheck command: `go test ./pkg/...`\n",
             ),
-            ("Cargo.toml", "[package]\nname = 'x'\n"),
+            ("go.mod", "module x\n"),
             ("package.json", MOCHA),
         ]);
         let plan = run_plan(dir.path(), "fix", EnvironmentRequest::default(), None, None).unwrap();
-        assert_eq!(plan.toolchain, Some(Toolchain::Rust));
+        assert_eq!(plan.toolchain, Some(Toolchain::Go));
         assert_eq!(
             plan.check,
-            Some(("cargo test --lib".into(), detect::CheckSource::AxocoatlMd))
+            Some(("go test ./pkg/...".into(), detect::CheckSource::AxocoatlMd))
         );
         assert_eq!(plan.setup, None, "no dependencies to fetch");
+        // A Rust repository is refused at admission, whatever names it.
+        let dir = repo(&[
+            ("AXOCOATL.md", "Check command: `cargo test --lib`\n"),
+            ("Cargo.toml", "[package]\nname = 'x'\n"),
+            ("package.json", MOCHA),
+        ]);
+        let error =
+            run_plan(dir.path(), "fix", EnvironmentRequest::default(), None, None).unwrap_err();
+        assert!(error.contains("rust toolchain"), "{error}");
+        assert!(error.contains("--toolchain node|python|go"), "{error}");
+    }
+
+    /// TC-DOC-1: under `network: none` the summary says no registry opens.
+    #[test]
+    fn the_summary_says_when_no_registry_opens() {
+        let dir = repo(&[("package.json", MOCHA), ("package-lock.json", "{}")]);
+        let mut plan =
+            run_plan(dir.path(), "fix", EnvironmentRequest::default(), None, None).unwrap();
+        assert_eq!(plan.network, "egress");
+        plan.network = "none".into();
+        let summary = plan.summary();
+        assert!(
+            summary.contains("no registry: the loadout's network is none"),
+            "{summary}"
+        );
+        assert!(!summary.contains("open for it alone"), "{summary}");
+    }
+
+    fn hints(program: &str) -> ProbeHints {
+        ProbeHints {
+            program: Some(program.into()),
+            ..ProbeHints::default()
+        }
+    }
+
+    fn classify(
+        exit: Option<i32>,
+        stdout: &str,
+        stderr: &str,
+        hints: &ProbeHints,
+        task: &str,
+    ) -> Option<ProbeMissing> {
+        classify_probe(exit, stdout, stderr, ProbeContext { hints, task })
     }
 
     #[test]
     fn probes_tell_a_missing_program_from_a_failing_check() {
+        let npm = ProbeHints {
+            program: Some("npm".into()),
+            script_program: Some("mocha".into()),
+            ..ProbeHints::default()
+        };
         assert_eq!(
-            classify_probe(
+            classify(
                 Some(127),
                 "",
                 "sh: 1: mocha: not found\n",
-                Some("npm"),
+                &npm,
                 "fix paging"
             ),
             Some(ProbeMissing::Program("mocha".into()))
         );
         assert_eq!(
-            classify_probe(
+            classify(
                 Some(1),
                 "",
                 "> test\n> mocha\n\nsh: mocha: not found\nnpm error code 127",
-                Some("npm"),
+                &npm,
                 ""
             ),
             Some(ProbeMissing::Program("mocha".into()))
         );
         assert_eq!(
-            classify_probe(
+            classify(
                 Some(127),
                 "",
                 "bash: line 1: cargo: command not found",
-                None,
+                &ProbeHints::default(),
                 ""
             ),
             Some(ProbeMissing::Program("cargo".into()))
         );
+        let python = ProbeHints {
+            program: Some("python3".into()),
+            runner_module: Some("pytest".into()),
+            ..ProbeHints::default()
+        };
         assert_eq!(
-            classify_probe(
+            classify(
                 Some(1),
                 "",
                 "/usr/local/bin/python3: No module named pytest",
-                Some("python3"),
+                &python,
                 ""
             ),
             Some(ProbeMissing::Module("pytest".into()))
         );
+        // A package the repository declares, not installed.
+        let declared = ProbeHints {
+            program: Some("pytest".into()),
+            declared_packages: vec!["requests".into(), "pyyaml".into()],
+            ..ProbeHints::default()
+        };
         assert_eq!(
-            classify_probe(
+            classify(
                 Some(2),
                 "E   ModuleNotFoundError: No module named 'requests'",
                 "",
-                Some("pytest"),
+                &declared,
                 "fix the page count"
             ),
             Some(ProbeMissing::Module("requests".into()))
         );
-        // A module the task asks for is missing by design.
+        // ... unless the task asks to create that module.
         assert_eq!(
-            classify_probe(
+            classify(
                 Some(2),
-                "E   ModuleNotFoundError: No module named 'slugify'",
+                "E   ModuleNotFoundError: No module named 'requests.adapters'",
                 "",
-                Some("pytest"),
-                "Add a slugify module with slugify(text)"
+                &declared,
+                "Add a requests module"
             ),
             None
         );
         // A check that runs and fails is not a refusal, even when its own
         // output says "not found".
         assert_eq!(
-            classify_probe(
+            classify(
                 Some(1),
                 "AssertionError: expected 3, got 2\nError: page not found",
                 "",
-                Some("pytest"),
+                &hints("pytest"),
                 ""
             ),
             None
         );
-        assert_eq!(classify_probe(Some(0), "", "", Some("npm"), ""), None);
+        assert_eq!(classify(Some(0), "", "", &hints("npm"), ""), None);
         assert_eq!(
-            classify_probe(Some(127), "", "", Some("jest"), ""),
+            classify(Some(127), "", "", &hints("jest"), ""),
             Some(ProbeMissing::Program("jest".into()))
         );
+    }
+
+    /// TC-COR-2: what a fix run is for is never refused: an import typo, a
+    /// module the task creates, a script the task adds, a program a test
+    /// runs.
+    #[test]
+    fn failures_the_writer_can_fix_are_not_refused() {
+        let pytest = ProbeHints {
+            program: Some("pytest".into()),
+            declared_packages: vec!["requests".into()],
+            test_files: vec!["tests/test_calc.py".into()],
+            ..ProbeHints::default()
+        };
+        for (exit, stdout, stderr, task) in [
+            (
+                Some(2),
+                "E   ModuleNotFoundError: No module named 'colections'",
+                "",
+                "The tests fail to import; fix it",
+            ),
+            (
+                Some(2),
+                "E   ModuleNotFoundError: No module named 'calc.utils'",
+                "",
+                "Create the utils module with an add() function",
+            ),
+            (
+                Some(1),
+                "",
+                "/bin/sh: 1: ./bin/greet: not found",
+                "Add the bin/greet script that prints hello",
+            ),
+            (
+                Some(1),
+                "",
+                "sh: 1: convert: not found\nFAILED tests/test_img.py::test_resize",
+                "fix resizing",
+            ),
+            (
+                Some(127),
+                "",
+                "/bin/sh: 1: scripts/run-tests.sh: not found",
+                "add the test script",
+            ),
+        ] {
+            assert_eq!(
+                classify(exit, stdout, stderr, &pytest, task),
+                None,
+                "{stdout}{stderr}"
+            );
+        }
+    }
+
+    /// TC-NU-1: a check that finds none of the repository's tests can never
+    /// pass; one in a repository without tests may (the writer adds them).
+    #[test]
+    fn a_check_that_runs_no_test_of_the_repository_is_refused() {
+        let with_tests = ProbeHints {
+            program: Some("python3".into()),
+            runner_module: Some("unittest".into()),
+            test_files: vec!["tests/test_pages.py".into()],
+            ..ProbeHints::default()
+        };
+        let unittest = "\n----------------------------------------------------------------------\nRan 0 tests in 0.000s\n\nNO TESTS RAN\n";
+        assert_eq!(
+            classify(Some(5), "", unittest, &with_tests, "fix paging"),
+            Some(ProbeMissing::NoTests {
+                files: vec!["tests/test_pages.py".into()]
+            })
+        );
+        assert_eq!(
+            classify(
+                Some(5),
+                "collected 0 items\n\n===== no tests ran in 0.01s =====",
+                "",
+                &with_tests,
+                ""
+            ),
+            Some(ProbeMissing::NoTests {
+                files: vec!["tests/test_pages.py".into()]
+            })
+        );
+        assert!(matches!(
+            classify(
+                Some(1),
+                "",
+                "Error: No test files found: \"test\"",
+                &with_tests,
+                ""
+            ),
+            Some(ProbeMissing::NoTests { .. })
+        ));
+        let without = ProbeHints {
+            test_files: Vec::new(),
+            ..with_tests.clone()
+        };
+        assert_eq!(classify(Some(5), "", unittest, &without, "add tests"), None);
+        // Tests that ran and failed are the run's to fix.
+        assert_eq!(
+            classify(
+                Some(1),
+                "",
+                "Ran 2 tests in 0.001s\n\nFAILED (failures=1)",
+                &with_tests,
+                ""
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_sandbox_refusal_is_the_environment() {
+        let missing = classify(
+            Some(101),
+            "",
+            "error: failed to write `/tmp/t/debug/deps/libx.rmeta`\n\nCaused by:\n  Invalid cross-device link (os error 18)",
+            &hints("cargo"),
+            "",
+        )
+        .unwrap();
+        assert!(matches!(missing, ProbeMissing::Sandbox(_)));
+        assert!(missing.is_environment());
+        assert!(!ProbeMissing::Program("x".into()).is_environment());
     }
 
     #[test]
@@ -922,12 +1381,128 @@ mod tests {
             "localhost/axocoatl-recipe-node:",
             "the node toolchain (package.json at the repository root)",
             "No writer or reviewer turn ran",
+            "package.json's devDependencies",
             "--setup",
             "--image",
             "loadout",
+            "--no-probe",
         ] {
             assert!(message.contains(expected), "{expected}: {message}");
         }
+    }
+
+    /// TC-NU-5: the advice fits the language and the program, and the setup
+    /// note is words, not Rust's debug output.
+    #[test]
+    fn probe_refusals_give_advice_that_can_work() {
+        let dir = repo(&[(
+            "pyproject.toml",
+            "[project]\nname = 'pages'\n[tool.pytest.ini_options]\n",
+        )]);
+        let plan = run_plan(dir.path(), "fix", EnvironmentRequest::default(), None, None).unwrap();
+        let make = probe_refusal(
+            &plan,
+            "make test",
+            &ProbeMissing::Program("make".into()),
+            Some("`pip install -e . pytest`: exited 0"),
+        );
+        assert!(
+            make.contains("system program no setup can install"),
+            "{make}"
+        );
+        assert!(
+            !make.contains("--setup \"<command that installs make>\""),
+            "{make}"
+        );
+        assert!(!make.contains("devDependencies"), "{make}");
+        assert!(
+            make.contains("Setup: `pip install -e . pytest`: exited 0."),
+            "{make}"
+        );
+        let module = probe_refusal(&plan, "pytest", &ProbeMissing::Module("yaml".into()), None);
+        assert!(module.contains("pyproject.toml"), "{module}");
+        let tests = probe_refusal(
+            &plan,
+            "python3 -m unittest discover",
+            &ProbeMissing::NoTests {
+                files: vec!["tests/test_a.py".into()],
+            },
+            None,
+        );
+        assert!(
+            tests.contains("can never pass in this run: it ran no test"),
+            "{tests}"
+        );
+        assert!(tests.contains("tests/test_a.py"), "{tests}");
+        assert!(tests.contains("Check command:"), "{tests}");
+    }
+
+    #[test]
+    fn a_missing_module_without_a_toolchain_points_to_the_python_toolchain() {
+        let dir = repo(&[("pyproject.toml", "[project]\nname = 'x'\n")]);
+        let plan = run_plan(
+            dir.path(),
+            "fix",
+            EnvironmentRequest {
+                toolchain: Some("none".into()),
+                ..Default::default()
+            },
+            Some("python3 -m pytest"),
+            None,
+        )
+        .unwrap();
+        let message = probe_refusal(
+            &plan,
+            "python3 -m pytest",
+            &ProbeMissing::Module("pytest".into()),
+            None,
+        );
+        assert!(
+            message.contains("To fix it: pass --toolchain python"),
+            "{message}"
+        );
+        assert!(!message.contains("pip install <package>"), "{message}");
+        assert!(!message.contains("node|python|go"), "{message}");
+    }
+
+    /// The probe's hints come from the repository's files.
+    #[test]
+    fn the_plan_carries_the_probes_hints() {
+        let dir = repo(&[
+            ("package.json", MOCHA),
+            ("package-lock.json", "{}"),
+            ("test/paging.test.js", ""),
+        ]);
+        let plan = run_plan(dir.path(), "fix", EnvironmentRequest::default(), None, None).unwrap();
+        assert_eq!(plan.probe.program.as_deref(), Some("npm"));
+        assert_eq!(plan.probe.script_program.as_deref(), Some("mocha"));
+        assert_eq!(plan.probe.test_files, ["test/paging.test.js"]);
+        let dir = repo(&[
+            ("requirements.txt", "PyYAML\n"),
+            ("tests/test_x.py", "def test_x():\n    pass\n"),
+        ]);
+        let plan = run_plan(
+            dir.path(),
+            "fix",
+            EnvironmentRequest::default(),
+            Some("python3 -m pytest -q"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(plan.probe.runner_module.as_deref(), Some("pytest"));
+        assert_eq!(plan.probe.declared_packages, ["pyyaml"]);
+        assert_eq!(plan.probe.test_files, ["tests/test_x.py"]);
+        // Detected: plain test functions get pytest, and the setup brings it.
+        let plan = run_plan(dir.path(), "fix", EnvironmentRequest::default(), None, None).unwrap();
+        assert_eq!(
+            plan.check,
+            Some(("python3 -m pytest".into(), detect::CheckSource::Detected))
+        );
+        assert_eq!(plan.probe.runner_module.as_deref(), Some("pytest"));
+        assert_eq!(
+            plan.setup.unwrap().command,
+            "pip install -r requirements.txt pytest"
+        );
     }
 
     #[test]
@@ -937,11 +1512,13 @@ mod tests {
             serde_json::to_value(EnvironmentRequest::default()).unwrap(),
             serde_json::json!({})
         );
-        let request: EnvironmentRequest =
-            serde_json::from_value(serde_json::json!({"toolchain": "go", "build_images": false}))
-                .unwrap();
+        let request: EnvironmentRequest = serde_json::from_value(
+            serde_json::json!({"toolchain": "go", "build_images": false, "no_probe": true}),
+        )
+        .unwrap();
         assert_eq!(request.toolchain.as_deref(), Some("go"));
         assert!(!request.build_images);
+        assert!(request.no_probe);
         assert!(serde_json::from_value::<EnvironmentRequest>(serde_json::json!({"x": 1})).is_err());
     }
 }

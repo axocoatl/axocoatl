@@ -5,9 +5,11 @@
 //! `toolchain`.
 use super::*;
 use crate::external_agent::recipe_images::{self, RecipeImageRecord};
-use crate::loadout::toolchain::{EnvironmentPlan, ProbeMissing, SetupPlan};
+use crate::loadout::toolchain::{EnvironmentPlan, ProbeContext, ProbeMissing, SetupPlan};
+use axocoatl_isolation::{ToolchainCacheState, ToolchainCacheStep};
 use axocoatl_session::network_record::{BindingKind, Decision, EgressScope, NetworkEvent};
 use axocoatl_session::receipt::{EnvironmentFacts, ProbeFacts, SetupFacts};
+use axocoatl_session::toolchain::Toolchain;
 
 /// Refused connections of a setup's own processes after which the setup is
 /// stopped: a package manager retrying a host that is not among the
@@ -21,27 +23,30 @@ const SETUP_TAIL_BYTES: usize = 3 * 1024;
 const SETUP_TAIL_LINES: usize = 30;
 /// Longest the probe waits for `command -v`.
 const PROBE_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-/// Longest the probe runs the check on the untouched tree.
-const PROBE_CHECK_TIMEOUT_CAP_SECS: u64 = 600;
-/// Bytes of the probe's output read.
+/// Longest the probe runs the check on the untouched tree. A check still
+/// running then can run: it is stopped (the supervisor ends every process
+/// it started) and the run goes on.
+const PROBE_CHECK_TIMEOUT_CAP_SECS: u64 = 120;
+/// Bytes of the probe's output read, each of stdout and stderr.
 const PROBE_OUTPUT_BYTES: usize = 256 * 1024;
-/// The marker a stamped setup prints when it installs nothing
-/// (`axocoatl_session::toolchain::setup_script`).
-const UNCHANGED_MARKER: &str = "axocoatl: nothing to install";
 
 /// How a toolchain setup went.
 pub(crate) struct SetupRun {
     pub facts: SetupFacts,
     /// Why the run cannot go on, with the last lines of the setup's output.
     pub failure: Option<String>,
+    /// Whether root took the cache back after the setup (it did not run:
+    /// nothing was handed over).
+    pub sealed: bool,
 }
 
 /// What the probe found.
 pub(crate) enum ProbeRun {
     /// The check can run here (and did, on the untouched tree).
     Runs(ProbeFacts),
-    /// It cannot: the run is refused with this usage error.
-    Refused(String),
+    /// It cannot: the run is refused with this message, a usage error
+    /// (exit 3) unless `environment` (exit 5).
+    Refused { message: String, environment: bool },
 }
 
 /// The last lines of `text`, at most [`SETUP_TAIL_BYTES`].
@@ -152,14 +157,18 @@ impl AxocoatlDaemon {
                 plan.image_text()
             )));
         }
-        let size = plan
-            .recipes
-            .iter()
-            .find_map(|name| axocoatl_isolation::recipes::toolchain_image(name))
-            .map(|image| {
+        let size = axocoatl_isolation::recipes::image_size(&plan.recipes)
+            .map(|size| {
                 format!(
-                    " (about {} MB to download, {} MB on disk)",
-                    image.download_mb, image.image_mb
+                    " (about {} MB of {} to download, {}{} MB on disk)",
+                    size.base_download_mb,
+                    size.base_image,
+                    if size.unmeasured.is_empty() {
+                        "about "
+                    } else {
+                        "at least "
+                    },
+                    size.disk_mb
                 )
             })
             .unwrap_or_default();
@@ -254,36 +263,117 @@ impl AxocoatlDaemon {
         (allowed, refused, refused_hosts)
     }
 
-    /// Run `setup` in the run's Session: open its registries to the
-    /// Session's setup credential (a per-Session allow, recorded with the
-    /// run as its actor), run it as the writer, then close them again, all
-    /// before the first model call. A setup whose own connections are
-    /// refused [`SETUP_REFUSALS_LIMIT`] times is stopped.
+    /// Run `setup` in the run's Session, all before the first model call.
+    ///
+    /// Root first takes the toolchain's directory of the Workspace's cache:
+    /// when it holds this exact setup already ([`SetupPlan::key`]) nothing
+    /// runs and no registry opens. Otherwise the directory is handed to the
+    /// writer, the setup's registries are opened to the Session's setup
+    /// credential (a per-Session allow, recorded with the run as its
+    /// actor), the setup runs as the writer, the registries close, and root
+    /// takes the directory back, read-only to the Session's users, whatever
+    /// the setup did. A setup whose own connections are refused
+    /// [`SETUP_REFUSALS_LIMIT`] times is stopped.
     pub(crate) async fn run_toolchain_setup(
         &self,
         session_id: &str,
         run_id: &str,
+        toolchain: Toolchain,
         network: &str,
         setup: &SetupPlan,
     ) -> SetupRun {
         use sha2::{Digest, Sha256};
-        let mut facts = SetupFacts {
+        let facts = SetupFacts {
             command: setup.command.clone(),
             source: setup.source.as_str().into(),
             script_sha256: format!("{:x}", Sha256::digest(setup.script.as_bytes())),
             ..SetupFacts::default()
         };
-        let fail = |mut facts: SetupFacts, error: String| SetupRun {
-            failure: Some(error.clone()),
-            facts: {
-                facts.error = Some(error);
-                facts
-            },
-        };
         let sandbox = match self.loadout_sandbox(session_id).await {
             Ok(sandbox) => sandbox,
-            Err(error) => return fail(facts, error.to_string()),
+            Err(error) => return failed_setup(facts, error.to_string()),
         };
+        let started = std::time::Instant::now();
+        let before = ToolchainCacheStep::Before {
+            toolchain: toolchain.name().into(),
+            key: setup.key.clone(),
+            reset: toolchain
+                .setup_reset_entries()
+                .iter()
+                .map(|entry| entry.to_string())
+                .collect(),
+        };
+        match sandbox.toolchain_cache_step(&before).await {
+            Ok(ToolchainCacheState::Unchanged) => {
+                let mut facts = facts;
+                facts.exit_code = Some(0);
+                facts.unchanged = true;
+                facts.duration_ms = started.elapsed().as_millis() as u64;
+                return SetupRun {
+                    facts,
+                    failure: None,
+                    sealed: true,
+                };
+            }
+            Ok(_) => {}
+            Err(error) => {
+                // Taken back even so: nothing of it may stay the writer's.
+                let _ = sandbox
+                    .toolchain_cache_step(&ToolchainCacheStep::After {
+                        toolchain: toolchain.name().into(),
+                        key: None,
+                    })
+                    .await;
+                return failed_setup(
+                    facts,
+                    format!("preparing the Workspace's toolchain cache for the setup: {error}"),
+                );
+            }
+        }
+        let mut run = self
+            .run_setup_with_registries(&sandbox, session_id, run_id, network, setup, facts)
+            .await;
+        let after = ToolchainCacheStep::After {
+            toolchain: toolchain.name().into(),
+            key: if run.failure.is_none() {
+                setup.key.clone()
+            } else {
+                None
+            },
+        };
+        if let Err(error) = sandbox.toolchain_cache_step(&after).await {
+            // Fail closed: the writer never starts with the cache writable.
+            // A setup that failed first keeps its own message.
+            let error = format!(
+                "the Workspace's toolchain cache could not be made read-only after the setup: \
+                 {error}"
+            );
+            run = match run.failure {
+                Some(failure) => {
+                    let mut run = failed_setup(run.facts, format!("{failure}\n({error})"));
+                    run.sealed = false;
+                    run
+                }
+                None => SetupRun {
+                    sealed: false,
+                    ..failed_setup(run.facts, error)
+                },
+            };
+        }
+        run.facts.duration_ms = started.elapsed().as_millis() as u64;
+        run
+    }
+
+    /// The setup itself, with its registries open for it alone.
+    async fn run_setup_with_registries(
+        &self,
+        sandbox: &Arc<dyn Sandbox>,
+        session_id: &str,
+        run_id: &str,
+        network: &str,
+        setup: &SetupPlan,
+        mut facts: SetupFacts,
+    ) -> SetupRun {
         // Under `network: none` there is no proxy to open anything on.
         let registries: &[(String, Vec<u16>)] = if network == "egress" {
             &setup.registries
@@ -297,7 +387,7 @@ impl AxocoatlDaemon {
             match self.session_egress(session_id).await {
                 Ok(egress) => Some(egress),
                 Err(error) => {
-                    return fail(facts, format!("opening the setup's registries: {error}"))
+                    return failed_setup(facts, format!("opening the setup's registries: {error}"))
                 }
             }
         };
@@ -324,7 +414,7 @@ impl AxocoatlDaemon {
                         if let Err(close) = closed {
                             error.push_str(&format!("; {close}"));
                         }
-                        return fail(facts, error);
+                        return failed_setup(facts, error);
                     }
                 }
             }
@@ -380,7 +470,7 @@ impl AxocoatlDaemon {
                 );
                 let message =
                     setup_failure_message(setup, None, facts.duration_ms, "", "", Some(&reason));
-                fail(facts, message)
+                failed_setup(facts, message)
             }
             Ok(Err(error)) => {
                 let message = setup_failure_message(
@@ -391,18 +481,17 @@ impl AxocoatlDaemon {
                     "",
                     Some(&format!("{error}")),
                 );
-                fail(facts, message)
+                failed_setup(facts, message)
             }
             Ok(Ok(results)) => match results.into_iter().next() {
-                None => fail(facts, "the setup did not run".into()),
+                None => failed_setup(facts, "the setup did not run".into()),
                 Some(result) => {
                     facts.exit_code = Some(result.exit_code);
-                    facts.unchanged =
-                        result.exit_code == 0 && result.stdout.contains(UNCHANGED_MARKER);
                     if result.exit_code == 0 {
                         SetupRun {
                             facts,
                             failure: None,
+                            sealed: true,
                         }
                     } else {
                         let mut reason = None;
@@ -424,14 +513,14 @@ impl AxocoatlDaemon {
                             &result.stderr,
                             reason,
                         );
-                        fail(facts, message)
+                        failed_setup(facts, message)
                     }
                 }
             },
         };
         if let Err(error) = closed {
             // Fail closed: a writer must never start with a registry open.
-            run = fail(run.facts, error);
+            run = failed_setup(run.facts, error);
         }
         run
     }
@@ -467,11 +556,17 @@ impl AxocoatlDaemon {
 
     /// Before the first model call: whether the check's program is on the
     /// writer's PATH, then one run of the check on the untouched tree as the
-    /// writer, without network. A check that cannot run here refuses the run
-    /// (a usage error); one that runs and fails is what the run is for.
+    /// writer, without network, through the Session's supervisor exactly as
+    /// the run's own checks run (so a refusal of the hardened sandbox shows
+    /// here too, and a check that outlasts the probe is stopped with every
+    /// process it started). A check that cannot run here refuses the run;
+    /// one that runs and fails is what the run is for. `Err` is a probe
+    /// that could not run, which decides nothing.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn probe_loadout_check(
         &self,
         session_id: &str,
+        run_id: &str,
         plan: &EnvironmentPlan,
         check: &str,
         timeout_secs: u64,
@@ -479,14 +574,18 @@ impl AxocoatlDaemon {
         setup_note: Option<&str>,
     ) -> Result<ProbeRun, DaemonError> {
         let sandbox = self.loadout_sandbox(session_id).await?;
-        let program = axocoatl_session::toolchain::check_program(check);
+        let hints = &plan.probe;
         let started = std::time::Instant::now();
         let mut facts = ProbeFacts {
-            program: program.clone(),
+            program: hints.program.clone(),
             program_found: true,
             ..ProbeFacts::default()
         };
-        if let Some(program) = &program {
+        let refused = |missing: &ProbeMissing| ProbeRun::Refused {
+            message: crate::loadout::toolchain::probe_refusal(plan, check, missing, setup_note),
+            environment: missing.is_environment(),
+        };
+        if let Some(program) = &hints.program {
             let lookup = sandbox
                 .exec_observed(
                     &["sh", "-c", "command -v -- \"$1\"", "sh", program],
@@ -498,46 +597,84 @@ impl AxocoatlDaemon {
                 .map_err(|error| {
                     DaemonError::Session(format!("probing the check's program {program}: {error}"))
                 })?;
-            if lookup.exit_code != Some(0) {
-                return Ok(ProbeRun::Refused(crate::loadout::toolchain::probe_refusal(
-                    plan,
-                    check,
-                    &ProbeMissing::Program(program.clone()),
-                    setup_note,
+            if lookup.client_timed_out {
+                return Err(DaemonError::Session(format!(
+                    "probing the check's program {program} timed out"
                 )));
+            }
+            if lookup.exit_code != Some(0) {
+                return Ok(refused(&ProbeMissing::Program(program.clone())));
             }
         }
         let timeout =
             std::time::Duration::from_secs(timeout_secs.clamp(1, PROBE_CHECK_TIMEOUT_CAP_SECS));
-        let result = sandbox
-            .exec_observed(
-                &["sh", "-c", check],
-                timeout,
-                PROBE_OUTPUT_BYTES,
-                PROBE_OUTPUT_BYTES,
-            )
+        let request = axocoatl_exec::protocol::ExecRequest {
+            protocol: axocoatl_exec::protocol::PROTOCOL_VERSION,
+            invocation_id: format!("check-probe-{run_id}"),
+            argv: vec!["sh".into(), "-c".into(), check.to_string()],
+            stdin: None,
+            timeout_ms: timeout.as_millis() as u64,
+            stdout_bytes: PROBE_OUTPUT_BYTES,
+            stderr_bytes: PROBE_OUTPUT_BYTES,
+            write_restriction: None,
+        };
+        request
+            .validate()
+            .map_err(|error| DaemonError::Session(format!("the check probe's request: {error}")))?;
+        let execution = sandbox
+            .prepare_supervised_command(request)
             .await
-            .map_err(|error| DaemonError::Session(format!("probing the check: {error}")))?;
+            .and_then(|prepared| prepared.dispatch())
+            .map_err(|error| DaemonError::Session(format!("starting the check probe: {error}")))?
+            .finish()
+            .await
+            .map_err(|error| DaemonError::Session(format!("the check probe: {error}")))?;
         facts.duration_ms = started.elapsed().as_millis() as u64;
-        if result.client_timed_out {
-            // A check that outlasts its own timeout is the run's to report.
-            return Ok(ProbeRun::Runs(facts));
-        }
-        facts.baseline_exit = result.exit_code;
-        let stdout = String::from_utf8_lossy(&result.stdout.retained);
-        let stderr = String::from_utf8_lossy(&result.stderr.retained);
+        let axocoatl_exec::protocol::ServerMessage::Finished {
+            outcome,
+            stdout,
+            stderr,
+            ..
+        } = execution.result()
+        else {
+            return Err(DaemonError::Session(
+                "the check probe has no terminal result".into(),
+            ));
+        };
+        use axocoatl_exec::protocol::ProcessOutcome;
+        let exit_code = match outcome {
+            ProcessOutcome::Exited { code } => Some(*code),
+            ProcessOutcome::Signalled { .. } => None,
+            ProcessOutcome::TimedOut => {
+                // It ran for the probe's whole time: it can run.
+                facts.timed_out = true;
+                return Ok(ProbeRun::Runs(facts));
+            }
+            ProcessOutcome::Cancelled
+            | ProcessOutcome::LaunchFailed { .. }
+            | ProcessOutcome::Failed { .. } => {
+                return Err(DaemonError::Session(format!(
+                    "the check probe did not run: {outcome:?}"
+                )))
+            }
+        };
+        facts.baseline_exit = exit_code;
+        let text = |output: &axocoatl_exec::protocol::CapturedOutput| {
+            output
+                .retained_bytes(PROBE_OUTPUT_BYTES)
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default()
+        };
+        let (stdout, stderr) = (text(stdout), text(stderr));
         match crate::loadout::toolchain::classify_probe(
-            result.exit_code,
+            exit_code,
             &stdout,
             &stderr,
-            program.as_deref(),
-            task,
+            ProbeContext { hints, task },
         ) {
             Some(missing) => {
                 facts.program_found = !matches!(missing, ProbeMissing::Program(_));
-                Ok(ProbeRun::Refused(crate::loadout::toolchain::probe_refusal(
-                    plan, check, &missing, setup_note,
-                )))
+                Ok(refused(&missing))
             }
             None => Ok(ProbeRun::Runs(facts)),
         }
@@ -570,27 +707,58 @@ impl AxocoatlDaemon {
     }
 }
 
-/// One line for the run's notes about how its setup went.
-pub(crate) fn setup_note(facts: &SetupFacts) -> String {
-    let hosts = if facts.registry_hosts.is_empty() {
-        "no registry".to_string()
-    } else {
-        facts.registry_hosts.join(", ")
-    };
-    let outcome = match (facts.exit_code, facts.unchanged) {
+/// A setup that cannot go on, with why.
+fn failed_setup(mut facts: SetupFacts, error: String) -> SetupRun {
+    facts.error = Some(error.clone());
+    SetupRun {
+        facts,
+        failure: Some(error),
+        sealed: true,
+    }
+}
+
+/// How a setup ended, in words: `exited 0`, `did not finish`, or that the
+/// Workspace's cache already held it.
+pub(crate) fn setup_outcome(facts: &SetupFacts) -> String {
+    match (facts.exit_code, facts.unchanged) {
         (Some(0), true) => "nothing to install: the Workspace's cache already holds it".into(),
-        (Some(code), _) => format!("exit {code}"),
+        (Some(code), _) => format!("exited {code}"),
         (None, _) => "did not finish".into(),
-    };
-    format!(
-        "setup `{}` ({}): {outcome} in {:.1} s; {} connections to {hosts} allowed, {} refused; \
-         the registries were closed before the first model call",
+    }
+}
+
+/// One line for the run's notes about how its setup went.
+pub(crate) fn setup_note(run: &SetupRun) -> String {
+    let facts = &run.facts;
+    let outcome = setup_outcome(facts);
+    let head = format!(
+        "setup `{}` ({}): {outcome} ({:.1} s)",
         facts.command,
         facts.source,
-        facts.duration_ms as f64 / 1000.0,
-        facts.allowed_connections,
-        facts.refused_connections
-    )
+        facts.duration_ms as f64 / 1000.0
+    );
+    if facts.unchanged {
+        return format!("{head}; no registry was opened");
+    }
+    let network = if facts.registry_hosts.is_empty() {
+        format!(
+            "no registry was opened; {} of its connections were refused",
+            facts.refused_connections
+        )
+    } else {
+        format!(
+            "{} connections to {} allowed, {} refused; the registries were closed",
+            facts.allowed_connections,
+            facts.registry_hosts.join(", "),
+            facts.refused_connections
+        )
+    };
+    let cache = if run.sealed {
+        "the Workspace's toolchain cache was made read-only again"
+    } else {
+        "the Workspace's toolchain cache could not be made read-only, so the run did not start"
+    };
+    format!("{head}; {network}; {cache} before the first model call")
 }
 
 #[cfg(test)]
@@ -605,6 +773,7 @@ mod tests {
             source: SetupSource::Detected,
             script: "npm ci".into(),
             registries: vec![("registry.npmjs.org".into(), vec![443])],
+            key: None,
         };
         let stdout: String = (1..=50).map(|n| format!("line {n}\n")).collect();
         let message = setup_failure_message(
@@ -644,17 +813,38 @@ mod tests {
             allowed_connections: 9,
             ..SetupFacts::default()
         };
+        let run = |facts: SetupFacts, sealed: bool| SetupRun {
+            facts,
+            failure: None,
+            sealed,
+        };
         assert_eq!(
-            setup_note(&facts),
-            "setup `pip install -e . pytest` (detected): exit 0 in 4.2 s; 9 connections to \
-             pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed \
-             before the first model call"
+            setup_note(&run(facts.clone(), true)),
+            "setup `pip install -e . pytest` (detected): exited 0 (4.2 s); 9 connections to \
+             pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; \
+             the Workspace's toolchain cache was made read-only again before the first model \
+             call"
+        );
+        assert!(setup_note(&run(facts.clone(), false)).contains("could not be made read-only"));
+        assert_eq!(setup_outcome(&facts), "exited 0");
+        assert_eq!(
+            setup_outcome(&SetupFacts {
+                exit_code: None,
+                ..SetupFacts::default()
+            }),
+            "did not finish"
         );
         let unchanged = SetupFacts {
             unchanged: true,
             allowed_connections: 0,
+            registry_hosts: Vec::new(),
+            duration_ms: 300,
             ..facts
         };
-        assert!(setup_note(&unchanged).contains("nothing to install"));
+        assert_eq!(
+            setup_note(&run(unchanged, true)),
+            "setup `pip install -e . pytest` (detected): nothing to install: the Workspace's \
+             cache already holds it (0.3 s); no registry was opened"
+        );
     }
 }

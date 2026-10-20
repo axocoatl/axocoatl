@@ -120,23 +120,72 @@ pub fn toolchain_for_program(program: &str) -> Option<Toolchain> {
 }
 
 /// The program a check command runs first: the first word that is not an
-/// environment assignment or `env`/`exec`/`time`/`command`, and for
-/// `sh -c '<command>'` the program of that command.
+/// environment assignment or `env`/`exec`/`time`/`command`, past a leading
+/// `cd <dir> &&` (or `export`/`set`/`.`), and for `sh -c '<command>'` the
+/// program of that command. `None` when the shell decides it at run time: a
+/// subshell or group (`(cd web && npm test)`), a keyword (`if`, `for`), or a
+/// word with a parameter or command substitution (`$PYTHON -m pytest`).
 pub fn check_program(command: &str) -> Option<String> {
-    let words = shell_words(command);
-    let mut words = words.iter().map(String::as_str).peekable();
-    while let Some(word) = words.next() {
-        if is_assignment(word) || matches!(word, "env" | "exec" | "time" | "command" | "--") {
-            continue;
+    let mut rest = command;
+    loop {
+        let (first, next) = split_first_command(rest);
+        let words = shell_words(first);
+        let mut words = words.iter().map(String::as_str).peekable();
+        let mut program = None;
+        while let Some(word) = words.next() {
+            if is_assignment(word) || matches!(word, "env" | "exec" | "time" | "command" | "--") {
+                continue;
+            }
+            if word.starts_with(['(', '{', '!'])
+                || word.contains(['$', '`'])
+                || matches!(
+                    word,
+                    "if" | "then" | "for" | "while" | "until" | "case" | "do" | "function" | "[["
+                )
+            {
+                return None;
+            }
+            let name = word.rsplit('/').next().unwrap_or(word);
+            if matches!(name, "sh" | "bash" | "dash") && words.peek() == Some(&"-c") {
+                words.next();
+                return words.next().and_then(check_program);
+            }
+            program = Some(name.to_string());
+            break;
         }
-        let name = word.rsplit('/').next().unwrap_or(word);
-        if matches!(name, "sh" | "bash" | "dash") && words.peek() == Some(&"-c") {
-            words.next();
-            return words.next().and_then(check_program);
+        match (program, next) {
+            // `cd web && npm test`: the program is the next command's.
+            (Some(program), Some(next))
+                if matches!(
+                    program.as_str(),
+                    "cd" | "export" | "set" | "." | "source" | "unset" | "umask"
+                ) =>
+            {
+                rest = next;
+            }
+            (program, _) => return program,
         }
-        return Some(name.to_string());
     }
-    None
+}
+
+/// The first simple command of a command line, and what follows it when it
+/// ends with `&&` or `;` (after `|`, `||` or `&` nothing is followed).
+fn split_first_command(command: &str) -> (&str, Option<&str>) {
+    let mut quote: Option<char> = None;
+    for (at, c) in command.char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '\'' | '"') => quote = Some(c),
+            (None, ';') => return (&command[..at], Some(&command[at + 1..])),
+            (None, '&') if command[at..].starts_with("&&") => {
+                return (&command[..at], Some(&command[at + 2..]))
+            }
+            (None, '&' | '|') => return (&command[..at], None),
+            _ => {}
+        }
+    }
+    (command, None)
 }
 
 fn is_assignment(word: &str) -> bool {
@@ -297,6 +346,29 @@ pub enum Choice {
     Nothing { reason: String },
     /// The files of several, and the check does not say which it needs.
     Ambiguous { candidates: Vec<Candidate> },
+}
+
+impl Choice {
+    /// The chosen toolchain, if one was.
+    pub fn toolchain(&self) -> Option<Toolchain> {
+        match self {
+            Choice::Chosen { toolchain, .. } => Some(*toolchain),
+            _ => None,
+        }
+    }
+}
+
+/// The module `python -m <module>` (or `python3 -m`) runs in a check:
+/// `pytest` for `python3 -m pytest -q`.
+pub fn python_module_of(check: &str) -> Option<String> {
+    let words = shell_words(split_first_command(check).0);
+    let program = check_program(check)?;
+    if toolchain_for_program(&program) != Some(Toolchain::Python) || !program.starts_with("python")
+    {
+        return None;
+    }
+    let at = words.iter().position(|word| word == "-m")?;
+    words.get(at + 1).cloned()
 }
 
 fn files_text(files: &[String]) -> String {
@@ -537,21 +609,257 @@ pub fn has_python_files(root: &RootFiles) -> bool {
         || !root.requirements_files().is_empty()
 }
 
-/// A Python repository's check: `pytest` when it uses pytest, else the
-/// standard library's `unittest` (G84: a repository that never mentions
-/// pytest is not given a check it cannot run).
+/// A Python repository's check: `pytest` when it uses pytest (it says so,
+/// or its test files are plain `def test_...` functions, which only pytest
+/// runs), else the standard library's `unittest` (G84: a repository whose
+/// tests are `unittest.TestCase`s and that never mentions pytest is not
+/// given a check it cannot run).
 pub fn python_check(dir: &SecureDir, root: &RootFiles) -> String {
-    if declares_pytest(dir, root) {
-        return "pytest".into();
+    // `python3 -m` puts the repository root on the import path, so tests
+    // import a module at the root (`from pages import ...`) whether or not
+    // the project is installed; the bare `pytest` script does not.
+    if declares_pytest(dir, root)
+        || python_test_style(dir, &python_test_files(dir, root)) == PythonTests::Pytest
+    {
+        return "python3 -m pytest".into();
     }
-    // `python3 -m` puts the repository root on the import path. A tests
-    // directory that is not a package is discovered from itself.
+    // A tests directory that is not a package is discovered from itself.
     let tests_dir = root.has_dir("tests") && !dir.is_file("tests/__init__.py").unwrap_or(true);
     if tests_dir {
         "python3 -m unittest discover -v -s tests".into()
     } else {
         "python3 -m unittest discover -v".into()
     }
+}
+
+/// Most test files listed, and read to tell pytest-style tests from
+/// unittest ones.
+const MAX_TEST_FILES: usize = 64;
+/// Most bytes read of one test file.
+const MAX_TEST_FILE_BYTES: usize = 256 * 1024;
+/// Most entries of one directory looked at while finding test files.
+const MAX_TEST_SCAN_ENTRIES: usize = 4096;
+/// Most directories opened while finding test files.
+const MAX_TEST_SCAN_DIRS: usize = 256;
+/// Deepest directory level (below the root) searched for test files.
+const MAX_TEST_SCAN_DEPTH: usize = 4;
+
+/// Directories never searched for test files: dependencies, build output,
+/// virtual environments and version control.
+const SKIPPED_DIRS: [&str; 11] = [
+    "node_modules",
+    "vendor",
+    "target",
+    "dist",
+    "build",
+    "venv",
+    "site-packages",
+    "__pycache__",
+    "testdata",
+    "coverage",
+    "out",
+];
+
+/// The repository's test files for `toolchain` (relative paths, sorted, at
+/// most [`MAX_TEST_FILES`]): Python's `test_*.py` and `*_test.py`, Node's
+/// `*.test.*` and `*.spec.*` scripts and the scripts of a `test/`, `tests/`
+/// or `__tests__/` directory, Go's `*_test.go`. Rust keeps tests in its
+/// sources, so none are listed for it. Hidden directories and dependency
+/// or build directories are not searched.
+pub fn test_files(dir: &SecureDir, toolchain: Toolchain) -> Vec<String> {
+    let matches: fn(&str, &str) -> bool = match toolchain {
+        Toolchain::Python => |_, name| {
+            name.ends_with(".py") && (name.starts_with("test_") || name.ends_with("_test.py"))
+        },
+        Toolchain::Node => |path, name| {
+            let script = [".js", ".cjs", ".mjs", ".ts", ".cts", ".mts", ".jsx", ".tsx"]
+                .iter()
+                .any(|extension| name.ends_with(extension));
+            script
+                && (name.contains(".test.")
+                    || name.contains(".spec.")
+                    || path
+                        .split('/')
+                        .any(|part| matches!(part, "test" | "tests" | "__tests__")))
+        },
+        Toolchain::Go => |_, name| name.ends_with("_test.go"),
+        Toolchain::Rust => return Vec::new(),
+    };
+    let mut found = Vec::new();
+    let mut queue: std::collections::VecDeque<(String, usize)> =
+        std::collections::VecDeque::from([(String::new(), 0)]);
+    let mut opened = 0;
+    while let Some((relative, depth)) = queue.pop_front() {
+        if opened >= MAX_TEST_SCAN_DIRS || found.len() >= MAX_TEST_FILES {
+            break;
+        }
+        opened += 1;
+        let child;
+        let directory = if relative.is_empty() {
+            dir
+        } else {
+            match dir.existing_child(&relative) {
+                Ok(opened) => {
+                    child = opened;
+                    &child
+                }
+                Err(_) => continue,
+            }
+        };
+        let Ok(mut entries) = directory.entries_limited(MAX_TEST_SCAN_ENTRIES) else {
+            continue;
+        };
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        for entry in entries {
+            let Some(name) = entry.name.to_str() else {
+                continue;
+            };
+            let path = if relative.is_empty() {
+                name.to_string()
+            } else {
+                format!("{relative}/{name}")
+            };
+            match entry.file_type {
+                SecureEntryType::File if matches(&path, name) => {
+                    found.push(path);
+                    if found.len() >= MAX_TEST_FILES {
+                        break;
+                    }
+                }
+                SecureEntryType::Directory
+                    if depth < MAX_TEST_SCAN_DEPTH
+                        && !name.starts_with('.')
+                        && !SKIPPED_DIRS.contains(&name) =>
+                {
+                    queue.push_back((path, depth + 1));
+                }
+                _ => {}
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// [`test_files`] of a Python repository.
+pub fn python_test_files(dir: &SecureDir, _root: &RootFiles) -> Vec<String> {
+    test_files(dir, Toolchain::Python)
+}
+
+/// Which runner a Python repository's tests are written for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PythonTests {
+    /// Plain `def test_...` functions (or `import pytest`): only pytest
+    /// runs them.
+    Pytest,
+    /// Every test file uses `unittest`: the standard library runs them.
+    Unittest,
+    /// No test file, or none that says.
+    Unknown,
+}
+
+/// Which runner the test files `files` (from [`test_files`]) are written
+/// for.
+pub fn python_test_style(dir: &SecureDir, files: &[String]) -> PythonTests {
+    let mut unittest = false;
+    let mut plain = false;
+    for file in files.iter().take(MAX_TEST_FILES) {
+        let Ok(bytes) = dir.read_limited(file, MAX_TEST_FILE_BYTES) else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        if text.contains("import pytest") || text.contains("from pytest") {
+            return PythonTests::Pytest;
+        }
+        if text.contains("unittest") || text.contains("TestCase") {
+            unittest = true;
+        } else if text.contains("def test") {
+            plain = true;
+        }
+    }
+    match (plain, unittest) {
+        (true, _) => PythonTests::Pytest,
+        (false, true) => PythonTests::Unittest,
+        (false, false) => PythonTests::Unknown,
+    }
+}
+
+/// The program the `package.json` script a check runs starts: for
+/// `npm test`, `npm run check`, `yarn test` or `pnpm run ci`, the first
+/// program of that script (`mocha` for `"test": "mocha --exit"`).
+pub fn package_script_program(dir: &SecureDir, check: &str) -> Option<String> {
+    let words = shell_words(split_first_command(check).0);
+    let mut words = words.iter().map(String::as_str);
+    let manager = words.next()?;
+    let manager = manager.rsplit('/').next().unwrap_or(manager);
+    if !matches!(manager, "npm" | "yarn" | "pnpm") {
+        return None;
+    }
+    let script = match words.next()? {
+        "run" | "run-script" => words.next()?,
+        "t" | "tst" if manager == "npm" => "test",
+        word => word,
+    };
+    let package = package_json(dir)?;
+    let command = package.get("scripts")?.get(script)?.as_str()?;
+    check_program(command)
+}
+
+/// The names (lower case, `_` and `.` as `-`) of the Python packages the
+/// repository declares anywhere: its dependencies, extras and groups in
+/// `pyproject.toml` (PEP 621, PEP 735, Poetry, uv, PDM), `setup.cfg`'s, and
+/// its requirements files'.
+pub fn declared_python_packages(dir: &SecureDir, root: &RootFiles) -> Vec<String> {
+    let mut requirements = Vec::new();
+    if let Some(text) = read_text(dir, "pyproject.toml") {
+        let pyproject = parse_pyproject(&text);
+        requirements.extend(pyproject.dependencies);
+        requirements.extend(pyproject.poetry_dependencies);
+        for (_, list) in pyproject
+            .extras
+            .into_iter()
+            .chain(pyproject.groups)
+            .chain(pyproject.poetry_groups)
+            .chain(pyproject.tool_groups)
+        {
+            requirements.extend(list);
+        }
+    }
+    if let Some(text) = read_text(dir, "setup.cfg") {
+        for (_, list) in setup_cfg_extras(&text) {
+            requirements.extend(list);
+        }
+        requirements.extend(setup_cfg_list(&text, "options", "install_requires"));
+    }
+    for file in root.requirements_files() {
+        if let Some(text) = read_text(dir, &file) {
+            requirements.extend(requirements_lines(&text));
+        }
+    }
+    let mut names: Vec<String> = requirements
+        .iter()
+        .filter_map(|requirement| requirement_name(requirement))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// The normalized name of a PEP 508 requirement: `PyYAML>=6` is `pyyaml`,
+/// `zope.interface` is `zope-interface`.
+pub fn requirement_name(requirement: &str) -> Option<String> {
+    let name: String = requirement
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        .collect();
+    (!name.is_empty()).then(|| normalize_package(&name))
+}
+
+/// A package or module name compared the way pip does: lower case, with
+/// `_` and `.` read as `-`.
+pub fn normalize_package(name: &str) -> String {
+    name.to_ascii_lowercase().replace(['_', '.'], "-")
 }
 
 /// The dependency install a run's setup runs for a toolchain.
@@ -580,6 +888,31 @@ pub fn install_for(
         Toolchain::Rust => rust_install(dir, root),
         Toolchain::Go => go_install(dir, root),
     }
+}
+
+/// Whether a repository with a `yarn.lock` uses Yarn 2 or later ("Berry"):
+/// its `packageManager` names `yarn@2` or later, or its lockfile is Berry's
+/// (it starts with a `__metadata:` entry).
+fn yarn_berry(dir: &SecureDir, package: &serde_json::Value) -> bool {
+    if let Some(manager) = package
+        .get("packageManager")
+        .and_then(|value| value.as_str())
+    {
+        if let Some(version) = manager.strip_prefix("yarn@") {
+            return version
+                .split('.')
+                .next()
+                .and_then(|major| major.parse::<u32>().ok())
+                .is_some_and(|major| major >= 2);
+        }
+    }
+    dir.read_limited("yarn.lock", 4096)
+        .map(|head| {
+            String::from_utf8_lossy(&head)
+                .lines()
+                .any(|line| line.starts_with("__metadata:"))
+        })
+        .unwrap_or(false)
 }
 
 fn node_install(dir: &SecureDir, root: &RootFiles) -> Option<Install> {
@@ -614,10 +947,21 @@ fn node_install(dir: &SecureDir, root: &RootFiles) -> Option<Install> {
             Some(lockfile),
         )
     } else if let Some(lockfile) = lock("yarn.lock") {
-        (
-            "yarn install --frozen-lockfile --prefer-offline",
-            Some(lockfile),
-        )
+        if yarn_berry(dir, &package) {
+            // Yarn 2 and later refuse Yarn 1's flags (`--frozen-lockfile`,
+            // `--prefer-offline`); `--immutable` is their frozen lockfile.
+            // They read no proxy from HTTPS_PROXY, only from their own
+            // settings.
+            (
+                "YARN_HTTPS_PROXY=\"$HTTPS_PROXY\" YARN_HTTP_PROXY=\"$HTTP_PROXY\" yarn install --immutable",
+                Some(lockfile),
+            )
+        } else {
+            (
+                "yarn install --frozen-lockfile --prefer-offline",
+                Some(lockfile),
+            )
+        }
     } else {
         (
             "npm install --no-package-lock --prefer-offline --no-audit --no-fund",
@@ -632,45 +976,8 @@ fn node_install(dir: &SecureDir, root: &RootFiles) -> Option<Install> {
     })
 }
 
-/// The keys of the tables `[<table>]` of a TOML text, read line by line.
-/// Enough to find which extras and groups a `pyproject.toml` declares.
-fn toml_table_keys(text: &str, table: &str) -> Vec<String> {
-    let mut keys = Vec::new();
-    let mut inside = false;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            inside = line
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .trim()
-                .eq(table)
-                && !line.starts_with("[[");
-            continue;
-        }
-        if !inside || line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let key = if let Some(rest) = line.strip_prefix('"') {
-            rest.split_once('"')
-                .filter(|(_, after)| after.trim_start().starts_with('='))
-                .map(|(key, _)| key.to_string())
-        } else {
-            line.split_once('=')
-                .map(|(key, _)| key.trim().to_string())
-                .filter(|key| {
-                    !key.is_empty()
-                        && key.bytes().all(|b| {
-                            b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.'
-                        })
-                })
-        };
-        keys.extend(key);
-    }
-    keys
-}
-
-/// Whether a TOML text has the table `[<table>]`.
+/// Whether a TOML text has the table `[<table>]` (read line by line, for a
+/// `pyproject.toml` that is not valid TOML).
 fn toml_has_table(text: &str, table: &str) -> bool {
     text.lines().any(|line| {
         let line = line.trim();
@@ -680,73 +987,449 @@ fn toml_has_table(text: &str, table: &str) -> bool {
     })
 }
 
-/// The extras of a `setup.cfg` (`[options.extras_require]`).
-fn setup_cfg_extras(text: &str) -> Vec<String> {
-    let mut keys = Vec::new();
+/// The extras of a `setup.cfg` (`[options.extras_require]`), each with its
+/// requirements.
+fn setup_cfg_extras(text: &str) -> Vec<(String, Vec<String>)> {
+    let mut extras: Vec<(String, Vec<String>)> = Vec::new();
     let mut inside = false;
     for line in text.lines() {
         if line.trim_start().starts_with('[') {
             inside = line.trim() == "[options.extras_require]";
             continue;
         }
-        if inside && !line.starts_with([' ', '\t']) {
-            if let Some((key, _)) = line.split_once(['=', ':']) {
-                let key = key.trim();
-                if !key.is_empty() && !key.starts_with(['#', ';']) {
-                    keys.push(key.to_string());
+        if !inside || line.trim().is_empty() || line.trim_start().starts_with(['#', ';']) {
+            continue;
+        }
+        if line.starts_with([' ', '\t']) {
+            if let Some((_, list)) = extras.last_mut() {
+                list.extend(cfg_values(line));
+            }
+        } else if let Some((key, value)) = line.split_once(['=', ':']) {
+            let key = key.trim();
+            if !key.is_empty() {
+                extras.push((key.to_string(), cfg_values(value)));
+            }
+        }
+    }
+    extras
+}
+
+/// The list value `key` of the section `[section]` of a `setup.cfg`.
+fn setup_cfg_list(text: &str, section: &str, key: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut in_section = false;
+    let mut in_key = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with('[') {
+            in_section = line.trim() == format!("[{section}]");
+            in_key = false;
+            continue;
+        }
+        if !in_section || line.trim().is_empty() {
+            continue;
+        }
+        if line.starts_with([' ', '\t']) {
+            if in_key {
+                values.extend(cfg_values(line));
+            }
+        } else {
+            in_key = false;
+            if let Some((name, value)) = line.split_once(['=', ':']) {
+                if name.trim() == key {
+                    in_key = true;
+                    values.extend(cfg_values(value));
                 }
             }
         }
     }
-    keys
+    values
 }
 
+/// The requirements of one `setup.cfg` value line (`;`-separated or one).
+fn cfg_values(text: &str) -> Vec<String> {
+    let text = text.trim();
+    if text.is_empty() || text.starts_with(['#', ';']) {
+        return Vec::new();
+    }
+    vec![text.to_string()]
+}
+
+/// The requirement lines of a requirements file (no options, includes or
+/// comments).
+fn requirements_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|line| line.split(" #").next().unwrap_or(line).trim())
+        .filter(|line| !line.is_empty() && !line.starts_with(['#', '-']))
+        .map(str::to_string)
+        .collect()
+}
+
+/// What a `pyproject.toml` declares that a run's install needs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Pyproject {
+    /// A `[project]` table (PEP 621): `pip install -e .` installs it.
+    project: bool,
+    dependencies: Vec<String>,
+    /// `[project.optional-dependencies]`, in either TOML form.
+    extras: Vec<(String, Vec<String>)>,
+    /// `[dependency-groups]` (PEP 735), with `include-group`s expanded.
+    groups: Vec<(String, Vec<String>)>,
+    /// A `[tool.poetry]` table.
+    poetry: bool,
+    /// Poetry builds the project as a package (`package-mode` is not
+    /// false), so `pip install -e .` installs it and its dependencies.
+    poetry_package: bool,
+    /// `[tool.poetry.dependencies]` as PEP 508 requirements, without
+    /// `python`.
+    poetry_dependencies: Vec<String>,
+    /// `[tool.poetry.group.<name>.dependencies]`, and the older
+    /// `[tool.poetry.dev-dependencies]` as `dev`, as PEP 508 requirements.
+    /// pip installs none of them.
+    poetry_groups: Vec<(String, Vec<String>)>,
+    /// uv's `[tool.uv] dev-dependencies` (as `dev`), PDM's
+    /// `[tool.pdm.dev-dependencies]` groups and Hatch's environments'
+    /// `dependencies`: tool-specific lists pip does not install.
+    tool_groups: Vec<(String, Vec<String>)>,
+}
+
+fn toml_strings(item: Option<&toml_edit::Item>) -> Vec<String> {
+    item.and_then(|item| item.as_array())
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(|value| value.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn toml_lists(item: Option<&toml_edit::Item>) -> Vec<(String, Vec<String>)> {
+    item.and_then(|item| item.as_table_like())
+        .map(|table| {
+            table
+                .iter()
+                .map(|(key, value)| (key.to_string(), toml_strings(Some(value))))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_pyproject(text: &str) -> Pyproject {
+    let Ok(document) = toml_edit::Document::parse(text) else {
+        // pip cannot read it either; say only what its tables are.
+        return Pyproject {
+            project: toml_has_table(text, "project"),
+            poetry: toml_has_table(text, "tool.poetry"),
+            poetry_package: true,
+            ..Pyproject::default()
+        };
+    };
+    let root = document.as_item();
+    let project = root.get("project");
+    let poetry = root.get("tool").and_then(|tool| tool.get("poetry"));
+    let mut pyproject = Pyproject {
+        project: project.is_some_and(|project| project.is_table_like()),
+        dependencies: toml_strings(project.and_then(|project| project.get("dependencies"))),
+        extras: toml_lists(project.and_then(|project| project.get("optional-dependencies"))),
+        poetry: poetry.is_some_and(|poetry| poetry.is_table_like()),
+        poetry_package: poetry
+            .and_then(|poetry| poetry.get("package-mode"))
+            .and_then(|mode| mode.as_bool())
+            != Some(false),
+        ..Pyproject::default()
+    };
+    // PEP 735 groups: strings, and `{include-group = "name"}` tables.
+    if let Some(groups) = root
+        .get("dependency-groups")
+        .and_then(|groups| groups.as_table_like())
+    {
+        let raw: Vec<(String, Vec<toml_edit::Value>)> = groups
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.to_string(),
+                    value
+                        .as_array()
+                        .map(|array| array.iter().cloned().collect())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        fn expand(
+            raw: &[(String, Vec<toml_edit::Value>)],
+            name: &str,
+            depth: usize,
+            out: &mut Vec<String>,
+        ) {
+            let Some((_, values)) = raw.iter().find(|(group, _)| group == name) else {
+                return;
+            };
+            for value in values {
+                if let Some(requirement) = value.as_str() {
+                    out.push(requirement.to_string());
+                } else if let Some(include) = value
+                    .as_inline_table()
+                    .and_then(|table| table.get("include-group"))
+                    .and_then(|group| group.as_str())
+                {
+                    if depth < 8 {
+                        expand(raw, include, depth + 1, out);
+                    }
+                }
+            }
+        }
+        for (name, _) in &raw {
+            let mut list = Vec::new();
+            expand(&raw, name, 0, &mut list);
+            pyproject.groups.push((name.clone(), list));
+        }
+    }
+    if let Some(poetry) = poetry {
+        pyproject.poetry_dependencies = poetry_requirements(poetry.get("dependencies"));
+        if let Some(groups) = poetry.get("group").and_then(|group| group.as_table_like()) {
+            for (name, group) in groups.iter() {
+                pyproject.poetry_groups.push((
+                    name.to_string(),
+                    poetry_requirements(group.get("dependencies")),
+                ));
+            }
+        }
+        if let Some(dev) = poetry.get("dev-dependencies") {
+            if !pyproject
+                .poetry_groups
+                .iter()
+                .any(|(name, _)| name == "dev")
+            {
+                pyproject
+                    .poetry_groups
+                    .push(("dev".into(), poetry_requirements(Some(dev))));
+            }
+        }
+    }
+    let tool = root.get("tool");
+    let uv_dev = toml_strings(
+        tool.and_then(|tool| tool.get("uv"))
+            .and_then(|uv| uv.get("dev-dependencies")),
+    );
+    if !uv_dev.is_empty() {
+        pyproject.tool_groups.push(("dev".into(), uv_dev));
+    }
+    pyproject.tool_groups.extend(
+        toml_lists(
+            tool.and_then(|tool| tool.get("pdm"))
+                .and_then(|pdm| pdm.get("dev-dependencies")),
+        )
+        .into_iter()
+        .map(|(name, list)| {
+            (
+                name,
+                list.into_iter()
+                    .filter(|requirement| !requirement.trim_start().starts_with('-'))
+                    .collect(),
+            )
+        }),
+    );
+    if let Some(envs) = tool
+        .and_then(|tool| tool.get("hatch"))
+        .and_then(|hatch| hatch.get("envs"))
+        .and_then(|envs| envs.as_table_like())
+    {
+        for (name, env) in envs.iter() {
+            let list = toml_strings(env.get("dependencies"));
+            if !list.is_empty() {
+                // `hatch-test` is Hatch's test environment.
+                let name = if name == "hatch-test" { "test" } else { name };
+                pyproject.tool_groups.push((name.to_string(), list));
+            }
+        }
+    }
+    pyproject
+}
+
+/// Poetry's dependency table as PEP 508 requirements: `pytest = "^8.0"` is
+/// `pytest>=8.0,<9`, `{version = "~1.2", extras = ["x"]}` is
+/// `name[x]>=1.2,<1.3`. `python`, optional dependencies and those from git,
+/// a path or a URL (which the registries alone cannot install) are left
+/// out; a constraint it cannot read leaves the name alone.
+fn poetry_requirements(item: Option<&toml_edit::Item>) -> Vec<String> {
+    let Some(table) = item.and_then(|item| item.as_table_like()) else {
+        return Vec::new();
+    };
+    let mut requirements = Vec::new();
+    for (name, value) in table.iter() {
+        if name.eq_ignore_ascii_case("python") || requirement_name(name).is_none() {
+            continue;
+        }
+        let (constraint, extras) = if let Some(constraint) = value.as_str() {
+            (Some(constraint.to_string()), Vec::new())
+        } else if let Some(spec) = value.as_table_like() {
+            let optional = spec
+                .get("optional")
+                .and_then(|optional| optional.as_bool())
+                .unwrap_or(false);
+            if optional
+                || ["git", "path", "url"]
+                    .iter()
+                    .any(|key| spec.get(key).is_some())
+            {
+                continue;
+            }
+            (
+                spec.get("version")
+                    .and_then(|version| version.as_str())
+                    .map(str::to_string),
+                toml_strings(spec.get("extras")),
+            )
+        } else {
+            // A list of constraints by Python version: the name alone.
+            (None, Vec::new())
+        };
+        let mut requirement = name.to_string();
+        if !extras.is_empty() {
+            requirement.push_str(&format!("[{}]", extras.join(",")));
+        }
+        if let Some(specifier) = constraint.as_deref().and_then(poetry_constraint) {
+            requirement.push_str(&specifier);
+        }
+        requirements.push(requirement);
+    }
+    requirements
+}
+
+/// A Poetry version constraint as a PEP 440 specifier, or `None` when it
+/// says any version or cannot be read (`^1.2.3`, `~1.2`, `1.2.*`, `>=1,<2`,
+/// `1.2.3`).
+fn poetry_constraint(constraint: &str) -> Option<String> {
+    let constraint = constraint.trim();
+    if constraint.is_empty() || constraint == "*" || constraint.contains("||") {
+        return None;
+    }
+    let numbers = |text: &str| -> Option<Vec<u64>> {
+        text.trim()
+            .split('.')
+            .map(|part| part.parse::<u64>().ok())
+            .collect()
+    };
+    let join = |parts: &[u64]| {
+        parts
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(".")
+    };
+    if let Some(version) = constraint.strip_prefix('^') {
+        let parts = numbers(version)?;
+        // The first non-zero part may not grow.
+        let at = parts
+            .iter()
+            .position(|part| *part != 0)
+            .unwrap_or(parts.len().saturating_sub(1));
+        let mut upper = parts[..=at].to_vec();
+        upper[at] += 1;
+        return Some(format!(">={},<{}", join(&parts), join(&upper)));
+    }
+    if let Some(version) = constraint
+        .strip_prefix('~')
+        .filter(|rest| !rest.starts_with('='))
+    {
+        let parts = numbers(version)?;
+        let mut upper = if parts.len() >= 2 {
+            parts[..2].to_vec()
+        } else {
+            parts.clone()
+        };
+        let last = upper.len() - 1;
+        upper[last] += 1;
+        return Some(format!(">={},<{}", join(&parts), join(&upper)));
+    }
+    if constraint.starts_with(['<', '>', '=', '!', '~']) {
+        let ok = constraint.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '.' | ',' | '<' | '>' | '=' | '!' | '~' | '*' | ' ')
+        });
+        return ok.then(|| constraint.replace(' ', ""));
+    }
+    if numbers(constraint.trim_end_matches(".*")).is_some() {
+        return Some(format!("=={constraint}"));
+    }
+    None
+}
+
+/// The extras, groups and their kinds a run looks for, in order.
 const TEST_NAMES: [&str; 4] = ["test", "tests", "testing", "dev"];
 
-fn first_test_name(names: &[String]) -> Option<String> {
+fn first_test(lists: &[(String, Vec<String>)]) -> Option<&(String, Vec<String>)> {
     TEST_NAMES
         .iter()
-        .find(|wanted| names.iter().any(|name| name == *wanted))
-        .map(|name| name.to_string())
+        .find_map(|wanted| lists.iter().find(|(name, _)| name == wanted))
+}
+
+/// Whether one of `requirements` installs pytest (`pytest` itself, or a
+/// `pytest-*` plugin, which requires it).
+fn installs_pytest(requirements: &[String]) -> bool {
+    requirements.iter().any(|requirement| {
+        requirement_name(requirement)
+            .is_some_and(|name| name == "pytest" || name.starts_with("pytest-"))
+    })
 }
 
 fn python_install(dir: &SecureDir, root: &RootFiles, check: Option<&str>) -> Option<Install> {
-    let pyproject = read_text(dir, "pyproject.toml");
+    let pyproject = read_text(dir, "pyproject.toml")
+        .map(|text| parse_pyproject(&text))
+        .unwrap_or_default();
     let setup_cfg = read_text(dir, "setup.cfg");
-    let mut inputs = Vec::new();
-    let mut args = Vec::new();
-    let installable = pyproject
+    let cfg_extras = setup_cfg
         .as_deref()
-        .is_some_and(|text| toml_has_table(text, "project") || toml_has_table(text, "tool.poetry"))
+        .map(setup_cfg_extras)
+        .unwrap_or_default();
+    let mut args = Vec::new();
+    // What the command installs, as far as the files say.
+    let mut installed: Vec<String> = Vec::new();
+    let installable = pyproject.project
+        || (pyproject.poetry && pyproject.poetry_package)
         || root.has("setup.py")
         || setup_cfg
             .as_deref()
             .is_some_and(|text| text.contains("[metadata]"));
     if installable {
-        let mut extras = pyproject
-            .as_deref()
-            .map(|text| toml_table_keys(text, "project.optional-dependencies"))
-            .unwrap_or_default();
-        extras.extend(
-            setup_cfg
-                .as_deref()
-                .map(setup_cfg_extras)
-                .unwrap_or_default(),
-        );
-        args.push(match first_test_name(&extras) {
-            Some(extra) => format!("-e '.[{extra}]'"),
-            None => "-e .".to_string(),
-        });
+        installed.extend(pyproject.dependencies.iter().cloned());
+        installed.extend(pyproject.poetry_dependencies.iter().cloned());
+        let mut extras = pyproject.extras.clone();
+        extras.extend(cfg_extras);
+        match first_test(&extras) {
+            Some((extra, list)) => {
+                args.push(format!("-e '.[{extra}]'"));
+                installed.extend(list.iter().cloned());
+            }
+            None => args.push("-e .".to_string()),
+        }
+    } else if pyproject.poetry {
+        // `package-mode = false`: nothing to build, only dependencies.
+        for requirement in &pyproject.poetry_dependencies {
+            args.push(shell_quote(requirement));
+        }
+        installed.extend(pyproject.poetry_dependencies.iter().cloned());
     }
-    if let Some(group) = pyproject
-        .as_deref()
-        .map(|text| toml_table_keys(text, "dependency-groups"))
-        .and_then(|groups| first_test_name(&groups))
+    // The test group: PEP 735 (`pip install --group`), else the
+    // tool-specific lists pip does not read, given as requirements.
+    if let Some((group, list)) = first_test(&pyproject.groups) {
+        args.push(format!("--group {}", shell_quote(group)));
+        installed.extend(list.iter().cloned());
+    } else if let Some((_, list)) =
+        first_test(&pyproject.poetry_groups).or_else(|| first_test(&pyproject.tool_groups))
     {
-        args.push(format!("--group {}", shell_quote(&group)));
+        for requirement in list {
+            args.push(shell_quote(requirement));
+        }
+        installed.extend(list.iter().cloned());
     }
+    let mut inputs = Vec::new();
     for file in root.requirements_files() {
         args.push(format!("-r {}", shell_quote(&file)));
+        if let Some(text) = read_text(dir, &file) {
+            installed.extend(requirements_lines(&text));
+        }
     }
     for name in ["pyproject.toml", "setup.py", "setup.cfg"] {
         if root.has(name) {
@@ -758,14 +1441,10 @@ fn python_install(dir: &SecureDir, root: &RootFiles, check: Option<&str>) -> Opt
         .and_then(check_program)
         .is_some_and(|program| program == "pytest" || program == "py.test")
         || check.is_some_and(|check| check.contains("-m pytest"));
-    if runs_pytest {
-        let listed = inputs
-            .iter()
-            .filter_map(|name| read_text(dir, name))
-            .any(|text| lists_pytest(&text));
-        if !listed {
-            args.push("pytest".into());
-        }
+    // pytest is installed when the check runs it and nothing this command
+    // installs brings it, whatever the files mention elsewhere.
+    if runs_pytest && !installs_pytest(&installed) {
+        args.push("pytest".into());
     }
     if args.is_empty() {
         return None;
@@ -773,25 +1452,6 @@ fn python_install(dir: &SecureDir, root: &RootFiles, check: Option<&str>) -> Opt
     Some(Install {
         command: format!("pip install {}", args.join(" ")),
         inputs,
-    })
-}
-
-/// Whether a manifest or requirements file lists pytest as a requirement
-/// (`pytest`, `pytest>=8`, `"pytest-cov"`), as opposed to configuring it
-/// (`[tool.pytest.ini_options]`).
-fn lists_pytest(text: &str) -> bool {
-    text.lines().any(|line| {
-        let line = line.trim().to_ascii_lowercase();
-        let starts = |text: &str| {
-            text.strip_prefix("pytest").is_some_and(|rest| {
-                rest.is_empty()
-                    || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
-            })
-        };
-        starts(&line)
-            || line
-                .match_indices(['"', '\''])
-                .any(|(at, _)| starts(&line[at + 1..]))
     })
 }
 
@@ -863,39 +1523,35 @@ pub fn setup_key(
     digest.iter().take(16).map(|b| format!("{b:02x}")).collect()
 }
 
+/// The name of the file in a toolchain's directory of the Workspace's cache
+/// that holds the [`setup_key`] of the last setup that installed into it.
+/// Only root writes it, after the setup, once the directory is root's again.
+pub const SETUP_STAMP: &str = "setup.stamp";
+
+impl Toolchain {
+    /// The entries of the toolchain's cache directory a setup starts again
+    /// from when its key changed (a different image or dependency set): the
+    /// Python virtual environment, so nothing of the old set stays.
+    pub fn setup_reset_entries(self) -> &'static [&'static str] {
+        match self {
+            Toolchain::Python => &["venv"],
+            _ => &[],
+        }
+    }
+}
+
 /// The shell script a toolchain's setup runs (as the Session's writer, in
 /// the repository): `command`, after what the toolchain needs first (a
-/// Python virtual environment in the cache). With a `key`, the script skips
-/// `command` when the Workspace's cache holds that key from an earlier
-/// setup, and records it after `command` succeeds.
-pub fn setup_script(toolchain: Toolchain, command: &str, key: Option<&str>) -> String {
-    let prepare = match toolchain {
-        Toolchain::Python => {
-            Some("{ [ -x \"$VIRTUAL_ENV/bin/python\" ] || python3 -m venv \"$VIRTUAL_ENV\"; }")
-        }
-        _ => None,
-    };
-    let body = match prepare {
-        Some(prepare) => format!("{prepare} && {command}"),
-        None => command.to_string(),
-    };
-    let Some(key) = key else {
-        return body;
-    };
-    let name = toolchain.name();
-    let reset = match toolchain {
-        // A different image or dependency set starts from a new environment.
-        Toolchain::Python => "rm -rf \"$VIRTUAL_ENV\" && ",
-        _ => "",
-    };
-    format!(
-        "stamp=\"$AXOCOATL_CACHE/{name}/setup.stamp\"; key={key}; \
-         if [ -f \"$stamp\" ] && [ \"$(cat \"$stamp\")\" = \"$key\" ]; then \
-         echo \"axocoatl: nothing to install: the dependency files and the image are unchanged \
-         since this Workspace's last {name} setup\"; \
-         else rm -f \"$stamp\" && {reset}{body} && mkdir -p \"$AXOCOATL_CACHE/{name}\" && \
-         printf '%s\\n' \"$key\" > \"$stamp\"; fi"
-    )
+/// Python virtual environment in the cache). Whether it runs at all, and
+/// who owns the cache before and after, is root's to decide around it
+/// ([`SETUP_STAMP`]).
+pub fn setup_script(toolchain: Toolchain, command: &str) -> String {
+    match toolchain {
+        Toolchain::Python => format!(
+            "{{ [ -x \"$VIRTUAL_ENV/bin/python\" ] || python3 -m venv \"$VIRTUAL_ENV\"; }} && {command}"
+        ),
+        _ => command.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -1072,9 +1728,15 @@ mod tests {
             "pyproject.toml",
             "[project]\nname = 'pages'\n[tool.pytest.ini_options]\ntestpaths = ['tests']\n",
         )]);
-        assert_eq!(detect_check_in(&secure, &root), Some("pytest".into()));
+        assert_eq!(
+            detect_check_in(&secure, &root),
+            Some("python3 -m pytest".into())
+        );
         let (_d, secure, root) = repo(&[("setup.py", ""), ("tests/conftest.py", "")]);
-        assert_eq!(detect_check_in(&secure, &root), Some("pytest".into()));
+        assert_eq!(
+            detect_check_in(&secure, &root),
+            Some("python3 -m pytest".into())
+        );
         let (_d, secure, root) = repo(&[
             ("package.json", r#"{"scripts":{"test":"mocha"}}"#),
             ("Cargo.toml", ""),
@@ -1145,10 +1807,9 @@ mod tests {
         )]);
         let install = install_for(&secure, &root, Toolchain::Python, Some("pytest")).unwrap();
         assert_eq!(install.command, "pip install -e . pytest");
-        assert!(lists_pytest("pytest>=8\n"));
-        assert!(lists_pytest("dev = [\"ruff\", 'pytest-cov']"));
-        assert!(!lists_pytest("[tool.pytest.ini_options]\naddopts = '-q'"));
-        assert!(!lists_pytest("pytest_plugins = []"));
+        assert!(installs_pytest(&["pytest>=8".into()]));
+        assert!(installs_pytest(&["ruff".into(), "pytest-cov".into()]));
+        assert!(!installs_pytest(&["pytestx".into(), "ruff".into()]));
         let (_d, secure, root) = repo(&[
             ("pyproject.toml", "[project]\nname = 'pages'\n"),
             ("tests/conftest.py", ""),
@@ -1241,55 +1902,323 @@ mod tests {
     }
 
     #[test]
-    fn setup_scripts_prepare_the_toolchain_and_skip_unchanged_installs() {
-        assert_eq!(setup_script(Toolchain::Node, "npm ci", None), "npm ci");
-        let python = setup_script(Toolchain::Python, "pip install -e .", None);
+    fn setup_scripts_prepare_the_toolchain_first() {
+        assert_eq!(setup_script(Toolchain::Node, "npm ci"), "npm ci");
+        let python = setup_script(Toolchain::Python, "pip install -e .");
         assert!(
             python.starts_with("{ [ -x \"$VIRTUAL_ENV/bin/python\" ]"),
             "{python}"
         );
         assert!(python.ends_with("&& pip install -e ."), "{python}");
-        let stamped = setup_script(Toolchain::Python, "pip install -e .", Some("abc123"));
-        assert!(stamped.contains("key=abc123"), "{stamped}");
-        assert!(
-            stamped.contains("$AXOCOATL_CACHE/python/setup.stamp"),
-            "{stamped}"
+        // The stamp is root's: the writer's script never reads or writes it.
+        assert!(!python.contains(SETUP_STAMP), "{python}");
+        assert_eq!(setup_script(Toolchain::Rust, "cargo fetch"), "cargo fetch");
+        assert_eq!(Toolchain::Python.setup_reset_entries(), ["venv"]);
+        assert!(Toolchain::Go.setup_reset_entries().is_empty());
+    }
+
+    /// TC-COR-5: a check the shell decides at run time names no program,
+    /// so the probe does not look one up; a leading `cd dir &&` is skipped.
+    #[test]
+    fn checks_the_shell_decides_name_no_program() {
+        assert_eq!(check_program("(cd web && npm test)"), None);
+        assert_eq!(check_program("{ npm test; }"), None);
+        assert_eq!(check_program("$PYTHON -m pytest"), None);
+        assert_eq!(check_program("`which pytest` -q"), None);
+        assert_eq!(check_program("if true; then pytest; fi"), None);
+        assert_eq!(check_program("cd web && npm test"), Some("npm".into()));
+        assert_eq!(check_program("cd web; pytest -q"), Some("pytest".into()));
+        assert_eq!(check_program("cd web || exit 1"), Some("cd".into()));
+        assert_eq!(
+            check_program("export CI=1 && cargo test"),
+            Some("cargo".into())
         );
-        assert!(
-            stamped.contains("rm -rf \"$VIRTUAL_ENV\" && {"),
-            "{stamped}"
-        );
-        assert!(stamped.contains("nothing to install"), "{stamped}");
-        let cargo = setup_script(Toolchain::Rust, "cargo fetch", Some("k"));
-        assert!(
-            cargo.contains("else rm -f \"$stamp\" && cargo fetch && mkdir -p"),
-            "{cargo}"
+        assert_eq!(
+            check_program("FOO='a b' pytest -k 'x and y'"),
+            Some("pytest".into())
         );
     }
 
-    /// The setup scripts run under a POSIX shell: write the stamp once,
-    /// then skip.
+    /// TC-NU-1: plain pytest-style test functions get `pytest`, which the
+    /// setup then installs; unittest-only test files keep `unittest`.
     #[test]
-    fn a_stamped_setup_runs_once_per_key() {
-        let cache = tempfile::tempdir().unwrap();
-        let marker = cache.path().join("ran");
-        let command = format!("echo x >> {}", marker.display());
-        let script = setup_script(Toolchain::Go, &command, Some("k1"));
-        let run = |script: &str| {
-            let output = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(script)
-                .env("AXOCOATL_CACHE", cache.path())
-                .output()
-                .unwrap();
-            assert!(output.status.success(), "{output:?}");
-            String::from_utf8_lossy(&output.stdout).into_owned()
-        };
-        run(&script);
-        let second = run(&script);
-        assert!(second.contains("nothing to install"), "{second}");
-        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "x\n");
-        run(&setup_script(Toolchain::Go, &command, Some("k2")));
-        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "x\nx\n");
+    fn python_tests_written_for_pytest_get_pytest() {
+        let (_d, secure, root) = repo(&[
+            ("requirements.txt", "six\n"),
+            (
+                "tests/test_pages.py",
+                "from pages import count\n\ndef test_count():\n    assert count(3) == 1\n",
+            ),
+            ("pages.py", "def count(n):\n    return 0\n"),
+        ]);
+        assert_eq!(python_test_files(&secure, &root), ["tests/test_pages.py"]);
+        assert_eq!(
+            detect_check_in(&secure, &root),
+            Some("python3 -m pytest".into())
+        );
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Python, Some("pytest"))
+                .unwrap()
+                .command,
+            "pip install -r requirements.txt pytest"
+        );
+        let (_d, secure, root) = repo(&[
+            ("pyproject.toml", "[project]\nname = 'calc'\n"),
+            (
+                "tests/test_calc.py",
+                "import unittest\n\nclass T(unittest.TestCase):\n    def test_add(self):\n        pass\n",
+            ),
+            ("tests/helpers/test_util.py", "from unittest import TestCase\n"),
+        ]);
+        assert_eq!(
+            python_test_style(&secure, &python_test_files(&secure, &root)),
+            PythonTests::Unittest
+        );
+        assert_eq!(
+            detect_check_in(&secure, &root),
+            Some("python3 -m unittest discover -v -s tests".into())
+        );
+        // Dependencies and hidden directories are not searched.
+        let (_d, secure, root) = repo(&[
+            ("setup.py", ""),
+            (".venv/lib/test_x.py", "def test_x(): pass\n"),
+            ("node_modules/x/test_y.py", "def test_y(): pass\n"),
+            ("src/app/app_test.py", "import pytest\n"),
+        ]);
+        assert_eq!(python_test_files(&secure, &root), ["src/app/app_test.py"]);
+        assert_eq!(
+            detect_check_in(&secure, &root),
+            Some("python3 -m pytest".into())
+        );
+        let (_d, secure, _root) = repo(&[
+            ("test/a.spec.ts", ""),
+            ("lib/b.test.js", ""),
+            ("test/helper.js", ""),
+            ("lib/c.js", ""),
+            ("pkg/x_test.go", ""),
+        ]);
+        assert_eq!(
+            test_files(&secure, Toolchain::Node),
+            ["lib/b.test.js", "test/a.spec.ts", "test/helper.js"]
+        );
+        assert_eq!(test_files(&secure, Toolchain::Go), ["pkg/x_test.go"]);
+        assert!(test_files(&secure, Toolchain::Rust).is_empty());
+    }
+
+    /// TC-COR-3 and TC-NU-2: pytest is installed whenever the check runs it
+    /// and what the command installs does not bring it, whatever else the
+    /// files mention.
+    #[test]
+    fn pytest_is_installed_unless_the_selected_install_brings_it() {
+        // Poetry: pip installs neither group; the dev group's packages are
+        // given as requirements, with Poetry's constraints translated.
+        let (_d, secure, root) = repo(&[(
+            "pyproject.toml",
+            "[tool.poetry]\nname = 'pages'\nversion = '0.1.0'\n\n[tool.poetry.dependencies]\npython = '^3.10'\nrequests = '^2.31'\n\n[tool.poetry.group.dev.dependencies]\npytest = \"^8.0\"\npytest-mock = { version = \"~3.14\" }\n\n[build-system]\nrequires = ['poetry-core']\nbuild-backend = 'poetry.core.masonry.api'\n",
+        )]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Python, Some("pytest"))
+                .unwrap()
+                .command,
+            "pip install -e . 'pytest>=8.0,<9' 'pytest-mock>=3.14,<3.15'"
+        );
+        // Poetry's older dev-dependencies table, and a project that is not
+        // a package.
+        let (_d, secure, root) = repo(&[(
+            "pyproject.toml",
+            "[tool.poetry]\nname = 'x'\npackage-mode = false\n[tool.poetry.dependencies]\npython = '*'\nflask = '2.3.*'\n[tool.poetry.dev-dependencies]\nnose = '*'\n",
+        )]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Python, Some("pytest -q"))
+                .unwrap()
+                .command,
+            "pip install 'flask==2.3.*' nose pytest"
+        );
+        // PEP 621 inline optional-dependencies.
+        let (_d, secure, root) = repo(&[(
+            "pyproject.toml",
+            "[project]\nname = 'x'\noptional-dependencies = { test = [\"pytest>=8\"], docs = [\"sphinx\"] }\n",
+        )]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Python, Some("pytest"))
+                .unwrap()
+                .command,
+            "pip install -e '.[test]'"
+        );
+        // An extra that does not hold pytest: it is added.
+        let (_d, secure, root) = repo(&[(
+            "pyproject.toml",
+            "[project]\nname = 'x'\n[project.optional-dependencies]\ndev = ['ruff']\nlint = ['pytest']\n",
+        )]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Python, Some("python3 -m pytest"))
+                .unwrap()
+                .command,
+            "pip install -e '.[dev]' pytest"
+        );
+        // PEP 735 groups, with include-group.
+        let (_d, secure, root) = repo(&[(
+            "pyproject.toml",
+            "[project]\nname = 'x'\n[dependency-groups]\nlint = ['pytest-cov']\ntest = [{include-group = 'lint'}, 'hypothesis']\n",
+        )]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Python, Some("pytest"))
+                .unwrap()
+                .command,
+            "pip install -e . --group test"
+        );
+        // uv's and PDM's dev lists.
+        let (_d, secure, root) = repo(&[(
+            "pyproject.toml",
+            "[project]\nname = 'x'\n[tool.uv]\ndev-dependencies = ['pytest>=8', 'ruff']\n",
+        )]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Python, Some("pytest"))
+                .unwrap()
+                .command,
+            "pip install -e . 'pytest>=8' ruff"
+        );
+        let (_d, secure, root) = repo(&[(
+            "pyproject.toml",
+            "[project]\nname = 'x'\n[tool.pdm.dev-dependencies]\ntest = ['-e file:///${PROJECT_ROOT}/sub', 'pytest']\n",
+        )]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Python, Some("pytest"))
+                .unwrap()
+                .command,
+            "pip install -e . pytest"
+        );
+        // Mentioning pytest outside what is installed does not count.
+        let (_d, secure, root) = repo(&[
+            (
+                "pyproject.toml",
+                "[project]\nname = 'x'\n[tool.pytest.ini_options]\naddopts = '-q'\n",
+            ),
+            ("requirements-docs.txt", "# pytest is not here\nsphinx\n"),
+        ]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Python, Some("pytest"))
+                .unwrap()
+                .command,
+            "pip install -e . -r requirements-docs.txt pytest"
+        );
+        // A setup.cfg extra's own list counts.
+        let (_d, secure, root) = repo(&[(
+            "setup.cfg",
+            "[metadata]\nname = x\n[options.extras_require]\ntesting =\n    pytest>=7\n    mock\n",
+        )]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Python, Some("pytest"))
+                .unwrap()
+                .command,
+            "pip install -e '.[testing]'"
+        );
+        // An unreadable pyproject.toml is still installed, so the setup
+        // fails with pip's own words about it.
+        let (_d, secure, root) = repo(&[("pyproject.toml", "[project\nname = \n")]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Python, Some("pytest"))
+                .unwrap()
+                .command,
+            "pip install -e . pytest"
+        );
+    }
+
+    #[test]
+    fn poetry_constraints_become_pep_440_specifiers() {
+        for (poetry, pep440) in [
+            ("^1.2.3", Some(">=1.2.3,<2")),
+            ("^0.2.3", Some(">=0.2.3,<0.3")),
+            ("^0.0.3", Some(">=0.0.3,<0.0.4")),
+            ("^2", Some(">=2,<3")),
+            ("~1.2.3", Some(">=1.2.3,<1.3")),
+            ("~1", Some(">=1,<2")),
+            ("~=1.4", Some("~=1.4")),
+            (">= 1.0, < 2.0", Some(">=1.0,<2.0")),
+            ("1.2.3", Some("==1.2.3")),
+            ("1.2.*", Some("==1.2.*")),
+            ("*", None),
+            ("^1.0 || ^2.0", None),
+            ("latest", None),
+        ] {
+            assert_eq!(poetry_constraint(poetry).as_deref(), pep440, "{poetry}");
+        }
+    }
+
+    #[test]
+    fn declared_packages_and_script_programs_are_read_from_the_files() {
+        let (_d, secure, root) = repo(&[
+            (
+                "pyproject.toml",
+                "[project]\nname = 'x'\ndependencies = ['PyYAML>=6', 'zope.interface']\n[tool.poetry.group.dev.dependencies]\nRequests_Mock = '*'\n",
+            ),
+            ("requirements-dev.txt", "-r requirements.txt\nhypothesis==6.1 # fuzz\n"),
+            (
+                "package.json",
+                r#"{"scripts":{"test":"NODE_ENV=test mocha --exit","check":"tsc && jest"}}"#,
+            ),
+        ]);
+        assert_eq!(
+            declared_python_packages(&secure, &root),
+            ["hypothesis", "pyyaml", "requests-mock", "zope-interface"]
+        );
+        assert_eq!(normalize_package("requests_mock"), "requests-mock");
+        assert_eq!(
+            package_script_program(&secure, "npm test"),
+            Some("mocha".into())
+        );
+        assert_eq!(
+            package_script_program(&secure, "npm run check"),
+            Some("tsc".into())
+        );
+        assert_eq!(
+            package_script_program(&secure, "yarn test --watch=false"),
+            Some("mocha".into())
+        );
+        assert_eq!(package_script_program(&secure, "npm run nope"), None);
+        assert_eq!(
+            python_module_of("python3 -m pytest -q"),
+            Some("pytest".into())
+        );
+        assert_eq!(
+            python_module_of("python -m unittest discover"),
+            Some("unittest".into())
+        );
+        assert_eq!(python_module_of("pytest -m slow"), None);
+        assert_eq!(package_script_program(&secure, "pytest"), None);
+    }
+
+    /// TC-COR-4: Yarn 2+ refuses Yarn 1's install flags.
+    #[test]
+    fn yarn_berry_installs_with_immutable() {
+        let deps = r#"{"packageManager":"yarn@4.5.0","devDependencies":{"mocha":"10.7.3"}}"#;
+        let (_d, secure, root) = repo(&[("package.json", deps), ("yarn.lock", "")]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Node, None)
+                .unwrap()
+                .command,
+            "YARN_HTTPS_PROXY=\"$HTTPS_PROXY\" YARN_HTTP_PROXY=\"$HTTP_PROXY\" yarn install --immutable"
+        );
+        let deps = r#"{"devDependencies":{"mocha":"10.7.3"}}"#;
+        let berry_lock =
+            "# This file is generated by running \"yarn install\"\n\n__metadata:\n  version: 8\n";
+        let (_d, secure, root) = repo(&[("package.json", deps), ("yarn.lock", berry_lock)]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Node, None)
+                .unwrap()
+                .command,
+            "YARN_HTTPS_PROXY=\"$HTTPS_PROXY\" YARN_HTTP_PROXY=\"$HTTP_PROXY\" yarn install --immutable"
+        );
+        let classic = r#"{"packageManager":"yarn@1.22.22","devDependencies":{"mocha":"1"}}"#;
+        let (_d, secure, root) = repo(&[
+            ("package.json", classic),
+            ("yarn.lock", "# yarn lockfile v1\n"),
+        ]);
+        assert_eq!(
+            install_for(&secure, &root, Toolchain::Node, None)
+                .unwrap()
+                .command,
+            "yarn install --frozen-lockfile --prefer-offline"
+        );
     }
 }

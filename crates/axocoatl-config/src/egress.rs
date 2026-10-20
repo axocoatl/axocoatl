@@ -419,7 +419,7 @@ fn unused_egress_fields(
             "{} not used by interactive Sessions, because sandbox.network is {network:?}: allow, \
              private_destinations and routes apply only to network: egress, and sidecar_network \
              and max_connections only to it and the browser's own proxy. Loadout runs \
-             (`axocoatl run`) always run under network: egress and use them",
+             (`axocoatl run`) under network: egress, as every built-in loadout is, use them",
             unused.join(", ")
         ),
     })
@@ -803,7 +803,8 @@ mod tests {
                 "sidecar_network, max_connections not used by interactive Sessions, because \
                  sandbox.network is \"bridge\""
             ) && messages[0].ends_with(
-                "Loadout runs (`axocoatl run`) always run under network: egress and use them"
+                "Loadout runs (`axocoatl run`) under network: egress, as every built-in \
+                 loadout is, use them"
             ),
             "{messages:?}"
         );

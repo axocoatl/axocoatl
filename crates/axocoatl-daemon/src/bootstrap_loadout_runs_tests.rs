@@ -1692,6 +1692,22 @@ async fn toolchain_admission_child_body() {
     assert!(message.contains("--toolchain node|go"), "{message}");
     assert!(daemon.list_loadout_runs().await.unwrap().is_empty());
 
+    // A Rust repository is refused before any image, Session or model call.
+    let rust = repo(&[
+        (
+            "Cargo.toml",
+            "[package]\nname = 'x'\n[dev-dependencies]\nitoa = '1'\n",
+        ),
+        ("src/lib.rs", ""),
+    ]);
+    let message = usage(
+        daemon
+            .admit_loadout_run(request(rust.path(), "rust", None))
+            .await,
+    );
+    assert!(message.contains("Invalid cross-device link"), "{message}");
+    assert!(daemon.list_loadout_runs().await.unwrap().is_empty());
+
     let python = repo(&[
         ("pyproject.toml", "[project]\nname = 'pages'\n"),
         ("tests/conftest.py", ""),
@@ -1735,7 +1751,7 @@ async fn toolchain_admission_child_body() {
         environment.image_id.as_deref(),
         Some(record.image_id.as_str())
     );
-    assert_eq!(environment.check.as_deref(), Some("pytest"));
+    assert_eq!(environment.check.as_deref(), Some("python3 -m pytest"));
     assert!(environment
         .cache_volume
         .as_deref()
@@ -1752,8 +1768,8 @@ async fn toolchain_admission_child_body() {
     assert_eq!(outcome.exit_code, exit_code::INFRASTRUCTURE, "{outcome:?}");
     assert!(
         outcome.notes.iter().any(|note| note.contains(
-            "· toolchain python (pyproject.toml at the repository root) · check pytest \
-             (detected from the repository) · setup pip install -e . pytest (detected; \
+            "· toolchain python (pyproject.toml at the repository root) · check python3 -m \
+             pytest (detected from the repository) · setup pip install -e . pytest (detected; \
              registries pypi.org, files.pythonhosted.org open for it alone)"
         )),
         "{:?}",

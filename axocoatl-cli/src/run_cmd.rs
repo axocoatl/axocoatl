@@ -83,6 +83,11 @@ pub struct RunArgs {
     /// `axocoatl recipe build` command
     #[arg(long)]
     pub no_build: bool,
+    /// Do not probe the check before the first model call (the probe
+    /// refuses a run whose check cannot run in its image; use this when it
+    /// is wrong about yours)
+    #[arg(long)]
+    pub no_probe: bool,
     /// What to do with a passing run's changes: none, branch or pr
     #[arg(long, default_value = "none")]
     pub keep: String,
@@ -172,7 +177,8 @@ pub struct RunPlan {
     pub keep: Keep,
     pub check_command: Option<String>,
     pub setup_command: Option<String>,
-    /// `--toolchain`, `--image`, `--no-setup` and `--no-build`.
+    /// `--toolchain`, `--image`, `--no-setup`, `--no-build` and
+    /// `--no-probe`.
     pub environment: axocoatl_daemon::loadout::toolchain::EnvironmentRequest,
 }
 
@@ -266,6 +272,7 @@ pub fn plan(args: &RunArgs, task_from_file: Option<String>) -> Result<RunPlan, F
             args.image.as_deref(),
             args.no_setup,
             args.no_build,
+            args.no_probe,
         ),
     })
 }

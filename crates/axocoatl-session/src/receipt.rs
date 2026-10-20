@@ -264,7 +264,8 @@ pub struct SetupFacts {
     /// `detected`, `--setup` or `loadout`.
     pub source: String,
     /// SHA-256 of the exact shell script that ran (it wraps the command
-    /// with the toolchain's preparation and the Workspace's setup stamp).
+    /// with the toolchain's preparation, such as Python's virtual
+    /// environment).
     pub script_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
@@ -296,6 +297,10 @@ pub struct ProbeFacts {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_exit: Option<i32>,
     pub duration_ms: u64,
+    /// The check outlasted the probe's time and was stopped (with every
+    /// process it started); it could run, so the run went on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub timed_out: bool,
 }
 
 /// One scope's network policy as the Session's network record holds it.
@@ -1468,6 +1473,7 @@ mod tests {
                 program_found: true,
                 baseline_exit: Some(1),
                 duration_ms: 900,
+                timed_out: false,
             }),
         });
         let text = serde_json::to_string(&statement.predicate.sandbox).unwrap();

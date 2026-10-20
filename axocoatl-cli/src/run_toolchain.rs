@@ -25,19 +25,35 @@ fn data_dir(config: &Path) -> PathBuf {
         .unwrap_or_else(|| crate::default_data_dir_for_config(config))
 }
 
-/// What a build of `recipes` downloads and takes, in words.
+/// What a build of `recipes` downloads and takes, in words: the official
+/// image it starts from and its download, the measured size on disk of the
+/// whole image (the toolchain and every other recipe), and what the other
+/// recipes download on top.
 pub(crate) fn build_line(image: &str, recipes: &[String]) -> String {
-    let toolchain = recipes
-        .iter()
-        .find_map(|name| axocoatl_isolation::recipes::toolchain_image(name));
     let what = recipes.join(" + ");
-    match toolchain {
-        Some(base) => format!(
-            "· building the run's image {image} ({what}, from {}): about {} MB to download and \
-             {} MB on disk, once on this computer; later runs reuse it",
-            base.image, base.download_mb, base.image_mb
-        ),
-        None => format!(
+    match axocoatl_isolation::recipes::image_size(recipes) {
+        Ok(size) => {
+            let more = if size.also_downloads.is_empty() {
+                String::new()
+            } else {
+                format!(" plus {}", size.also_downloads.join(" and "))
+            };
+            let disk = if size.unmeasured.is_empty() {
+                format!("about {} MB on disk", size.disk_mb)
+            } else {
+                format!(
+                    "at least {} MB on disk (more for {})",
+                    size.disk_mb,
+                    size.unmeasured.join(" and ")
+                )
+            };
+            format!(
+                "· building the run's image {image} ({what}, from {}): about {} MB to download{more}, \
+                 {disk}, once on this computer; later runs reuse it",
+                size.base_image, size.base_download_mb
+            )
+        }
+        Err(_) => format!(
             "· building the run's image {image} ({what}); once on this computer, later runs \
              reuse it"
         ),
@@ -122,11 +138,13 @@ pub(super) fn request(
     image: Option<&str>,
     no_setup: bool,
     no_build: bool,
+    no_probe: bool,
 ) -> EnvironmentRequest {
     EnvironmentRequest {
         toolchain: toolchain.map(str::to_string),
         image: image.map(str::to_string),
         no_setup,
+        no_probe,
         build_images: !no_build,
     }
 }
@@ -149,18 +167,31 @@ mod tests {
             line.contains("docker.io/library/python:3.13.16-slim-bookworm"),
             "{line}"
         );
-        assert!(line.contains("MB to download"), "{line}");
-        assert!(line.contains("MB on disk"), "{line}");
-        let composed = build_line("x", &["claude-code".to_string(), "rust".to_string()]);
-        assert!(composed.contains("claude-code + rust"), "{composed}");
-        assert!(composed.contains("rust:1.99.1"), "{composed}");
-        assert!(build_line("y", &["codex".to_string()]).contains("(codex)"));
+        assert!(
+            line.contains("about 65 MB to download, about 250 MB on disk"),
+            "{line}"
+        );
+        // TC-NU-6: a composed image says its whole size.
+        let composed = build_line("x", &["claude-code".to_string(), "python".to_string()]);
+        assert!(composed.contains("claude-code + python"), "{composed}");
+        assert!(composed.contains("python:3.13.16"), "{composed}");
+        assert!(
+            composed.contains("plus Node.js and claude-code, about 645 MB on disk"),
+            "{composed}"
+        );
+        let codex = build_line("y", &["codex".to_string()]);
+        assert!(
+            codex.contains("(codex, from docker.io/library/node:"),
+            "{codex}"
+        );
+        let e2e = build_line("z", &["e2e".to_string(), "go".to_string()]);
+        assert!(e2e.contains("at least"), "{e2e}");
         assert_eq!(
-            request(None, None, false, false),
+            request(None, None, false, false, false),
             EnvironmentRequest::default()
         );
-        let flags = request(Some("go"), None, true, true);
+        let flags = request(Some("go"), None, true, true, true);
         assert_eq!(flags.toolchain.as_deref(), Some("go"));
-        assert!(flags.no_setup && !flags.build_images);
+        assert!(flags.no_setup && !flags.build_images && flags.no_probe);
     }
 }

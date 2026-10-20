@@ -23,6 +23,9 @@ quick-xml = "0.41"
 # Receipts: Ed25519 signatures of run statements (the daemon's version).
 ring = "0.17"
 thiserror = { workspace = true }
+# Repository toolchains: reading a Python project's pyproject.toml (the
+# parser only, the same build of it proc-macro-crate already uses).
+toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 unicode-normalization = { workspace = true }
 uuid = { workspace = true }
 

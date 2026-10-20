@@ -1589,7 +1589,10 @@ mod tests {
             Some("python3 -m unittest discover -v")
         );
         std::fs::write(d.join("conftest.py"), "").unwrap();
-        assert_eq!(detect_check_command(&d).as_deref(), Some("pytest"));
+        assert_eq!(
+            detect_check_command(&d).as_deref(),
+            Some("python3 -m pytest")
+        );
         std::fs::write(d.join("AXOCOATL.md"), "Check command: `pytest -q tests`\n").unwrap();
         assert_eq!(detect_check_command(&d).as_deref(), Some("pytest -q tests"));
     }
