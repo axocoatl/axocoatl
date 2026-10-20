@@ -88,10 +88,10 @@ cargo uninstall axocoatl-cli
 ```
 
 When the installer added `~/.local/bin` to your `PATH`, it wrote a line after the comment
-`# Added by the Axocoatl installer` in your shell's profile (`~/.zprofile` or `~/.zshrc`
-for zsh, `~/.bash_profile`, `~/.profile` or `~/.bashrc` for bash,
-`~/.config/fish/config.fish` for fish). Delete those two lines if nothing else of yours
-lives in `~/.local/bin`.
+`# Added by the Axocoatl installer` in your shell's startup files (`~/.zprofile`, and on
+Linux `~/.zshrc`, for zsh; `~/.bash_profile`, `~/.bash_login` or `~/.profile`, and on
+Linux `~/.bashrc`, for bash; `~/.config/fish/config.fish` for fish). Delete those two
+lines from each file if nothing else of yours lives in `~/.local/bin`.
 
 ## 5. Optional: Podman, Ollama and your sign-ins
 

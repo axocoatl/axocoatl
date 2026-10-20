@@ -4,7 +4,11 @@
 #
 # It installs to /usr/local/bin when that directory is writable, else to
 # ~/.local/bin. When the directory is not on PATH it asks, on the terminal,
-# before adding one line to your shell's profile; without a terminal (or when
+# before adding one line to the startup files your shell reads in a new
+# terminal and a new login (~/.zprofile for zsh on macOS; ~/.zshrc and
+# ~/.zprofile for zsh on Linux; for bash the login file that exists, else
+# ~/.bash_profile on macOS and ~/.profile on Linux, and on Linux ~/.bashrc
+# too; fish's config.fish; ~/.profile otherwise); without a terminal (or when
 # the answer is end of input) it only prints that line. In a GitHub Actions
 # step it adds the directory to $GITHUB_PATH instead, for the job's later steps.
 # AXOCOATL_MODIFY_PATH=yes adds the line without asking;
@@ -66,9 +70,15 @@ shell_word() {
   esac
 }
 
-# The profile file the user's login shell reads, and the line that puts
-# $1 on PATH in it. Sets profile and path_line.
-choose_profile() {
+# The startup files a new shell of the user's login shell reads, one per
+# line, and the line that puts $1 on PATH in them. Sets profiles and
+# path_line.
+# Terminal on macOS starts login shells. On Linux a new terminal window
+# starts an interactive shell (.bashrc, .zshrc) and a new login (SSH, the
+# console, the desktop session) a login shell, which reads only its login
+# files (.bash_profile, .bash_login or .profile; .zprofile), so the line goes
+# into both.
+choose_profiles() {
   case "$1" in
     "$HOME"/*) dir_expr="\$HOME/${1#"$HOME"/}" ;;
     *) dir_expr="$1" ;;
@@ -78,37 +88,54 @@ choose_profile() {
   path_line="export PATH=\"${dir_expr}:\$PATH\""
   case "$user_shell" in
     zsh)
-      # Terminal on macOS starts login shells (.zprofile); Linux terminals
-      # start interactive ones (.zshrc).
       if [ "$os" = "Darwin" ]; then
-        profile="${ZDOTDIR:-$HOME}/.zprofile"
+        profiles="${ZDOTDIR:-$HOME}/.zprofile"
       else
-        profile="${ZDOTDIR:-$HOME}/.zshrc"
+        profiles="${ZDOTDIR:-$HOME}/.zshrc
+${ZDOTDIR:-$HOME}/.zprofile"
       fi
       ;;
     bash)
+      # A login bash reads only the first of these that exists, so a new
+      # .bash_profile would hide an existing .profile.
+      login_file=""
+      for candidate in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+        if [ -f "$candidate" ]; then
+          login_file="$candidate"
+          break
+        fi
+      done
       if [ "$os" = "Darwin" ]; then
-        # A login bash reads only the first of these that exists, so a new
-        # .bash_profile would hide an existing .profile.
-        profile="$HOME/.bash_profile"
-        for candidate in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
-          if [ -f "$candidate" ]; then
-            profile="$candidate"
-            break
-          fi
-        done
+        profiles="${login_file:-$HOME/.bash_profile}"
       else
-        profile="$HOME/.bashrc"
+        profiles="$HOME/.bashrc
+${login_file:-$HOME/.profile}"
       fi
       ;;
     fish)
-      profile="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
+      # fish reads config.fish in every shell, login or not.
+      profiles="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
       path_line="fish_add_path \"${dir_expr}\""
       ;;
     *)
-      profile="$HOME/.profile"
+      profiles="$HOME/.profile"
       ;;
   esac
+}
+
+# Paths, one per line, as the user knows them: "~/.a" or "~/.a and ~/.b".
+display_paths() {
+  shown=""
+  old_ifs=$IFS
+  IFS='
+'
+  set -f
+  for each in $1; do
+    shown="${shown}${shown:+ and }$(display_path "$each")"
+  done
+  set +f
+  IFS=$old_ifs
+  printf '%s' "$shown"
 }
 
 # Whether a question can be asked: the terminal opens for reading and writing.
@@ -254,11 +281,29 @@ info "installed ${BIN} ${tag} -> ${dest}/${BIN}"
 # A stock macOS PATH (/etc/paths) has no ~/.local/bin, and an `export` typed
 # in this shell is gone in the next Terminal window.
 offer_profile_line() {
-  choose_profile "$dest"
+  choose_profiles "$dest"
   shown_dest="$(display_path "$dest")"
-  shown_profile="$(display_path "$profile")"
-  if [ -f "$profile" ] && grep -Fxq -- "$path_line" "$profile" 2>/dev/null; then
-    info "${shown_profile} already adds ${shown_dest} to PATH; new terminals find ${BIN}"
+  # The startup files that do not have the line yet.
+  missing=""
+  old_ifs=$IFS
+  IFS='
+'
+  set -f
+  for profile in $profiles; do
+    if [ -f "$profile" ] && grep -Fxq -- "$path_line" "$profile" 2>/dev/null; then
+      continue
+    fi
+    missing="${missing}${missing:+
+}${profile}"
+  done
+  set +f
+  IFS=$old_ifs
+  if [ -z "$missing" ]; then
+    case "$profiles" in
+      *'
+'*) info "$(display_paths "$profiles") already add ${shown_dest} to PATH; new terminals find ${BIN}" ;;
+      *) info "$(display_paths "$profiles") already adds ${shown_dest} to PATH; new terminals find ${BIN}" ;;
+    esac
     return 0
   fi
   answer=no
@@ -266,7 +311,7 @@ offer_profile_line() {
     answer=yes
   elif [ "$modify_path" = "ask" ] && can_ask; then
     printf 'axocoatl-install: %s is not on your PATH. Add it in %s? [Y/n] ' \
-      "$shown_dest" "$shown_profile" >>"$tty_device"
+      "$shown_dest" "$(display_paths "$missing")" >>"$tty_device"
     reply=""
     if read -r reply <"$tty_device"; then
       case "$reply" in
@@ -278,17 +323,36 @@ offer_profile_line() {
       printf '\n' 2>/dev/null >>"$tty_device" || true
     fi
   fi
-  if [ "$answer" = "yes" ] \
-    && mkdir -p "${profile%/*}" 2>/dev/null \
-    && printf '\n# Added by the Axocoatl installer\n%s\n' "$path_line" 2>/dev/null >>"$profile"; then
-    info "added to ${shown_profile}:  ${path_line}"
-    info "new terminals find ${BIN}; in this one, run:  ${path_line}"
-  else
-    [ "$answer" = "no" ] || info "could not write ${shown_profile}"
-    info "${shown_dest} is not on your PATH. For new terminals to find ${BIN}, add this line to ${shown_profile}:"
-    echo
-    echo "    ${path_line}"
+  if [ "$answer" = "yes" ]; then
+    written=""
+    failed=""
+    old_ifs=$IFS
+    IFS='
+'
+    set -f
+    for profile in $missing; do
+      if mkdir -p "${profile%/*}" 2>/dev/null \
+        && printf '\n# Added by the Axocoatl installer\n%s\n' "$path_line" 2>/dev/null >>"$profile"; then
+        written="${written}${written:+
+}${profile}"
+      else
+        failed="${failed}${failed:+
+}${profile}"
+      fi
+    done
+    set +f
+    IFS=$old_ifs
+    [ -z "$written" ] || info "added to $(display_paths "$written"):  ${path_line}"
+    if [ -z "$failed" ]; then
+      info "new terminals find ${BIN}; in this one, run:  ${path_line}"
+      return 0
+    fi
+    info "could not write $(display_paths "$failed")"
+    missing=$failed
   fi
+  info "${shown_dest} is not on your PATH. For new terminals to find ${BIN}, add this line to $(display_paths "$missing"):"
+  echo
+  echo "    ${path_line}"
 }
 
 case ":${PATH}:" in

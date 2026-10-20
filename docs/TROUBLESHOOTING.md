@@ -7,9 +7,10 @@ automatically with fix hints.
 
 **`axocoatl: command not found` after install.sh**
 The binary went to `~/.local/bin`, which isn't on your PATH. If you let the installer
-add it to your shell's profile, open a new terminal. Otherwise add the line it printed
-to that profile (`~/.zprofile` for zsh on macOS, `~/.bashrc` for bash on Linux); this
-sets it for the current shell only:
+add it to your shell's startup files, open a new terminal. Otherwise add the line it
+printed to the files it named (`~/.zprofile` for zsh on macOS; for bash on Linux
+`~/.bashrc` and `~/.profile`, or `~/.bash_profile` when you have one); this sets it for
+the current shell only:
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
 ```

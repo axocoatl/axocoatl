@@ -219,6 +219,8 @@ run_case() {
   AXOCOATL_INSTALL_BASE_URL= \
   GITHUB_PATH= \
   SHELL=/bin/sh \
+  XDG_CONFIG_HOME= \
+  ZDOTDIR= \
   TEST_WORK_DIR="$work_dir" \
   TEST_OS="$os" \
   TEST_INSTALL_TOOL_MODE=1 \
@@ -300,6 +302,7 @@ run_case checksum-tool-missing fail "neither sha256sum nor shasum is available" 
 #   P_VERSION     the AXOCOATL_VERSION value
 #   P_BASE_URL    the AXOCOATL_INSTALL_BASE_URL value
 #   P_BIN         the directory of tools on PATH (default: the stubs)
+#   P_XDG_CONFIG_HOME, P_ZDOTDIR  those variables (default: unset)
 run_path_case() {
   name=$1
   case_count=$((case_count + 1))
@@ -356,6 +359,8 @@ run_path_case() {
   AXOCOATL_INSTALL_BASE_URL="${P_BASE_URL:-}" \
   GITHUB_PATH="$case_github_path" \
   SHELL="${P_SHELL:-/bin/zsh}" \
+  XDG_CONFIG_HOME="${P_XDG_CONFIG_HOME:-}" \
+  ZDOTDIR="${P_ZDOTDIR:-}" \
   TEST_WORK_DIR="$work_dir" \
   TEST_OS="${P_OS:-Darwin}" \
   TEST_INSTALL_TOOL_MODE=1 \
@@ -407,14 +412,83 @@ path_expect_next_runs() {
     || fail "$name: the printed next command ran something else: $next_command: $next_result"
 }
 
-# A new login shell that reads the profile finds the installed binary.
-path_expect_profile_finds() {
-  profile_file=$1
-  [ -f "$profile_file" ] || fail "$name did not write $profile_file: $(cat "$output")"
-  found_binary="$(HOME="$case_home" PATH="$fake_bin" /bin/sh -c '. "$1" && command -v axocoatl' sh "$profile_file")" \
-    || fail "$name: $profile_file does not put axocoatl on PATH: $(cat "$profile_file")"
-  [ "$found_binary" = "$case_dest/axocoatl" ] \
-    || fail "$name: $profile_file finds '$found_binary', not $case_dest/axocoatl"
+# path_expect_new_shells_find SHELL FILE...: the installer wrote its line into
+# each FILE, and every new SHELL a user gets next finds the installed binary.
+# The shells start as a new terminal or login starts them (macOS Terminal: an
+# interactive login shell; Linux: a login shell for SSH, the console or the
+# desktop session, an interactive one for a new terminal window, and an
+# interactive login one for SSH), from an empty environment with a base PATH,
+# so they read only their own startup files. A shell not installed here is
+# recorded, and each FILE is read with /bin/sh instead (fish: its line is
+# looked for), which checks the line but not which files that shell reads.
+real_shells=""
+missing_shells=""
+path_expect_new_shells_find() {
+  shell_name=$1
+  shift
+  for profile_file in "$@"; do
+    [ -f "$profile_file" ] || fail "$name did not write $profile_file: $(cat "$output")"
+    grep -Fx -- "$(path_line_for "$shell_name")" "$profile_file" >/dev/null \
+      || fail "$name: $profile_file does not have the PATH line: $(cat "$profile_file")"
+  done
+  case "$shell_name" in
+    sh) shell_path=/bin/sh ;;
+    *) shell_path="$(command -v "$shell_name" 2>/dev/null || true)" ;;
+  esac
+  if [ -z "$shell_path" ]; then
+    case " $missing_shells " in *" $shell_name "*) ;; *) missing_shells="$missing_shells${missing_shells:+ }$shell_name" ;; esac
+    [ "$shell_name" = fish ] && return 0
+    for profile_file in "$@"; do
+      found_binary="$(env -i HOME="$case_home" PATH=/usr/bin:/bin /bin/sh -c '. "$1" >/dev/null 2>&1; command -v axocoatl' sh "$profile_file")"
+      [ "$found_binary" = "$case_dest/axocoatl" ] \
+        || fail "$name: $profile_file read with sh finds '$found_binary', not $case_dest/axocoatl"
+    done
+    return 0
+  fi
+  case " $real_shells " in *" $shell_name "*) ;; *) real_shells="$real_shells${real_shells:+ }$shell_name" ;; esac
+  case "${P_OS:-Darwin}:$shell_name" in
+    *:sh) flag_sets='-lc' ;;
+    Darwin:*) flag_sets='-ilc' ;;
+    *) flag_sets='-lc -ic -ilc' ;;
+  esac
+  for flags in $flag_sets; do
+    found_binary="$(env -i HOME="$case_home" PATH=/usr/bin:/bin TERM=dumb \
+      ${P_XDG_CONFIG_HOME:+"XDG_CONFIG_HOME=$P_XDG_CONFIG_HOME"} \
+      "$shell_path" "$flags" 'command -v axocoatl' </dev/null 2>/dev/null | tail -n 1)"
+    [ "$found_binary" = "$case_dest/axocoatl" ] \
+      || fail "$name: a new '$shell_name $flags' finds '$found_binary', not $case_dest/axocoatl; startup files: $(for f in "$@"; do printf '%s: ' "$f"; tr '\n' ' ' <"$f"; done)"
+  done
+}
+
+# The line the installer adds for SHELL, for ~/.local/bin.
+path_line_for() {
+  case "$1" in
+    fish) printf '%s' 'fish_add_path "$HOME/.local/bin"' ;;
+    *) printf '%s' 'export PATH="$HOME/.local/bin:$PATH"' ;;
+  esac
+}
+
+# seed_home NAME LAYOUT: the startup files a new account starts with, in the
+# home directory of path case NAME, written before the installer runs.
+#   ubuntu  a .profile that reads .bashrc in bash, and a .bashrc that does
+#           nothing in a non-interactive shell (Ubuntu's /etc/skel does both)
+#   runner  ubuntu's files and a .bash_profile that reads neither (GitHub's
+#           Ubuntu runner images add one to /etc/skel that loads nvm)
+seed_home() {
+  seed_dir="$work_dir/$1/${P_HOME_NAME:-home}"
+  mkdir -p "$seed_dir"
+  case "$2" in
+    ubuntu | runner)
+      printf '%s\n' '# like Ubuntu: bash reads .bashrc' \
+        'if [ -n "$BASH_VERSION" ] && [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi' >"$seed_dir/.profile"
+      printf '%s\n' '# like Ubuntu: nothing more for a non-interactive shell' \
+        'case $- in *i*) ;; *) return ;; esac' >"$seed_dir/.bashrc"
+      ;;
+    *) fail "invalid home layout $2" ;;
+  esac
+  if [ "$2" = runner ]; then
+    printf '%s\n' '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >"$seed_dir/.bash_profile"
+  fi
 }
 
 path_expect_no_prompt() {
@@ -425,7 +499,7 @@ path_expect_no_prompt() {
 
 reset_path_case() {
   P_OS=Darwin P_SHELL=/bin/zsh P_SYSTEM=missing P_ON_PATH=no P_SHADOW=no P_TTY=none P_MODIFY=ask P_HOME_NAME=home
-  P_GITHUB_PATH=no P_PODMAN=no P_VERSION='' P_BASE_URL='' P_BIN=''
+  P_GITHUB_PATH=no P_PODMAN=no P_VERSION='' P_BASE_URL='' P_BIN='' P_XDG_CONFIG_HOME='' P_ZDOTDIR=''
 }
 
 # A stock Mac in a pipe with no terminal: ~/.local/bin, the persistent line
@@ -450,7 +524,7 @@ path_expect_status 0
 grep -F '~/.local/bin is not on your PATH. Add it in ~/.zprofile? [Y/n]' "$case_tty" >/dev/null \
   || fail "$name did not ask on the terminal: $(cat "$case_tty")"
 path_expect_text 'added to ~/.zprofile:  export PATH="$HOME/.local/bin:$PATH"'
-path_expect_profile_finds "$case_home/.zprofile"
+path_expect_new_shells_find zsh "$case_home/.zprofile"
 path_expect_next_runs
 [ "$(grep -c -F 'export PATH="$HOME/.local/bin:$PATH"' "$case_home/.zprofile")" -eq 1 ] \
   || fail "$name wrote the PATH line more than once"
@@ -505,7 +579,7 @@ reset_path_case
 P_MODIFY=yes
 run_path_case path-modify-yes
 path_expect_status 0
-path_expect_profile_finds "$case_home/.zprofile"
+path_expect_new_shells_find zsh "$case_home/.zprofile"
 
 # An unknown AXOCOATL_MODIFY_PATH stops before any download.
 reset_path_case
@@ -515,20 +589,123 @@ path_expect_status 1
 path_expect_text "AXOCOATL_MODIFY_PATH must be ask, yes or no, not 'maybe'"
 [ ! -s "$curl_log" ] || fail "$name reached the network stub"
 
-# Linux bash reads ~/.bashrc in a new terminal.
+# Linux bash: a new terminal reads ~/.bashrc, and a new login reads the first
+# of ~/.bash_profile, ~/.bash_login and ~/.profile, so the line goes into
+# ~/.bashrc and that login file (~/.profile when there is none).
 reset_path_case
 P_OS=Linux P_SHELL=/bin/bash P_TTY='yes'
 run_path_case path-linux-bash
 path_expect_status 0
-path_expect_profile_finds "$case_home/.bashrc"
+grep -F '~/.local/bin is not on your PATH. Add it in ~/.bashrc and ~/.profile? [Y/n]' "$case_tty" >/dev/null \
+  || fail "$name did not name ~/.bashrc and ~/.profile in its question: $(cat "$case_tty")"
+path_expect_text 'added to ~/.bashrc and ~/.profile:  export PATH="$HOME/.local/bin:$PATH"'
+path_expect_new_shells_find bash "$case_home/.bashrc" "$case_home/.profile"
 [ ! -e "$case_home/.bash_profile" ] || fail "$name wrote ~/.bash_profile on Linux"
+path_expect_next_runs
 
-# Linux zsh reads ~/.zshrc.
+# Ubuntu's startup files: ~/.profile reads ~/.bashrc, which stops early in a
+# non-interactive shell; the line goes into both.
+reset_path_case
+P_OS=Linux P_SHELL=/bin/bash P_TTY=''
+seed_home path-linux-bash-ubuntu ubuntu
+run_path_case path-linux-bash-ubuntu
+path_expect_status 0
+path_expect_new_shells_find bash "$case_home/.bashrc" "$case_home/.profile"
+[ ! -e "$case_home/.bash_profile" ] || fail "$name created ~/.bash_profile next to ~/.profile"
+grep -F '# like Ubuntu: bash reads .bashrc' "$case_home/.profile" >/dev/null || fail "$name lost the existing ~/.profile"
+linux_bash_home=$case_home
+
+# Install again over that home: nothing is asked or added.
+reset_path_case
+P_OS=Linux P_SHELL=/bin/bash P_TTY='y'
+name=path-linux-bash-again
+mkdir -p "$work_dir/$name/home"
+cp "$linux_bash_home/.profile" "$linux_bash_home/.bashrc" "$work_dir/$name/home/"
+run_path_case "$name"
+path_expect_status 0
+path_expect_text '~/.bashrc and ~/.profile already add ~/.local/bin to PATH; new terminals find axocoatl'
+path_expect_no_prompt
+for profile_file in .bashrc .profile; do
+  [ "$(grep -c -F 'export PATH="$HOME/.local/bin:$PATH"' "$case_home/$profile_file")" -eq 1 ] \
+    || fail "$name added the PATH line to ~/$profile_file again"
+done
+
+# A home where only ~/.bashrc has the line (as an earlier installer left it):
+# only ~/.profile is asked about and written.
+reset_path_case
+P_OS=Linux P_SHELL=/bin/bash P_TTY='y'
+seed_home path-linux-bash-bashrc-only ubuntu
+printf '\n# Added by the Axocoatl installer\n%s\n' 'export PATH="$HOME/.local/bin:$PATH"' \
+  >>"$work_dir/path-linux-bash-bashrc-only/home/.bashrc"
+run_path_case path-linux-bash-bashrc-only
+path_expect_status 0
+grep -F 'Add it in ~/.profile? [Y/n]' "$case_tty" >/dev/null \
+  || fail "$name did not ask about ~/.profile alone: $(cat "$case_tty")"
+path_expect_text 'added to ~/.profile:  export PATH="$HOME/.local/bin:$PATH"'
+[ "$(grep -c -F 'export PATH="$HOME/.local/bin:$PATH"' "$case_home/.bashrc")" -eq 1 ] \
+  || fail "$name added the PATH line to ~/.bashrc again"
+path_expect_new_shells_find bash "$case_home/.bashrc" "$case_home/.profile"
+
+# GitHub's Ubuntu runner images: a ~/.bash_profile that reads neither
+# ~/.profile nor ~/.bashrc, so a login shell reads only it.
+reset_path_case
+P_OS=Linux P_SHELL=/bin/bash P_TTY='y'
+seed_home path-linux-bash-runner runner
+run_path_case path-linux-bash-runner
+path_expect_status 0
+grep -F 'Add it in ~/.bashrc and ~/.bash_profile? [Y/n]' "$case_tty" >/dev/null \
+  || fail "$name did not name ~/.bashrc and ~/.bash_profile in its question: $(cat "$case_tty")"
+path_expect_new_shells_find bash "$case_home/.bashrc" "$case_home/.bash_profile"
+grep -F 'export PATH="$HOME/.local/bin:$PATH"' "$case_home/.profile" >/dev/null \
+  && fail "$name wrote ~/.profile, which a login bash does not read next to ~/.bash_profile"
+
+# No terminal: the printed line names both files, and adding it to them as
+# told puts axocoatl on every new shell's PATH.
+reset_path_case
+P_OS=Linux P_SHELL=/bin/bash
+seed_home path-linux-bash-no-terminal runner
+run_path_case path-linux-bash-no-terminal
+path_expect_status 0
+path_expect_text '~/.local/bin is not on your PATH. For new terminals to find axocoatl, add this line to ~/.bashrc and ~/.bash_profile:'
+path_expect_text '    export PATH="$HOME/.local/bin:$PATH"'
+grep -F 'export PATH=' "$case_home/.bashrc" "$case_home/.bash_profile" >/dev/null \
+  && fail "$name wrote a startup file without being asked"
+for profile_file in .bashrc .bash_profile; do
+  printf '\n%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >>"$case_home/$profile_file"
+done
+path_expect_new_shells_find bash "$case_home/.bashrc" "$case_home/.bash_profile"
+
+# Linux zsh: a new terminal reads ~/.zshrc and a new login ~/.zprofile.
 reset_path_case
 P_OS=Linux P_SHELL=/usr/bin/zsh P_TTY='Y'
 run_path_case path-linux-zsh
 path_expect_status 0
-path_expect_profile_finds "$case_home/.zshrc"
+grep -F 'Add it in ~/.zshrc and ~/.zprofile? [Y/n]' "$case_tty" >/dev/null \
+  || fail "$name did not name ~/.zshrc and ~/.zprofile in its question: $(cat "$case_tty")"
+path_expect_new_shells_find zsh "$case_home/.zshrc" "$case_home/.zprofile"
+
+# zsh with ZDOTDIR (set in ~/.zshenv): the files in that directory.
+reset_path_case
+P_SHELL=/bin/zsh P_TTY='y'
+name=path-mac-zsh-zdotdir
+mkdir -p "$work_dir/$name/home/.config/zsh"
+printf '%s\n' 'export ZDOTDIR="$HOME/.config/zsh"' >"$work_dir/$name/home/.zshenv"
+P_ZDOTDIR="$work_dir/$name/home/.config/zsh"
+run_path_case "$name"
+path_expect_status 0
+grep -F 'Add it in ~/.config/zsh/.zprofile? [Y/n]' "$case_tty" >/dev/null \
+  || fail "$name did not name ~/.config/zsh/.zprofile in its question: $(cat "$case_tty")"
+[ ! -e "$case_home/.zprofile" ] || fail "$name wrote ~/.zprofile, which zsh does not read with ZDOTDIR"
+path_expect_new_shells_find zsh "$case_home/.config/zsh/.zprofile"
+
+# macOS bash with no startup file: ~/.bash_profile, which Terminal's login
+# shell reads.
+reset_path_case
+P_SHELL=/bin/bash P_TTY='y'
+run_path_case path-mac-bash
+path_expect_status 0
+path_expect_new_shells_find bash "$case_home/.bash_profile"
+[ ! -e "$case_home/.bashrc" ] || fail "$name wrote ~/.bashrc on macOS"
 
 # macOS bash with only ~/.profile: a new ~/.bash_profile would hide it, so the
 # line goes into ~/.profile.
@@ -539,27 +716,40 @@ mkdir -p "$work_dir/$name/home"
 printf '%s\n' '# existing profile' > "$work_dir/$name/home/.profile"
 run_path_case "$name"
 path_expect_status 0
-path_expect_profile_finds "$case_home/.profile"
+path_expect_new_shells_find bash "$case_home/.profile"
 [ ! -e "$case_home/.bash_profile" ] || fail "$name created ~/.bash_profile next to ~/.profile"
 grep -F '# existing profile' "$case_home/.profile" >/dev/null || fail "$name lost the existing ~/.profile"
 
-# fish gets fish_add_path in its config.
+# fish gets fish_add_path in its config, on macOS and on Linux.
+for fish_os in Darwin Linux; do
+  reset_path_case
+  P_OS=$fish_os P_SHELL=/opt/homebrew/bin/fish P_TTY='y'
+  [ "$fish_os" = Linux ] && P_SHELL=/usr/bin/fish
+  run_path_case "path-fish-$fish_os"
+  path_expect_status 0
+  grep -F 'Add it in ~/.config/fish/config.fish? [Y/n]' "$case_tty" >/dev/null \
+    || fail "$name did not name config.fish in its question: $(cat "$case_tty")"
+  path_expect_new_shells_find fish "$case_home/.config/fish/config.fish"
+  path_expect_next_runs
+done
+
+# fish with XDG_CONFIG_HOME: the config.fish under it, which fish reads.
 reset_path_case
-P_SHELL=/opt/homebrew/bin/fish P_TTY='y'
-run_path_case path-fish
+P_OS=Linux P_SHELL=/usr/bin/fish P_TTY='y'
+P_XDG_CONFIG_HOME="$work_dir/path-fish-xdg/xdg config"
+run_path_case path-fish-xdg
 path_expect_status 0
-grep -F 'Add it in ~/.config/fish/config.fish? [Y/n]' "$case_tty" >/dev/null \
-  || fail "$name did not name config.fish in its question: $(cat "$case_tty")"
-grep -F 'fish_add_path "$HOME/.local/bin"' "$case_home/.config/fish/config.fish" >/dev/null \
-  || fail "$name did not add fish_add_path to config.fish: $(cat "$output")"
-path_expect_next_runs
+grep -F "Add it in $P_XDG_CONFIG_HOME/fish/config.fish? [Y/n]" "$case_tty" >/dev/null \
+  || fail "$name did not name \$XDG_CONFIG_HOME/fish/config.fish in its question: $(cat "$case_tty")"
+[ ! -e "$case_home/.config/fish/config.fish" ] || fail "$name wrote ~/.config/fish/config.fish next to XDG_CONFIG_HOME"
+path_expect_new_shells_find fish "$P_XDG_CONFIG_HOME/fish/config.fish"
 
 # Any other shell reads ~/.profile.
 reset_path_case
 P_SHELL=/bin/ksh P_TTY='y'
 run_path_case path-other-shell
 path_expect_status 0
-path_expect_profile_finds "$case_home/.profile"
+path_expect_new_shells_find sh "$case_home/.profile"
 
 # A home directory with a space: the printed next command is quoted.
 reset_path_case
@@ -691,4 +881,6 @@ path_expect_status 1
 path_expect_text 'checksum mismatch'
 [ ! -e "$case_home/.local/bin/axocoatl" ] || fail "$name installed a binary whose checksum did not match"
 
-echo "Installer regression contract: PASS ($case_count local simulations)"
+shells_note="new shells started: ${real_shells:-none}"
+[ -z "$missing_shells" ] || shells_note="$shells_note; not installed here, startup files read with sh instead: $missing_shells"
+echo "Installer regression contract: PASS ($case_count local simulations; $shells_note)"
