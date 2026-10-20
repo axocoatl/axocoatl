@@ -111,7 +111,9 @@ On supported Unix hosts, bootstrap retains an opened handle to that root and
 acquires an external current lease, the 0.1-compatible in-root lease, and a
 directory-inode lock before runtime reconciliation or mutable state reads. If the
 resolved root is below a local Podman Workspace, it is masked inside the container.
-A Workspace equal to or below that root is rejected. These controls are automatic
+A Workspace equal to or below that root is rejected. The per-user configuration
+directory is treated the same way when the daemon loaded the per-user
+configuration file. These controls are automatic
 and have no YAML override. See [Data and backup](/operate/data-backup/) and
 [Security](/operate/security/).
 

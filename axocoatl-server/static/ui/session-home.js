@@ -190,6 +190,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
   text-align: left;
 }
 .picker-row:hover { background: var(--bg-3); }
+.git-badge {
+  margin-left: auto; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--ok) 55%, var(--border));
+  border-radius: var(--r-sm); color: var(--ok); font: var(--fs-xs) var(--font-mono);
+}
+.picker-path .git-badge { margin-left: var(--sp-2); }
+.picker-scope {
+  padding: var(--sp-2) var(--sp-4); border-top: 1px solid var(--border);
+  border-left: 3px solid var(--warn); background: color-mix(in srgb, var(--warn) 8%, var(--bg-2));
+  color: var(--text); font-size: var(--fs-sm);
+}
+.picker-scope.protected { border-left-color: var(--err); background: color-mix(in srgb, var(--err) 8%, var(--bg-2)); }
 .config { min-height: 0; overflow-y: auto; }
 .config-row { display: flex; align-items: center; gap: 10px; padding: var(--sp-2) var(--sp-4); border-top: 1px solid var(--border); }
 .config-row.wrap { align-items: flex-start; flex-wrap: wrap; }
@@ -783,10 +794,11 @@ export class AxSessionHome extends HTMLElement {
       const row = element('div', `side-row${active ? ' active' : ''}`);
       row.tabIndex = 0; row.title = workspaceDirectory(workspace); row.dataset.workspaceId = workspace.id;
       row.append(element('span', 'side-icon', '▱'), element('span', 'side-label', workspace.name));
-      const rename = element('button', 'side-remove', '•••');
-      rename.type = 'button'; rename.dataset.action = 'rename-workspace'; rename.dataset.workspaceId = workspace.id;
-      rename.title = `Rename ${workspace.name}`; rename.setAttribute('aria-label', rename.title);
-      row.append(rename); workspaces.append(row);
+      const more = element('button', 'side-remove', '•••');
+      more.type = 'button'; more.dataset.action = 'workspace-menu'; more.dataset.workspaceId = workspace.id;
+      more.title = `Actions for ${workspace.name}`; more.setAttribute('aria-label', more.title);
+      more.setAttribute('aria-haspopup', 'menu');
+      row.append(more); workspaces.append(row);
     });
   }
 
@@ -1057,6 +1069,7 @@ export class AxSessionHome extends HTMLElement {
         { label: 'Open', action: 'open' }, { label: 'New Session', action: 'new-session' },
         { separator: true }, { label: 'Rename Workspace…', action: 'rename' },
         { label: 'Copy folder path', action: 'copy-path' },
+        { separator: true }, { label: 'Remove from list…', action: 'remove', danger: true },
       ];
     }
     return [];
@@ -1093,6 +1106,7 @@ export class AxSessionHome extends HTMLElement {
       }));
     } else if (action === 'new-session') this.newSession(workspace.id);
     else if (action === 'rename') await this.renameWorkspace(workspace.id);
+    else if (action === 'remove') await this.removeWorkspace(workspace.id);
     else if (action === 'copy-path') {
       try {
         if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable.');
@@ -1171,6 +1185,10 @@ export class AxSessionHome extends HTMLElement {
       picker.requestedPath = picker.path;
       picker.dirs = Array.isArray(data?.dirs) ? data.dirs : [];
       picker.parent = data?.parent || null;
+      picker.git = data?.git === true;
+      picker.scope = data?.workspace_scope && typeof data.workspace_scope.message === 'string'
+        ? { code: String(data.workspace_scope.code || ''), message: data.workspace_scope.message }
+        : null;
       if (!picker.form.workspaceNameTouched) {
         const existing = this.#workspaces.find((workspace) => workspaceDirectory(workspace) === picker.path);
         picker.form.workspaceName = existing?.name || folderName(picker.path) || picker.path;
@@ -1279,11 +1297,16 @@ export class AxSessionHome extends HTMLElement {
         : `New session in ${workspace?.name || 'workspace'}`);
     title.id = 'session-picker-title';
     modal.append(title);
-    modal.append(element('div', 'picker-path', picker.kind === 'session'
+    const pathLine = element('div', 'picker-path', picker.kind === 'session'
       ? workspaceDirectory(workspace)
       : picker.kind === 'environment'
         ? sessionDirectory(targetSession)
-        : picker.path || picker.requestedPath || 'Choose a project folder'));
+        : picker.path || picker.requestedPath || 'Choose a project folder');
+    if (picker.kind === 'workspace' && picker.phase === 'ready' && picker.git) {
+      const badge = element('span', 'git-badge', 'git'); badge.title = 'This folder is a Git repository';
+      pathLine.append(badge);
+    }
+    modal.append(pathLine);
     if (picker.kind === 'workspace') {
       const list = element('div', 'picker-list');
       if (picker.phase === 'loading') list.append(element('div', 'state', 'Opening folder…'));
@@ -1291,7 +1314,8 @@ export class AxSessionHome extends HTMLElement {
         list.append(this.#errorState('This folder could not be opened', picker.error, 'retry-picker'));
       } else {
         if (picker.parent) list.append(this.#pickerPathRow(picker.parent, '↑', '.. (parent)'));
-        picker.dirs.forEach((directory) => list.append(this.#pickerPathRow(directory.path, '▸', directory.name)));
+        picker.dirs.forEach((directory) => list.append(
+          this.#pickerPathRow(directory.path, '▸', directory.name, directory.git === true)));
         if (!picker.parent && !picker.dirs.length) list.append(element('div', 'state', 'No subfolders. You can open this folder.'));
       }
       modal.append(list);
@@ -1302,6 +1326,14 @@ export class AxSessionHome extends HTMLElement {
       name.type = 'text'; name.dataset.field = 'workspace-name'; name.value = picker.form.workspaceName;
       name.placeholder = folderName(picker.path) || 'My workspace';
       nameRow.append(nameLabel, name, element('span', 'config-help', 'The folder path stays unchanged'));
+      if (picker.phase === 'ready' && picker.scope) {
+        const scope = element('div', `picker-scope${picker.scope.code === 'workspace_protected' ? ' protected' : ''}`,
+          picker.scope.code === 'workspace_protected'
+            ? picker.scope.message
+            : `${picker.scope.message} Opening it anyway asks you to type its name.`);
+        scope.setAttribute('role', 'status');
+        modal.append(scope);
+      }
       modal.append(nameRow);
     } else if (picker.kind === 'session') {
       const nameRow = element('div', 'config-row');
@@ -1346,7 +1378,9 @@ export class AxSessionHome extends HTMLElement {
     const selectedLatticeTeamId = picker.form.workflowId || this.#teams[0]?.id || '';
     const latticeTeamMissing = picker.kind === 'session' && picker.form.modeKind === 'lattice'
       && !this.#teams.some((team) => team.id === selectedLatticeTeamId);
+    const protectedFolder = picker.kind === 'workspace' && picker.scope?.code === 'workspace_protected';
     use.disabled = picker.busy || picker.phase !== 'ready' || !picker.path || nameMissing
+      || protectedFolder
       || (environmentKind && picker.probePending)
       || projectProbeFailureBlocksCreation
       || malformedDevcontainerBlocksCreation
@@ -1378,10 +1412,15 @@ export class AxSessionHome extends HTMLElement {
     if (restoreFocus) queueMicrotask(() => target?.isConnected && target.focus?.());
   }
 
-  #pickerPathRow(path, icon, label) {
+  #pickerPathRow(path, icon, label, git = false) {
     const row = element('button', 'picker-row'); row.type = 'button'; row.dataset.action = 'picker-navigate'; row.dataset.path = path;
     row.disabled = Boolean(this.#picker?.busy);
-    row.append(element('span', 'folder', icon), element('span', '', label)); return row;
+    row.append(element('span', 'folder', icon), element('span', '', label));
+    if (git) {
+      const badge = element('span', 'git-badge', 'git'); badge.title = 'Git repository';
+      row.append(badge); row.setAttribute('aria-label', `${label} (Git repository)`);
+    }
+    return row;
   }
 
   #pickerConfig(picker) {
@@ -1808,9 +1847,23 @@ export class AxSessionHome extends HTMLElement {
         // Reopening a known folder is selection, not an implicit rename. Only
         // send a name for a new Workspace or when the person edited the field.
         if (!existing || picker.form.workspaceNameTouched) body.name = name;
-        const workspace = await this.#request('/api/workspaces', {
+        const open = () => this.#request('/api/workspaces', {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
         });
+        let workspace;
+        try {
+          workspace = await open();
+        } catch (error) {
+          if (error?.code !== 'workspace_too_broad') throw error;
+          // The daemon refused a broad folder; only a typed confirmation of
+          // its exact name opens it.
+          if (!await this.#confirmBroadWorkspace(picker.path, String(error.message || ''))) {
+            if (this.#picker === picker) { picker.busy = false; picker.error = ''; this.#renderPicker(); }
+            return;
+          }
+          body.confirm_broad = true;
+          workspace = await open();
+        }
         if (this.#picker === picker) this.#closePicker();
         await this.refresh();
         this.selectWorkspace(workspace.id);
@@ -1867,8 +1920,49 @@ export class AxSessionHome extends HTMLElement {
       this.selectWorkspace(workspace.id);
       if (this.#navigationGeneration === navigationGeneration) this.#openSession(session, 'created');
     } catch (error) {
+      // A refused create may still have changed what the daemon lists (a
+      // Session whose environment failed); show the list as it is now.
+      await this.refresh();
       if (this.#picker !== picker) return;
       picker.busy = false; picker.error = String(error?.message || error); this.#renderPicker();
+    }
+  }
+
+  /** Ask the person to type a broad folder's name before it becomes a Workspace. */
+  async #confirmBroadWorkspace(path, reason) {
+    const expected = folderName(path) || path;
+    const typed = await this.#ask({
+      title: 'Open this folder anyway?',
+      body: `${reason}\n\nTo open ${path} as a Workspace anyway, type its name: ${expected}`,
+      label: 'Folder name', value: '', okLabel: 'Open anyway', danger: true,
+    });
+    if (typed == null) return false;
+    if (typed.trim() !== expected) {
+      this.#notify('Workspace not opened', `The name you typed is not “${expected}”.`, 'err');
+      return false;
+    }
+    return true;
+  }
+
+  /** Remove a Workspace from the list; its folder is never touched. */
+  async removeWorkspace(id) {
+    const workspace = this.workspace(id);
+    if (!workspace) return false;
+    const ok = await this.#ask({
+      kind: 'confirm', title: 'Remove this Workspace from the list?',
+      body: `“${workspace.name}” leaves the Workspace list. Nothing in ${workspaceDirectory(workspace)} is deleted, and its closed Sessions stay under All Sessions. Open the folder again to bring it back.`,
+      okLabel: 'Remove from list', danger: true,
+    });
+    if (!ok) return false;
+    try {
+      await this.#request(`/api/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      this.#notify('Workspace removed from the list', workspaceDirectory(workspace), 'ok');
+      await this.refresh();
+      return true;
+    } catch (error) {
+      this.#notify('Workspace not removed', String(error?.message || error), 'err');
+      await this.refresh();
+      return false;
     }
   }
 
@@ -1949,8 +2043,12 @@ export class AxSessionHome extends HTMLElement {
   async #request(url, options) {
     const response = await fetch(url, options);
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body?.error || `HTTP ${response.status}`);
-    if (body?.error) throw new Error(body.error);
+    if (!response.ok || body?.error) {
+      const error = new Error(body?.error || `HTTP ${response.status}`);
+      error.status = response.status;
+      if (typeof body?.code === 'string') error.code = body.code;
+      throw error;
+    }
     return body;
   }
 
@@ -1967,6 +2065,10 @@ export class AxSessionHome extends HTMLElement {
       if (action === 'open-workspace') this.openWorkspace();
       else if (action === 'new-session') this.newSession(this.#selectedWorkspaceId);
       else if (action === 'rename-workspace') void this.renameWorkspace(actionElement.dataset.workspaceId);
+      else if (action === 'workspace-menu') {
+        const box = actionElement.getBoundingClientRect();
+        this.#showMenu('workspace', actionElement.dataset.workspaceId, box.left, box.bottom + 2);
+      }
       else if (action === 'back') this.#goBack();
       else if (action === 'forward') this.#goForward();
       else if (action === 'up') this.#goUp();

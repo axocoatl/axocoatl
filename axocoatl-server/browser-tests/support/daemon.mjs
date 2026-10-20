@@ -12,7 +12,7 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -348,11 +348,18 @@ export async function launchTestDaemon({
   helpers = [],
   extraAgents = [],
   workflows = [],
+  // A fixture home folder (`runRoot/home`) for the daemon's HOME, so a
+  // journey through the folder picker never lists the real one.
+  home = false,
+  // Extra environment for the daemon (for example a PATH with fake tools).
+  env = {},
   port: requestedPort = Number(process.env.AXOCOATL_E2E_PORT) || 0,
 } = {}) {
   const runRoot = await mkdtemp(path.join(tmpdir(), 'axocoatl-browser-e2e-'));
   const dataDirectory = path.join(runRoot, 'data');
   const projectsDirectory = path.join(runRoot, 'projects');
+  const homeDirectory = home ? path.join(runRoot, 'home') : null;
+  if (homeDirectory) await mkdir(homeDirectory, { recursive: true });
   if (!nativeDataRoot) {
     await mkdir(dataDirectory, { recursive: true });
     // A legacy (1.0-format) root is one a daemon already owned: its format
@@ -377,8 +384,10 @@ export async function launchTestDaemon({
   const baseUrl = `http://127.0.0.1:${port}`;
   const configPath = path.join(runRoot, 'axocoatl.e2e.yaml');
   // The daemon runs in runRoot with a relative socket path, so the Unix
-  // socket stays below SUN_LEN however long TMPDIR is.
-  const socketPath = './axocoatl.sock';
+  // socket stays below SUN_LEN however long TMPDIR is. The socket's directory
+  // is one of Axocoatl's own; it holds nothing else, so the fixture projects
+  // beside it can be Workspaces.
+  const socketPath = './run/axocoatl.sock';
   const binary = process.env.AXOCOATL_E2E_BINARY
     ? path.resolve(process.env.AXOCOATL_E2E_BINARY)
     : path.join(REPOSITORY_ROOT, 'target', 'debug', 'axocoatl');
@@ -455,6 +464,14 @@ consolidation:
       cwd: runRoot,
       env: {
         ...process.env,
+        // Podman finds its machine connection and storage through the
+        // XDG directories, which stay the real ones.
+        ...(homeDirectory ? {
+          HOME: homeDirectory,
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config'),
+          XDG_DATA_HOME: process.env.XDG_DATA_HOME || path.join(homedir(), '.local', 'share'),
+        } : {}),
+        ...env,
         AXOCOATL_DATA_DIR: dataDirectory,
         AXOCOATL_SOCKET_PATH: socketPath,
         RUST_LOG: process.env.AXOCOATL_E2E_RUST_LOG || 'warn',
@@ -486,6 +503,8 @@ consolidation:
     return {
       baseUrl,
       runRoot,
+      homeDirectory: homeDirectory ? await realpath(homeDirectory) : null,
+      projectsDirectory: await realpath(projectsDirectory),
       fixtures,
       logs,
       get token() { return token; },
@@ -583,4 +602,24 @@ export async function resolveChromiumExecutable() {
   } catch {
     return undefined;
   }
+}
+
+// The browser engines a journey runs in: Chromium always, and WebKit (the
+// Safari engine, the default browser on a Mac) when Playwright's WebKit is
+// installed. With AXOCOATL_E2E_WEBKIT=1 a missing WebKit is a failure rather
+// than a skip, so the release gate cannot pass on Chromium alone.
+export async function browserEngines() {
+  const { chromium, webkit } = await import('playwright');
+  const executablePath = await resolveChromiumExecutable();
+  const engines = [{
+    name: 'chromium',
+    launch: () => chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) }),
+  }];
+  let webkitInstalled = false;
+  try { await access(webkit.executablePath()); webkitInstalled = true; } catch {}
+  if (process.env.AXOCOATL_E2E_WEBKIT === '1' && !webkitInstalled) {
+    throw new Error('AXOCOATL_E2E_WEBKIT=1 but Playwright WebKit is not installed; run `npx playwright install webkit`.');
+  }
+  if (webkitInstalled) engines.push({ name: 'webkit', launch: () => webkit.launch({ headless: true }) });
+  return engines;
 }

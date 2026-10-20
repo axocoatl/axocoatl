@@ -1150,6 +1150,31 @@ fn write_user_configuration(
     Ok(())
 }
 
+/// Tell the daemon which configuration file it loaded. The per-user file's
+/// directory is Axocoatl's own: it is never a Workspace and stays hidden from
+/// Sessions. A project's own file, loaded by explicit path, only warns.
+fn remember_config_path(daemon: &axocoatl_daemon::AxocoatlDaemon, config_path: &std::path::Path) {
+    if is_user_config_path(config_path) {
+        daemon.set_user_config_path(config_path);
+    } else {
+        daemon.set_config_path(config_path);
+    }
+}
+
+/// Whether `config_path` is the per-user configuration file.
+fn is_user_config_path(config_path: &std::path::Path) -> bool {
+    let Ok(user_paths) = user_paths::UserPaths::discover() else {
+        return false;
+    };
+    match (
+        std::fs::canonicalize(config_path),
+        std::fs::canonicalize(&user_paths.config_path),
+    ) {
+        (Ok(loaded), Ok(user)) => loaded == user,
+        _ => config_path == user_paths.config_path,
+    }
+}
+
 fn default_data_dir_for_config(config_path: &std::path::Path) -> PathBuf {
     if let Ok(user_paths) = user_paths::UserPaths::discover() {
         if config_path == user_paths.config_path {
@@ -2434,7 +2459,7 @@ async fn cmd_dev(config_path: &std::path::Path) {
     let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap(config).await {
         Ok(d) => {
             println!("  Runtime: {} agents spawned", d.agent_count().await);
-            d.set_config_path(config_path);
+            remember_config_path(&d, config_path);
             d
         }
         Err(e) => {
@@ -2509,7 +2534,7 @@ async fn cmd_serve(config_path: &std::path::Path) {
         }
     };
     // A Session whose Workspace holds this file warns that Agents can read it.
-    daemon.set_config_path(config_path);
+    remember_config_path(&daemon, config_path);
 
     println!("Axocoatl server starting on {host}:{port}");
 
@@ -5060,6 +5085,15 @@ mod tests {
             default_data_dir_for_config(std::path::Path::new("/tmp/project/axocoatl.yaml")),
             PathBuf::from("/tmp/project/data")
         );
+    }
+
+    #[test]
+    fn only_the_per_user_config_protects_its_directory() {
+        let paths = user_paths::UserPaths::discover().unwrap();
+        assert!(is_user_config_path(&paths.config_path));
+        assert!(!is_user_config_path(std::path::Path::new(
+            "/tmp/project/axocoatl.yaml"
+        )));
     }
 
     #[test]

@@ -1488,6 +1488,12 @@ pub struct CreateWorkspaceBody {
     /// existing custom name when the canonical path is already registered.
     #[serde(default)]
     pub name: Option<String>,
+    /// The person confirmed a folder the daemon refused as too broad
+    /// (`workspace_too_broad`): the home folder, a folder above it, or one
+    /// that contains Axocoatl's own directories. It never opens one of
+    /// Axocoatl's own directories (`workspace_protected`).
+    #[serde(default)]
+    pub confirm_broad: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -1502,17 +1508,37 @@ pub async fn list_workspaces(
     Json(state.read().await.list_workspaces().await)
 }
 
+/// `POST /api/workspaces`: open a folder as a Workspace. A folder that is
+/// too broad is a 409 with the code `workspace_too_broad` until the request
+/// carries `confirm_broad: true`; one of Axocoatl's own directories is a 409
+/// with `workspace_protected`.
 pub async fn create_workspace(
     State(state): State<AppState>,
     Json(body): Json<CreateWorkspaceBody>,
-) -> Result<Json<axocoatl_session::Workspace>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<axocoatl_session::Workspace>, CodedRouteError> {
     state
         .read()
         .await
-        .create_workspace(&body.path, body.name.as_deref())
+        .open_workspace(&body.path, body.name.as_deref(), body.confirm_broad)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
+}
+
+/// `DELETE /api/workspaces/{id}`: remove a Workspace from the list. Its
+/// folder is never touched. A Workspace with open Sessions is a 409 with the
+/// code `workspace_has_open_sessions`.
+pub async fn remove_workspace(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<axocoatl_session::Workspace>, CodedRouteError> {
+    state
+        .read()
+        .await
+        .remove_workspace(&id)
+        .await
+        .map(Json)
+        .map_err(coded_err)
 }
 
 pub async fn get_workspace(
@@ -1685,7 +1711,10 @@ pub async fn get_session(
 /// Workspace, the answer is a `409` with the code `workspace_busy` at once,
 /// naming that Session, its loadout run and its turn, and no Session is
 /// created; another operation of the Workspace is waited for up to ten
-/// seconds first. Any other refusal is a `400`.
+/// seconds first. A folder too broad for a Workspace that was never opened
+/// with Open workspace… is a `409` with the code `workspace_too_broad`, and
+/// one of Axocoatl's own directories a `409` with `workspace_protected`.
+/// Any other refusal is a `400`.
 pub async fn create_session(
     State(state): State<AppState>,
     Json(body): Json<CreateSessionBody>,
@@ -1716,7 +1745,8 @@ pub async fn create_session(
         .await
         .map(Json)
         .map_err(|error| match error {
-            error @ axocoatl_daemon::DaemonError::WorkspaceBusy(_) => coded_err(error),
+            error @ (axocoatl_daemon::DaemonError::WorkspaceBusy(_)
+            | axocoatl_daemon::DaemonError::WorkspaceRefused { .. }) => coded_err(error),
             other => uncoded(err(StatusCode::BAD_REQUEST, other.to_string())),
         })
 }
@@ -2749,7 +2779,8 @@ fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorRe
     let status = match &error {
         axocoatl_daemon::DaemonError::AttemptConflict(_)
         | axocoatl_daemon::DaemonError::SessionConflict(_)
-        | axocoatl_daemon::DaemonError::WorkspaceBusy(_) => StatusCode::CONFLICT,
+        | axocoatl_daemon::DaemonError::WorkspaceBusy(_)
+        | axocoatl_daemon::DaemonError::WorkspaceRefused { .. } => StatusCode::CONFLICT,
         axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::UNPROCESSABLE_ENTITY,
         axocoatl_daemon::DaemonError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
         axocoatl_daemon::DaemonError::NotFound(_) => StatusCode::NOT_FOUND,
@@ -2765,7 +2796,10 @@ fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorRe
 
 /// An error body with a machine-readable `code` when the refusal has one:
 /// `{"error": "…", "code": "workspace_busy"}` for a Workspace that another
-/// run, Session turn or operation holds (409; retry later).
+/// run, Session turn or operation holds (409; retry later), and the 409s of
+/// Workspace scope: `workspace_too_broad` (open it only with
+/// `confirm_broad: true`), `workspace_protected` (never) and
+/// `workspace_has_open_sessions` (close them first).
 #[derive(Serialize)]
 pub struct CodedErrorResponse {
     pub error: String,
@@ -2775,12 +2809,11 @@ pub struct CodedErrorResponse {
 
 pub type CodedRouteError = (StatusCode, Json<CodedErrorResponse>);
 
-/// [`attempt_err`]'s statuses, with the `workspace_busy` code on a busy
-/// Workspace, so a client can tell "retry later" from any other conflict.
+/// [`attempt_err`]'s statuses, with the error's code (`workspace_busy` on a
+/// busy Workspace), so a client can tell "retry later" from any other
+/// conflict.
 pub(crate) fn coded_err(error: axocoatl_daemon::DaemonError) -> CodedRouteError {
-    let code = error
-        .is_workspace_busy()
-        .then_some(axocoatl_daemon::WORKSPACE_BUSY_CODE);
+    let code = error.code();
     let (status, Json(ErrorResponse { error })) = attempt_err(error);
     (status, Json(CodedErrorResponse { error, code }))
 }
@@ -4720,6 +4753,16 @@ pub struct FsListQuery {
 pub struct FsDirEntry {
     pub name: String,
     pub path: String,
+    /// The folder is a Git repository (it has a `.git` entry).
+    pub git: bool,
+}
+
+/// Why the listed folder cannot simply be opened as a Workspace, with the
+/// code `POST /api/workspaces` would answer.
+#[derive(Serialize)]
+pub struct FsWorkspaceScope {
+    pub code: &'static str,
+    pub message: String,
 }
 
 #[derive(Serialize)]
@@ -4727,6 +4770,20 @@ pub struct FsListResponse {
     pub path: String,
     pub parent: Option<String>,
     pub dirs: Vec<FsDirEntry>,
+    /// The listed folder itself is a Git repository.
+    pub git: bool,
+    /// Present when opening the listed folder as a Workspace would be
+    /// refused: `workspace_too_broad` (confirmation needed) or
+    /// `workspace_protected` (never).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_scope: Option<FsWorkspaceScope>,
+}
+
+/// Whether `directory` is a Git repository: it has a `.git` directory or a
+/// `.git` file (a worktree or submodule link). Never follows anything else.
+fn is_git_repository(directory: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(directory.join(".git"))
+        .is_ok_and(|metadata| metadata.is_dir() || metadata.is_file())
 }
 
 fn err(status: StatusCode, msg: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
@@ -4734,7 +4791,10 @@ fn err(status: StatusCode, msg: impl Into<String>) -> (StatusCode, Json<ErrorRes
 }
 
 /// List the subdirectories of a path — backs the folder picker. Read-only.
+/// Each folder says whether it is a Git repository, and the listed folder
+/// says whether it could be opened as a Workspace as it is.
 pub async fn fs_list_dirs(
+    State(state): State<AppState>,
     Query(q): Query<FsListQuery>,
 ) -> Result<Json<FsListResponse>, (StatusCode, Json<ErrorResponse>)> {
     let raw = q
@@ -4764,15 +4824,31 @@ pub async fn fs_list_dirs(
             }
             dirs.push(FsDirEntry {
                 name,
+                git: is_git_repository(&p),
                 path: p.to_string_lossy().to_string(),
             });
         }
     }
     dirs.sort_by_key(|a| a.name.to_lowercase());
+    let workspace_scope = match state.read().await.workspace_scope().check(&dir) {
+        Ok(()) => None,
+        Err(axocoatl_session::WorkspaceScopeRefusal::Broad(message)) => Some(FsWorkspaceScope {
+            code: axocoatl_daemon::WORKSPACE_TOO_BROAD_CODE,
+            message,
+        }),
+        Err(axocoatl_session::WorkspaceScopeRefusal::Protected(message)) => {
+            Some(FsWorkspaceScope {
+                code: axocoatl_daemon::WORKSPACE_PROTECTED_CODE,
+                message,
+            })
+        }
+    };
     Ok(Json(FsListResponse {
+        git: is_git_repository(&dir),
         path: dir.to_string_lossy().to_string(),
         parent: dir.parent().map(|p| p.to_string_lossy().to_string()),
         dirs,
+        workspace_scope,
     }))
 }
 

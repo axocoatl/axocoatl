@@ -2,6 +2,20 @@
 /// another run, Session turn or operation holds the Workspace; retry later.
 pub const WORKSPACE_BUSY_CODE: &str = "workspace_busy";
 
+/// The `code` of an HTTP 409 for a folder too broad to open as a Workspace
+/// without the person's explicit confirmation (`confirm_broad`): the file
+/// system root, the home folder and the folders above it, or a folder that
+/// contains one of Axocoatl's own directories.
+pub const WORKSPACE_TOO_BROAD_CODE: &str = "workspace_too_broad";
+
+/// The `code` of an HTTP 409 for a folder inside one of Axocoatl's own
+/// directories. No confirmation opens it.
+pub const WORKSPACE_PROTECTED_CODE: &str = "workspace_protected";
+
+/// The `code` of an HTTP 409 for removing a Workspace that still has open
+/// Sessions.
+pub const WORKSPACE_HAS_OPEN_SESSIONS_CODE: &str = "workspace_has_open_sessions";
+
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error("Configuration error: {0}")]
@@ -59,6 +73,13 @@ pub enum DaemonError {
     /// `workspace_busy`, and `axocoatl run` exits 7 (`exit_code::BUSY`).
     #[error("Workspace busy: {0}")]
     WorkspaceBusy(String),
+
+    /// A Workspace request refused for what the folder is, not for what is
+    /// happening in it: a folder too broad to open without confirmation, one
+    /// of Axocoatl's own directories, or a Workspace whose Sessions are still
+    /// open. Nothing was changed. The HTTP boundary returns 409 with `code`.
+    #[error("{message}")]
+    WorkspaceRefused { code: &'static str, message: String },
 
     /// An idempotent resend attached to the exact turn that is already live.
     /// This is a non-terminal dispatch disposition; the daemon intentionally
@@ -138,6 +159,16 @@ impl DaemonError {
     /// run, Session turn or operation (retry later).
     pub fn is_workspace_busy(&self) -> bool {
         matches!(self, Self::WorkspaceBusy(_))
+    }
+
+    /// The machine-readable `code` an HTTP refusal of this error carries,
+    /// when it has one.
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            Self::WorkspaceBusy(_) => Some(WORKSPACE_BUSY_CODE),
+            Self::WorkspaceRefused { code, .. } => Some(code),
+            _ => None,
+        }
     }
 
     pub fn session_token_usage(&self) -> Option<(&axocoatl_core::TokenUsageStats, bool)> {

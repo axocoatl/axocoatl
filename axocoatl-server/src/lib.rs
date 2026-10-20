@@ -125,7 +125,9 @@ pub fn build_router(
         )
         .route(
             "/api/workspaces/{id}",
-            get(routes::get_workspace).patch(routes::rename_workspace),
+            get(routes::get_workspace)
+                .patch(routes::rename_workspace)
+                .delete(routes::remove_workspace),
         )
         .route(
             "/api/workspaces/{id}/sessions",
@@ -935,6 +937,9 @@ async fn wait_for_shutdown_request(state: AppState) {
 
 #[cfg(all(test, unix))]
 mod missing_workspace_tests;
+
+#[cfg(all(test, unix))]
+mod workspace_scope_tests;
 
 #[cfg(test)]
 mod tests {

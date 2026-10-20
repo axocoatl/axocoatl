@@ -101,13 +101,16 @@ use axocoatl_session::{
     SessionRuntimeRecoveryRecord, SessionSetupResult, SessionStore, SessionTranscriptMessage,
     SessionTranscriptRole, SessionTurn, SessionTurnContextReference, SessionTurnLifecycle,
     SessionTurnSearchHit, SessionTurnStore, TransitionSessionTurn, TurnContextScope, Workspace,
-    WorkspaceStore,
+    WorkspaceScope, WorkspaceScopeRefusal, WorkspaceStore,
 };
 use axocoatl_token::{ApproximateCounter, TokenCounter};
 use axocoatl_tools::ToolExecutor;
 use ractor::Actor;
 
-use crate::error::DaemonError;
+use crate::error::{
+    DaemonError, WORKSPACE_HAS_OPEN_SESSIONS_CODE, WORKSPACE_PROTECTED_CODE,
+    WORKSPACE_TOO_BROAD_CODE,
+};
 use crate::scheduler::ScheduleTable;
 
 /// Active E2B lease window. Live handles refresh this TTL; auto-pause preserves
@@ -3706,6 +3709,12 @@ pub struct AxocoatlDaemon {
     /// The configuration file this daemon loaded, canonical, once the CLI
     /// has said which one it was.
     config_path: StdMutex<Option<std::path::PathBuf>>,
+    /// The per-user configuration directory, canonical, when the CLI loaded
+    /// the per-user configuration file in it. It is one of Axocoatl's own
+    /// directories: never a Workspace, and hidden from a Session whose
+    /// Workspace contains it. A project's own configuration file, loaded by
+    /// explicit path, leaves this empty and keeps the warning instead.
+    user_config_dir: StdMutex<Option<std::path::PathBuf>>,
     /// `web_search` and `web_fetch`, and the managed SearXNG behind search.
     web_tools: Arc<crate::session_dispatch_web::WebTools>,
     /// The browser tools' runtime, present when `browser:` is configured.
@@ -5555,6 +5564,7 @@ impl AxocoatlDaemon {
             egress_points,
             loadout_runs: Arc::new(loadout_runs::LoadoutRuns::open(&secure_data_dir_for_runs)),
             config_path: StdMutex::new(None),
+            user_config_dir: StdMutex::new(None),
             session_network_evidence: Arc::new(
                 crate::session_network_evidence::NetworkEvidenceIndex::default(),
             ),
@@ -6358,6 +6368,117 @@ impl AxocoatlDaemon {
         self.register_workspace(path, name).await
     }
 
+    /// Open a folder as a Workspace at a person's request (Open workspace).
+    /// A folder too broad to be a Workspace (the file system root, the home
+    /// folder and the folders above it, a folder that contains one of
+    /// Axocoatl's own directories) is refused with the code
+    /// [`WORKSPACE_TOO_BROAD_CODE`] unless the person confirmed it
+    /// (`confirm_broad`); one of Axocoatl's own directories, or a folder
+    /// inside one, is refused with [`WORKSPACE_PROTECTED_CODE`] always.
+    pub async fn open_workspace(
+        &self,
+        path: &str,
+        name: Option<&str>,
+        confirm_broad: bool,
+    ) -> Result<Workspace, DaemonError> {
+        self.check_workspace_scope(path, confirm_broad)?;
+        self.register_workspace(path, name).await
+    }
+
+    /// Refuse `path` as a Workspace when [`Self::workspace_scope`] does; a
+    /// broad folder passes once the person confirmed it. A path that does
+    /// not resolve is left to registration, which names it.
+    fn check_workspace_scope(&self, path: &str, confirm_broad: bool) -> Result<(), DaemonError> {
+        let Ok(canonical) = std::fs::canonicalize(path) else {
+            return Ok(());
+        };
+        match self.workspace_scope().check(&canonical) {
+            Ok(()) => Ok(()),
+            Err(WorkspaceScopeRefusal::Broad(_)) if confirm_broad => {
+                tracing::warn!(
+                    path = %canonical.display(),
+                    "a broad folder was opened as a Workspace after the person confirmed it"
+                );
+                Ok(())
+            }
+            Err(WorkspaceScopeRefusal::Broad(message)) => Err(DaemonError::WorkspaceRefused {
+                code: WORKSPACE_TOO_BROAD_CODE,
+                message,
+            }),
+            Err(WorkspaceScopeRefusal::Protected(message)) => Err(DaemonError::WorkspaceRefused {
+                code: WORKSPACE_PROTECTED_CODE,
+                message,
+            }),
+        }
+    }
+
+    /// Remove Workspace `id` from the list. Its folder is never touched. A
+    /// Workspace with a Session that is not closed is refused with the code
+    /// [`WORKSPACE_HAS_OPEN_SESSIONS_CODE`]. Its closed Sessions stay
+    /// reviewable among all Sessions; on a 1.0-format data root, whose
+    /// startup would make the Workspace again for them, they refuse too.
+    pub async fn remove_workspace(&self, id: &str) -> Result<Workspace, DaemonError> {
+        if self.get_workspace(id).await.is_none() {
+            return Err(DaemonError::NotFound(format!("workspace '{id}' not found")));
+        }
+        let _operation = self
+            .take_lifecycle_workspace_operation(
+                id,
+                workspace_operation::WorkspaceRequest {
+                    doing: "a Workspace being removed from the list".into(),
+                    refused: "The Workspace was not removed".into(),
+                },
+            )
+            .await?;
+        let sessions = self.session_store.lock().await.list_for_workspace(id);
+        let open = sessions
+            .iter()
+            .filter(|session| session.status != axocoatl_session::SessionStatus::Closed)
+            .count();
+        let legacy = matches!(
+            &self._data_dir_lease.ownership,
+            axocoatl_session::execution_ownership::DataRootFormatOwnership::Legacy(_)
+        );
+        if open > 0 {
+            return Err(DaemonError::WorkspaceRefused {
+                code: WORKSPACE_HAS_OPEN_SESSIONS_CODE,
+                message: format!(
+                    "This Workspace has {open} open {}. Close {} first; removing a Workspace \
+                     never deletes its folder.",
+                    if open == 1 { "Session" } else { "Sessions" },
+                    if open == 1 { "it" } else { "them" },
+                ),
+            });
+        }
+        if legacy && !sessions.is_empty() {
+            return Err(DaemonError::WorkspaceRefused {
+                code: WORKSPACE_HAS_OPEN_SESSIONS_CODE,
+                message: format!(
+                    "This Workspace has {} closed {} in a 1.0-format data directory, which \
+                     would list the Workspace again at the next start. Delete {} first, or run \
+                     `axocoatl session upgrade`.",
+                    sessions.len(),
+                    if sessions.len() == 1 {
+                        "Session"
+                    } else {
+                        "Sessions"
+                    },
+                    if sessions.len() == 1 { "it" } else { "them" },
+                ),
+            });
+        }
+        if let Some((owner, set_id)) = self.unresolved_attempt_owner_for_workspace_id(id).await? {
+            return Err(DaemonError::AttemptConflict(format!(
+                "attempt set '{set_id}' in session '{owner}' owns this Workspace; keep or discard it before removing the Workspace"
+            )));
+        }
+        self.workspace_store
+            .lock()
+            .await
+            .remove(id)
+            .map_err(|error| DaemonError::Session(error.to_string()))
+    }
+
     /// Register `path` and mark its Workspace active. A Workspace whose
     /// directory was moved to `path` moves with it (see
     /// [`WorkspaceStore::register_reporting_move`]); its Sessions keep the
@@ -6489,6 +6610,19 @@ impl AxocoatlDaemon {
         setup_reviewed: bool,
     ) -> Result<Session, DaemonError> {
         validate_session_mode(&self.config, &mode)?;
+        // This path names its folder directly. A folder already opened as a
+        // Workspace was accepted then, after confirmation when it is broad;
+        // any other broad folder must be opened with Open workspace… first.
+        let registered = match std::fs::canonicalize(working_dir) {
+            Ok(canonical) => self
+                .workspace_store
+                .lock()
+                .await
+                .get_by_path(&canonical)
+                .is_some(),
+            Err(_) => false,
+        };
+        self.check_workspace_scope(working_dir, registered)?;
         let workspace = self.register_workspace(working_dir, None).await?;
         // A lifecycle action never waits for the Workspace: a busy one
         // refuses at once, naming who holds it.
@@ -8715,11 +8849,7 @@ impl AxocoatlDaemon {
                     require_resource_limits: sc.require_resource_limits,
                     passive_start: false,
                     runtime_authority: Some(self.local_runtime_authority.clone()),
-                    control_plane_dirs: vec![
-                        self.data_root.path().to_path_buf(),
-                        self._data_dir_lease.external_root().path().to_path_buf(),
-                        self.ipc_root.path().to_path_buf(),
-                    ],
+                    control_plane_dirs: self.control_plane_dir_paths(),
                     control_plane_roots: vec![
                         self.data_root.clone(),
                         self._data_dir_lease.external_root().clone(),
@@ -9975,11 +10105,7 @@ impl AxocoatlDaemon {
             require_resource_limits: config.require_resource_limits,
             passive_start: true,
             runtime_authority: Some(self.local_runtime_authority.clone()),
-            control_plane_dirs: vec![
-                self.data_root.path().to_path_buf(),
-                self._data_dir_lease.external_root().path().to_path_buf(),
-                self.ipc_root.path().to_path_buf(),
-            ],
+            control_plane_dirs: self.control_plane_dir_paths(),
             control_plane_roots: vec![
                 self.data_root.clone(),
                 self._data_dir_lease.external_root().clone(),
@@ -11177,6 +11303,63 @@ impl AxocoatlDaemon {
                 tracing::warn!(path = %path.display(), %error, "resolving the configuration file's path failed");
             }
         }
+    }
+
+    /// [`Self::set_config_path`] for the per-user configuration file (not a
+    /// project's own file loaded by explicit path): its directory is also
+    /// one of Axocoatl's own directories from now on. See
+    /// [`Self::control_plane_dir_paths`] and [`Self::workspace_scope`].
+    pub fn set_user_config_path(&self, path: &std::path::Path) {
+        self.set_config_path(path);
+        let directory = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .and_then(|parent| std::fs::canonicalize(parent).ok());
+        *self
+            .user_config_dir
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = directory;
+    }
+
+    /// The per-user configuration directory, when this daemon loaded the
+    /// per-user configuration file.
+    pub(crate) fn user_config_dir(&self) -> Option<std::path::PathBuf> {
+        self.user_config_dir
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    /// The host directories that hold this daemon's own state. A Session
+    /// sandbox hides each one below its Workspace and refuses a Workspace at
+    /// or below one.
+    pub fn control_plane_dir_paths(&self) -> Vec<std::path::PathBuf> {
+        let mut directories = vec![
+            self.data_root.path().to_path_buf(),
+            self._data_dir_lease.external_root().path().to_path_buf(),
+            self.ipc_root.path().to_path_buf(),
+        ];
+        directories.extend(self.user_config_dir());
+        directories
+    }
+
+    /// Which folders may be opened as a Workspace without the person's
+    /// explicit confirmation (see [`WorkspaceScope`]).
+    pub fn workspace_scope(&self) -> WorkspaceScope {
+        let home = std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(std::path::PathBuf::from);
+        let mut scope = WorkspaceScope::new(home.as_deref())
+            .protect("data directory", self.data_root.path())
+            .protect(
+                "lease directory",
+                self._data_dir_lease.external_root().path(),
+            )
+            .protect("control socket directory", self.ipc_root.path());
+        if let Some(config_dir) = self.user_config_dir() {
+            scope = scope.protect("configuration directory", &config_dir);
+        }
+        scope
     }
 
     /// The warning for a Session whose Workspace contains this daemon's
@@ -14216,11 +14399,7 @@ trap - 0 1 2 15
             require_resource_limits: config.require_resource_limits,
             passive_start: false,
             runtime_authority: Some(self.local_runtime_authority.clone()),
-            control_plane_dirs: vec![
-                self.data_root.path().to_path_buf(),
-                self._data_dir_lease.external_root().path().to_path_buf(),
-                self.ipc_root.path().to_path_buf(),
-            ],
+            control_plane_dirs: self.control_plane_dir_paths(),
             control_plane_roots: vec![
                 self.data_root.clone(),
                 self._data_dir_lease.external_root().clone(),
