@@ -612,3 +612,62 @@ async fn an_ollama_at_another_address_can_be_entered() {
     );
     assert_eq!(o.facts.ollama_url, ollama.url());
 }
+
+/// I3, doctor's side: a configured model that is not pulled and is too
+/// large for this computer gets the fix onboarding gives (choose another),
+/// never `ollama pull`; on a computer it fits, the pull.
+#[cfg(unix)]
+#[tokio::test]
+async fn doctor_does_not_tell_a_small_computer_to_pull_a_model_too_large_for_it() {
+    let shims = Shims::new();
+    let ollama = FakeOllama::start("0.40.6", shims.home.path(), shims.dir.path(), &[]).await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    let config_path = shims.home.path().join("config.yaml");
+    let text = config::render(&config::ConfigPlan {
+        ollama_base_url: Some(ollama.url()),
+        openrouter_key: None,
+        lead: config::ModelRef::new(config::Provider::Ollama, "qwen3-coder:30b"),
+        reviewer: config::ModelRef::new(config::Provider::Ollama, "gpt-oss:20b"),
+        run_writer: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "qwen3-coder:30b",
+        )),
+        run_reviewer: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "gpt-oss:20b",
+        )),
+        port: free_port(),
+        note: "local Ollama setup".into(),
+        writer: "ollama",
+        codex_credential: None,
+    });
+    std::fs::write(&config_path, text).unwrap();
+    for gb in [12, 48] {
+        let mut env = doctor_env(&shims);
+        env.memory_bytes = Some(gb * GIB);
+        let report = crate::doctor::collect(&config_path, &env).await;
+        let item = report
+            .sections
+            .models
+            .iter()
+            .find(|item| item.name == "Model qwen3-coder:30b")
+            .unwrap_or_else(|| panic!("{:?}", report.sections.models));
+        assert_eq!(item.status, crate::doctor::Status::Fail);
+        let fix = item.fix.clone().unwrap_or_default();
+        if gb == 12 {
+            assert_eq!(
+                item.detail,
+                "qwen3-coder:30b is not pulled, and at 18.6 GB it is too large for this \
+                 computer's 12 GB"
+            );
+            assert!(fix.contains("axocoatl onboard --update"), "{fix}");
+            assert!(!fix.contains("ollama pull"), "{fix}");
+        } else {
+            assert_eq!(item.detail, "qwen3-coder:30b is not pulled");
+            assert!(
+                fix.contains("ollama pull qwen3-coder:30b (18.6 GB)"),
+                "{fix}"
+            );
+        }
+    }
+}

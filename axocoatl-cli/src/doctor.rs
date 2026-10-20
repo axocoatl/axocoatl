@@ -1164,20 +1164,42 @@ async fn check_ollama(
             .find(|candidate| candidate.name() == model)
             .map(|candidate| candidate.size_bytes());
         if !ollama_setup::is_installed(model, &installed) {
-            let size = ollama_setup::known_size(model)
+            let known = ollama_setup::known_size(model);
+            let size = known
                 .map(|size| format!(" ({})", ollama_setup::size_text(size)))
                 .unwrap_or_default();
-            // Another tag of the same model does not count (Ollama reads an
-            // untagged name as `:latest`): the hint names it exactly.
-            items.push(Item::fail(
-                &name,
-                format!("{model} is not pulled"),
-                ollama_setup::not_pulled_hint(
-                    model,
-                    &format!("ollama pull {model}{size}"),
-                    &installed,
+            let too_large = match (known, env.memory_bytes) {
+                (Some(size), Some(memory)) if !ollama_setup::fits_memory(size, memory) => Some((
+                    ollama_setup::size_text(size),
+                    axocoatl_isolation::host::memory_gb(memory),
+                )),
+                _ => None,
+            };
+            // A pull would not help a model too large for this computer:
+            // the fix is the one onboarding gives for it.
+            items.push(match too_large {
+                Some((size, gb)) => Item::fail(
+                    &name,
+                    format!(
+                        "{model} is not pulled, and at {size} it is too large for this \
+                         computer's {gb} GB"
+                    ),
+                    "Choose a smaller model (`axocoatl onboard --update`), or use OpenRouter for it \
+                     (`axocoatl onboard --update --writer openrouter`)",
                 ),
-            ));
+                // Another tag of the same model does not count (Ollama
+                // reads an untagged name as `:latest`): the hint names it
+                // exactly.
+                None => Item::fail(
+                    &name,
+                    format!("{model} is not pulled"),
+                    ollama_setup::not_pulled_hint(
+                        model,
+                        &format!("ollama pull {model}{size}"),
+                        &installed,
+                    ),
+                ),
+            });
             states.insert(
                 model.clone(),
                 ModelState {
