@@ -31,8 +31,13 @@ harness reads that file and registers the daemon for the test process:
   unless the caller set a credential, and the `/` redirect from `127.0.0.1` to
   `localhost` is followed with the header kept;
 - `newAuthorizedContext(browser, options)` (or `authorizeContext(context)`)
-  adds the `axocoatl-token-<port>` cookie for `localhost` and `127.0.0.1`,
-  exactly as the sign-in link would;
+  adds the `axocoatl-token-<port>` cookie and the secret-free
+  `axocoatl-token-<port>-signed-in` cookie for `localhost` and `127.0.0.1`,
+  exactly as the sign-in link would. In WebKit a journey that opens `/` at
+  `127.0.0.1` then passes the daemon's one same-origin retry page (Safari
+  leaves the Strict cookie off the redirect to `localhost`), so wait for the
+  workbench (`waitForFunction`, a locator) rather than reading the page right
+  after `goto`;
 - Node `WebSocket` clients pass the header explicitly with `runtime.token`.
 
 `runtime.fetchWithoutToken`, `runtime.signInUrl`, and a plain

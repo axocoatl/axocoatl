@@ -134,8 +134,10 @@ function unregisterDaemon(port) {
   if (authorizedDaemons.size === 0) globalThis.fetch = unauthenticatedFetch;
 }
 
-// Give a Playwright context the sign-in cookie of every daemon running in this
-// process, exactly as `/?token=` would set it. Component-mode runtimes
+// Give a Playwright context the sign-in cookies of every daemon running in
+// this process, exactly as `/?token=` would set them: the token cookie and the
+// secret-free "signed in" cookie, with which `/` gets Safari (WebKit) past the
+// `127.0.0.1` -> `localhost` redirect. Component-mode runtimes
 // (AXOCOATL_COMPONENT_BASE_URL) register nothing, so this is then a no-op.
 export async function authorizeContext(context) {
   const cookies = [];
@@ -147,6 +149,12 @@ export async function authorizeContext(context) {
         url: `http://${host}:${port}/`,
         httpOnly: true,
         sameSite: 'Strict',
+      }, {
+        name: `axocoatl-token-${port}-signed-in`,
+        value: '1',
+        url: `http://${host}:${port}/`,
+        httpOnly: true,
+        sameSite: 'Lax',
       });
     }
   }

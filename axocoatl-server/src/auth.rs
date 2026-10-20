@@ -10,9 +10,11 @@
 //!   `allow_unauthenticated`): the daemon keeps one random secret in
 //!   `<data root>/local-api-token`. Scripts send it in either header. A browser
 //!   signs in once by opening `/?token=<secret>`, which sets an HttpOnly,
-//!   SameSite=Strict cookie. Health, static assets and the dashboard shell's
-//!   sign-in page are public; every route that reads or changes state needs
-//!   the secret.
+//!   SameSite=Strict cookie, and a secret-free SameSite=Lax "signed in"
+//!   cookie that lets Safari reach the workbench from a `127.0.0.1` address
+//!   (see `same_origin_retry_page`). Health, static assets and the dashboard
+//!   shell's sign-in page are public; every route that reads or changes state
+//!   needs the secret.
 
 use axocoatl_config::SecretString;
 use axocoatl_core::{SecureDir, SecureLeaf};
@@ -40,12 +42,19 @@ const LOCAL_TOKEN_MIN_LEN: usize = 43;
 const LOCAL_TOKEN_MAX_FILE_BYTES: usize = 256;
 const LOCAL_TOKEN_COOKIE_MAX_AGE_SECS: u64 = 30 * 24 * 60 * 60;
 
+/// Suffix of the second cookie a sign-in sets, `axocoatl-token-<port>-signed-in`.
+/// It holds no secret and authorizes nothing (see [`local_dashboard`]); its
+/// name keeps the token prefix so the Preview proxies strip it and refuse to
+/// let Session code set it, exactly as they do for the token cookie.
+const SIGNED_IN_COOKIE_SUFFIX: &str = "-signed-in";
+
 /// The per-daemon local API secret and the cookie name a browser stores it
 /// under. `SecretString` keeps the value out of `Debug` output.
 #[derive(Debug, Clone)]
 pub struct LocalToken {
     secret: SecretString,
     cookie_name: String,
+    signed_in_cookie_name: String,
 }
 
 /// Configuration for server authentication. Credentials are held as
@@ -89,9 +98,11 @@ impl AuthConfig {
     /// Require the per-daemon local token. `port` is the listener port, which
     /// names the browser cookie.
     pub fn with_local_token(mut self, secret: SecretString, port: u16) -> Self {
+        let cookie_name = local_token_cookie_name(port);
         self.local_token = Some(LocalToken {
             secret,
-            cookie_name: local_token_cookie_name(port),
+            signed_in_cookie_name: format!("{cookie_name}{SIGNED_IN_COOKIE_SUFFIX}"),
+            cookie_name,
         });
         self.enabled = true;
         self
@@ -303,19 +314,59 @@ fn is_authorized(config: &AuthConfig, headers: &HeaderMap) -> bool {
         authorized |= any_secret_matches(config.bearer_tokens.iter().chain(local), &token);
     }
     if let Some(local) = &config.local_token {
-        // A SameSite=Strict cookie still rides along on same-site requests,
-        // and every `localhost:<port>` page is same-site with the workbench.
-        // Only the workbench itself (same-origin), a typed URL (`none`) or a
-        // request without Fetch Metadata (WebSocket upgrades, non-browser
-        // clients) may use it. The Origin guard covers WebSocket handshakes.
-        if !fetch_site_is_foreign(headers) {
-            authorized |= cookie_values(headers, &local.cookie_name)
-                .fold(false, |matched, value| {
-                    secret_matches(local.secret.expose_secret(), value) | matched
-                });
-        }
+        authorized |= has_valid_token_cookie(local, headers);
     }
     authorized
+}
+
+/// Whether the request carries this daemon's token cookie with the right
+/// secret, on a request that may use it. A SameSite=Strict cookie still rides
+/// along on same-site requests, and every `localhost:<port>` page is
+/// same-site with the workbench. Only the workbench itself (same-origin), a
+/// typed URL (`none`) or a request without Fetch Metadata (WebSocket
+/// upgrades, non-browser clients) may use it. The Origin guard covers
+/// WebSocket handshakes.
+fn has_valid_token_cookie(local: &LocalToken, headers: &HeaderMap) -> bool {
+    !fetch_site_is_foreign(headers)
+        && cookie_values(headers, &local.cookie_name).fold(false, |matched, value| {
+            secret_matches(local.secret.expose_secret(), value) | matched
+        })
+}
+
+fn has_signed_in_cookie(local: &LocalToken, headers: &HeaderMap) -> bool {
+    cookie_values(headers, &local.signed_in_cookie_name).any(|value| value == "1")
+}
+
+/// `Set-Cookie` for the secret-free "signed in" cookie: `1` to set it, or
+/// expired to clear it.
+fn signed_in_cookie(local: &LocalToken, set: bool) -> Option<HeaderValue> {
+    let (value, max_age) = if set {
+        ("1", LOCAL_TOKEN_COOKIE_MAX_AGE_SECS)
+    } else {
+        ("", 0)
+    };
+    HeaderValue::from_str(&format!(
+        "{}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}",
+        local.signed_in_cookie_name
+    ))
+    .ok()
+}
+
+/// A top-level navigation the person started themselves: a typed URL, a
+/// bookmark, or a link opened from another application. Fetch Metadata marks
+/// it `Sec-Fetch-Site: none`, and keeps `none` across redirects, so no page
+/// of any site asked for it.
+fn is_navigation_the_person_started(method: &Method, headers: &HeaderMap) -> bool {
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_ascii_lowercase)
+    };
+    *method == Method::GET
+        && header("sec-fetch-site").as_deref() == Some("none")
+        && header("sec-fetch-mode").as_deref() == Some("navigate")
+        && header("sec-fetch-dest").is_none_or(|dest| dest == "document")
 }
 
 fn query_key(pair: &str) -> &str {
@@ -575,11 +626,15 @@ fn sign_in_redirect(local: &LocalToken, uri: &Uri) -> Response {
     ) else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
+    let Some(signed_in) = signed_in_cookie(local, true) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
     let mut response = Response::new(Body::empty());
     *response.status_mut() = StatusCode::SEE_OTHER;
     let headers = response.headers_mut();
     headers.insert(header::LOCATION, location);
     headers.insert(header::SET_COOKIE, cookie);
+    headers.append(header::SET_COOKIE, signed_in);
     headers.insert(
         header::REFERRER_POLICY,
         HeaderValue::from_static("no-referrer"),
@@ -589,7 +644,9 @@ fn sign_in_redirect(local: &LocalToken, uri: &Uri) -> Response {
 }
 
 /// `GET /` in local token mode: sign in from `?token=`, serve the shell to a
-/// signed-in browser, or explain how to sign in.
+/// signed-in browser, open the same address again from the workbench's own
+/// origin when Safari left the token cookie off a navigation the person
+/// started ([`same_origin_retry_page`]), or explain how to sign in.
 async fn local_dashboard(
     config: &AuthConfig,
     local: &LocalToken,
@@ -609,10 +666,135 @@ async fn local_dashboard(
         };
     }
     if is_authorized(config, request.headers()) {
-        next.run(request).await
-    } else {
-        sign_in_page(false)
+        // A browser that signed in before the "signed in" cookie existed gets
+        // it the next time its token cookie opens the workbench.
+        let remember = has_valid_token_cookie(local, request.headers())
+            && !has_signed_in_cookie(local, request.headers());
+        let mut response = next.run(request).await;
+        if remember {
+            if let Some(cookie) = signed_in_cookie(local, true) {
+                response.headers_mut().append(header::SET_COOKIE, cookie);
+            }
+        }
+        return response;
     }
+    if is_navigation_the_person_started(request.method(), request.headers())
+        && has_signed_in_cookie(local, request.headers())
+    {
+        return same_origin_retry_page(local, request.uri());
+    }
+    sign_in_page(false)
+}
+
+/// Open the same address again from a page of the workbench's own origin.
+///
+/// Safari (WebKit) leaves a SameSite=Strict cookie off every request of a
+/// navigation that was redirected from another site, and keeps doing so when
+/// that page is reloaded. `127.0.0.1` and `localhost` are different sites, so
+/// a person who opened a `127.0.0.1` bookmark or sign-in link reached
+/// `localhost` through the canonical-host redirect without the token cookie
+/// and saw "Sign in to Axocoatl", while Chromium sent the cookie. A
+/// navigation this page starts is same-origin, so every browser sends the
+/// cookie with it.
+///
+/// It is served only when the person started the navigation themselves
+/// (`Sec-Fetch-Site: none`, see [`is_navigation_the_person_started`]) and
+/// this browser holds the "signed in" cookie, which a sign-in sets beside the
+/// token cookie. That is the case where Chromium already sends the Strict
+/// cookie, so no browser is signed in on a navigation that Chromium would not
+/// sign in: a link or form on another site (`cross-site`) still gets the
+/// sign-in page and its one-click Continue. The token cookie keeps HttpOnly,
+/// SameSite=Strict and its value; the "signed in" cookie holds no secret and
+/// is never a credential. This response clears it, so it sends a browser
+/// back at most once: if the token cookie is still missing on the second
+/// request, that request gets the sign-in page. The next workbench load the
+/// token cookie opens sets it again.
+fn same_origin_retry_page(local: &LocalToken, uri: &Uri) -> Response {
+    let target = html_attribute_url(&location_without_sign_in_token(uri));
+    let mut response = (
+        StatusCode::OK,
+        format!(
+            r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="refresh" content="0; url='{target}'">
+<title>Opening Axocoatl</title>
+<style>
+:root {{ color-scheme: light dark; }}
+body {{ font: 16px/1.5 system-ui, sans-serif; max-width: 36rem; margin: 12vh auto; padding: 0 16px; }}
+</style>
+</head>
+<body>
+<p>Opening Axocoatl… <a href="{target}">Continue</a></p>
+</body>
+</html>
+"#
+        ),
+    )
+        .into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+        ),
+    );
+    if let Some(clear) = signed_in_cookie(local, false) {
+        headers.insert(header::SET_COOKIE, clear);
+    }
+    response
+}
+
+/// A same-origin path and query, made safe to place in a quoted HTML
+/// attribute and in a `refresh` URL: bytes outside the URL characters that
+/// need no quoting are percent-encoded (quotes and angle brackets among
+/// them), and `&` becomes `&amp;`.
+fn html_attribute_url(target: &str) -> String {
+    let mut encoded = String::with_capacity(target.len());
+    for byte in target.bytes() {
+        match byte {
+            b'&' => encoded.push_str("&amp;"),
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'.'
+            | b'_'
+            | b'~'
+            | b'!'
+            | b'$'
+            | b'('
+            | b')'
+            | b'*'
+            | b'+'
+            | b','
+            | b';'
+            | b'='
+            | b':'
+            | b'@'
+            | b'/'
+            | b'?'
+            | b'%' => encoded.push(char::from(byte)),
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 /// Core auth check. Checks run in order: Host (421), browser write origin
@@ -935,6 +1117,29 @@ mod tests {
         format!("{LOCAL_TOKEN_COOKIE_PREFIX}{PORT}={value}")
     }
 
+    const SIGNED_IN: &str = "axocoatl-token-18080-signed-in=1";
+
+    fn set_cookies(response: &Response) -> Vec<String> {
+        response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|value| value.to_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// Fetch Metadata of a navigation the person started (a typed URL or a
+    /// bookmark), as Safari and Chromium send it, plus `extra`.
+    fn typed_navigation<'a>(extra: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+        let mut headers = vec![
+            ("sec-fetch-site", "none"),
+            ("sec-fetch-mode", "navigate"),
+            ("sec-fetch-dest", "document"),
+        ];
+        headers.extend_from_slice(extra);
+        headers
+    }
+
     fn bearer(value: &str) -> String {
         format!("Bearer {value}")
     }
@@ -1127,13 +1332,15 @@ mod tests {
         assert_eq!(location, "/?session=s1");
         assert!(!location.contains(TOKEN));
         assert_eq!(
-            header_text(&response, header::SET_COOKIE),
-            Some(
+            set_cookies(&response),
+            [
                 format!(
                     "{LOCAL_TOKEN_COOKIE_PREFIX}{PORT}={TOKEN}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000"
-                )
-                .as_str()
-            )
+                ),
+                format!(
+                    "{LOCAL_TOKEN_COOKIE_PREFIX}{PORT}-signed-in=1; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
+                ),
+            ]
         );
         assert_eq!(
             header_text(&response, header::REFERRER_POLICY),
@@ -1160,6 +1367,180 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert!(response.headers().get(header::SET_COOKIE).is_none());
         assert!(body_text(response).await.contains("not valid"));
+    }
+
+    /// Safari leaves the SameSite=Strict token cookie off a navigation that
+    /// the `127.0.0.1` -> `localhost` redirect carried across sites. With the
+    /// "signed in" cookie, `/` opens the same address again from its own
+    /// origin, once.
+    #[tokio::test]
+    async fn typed_navigation_without_the_token_cookie_reopens_from_the_workbench_origin_once() {
+        let uri = "/?session=s1&view=trace";
+        let response = send(
+            &token_config(),
+            Method::GET,
+            uri,
+            &typed_navigation(&[("cookie", SIGNED_IN)]),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            header_text(&response, header::CACHE_CONTROL),
+            Some("no-store")
+        );
+        assert_eq!(
+            header_text(&response, header::REFERRER_POLICY),
+            Some("no-referrer")
+        );
+        assert_eq!(
+            header_text(&response, header::CONTENT_SECURITY_POLICY),
+            Some("default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+        );
+        // It clears the "signed in" cookie, so a browser that still sends no
+        // token cookie gets the sign-in page next instead of a loop.
+        assert_eq!(
+            set_cookies(&response),
+            ["axocoatl-token-18080-signed-in=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"]
+        );
+        let body = body_text(response).await;
+        assert!(body.contains(
+            r#"<meta http-equiv="refresh" content="0; url='/?session=s1&amp;view=trace'">"#
+        ));
+        assert!(body.contains(r#"<a href="/?session=s1&amp;view=trace">Continue</a>"#));
+        assert!(!body.contains("ax-rail"));
+        assert!(!body.contains(TOKEN));
+
+        // The second request, from that page, is same-origin.
+        let response = send(
+            &token_config(),
+            Method::GET,
+            uri,
+            &[
+                ("sec-fetch-site", "same-origin"),
+                ("sec-fetch-mode", "navigate"),
+                ("sec-fetch-dest", "document"),
+            ],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(body_text(response).await.contains("axocoatl url"));
+    }
+
+    /// The "signed in" cookie authorizes nothing: without the token cookie,
+    /// every request but a navigation the person started gets what it got
+    /// before, and a navigation another site started still gets the sign-in
+    /// page with its one-click Continue.
+    #[tokio::test]
+    async fn signed_in_cookie_never_signs_in_a_request_another_site_or_a_script_made() {
+        let config = token_config();
+        let refused: [Vec<(&str, &str)>; 7] = [
+            // A link or form on another site, including another localhost port.
+            vec![
+                ("sec-fetch-site", "cross-site"),
+                ("sec-fetch-mode", "navigate"),
+                ("sec-fetch-dest", "document"),
+                ("cookie", SIGNED_IN),
+            ],
+            vec![
+                ("sec-fetch-site", "same-site"),
+                ("sec-fetch-mode", "navigate"),
+                ("sec-fetch-dest", "document"),
+                ("cookie", SIGNED_IN),
+            ],
+            // A frame, a fetch, a client without Fetch Metadata.
+            typed_navigation(&[("sec-fetch-dest", "iframe"), ("cookie", SIGNED_IN)])
+                .into_iter()
+                .filter(|header| *header != ("sec-fetch-dest", "document"))
+                .collect(),
+            vec![
+                ("sec-fetch-site", "none"),
+                ("sec-fetch-mode", "cors"),
+                ("sec-fetch-dest", "empty"),
+                ("cookie", SIGNED_IN),
+            ],
+            vec![("cookie", SIGNED_IN)],
+            // A typed navigation without the "signed in" cookie, or with another value.
+            typed_navigation(&[]),
+            typed_navigation(&[("cookie", "axocoatl-token-18080-signed-in=yes")]),
+        ];
+        for headers in refused {
+            let response = send(&config, Method::GET, "/", &headers).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{headers:?}");
+            assert!(response.headers().get(header::SET_COOKIE).is_none());
+            assert!(body_text(response).await.contains("axocoatl url"));
+        }
+        let response = send(
+            &config,
+            Method::HEAD,
+            "/",
+            &typed_navigation(&[("cookie", SIGNED_IN)]),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        // The API never treats it as a credential.
+        let response = send(
+            &config,
+            Method::GET,
+            "/api/agents",
+            &typed_navigation(&[("cookie", SIGNED_IN)]),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn retry_page_percent_encodes_quotes_and_markup_in_the_address() {
+        let response = send(
+            &token_config(),
+            Method::GET,
+            "/?session=a'b%22c&x=%3Cscript%3E",
+            &typed_navigation(&[("cookie", SIGNED_IN)]),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(body.contains(r#"content="0; url='/?session=a%27b%22c&amp;x=%3Cscript%3E'""#));
+        assert_eq!(
+            html_attribute_url(r#"/?q="<x>'&y"#),
+            "/?q=%22%3Cx%3E%27&amp;y"
+        );
+    }
+
+    #[tokio::test]
+    async fn token_cookie_load_sets_the_signed_in_cookie_it_lacks() {
+        let config = token_config();
+        let valid_cookie = cookie(TOKEN);
+        // A browser that signed in before the cookie existed.
+        let response = send(
+            &config,
+            Method::GET,
+            "/",
+            &typed_navigation(&[("cookie", valid_cookie.as_str())]),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            set_cookies(&response),
+            ["axocoatl-token-18080-signed-in=1; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"]
+        );
+        assert_eq!(
+            body_text(response).await,
+            include_str!("../static/index.html")
+        );
+        // One that has it, or a script with a header credential, gets no cookie.
+        let both = format!("{valid_cookie}; {SIGNED_IN}");
+        let valid_bearer = bearer(TOKEN);
+        for headers in [
+            typed_navigation(&[("cookie", both.as_str())]),
+            vec![("authorization", valid_bearer.as_str())],
+        ] {
+            let response = send(&config, Method::GET, "/", &headers).await;
+            assert_eq!(response.status(), StatusCode::OK, "{headers:?}");
+            assert!(
+                response.headers().get(header::SET_COOKIE).is_none(),
+                "{headers:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1307,7 +1688,14 @@ mod tests {
             Some("a=1; b=2")
         );
         assert_eq!(filter("axocoatl-token-18080=secret"), None);
+        assert_eq!(
+            filter("axocoatl-token-18080-signed-in=1; app=1").as_deref(),
+            Some("app=1")
+        );
         assert_eq!(filter("app=1").as_deref(), Some("app=1"));
+        assert!(sets_local_token_cookie(&HeaderValue::from_static(
+            "axocoatl-token-18080-signed-in=1; Path=/"
+        )));
 
         assert!(sets_local_token_cookie(&HeaderValue::from_static(
             "axocoatl-token-18080=x; Path=/"

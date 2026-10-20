@@ -27,6 +27,10 @@ async function signInCookie(context) {
   return (await context.cookies()).find((cookie) => cookie.name === runtime.cookieName);
 }
 
+async function signedInCookie(context) {
+  return (await context.cookies()).find((cookie) => cookie.name === `${runtime.cookieName}-signed-in`);
+}
+
 /**
  * The page landed on the workbench at `/` on localhost without the token.
  * The workbench may already have written the Session it restored into the
@@ -81,6 +85,13 @@ test('the sign-in link sets an HttpOnly cookie, drops the token from the URL and
     assert.equal(cookie.path, '/');
     assert.equal(cookie.httpOnly, true);
     assert.equal(cookie.sameSite, 'Strict');
+    // Beside it, a cookie that holds no secret says this browser signed in.
+    const signedIn = await signedInCookie(context);
+    assert.ok(signedIn, 'the signed-in cookie is stored');
+    assert.equal(signedIn.value, '1');
+    assert.equal(signedIn.domain, 'localhost');
+    assert.equal(signedIn.httpOnly, true);
+    assert.equal(signedIn.sameSite, 'Lax');
     assert.equal(await page.evaluate(() => document.cookie.includes('axocoatl-token')), false);
 
     await page.waitForFunction(workbenchConnected);
@@ -92,6 +103,11 @@ test('the sign-in link sets an HttpOnly cookie, drops the token from the URL and
   }
 });
 
+// Safari (WebKit) leaves the SameSite=Strict cookie off a navigation that the
+// redirect from 127.0.0.1 carried to localhost, a different site, and off its
+// reloads; the workbench then opens the address again from its own origin.
+// In every engine the person ends up in the workbench, and stays there on
+// reload.
 test('a loopback IP sign-in link and a loopback IP bookmark both reach the workbench', async () => {
   const context = await browser.newContext();
   try {
@@ -100,11 +116,51 @@ test('a loopback IP sign-in link and a loopback IP bookmark both reach the workb
     assertLandedWithoutToken(page);
     assert.ok(await signInCookie(context));
     await page.waitForFunction(workbenchConnected);
+    await page.reload();
+    await page.waitForFunction(workbenchConnected);
 
     const session = runtime.fixtures.alpha.sessions[0].id;
     await page.goto(`${runtime.baseUrl}/?session=${encodeURIComponent(session)}`);
     assert.equal(page.url(), `http://localhost:${port()}/?session=${encodeURIComponent(session)}`);
     await page.waitForFunction(workbenchConnected);
+    await page.reload();
+    await page.waitForFunction(workbenchConnected);
+    assert.equal(page.url(), `http://localhost:${port()}/?session=${encodeURIComponent(session)}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('once signed in, a link from another site to the loopback IP or localhost still needs one Continue click', async () => {
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await page.goto(runtime.signInUrl);
+    await page.waitForFunction(workbenchConnected);
+    assert.ok(await signedInCookie(context));
+    const elsewhere = 'http://elsewhere.test/';
+    await page.route(elsewhere, (route) => route.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: `<!doctype html><a id="ip" href="http://127.0.0.1:${port()}/">IP</a>`
+        + `<a id="name" href="http://localhost:${port()}/">localhost</a>`,
+    }));
+    for (const link of ['#ip', '#name']) {
+      await page.goto(elsewhere);
+      const workbench = `http://localhost:${port()}/`;
+      const [response] = await Promise.all([
+        page.waitForResponse((candidate) => candidate.url() === workbench
+          && candidate.request().isNavigationRequest()),
+        page.click(link),
+      ]);
+      // The page another site opened is the sign-in page, never the workbench
+      // or a page that opens it.
+      assert.equal(response.status(), 401, link);
+      await page.waitForURL(workbench);
+      assert.match(await page.locator('body').innerText(), /axocoatl url/, link);
+      assert.equal(await page.locator('ax-rail').count(), 0, link);
+      await Promise.all([page.waitForURL(workbench), page.click('a[href="/"]')]);
+      await page.waitForFunction(workbenchConnected);
+    }
   } finally {
     await context.close();
   }
