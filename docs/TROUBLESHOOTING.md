@@ -9,7 +9,8 @@ automatically with fix hints.
 The binary went to `~/.local/bin`, which isn't on your PATH. If you let the installer
 add it to your shell's startup files, open a new terminal. Otherwise add the line it
 printed to the files it named (`~/.zprofile` for zsh on macOS; for bash on Linux
-`~/.bashrc` and `~/.profile`, or `~/.bash_profile` when you have one); this sets it for
+`~/.bashrc` and `~/.profile`, or `~/.bash_profile` when you have one, and `~/.bashrc`
+alone when `~/.profile` adds `~/.local/bin` already, as Ubuntu's does); this sets it for
 the current shell only:
 ```sh
 export PATH="$HOME/.local/bin:$PATH"

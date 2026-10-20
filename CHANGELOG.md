@@ -180,7 +180,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on Linux; for bash the login file that exists, else `~/.bash_profile` on macOS and
   `~/.profile` on Linux, and on Linux `~/.bashrc` too; `fish_add_path` in fish's
   `config.fish`, under `$XDG_CONFIG_HOME` when that is set; `~/.profile` otherwise), and
-  prints that line and those files when it cannot ask. `AXOCOATL_MODIFY_PATH=yes` adds it
+  prints that line and those files when it cannot ask. The line adds the directory only
+  when PATH does not have it, and a file that already adds it gets none: next to Ubuntu's
+  and Debian's `~/.profile`, which reads `~/.bashrc` and then adds `~/.local/bin` itself,
+  only `~/.bashrc` gets a line, one that skips login shells, so a new login and a new
+  terminal each list `~/.local/bin` once. `AXOCOATL_MODIFY_PATH=yes` adds it
   without asking and `=no` never asks; end of input at the question (Ctrl-D) counts as
   no. In a GitHub Actions step it adds the directory to `$GITHUB_PATH` instead. The next
   commands are printed with the binary's full path unless the shell already finds it, and an

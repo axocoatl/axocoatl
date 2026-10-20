@@ -8,9 +8,12 @@
 # terminal and a new login (~/.zprofile for zsh on macOS; ~/.zshrc and
 # ~/.zprofile for zsh on Linux; for bash the login file that exists, else
 # ~/.bash_profile on macOS and ~/.profile on Linux, and on Linux ~/.bashrc
-# too; fish's config.fish; ~/.profile otherwise); without a terminal (or when
-# the answer is end of input) it only prints that line. In a GitHub Actions
-# step it adds the directory to $GITHUB_PATH instead, for the job's later steps.
+# too; fish's config.fish; ~/.profile otherwise). The line adds the directory
+# only when PATH does not have it, and a file that already adds it (such as
+# Ubuntu's ~/.profile) gets none; then the ~/.bashrc line skips login shells.
+# Without a terminal (or when the answer is end of input) it only prints that
+# line. In a GitHub Actions step it adds the directory to $GITHUB_PATH
+# instead, for the job's later steps.
 # AXOCOATL_MODIFY_PATH=yes adds the line without asking;
 # AXOCOATL_MODIFY_PATH=no never changes a profile or $GITHUB_PATH.
 # AXOCOATL_VERSION=v1.5.0 installs that release instead of the latest one, and
@@ -70,14 +73,66 @@ shell_word() {
   esac
 }
 
+# Whether startup file $1 already puts the install directory ($dest) on PATH:
+# a line that is not a comment names the directory ($HOME/..., ${HOME}/...,
+# ~/... or its full path) and sets PATH (or zsh's path, or fish_add_path).
+# Ubuntu's and Debian's ~/.profile have one for ~/.local/bin; so does a line
+# an earlier installer wrote.
+adds_to_path() {
+  [ -f "$1" ] || return 1
+  case "$dest" in
+    "$HOME"/*) dest_rel="${dest#"$HOME"/}" ;;
+    *) dest_rel="" ;;
+  esac
+  awk -v abs="$dest" -v rel="$dest_rel" '
+    # Whether text holds name, followed by an end of the directory name.
+    function names(text, name,    at, next_char) {
+      while ((at = index(text, name)) > 0) {
+        next_char = substr(text, at + length(name), 1)
+        if (next_char == "" || next_char !~ /[A-Za-z0-9_.-]/) return 1
+        text = substr(text, at + 1)
+      }
+      return 0
+    }
+    {
+      line = $0
+      sub(/^[ \t]+/, "", line)
+      if (substr(line, 1, 1) == "#") next
+      if (line !~ /PATH|path\+?=|fish_add_path|fish_user_paths/) next
+      if (names(line, abs)) { found = 1; exit }
+      if (rel != "" && (names(line, "$HOME/" rel) || names(line, "${HOME}/" rel) || names(line, "~/" rel))) { found = 1; exit }
+    }
+    END { exit !found }
+  ' "$1" 2>/dev/null
+}
+
+# Whether bash login file $1 (~/.bash_profile or ~/.bash_login) reads
+# ~/.profile with `.` or `source`.
+reads_dot_profile() {
+  [ -f "$1" ] || return 1
+  awk '
+    {
+      line = $0
+      sub(/^[ \t]+/, "", line)
+      if (substr(line, 1, 1) == "#") next
+      if (line ~ /(^|[^A-Za-z0-9_])(\.|source)[ \t]+["'\'']?(~|\$HOME|\$\{HOME\})\/\.profile(["'\'' \t;]|$)/) { found = 1; exit }
+    }
+    END { exit !found }
+  ' "$1" 2>/dev/null
+}
+
 # The startup files a new shell of the user's login shell reads, one per
-# line, and the line that puts $1 on PATH in them. Sets profiles and
-# path_line.
+# line, and the line that puts $1 on PATH in them. Sets profiles,
+# path_line (for those files), now_line (for this shell) and login_covers
+# (a bash login file that puts $1 on PATH already, or empty).
 # Terminal on macOS starts login shells. On Linux a new terminal window
 # starts an interactive shell (.bashrc, .zshrc) and a new login (SSH, the
 # console, the desktop session) a login shell, which reads only its login
 # files (.bash_profile, .bash_login or .profile; .zprofile), so the line goes
-# into both.
+# into both. The line adds the directory only when PATH does not have it
+# yet: a login zsh reads .zprofile and then .zshrc, and a login bash's
+# .profile or .bash_profile often reads .bashrc, and neither should list it
+# twice.
 choose_profiles() {
   case "$1" in
     "$HOME"/*) dir_expr="\$HOME/${1#"$HOME"/}" ;;
@@ -85,7 +140,9 @@ choose_profiles() {
   esac
   user_shell="${SHELL:-}"
   user_shell="${user_shell##*/}"
-  path_line="export PATH=\"${dir_expr}:\$PATH\""
+  now_line="export PATH=\"${dir_expr}:\$PATH\""
+  path_line="case \":\$PATH:\" in *\":${dir_expr}:\"*) ;; *) ${now_line} ;; esac"
+  login_covers=""
   case "$user_shell" in
     zsh)
       if [ "$os" = "Darwin" ]; then
@@ -108,14 +165,33 @@ ${ZDOTDIR:-$HOME}/.zprofile"
       if [ "$os" = "Darwin" ]; then
         profiles="${login_file:-$HOME/.bash_profile}"
       else
-        profiles="$HOME/.bashrc
-${login_file:-$HOME/.profile}"
+        login_file="${login_file:-$HOME/.profile}"
+        if adds_to_path "$login_file"; then
+          login_covers="$login_file"
+        elif [ "$login_file" != "$HOME/.profile" ] && reads_dot_profile "$login_file" \
+          && adds_to_path "$HOME/.profile"; then
+          login_covers="$HOME/.profile"
+        fi
+        if [ -n "$login_covers" ]; then
+          # Ubuntu's and Debian's ~/.profile read ~/.bashrc and then add
+          # ~/.local/bin whether or not PATH has it, so a line in ~/.bashrc
+          # that ran in a login shell would list it twice: there it runs
+          # only in a shell that is not a login shell (a new terminal
+          # window whose session started before ~/.local/bin existed).
+          profiles="$HOME/.bashrc"
+          path_line="shopt -q login_shell || ${path_line}"
+        else
+          profiles="$HOME/.bashrc
+${login_file}"
+        fi
       fi
       ;;
     fish)
-      # fish reads config.fish in every shell, login or not.
+      # fish reads config.fish in every shell, login or not, and
+      # fish_add_path adds nothing PATH already has.
       profiles="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
       path_line="fish_add_path \"${dir_expr}\""
+      now_line=$path_line
       ;;
     *)
       profiles="$HOME/.profile"
@@ -283,28 +359,38 @@ info "installed ${BIN} ${tag} -> ${dest}/${BIN}"
 offer_profile_line() {
   choose_profiles "$dest"
   shown_dest="$(display_path "$dest")"
-  # The startup files that do not have the line yet.
+  # The startup files that do not put it on PATH yet, and those that do.
   missing=""
+  present="$login_covers"
   old_ifs=$IFS
   IFS='
 '
   set -f
   for profile in $profiles; do
-    if [ -f "$profile" ] && grep -Fxq -- "$path_line" "$profile" 2>/dev/null; then
-      continue
-    fi
-    missing="${missing}${missing:+
+    if adds_to_path "$profile"; then
+      present="${present}${present:+
 }${profile}"
+    else
+      missing="${missing}${missing:+
+}${profile}"
+    fi
   done
   set +f
   IFS=$old_ifs
+  case "$present" in
+    '') ;;
+    *'
+'*) present_note="$(display_paths "$present") already add ${shown_dest} to PATH" ;;
+    *) present_note="$(display_paths "$present") already adds ${shown_dest} to PATH" ;;
+  esac
   if [ -z "$missing" ]; then
-    case "$profiles" in
-      *'
-'*) info "$(display_paths "$profiles") already add ${shown_dest} to PATH; new terminals find ${BIN}" ;;
-      *) info "$(display_paths "$profiles") already adds ${shown_dest} to PATH; new terminals find ${BIN}" ;;
-    esac
+    info "${present_note}; new terminals find ${BIN}"
     return 0
+  fi
+  if [ -n "$login_covers" ] && [ "$present" = "$login_covers" ]; then
+    info "${present_note} in a new login"
+  elif [ -n "$present" ]; then
+    info "${present_note}"
   fi
   answer=no
   if [ "$modify_path" = "yes" ]; then
@@ -344,7 +430,7 @@ offer_profile_line() {
     IFS=$old_ifs
     [ -z "$written" ] || info "added to $(display_paths "$written"):  ${path_line}"
     if [ -z "$failed" ]; then
-      info "new terminals find ${BIN}; in this one, run:  ${path_line}"
+      info "new terminals find ${BIN}; in this one, run:  ${now_line}"
       return 0
     fi
     info "could not write $(display_paths "$failed")"
