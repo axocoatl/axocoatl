@@ -122,8 +122,8 @@ pub fn choose_for(
             // after the run's Session and sandbox were set up.
             if !stored(&asked) {
                 return Err(RunError::Usage(format!(
-                    "Agent {id} ({}) sends the stored credential {asked:?} ({}), which is not \
-                     stored: {}, then run again",
+                    "Agent {id} ({}) needs the credential {asked} ({}), and it is not stored \
+                     yet: {}, then run again",
                     runtime.id(),
                     credential_words(&asked),
                     crate::secret_store::how_to_store(&asked)
@@ -230,8 +230,8 @@ mod tests {
             assert!(matches!(error, RunError::Usage(_)), "{error}");
             assert!(
                 error.to_string().starts_with(&format!(
-                    "Agent writer (codex) sends the stored credential \"{name}\" ({}), which \
-                     is not stored: run `axocoatl connect codex",
+                    "Agent writer (codex) needs the credential {name} ({}), and it is not \
+                     stored yet: run `axocoatl connect codex",
                     credential_words(name)
                 )),
                 "{error}"
@@ -250,9 +250,9 @@ mod tests {
         let error = choose(&mut run.clone(), |_| false).unwrap_err().to_string();
         assert!(
             error.starts_with(
-                "Agent writer (claude-code) sends the stored credential \"claude-code-oauth\" \
-                 (Claude Code's OAuth token, sent to api.anthropic.com), which is not stored: \
-                 run `axocoatl connect claude-code`"
+                "Agent writer (claude-code) needs the credential claude-code-oauth (Claude \
+                 Code's OAuth token, sent to api.anthropic.com), and it is not stored yet: run \
+                 `axocoatl connect claude-code`"
             ),
             "{error}"
         );

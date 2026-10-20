@@ -128,13 +128,78 @@ pub struct RunProblem {
     pub message: String,
 }
 
-/// `POST /api/runs?dry_run=1` (`axocoatl run --dry-run`): what admission
+/// `POST /api/runs/preflight` (`axocoatl run --dry-run`): a run to check
+/// as admission would, without starting it. It is its own route, not a
+/// flag on `POST /api/runs`, so a daemon too old to know it answers 405 and
+/// never mistakes it for a run. A [`RunRequest`] body is accepted as is;
+/// the task and the request id may be left out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunPreflightRequest {
+    pub loadout: String,
+    /// Left out: the task is not checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    pub repo: String,
+    #[serde(default)]
+    pub params: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub keep: KeepMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_command: Option<String>,
+    /// Accepted so a [`RunRequest`] body can be checked as it is; unused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// Whether each Ollama model is loaded, as a run's admission loads it
+    /// (no prompt), and probed with the two one-token contract probes, so
+    /// its loaded context is checked against the run's floor. `true` when
+    /// left out. `false` reads Ollama's metadata only: a model that is not
+    /// already loaded is not loaded, and its context is not checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_models: Option<bool>,
+}
+
+impl From<RunRequest> for RunPreflightRequest {
+    fn from(request: RunRequest) -> Self {
+        Self {
+            loadout: request.loadout,
+            task: Some(request.task),
+            repo: request.repo,
+            params: request.params,
+            keep: request.keep,
+            check_command: request.check_command,
+            setup_command: request.setup_command,
+            request_id: Some(request.request_id),
+            load_models: None,
+        }
+    }
+}
+
+/// What a dry run learned of one Ollama model of the run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreflightOllamaModel {
+    /// `ollama:<model>`.
+    pub model: String,
+    /// The dry run loaded it (no prompt, as a run's admission does) and ran
+    /// the two one-token contract probes; `false` when it read Ollama's
+    /// metadata only (`load_models: false`), or could not get that far.
+    pub loaded: bool,
+    /// The context Ollama loaded it with, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u64>,
+}
+
+/// `POST /api/runs/preflight` (`axocoatl run --dry-run`): what admission
 /// finds for the request, with nothing created, started or recorded. Podman
-/// is only asked, never started.
+/// is only asked, never started. Unless `load_models` was `false`, each
+/// Ollama model was loaded and probed, as a run's admission does
+/// ([`PreflightOllamaModel`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunPreflight {
     pub loadout: String,
-    /// No problem was found: the same request without `dry_run` would be
+    /// No problem was found: the same request to `POST /api/runs` would be
     /// admitted while nothing changes (and no other run or Session holds the
     /// repository's Workspace).
     pub ready: bool,
@@ -157,6 +222,9 @@ pub struct RunPreflight {
     /// that a run starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
+    /// Each Ollama model of the run, and whether this dry run loaded it.
+    #[serde(default)]
+    pub ollama_models: Vec<PreflightOllamaModel>,
 }
 
 /// `202 Accepted` body of `POST /api/runs`.

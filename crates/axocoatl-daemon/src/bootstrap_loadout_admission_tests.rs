@@ -19,14 +19,30 @@ const REVIEWER: &str = "reviewer-model:latest";
 const SMALL: &str = "small-model:latest";
 /// Not pulled.
 const MISSING: &str = "missing-model:latest";
+/// Pulled, and not loaded until something loads it.
+const UNLOADED: &str = "unloaded-model:latest";
+/// Ollama answers 503 (busy) for it, every time.
+const BUSY: &str = "busy-model:latest";
 const DIGEST: &str = "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
 
 /// An audited Ollama 0.40.6 with cloud models off: WRITER and REVIEWER
 /// load with 32768 tokens of context, SMALL with 4096, and MISSING is not
-/// pulled (`/api/show` answers 404 with Ollama's message).
+/// pulled (`/api/show` answers 404 with Ollama's message). UNLOADED is
+/// pulled and not loaded; Ollama is busy (503) for BUSY.
 async fn ollama() -> MockServer {
     let server = MockServer::start().await;
     crate::ollama_contract_test_support::mount_contract_probes(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/api/show"))
+        .and(body_partial_json(serde_json::json!({"model": BUSY})))
+        .respond_with(
+            ResponseTemplate::new(503)
+                .insert_header("Retry-After", "0")
+                .set_body_json(serde_json::json!({"error": "server busy, please try again"})),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
     Mock::given(method("POST"))
         .and(path("/api/show"))
         .and(body_partial_json(serde_json::json!({"model": MISSING})))
@@ -41,7 +57,9 @@ async fn ollama() -> MockServer {
     let models = [(WRITER, 32768), (REVIEWER, 32768), (SMALL, 4096)];
     let tags: Vec<_> = models
         .iter()
-        .map(|(name, _)| serde_json::json!({"name": name, "model": name, "digest": DIGEST}))
+        .map(|(name, _)| *name)
+        .chain([UNLOADED])
+        .map(|name| serde_json::json!({"name": name, "model": name, "digest": DIGEST}))
         .collect();
     let loaded: Vec<_> = models
         .iter()
@@ -312,9 +330,9 @@ async fn usage_child_body() {
         "3 problems stop this run, and nothing was started:"
     );
     assert!(
-        lines[1].starts_with(
-            "  1. Agent writer (claude-code) sends the stored credential \"claude-code-oauth\""
-        ) && lines[1].contains("axocoatl connect claude-code"),
+        lines[1]
+            .starts_with("  1. Agent writer (claude-code) needs the credential claude-code-oauth")
+            && lines[1].contains("axocoatl connect claude-code"),
         "{message}"
     );
     assert!(
@@ -599,6 +617,252 @@ async fn no_podman_child_body() {
     daemon.shutdown().await.unwrap();
 }
 
+/// The requests the stand-in Ollama received at `endpoint`.
+async fn received(server: &MockServer, endpoint: &str) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == endpoint)
+        .count()
+}
+
+async fn more_problems_child_body() {
+    let server = ollama().await;
+    let (daemon, dir) = daemon(&server.uri(), "").await;
+    let repo = tempfile::tempdir().unwrap();
+    let writer = format!("ollama:{WRITER}");
+    let reviewer = format!("ollama:{REVIEWER}");
+    forget_podman_calls();
+
+    // Refused only for infrastructure (the recipe image is not built): the
+    // stopped Podman machine is asked about, never started.
+    let secret = crate::secret_store::secret_path(daemon.data_root.path(), "claude-code-oauth");
+    std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
+    std::fs::write(&secret, "a stand-in, never sent").unwrap();
+    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+    match admit(
+        &daemon,
+        request(
+            "fix-claude-code",
+            repo.path(),
+            &[("reviewer_model", &reviewer)],
+            "image",
+        ),
+    )
+    .await
+    {
+        Err(DaemonError::Session(message)) => assert!(
+            message.contains("recipe images: no image is built from the recipes claude-code"),
+            "{message}"
+        ),
+        Err(other) => panic!("expected the missing image, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    }
+    assert!(
+        !podman_calls().iter().any(|call| call == "machine start"),
+        "{:?}",
+        podman_calls()
+    );
+
+    // Ollama still busy after the retry: infrastructure (exit code 5) in
+    // Ollama's words, not a usage error.
+    let busy_model = format!("ollama:{BUSY}");
+    match admit(
+        &daemon,
+        request(
+            "fix",
+            repo.path(),
+            &[("writer_model", &writer), ("reviewer_model", &busy_model)],
+            "busy",
+        ),
+    )
+    .await
+    {
+        Err(DaemonError::Session(message)) => assert!(
+            message.starts_with(&format!(
+                "the reviewer runs {busy_model}, which the Ollama at {} cannot serve: ollama API \
+                 error: 503 - server busy, please try again",
+                server.uri()
+            )),
+            "{message}"
+        ),
+        Err(other) => panic!("expected a busy Ollama, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    }
+
+    // A credential the writer cannot send is named with a missing
+    // parameter, not after it.
+    let preflight = daemon
+        .preflight_loadout_run(request(
+            "fix-codex",
+            repo.path(),
+            &[("credential", "codex")],
+            "credential",
+        ))
+        .await;
+    let codes: Vec<&str> = preflight
+        .problems
+        .iter()
+        .map(|problem| problem.code.as_str())
+        .collect();
+    assert!(
+        codes.contains(&"parameters") && codes.contains(&"credential"),
+        "{:?}",
+        preflight.problems
+    );
+
+    // A dry run that asks not to load reads metadata only: a loaded
+    // model's context, an unknown one for a model not loaded, the floor
+    // checked where it is known, and nothing loaded or probed. Two callers
+    // of one small model get one problem, with both roles.
+    let (loads, chats) = (
+        received(&server, "/api/generate").await,
+        received(&server, "/api/chat").await,
+    );
+    let small = format!("ollama:{SMALL}");
+    let unloaded = format!("ollama:{UNLOADED}");
+    let mut light: crate::loadout::api::RunPreflightRequest = request(
+        "fix",
+        repo.path(),
+        &[("writer_model", &small), ("reviewer_model", &unloaded)],
+        "light",
+    )
+    .into();
+    light.load_models = Some(false);
+    let preflight = daemon.preflight_loadout_run(light.clone()).await;
+    assert_eq!(
+        preflight.ollama_models,
+        [
+            crate::loadout::api::PreflightOllamaModel {
+                model: small.clone(),
+                loaded: false,
+                context_tokens: Some(4096),
+            },
+            crate::loadout::api::PreflightOllamaModel {
+                model: unloaded.clone(),
+                loaded: false,
+                context_tokens: None,
+            },
+        ]
+    );
+    let context: Vec<&str> = preflight
+        .problems
+        .iter()
+        .filter(|problem| problem.code == "context")
+        .map(|problem| problem.message.as_str())
+        .collect();
+    assert_eq!(context.len(), 1, "{:?}", preflight.problems);
+    assert!(context[0].starts_with(&format!("Agent writer runs {small}")));
+    assert_eq!(received(&server, "/api/generate").await, loads);
+    assert_eq!(received(&server, "/api/chat").await, chats);
+    light.params.insert("reviewer_model".into(), small.clone());
+    let preflight = daemon.preflight_loadout_run(light).await;
+    let context: Vec<&str> = preflight
+        .problems
+        .iter()
+        .filter(|problem| problem.code == "context")
+        .map(|problem| problem.message.as_str())
+        .collect();
+    assert_eq!(context.len(), 1, "{:?}", preflight.problems);
+    assert!(
+        context[0].starts_with(&format!(
+            "Agent writer and the reviewer run {small}, which the Ollama at {} loads with a \
+             4096-token context",
+            server.uri()
+        )) && context[0].contains(
+            "--model writer=openrouter:<vendor>/<model> --model \
+             reviewer=openrouter:<vendor>/<model>"
+        ),
+        "{}",
+        context[0]
+    );
+
+    // A dry run without a task checks the rest and says it did not check
+    // the task.
+    let mut untasked: crate::loadout::api::RunPreflightRequest = request(
+        "fix",
+        repo.path(),
+        &[("writer_model", &writer), ("reviewer_model", &reviewer)],
+        "untasked",
+    )
+    .into();
+    untasked.task = None;
+    let preflight = daemon.preflight_loadout_run(untasked).await;
+    assert!(preflight.ready, "{:?}", preflight.problems);
+    assert!(preflight
+        .notes
+        .contains(&"no task was given, so the task was not checked".to_string()));
+    assert!(preflight.ollama_models.iter().all(|model| model.loaded));
+
+    // run.models written after the daemon started: the missing-parameter
+    // problem says to restart it.
+    let path = dir.path().join("axocoatl.yaml");
+    let mut text = std::fs::read_to_string(&path).unwrap();
+    text.push_str(&format!(
+        "run:\n  models:\n    writer: \"{writer}\"\n    reviewer: \"{reviewer}\"\n"
+    ));
+    std::fs::write(&path, text).unwrap();
+    let preflight = daemon
+        .preflight_loadout_run(request("fix", repo.path(), &[], "stale"))
+        .await;
+    let parameters = preflight
+        .problems
+        .iter()
+        .find(|problem| problem.code == "parameters")
+        .unwrap();
+    assert!(
+        parameters
+            .message
+            .contains("now sets run.models differently from when this daemon started")
+            && parameters.message.contains("restart it (`axocoatl dev`"),
+        "{}",
+        parameters.message
+    );
+
+    assert!(
+        !podman_calls().iter().any(|call| call == "machine start"),
+        "{:?}",
+        podman_calls()
+    );
+    nothing_created(&daemon).await;
+    daemon.shutdown().await.unwrap();
+}
+
+async fn rootful_child_body() {
+    let server = ollama().await;
+    let (daemon, _dir) = daemon(&server.uri(), "").await;
+    let repo = tempfile::tempdir().unwrap();
+    let writer = format!("ollama:{WRITER}");
+    let reviewer = format!("ollama:{REVIEWER}");
+    let params = [
+        ("writer_model", writer.as_str()),
+        ("reviewer_model", reviewer.as_str()),
+    ];
+    match admit(&daemon, request("fix", repo.path(), &params, "rootful")).await {
+        Err(DaemonError::Session(message)) => {
+            assert!(message.contains("this Podman runs as root"), "{message}")
+        }
+        Err(other) => panic!("expected rootful Podman, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    }
+    // The person switches the machine to rootless: the next check sees it,
+    // without restarting the daemon.
+    let log = std::env::var(PODMAN_LOG).unwrap();
+    std::fs::remove_file(std::path::Path::new(&log).with_file_name("rootful")).unwrap();
+    let preflight = daemon
+        .preflight_loadout_run(request("fix", repo.path(), &params, "rootless"))
+        .await;
+    assert!(preflight.ready, "{:?}", preflight.problems);
+    assert_eq!(
+        preflight.sandbox.as_deref(),
+        Some("Podman answers and runs rootless")
+    );
+    nothing_created(&daemon).await;
+    daemon.shutdown().await.unwrap();
+}
+
 /// How the fake Podman starts.
 #[derive(Clone, Copy)]
 enum Podman {
@@ -608,6 +872,9 @@ enum Podman {
     Stopped,
     /// A rootless Podman that answers.
     Running,
+    /// A running Podman that runs as root until the file `rootful` beside
+    /// its log is removed.
+    Rootful,
 }
 
 /// Run `name` in a child process with its own data root and `podman`.
@@ -634,7 +901,7 @@ case "$*" in
     printf '{{}}\n' ;;
   'info --format {{{{.Host.Security.Rootless}}}}')
     [ -e "$state" ] || {{ printf 'Cannot connect to Podman\n' >&2; exit 125; }}
-    printf 'true\n' ;;
+    if [ -e "{rootful}" ]; then printf 'false\n'; else printf 'true\n'; fi ;;
   'ps '*) ;;
   'rm '*|'volume rm '*|'network rm '*) ;;
   *) printf 'unexpected Podman command: %s\n' "$*" >&2; exit 1 ;;
@@ -642,12 +909,16 @@ esac
 "#,
                 log = log.display(),
                 state = root.path().join("machine-running").display(),
+                rootful = root.path().join("rootful").display(),
             ),
         )
         .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
-        if matches!(podman, Podman::Running) {
+        if matches!(podman, Podman::Running | Podman::Rootful) {
             std::fs::write(root.path().join("machine-running"), "").unwrap();
+        }
+        if matches!(podman, Podman::Rootful) {
+            std::fs::write(root.path().join("rootful"), "").unwrap();
         }
     }
     let result = tokio::time::timeout(
@@ -736,6 +1007,40 @@ async fn without_podman_a_run_is_refused_as_infrastructure() {
     run_child(
         "bootstrap::loadout_runs::admission_tests::without_podman_a_run_is_refused_as_infrastructure",
         Podman::Absent,
+    )
+    .await;
+}
+
+/// A run refused only for infrastructure leaves a stopped Podman machine
+/// stopped; Ollama still busy after its retry is infrastructure; a
+/// credential is named with a missing parameter; a dry run may read
+/// Ollama's metadata only; one problem names every model under the context
+/// floor; a dry run needs no task; and run.models written after the daemon
+/// started says to restart it.
+#[tokio::test]
+async fn refusals_classify_their_problems_and_never_start_the_machine() {
+    if std::env::var_os(CHILD).is_some() {
+        more_problems_child_body().await;
+        return;
+    }
+    run_child(
+        "bootstrap::loadout_runs::admission_tests::refusals_classify_their_problems_and_never_start_the_machine",
+        Podman::Stopped,
+    )
+    .await;
+}
+
+/// A rootful Podman is refused, and once switched to rootless it is seen
+/// at the next check, without a daemon restart.
+#[tokio::test]
+async fn a_machine_switched_to_rootless_is_seen_without_a_restart() {
+    if std::env::var_os(CHILD).is_some() {
+        rootful_child_body().await;
+        return;
+    }
+    run_child(
+        "bootstrap::loadout_runs::admission_tests::a_machine_switched_to_rootless_is_seen_without_a_restart",
+        Podman::Rootful,
     )
     .await;
 }

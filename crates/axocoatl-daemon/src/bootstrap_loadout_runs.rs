@@ -1191,12 +1191,32 @@ fn find_in_registry(registry: Vec<RegistryEntry>, id: &str) -> Result<Loadout, D
     }
 }
 
-/// Whether admission prepares the run's sandbox (a run: a stopped Podman
-/// machine is started) or only asks about it (a dry run).
+/// Whether admission is for a run, which may start a stopped Podman machine
+/// once nothing else stops it, or a dry run, which only asks Podman and,
+/// with `load_models` false, only reads each Ollama model's metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AdmissionMode {
     Run,
-    DryRun,
+    DryRun {
+        /// Load each Ollama model (no prompt) and run the contract probes,
+        /// as a run's admission does.
+        load_models: bool,
+        /// The request names a task (else the task is not checked).
+        task_given: bool,
+    },
+}
+
+impl AdmissionMode {
+    fn dry(self) -> bool {
+        matches!(self, Self::DryRun { .. })
+    }
+
+    fn loads_models(self) -> bool {
+        match self {
+            Self::Run => true,
+            Self::DryRun { load_models, .. } => load_models,
+        }
+    }
 }
 
 /// What admission checked of a run that can start.
@@ -1224,6 +1244,7 @@ struct AdmissionReport {
     warnings: Vec<axocoatl_config::loadout::LoadoutWarning>,
     notes: Vec<String>,
     sandbox: Option<String>,
+    ollama_models: Vec<crate::loadout::api::PreflightOllamaModel>,
 }
 
 /// Why a run whose writer and reviewer are the same model is refused when
@@ -1259,27 +1280,43 @@ fn same_model_from_defaults(
     ))
 }
 
+/// One native Ollama model of a run: the callers that run it (`Agent
+/// writer`, `the reviewer`) and the roles whose `--model` sets it.
+struct OllamaModelCallers {
+    model: axocoatl_config::loadout::ModelSpec,
+    who: Vec<String>,
+    roles: Vec<String>,
+}
+
 /// What admission learns of each native Ollama model of a run at
-/// `base_url` (with the callers that run it), as its first call would: the
-/// server is reachable, runs an accepted version and has its cloud models
-/// off; then each model is pulled, GGUF, loads, passes the contract probes
-/// and is loaded with at least [`axocoatl_config::loadout::MIN_RUN_CONTEXT_TOKENS`]
-/// tokens of context (a load without a prompt, no inference). A transient
-/// failure (a busy server) is tried once more; Ollama's own reason is kept.
-/// A model whose observation does not finish within
-/// [`ADMISSION_CONTEXT_TIMEOUT`] is not refused: its context is unknown
-/// (`None`), and its first call reports Ollama's error.
+/// `base_url`, as its first call would: the server is reachable, runs an
+/// accepted version and has its cloud models off; then each model is
+/// pulled, GGUF, loads, passes the contract probes and is loaded with at
+/// least [`axocoatl_config::loadout::MIN_RUN_CONTEXT_TOKENS`] tokens of
+/// context (a load without a prompt, no inference). With `load` false (a
+/// dry run that asked not to load) only the metadata is read, and a model
+/// that is not already loaded has no known context. A transient failure (a
+/// busy server) is tried once more; Ollama's own reason is kept, and a
+/// server that is busy or failing is an infrastructure problem, a model or
+/// setup it refuses a usage one. A model whose observation does not finish
+/// within [`ADMISSION_CONTEXT_TIMEOUT`] is not refused: its context is
+/// unknown (`None`), and its first call reports Ollama's error.
 async fn loadout_ollama_contexts(
     base_url: &str,
-    models: &[(axocoatl_config::loadout::ModelSpec, Vec<String>)],
+    models: &[OllamaModelCallers],
+    load: bool,
     problems: &mut crate::loadout::admission::Problems,
-) -> HashMap<axocoatl_config::loadout::ModelSpec, Option<u64>> {
+) -> (
+    HashMap<axocoatl_config::loadout::ModelSpec, Option<u64>>,
+    Vec<crate::loadout::api::PreflightOllamaModel>,
+) {
     use crate::loadout::admission;
     let mut contexts = HashMap::new();
+    let mut seen = Vec::new();
     match axocoatl_llm_ollama::check_native_ollama_server(base_url).await {
         Err(error) => {
             problems.usage("ollama", admission::ollama_unreachable(base_url, &error));
-            return contexts;
+            return (contexts, seen);
         }
         Ok(check) => {
             let refused = admission::ollama_server_problems(base_url, &check);
@@ -1287,41 +1324,68 @@ async fn loadout_ollama_contexts(
                 for problem in refused {
                     problems.usage("ollama", problem);
                 }
-                return contexts;
+                return (contexts, seen);
             }
         }
     }
-    for (model, who) in models {
-        let who = admission::callers(who);
+    let mut small = Vec::new();
+    for caller in models {
+        let model = &caller.model;
         let observed = tokio::time::timeout(
             ADMISSION_CONTEXT_TIMEOUT,
-            crate::session_dispatch::with_provider_retry(|| {
-                axocoatl_llm_ollama::observe_native_ollama_context(base_url, &model.model)
+            crate::session_dispatch::with_provider_retry(|| async {
+                if load {
+                    axocoatl_llm_ollama::observe_native_ollama_context(base_url, &model.model)
+                        .await
+                        .map(|observation| Some(observation.context_tokens as u64))
+                } else {
+                    axocoatl_llm_ollama::inspect_native_ollama_model(base_url, &model.model)
+                        .await
+                        .map(|context| context.map(|tokens| tokens as u64))
+                }
             }),
         )
         .await;
-        let context = match observed {
-            Ok(Ok(observation)) => Some(observation.context_tokens as u64),
+        let (context, loaded) = match observed {
+            Ok(Ok(context)) => (context, load),
             Ok(Err(error)) => {
-                problems.usage(
-                    "ollama",
-                    admission::ollama_model_problem(&who, model, base_url, &error),
-                );
-                None
+                let problem = admission::ollama_model_problem(&caller.who, model, base_url, &error);
+                if admission::ollama_error_is_infrastructure(&error) {
+                    problems.infrastructure("ollama", problem);
+                } else {
+                    problems.usage("ollama", problem);
+                }
+                (None, false)
             }
             Err(_) => {
                 tracing::debug!(model = %model, "admission did not observe the model's context in time");
-                None
+                (None, false)
             }
         };
-        if let Some(problem) = context
-            .and_then(|context| admission::context_floor_problem(&who, model, base_url, context))
-        {
-            problems.usage("context", problem);
+        if let Some(context) = context.filter(|context| admission::below_context_floor(*context)) {
+            small.push(admission::SmallContext {
+                who: caller.who.clone(),
+                roles: caller.roles.clone(),
+                model: model.clone(),
+                context,
+            });
         }
+        seen.push(crate::loadout::api::PreflightOllamaModel {
+            model: model.to_string(),
+            loaded,
+            context_tokens: context,
+        });
         contexts.insert(model.clone(), context);
     }
-    contexts
+    if let Some(problem) = admission::context_floor_problem(
+        &small,
+        base_url,
+        admission::OllamaInstall::here(),
+        &admission::brew_services_env(),
+    ) {
+        problems.usage("context", problem);
+    }
+    (contexts, seen)
 }
 
 /// An [`axocoatl_isolation::IsolationError`] in Podman's own words.
@@ -1334,13 +1398,15 @@ fn podman_text(error: &axocoatl_isolation::IsolationError) -> String {
 
 /// Whether Podman can run a loadout Session: it answers and runs rootless.
 /// It is asked first (`podman info`), which also works through
-/// CONTAINER_HOST or CONTAINER_CONNECTION. When it does not answer, a run
-/// makes it ready as a Session would ([`axocoatl_isolation::podman::ensure_ready`]:
-/// an existing, stopped machine is started; nothing is installed or created)
-/// and asks again, while a dry run only says what it found (a stopped
-/// machine is not a problem: the run starts it). Returns what Podman said,
-/// or the problem.
-async fn loadout_podman(mode: AdmissionMode) -> Result<String, String> {
+/// CONTAINER_HOST or CONTAINER_CONNECTION. When it does not answer and
+/// `start` is true (a run that nothing else stops), it is made ready as a
+/// Session would make it ([`axocoatl_isolation::podman::ensure_ready`]: an
+/// existing, stopped machine is started; nothing is installed or created)
+/// and asked again. Otherwise (a dry run, or a run already refused for
+/// another problem) it only says what it found: a stopped machine is not a
+/// problem, since a run starts it. Returns what Podman said, or the
+/// problem.
+async fn loadout_podman(start: bool) -> Result<String, String> {
     use crate::loadout::admission;
     use axocoatl_isolation::podman::PodmanReadiness;
     use axocoatl_isolation::session_sandbox::podman_rootless;
@@ -1349,24 +1415,22 @@ async fn loadout_podman(mode: AdmissionMode) -> Result<String, String> {
         Ok(false) => return Err(admission::rootful_podman()),
         Err(error) => podman_text(&error),
     };
-    match mode {
-        AdmissionMode::Run => {
-            axocoatl_isolation::podman::ensure_ready()
-                .await
-                .map_err(|error| admission::podman_not_ready(&podman_text(&error)))?;
-            match podman_rootless().await {
-                Ok(true) => Ok("Podman answers and runs rootless".into()),
-                Ok(false) => Err(admission::rootful_podman()),
-                Err(error) => Err(admission::podman_unanswered(&podman_text(&error))),
-            }
+    if start {
+        axocoatl_isolation::podman::ensure_ready()
+            .await
+            .map_err(|error| admission::podman_not_ready(&podman_text(&error)))?;
+        return match podman_rootless().await {
+            Ok(true) => Ok("Podman answers and runs rootless".into()),
+            Ok(false) => Err(admission::rootful_podman()),
+            Err(error) => Err(admission::podman_unanswered(&podman_text(&error))),
+        };
+    }
+    match axocoatl_isolation::podman::detect().await {
+        PodmanReadiness::MachineStopped => {
+            Ok("the Podman machine is stopped; a run starts it first".into())
         }
-        AdmissionMode::DryRun => match axocoatl_isolation::podman::detect().await {
-            PodmanReadiness::MachineStopped => {
-                Ok("the Podman machine is stopped; a run starts it first".into())
-            }
-            PodmanReadiness::Ready => Err(admission::podman_unanswered(&first)),
-            other => Err(admission::podman_not_ready(&other.summary())),
-        },
+        PodmanReadiness::Ready => Err(admission::podman_unanswered(&first)),
+        other => Err(admission::podman_not_ready(&other.summary())),
     }
 }
 
@@ -1436,6 +1500,7 @@ impl AxocoatlDaemon {
             warnings: Vec::new(),
             notes: Vec::new(),
             sandbox: None,
+            ollama_models: Vec::new(),
         };
         let loadout = match self.find_loadout_to_run(&request.loadout) {
             Ok(loadout) => loadout,
@@ -1445,7 +1510,18 @@ impl AxocoatlDaemon {
                 return report;
             }
         };
-        if request.task.trim().is_empty() {
+        let task_given = !matches!(
+            mode,
+            AdmissionMode::DryRun {
+                task_given: false,
+                ..
+            }
+        );
+        if !task_given {
+            report
+                .notes
+                .push("no task was given, so the task was not checked".into());
+        } else if request.task.trim().is_empty() {
             problems.usage("task", "the task is empty");
         } else if request.task.len() > MAX_RUN_TASK_BYTES {
             problems.usage(
@@ -1483,7 +1559,8 @@ impl AxocoatlDaemon {
             &self.config.run.models,
             &mut params,
         );
-        let mut notes: Vec<String> = defaults.iter().map(RunModelDefault::note).collect();
+        let mut notes: Vec<String> = report.notes.drain(..).collect();
+        notes.extend(defaults.iter().map(RunModelDefault::note));
         // An empty task is already a problem; resolve anyway, so the
         // parameters are checked too.
         let task = if request.task.trim().is_empty() {
@@ -1491,13 +1568,41 @@ impl AxocoatlDaemon {
         } else {
             request.task.as_str()
         };
+        // `run.models` in the configuration file now, when it is not what
+        // this daemon read at its start: a daemon started before
+        // `axocoatl onboard` wrote them does not use them until it restarts.
+        let stale_run_models = self.run_models_on_disk().and_then(|on_disk| {
+            (on_disk != self.config.run.models).then(|| {
+                format!(
+                    "the configuration file {} now sets run.models differently from when this \
+                     daemon started, and the daemon uses run.models as it read them then: \
+                     restart it (`axocoatl dev`, or `axocoatl service stop` and `axocoatl \
+                     service start`) to use them",
+                    self.config_path_text()
+                )
+            })
+        });
+        let mut parameters_error = None;
         let mut resolved = match resolve_loadout(&loadout, &params, task, &repo_text) {
             Ok(mut resolved) => {
                 resolved.notes.append(&mut notes);
+                if let Some(stale) = &stale_run_models {
+                    resolved.notes.push(stale.clone());
+                }
                 Some(resolved)
             }
             Err(error) => {
-                problems.usage("parameters", error.to_string());
+                let message = error.to_string();
+                parameters_error = Some(message.clone());
+                problems.usage(
+                    "parameters",
+                    match &stale_run_models {
+                        Some(stale) if message.contains("run.models") => {
+                            format!("{message}. Note: {stale}")
+                        }
+                        _ => message,
+                    },
+                );
                 None
             }
         };
@@ -1554,22 +1659,30 @@ impl AxocoatlDaemon {
                 }
             },
             None => {
-                if let Ok(mut chosen) =
-                    axocoatl_config::loadout::resolve_credentials(&loadout.file, &params)
-                {
-                    let agents: Vec<(String, AgentRuntime)> = loadout
-                        .file
-                        .agents
-                        .iter()
-                        .map(|agent| (agent.id.clone(), agent.runtime))
-                        .collect();
-                    if let Err(error) = crate::loadout::credentials::choose_for(
-                        &agents,
-                        &mut chosen,
-                        &mut notes,
-                        &stored,
-                    ) {
-                        problems.run_error("credential", error);
+                match axocoatl_config::loadout::resolve_credentials(&loadout.file, &params) {
+                    Ok(mut chosen) => {
+                        let agents: Vec<(String, AgentRuntime)> = loadout
+                            .file
+                            .agents
+                            .iter()
+                            .map(|agent| (agent.id.clone(), agent.runtime))
+                            .collect();
+                        if let Err(error) = crate::loadout::credentials::choose_for(
+                            &agents,
+                            &mut chosen,
+                            &mut notes,
+                            &stored,
+                        ) {
+                            problems.run_error("credential", error);
+                        }
+                    }
+                    // A credential the loadout cannot send, unless it is
+                    // the very error resolution already reported.
+                    Err(error) => {
+                        let message = error.to_string();
+                        if parameters_error.as_deref() != Some(message.as_str()) {
+                            problems.usage("credential", message);
+                        }
                     }
                 }
                 BTreeMap::new()
@@ -1580,17 +1693,31 @@ impl AxocoatlDaemon {
         // and on Ollama a server and model native runs accept, loaded with
         // enough context.
         let native = axocoatl_config::loadout::native_callers(&loadout.file, &params);
-        let mut ollama_models: Vec<(axocoatl_config::loadout::ModelSpec, Vec<String>)> = Vec::new();
+        let mut ollama_models: Vec<OllamaModelCallers> = Vec::new();
         let mut openrouter_callers = Vec::new();
         for caller in &native {
             match caller.model.provider.as_str() {
-                "ollama" => match ollama_models
-                    .iter_mut()
-                    .find(|(model, _)| *model == caller.model)
-                {
-                    Some((_, who)) => who.push(caller.who.clone()),
-                    None => ollama_models.push((caller.model.clone(), vec![caller.who.clone()])),
-                },
+                "ollama" => {
+                    let role = caller
+                        .param
+                        .as_deref()
+                        .and_then(|param| param.strip_suffix("_model"))
+                        .map(str::to_string);
+                    match ollama_models
+                        .iter_mut()
+                        .find(|known| known.model == caller.model)
+                    {
+                        Some(known) => {
+                            known.who.push(caller.who.clone());
+                            known.roles.extend(role);
+                        }
+                        None => ollama_models.push(OllamaModelCallers {
+                            model: caller.model.clone(),
+                            who: vec![caller.who.clone()],
+                            roles: role.into_iter().collect(),
+                        }),
+                    }
+                }
                 "openrouter" => openrouter_callers.push(caller.who.clone()),
                 _ => problems.usage(
                     "model_provider",
@@ -1613,10 +1740,7 @@ impl AxocoatlDaemon {
             if let Some(reason) = reason {
                 problems.usage(
                     "model_provider",
-                    admission::openrouter_not_ready(
-                        &admission::callers(&openrouter_callers),
-                        &reason,
-                    ),
+                    admission::openrouter_not_ready(&openrouter_callers, &reason),
                 );
             }
         }
@@ -1626,17 +1750,20 @@ impl AxocoatlDaemon {
                 None => {
                     let who: Vec<String> = ollama_models
                         .iter()
-                        .flat_map(|(_, who)| who.clone())
+                        .flat_map(|known| known.who.clone())
                         .collect();
-                    problems.usage(
-                        "model_provider",
-                        admission::ollama_not_configured(&admission::callers(&who)),
-                    );
+                    problems.usage("model_provider", admission::ollama_not_configured(&who));
                 }
                 Some(ollama) => {
-                    ollama_contexts =
-                        loadout_ollama_contexts(&ollama.base_url, &ollama_models, &mut problems)
-                            .await;
+                    let (contexts, seen) = loadout_ollama_contexts(
+                        &ollama.base_url,
+                        &ollama_models,
+                        mode.loads_models(),
+                        &mut problems,
+                    )
+                    .await;
+                    ollama_contexts = contexts;
+                    report.ollama_models = seen;
                 }
             }
         }
@@ -1769,8 +1896,9 @@ impl AxocoatlDaemon {
 
         // A loadout Session runs only where the host can isolate it: local
         // rootless Podman, never a fallback. Podman is asked last, and only
-        // when nothing in the request or setup must change first: a run that
-        // cannot start never starts a Podman machine.
+        // when nothing in the request or setup must change first; a run
+        // starts a stopped machine only when no other problem was found, so
+        // a run that cannot start never starts a Podman machine.
         // Loadout runs need native Session history: a data root still in the
         // 1.0 format is refused now, not after Podman was asked.
         let legacy_root = !matches!(
@@ -1783,8 +1911,9 @@ impl AxocoatlDaemon {
         let e2b = self.config.sandbox.backend == "e2b";
         if e2b {
             problems.infrastructure("sandbox", LOADOUT_NEEDS_LOCAL_PODMAN);
-        } else if !legacy_root && (mode == AdmissionMode::DryRun || !problems.has_usage()) {
-            match loadout_podman(mode).await {
+        } else if !legacy_root && (mode.dry() || !problems.has_usage()) {
+            let start = mode == AdmissionMode::Run && problems.is_empty();
+            match loadout_podman(start).await {
                 Ok(state) => report.sandbox = Some(state),
                 Err(problem) => problems.infrastructure("podman", problem),
             }
@@ -1825,13 +1954,30 @@ impl AxocoatlDaemon {
         report
     }
 
-    /// `POST /api/runs?dry_run=1`: admission's checks of `request`, with
+    /// `POST /api/runs/preflight`: admission's checks of `request`, with
     /// nothing created, started or recorded, and Podman only asked
-    /// ([`RunPreflight`]).
-    pub async fn preflight_loadout_run(&self, request: RunRequest) -> RunPreflight {
-        let report = self
-            .check_loadout_run(&request, AdmissionMode::DryRun)
-            .await;
+    /// ([`RunPreflight`]). Each Ollama model is loaded and probed as a
+    /// run's admission does, unless the request says `load_models: false`.
+    pub async fn preflight_loadout_run(
+        &self,
+        request: impl Into<crate::loadout::api::RunPreflightRequest>,
+    ) -> RunPreflight {
+        let request = request.into();
+        let mode = AdmissionMode::DryRun {
+            load_models: request.load_models.unwrap_or(true),
+            task_given: request.task.is_some(),
+        };
+        let request = RunRequest {
+            loadout: request.loadout,
+            task: request.task.unwrap_or_default(),
+            repo: request.repo,
+            params: request.params,
+            keep: request.keep,
+            check_command: request.check_command,
+            setup_command: request.setup_command,
+            request_id: request.request_id.unwrap_or_default(),
+        };
+        let report = self.check_loadout_run(&request, mode).await;
         RunPreflight {
             loadout: request.loadout,
             ready: report.problems.is_empty(),
@@ -1849,7 +1995,30 @@ impl AxocoatlDaemon {
                 .collect(),
             notes: report.notes,
             sandbox: report.sandbox,
+            ollama_models: report.ollama_models,
         }
+    }
+
+    /// `run.models` as the configuration file this daemon loaded says now;
+    /// `None` when the daemon has no file, or it cannot be read or parsed.
+    fn run_models_on_disk(&self) -> Option<axocoatl_config::RunModelsYaml> {
+        let path = self
+            .config_path
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()?;
+        let text = std::fs::read_to_string(&path).ok()?;
+        axocoatl_config::run_defaults::run_models_in(&text)
+    }
+
+    /// The configuration file this daemon loaded, as a refusal names it.
+    fn config_path_text(&self) -> String {
+        self.config_path
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "of this daemon".into())
     }
 
     /// Admission of one run. See [`Self::admit_loadout_run`].

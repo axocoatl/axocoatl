@@ -8,8 +8,8 @@
 use super::*;
 use axocoatl_daemon::bootstrap::loadout_runs::BundleCursor;
 use axocoatl_daemon::loadout::api::{
-    LoadoutSummary, LoadoutView, RunEventsPage, RunPreflight, RunRequest, RunStatusView,
-    ValidateLoadoutRequest, ValidateLoadoutResponse,
+    LoadoutSummary, LoadoutView, RunEventsPage, RunPreflight, RunPreflightRequest, RunRequest,
+    RunStatusView, ValidateLoadoutRequest, ValidateLoadoutResponse,
 };
 use axocoatl_daemon::loadout::host::{CheckLabel, ReproRequest};
 use axocoatl_daemon::loadout::{RunContext, RunError, RunHost};
@@ -118,32 +118,35 @@ pub fn spawn_run_driver(state: AppState, context: RunContext) {
 
 #[derive(Deserialize, Default)]
 pub struct StartRunQuery {
-    /// `1` or `true`: only check the run as admission would (a
-    /// [`RunPreflight`], `200`), creating, starting and recording nothing.
+    /// Never a dry run here: `POST /api/runs` starts runs. Present at all
+    /// (any value, or none), the request is refused with nothing started,
+    /// naming `POST /api/runs/preflight`, so a client that asks this route
+    /// for a dry run can never start a run by mistake on this daemon.
     pub dry_run: Option<String>,
-}
-
-impl StartRunQuery {
-    fn dry_run(&self) -> bool {
-        matches!(self.dry_run.as_deref(), Some("1" | "true"))
-    }
 }
 
 /// `POST /api/runs`: admit the run, start its driver task, return 202. A
 /// Workspace that another run or Session holds is a `409` with the code
 /// `workspace_busy`, which `axocoatl run` exits 7 on. A refused run names
 /// every problem admission found, usage problems (`422`) before
-/// infrastructure ones (`400`). With `?dry_run=1` it answers `200` with the
-/// [`RunPreflight`] and nothing is created.
+/// infrastructure ones (`400`). A `dry_run` query is refused (`400`): a dry
+/// run is [`preflight_loadout_run`].
 pub async fn start_loadout_run(
     State(state): State<AppState>,
     Query(query): Query<StartRunQuery>,
     Json(request): Json<RunRequest>,
 ) -> Result<axum::response::Response, CodedRouteError> {
     use axum::response::IntoResponse;
-    if query.dry_run() {
-        let preflight: RunPreflight = state.read().await.preflight_loadout_run(request).await;
-        return Ok((StatusCode::OK, Json(preflight)).into_response());
+    if query.dry_run.is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(CodedErrorResponse {
+                error: "POST /api/runs starts a run and takes no dry_run, so nothing was \
+                        started; a dry run is POST /api/runs/preflight with the same body"
+                    .into(),
+                code: None,
+            }),
+        ));
     }
     let (accepted, context) = state
         .read()
@@ -153,6 +156,17 @@ pub async fn start_loadout_run(
         .map_err(coded_err)?;
     spawn_run_driver(state.clone(), context);
     Ok((StatusCode::ACCEPTED, Json(accepted)).into_response())
+}
+
+/// `POST /api/runs/preflight` (`axocoatl run --dry-run`): what admission
+/// finds for the run, `200` with a [`RunPreflight`], and nothing created,
+/// started or recorded. It is a route of its own so that a daemon too old
+/// to know it answers `405` instead of starting a run.
+pub async fn preflight_loadout_run(
+    State(state): State<AppState>,
+    Json(request): Json<RunPreflightRequest>,
+) -> Json<RunPreflight> {
+    Json(state.read().await.preflight_loadout_run(request).await)
 }
 
 pub async fn list_loadout_runs(

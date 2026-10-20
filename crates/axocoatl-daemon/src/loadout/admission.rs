@@ -8,10 +8,11 @@
 //! an accepted version, cloud models off, pulled, GGUF, loaded with enough
 //! context), the budgets, the network and the recipe image. It collects
 //! every problem and reports them together, usage problems (exit code 3)
-//! before infrastructure ones (5). Only a run with no usage problem asks
-//! Podman, so a run that cannot start never starts a Podman machine.
-//! Nothing — no Workspace, Session, volume, run record or receipt — exists
-//! for a refused run.
+//! before infrastructure ones (5). Podman is asked last, and only when no
+//! usage problem stands; a run starts a stopped Podman machine only when
+//! no other problem was found, so a run that cannot start never starts a
+//! Podman machine. Nothing — no Workspace, Session, volume, run record or
+//! receipt — exists for a refused run.
 
 use axocoatl_config::loadout::{ModelSpec, MIN_RUN_CONTEXT_TOKENS};
 use axocoatl_llm::ProviderError;
@@ -152,6 +153,16 @@ pub fn callers(who: &[String]) -> String {
     axocoatl_config::loadout::and_list(who)
 }
 
+/// `who` and the verb: `Agent writer runs`, `Agent writer and the reviewer
+/// run`.
+pub fn run_by(who: &[String]) -> String {
+    format!(
+        "{} {}",
+        callers(who),
+        if who.len() > 1 { "run" } else { "runs" }
+    )
+}
+
 /// Why `model` cannot run as `who`'s native model: native Agents and
 /// reviewers run on Ollama or OpenRouter only.
 pub fn unsupported_provider(who: &str, param: Option<&str>, model: &ModelSpec) -> String {
@@ -179,10 +190,11 @@ pub fn unsupported_provider(who: &str, param: Option<&str>, model: &ModelSpec) -
 }
 
 /// Why `who` cannot use Ollama: the configuration names no Ollama server.
-pub fn ollama_not_configured(who: &str) -> String {
+pub fn ollama_not_configured(who: &[String]) -> String {
     format!(
-        "{who} runs on Ollama, and this daemon's configuration has no providers.ollama: run \
-         `axocoatl onboard`, or add providers.ollama.base_url and restart the daemon"
+        "{} on Ollama, and this daemon's configuration has no providers.ollama: run `axocoatl \
+         onboard`, or add providers.ollama.base_url and restart the daemon",
+        run_by(who)
     )
 }
 
@@ -221,12 +233,13 @@ pub fn openrouter_unready_reason(
 }
 
 /// Why `who` cannot run on OpenRouter: `reason`, and how to set it up.
-pub fn openrouter_not_ready(who: &str, reason: &str) -> String {
+pub fn openrouter_not_ready(who: &[String], reason: &str) -> String {
     let reason = reason.strip_prefix("Session dispatch: ").unwrap_or(reason);
     format!(
-        "{who} runs on OpenRouter, and {reason}: run `axocoatl onboard` and choose OpenRouter, \
-         or set providers.openrouter (api_key) and providers.openrouter_billing: credits and \
-         restart the daemon; or choose an Ollama model"
+        "{} on OpenRouter, and {reason}: run `axocoatl onboard` and choose OpenRouter, or set \
+         providers.openrouter (api_key) and providers.openrouter_billing: credits and restart \
+         the daemon; or choose an Ollama model",
+        run_by(who)
     )
 }
 
@@ -272,7 +285,7 @@ pub fn ollama_server_problems(base_url: &str, check: &NativeOllamaServerCheck) -
 /// Why `model`, which `who` runs, cannot run on the Ollama at `base_url`:
 /// Ollama's own reason, with what to do.
 pub fn ollama_model_problem(
-    who: &str,
+    who: &[String],
     model: &ModelSpec,
     base_url: &str,
     error: &ProviderError,
@@ -294,43 +307,206 @@ pub fn ollama_model_problem(
         }
         other => axocoatl_llm_ollama::describe_native_ollama_error(other),
     };
-    format!("{who} runs {model}, which the Ollama at {base_url} cannot serve: {reason}")
+    format!(
+        "{} {model}, which the Ollama at {base_url} cannot serve: {reason}",
+        run_by(who)
+    )
 }
 
-/// How to give Ollama a larger context on this kind of computer.
-fn context_length_fix() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "restart Ollama with OLLAMA_CONTEXT_LENGTH=32768 in its environment: stop it \
-         (`brew services stop ollama`, or quit the Ollama app) and run \
-         `OLLAMA_CONTEXT_LENGTH=32768 ollama serve`, or raise Context length in the Ollama \
-         app's settings"
-    } else {
-        "restart Ollama with OLLAMA_CONTEXT_LENGTH=32768 in its environment: for the \
-         systemd service, add Environment=\"OLLAMA_CONTEXT_LENGTH=32768\" with `sudo \
-         systemctl edit ollama` and run `sudo systemctl restart ollama`; otherwise run \
-         `OLLAMA_CONTEXT_LENGTH=32768 ollama serve`"
+/// The context [`context_floor_problem`] asks Ollama to load models with,
+/// as `axocoatl onboard` sets it.
+pub const CONTEXT_FIX_TOKENS: u64 = 32_768;
+
+/// How the Ollama on this computer runs, as its files show it, which
+/// decides where `OLLAMA_CONTEXT_LENGTH` goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OllamaInstall {
+    /// `brew services` (Homebrew's LaunchAgent for this user).
+    Brew,
+    /// The Ollama macOS app.
+    App,
+    /// The systemd unit Ollama's Linux installer creates.
+    Systemd,
+    /// Something else, such as `ollama serve` in a terminal.
+    Unknown,
+}
+
+impl OllamaInstall {
+    /// The install on this computer: on macOS Homebrew's LaunchAgent in
+    /// `home`, else the app; on Linux the systemd unit. `root` is `/`
+    /// outside tests.
+    pub fn detect(home: Option<&std::path::Path>, root: &std::path::Path, macos: bool) -> Self {
+        if macos {
+            if home.is_some_and(|home| {
+                home.join("Library/LaunchAgents/homebrew.mxcl.ollama.plist")
+                    .is_file()
+            }) {
+                return Self::Brew;
+            }
+            let app = root.join("Applications/Ollama.app").is_dir()
+                || home.is_some_and(|home| home.join("Applications/Ollama.app").is_dir());
+            return if app { Self::App } else { Self::Unknown };
+        }
+        let unit = [
+            "etc/systemd/system/ollama.service",
+            "usr/lib/systemd/system/ollama.service",
+            "lib/systemd/system/ollama.service",
+        ]
+        .iter()
+        .any(|unit| root.join(unit).is_file());
+        if unit {
+            Self::Systemd
+        } else {
+            Self::Unknown
+        }
+    }
+
+    /// The install of the computer this daemon runs on.
+    pub fn here() -> Self {
+        let home = std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(std::path::PathBuf::from);
+        Self::detect(
+            home.as_deref(),
+            std::path::Path::new("/"),
+            cfg!(target_os = "macos"),
+        )
+    }
+
+    /// How to give this install's Ollama a [`CONTEXT_FIX_TOKENS`] context,
+    /// lasting across restarts. `services_env` is Homebrew's service
+    /// environment file for Ollama.
+    pub fn context_fix(self, services_env: &str) -> String {
+        match self {
+            Self::Brew => format!(
+                "add OLLAMA_CONTEXT_LENGTH={CONTEXT_FIX_TOKENS} to {services_env} and run `brew \
+                 services restart ollama` (`axocoatl onboard` does this after asking)"
+            ),
+            Self::App => format!(
+                "in the Ollama app's Settings, set the context length to {}k, then quit and \
+                 reopen Ollama",
+                CONTEXT_FIX_TOKENS / 1024
+            ),
+            Self::Systemd => format!(
+                "add a drop-in with `Environment=\"OLLAMA_CONTEXT_LENGTH={CONTEXT_FIX_TOKENS}\"` \
+                 (`sudo systemctl edit ollama`), then `sudo systemctl restart ollama` (`axocoatl \
+                 onboard` does this after asking)"
+            ),
+            Self::Unknown => format!(
+                "start Ollama with OLLAMA_CONTEXT_LENGTH={CONTEXT_FIX_TOKENS} in its environment \
+                 (for example `OLLAMA_CONTEXT_LENGTH={CONTEXT_FIX_TOKENS} OLLAMA_NO_CLOUD=1 ollama \
+                 serve`), or set it in the service that starts it"
+            ),
+        }
     }
 }
 
-/// Why `model`, which `who` runs, is loaded with too small a context for a
-/// loadout run: the context observed and the context needed, with the fix.
-/// `None` when the context is enough.
+/// Homebrew's service environment file for Ollama:
+/// `$XDG_CONFIG_HOME/homebrew/services/ollama.env`, else
+/// `~/.homebrew/services/ollama.env`, as `axocoatl onboard` writes it.
+pub fn brew_services_env() -> String {
+    match std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+    {
+        Some(config) => config
+            .join("homebrew/services/ollama.env")
+            .display()
+            .to_string(),
+        None => "~/.homebrew/services/ollama.env".into(),
+    }
+}
+
+/// One Ollama model a run loads with too small a context: who runs it, the
+/// roles (`writer`, `reviewer`) whose `--model` sets it, the model and the
+/// context Ollama loaded it with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmallContext {
+    pub who: Vec<String>,
+    pub roles: Vec<String>,
+    pub model: ModelSpec,
+    pub context: u64,
+}
+
+/// Whether `context` is below what a loadout run needs.
+pub fn below_context_floor(context: u64) -> bool {
+    context < MIN_RUN_CONTEXT_TOKENS
+}
+
+/// Why the run's models that the Ollama at `base_url` loads with too small
+/// a context cannot run it: each with the context observed, the context
+/// needed, and once for all of them the fix for `install` and the roles to
+/// run on OpenRouter instead. `None` when there is none.
 pub fn context_floor_problem(
-    who: &str,
-    model: &ModelSpec,
+    small: &[SmallContext],
     base_url: &str,
-    context: u64,
+    install: OllamaInstall,
+    services_env: &str,
 ) -> Option<String> {
-    (context < MIN_RUN_CONTEXT_TOKENS).then(|| {
+    let first = small.first()?;
+    let runs: Vec<String> = small
+        .iter()
+        .map(|model| format!("{} {}", run_by(&model.who), model.model))
+        .collect();
+    let contexts: Vec<u64> = small.iter().map(|model| model.context).collect();
+    let loaded = if contexts.iter().all(|context| *context == first.context) {
         format!(
-            "{who} runs {model}, which the Ollama at {base_url} loads with a {context}-token \
-             context, and a loadout run needs at least {MIN_RUN_CONTEXT_TOKENS} (the fix \
-             writer's first call alone is about 9,700 tokens): {}, then run again. A larger \
-             context uses more memory; on a computer that cannot spare it, run this role on \
-             OpenRouter instead (--model <role>=openrouter:<vendor>/<model>)",
-            context_length_fix()
+            "loads with a {}-token context{}",
+            first.context,
+            if small.len() == 1 { "" } else { " each" }
         )
-    })
+    } else {
+        let numbers: Vec<String> = contexts.iter().map(u64::to_string).collect();
+        format!(
+            "loads with {}-token contexts",
+            axocoatl_config::loadout::and_list(&numbers)
+        )
+    };
+    let roles: Vec<String> = small
+        .iter()
+        .flat_map(|model| model.roles.iter().cloned())
+        .fold(Vec::new(), |mut roles, role| {
+            if !roles.contains(&role) {
+                roles.push(role);
+            }
+            roles
+        });
+    let instead = if roles.is_empty() {
+        "use an OpenRouter model instead".to_string()
+    } else {
+        let flags: Vec<String> = roles
+            .iter()
+            .map(|role| format!("--model {role}=openrouter:<vendor>/<model>"))
+            .collect();
+        format!(
+            "run the {} on OpenRouter instead ({})",
+            axocoatl_config::loadout::and_list(&roles),
+            flags.join(" ")
+        )
+    };
+    Some(format!(
+        "{}, which the Ollama at {base_url} {loaded}, and a loadout run needs at least \
+         {MIN_RUN_CONTEXT_TOKENS} (the fix writer's first call alone is about 9,700 tokens). \
+         Give Ollama a {CONTEXT_FIX_TOKENS}-token context: {}, then run again. A larger context \
+         uses more memory; on a computer that cannot spare it, {instead}",
+        axocoatl_config::loadout::and_list(&runs),
+        install.context_fix(services_env)
+    ))
+}
+
+/// Whether an Ollama error says how the server is doing now (busy, failing
+/// to load, not answering), which is infrastructure (exit code 5), rather
+/// than refusing the model or the server's setup, which is usage (3).
+pub fn ollama_error_is_infrastructure(error: &ProviderError) -> bool {
+    match error {
+        ProviderError::ApiError { status, .. } => *status >= 500 || *status == 429,
+        ProviderError::RateLimited { .. }
+        | ProviderError::Network(_)
+        | ProviderError::Stream(_)
+        | ProviderError::IncompleteStream { .. }
+        | ProviderError::Serialization(_) => true,
+        _ => false,
+    }
 }
 
 /// A loadout Session cannot run under Podman that runs as root.
@@ -424,22 +600,121 @@ mod tests {
         );
     }
 
+    fn small(who: &str, roles: &[&str], model: &str, context: u64) -> SmallContext {
+        SmallContext {
+            who: vec![who.into()],
+            roles: roles.iter().map(|role| role.to_string()).collect(),
+            model: spec(model),
+            context,
+        }
+    }
+
     #[test]
     fn a_small_context_names_both_numbers_and_ollama_context_length() {
         let url = "http://127.0.0.1:11434";
-        let model = spec("ollama:qwen3-coder:30b");
-        assert!(context_floor_problem("Agent writer", &model, url, 16_384).is_none());
-        let problem = context_floor_problem("Agent writer", &model, url, 4096).unwrap();
+        let env = "~/.homebrew/services/ollama.env";
+        assert!(!below_context_floor(16_384));
+        assert!(below_context_floor(4096));
+        assert!(context_floor_problem(&[], url, OllamaInstall::Brew, env).is_none());
+        let writer = small("Agent writer", &["writer"], "ollama:qwen3-coder:30b", 4096);
+        let problem =
+            context_floor_problem(std::slice::from_ref(&writer), url, OllamaInstall::Brew, env)
+                .unwrap();
+        assert_eq!(
+            problem,
+            "Agent writer runs ollama:qwen3-coder:30b, which the Ollama at \
+             http://127.0.0.1:11434 loads with a 4096-token context, and a loadout run needs at \
+             least 16384 (the fix writer's first call alone is about 9,700 tokens). Give Ollama \
+             a 32768-token context: add OLLAMA_CONTEXT_LENGTH=32768 to \
+             ~/.homebrew/services/ollama.env and run `brew services restart ollama` (`axocoatl \
+             onboard` does this after asking), then run again. A larger context uses more \
+             memory; on a computer that cannot spare it, run the writer on OpenRouter instead \
+             (--model writer=openrouter:<vendor>/<model>)"
+        );
+        // Two models: one sentence names both, the fix and both roles once.
+        let reviewer = small("the reviewer", &["reviewer"], "ollama:gpt-oss:20b", 8192);
+        let problem =
+            context_floor_problem(&[writer, reviewer], url, OllamaInstall::Systemd, env).unwrap();
         assert!(
             problem.starts_with(
-                "Agent writer runs ollama:qwen3-coder:30b, which the Ollama at \
-                 http://127.0.0.1:11434 loads with a 4096-token context, and a loadout run \
-                 needs at least 16384"
+                "Agent writer runs ollama:qwen3-coder:30b and the reviewer runs \
+                 ollama:gpt-oss:20b, which the Ollama at http://127.0.0.1:11434 loads with 4096 \
+                 and 8192-token contexts"
             ),
             "{problem}"
         );
-        assert!(problem.contains("OLLAMA_CONTEXT_LENGTH=32768"), "{problem}");
-        assert!(problem.contains("openrouter"), "{problem}");
+        assert_eq!(problem.matches("OLLAMA_CONTEXT_LENGTH=32768").count(), 1);
+        assert!(problem.contains("sudo systemctl edit ollama"), "{problem}");
+        assert!(
+            problem.ends_with(
+                "run the writer and reviewer on OpenRouter instead (--model \
+                 writer=openrouter:<vendor>/<model> --model reviewer=openrouter:<vendor>/<model>)"
+            ),
+            "{problem}"
+        );
+        for (install, fix) in [
+            (
+                OllamaInstall::App,
+                "in the Ollama app's Settings, set the context length to 32k",
+            ),
+            (
+                OllamaInstall::Unknown,
+                "start Ollama with OLLAMA_CONTEXT_LENGTH=32768 in its environment",
+            ),
+        ] {
+            assert!(install.context_fix(env).starts_with(fix), "{install:?}");
+        }
+    }
+
+    #[test]
+    fn the_install_is_read_from_its_files() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let detect = |macos| OllamaInstall::detect(Some(&home), root.path(), macos);
+        assert_eq!(detect(true), OllamaInstall::Unknown);
+        assert_eq!(detect(false), OllamaInstall::Unknown);
+        std::fs::create_dir_all(root.path().join("Applications/Ollama.app")).unwrap();
+        assert_eq!(detect(true), OllamaInstall::App);
+        std::fs::create_dir_all(home.join("Library/LaunchAgents")).unwrap();
+        std::fs::write(
+            home.join("Library/LaunchAgents/homebrew.mxcl.ollama.plist"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(detect(true), OllamaInstall::Brew);
+        std::fs::create_dir_all(root.path().join("etc/systemd/system")).unwrap();
+        std::fs::write(root.path().join("etc/systemd/system/ollama.service"), "").unwrap();
+        assert_eq!(detect(false), OllamaInstall::Systemd);
+    }
+
+    #[test]
+    fn a_busy_or_failing_ollama_is_infrastructure_and_a_refused_model_is_usage() {
+        let api = |status| ProviderError::ApiError {
+            provider: "ollama".into(),
+            status,
+            message: "server busy, please try again".into(),
+        };
+        for error in [
+            api(503),
+            api(500),
+            ProviderError::Network("connection reset".into()),
+        ] {
+            assert!(ollama_error_is_infrastructure(&error), "{error}");
+        }
+        for error in [
+            api(400),
+            ProviderError::ModelNotFound {
+                provider: "ollama".into(),
+                model: "x".into(),
+            },
+            ProviderError::InvalidRequest {
+                provider: "ollama".into(),
+                message: "x is a safetensors model".into(),
+            },
+        ] {
+            assert!(!ollama_error_is_infrastructure(&error), "{error}");
+        }
     }
 
     #[test]
@@ -450,7 +725,12 @@ mod tests {
             model: "gpt-oss:20b".into(),
         };
         assert_eq!(
-            ollama_model_problem("the reviewer", &spec("ollama:gpt-oss:20b"), url, &missing),
+            ollama_model_problem(
+                &["the reviewer".to_string()],
+                &spec("ollama:gpt-oss:20b"),
+                url,
+                &missing
+            ),
             "the reviewer runs ollama:gpt-oss:20b, which the Ollama at http://127.0.0.1:11434 \
              cannot serve: Model not found: gpt-oss:20b on ollama. Ollama does not have \
              gpt-oss:20b: run `ollama pull gpt-oss:20b`"
@@ -460,7 +740,7 @@ mod tests {
             message: "x is a safetensors model".into(),
         };
         assert!(
-            ollama_model_problem("Agent writer", &spec("ollama:x"), url, &mlx)
+            ollama_model_problem(&["Agent writer".to_string()], &spec("ollama:x"), url, &mlx)
                 .contains("ollama pull --runner llamacpp x")
         );
         let down = ProviderError::Network("connection refused".into());

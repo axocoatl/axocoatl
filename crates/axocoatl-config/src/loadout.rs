@@ -1591,7 +1591,8 @@ fn missing_params_error(missing: &[(&str, &LoadoutParam)]) -> LoadoutError {
         String::new()
     } else {
         format!(
-            ", or set {} in the configuration (`axocoatl onboard` writes {})",
+            ", or set {} in the configuration (`axocoatl onboard` writes {}) and restart the \
+             daemon",
             and_list(&keys),
             if keys.len() == 1 { "it" } else { "them" }
         )
@@ -2006,7 +2007,8 @@ mod tests {
              writer=provider:model --model reviewer=provider:model (writer_model: \
              provider:model of the writer; reviewer_model: provider:model of the reviewer (use \
              a different model than the writer)), or set run.models.writer and \
-             run.models.reviewer in the configuration (`axocoatl onboard` writes them)"
+             run.models.reviewer in the configuration (`axocoatl onboard` writes them) and \
+             restart the daemon"
         );
         let mut values = ParamValues::new();
         values.insert("writer_model".into(), "ollama:qwen3-coder:30b".into());
@@ -2016,7 +2018,8 @@ mod tests {
             error.to_string(),
             "loadout parameter reviewer_model: required: pass --model reviewer=provider:model \
              (provider:model of the reviewer (use a different model than the writer)), or set \
-             run.models.reviewer in the configuration (`axocoatl onboard` writes it)"
+             run.models.reviewer in the configuration (`axocoatl onboard` writes it) and restart \
+             the daemon"
         );
         // fix-codex needs only its reviewer: the writer and the credential
         // have defaults.

@@ -203,6 +203,21 @@ pub fn apply_run_model_defaults(
     considered
 }
 
+/// `run.models` in the text of a configuration file, read alone: what the
+/// file says now, without the other checks of the configuration, so a
+/// running daemon can tell that `axocoatl onboard` or an edit changed them
+/// since it started. `None` when the text does not parse.
+pub fn run_models_in(text: &str) -> Option<RunModelsYaml> {
+    #[derive(Deserialize)]
+    struct OnlyRun {
+        #[serde(default)]
+        run: RunConfigYaml,
+    }
+    crate::yaml::from_str::<OnlyRun>(text)
+        .ok()
+        .map(|only| only.run.models)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,6 +243,23 @@ mod tests {
         RunConfigYaml {
             models: models(writer, reviewer),
         }
+    }
+
+    /// The file's `run.models` alone, whatever else the file holds; none in
+    /// a file without them, and `None` for text that does not parse.
+    #[test]
+    fn run_models_are_read_alone_from_a_configuration_file() {
+        let text = "agents: []\nproviders:\n  ollama:\n    base_url: http://127.0.0.1:11434\n\
+                    run:\n  models:\n    reviewer: \"ollama:gpt-oss:20b\"\n";
+        assert_eq!(
+            run_models_in(text),
+            Some(models(None, Some("ollama:gpt-oss:20b")))
+        );
+        assert_eq!(
+            run_models_in("agents: []\n"),
+            Some(RunModelsYaml::default())
+        );
+        assert_eq!(run_models_in("run: [unclosed"), None);
     }
 
     #[test]

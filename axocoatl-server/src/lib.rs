@@ -90,6 +90,7 @@ pub fn build_router(
             "/api/runs",
             get(routes::list_loadout_runs).post(routes::start_loadout_run),
         )
+        .route("/api/runs/preflight", post(routes::preflight_loadout_run))
         .route("/api/runs/{run_id}", get(routes::get_loadout_run))
         .route(
             "/api/runs/{run_id}/events",

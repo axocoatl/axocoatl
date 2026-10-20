@@ -220,6 +220,43 @@ async fn moved_workspace_routes_body() {
     let (a, b) = (outside.join("a"), outside.join("b"));
     std::fs::create_dir(&a).unwrap();
     std::fs::write(a.join("README.md"), "# a\n").unwrap();
+
+    // The dry run is its own route: 200 with what admission found, the
+    // task optional, and nothing created.
+    let mut dry = run(&a, "dry");
+    dry.as_object_mut().unwrap().remove("task");
+    dry.as_object_mut().unwrap().remove("request_id");
+    let (status, preflight) = call(&router, Method::POST, "/api/runs/preflight", Some(dry)).await;
+    assert_eq!(status, StatusCode::OK, "{preflight}");
+    assert_eq!(preflight["ready"], true, "{preflight}");
+    assert_eq!(preflight["ollama_models"][0]["loaded"], true, "{preflight}");
+    assert_eq!(
+        preflight["ollama_models"][0]["context_tokens"], 32768,
+        "{preflight}"
+    );
+    // POST /api/runs never takes a dry run: any dry_run query is refused
+    // with nothing started, never run for real.
+    for query in ["?dry_run=1", "?dry_run", "?dry_run=yes", "?dry_run=0"] {
+        let (status, refused) = call(
+            &router,
+            Method::POST,
+            &format!("/api/runs{query}"),
+            Some(run(&a, "never")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap()
+                .contains("POST /api/runs/preflight"),
+            "{refused}"
+        );
+    }
+    assert!(session_ids(&router).await.is_empty());
+    let (status, runs) = call(&router, Method::GET, "/api/runs", None).await;
+    assert_eq!(status, StatusCode::OK, "{runs}");
+    assert_eq!(runs, serde_json::json!([]));
     let (status, run_a) = call(&router, Method::POST, "/api/runs", Some(run(&a, "run-a"))).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{run_a}");
     let stale = run_a["session_id"].as_str().unwrap().to_string();
