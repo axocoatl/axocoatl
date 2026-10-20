@@ -36,6 +36,31 @@ axocoatl run <LOADOUT> (--task <TEXT> | --task-file <FILE|->)
 | `--url <URL>` | The daemon's address. |
 | `-c, --config <CONFIG>` | The configuration file used to find the daemon's address and data root; default the user configuration. |
 
+### Toolchain flags
+
+```text
+axocoatl run <LOADOUT> ... [--toolchain detected|node|python|rust|go|none]
+             [--image <REF>] [--no-setup] [--no-build]
+```
+
+A loadout that runs the repository's check (`fix`, `fix-claude-code`, `fix-codex`) runs
+in Axocoatl's image of the repository's language. The run installs the repository's
+dependencies with only that language's registries open, and checks that the check can
+start before any model call. [Repository toolchains](/configure/toolchains/) describes
+each step.
+
+| Flag | Meaning |
+| --- | --- |
+| `--toolchain <NAME>` | `detected` (the default for such a loadout), `node`, `python`, `rust` or `go`, or `none` for the image as the loadout names it, with no detected install. Several toolchains whose check does not say which is a usage error that lists them. |
+| `--image <REF>` | Run this curated or trusted image as it is, without a toolchain. Give its installs with `--setup`. You cannot combine it with `--toolchain <language>`. |
+| `--no-setup` | Run no setup, not even the detected install. |
+| `--no-build` | Refuse the run when its toolchain image is not built, naming the `axocoatl recipe build` command. Without this flag, `axocoatl run` builds the image first and prints what it builds, its size and Podman's progress on standard error. |
+
+With a toolchain, `--setup` replaces the detected install and gets the same registries,
+and `--check` also chooses among several toolchains by its program. A check whose
+program cannot start in the image is refused with exit code 3, and a setup that fails
+ends the run with exit code 5. Both happen before any writer or reviewer turn.
+
 ## How it finds the daemon
 
 `axocoatl run` talks to a daemon that is already running (`axocoatl dev`, `axocoatl

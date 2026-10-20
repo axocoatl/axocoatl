@@ -123,9 +123,15 @@ Session container, through that view, that they can enter and list the repositor
 when they cannot (a repository another user owns, or a container or kernel that cannot
 give the view), the run ends with exit code 5 before its first turn and says why.
 
-A run approves at most one setup command: `--setup`, or else the loadout's
-`environment.setup`. A command Axocoatl detects in the repository, such as `npm ci`, is never
-approved by a run.
+A loadout with a `detected` check runs in Axocoatl's image of the repository's language
+(Node.js, Python, Rust or Go), detected from its files. Before the first model call the
+run installs the repository's dependencies, such as `npm ci` or `pip install -e
+'.[test]'`, with only that language's package registries open, and checks that the check
+command can start. A check whose program is missing ends the run with exit code 3. See
+[Repository toolchains](/configure/toolchains/). `--setup`, or else the loadout's
+`environment.setup`, replaces the detected install. Without a toolchain (`--toolchain
+none`, or a loadout that names its `image`), a run approves only `--setup` or
+`environment.setup` and nothing detected.
 
 ## Settings shows loadouts; it does not run them
 
@@ -204,7 +210,7 @@ Unknown fields are refused everywhere in the file.
 | `budgets` | map | `agent` (limits of each Agent without its own `budget`), `reviewer` (required with `review`: the reviewer's limits for all rounds of one turn) and `wall_clock` (such as `60m`). Limits are `activations` and `invocations`, each at least 1; `tokens`, enough for one model call of each Agent and the reviewer; and `cost_usd`, 0 to 10,000. Validation refuses `tokens` below 2048 plus the output bound (`max_output_tokens`, 8192 when unset). Before a run starts, each budget is checked against what one call of its model needs, and a budget that does not hold it is refused, naming the budget and the minimum (exit code 3): for an Ollama model, its loaded context plus the output bound; for an OpenRouter model, the 4,096-token prompt allowance a call reserves at least (within the model's `context_length` in OpenRouter's public catalog, which admission reads) plus the output bound and the reasoning allowance of its effort, not the whole context window, since a call reserves its own request; for an [external program](/configure/external-agents/#what-a-run-costs)'s model in Axocoatl's pinned table, the most one call of the program can use. |
 | `prompt` | string | The turn's request. Must contain `{task}`; may also use `{repo}`, `{target_url}` and `{reference_url}`. |
 | `sandbox` | map | `network: egress` (the default) or `none`, and `workload: hardened`. `bridge` and `image` are refused; `none` refuses `egress.allow`, `routes`, an external Agent (it needs a route) and Agents that list `web_search`, `web_fetch`, `browser` or `browser_check`. |
-| `environment` | map | `image` (a curated or trusted image) or `recipes` (the image [`axocoatl recipe build`](/configure/external-agents/#build-the-image) built from exactly those recipes; a run whose image was not built fails with exit code 5 and names the command), not both, and `setup`, the exact setup command a run approves. |
+| `environment` | map | `image` (a curated or trusted image) or `recipes` (the image [`axocoatl recipe build`](/configure/external-agents/#build-the-image) built from exactly those recipes; a run builds one that is missing, or with `--no-build` is refused naming the command), not both; `setup`, the exact setup command a run approves; and `toolchain`: `detected`, `node`, `python`, `rust`, `go` or `none` (see [Repository toolchains](/configure/toolchains/)). A toolchain among the `recipes`, such as `[claude-code, python]`, names it too. `toolchain` and `image` are exclusive unless `toolchain` is `none`. |
 | `qa` | map | `qa` kind only: `target_url`, `reference_url`, `repro_dir`, `fail_on_findings` (default `true`). |
 | `audit` | map | `audit` kind only: `min_areas`, `max_areas` (2 ≤ min ≤ max ≤ 8), `fail_on_findings` (default `false`). |
 
@@ -230,8 +236,10 @@ is the test case name in the JUnit file. `run` sets exactly one of:
 
 - `argv: [..]`, an exact argument list;
 - `shell: "…"` or `shell: {param: name}`, run as `sh -c`;
-- `detected: true`, the Session's detected check command, or the `--check` command in
-  its place; a run with neither is a usage error (exit code 3);
+- `detected: true`, the repository's check command: `--check`, else a `Check command:`
+  line in the root `AXOCOATL.md`, else one detected from its files (see
+  [The check command](/configure/toolchains/#the-check-command)); a run with none is a
+  usage error (exit code 3), and so is one whose check cannot start in the run's image;
 - `e2e: {args, model_route, model}`, the [e2e check](/configure/e2e-check/).
 
 `timeout` is a duration such as `90s`, `3m` or `1h`: three minutes when left out, at

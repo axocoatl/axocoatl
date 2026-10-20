@@ -75,6 +75,8 @@ workbench uses.
 | Session creation fails | Podman readiness, existing canonical directory, curated/arbitrary image policy, malformed `.devcontainer` metadata, selected Agent |
 | Podman is missing | Install and initialize it yourself using `axocoatl doctor` guidance; Session startup never runs a host package manager or creates the VM |
 | A `network: none` Session lacks `git`, `realpath`, or another required command | Select an image that already contains Axocoatl's repository commands; in-container readiness provisioning cannot download them without a network |
+| `axocoatl run` exits 3: "the check … cannot run in this run's image" | The check's program, or a Python module it needs, is not in the run's image after setup. Declare it in the repository's dependencies, or pass `--setup`, `--toolchain`, `--image` or `--check`; see [Repository toolchains](/configure/toolchains/#the-probe) |
+| `axocoatl run` exits 5: "the toolchain setup … failed" | The dependency install failed; the last lines of its output follow the message. Fix the dependency files, give the install with `--setup "<command>"`, or run with `--no-setup`; a host beyond the toolchain's registries goes in `sandbox.egress.allow` |
 | Host `node_modules` is absent inside a root Node Session | Expected on local Podman: a Session-owned Linux volume masks the host dependency tree; run approved setup inside the sandbox |
 | E2B rejects the selected image | Clear the Session/devcontainer OCI image or switch the daemon to Podman; E2B uses one daemon-global template |
 | E2B environment fails its command probe | Build the required repository commands into the configured template; Axocoatl verifies but does not package-provision E2B |

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.5.0] - Unreleased
 
+### Added
+- **Runs get the repository's toolchain and dependencies, and a run whose check cannot
+  start is refused before any model call.** A loadout with a `detected` check (`fix`,
+  `fix-claude-code`, `fix-codex`) now detects the repository's language from its root
+  files (`package.json`, `pyproject.toml`/`setup.py`/`setup.cfg`/`requirements*.txt`,
+  `Cargo.toml`, `go.mod`; with several, the check command's program chooses, else the run
+  is refused naming `--toolchain`) and runs an image of it built from the new toolchain
+  recipes `node` (Node 24.21.0), `python` (Python 3.13.16), `rust` (Rust 1.99.1) and `go`
+  (Go 1.27.2), each an official Debian-based image pinned by its multi-architecture index
+  digest plus git. `axocoatl run` builds a missing image first and prints what it builds
+  and its size (`--no-build` refuses, naming `axocoatl recipe build`); an external
+  writer's recipe composes with the toolchain into one image (`claude-code python`).
+  Before the first model call a setup installs the declared dependencies (`npm ci`,
+  `pnpm`/`yarn` through corepack, `pip install -e '.[test]'` into a virtual environment,
+  `cargo fetch`, `go mod download`) as the writer, with only that ecosystem's registries
+  open (a per-Session allow recorded with the run as actor, revoked before the writer
+  starts; a setup refused 30 connections is stopped), and caches persist in a
+  per-Workspace volume so a second run installs offline. A failed setup ends the run with
+  exit code 5 and the installer's last lines. Then a probe checks the check's program is on
+  the writer's PATH and runs the check once on the untouched tree: a missing program
+  (`not found`, exit 127) or Python module refuses the run with exit code 3, naming the
+  image, the check, the program and the fixes. The check is `--check`, else a `Check
+  command:` line of `AXOCOATL.md`, else detected; Python repositories get `pytest` only
+  when they use it, else `python3 -m unittest discover`. New flags `--toolchain
+  detected|node|python|rust|go|none`, `--image`, `--no-setup`, `--no-build` and the
+  loadout field `environment.toolchain`; `none` keeps the earlier behavior. The run's
+  notes, manifest and receipt (`predicate.sandbox.environment`, ignored by 1.4 verifiers)
+  record the toolchain and why, the image, the check, the setup command, exit code,
+  duration, registries and its connections, and the probe.
+
+### Fixed
+- A run that ended at admission (a failed environment or setup) reported "0 recorded
+  events" in its network summary; it now counts what the Session's record holds.
+- The `sandbox.egress` warning under `sandbox.network: bridge` said `allow` was
+  ignored; loadout runs always use it, and the warning now says so.
+
 ### Changed
 - **Native Sessions run on Ollama 0.40.6 and later 0.40 releases; Ollama 0.20.6 is
   refused.** Native execution accepted only an Ollama reporting exactly 0.20.6, while

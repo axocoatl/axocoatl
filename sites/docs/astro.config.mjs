@@ -86,6 +86,7 @@ export default defineConfig({
             { label: 'Signed receipts', slug: 'workbench/receipts' },
             // Pages that live under Configure, linked here too; their slugs stay put.
             { label: 'Loadouts', link: '/configure/loadouts/' },
+            { label: 'Repository toolchains', link: '/configure/toolchains/' },
             { label: 'External agents', link: '/configure/external-agents/' },
           ],
         },
@@ -108,6 +109,7 @@ export default defineConfig({
             { label: 'Agents and budgets', slug: 'configure/agents' },
             { label: 'Cross-model review', slug: 'configure/cross-model-review' },
             { label: 'Loadouts', slug: 'configure/loadouts' },
+            { label: 'Repository toolchains', slug: 'configure/toolchains' },
             { label: 'External agents', slug: 'configure/external-agents' },
             { label: 'The e2e check', slug: 'configure/e2e-check' },
             { label: 'Sandboxes', slug: 'configure/sandboxes' },

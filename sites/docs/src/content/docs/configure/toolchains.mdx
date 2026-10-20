@@ -1,0 +1,206 @@
+---
+title: Repository toolchains
+description: How axocoatl run gives a fix run your repository's language. It detects Node.js, Python, Rust or Go, runs an official Debian-based image of that language, installs the dependencies with only that ecosystem's registries open, and checks the test command can run before any model call.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A `fix` run judges the writer's change by running your repository's own check, such as
+`npm test` or `pytest`. That check needs the language, the test runner and the project's
+dependencies. Before the writer starts, [`axocoatl run`](/reference/run/) does three
+things:
+
+1. It reads your repository's files to choose a **toolchain**: `node`, `python`, `rust`
+   or `go`. The Session runs an official Debian-based image of that language, pinned by
+   digest. Axocoatl builds the image once on your computer.
+2. It runs a **setup** that installs your dependencies, such as `npm ci` or
+   `pip install -e '.[test]'`. Only that ecosystem's package registries are open while
+   the setup runs, and they close before the first model call.
+3. It runs a **probe** to make sure the check can start in that image. A check whose
+   program is missing ends the run with exit code 3, before the writer or the reviewer
+   runs.
+
+```sh
+cd ~/src/my-app
+axocoatl run fix --task "Paging skips the last item" \
+  --model writer=ollama:qwen3-coder:30b --model reviewer=ollama:gpt-oss:20b
+```
+
+```text
+· note: image localhost/axocoatl-recipe-node:0c7afcfb6d13 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+· note: setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exit 0 in 3.5 s; 15 connections to registry.npmjs.org allowed, 0 refused; the registries were closed before the first model call
+```
+
+This applies to the built-in `fix`, `fix-claude-code` and `fix-codex` loadouts, and to
+any loadout with a [`detected` check](/configure/loadouts/#checks). `qa` and `audit` do
+not run your tests, so they keep their images. With `--toolchain none`, a run works the
+way it did before toolchains existed.
+
+## How the toolchain is chosen
+
+| Toolchain | Files at the repository root | Image |
+| --- | --- | --- |
+| `node` | `package.json` | Node.js 24.21.0 with npm, plus pnpm and yarn through corepack |
+| `python` | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements*.txt` or `pytest.ini` | Python 3.13.16 with pip and venv |
+| `rust` | `Cargo.toml` | Rust 1.99.1 with cargo, rustc and gcc |
+| `go` | `go.mod` | Go 1.27.2 with gcc |
+
+A repository can have the files of more than one toolchain. In that case the run uses
+the toolchain of the check command's program: `pytest` and `python3` are Python, `cargo`
+is Rust, `go` is Go, and `npm`, `npx`, `node`, `pnpm` and `yarn` are Node.js. When the
+program does not identify a toolchain, the run is refused with exit code 3. The message
+lists the candidate toolchains so you can choose one with `--toolchain`.
+
+The run prints the choice and the reason at the start, records both in the run's
+manifest, and includes them in the [receipt](/workbench/receipts/).
+
+## The check command
+
+A `detected` check runs the first one of these that the run finds:
+
+1. `--check "<command>"`.
+2. A `Check command:` line in the root `AXOCOATL.md`, such as
+   ``Check command: `pytest -q` ``. The line can be a list item or bold, and the command
+   can be on the next line in a code block.
+3. The repository's files:
+   - a `check`, `test`, `ci` or `build` script in `package.json`, run as
+     `npm run <script>`;
+   - `cargo test`;
+   - `go test ./...`;
+   - for Python, `pytest` when the repository uses pytest (a pytest config file, a
+     `conftest.py`, or `pytest` named in a manifest or requirements file), otherwise
+     `python3 -m unittest discover -v`;
+   - `make test`.
+
+## Setup
+
+The setup installs the dependencies that the repository declares:
+
+| Toolchain | Install |
+| --- | --- |
+| `node` | `npm ci` with `package-lock.json`, `pnpm install --frozen-lockfile` with `pnpm-lock.yaml`, `yarn install --frozen-lockfile` with `yarn.lock`, otherwise `npm install --no-package-lock`. Skipped when `package.json` declares no dependencies. |
+| `python` | `pip install` into a virtual environment: `-e '.[test]'` for an installable project (or `tests`, `testing` or `dev`, whichever extra it declares first), `--group` for a matching dependency group, and `-r` for each root `requirements*.txt`. When the check runs pytest and no file lists it as a requirement, `pytest` is added. |
+| `rust` | `cargo fetch`, when `Cargo.toml` has dependencies or a workspace. |
+| `go` | `go mod download`, when `go.mod` requires modules. |
+
+`--setup "<command>"` replaces the detected install, and it gets the same registries.
+`--no-setup` turns the setup off.
+
+The setup runs in the Session as the non-root writer user, with a 15-minute limit. Only
+the setup's own processes can reach these registries, and only while it runs:
+
+| Toolchain | Registries |
+| --- | --- |
+| `node` | `registry.npmjs.org`, plus `registry.yarnpkg.com` and `repo.yarnpkg.com` for a `yarn.lock` |
+| `python` | `pypi.org`, `files.pythonhosted.org` |
+| `rust` | `index.crates.io`, `static.crates.io`, `crates.io` |
+| `go` | `proxy.golang.org`, `sum.golang.org` |
+
+Axocoatl opens each registry as a per-Session allow and revokes it when the setup ends.
+Both changes are written to the Session's network record, with the run as the actor. If
+a registry cannot be revoked, the run stops before the writer starts. A setup that is
+refused 30 connections, for example to a git dependency on another host, is stopped at
+once rather than retrying until the limit. To let a setup reach another host, add it to
+[`sandbox.egress.allow`](/reference/config/#sandboxegress).
+
+A setup that fails ends the run with exit code 5, before any writer or reviewer turn.
+The error names the command, its exit code and its duration, followed by the last lines
+of the installer's output.
+
+The run's notes, its manifest and its receipt record the setup command, its exit code
+and duration, the registries, and how many of the setup's connections were allowed and
+refused. The run's network summary counts these connections too.
+
+## Caches: the second run is offline
+
+Each Workspace has its own toolchain cache volume, `axo-tc-<24 hex digits>`, named after
+your daemon's data root and the repository path. Runs mount it at
+`/opt/axocoatl-cache`, where the image keeps its package caches:
+
+- **Node.js:** the npm cache, plus the pnpm store, the yarn cache and the package
+  managers corepack downloads. `npm ci --prefer-offline` installs from the cache.
+- **Python:** the pip cache and the virtual environment.
+- **Rust:** cargo's registry and the build directory, so no `target/` is written into
+  your repository.
+- **Go:** the module cache and the build cache.
+
+The Python, Rust and Go setups write a stamp of what they installed. When your
+dependency files, the command and the image are unchanged, the next run installs nothing
+and reaches no registry (`nothing to install` in its note). Node.js installs into each
+Session's own `node_modules` volume, so `npm ci` runs every time, from the cache.
+
+To start a Workspace's cache over, remove its volume: `podman volume ls --filter
+label=io.axocoatl.role=toolchain-cache`, then `podman volume rm axo-tc-…`.
+
+The toolchain images also keep these files out of your repository: Python bytecode,
+pytest's cache, and an editable install's `*.egg-info` directory. A Rust
+`cargo fetch` in a repository without a `Cargo.lock` writes one.
+
+## The image
+
+The toolchain is an image recipe, like `claude-code` and `codex`
+([External agents](/configure/external-agents/#build-the-image)). Axocoatl builds it
+locally from a pinned official image and adds git:
+
+| Toolchain | Official image (multi-architecture index digest) | First build downloads | Image on disk |
+| --- | --- | --- | --- |
+| `node` | `docker.io/library/node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20` | about 100 MB | about 360 MB |
+| `python` | `docker.io/library/python:3.13.16-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641` | about 65 MB | about 250 MB |
+| `rust` | `docker.io/library/rust:1.99.1-slim-bookworm@sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c` | about 330 MB | about 920 MB |
+| `go` | `docker.io/library/golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61` | about 300 MB | about 880 MB |
+
+The download sizes are the compressed layers of the official image plus the Debian
+packages for git, and the sizes on disk were measured on Apple silicon (linux/arm64).
+On amd64 the Rust layers are about 40 MB larger.
+
+The first run that needs an image builds it. `axocoatl run` prints what it builds and
+about how large it is, and Podman's progress appears on standard error. Later runs reuse
+the image. To build it ahead of time, run `axocoatl recipe build python`.
+`--no-build` refuses the run instead and names the build command. `axocoatl recipe list`
+lists the toolchains and the images you have built.
+
+`fix-claude-code` and `fix-codex` combine their agent recipe with the toolchain into a
+single image, such as `axocoatl recipe build claude-code python`. On a Python, Rust or Go
+image, Node.js from the recipe base's own pinned image is copied in, because the agent's
+install needs it.
+
+Go runs with `GOTOOLCHAIN=local`. A `go.mod` that requires a newer Go than 1.27.2 fails
+the setup and names the version it needs. Outside the setup, `GOPROXY=off`, so a module
+that is not in the cache fails at once.
+
+## The probe
+
+After the setup, the run checks that the check can start. It confirms the check's
+program is on the writer's `PATH`, then runs the check once on the untouched tree as the
+writer, with no network. A check that runs and fails is expected, because that failure
+is what the fix is for. If the program is missing, or the shell reports `not found` or
+exit code 127, or Python reports `No module named` for a module that the task does not
+name, the run is refused with exit code 3. The message names the image, the check, the
+missing program, and the fixes: `--setup`, `--toolchain`, `--image`, `--check` or a
+loadout. No writer or reviewer turn runs.
+
+```text
+axocoatl run: the check `npm run test` cannot run in this run's image: the program `jest` was not found. Image: localhost/axocoatl-recipe-node:0c7afcfb6d13, with the node toolchain (package.json at the repository root). No writer or reviewer turn ran. Fix it with --setup "<command that installs jest>" (or declare it in the project's dependencies, such as package.json devDependencies); …
+```
+
+<Aside type="note">
+Admission checks the run's models first, as it did before toolchains existed. A refused
+run's time is mostly spent loading the writer and reviewer models into Ollama, when they
+are not loaded already.
+</Aside>
+
+## Overrides
+
+| Flag | Loadout field | Effect |
+| --- | --- | --- |
+| `--toolchain node\|python\|rust\|go` | `environment.toolchain`, or the toolchain among `environment.recipes` | Use this toolchain whatever the files say. |
+| `--toolchain detected` | `environment.toolchain: detected` | Detect it (the default for a loadout with a `detected` check). |
+| `--toolchain none` | `environment.toolchain: none` | No toolchain: the image as the loadout names it (`alpine:3.20` for `fix`), the setup only from `--setup` or `environment.setup`, and only your configured egress lists. |
+| `--image <ref>` | `environment.image` | Run this image as it is, without a toolchain. It must be a [curated or trusted image](/configure/sandboxes/). Give its installs with `--setup`. You cannot combine it with `--toolchain <language>`. |
+| `--setup "<cmd>"` | `environment.setup` | Replaces the detected install. With a toolchain, it gets that toolchain's registries. |
+| `--no-setup` | — | No setup. |
+| `--no-build` | — | Refuse instead of building a missing image. |
+
+A loadout that sets `environment.image` gets no toolchain unless the run passes
+`--toolchain <language>`, which replaces that image with the toolchain's. A loadout
+cannot set both `image` and `toolchain`.
