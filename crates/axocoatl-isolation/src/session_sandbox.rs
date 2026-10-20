@@ -641,7 +641,10 @@ impl crate::egress::EgressAuthority for ContainerEgressAuthority {
 }
 
 /// Whether the Podman this process uses runs rootless, from `podman info`.
-/// The first answer is kept: it cannot change while a connection stays.
+/// A rootless answer is kept: it cannot change while a connection stays. A
+/// rootful one is not, so a machine the person switches to rootless
+/// (`podman machine set --rootful=false`) is seen at the next ask, without
+/// restarting the daemon.
 pub async fn podman_rootless() -> Result<bool, IsolationError> {
     static ROOTLESS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if let Some(rootless) = ROOTLESS.get() {
@@ -656,16 +659,13 @@ pub async fn podman_rootless() -> Result<bool, IsolationError> {
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let rootless = match String::from_utf8_lossy(&output.stdout).trim() {
-        "true" => true,
-        "false" => false,
-        other => {
-            return Err(IsolationError::OciSetupFailed(format!(
-                "Podman reported an unreadable rootless setting: {other:?}"
-            )))
-        }
-    };
-    Ok(*ROOTLESS.get_or_init(|| rootless))
+    match String::from_utf8_lossy(&output.stdout).trim() {
+        "true" => Ok(*ROOTLESS.get_or_init(|| true)),
+        "false" => Ok(false),
+        other => Err(IsolationError::OciSetupFailed(format!(
+            "Podman reported an unreadable rootless setting: {other:?}"
+        ))),
+    }
 }
 
 impl Default for SandboxPolicy {
