@@ -1325,16 +1325,15 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
                         })
                         .collect();
                     for m in &wanted {
-                        let have = models.iter().any(|installed| {
-                            installed.name == *m || installed.name.starts_with(&format!("{m}:"))
-                        });
-                        if have {
+                        // The exact name a Session asks Ollama for (an
+                        // untagged name is `:latest`), not any tag of it.
+                        if ollama_setup::is_installed(m, &models) {
                             pass(&format!("Model '{m}' is pulled"));
                         } else {
                             hard_ok = false;
                             fail(
                                 &format!("Model '{m}' not pulled"),
-                                &format!("Run: ollama pull {m}"),
+                                &ollama_setup::not_pulled_hint(m, &models),
                             );
                         }
                     }

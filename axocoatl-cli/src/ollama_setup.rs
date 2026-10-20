@@ -332,6 +332,38 @@ pub fn is_installed(name: &str, models: &[InstalledModel]) -> bool {
     })
 }
 
+/// What `doctor` says to do about `name`, which is not installed under that
+/// exact name: pull it, or, when another tag of the same model is installed
+/// (`qwen3-coder:30b` for `qwen3-coder`, which Ollama reads as
+/// `qwen3-coder:latest`), name that tag exactly.
+pub fn not_pulled_hint(name: &str, models: &[InstalledModel]) -> String {
+    let base = name.split_once(':').map_or(name, |(base, _)| base);
+    let tags: Vec<&str> = models
+        .iter()
+        .map(|model| model.name.as_str())
+        .filter(|installed| {
+            installed
+                .split_once(':')
+                .map_or(*installed, |(base, _)| base)
+                == base
+                && *installed != name
+        })
+        .collect();
+    match tags.as_slice() {
+        [] => format!("Run: ollama pull {name}"),
+        tags => format!(
+            "Run: ollama pull {name}, or use the installed {} by its exact name (Ollama reads \
+             {name} as {})",
+            tags.join(", "),
+            if name.contains(':') {
+                name.to_string()
+            } else {
+                format!("{name}:latest")
+            }
+        ),
+    }
+}
+
 /// What setup learned about an Ollama server.
 #[derive(Debug)]
 pub enum ServerProbe {
@@ -512,7 +544,7 @@ pub async fn model_finding(base_url: &str, model: &str, needs_tools: bool) -> Fi
         Ok(shown) => shown_model_finding(model, &shown, needs_tools),
         Err(error) => Finding::fail(
             format!("Could not read model '{model}' from Ollama at {base_url}"),
-            vec![error.to_string()],
+            vec![axocoatl_llm_ollama::describe_native_ollama_error(&error)],
         ),
     }
 }
@@ -820,6 +852,17 @@ mod tests {
         assert!(is_installed("llama3.2", &installed));
         assert!(!is_installed("qwen3-coder", &installed));
         assert!(!is_installed("qwen3-coder:480b", &installed));
+        // Not installed under that name: pull it, or name an installed tag.
+        assert_eq!(
+            not_pulled_hint("qwen3-coder", &installed),
+            "Run: ollama pull qwen3-coder, or use the installed qwen3-coder:axocoatl-launch, \
+             qwen3-coder:30b by its exact name (Ollama reads qwen3-coder as \
+             qwen3-coder:latest)"
+        );
+        assert_eq!(
+            not_pulled_hint("mistral:7b", &installed),
+            "Run: ollama pull mistral:7b"
+        );
     }
 
     #[test]

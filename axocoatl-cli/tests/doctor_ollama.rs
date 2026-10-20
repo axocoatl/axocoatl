@@ -59,6 +59,11 @@ async fn ollama_showing(version: Value, status: Option<Value>, show: Value) -> M
 /// Run doctor on an explicit configuration naming `base_url`, isolated from
 /// the user's configuration, data, daemon socket and Podman.
 fn doctor(root: &Path, base_url: &str) -> (bool, String) {
+    doctor_with_model(root, base_url, "qwen3-coder:30b")
+}
+
+/// [`doctor`] with the Lead Agent on `model`.
+fn doctor_with_model(root: &Path, base_url: &str, model: &str) -> (bool, String) {
     let config = root.join("axocoatl.yaml");
     std::fs::write(
         &config,
@@ -67,7 +72,7 @@ fn doctor(root: &Path, base_url: &str) -> (bool, String) {
   - id: lead
     name: Lead
     provider: ollama
-    model: "qwen3-coder:30b"
+    model: "{model}"
     tools: [read_file]
 providers:
   ollama:
@@ -234,6 +239,36 @@ async fn doctor_fails_a_model_without_tools_for_an_agent_with_tools() {
     assert!(!ok, "doctor must fail:\n{stdout}");
     assert!(
         stdout.contains("[FAIL] Model 'qwen3-coder:30b' does not report tool calling"),
+        "{stdout}"
+    );
+}
+
+/// An untagged name is the `:latest` tag to Ollama, so another tag of the
+/// same model does not count as pulled: doctor fails it and names the tag
+/// that is installed, instead of passing a model Session start then refuses.
+#[tokio::test]
+async fn doctor_fails_an_untagged_model_that_only_another_tag_satisfies() {
+    let server = ollama(
+        json!({"version": AUDITED_OLLAMA_VERSION}),
+        Some(json!({"cloud": {"disabled": true, "source": "env"}})),
+    )
+    .await;
+    let root = tempfile::tempdir().unwrap();
+    let (ok, stdout) = doctor_with_model(root.path(), &server.uri(), "qwen3-coder");
+    assert!(!ok, "doctor must fail:\n{stdout}");
+    assert!(
+        stdout.contains("[FAIL] Model 'qwen3-coder' not pulled"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "Run: ollama pull qwen3-coder, or use the installed qwen3-coder:30b by its exact \
+             name (Ollama reads qwen3-coder as qwen3-coder:latest)"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("[ OK ] Model 'qwen3-coder' is pulled"),
         "{stdout}"
     );
 }

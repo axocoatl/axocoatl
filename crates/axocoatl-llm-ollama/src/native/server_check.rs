@@ -112,15 +112,26 @@ pub async fn check_native_ollama_server(
     base_url: &str,
 ) -> Result<NativeOllamaServerCheck, ProviderError> {
     let client = local_client(base_url)?;
+    // A server that answers, but refuses the request or answers something
+    // unreadable, did not report the value: only a server that cannot be
+    // reached is an error.
+    let unreported = |error: &ProviderError| {
+        matches!(
+            error,
+            ProviderError::InvalidRequest { .. }
+                | ProviderError::ApiError { .. }
+                | ProviderError::ModelNotFound { .. }
+        )
+    };
     let check = async {
         let version = match metadata_request(&client, base_url, "api/version", None).await {
             Ok(value) => reported_text(value.get("version")),
-            Err(ProviderError::InvalidRequest { .. }) => None,
+            Err(error) if unreported(&error) => None,
             Err(error) => return Err(error),
         };
         let cloud = match metadata_request(&client, base_url, "api/status", None).await {
             Ok(value) => OllamaCloudMode::from_status(&value),
-            Err(ProviderError::InvalidRequest { .. }) => OllamaCloudMode::Unreported,
+            Err(error) if unreported(&error) => OllamaCloudMode::Unreported,
             Err(error) => return Err(error),
         };
         Ok(NativeOllamaServerCheck { version, cloud })
