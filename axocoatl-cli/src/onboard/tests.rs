@@ -1394,3 +1394,40 @@ async fn step_0_names_the_computer_and_what_is_missing() {
     );
     assert!(lines[0].contains("48 GB memory (by default WSL gives Linux half of Windows' memory)"));
 }
+
+/// --plan over an existing configuration shows the update it would make and
+/// leaves the file as it was.
+#[tokio::test]
+async fn plan_over_an_existing_configuration_changes_nothing() {
+    let shims = Shims::new();
+    let facts = facts(
+        mac("26.6"),
+        16,
+        no_podman(),
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Manual,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Plan, false, None),
+        facts,
+        OnboardArgs {
+            plan: true,
+            writer: Some(WriterChoice::Openrouter),
+            podman: Some(PodmanChoice::Skip),
+            ..OnboardArgs::default()
+        },
+    );
+    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    std::fs::write(&o.paths.config_path, "agents: []\n").unwrap();
+    let before = tree(shims.home.path());
+    assert_eq!(run(&mut o).await, exit::READY, "{}", o.ui.output());
+    assert_eq!(tree(shims.home.path()), before);
+    assert!(
+        o.ui.output().contains("would ask: Write these changes?"),
+        "{}",
+        o.ui.output()
+    );
+}

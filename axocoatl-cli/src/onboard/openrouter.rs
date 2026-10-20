@@ -83,6 +83,21 @@ fn flag_model(spec: &Option<String>) -> Option<String> {
 /// The key: `--openrouter-key-env VAR`, else (at a terminal)
 /// `OPENROUTER_API_KEY` when set, else a hidden prompt.
 fn key(o: &mut Onboarding) -> Option<(KeyRef, zeroize::Zeroizing<String>)> {
+    if o.ui.plan() {
+        let variable = o
+            .args
+            .openrouter_key_env
+            .clone()
+            .unwrap_or_else(|| "OPENROUTER_API_KEY".to_string());
+        o.ui.say(format!(
+            "  would read the OpenRouter key from ${variable}, or ask for it at a hidden prompt, \
+             and check it and both models with OpenRouter"
+        ));
+        return Some((
+            KeyRef::Env(variable),
+            zeroize::Zeroizing::new(String::new()),
+        ));
+    }
     if let Some(variable) = o.args.openrouter_key_env.clone() {
         return match std::env::var(&variable)
             .ok()

@@ -426,9 +426,20 @@ pub(crate) fn update(
     })?;
     let mut lines = to_lines(old);
 
-    // Agents: only when there are none.
-    if existing.agents.is_empty() && top_block(&lines, "agents").is_none() {
-        lines.extend(to_lines(&format!("\n{}", agents_block(plan))));
+    // Agents: only when there are none (no `agents:`, or an empty one such
+    // as `agents: []`, which the team replaces).
+    if existing.agents.is_empty() {
+        let team = to_lines(agents_block(plan).trim_end());
+        match lines.iter().position(|line| line.starts_with("agents:")) {
+            Some(start) => {
+                let end = top_block(&lines, "agents").map_or(start + 1, |(_, end)| end);
+                lines.splice(start..end, team);
+            }
+            None => {
+                lines.push(String::new());
+                lines.extend(team);
+            }
+        }
     }
 
     // Providers: add the sections this setup needs and does not have.
@@ -812,6 +823,15 @@ mod tests {
         assert!(update("agents: [", &plan, Path::new("c.yaml"))
             .unwrap_err()
             .contains("choose Replace"));
+    }
+
+    /// An empty `agents: []` gets the default team in its place.
+    #[test]
+    fn update_fills_an_empty_agents_list() {
+        let new = update("agents: []\n", &local_plan(), Path::new("c.yaml")).unwrap();
+        let config = axocoatl_config::parse_config(&new, Path::new("c.yaml")).unwrap();
+        assert_eq!(config.agents.len(), 4);
+        assert_eq!(new.matches("agents:").count(), 1, "{new}");
     }
 
     #[test]

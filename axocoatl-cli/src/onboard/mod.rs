@@ -792,19 +792,18 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
             o.ui.say(format!("    {line}"));
         }
         let backup = format!("config.yaml.bak-{}", host::stamp());
-        if !o.ui.consent(
-            &format!("Write these changes? The current file is kept as {backup} next to it."),
-            false,
-            false,
-        ) {
+        let question =
+            format!("Write these changes? The current file is kept as {backup} next to it.");
+        if o.ui.plan() {
+            o.ui.consent(&question, false, false);
+            return true;
+        }
+        if !o.ui.consent(&question, false, false) {
             o.step_left(format!(
                 "The configuration was not changed: run `axocoatl onboard` again to write it ({})",
                 path.display()
             ));
             return false;
-        }
-        if o.ui.plan() {
-            return true;
         }
         if let Err(error) = write_backup(&o.paths, &backup, old) {
             o.step_left(format!("Could not back up the configuration: {error}"));
