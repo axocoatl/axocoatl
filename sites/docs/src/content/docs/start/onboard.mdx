@@ -1,134 +1,425 @@
 ---
-title: Configure Axocoatl and run doctor
-description: Configure Axocoatl for the current user, locate its user-level files, and interpret the environment health checks.
+title: Set up Axocoatl and run doctor
+description: Set up the sandbox, the writer and reviewer models, and the user configuration with axocoatl onboard, then read what axocoatl doctor says is ready.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-`axocoatl onboard` configures Axocoatl once for the current operating-system
-user. It does not create a project directory, Workspace, Session, or repository.
-You choose the folders Axocoatl can use later through **Open workspace…** in the
-browser app.
-
-## Run the setup wizard
+After the installer, `axocoatl onboard` is the one setup command. It finds what this
+computer has, says what is missing, asks before each change to the computer, makes
+the change itself, and ends in one of two ways: ready (exit 0), or a numbered list of
+the steps still left (exit 1). It never prints a ready line after a failed check.
 
 ```sh
 axocoatl onboard
 ```
 
-The wizard offers two starting providers for native Sessions:
+Onboarding configures Axocoatl for the current operating-system user. It does not
+create a project directory, Workspace, Session, or repository; you choose the folders
+Axocoatl can use later through **Open workspace…** in the browser app.
 
-- Ollama;
-- OpenRouter.
+## How it asks
 
-For a new installation, choose Ollama or OpenRouter for Session work. New data
-roots use native execution, which currently accepts only reviewed local Ollama
-profiles and eligible OpenRouter-credit profiles. Anthropic, OpenAI, Gemini, and
-Mistral remain compatibility adapters configured manually; they are not eligible
-for native Session execution. See [Providers](/configure/providers/).
+- Each change to the computer is its own question, showing the exact command, what it
+  downloads, and what else it affects.
+- Enter answers **yes** only when the size is shown and the change fits this computer.
+  Enter answers **no** for anything that changes an existing setup: an existing Podman
+  machine, an existing Ollama configuration (`~/.ollama/server.json`, Homebrew's
+  `services/ollama.env`, a systemd drop-in onboarding wrote before), an existing
+  `config.yaml`.
+- A command that needs `sudo` asks for your password itself. With `--yes`, such a
+  command runs only with `--allow-sudo`; otherwise it is listed as a step left.
+- Keys are never pasted into a command line. Claude Code and Codex sign in through
+  `axocoatl connect` in the browser; an OpenRouter key comes from an environment
+  variable or a hidden prompt.
+- Every command onboarding runs, with its exit status, is written to
+  `~/Library/Logs/Axocoatl/onboard-<time>.log` on macOS and
+  `~/.local/state/axocoatl/onboard-<time>.log` on Linux (`$XDG_STATE_HOME/axocoatl`
+  when it is set).
+- Running `axocoatl onboard` again keeps what is set up: see
+  [Running onboard again](#running-onboard-again).
 
-For a hosted provider, the API-key prompt is masked. A supplied key is stored in
-the owner-only user configuration; leaving it blank keeps the provider's
-`${PROVIDER_API_KEY}` environment reference instead.
+## What it does
 
-### Ollama
+### Step 0: this computer
 
-The wizard asks for the Ollama server URL, `http://localhost:11434` by default,
-and checks it before it writes anything. Native Sessions use an Ollama server
-only when it:
+Onboarding prints what it found, for example:
 
-- is reached at a loopback address on this machine, such as `localhost`;
-- runs Ollama **0.40.6 or a later 0.40 release** (the audited version is 0.40.6;
-  0.20.6, pre-releases and 0.41 or later are refused, each with what to do);
-- reports its cloud features disabled in `GET /api/status`
-  (`"cloud": {"disabled": true}`).
+```text
+This computer: macOS 26.6, Apple M5 Pro, 48 GB memory, 18 cores, 412 GB free.
+Found: Homebrew 7.0.10, Podman 5.8.2 (no machine), Ollama 0.40.6 at http://localhost:11434 (cloud models on), claude 2.1.292, git 2.39.5.
+Not found: codex, gh.
+```
 
-Install or upgrade Ollama from [ollama.com/download](https://ollama.com/download)
-or with `brew install ollama` / `brew upgrade ollama`.
+It reads the operating system (on Linux, `/etc/os-release` and whether this is WSL),
+memory, processors and free disk (for the models, and for Podman when that is another
+file system), and looks for Homebrew, Podman, Ollama, `claude`, `codex`, `gh`, `git`,
+a running Axocoatl daemon and its version, and an installed Always-On Service. It
+checks whether port 8080 is free only when `--port` does not name the port. It stops if it runs as root
+(loadout runs need rootless Podman) or in WSL 1 (`wsl --set-version <distro> 2`). On
+macOS a missing `git` is the Command Line Tools stub; onboarding offers
+`xcode-select --install`.
 
-A URL that is not a loopback address is refused, and the wizard asks for the URL
-again. If the server fails another check, the wizard says which one and offers to
-check again, to use a different server URL, or to continue with this one. Native
-Sessions refuse that server until it is fixed, and `axocoatl doctor` reports it
-as a failure. To turn Ollama's cloud features off, do one of these and restart
-Ollama:
+### Step 1: who writes the code
 
-- add `{"disable_ollama_cloud": true}` to `~/.ollama/server.json` of the user
-  that runs Ollama (this also works for the Homebrew service);
-- start the server with `OLLAMA_NO_CLOUD=1`, for example
-  `OLLAMA_NO_CLOUD=1 ollama serve`. For the macOS app, run
-  `launchctl setenv OLLAMA_NO_CLOUD 1`, then quit and reopen Ollama.
+```text
+Who writes the code?
+> Claude Code (your Claude Pro or Max plan; claude found at ~/.local/bin/claude)
+  Codex (your ChatGPT plan, or an OpenAI API key)
+  A local model on this computer (Ollama, no account, needs 48 GB memory or more)
+  A hosted model (OpenRouter credits)
+```
 
-`curl -s http://localhost:11434/api/status` then shows `"disabled":true`. You
-can also keep your usual Ollama as it is and run a second, cloud-disabled server
-on another port, for example
-`OLLAMA_NO_CLOUD=1 OLLAMA_HOST=127.0.0.1:11436 ollama serve`, then give the
-wizard `http://127.0.0.1:11436`.
+The default is Claude Code when `claude` is installed, else Codex when `codex` is,
+else a local model with 48 GB of memory or more, else OpenRouter. (On Linux,
+`MemTotal` leaves out what the kernel reserves, so up to 6% less than 48 GB counts.)
+When it updates a setup, the default is the writer that setup has, and `--yes` keeps
+it. Every fix run also
+needs a reviewer: a different model that only reads the change. Claude Code and Codex
+can write but cannot review, so their path sets up a reviewer on Ollama or OpenRouter.
 
-The wizard then lists the models installed on that server and preselects one for
-**Lead** and one for **Reviewer**. You can pick any installed model or type
-another name.
+### Step 2: the sandbox
 
-- For Lead, it prefers a coding model: a Qwen3-Coder tag when one is installed,
-  then the largest other coding model, then the largest general model.
-- For Reviewer, it prefers a different model so a second model checks Lead's work
-  (see [Cross-model review](/configure/cross-model-review/)): gpt-oss of any size
-  when one is installed, otherwise a different, larger model. Without one,
-  Reviewer uses Lead's model.
-- Cloud models and embedding models are never suggested. Native Sessions run only
-  GGUF models, so a model Ollama lists as MLX or not GGUF (on Apple silicon, Ollama
-  pulls the MLX variant of some models) is not offered either, and the wizard says
-  why.
-- If the server has no suitable local model, it suggests `qwen3-coder:30b` (19 GB)
-  for Lead and `gpt-oss:20b` (14 GB) for Reviewer: two different models that fit a
-  48 GB Mac, one at a time. Both are large downloads.
+Every Session and every `axocoatl run` uses a rootless Podman sandbox.
 
-Scout and the chat Assistant use Lead's model. For a model that is not installed
-yet, the wizard offers to run `ollama pull` against that server, then reads the
-model again: if Ollama pulled a variant native Sessions refuse, it says so and
-names `ollama pull --runner llamacpp <model>`, which pulls the GGUF variant (Ollama
-does not document that flag).
+On **macOS**:
 
-OpenRouter setup uses ordinary OpenRouter credits and asks you to confirm that no
-BYOK provider keys are connected. It suggests a non-reasoning text/tool model and sets
-an explicit output limit; any eligible model id works, reasoning models included. Native Sessions do not support BYOK. Review the Session's **Team &
-budget** before execution; see [OpenRouter configuration](/configure/providers/#configure-openrouter).
+- Podman missing, Homebrew present: `brew install podman` (about 100 MB). Without
+  Homebrew, onboarding points to the installer from podman.io. Podman 6 no longer
+  supports Intel Macs; there onboarding names the Podman 5.8 package and does not
+  install anything (Axocoatl has not been tested on Intel Macs).
+- No machine:
 
-With OpenRouter, you never need to type a key: leave the key blank when onboarding
-asks for it, then run `axocoatl connect openrouter`. It signs you in to OpenRouter in
-the browser, stores the key OpenRouter issues in Axocoatl's secret store (not in the
-configuration) and replaces the configuration's `${OPENROUTER_API_KEY}` placeholder
-with `api_key_secret: openrouter`. For the always-on service, run
-`axocoatl service install` after that, not `axocoatl onboard --install-daemon`: the
-configuration then holds no environment placeholder, so the service needs no
-variable.
+  ```text
+  Create the Podman machine your Sessions run in?
+        podman machine init --cpus 6 --memory 8192 --disk-size 60
+        podman machine start
+      This downloads about 0.9 GB and uses up to 8 GiB of memory while it runs. [Y/n]
+  ```
 
-When using `axocoatl onboard --install-daemon` with another hosted provider, enter
-the key during onboarding. The generated service does not inherit shell environment
-variables, so onboarding refuses to install it while the configuration still
-contains an environment placeholder.
+  The size is 6 CPUs and 8 GiB, the size Axocoatl is tested with, clamped to half
+  the processors and half the memory (`--machine-cpus` and `--machine-memory` change
+  it); any other size is printed as not yet tested. The machine is never rootful. When
+  Podman would create it with a provider other than `applehv` (the podman.io package
+  defaults to libkrun), onboarding offers to write `[machine] provider = "applehv"` to
+  `~/.config/containers/containers.conf` first. It creates a machine only where
+  Podman has no connection defined; a connection that exists but does not answer,
+  or a `CONTAINER_HOST` or `CONTAINER_CONNECTION` that does not answer, is a step to
+  fix instead.
+- A stopped machine: `podman machine start`. (Sessions and runs also start an
+  existing stopped machine themselves.)
+- A rootful machine (Podman Desktop creates one by default): every `axocoatl run`
+  would stop with exit 5, so onboarding asks, with **no** as the default, to switch it:
+  `podman machine stop`, `podman machine set --rootful=false`, `podman machine start`.
+  This affects other tools that use the machine. Answering no offers the other way
+  out, also with **no** as the default: keep that machine and create a separate rootless
+  machine named `axocoatl` (`podman machine init … axocoatl`). Only one machine runs at a
+  time, so the step left says to stop the other one and to start Axocoatl from a shell
+  with `export CONTAINER_CONNECTION=axocoatl` (`axocoatl service install` records it;
+  Sessions and runs start that machine). Answering no twice leaves a step that names
+  both ways out.
+- A machine with less than 4 GiB: onboarding offers `podman machine set --memory`
+  (default no).
+- Every `podman machine` command names the machine Podman uses when it is not
+  `podman-machine-default` (Podman acts on `podman-machine-default` without a name), and
+  the machine `CONTAINER_CONNECTION` names when that is set. Through `CONTAINER_HOST`,
+  or a `CONTAINER_CONNECTION` that is not a machine, onboarding changes no machine; a
+  problem there is a step left.
+- Podman installed in a directory that is not on your `PATH` (Homebrew's
+  `/opt/homebrew/bin` before `brew shellenv` runs, for example) is a step left:
+  `axocoatl dev`, the service and every run look for Podman on `PATH`.
 
-<Aside type="caution" title="The user configuration contains secrets">
-A hosted-provider key typed during onboarding is stored as plain text in a
-configuration file with owner-only permissions (`0600` on supported Unix systems).
-A key `axocoatl connect openrouter` stores is in the secret store instead, and the
-configuration holds only its name. Axocoatl does
-not encrypt that file. Protect it and its backups. The wizard does not create a
-`.env.example` file, and Axocoatl does not load dotenv files automatically.
+On **Linux and WSL2**:
+
+- Podman missing: the install command for the distribution, which asks for your
+  password:
+
+  | Distribution | Command |
+  | --- | --- |
+  | Ubuntu, Debian and derivatives | `sudo apt-get install -y podman` |
+  | Fedora, RHEL and derivatives | `sudo dnf install -y podman` |
+  | Arch | `sudo pacman -S --noconfirm podman` |
+  | openSUSE, SLES | `sudo zypper install -y podman` |
+
+- Ubuntu 22.04 ships Podman 3.4.4. Axocoatl runs need Podman 4.3 or later (4.9 is
+  tested), so onboarding stops there and asks for Ubuntu 24.04 or newer. Podman 4.3
+  to 4.8 works but is reported as not tested.
+- No range of subordinate user ids (rootless Podman cannot unpack images or start
+  Sessions without one): `sudo usermod --add-subuids 100000-165535 --add-subgids
+  100000-165535 <user> && podman system migrate`.
+- Landlock: below ABI 3 (Linux 6.2) fix, fix-claude-code, fix-codex and audit cannot
+  run their read-only reviewer, and onboarding says how to get a newer kernel (Debian
+  12: bookworm-backports; WSL: `wsl --update`). ABI 3 works, but read-only helper
+  shells need Linux 6.7.
+- SELinux enforcing is reported as not yet verified; WSL without systemd is told that
+  the Always-On Service is unavailable and that `axocoatl dev` works.
+
+Then one throwaway container proves the setup: onboarding pulls
+`docker.io/library/alpine:3.20` (about 4 MB, the image Sessions start from) and runs it
+rootless with `--userns=keep-id`, no network, no capabilities and `--rm`. On success it
+prints a line such as `✓ Sandbox ready: Podman 5.8.2, applehv, rootless, 6 CPUs / 8 GiB`.
+
+### Step 3A: a local writer and reviewer (Ollama)
+
+1. **Ollama missing.** macOS with Homebrew: `brew install ollama && brew services start
+   ollama` (about 40 MB; models download separately); without Homebrew, onboarding
+   points to [ollama.com/download](https://ollama.com/download). Linux:
+   `curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.40.6 sh`, which sets
+   Ollama up as a systemd service and asks for your password (with `zstd` installed
+   first when it is missing). In WSL it is installed inside the distribution; the
+   Windows app is not reachable from WSL in its default NAT mode.
+2. **Version.** Native Sessions accept Ollama 0.40.6 and later. A later 0.40 release
+   is accepted as is; a later 0.x release (0.41 or later) is accepted only once the
+   contract probes pass on each model, and onboarding, `doctor` and the run's receipt
+   say it is newer than the audited 0.40.6. An older Ollama is upgraded after asking
+   (`brew upgrade ollama && brew services restart ollama`, or the pinned Linux
+   installer). When the `ollama` on PATH is accepted but the server still runs an older
+   version, the fix is a restart (`brew services restart ollama`), not another upgrade.
+   A pre-release, a development build or a new major release is refused, with the
+   install command for 0.40.6; onboarding never suggests `brew upgrade` for a version
+   that is too new.
+3. **Cloud models off**, which native Sessions require and which a fresh Ollama has on.
+   Onboarding changes the setting the running server reads, then waits until
+   `GET /api/status` reports `"disabled": true`:
+   - the Homebrew service or an `ollama serve` you run: it adds
+     `{"disable_ollama_cloud": true}` to `~/.ollama/server.json` (keeping every other
+     key and backing the file up first) and runs `brew services restart ollama`, or
+     asks you to restart your server;
+   - the macOS app: turn off Cloud in Ollama's Settings, then press Enter;
+   - the Linux service (it runs as the user `ollama`): it writes
+     `/etc/systemd/system/ollama.service.d/axocoatl-no-cloud.conf` with
+     `Environment="OLLAMA_NO_CLOUD=1"`, then runs `sudo systemctl daemon-reload` and
+     `sudo systemctl restart ollama`.
+
+   This also turns off Ollama's web search.
+4. **Models by memory.** Models already installed come first. Any model larger than
+   about 0.65 of this computer's memory is labelled too large and never preselected.
+   With nothing suitable installed:
+
+   | Memory | Writer | Reviewer | What is known |
+   | --- | --- | --- | --- |
+   | 96 GB or more | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:120b` (65.4 GB) | gpt-oss 120B is the reviewer Axocoatl has measured |
+   | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | Runs end to end on 48 GB; this reviewer's quality has not been measured |
+   | Under 48 GB | — | — | No local pair has been tested; onboarding offers OpenRouter for both, or for the reviewer |
+
+   The reviewer must be a different model from the writer. Under 48 GB with `--yes`,
+   `--writer ollama` stays local: without `--writer-model` and `--reviewer`, naming the
+   models is a step left (onboarding never switches it to OpenRouter by itself).
+5. **Pull.** One question shows each size and the free disk, counting a tenth more for
+   Ollama's temporary files:
+   `Pull qwen3-coder:30b (18.6 GB) and gpt-oss:20b (13.8 GB)? Needs 35.6 GB free; 412.0 GB
+   free here.` With `--yes` or `--pull`, a pull that does not fit the disk is not started
+   but left as a step. A failed pull shows Ollama's own error and offers to retry. After a pull,
+   onboarding reads the model again: if Ollama pulled a variant native Sessions refuse
+   (the MLX variant on Apple silicon), it offers `ollama pull --runner llamacpp <model>`
+   (an undocumented Ollama flag) to pull the GGUF one.
+6. **Context.** Onboarding loads each model once without generating, reads the context
+   Ollama gives it, and runs the contract probes. Ollama picks 4096 tokens below about
+   23 GiB of graphics memory, and a fix run's first writer call needs about 9.7k, so a
+   context below 16384 is refused. Onboarding offers to set `OLLAMA_CONTEXT_LENGTH=32768`
+   for the service and restart it: in Homebrew's service environment,
+   `~/.homebrew/services/ollama.env` (`$XDG_CONFIG_HOME/homebrew/services/ollama.env`
+   when that is set; Homebrew reads it on `brew services restart`, and onboarding
+   writes it only when `brew services --help` says Homebrew reads that file), or in a
+   systemd drop-in for the Linux service. For the app or an `ollama serve` you run, it says what
+   to set. If the context stays small, it recommends OpenRouter.
+
+### Step 3B: Claude Code
+
+Onboarding finds the `claude` CLI and prints its path and version; without it, it
+names the Claude Code install page. Claude Code runs on your Claude Pro or Max plan:
+`claude setup-token` needs a subscription, and Anthropic API keys, Bedrock and Vertex
+are not supported by fix-claude-code. Onboarding then asks to build the sandbox image
+(`axocoatl recipe build claude-code`, about 0.6 to 0.9 GB) and to sign in
+(`axocoatl connect claude-code` runs `claude setup-token` and opens your browser; it
+needs a terminal), and sets up the reviewer alone:
+
+```text
+Choose the reviewer
+> Local Ollama gpt-oss:20b (13.8 GB, needs 48 GB memory)
+  OpenRouter (hosted, credits)
+```
+
+Claude Code runs in a Node image: Node repositories only for now.
+
+### Step 3C: Codex
+
+Codex works the same way through `axocoatl connect codex`, which builds the Codex
+sandbox image (about 0.8 to 1.2 GB) once and signs in through the browser. Onboarding
+asks which account pays for Codex runs, your ChatGPT plan (recommended) or an OpenAI API
+key (`axocoatl connect codex --api-key-only`; it needs an OpenAI Platform organization
+and is billed at API rates), and names that credential on the run command it prints
+(`--param credential=codex-chatgpt` or `codex-openai`), so storing a key later does not
+move a ChatGPT-plan setup to API billing.
+
+### Step 3D: OpenRouter
+
+Onboarding asks for two models: the writer (default `qwen/qwen3-coder`) and the
+reviewer (default `openai/gpt-oss-120b`, another vendor), and refuses the same model
+for both. The writer's output limit is 4096 tokens. The key comes from
+`--openrouter-key-env VAR`, from the configuration when onboarding updates a setup
+that has one (a `${VAR}` reference is used when `VAR` is set; at a terminal you can
+answer no and enter another key), from `OPENROUTER_API_KEY` when it is set (the
+configuration then names the variable, not the key), or from a hidden prompt (the key
+is then stored in the owner-only configuration). With `--writer openrouter` the
+reviewer runs on OpenRouter too; a `--reviewer ollama:…` is a usage error. Before writing anything, onboarding
+checks that OpenRouter accepts the key and lists both models. OpenRouter uses your
+OpenRouter credits; BYOK is not supported for native Sessions.
+
+### Step 4: the configuration
+
+Onboarding shows what it writes, backs up an existing file as
+`config.yaml.bak-<time>` next to it, and writes `config.yaml`. Besides the
+[default team](#default-team) and the provider it needs, the configuration holds the
+defaults `axocoatl run` uses, so `axocoatl run fix --task "…"` needs no `--model`:
+
+```yaml
+# Writer: ollama (axocoatl run fix)
+run:
+  models:
+    writer: "ollama:qwen3-coder:30b"
+    reviewer: "ollama:gpt-oss:20b"
+```
+
+`--model writer=…` or `--model reviewer=…` on the command line overrides them. For
+Claude Code and Codex only the reviewer is written; their loadouts name the writer's
+model. The `# Writer:` comment records who writes (for Codex, also the credential, as
+in `# Writer: codex (axocoatl run fix-codex --param credential=codex-chatgpt)`), so
+`doctor` and a later `axocoatl onboard` know the setup. The workbench uses port 8080 when it is free, otherwise the first free port
+after it, written to `server.port` (`--port` chooses one).
+
+### Step 5: check
+
+Onboarding runs the same checks as [`axocoatl doctor`](#run-doctor) and says exactly
+what is ready:
+
+```text
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b)
+  ✗ axocoatl run fix-claude-code (not set up: run `axocoatl onboard --update --writer claude-code`)
+  ✗ axocoatl run fix-codex (not set up: run `axocoatl onboard --update --writer codex`)
+  ✓ workbench Sessions (Lead ollama:qwen3-coder:30b)
+Ready: yes
+```
+
+or the steps left, with exit 1:
+
+```text
+Not ready yet, 2 steps left:
+  1) …
+  2) …
+```
+
+### Step 6: start Axocoatl
+
+```text
+How should Axocoatl run?
+> In this terminal now (axocoatl dev)
+  Always on, starting at login (a launchd or systemd service)
+  I'll start it later
+```
+
+The service is installed only after this question (or `--start service`). A service
+cannot read keys from your shell's environment, so onboarding refuses to install one
+while the configuration names an environment variable for a key. The terminal choice
+starts `axocoatl dev` as its own process; Ctrl+C stops it.
+
+### Step 7: a first run
+
+```text
+Run a first fix now on a small sample repository to prove the setup end to end?
+It runs locally. [Y/n]
+```
+
+(For Claude Code it uses your Claude plan's quota, for Codex your ChatGPT plan or
+OpenAI credits, for OpenRouter your OpenRouter credits.)
+
+Onboarding copies a small Node repository with one failing `node --test` to a new
+temporary directory only you can open, uses the daemon that runs (it waits for the
+Always-On Service Step 6 just started, or a daemon that already runs, and never starts
+a second one beside it), or starts one for the run and stops it afterwards (its first
+start downloads an 87 MB embedding model once), runs
+`axocoatl run fix --task "Paging skips the last item"` (or fix-claude-code or
+fix-codex) with your models and a receipt beside the copy, and checks the receipt with
+`axocoatl receipt verify <receipt> --key "$(axocoatl receipt key)" --repo <copy>`. It
+ends with the next command for your own repository.
+
+## Without a terminal, and dry runs
+
+Without a terminal, onboarding answers nothing by itself: it exits 3, changes nothing
+and points to `--yes`. With `--yes` and these flags it runs unattended:
+
+```sh
+axocoatl onboard --yes --writer claude-code|codex|ollama|openrouter \
+    [--reviewer PROVIDER:MODEL] [--writer-model PROVIDER:MODEL] [--ollama-url URL] \
+    [--podman create|skip] [--machine-cpus N] [--machine-memory MiB] \
+    [--pull|--no-pull] [--recipe-build|--no-recipe-build] [--connect|--no-connect] \
+    [--openrouter-key-env VAR] [--port N] [--start dev|service|none] \
+    [--smoke-test|--no-smoke-test] [--allow-sudo] [--update|--replace]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--yes` | Answer yes to every question. A `sudo` step also needs `--allow-sudo`; a sign-in also needs `--connect` and a terminal, otherwise it is a step left |
+| `--writer` | Who writes the code (Step 1). With `--update` and without it, the writer the setup has |
+| `--reviewer`, `--writer-model` | The models as `ollama:MODEL` or `openrouter:VENDOR/MODEL` (a Claude Code writer model is `anthropic:MODEL`, a Codex one `openai:MODEL`). The same model for both, or a non-OpenRouter reviewer with `--writer openrouter`, is a usage error |
+| `--ollama-url` | The Ollama server native Sessions use (default `http://localhost:11434`); it must be on this computer |
+| `--podman create\|skip` | Install Podman and create its machine when missing (the default), or leave Podman as it is |
+| `--machine-cpus`, `--machine-memory` | The size of a new Podman machine (memory in MiB) |
+| `--pull`, `--no-pull` | Pull the chosen Ollama models, or leave the pulls as steps left |
+| `--recipe-build`, `--no-recipe-build` | Build the Claude Code or Codex sandbox image |
+| `--connect`, `--no-connect` | Sign in to Claude Code or Codex now |
+| `--openrouter-key-env VAR` | Read the OpenRouter key from `VAR`; the configuration names the variable |
+| `--port` | The workbench port |
+| `--start dev\|service\|none` | Step 6 (`none` with `--yes` when not given) |
+| `--smoke-test`, `--no-smoke-test` | Step 7 (off with `--yes` when not given) |
+| `--update`, `--replace` | What to do with an existing configuration (update with `--yes` when not given) |
+
+`axocoatl onboard --plan` prints what this computer has and every action onboarding
+would take, as Enter at each question would answer it, from Step 0 to Step 7 (the
+Podman checks, the service and the first run included), and writes no file. It exits
+0. (Podman, asked for its version or state, may create its own empty settings
+directories in a home directory that has none.)
+
+Exit codes: **0** ready (and the first run passed, when it ran), **1** not ready, with
+the steps left listed, **3** a command line onboarding does not take, or no terminal
+and no `--yes`.
+
+## Running onboard again
+
+With a configuration already there, onboarding offers:
+
+- **Update this setup** (the default, and what `--yes` does): keep the file, back it
+  up, and change only what is missing or what this run chose: a provider section it
+  needs, the OpenRouter key when you chose another, `run`, and `server.port`. The
+  writer, the run models, the Codex credential and the OpenRouter key the setup has are
+  kept unless a flag names others; `axocoatl onboard --update --port 8081` changes only
+  the port. Everything else, comments included, stays as it was, and the change is
+  shown as a diff first, with every secret value hidden.
+- **Replace it**: write a new configuration; the old file is backed up first and is
+  not shown (only the new file is, with its key hidden).
+- **Leave it unchanged**: check the file as it is (Step 5) and stop: exit 0 when it is
+  ready, 1 with the steps left otherwise.
+
+<Aside type="caution" title="The user configuration can contain a key">
+An OpenRouter key typed at the hidden prompt is stored as plain text in a configuration
+file with owner-only permissions (`0600` on supported Unix systems). Axocoatl does not
+encrypt that file. Protect it and its backups, or give the key in an environment
+variable instead. Axocoatl does not load dotenv files.
 </Aside>
 
 ## Default team
 
-Both choices write the same Agents on the provider you choose. With OpenRouter
-they all use the model you enter; with Ollama, Reviewer uses the Reviewer model
-and the others use the Lead model:
+Every setup writes the same Agents. Lead, Scout and the chat Assistant run on the
+writer's model, or, for Claude Code and Codex, on the reviewer's model, since the
+workbench does not run Claude Code or Codex; Reviewer runs on the reviewer's model:
 
 | Agent | Role | Tools | May change |
 | --- | --- | --- | --- |
 | **Lead** (`lead`) | Autonomous | `read_file`, `list_dir`, `grep`, `glob`, `write_file`, `edit_file`, `bash` | Any file |
 | **Scout** (`scout`) | Worker | `read_file`, `list_dir`, `grep`, `glob`, `bash` | Nothing (`writes: []`) |
 | **Reviewer** (`reviewer`) | Worker | `read_file`, `list_dir`, `grep`, `glob`, `bash` | Nothing (`writes: []`) |
-| **Assistant** (`assistant`) | Autonomous | none | Not used in Sessions by default |
+| **Assistant** (`assistant`) | Autonomous | `read_file`, `list_dir`, `grep`, `glob` | Not used in Sessions by default |
 
 Lead owns the change. Its instructions say to look first, to verify with the tests,
 and, if it has helpers, to send a focused read-only question to Scout and to ask
@@ -137,10 +428,9 @@ line numbers and short evidence. Reviewer reports concrete defects with `file:li
 or says it found none. Neither changes files.
 Assistant is the plain chat Agent for `axocoatl chat`.
 
-This is configuration only: onboarding still creates no project, Workspace, or
-Session. A new Session selects Lead unless you choose another Agent, and starts with
-Lead alone: in **Team & budget** you enter Lead's limits and choose **Apply** before the
-first request. Scout and Reviewer are offered there as Lead's helpers; select **Let this
+A new Session selects Lead unless you choose another Agent, and starts with Lead alone:
+in **Team & budget** you enter Lead's limits and choose **Apply** before the first
+request. Scout and Reviewer are offered there as Lead's helpers; select **Let this
 Agent delegate to helpers** and enter each helper's limits to use them. Required checks
 and a required review stay off until you add them.
 [Default team](/understand/coordination/#default-team) describes how the helpers run,
@@ -158,43 +448,37 @@ Onboarding creates no files in the directory from which you run it:
 Plain config-aware commands resolve these paths regardless of the current
 directory. A repository's `axocoatl.yaml` is never selected implicitly.
 
-Running `axocoatl onboard` again never overwrites an existing user
-configuration silently. It reports the existing path and requires an explicit
-decision before replacing it.
-
 ## Run doctor
 
 ```sh
 axocoatl doctor
+axocoatl doctor --json
 ```
 
-Doctor performs these checks against the resolved user configuration:
+Doctor runs the checks onboarding's Step 5 runs, against the resolved user
+configuration, and reports each item as OK, WARN or FAIL in four sections, then what
+is ready to run and the steps left. It exits 0 when nothing failed and 1 otherwise; the
+last line is `Ready: yes` or `Ready: no`. With `--json` it prints the same report as one
+document: `ready`, `config`, `sections` (`sandbox`, `models`, `writers`, `daemon`, each a
+list of `{"name", "status": "ok|warn|fail", "detail", "fix"}`), `ready_for` and
+`steps_left`.
 
-| Check | Failure level | What to do |
+| Section | Checks | Failure level |
 |---|---|---|
-| Configuration parses and validates | Required | Fix the reported field, then run `axocoatl validate`. |
-| Configured Ollama endpoint responds | Required when configured | Start Ollama or correct `providers.ollama.base_url`. |
-| The Ollama endpoint is a loopback address | Required when configured | Native Sessions use only an Ollama server on this machine; set `providers.ollama.base_url` to one. |
-| The Ollama server reports a version native Sessions accept (0.40.6 or a later 0.40 release) | Required when configured | Doctor prints the version and why it is refused. Install Ollama 0.40.6 or later (`brew upgrade ollama`), or point `providers.ollama.base_url` at a server that runs it; for a newer minor release, upgrade Axocoatl. |
-| The Ollama server reports its cloud features disabled (`GET /api/status`) | Required when configured | Add `{"disable_ollama_cloud": true}` to `~/.ollama/server.json` or start the server with `OLLAMA_NO_CLOUD=1`, then restart Ollama; or point `providers.ollama.base_url` at a cloud-disabled server. |
-| Every configured Ollama model is present | Required when configured | Run `ollama pull <model>`. |
-| Every present configured Ollama model is a local GGUF completion model, with tool calling for an Agent that lists tools (`POST /api/show`) | Required when configured | Choose another model, or pull the GGUF variant of an MLX model with `ollama pull --runner llamacpp <model>` (an undocumented Ollama flag). |
-| Data directory is writable | Required | Fix permissions or set `AXOCOATL_DATA_DIR`. |
-| Rust toolchain | Warning | Needed only to build from source. |
-| Hosted-provider key appears present | Warning | For OpenRouter, run `axocoatl connect openrouter`. For the others, supply the key during onboarding or export the referenced environment variable before using that Agent. A key named by `api_key_secret` must be stored in the secret store. OpenAI, Anthropic, Gemini, Mistral, and OpenRouter are checked when configured. |
-| Daemon IPC is reachable | Warning | Start `axocoatl dev` or `axocoatl serve` when you need it. |
-| Podman runtime answers a bounded `podman info --format json` probe | Warning | Required for default folder Sessions and several Ways; follow the reported install, machine, or runtime guidance. |
-| Configured webhooks | Egress notice | Confirm that each named destination is intentional. |
+| Sandbox | Podman installed, its machine (on macOS) created, rootless, 4.3 or later, and, rootless, a range of subordinate ids; the client and server versions, the machine's provider, CPUs and memory (under 4 GiB warns), the kernel | FAIL, except a stopped machine (OK: it starts on first use), an untested version or provider, and a small machine (WARN) |
+| Sandbox | Landlock ABI on Linux (below 3 fails, 3 warns); SELinux on Linux (warns) | As described |
+| Sandbox | Network, workload users, egress routes and credentials (names only), browser image | WARN when something needs attention |
+| Models | The Ollama server: reachable, on this computer, an accepted version (a newer 0.x minor warns), cloud models off | FAIL |
+| Models | Each configured Ollama model: pulled, GGUF, tool calling for an Agent with tools, its size against memory (too large warns), its loaded context (below 16384 fails) and how much of it is in GPU memory; doctor loads each model once to read it and runs the contract probes | FAIL |
+| Models | OpenRouter and other hosted-provider keys present (not checked with the provider) | FAIL when an Agent or `run.models` uses OpenRouter without a key, otherwise WARN |
+| Writers | Claude Code and Codex: sandbox image built and credential stored (for Codex, the credential the setup names); the `claude`, `codex` and `gh` CLIs (`gh` signed in, for `--keep pr`); the names of stored credentials | FAIL for the writer the configuration names (its `# Writer:` comment); WARN for one partly set up |
+| Daemon | Configuration valid; data directory writable and owned; a running daemon and its version against the CLI's; the Always-On Service's program; the configured port when no daemon runs; webhooks | FAIL for the configuration and data directory; otherwise WARN |
 
-Doctor checks the Ollama server requirements of native Sessions, but not each
-model's native profile. **Team & budget** performs the exact provider/model and
-allowance review before native work starts.
-
-Doctor exits non-zero when a required check fails. A Podman warning does not
-make a provider-only one-shot command fail, but it does block the normal local
-Session path. Before reporting Podman ready, doctor checks the client, checks
-the applicable machine state on macOS, and requires the bounded runtime probe
-to return a JSON object successfully.
+Each FAIL names its fix: the exact command, or `axocoatl onboard`, which makes the
+change after asking. `Ready for` lists `axocoatl run fix` for a local or OpenRouter
+writer and `axocoatl run fix-claude-code` or `fix-codex` for those writers. With
+`sandbox.backend: e2b`, Podman problems warn (workbench Sessions use E2B), but the
+`axocoatl run` lines stay not ready until Podman is: runs always use it.
 
 ## Validate without starting the runtime
 
@@ -227,6 +511,9 @@ explicit configuration uses a `data/` directory beside the configuration file.
 axocoatl dev
 ```
 
-By default the app is at `http://localhost:8080`. Keep this process running,
+The app is at `http://localhost:8080`, or the port onboarding wrote to `server.port`.
+`dev` holds the port before it starts; when another program already listens there,
+it says which port and how to choose another, and exits. Keep this process running,
 open the `Sign in:` link it prints (or run `axocoatl url`), and choose
-**Open workspace…** to authorize the repository you want to use. Then [create your first Session →](/start/first-session/).
+**Open workspace…** to authorize the repository you want to use. Then
+[create your first Session →](/start/first-session/).

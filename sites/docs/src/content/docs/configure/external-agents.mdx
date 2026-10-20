@@ -313,9 +313,11 @@ axocoatl connect codex --api-key       # also stores the OpenAI API key OpenAI i
 This runs the official `codex login` for you and stores the ChatGPT sign-in it makes as
 the secret `codex-chatgpt`. You approve the sign-in in the browser (or, with
 `--device-auth`, enter the code Codex shows at the address it gives); you never see, copy,
-paste or type a token. Nothing but Podman (and, on a Mac, its machine, which
-`axocoatl onboard` sets up) needs to be installed on your computer: by default the pinned
-Codex 0.160.1, the one the `codex` recipe installs, runs in a throwaway container.
+paste or type a token. Nothing but Podman needs to be installed on your computer (with,
+on macOS, its machine created and running; `axocoatl onboard` installs Podman and
+creates and starts the machine after asking, and `connect codex` starts a stopped
+machine itself): by default the pinned Codex 0.160.1, the one the `codex` recipe
+installs, runs in a throwaway container.
 
 - **The image.** It is the `codex` recipe image recorded in the data root by
   `axocoatl recipe build codex`, used by its exact image id. When none is recorded (or

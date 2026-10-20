@@ -52,15 +52,16 @@ same proof as building `axocoatl-cli`.
 
 </Steps>
 
-Doctor live-probes Ollama: it requires a loopback Ollama 0.40.6 or a later 0.x release
-(and warns that one newer than the 0.40 line is unaudited) that reports its cloud
-features disabled, and every configured Ollama Agent
-model to be present as a local GGUF completion model, with tool calling for an Agent
-that lists tools. Hosted provider checks are not equivalent: they inspect credential
-presence—including OpenRouter when configured—but do not make a live model
-request. Doctor reports Podman ready only after the client and applicable
-machine state pass and a bounded `podman info --format json` probe returns a
-JSON object successfully.
+Doctor live-probes Ollama: it requires a loopback Ollama 0.40.6 or later (a later 0.x
+release warns and passes only through the contract probes) that reports its cloud
+features disabled, and every configured Ollama Agent model to be present as a local
+GGUF completion model, with tool calling for an Agent that lists tools; it loads each
+model once to read its context (below 16384 tokens fails). Hosted provider checks are
+not equivalent: they inspect credential presence—including OpenRouter when
+configured—but do not make a live model request. Doctor reports Podman ready only
+after a bounded `podman info --format json` probe returns a JSON object, and fails
+when Podman is missing, has no machine, runs rootful, is older than 4.3, or, rootless,
+has no range of subordinate ids.
 
 ## Start the embedded app
 

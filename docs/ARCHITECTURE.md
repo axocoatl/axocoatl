@@ -378,8 +378,10 @@ before canonical acceptance. Completion then leaves its dispatch gate closed.
 
 `NativeOllamaProvider` supplies an explicit bounded local capability alongside the existing
 compatible adapter. Its profile validates the configured local server's version against the
-version policy (Ollama 0.40.6, the audited release, or a later 0.40 release; pre-releases, other
-minor lines and a compiled-in denylist are refused), reported cloud-disabled mode, and a local
+version policy (Ollama 0.40.6, the audited release, a later 0.40 release, or a later 0.x
+release, which serves only after the contract probes pass on each model and is recorded as
+unaudited; pre-releases, development builds, older releases, a new major release and a
+compiled-in denylist are refused), reported cloud-disabled mode, and a local
 GGUF completion model before inference; a model Ollama shows as non-GGUF or MLX, or loads with
 any runner but llama.cpp's `llama-server`, is refused, since MLX does not hold `num_ctx` as a
 hard limit. Native `/api/chat` requests set finite context/prediction limits and disable implicit
@@ -388,7 +390,10 @@ first inference does not reload the model. After the context is observed, two co
 the person's own server and model check the guarantees the bound relies on: a prompt about four
 times the context (`truncate:false`) must be refused before any generation, and a one-token
 request must stop after one token. Passes are cached per server, version, model digest and
-context; a newer accepted version is probed again before it serves a retained profile. Plain
+context; a newer accepted version is probed again before it serves a retained profile. The
+scheduled `ollama-watch` workflow runs both probes daily against each new Ollama release and
+release candidate (an ignored test, `native::observed_context::watch`, that bypasses the version
+policy so a release candidate is probed too). Plain
 calls reserve context plus prediction capacity; JSON calls reserve two full passes (Ollama 0.40
 runs thinking and structured output in one pass, so this stays a valid, loose bound). The final structured
 response reports only the last pass, so its token measurement remains incomplete. Neither this

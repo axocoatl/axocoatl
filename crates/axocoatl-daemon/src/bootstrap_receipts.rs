@@ -80,8 +80,27 @@ async fn origin_url(repo: &std::path::Path) -> Option<String> {
 /// `ollama` and the versions the run's Outcome records for the model, or
 /// `None` when no call of the model ran.
 fn ollama_program_version(outcome: &RunOutcome, model: &str) -> Option<String> {
-    let versions = outcome.ollama_versions.get(model)?;
-    (!versions.is_empty()).then(|| format!("ollama {}", versions.join(", ")))
+    ollama_versions_program_version(outcome.ollama_versions.get(model)?)
+}
+
+/// `ollama` and `versions`, or `None` when there are none. A version newer
+/// than the audited minor line, which served only after the contract probes
+/// passed on it, is marked as such: `ollama 0.41.0 (unaudited, contract
+/// probes passed)`.
+fn ollama_versions_program_version(versions: &[String]) -> Option<String> {
+    (!versions.is_empty()).then(|| {
+        let shown: Vec<String> = versions
+            .iter()
+            .map(|version| {
+                if axocoatl_llm_ollama::ollama_version_unaudited(version) {
+                    format!("{version} (unaudited, contract probes passed)")
+                } else {
+                    version.clone()
+                }
+            })
+            .collect();
+        format!("ollama {}", shown.join(", "))
+    })
 }
 
 /// What the run status and the UI show of a receipt.
@@ -504,5 +523,28 @@ pub fn receipt_unavailable(reason: &str) -> axocoatl_session::run_outcome::RunWa
             "The run finished, but its receipt could not be signed: {reason}. The verdict and \
              exit code are unchanged."
         ),
+    }
+}
+
+#[cfg(test)]
+mod program_version_tests {
+    use super::*;
+
+    /// The receipt names the Ollama that served each model; a newer minor,
+    /// which served only after the contract probes passed, says so.
+    #[test]
+    fn an_unaudited_ollama_is_named_as_such_in_the_receipt() {
+        let versions = |list: &[&str]| -> Vec<String> {
+            list.iter().map(|version| version.to_string()).collect()
+        };
+        assert_eq!(
+            ollama_versions_program_version(&versions(&["0.40.6"])).as_deref(),
+            Some("ollama 0.40.6")
+        );
+        assert_eq!(
+            ollama_versions_program_version(&versions(&["0.40.7", "0.41.0"])).as_deref(),
+            Some("ollama 0.40.7, 0.41.0 (unaudited, contract probes passed)")
+        );
+        assert_eq!(ollama_versions_program_version(&[]), None);
     }
 }

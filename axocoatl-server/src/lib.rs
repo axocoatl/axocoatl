@@ -707,8 +707,49 @@ pub async fn serve(daemon: AxocoatlDaemon, host: &str, port: u16) -> std::io::Re
     serve_shared(state, host, port).await
 }
 
+/// The HTTP listeners for `host:port`, bound before the daemon starts so
+/// `axocoatl dev` and `serve` can say a port is taken before they print
+/// that they are running ([`serve_shared_bound`] serves on them).
+pub struct BoundListeners(Vec<tokio::net::TcpListener>);
+
+impl BoundListeners {
+    /// The port the first listener holds (the configured one, or the one an
+    /// ephemeral `port: 0` bind got).
+    pub fn port(&self) -> Option<u16> {
+        self.0
+            .first()
+            .and_then(|listener| listener.local_addr().ok())
+            .map(|address| address.port())
+    }
+}
+
+/// Bind the listeners [`serve_shared_bound`] serves on. A port another
+/// process holds fails with [`std::io::ErrorKind::AddrInUse`].
+pub async fn bind_server(host: &str, port: u16) -> std::io::Result<BoundListeners> {
+    bind_listeners(host, port).await.map(BoundListeners)
+}
+
 /// Start the HTTP server with a shared daemon state (for use alongside IPC).
 pub async fn serve_shared(state: AppState, host: &str, port: u16) -> std::io::Result<()> {
+    serve_shared_on(state, host, port, None).await
+}
+
+/// [`serve_shared`] on listeners bound beforehand with [`bind_server`].
+pub async fn serve_shared_bound(
+    state: AppState,
+    host: &str,
+    port: u16,
+    listeners: BoundListeners,
+) -> std::io::Result<()> {
+    serve_shared_on(state, host, port, Some(listeners)).await
+}
+
+async fn serve_shared_on(
+    state: AppState,
+    host: &str,
+    port: u16,
+    bound: Option<BoundListeners>,
+) -> std::io::Result<()> {
     // Pull auth + CORS from the live config.
     let (auth, cors_origins, allow_unauthenticated, token_mode, rate_cfg) = {
         let d = state.read().await;
@@ -805,7 +846,11 @@ pub async fn serve_shared(state: AppState, host: &str, port: u16) -> std::io::Re
     let addr = format!("{host}:{port}");
     tracing::info!(addr = %addr, "Starting Axocoatl API server");
 
-    let listeners = match bind_listeners(host, port).await {
+    let bound = match bound {
+        Some(BoundListeners(listeners)) => Ok(listeners),
+        None => bind_listeners(host, port).await,
+    };
+    let listeners = match bound {
         Ok(listeners) => listeners,
         Err(error) => {
             state.read().await.begin_shutdown();
@@ -1037,6 +1082,33 @@ mod tests {
             // The listener on the requested address was released.
             std::net::TcpListener::bind(format!("{}:{port}", host_literal(host))).unwrap();
         }
+    }
+
+    /// `dev` and `serve` bind before they bootstrap or print that they run:
+    /// a taken port fails then, as AddrInUse, and a free one is held for the
+    /// server.
+    #[tokio::test]
+    async fn bind_server_holds_the_port_and_refuses_a_taken_one() {
+        let bound = super::bind_server("127.0.0.1", 0).await.unwrap();
+        let port = bound.port().unwrap();
+        let error = super::bind_server("127.0.0.1", port).await.err().unwrap();
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+        drop(bound);
+        super::bind_server("127.0.0.1", port).await.unwrap();
+    }
+
+    /// `/health` says which Axocoatl runs, so `doctor` can compare it with
+    /// the CLI after an upgrade.
+    #[test]
+    fn health_names_the_daemon_version() {
+        let health = serde_json::to_value(crate::routes::HealthResponse {
+            status: "healthy".into(),
+            agents: 0,
+            version: env!("CARGO_PKG_VERSION"),
+        })
+        .unwrap();
+        assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(health["status"], "healthy");
     }
 
     fn host_literal(host: &str) -> &str {

@@ -28,20 +28,36 @@ Start it: `ollama serve &`. Verify: `curl http://localhost:11434/api/tags`.
 
 **`Ollama at http://localhost:11434 has cloud models enabled; native Sessions refuse it`**
 Native Sessions use only an Ollama server that reports its cloud features
-disabled. Add `{"disable_ollama_cloud": true}` to `~/.ollama/server.json` of
-the user that runs Ollama, or start it with `OLLAMA_NO_CLOUD=1` (macOS app:
-`launchctl setenv OLLAMA_NO_CLOUD 1`), and restart Ollama.
-`curl -s http://localhost:11434/api/status` must then show `"disabled":true`.
-You can instead run a second server, for example
+disabled. `axocoatl onboard` turns them off where the running server reads them,
+after asking, and waits until the server says so. By hand: for the Homebrew service
+or an `ollama serve` you run, add `{"disable_ollama_cloud": true}` to
+`~/.ollama/server.json` of the user that runs it and restart it
+(`brew services restart ollama`); for the macOS app, turn off Cloud in its Settings;
+for the Linux service, which runs as the user `ollama`, add
+`Environment="OLLAMA_NO_CLOUD=1"` with `sudo systemctl edit ollama` and run
+`sudo systemctl restart ollama`. `curl -s http://localhost:11434/api/status` must
+then show `"disabled":true`. You can instead run a second server, for example
 `OLLAMA_NO_CLOUD=1 OLLAMA_HOST=127.0.0.1:11436 ollama serve`, and set
 `providers.ollama.base_url` to it.
 
 **Ollama version refused**
-Native Sessions accept Ollama 0.40.6 or a later 0.40 release (the audited version is
-0.40.6). Ollama 0.20.6, pre-releases and 0.41 or later are refused, and `axocoatl
-doctor` says why: install Ollama 0.40.6 or later (`brew upgrade ollama`), or, for a newer
-minor release, upgrade Axocoatl. A Team reviewed on Ollama 0.20.6 asks to be reviewed
-again ("Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again").
+Native Sessions accept Ollama 0.40.6 and later (the audited version is 0.40.6). Later
+0.40 releases are accepted; a later 0.x release (0.41 or later) is accepted once the
+contract probes pass on each model, with a warning in `axocoatl doctor`. Ollama 0.20.6
+and older, pre-releases, development builds and a new major release are refused, and
+`axocoatl doctor` names the fix for how Ollama runs here: an upgrade
+(`brew upgrade ollama && brew services restart ollama`, or the pinned Linux installer
+`curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.40.6 sh`), a restart when
+the `ollama` on PATH is newer than the server that answers, or 0.40.6 in place of a
+version that is too new. A Team reviewed on Ollama 0.20.6 asks to be reviewed again
+("Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again").
+
+**A model loaded with a 4096-token context**
+Ollama gives models 4096 tokens on computers with less than about 23 GiB of graphics
+memory, and a fix run needs at least 16384. `axocoatl doctor` fails such a model;
+`axocoatl onboard` offers to set `OLLAMA_CONTEXT_LENGTH=32768` for the Ollama service
+(`~/.homebrew/services/ollama.env` for the Homebrew service, a systemd drop-in on
+Linux) and restart it.
 
 **Model refused as not GGUF, or run with MLX**
 Native Sessions run only GGUF models, which Ollama runs in llama.cpp's `llama-server`.

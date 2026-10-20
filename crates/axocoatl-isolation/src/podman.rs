@@ -6,7 +6,12 @@
 //!
 //! [`ensure_ready`] verifies that podman is installed and starts an existing,
 //! stopped VM when needed. It never installs host software or creates a VM;
-//! those changes require an explicit user action outside Session startup.
+//! those changes require an explicit user action outside Session startup
+//! (`axocoatl onboard` asks before it does either). [`preflight`] asks the
+//! runtime first, so a setup that reaches Podman through `CONTAINER_HOST` or
+//! `CONTAINER_CONNECTION` passes without a local machine. [`machine_spec`]
+//! sizes the machine onboarding creates, and every hint that tells someone to
+//! create one prints the same sized command ([`machine_create_hint`]).
 
 use std::time::Duration;
 
@@ -43,10 +48,10 @@ impl PodmanReadiness {
             PodmanReadiness::NotInstalled => {
                 format!("podman not installed — {}", manual_install_hint())
             }
-            PodmanReadiness::MachineMissing => {
-                "podman installed, but no VM — run: podman machine init && podman machine start"
-                    .to_string()
-            }
+            PodmanReadiness::MachineMissing => format!(
+                "podman installed, but no VM — run `axocoatl onboard`, or: {}",
+                machine_create_hint()
+            ),
             PodmanReadiness::MachineStopped => {
                 "podman installed, VM stopped — run: podman machine start".to_string()
             }
@@ -97,7 +102,7 @@ async fn bounded_output(
 }
 
 async fn has(bin: &str) -> Result<bool, IsolationError> {
-    if !command_exists_on_path(bin) {
+    if !command_exists(bin) {
         return Ok(false);
     }
     let output = bounded_output(bin, &["--version"], READINESS_COMMAND_TIMEOUT).await?;
@@ -143,9 +148,9 @@ fn validate_runtime_info(stdout: &[u8]) -> Result<(), IsolationError> {
 
 /// Prove that the Podman service can answer a bounded runtime request. A
 /// working client binary or a running machine entry alone is not enough.
-async fn runtime_available() -> Result<(), IsolationError> {
+async fn runtime_available_with(program: &str) -> Result<(), IsolationError> {
     let output = bounded_output(
-        "podman",
+        program,
         &["info", "--format", "json"],
         READINESS_COMMAND_TIMEOUT,
     )
@@ -163,9 +168,9 @@ async fn runtime_available() -> Result<(), IsolationError> {
 }
 
 /// `(machine exists, machine running)` — only meaningful on macOS/Windows.
-async fn machine_state() -> Result<(bool, bool), IsolationError> {
+async fn machine_state_with(program: &str) -> Result<(bool, bool), IsolationError> {
     let output = bounded_output(
-        "podman",
+        program,
         &["machine", "list", "--format", "json"],
         READINESS_COMMAND_TIMEOUT,
     )
@@ -197,27 +202,195 @@ fn machine_state_from_output(
     Ok((!machines.is_empty(), running))
 }
 
+/// Which Podman connection this process's environment selects.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ConnectionOverride {
+    /// Neither variable is set: Podman uses its default connection (on
+    /// macOS, the default machine).
+    #[default]
+    None,
+    /// `CONTAINER_HOST=…`: a Podman service reached by URL, never a machine
+    /// Axocoatl manages.
+    Host(String),
+    /// `CONTAINER_CONNECTION=NAME`: a named connection, which is a machine
+    /// of that name when `podman machine list` lists one.
+    Connection(String),
+}
+
+impl ConnectionOverride {
+    /// What `CONTAINER_HOST` and `CONTAINER_CONNECTION` say (`CONTAINER_HOST`
+    /// first, as Podman reads it).
+    pub fn from_env() -> Self {
+        let read = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        };
+        if let Some(host) = read("CONTAINER_HOST") {
+            ConnectionOverride::Host(host)
+        } else if let Some(name) = read("CONTAINER_CONNECTION") {
+            ConnectionOverride::Connection(name)
+        } else {
+            ConnectionOverride::None
+        }
+    }
+
+    /// `CONTAINER_HOST=…` or `CONTAINER_CONNECTION=…`, for messages.
+    pub fn describe(&self) -> Option<String> {
+        match self {
+            ConnectionOverride::None => None,
+            ConnectionOverride::Host(host) => Some(format!("CONTAINER_HOST={host}")),
+            ConnectionOverride::Connection(name) => Some(format!("CONTAINER_CONNECTION={name}")),
+        }
+    }
+}
+
+/// Ask the runtime first: when `podman info` answers, Podman is ready,
+/// however it is reached (a local machine, `CONTAINER_HOST` or
+/// `CONTAINER_CONNECTION`). Only when it does not does [`detect`] say why
+/// (not installed, no machine, a stopped machine, or the error).
+pub async fn preflight() -> PodmanReadiness {
+    preflight_with(PODMAN).await
+}
+
+/// [`preflight`] with the Podman client at `program`.
+pub async fn preflight_with(program: &str) -> PodmanReadiness {
+    preflight_through(program, &ConnectionOverride::from_env()).await
+}
+
+/// [`preflight_with`] given the connection the environment selects. When
+/// one is selected and Podman does not answer through it, the default
+/// machine's state says nothing about that connection, so a missing or
+/// stopped default machine is never reported (and onboarding never offers
+/// to create one) for it. The one exception is `CONTAINER_CONNECTION`
+/// naming a machine that is stopped: that machine starts on first use like
+/// the default one.
+pub async fn preflight_through(program: &str, connection: &ConnectionOverride) -> PodmanReadiness {
+    if !command_exists(program) {
+        return PodmanReadiness::NotInstalled;
+    }
+    let error = match runtime_available_with(program).await {
+        Ok(()) => return PodmanReadiness::Ready,
+        Err(error) => error,
+    };
+    let unavailable = |described: String| {
+        PodmanReadiness::Unavailable(format!(
+            "{described} is set, and Podman does not answer through it: {error}"
+        ))
+    };
+    match connection {
+        ConnectionOverride::None => detect_with(program).await,
+        ConnectionOverride::Host(_) => unavailable(connection.describe().unwrap_or_default()),
+        ConnectionOverride::Connection(name) => {
+            let stopped_machine = needs_machine()
+                && machine_list_with(program).await.is_ok_and(|machines| {
+                    machines
+                        .iter()
+                        .any(|machine| machine.name == *name && !machine.running)
+                });
+            if stopped_machine {
+                PodmanReadiness::MachineStopped
+            } else {
+                unavailable(connection.describe().unwrap_or_default())
+            }
+        }
+    }
+}
+
+/// `podman machine list --format json`, read.
+async fn machine_list_with(
+    program: &str,
+) -> Result<Vec<crate::podman_report::MachineInfo>, IsolationError> {
+    let output = bounded_output(
+        program,
+        &["machine", "list", "--format", "json"],
+        READINESS_COMMAND_TIMEOUT,
+    )
+    .await?;
+    if output.timed_out {
+        return Err(IsolationError::Timeout(READINESS_COMMAND_TIMEOUT));
+    }
+    if !output.status.success() {
+        return Err(IsolationError::OciSetupFailed(format!(
+            "podman machine list failed: {}",
+            command_error_detail(&output)
+        )));
+    }
+    crate::podman_report::parse_machine_list(&output.stdout).map_err(IsolationError::OciSetupFailed)
+}
+
+/// The stopped machine to start: the one `CONTAINER_CONNECTION` names,
+/// else the default machine, else the only machine. `None` when Podman
+/// lists no such machine (then `podman machine start` starts the default).
+pub fn machine_to_start(
+    machines: &[crate::podman_report::MachineInfo],
+    connection: &ConnectionOverride,
+) -> Option<String> {
+    if let ConnectionOverride::Connection(name) = connection {
+        return machines
+            .iter()
+            .any(|machine| machine.name == *name)
+            .then(|| name.clone());
+    }
+    machines
+        .iter()
+        .find(|machine| machine.default)
+        .or_else(|| (machines.len() == 1).then(|| &machines[0]))
+        .map(|machine| machine.name.clone())
+}
+
+const PODMAN: &str = "podman";
+
+/// `program` is runnable: a path to an executable file, or a name found on
+/// PATH.
+fn command_exists(program: &str) -> bool {
+    if program.contains('/') {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            return std::fs::metadata(program).is_ok_and(|metadata| {
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            });
+        }
+        #[cfg(not(unix))]
+        {
+            return std::path::Path::new(program).is_file();
+        }
+    }
+    command_exists_on_path(program)
+}
+
 /// Inspect the current podman readiness.
 pub async fn detect() -> PodmanReadiness {
-    let installed = match has("podman").await {
-        Ok(installed) => installed,
-        Err(error) => return PodmanReadiness::Unavailable(error.to_string()),
+    detect_with(PODMAN).await
+}
+
+/// [`detect`] with the Podman client at `program`.
+pub async fn detect_with(program: &str) -> PodmanReadiness {
+    let installed = if command_exists(program) {
+        match has(program).await {
+            Ok(installed) => installed,
+            Err(error) => return PodmanReadiness::Unavailable(error.to_string()),
+        }
+    } else {
+        false
     };
     if !installed {
         return PodmanReadiness::NotInstalled;
     }
     if !needs_machine() {
         // Linux / WSL — podman runs containers natively, no VM.
-        return match runtime_available().await {
+        return match runtime_available_with(program).await {
             Ok(()) => PodmanReadiness::Ready,
             Err(error) => PodmanReadiness::Unavailable(error.to_string()),
         };
     }
-    match machine_state().await {
+    match machine_state_with(program).await {
         Err(error) => PodmanReadiness::Unavailable(error.to_string()),
         Ok((false, _)) => PodmanReadiness::MachineMissing,
         Ok((true, false)) => PodmanReadiness::MachineStopped,
-        Ok((true, true)) => match runtime_available().await {
+        Ok((true, true)) => match runtime_available_with(program).await {
             Ok(()) => PodmanReadiness::Ready,
             Err(error) => PodmanReadiness::Unavailable(error.to_string()),
         },
@@ -235,10 +408,10 @@ fn ready_action(readiness: PodmanReadiness) -> ReadyAction {
     match readiness {
         PodmanReadiness::Ready => ReadyAction::Ready,
         PodmanReadiness::MachineStopped => ReadyAction::StartExistingMachine,
-        PodmanReadiness::MachineMissing => ReadyAction::Fail(
-            "podman is installed but has no VM — run: podman machine init && podman machine start"
-                .to_string(),
-        ),
+        PodmanReadiness::MachineMissing => ReadyAction::Fail(format!(
+            "podman is installed but has no VM — run `axocoatl onboard`, or: {}",
+            machine_create_hint()
+        )),
         PodmanReadiness::NotInstalled => ReadyAction::Fail(format!(
             "podman is required for local Session isolation but is not installed. Axocoatl will not install host software automatically; {}",
             manual_install_hint()
@@ -259,17 +432,36 @@ pub async fn ensure_ready() -> Result<(), IsolationError> {
     // detect/start/re-probe transition so one daemon never launches competing
     // `podman machine start` clients against the same managed VM.
     let _readiness = readiness_lock.lock().await;
-    match ready_action(detect().await) {
+    match ready_action(preflight().await) {
         ReadyAction::Ready => Ok(()),
-        ReadyAction::StartExistingMachine => machine_start().await,
+        ReadyAction::StartExistingMachine => {
+            machine_start(PODMAN, &ConnectionOverride::from_env()).await
+        }
         ReadyAction::Fail(message) => Err(IsolationError::OciSetupFailed(message)),
     }
 }
 
-/// Start an existing (stopped) `podman machine`.
-async fn machine_start() -> Result<(), IsolationError> {
-    tracing::info!("starting the podman machine");
-    let output = bounded_output("podman", &["machine", "start"], MACHINE_START_TIMEOUT)
+/// Start an existing (stopped) `podman machine`: the one in use, by name
+/// ([`machine_to_start`]), so a machine with another name than
+/// `podman-machine-default` starts too.
+async fn machine_start(
+    program: &str,
+    connection: &ConnectionOverride,
+) -> Result<(), IsolationError> {
+    // Podman starts `podman-machine-default` when no name is given.
+    let name = match machine_list_with(program).await {
+        Ok(machines) => {
+            machine_to_start(&machines, connection).filter(|name| name != "podman-machine-default")
+        }
+        Err(_) => None,
+    };
+    tracing::info!(
+        machine = name.as_deref().unwrap_or("default"),
+        "starting the podman machine"
+    );
+    let mut args = vec!["machine", "start"];
+    args.extend(name.as_deref());
+    let output = bounded_output(program, &args, MACHINE_START_TIMEOUT)
         .await
         .map_err(|error| {
             IsolationError::OciSetupFailed(format!("podman machine start: {error}"))
@@ -279,7 +471,7 @@ async fn machine_start() -> Result<(), IsolationError> {
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     if output.status.success() || stderr.contains("already running") {
-        runtime_available().await.map_err(|error| {
+        runtime_available_with(program).await.map_err(|error| {
             IsolationError::OciSetupFailed(format!(
                 "podman machine started but its runtime is not ready: {error}"
             ))
@@ -293,28 +485,399 @@ async fn machine_start() -> Result<(), IsolationError> {
 }
 
 /// The exact command to install podman on the current OS.
-pub fn manual_install_hint() -> &'static str {
+pub fn manual_install_hint() -> String {
     #[cfg(target_os = "linux")]
     {
-        "install it, e.g.: sudo apt-get install -y podman  (or dnf/pacman/zypper)"
+        "run `axocoatl onboard` (it asks before installing), or install it, e.g.: sudo apt-get \
+         install -y podman  (or dnf/pacman/zypper)"
+            .to_string()
     }
     #[cfg(target_os = "macos")]
     {
-        "install it: brew install podman && podman machine init && podman machine start"
+        format!(
+            "run `axocoatl onboard` (it asks before installing), or install it: brew install \
+             podman && {}",
+            machine_create_hint()
+        )
     }
     #[cfg(target_os = "windows")]
     {
-        "install it: winget install RedHat.Podman, then: podman machine init && podman machine start"
+        format!(
+            "install it: winget install RedHat.Podman, then: {}",
+            machine_create_hint()
+        )
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
-        "install podman — see https://podman.io/docs/installation"
+        "install podman — see https://podman.io/docs/installation".to_string()
     }
+}
+
+// ── The machine Axocoatl creates ────────────────────────────────────────
+
+/// The provider Axocoatl creates a macOS machine with: Apple's
+/// Virtualization framework, the one Axocoatl is tested with. Homebrew's
+/// Podman uses it by default; the podman.io package defaults to libkrun.
+pub const MACHINE_PROVIDER: &str = "applehv";
+
+/// The machine size Axocoatl is tested with: 6 CPUs and 8 GiB of memory.
+pub const TESTED_MACHINE_CPUS: u64 = 6;
+/// See [`TESTED_MACHINE_CPUS`].
+pub const TESTED_MACHINE_MEMORY_MIB: u64 = 8192;
+/// The disk the machine Axocoatl creates gets, in GiB.
+pub const MACHINE_DISK_GIB: u64 = 60;
+/// Below this a machine holds too few Sessions (each may take 2 GiB), and
+/// `doctor` warns.
+pub const MIN_MACHINE_MEMORY_MIB: u64 = 4096;
+/// What creating a machine downloads (its Fedora CoreOS image).
+pub const MACHINE_DOWNLOAD: &str = "about 0.9 GB";
+/// Starting a machine that exists.
+pub const MACHINE_START_COMMAND: &str = "podman machine start";
+
+/// The size of the Podman machine Axocoatl creates on a computer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MachineSpec {
+    pub cpus: u64,
+    pub memory_mib: u64,
+    pub disk_gib: u64,
+}
+
+/// The machine for a computer with `ram_bytes` of memory and `ncpu`
+/// processors: the tested 6 CPUs and 8 GiB, clamped to half the processors
+/// and half the memory (rounded down to 512 MiB, at least 2 GiB). Never
+/// rootful; [`MACHINE_PROVIDER`] on macOS.
+pub fn machine_spec(ram_bytes: u64, ncpu: u64) -> MachineSpec {
+    let cpus = (ncpu / 2).clamp(1, TESTED_MACHINE_CPUS);
+    let half_mib = ram_bytes / 2 / (1024 * 1024);
+    let memory_mib = (half_mib / 512 * 512).clamp(2048, TESTED_MACHINE_MEMORY_MIB);
+    MachineSpec {
+        cpus,
+        memory_mib,
+        disk_gib: MACHINE_DISK_GIB,
+    }
+}
+
+/// [`machine_spec`] for this computer. When its memory cannot be read, the
+/// tested size.
+pub fn host_machine_spec() -> MachineSpec {
+    machine_spec(
+        crate::host::memory_bytes().unwrap_or(TESTED_MACHINE_MEMORY_MIB * 2 * 1024 * 1024),
+        crate::host::cpu_count(),
+    )
+}
+
+impl MachineSpec {
+    /// The size Axocoatl is tested with.
+    pub fn tested(&self) -> bool {
+        self.cpus == TESTED_MACHINE_CPUS && self.memory_mib == TESTED_MACHINE_MEMORY_MIB
+    }
+
+    /// `podman` arguments that create a machine of this size (`name`: the
+    /// default machine when `None`). Never `--rootful`.
+    pub fn init_args(&self, name: Option<&str>) -> Vec<String> {
+        let mut args = vec![
+            "machine".to_string(),
+            "init".to_string(),
+            "--cpus".to_string(),
+            self.cpus.to_string(),
+            "--memory".to_string(),
+            self.memory_mib.to_string(),
+            "--disk-size".to_string(),
+            self.disk_gib.to_string(),
+        ];
+        args.extend(name.map(str::to_string));
+        args
+    }
+
+    /// The command that creates the default machine of this size.
+    pub fn init_command(&self) -> String {
+        format!("podman {}", self.init_args(None).join(" "))
+    }
+
+    /// The memory as people say it: `8 GiB`, `6.5 GiB`.
+    pub fn memory_text(&self) -> String {
+        gib_text(self.memory_mib)
+    }
+}
+
+/// `mib` as GiB, with one decimal only when it is not whole.
+pub fn gib_text(mib: u64) -> String {
+    if mib.is_multiple_of(1024) {
+        format!("{} GiB", mib / 1024)
+    } else {
+        format!("{:.1} GiB", mib as f64 / 1024.0)
+    }
+}
+
+/// The commands that create and start the machine for this computer, as
+/// every hint prints them.
+pub fn machine_create_hint() -> String {
+    format!(
+        "{} && {MACHINE_START_COMMAND}",
+        host_machine_spec().init_command()
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_machine_is_sized_from_memory_and_processors_and_capped_at_the_tested_size() {
+        const GIB: u64 = 1 << 30;
+        let tested = machine_spec(48 * GIB, 18);
+        assert_eq!(
+            tested,
+            MachineSpec {
+                cpus: 6,
+                memory_mib: 8192,
+                disk_gib: 60
+            }
+        );
+        assert!(tested.tested());
+        assert_eq!(
+            tested.init_command(),
+            "podman machine init --cpus 6 --memory 8192 --disk-size 60"
+        );
+        assert_eq!(tested.memory_text(), "8 GiB");
+        assert!(!tested
+            .init_args(None)
+            .iter()
+            .any(|arg| arg.contains("rootful")));
+        assert_eq!(
+            tested
+                .init_args(Some("axocoatl"))
+                .last()
+                .map(String::as_str),
+            Some("axocoatl")
+        );
+        let small = machine_spec(16 * GIB, 8);
+        assert_eq!((small.cpus, small.memory_mib), (4, 8192));
+        assert!(!small.tested());
+        let smaller = machine_spec(8 * GIB, 8);
+        assert_eq!((smaller.cpus, smaller.memory_mib), (4, 4096));
+        let odd = machine_spec(13 * GIB, 3);
+        assert_eq!((odd.cpus, odd.memory_mib), (1, 6656));
+        assert_eq!(odd.memory_text(), "6.5 GiB");
+        let tiny = machine_spec(2 * GIB, 1);
+        assert_eq!((tiny.cpus, tiny.memory_mib), (1, 2048));
+        assert_eq!(machine_spec(512 * GIB, 64), tested);
+    }
+
+    /// Every hint that tells someone to create a machine prints the sized
+    /// command onboarding runs, never Podman's 2 GiB default.
+    #[test]
+    fn every_create_hint_prints_the_sized_machine() {
+        let hint = machine_create_hint();
+        assert!(hint.starts_with("podman machine init --cpus "), "{hint}");
+        assert!(hint.contains(" --memory "), "{hint}");
+        assert!(hint.ends_with("&& podman machine start"), "{hint}");
+        assert!(PodmanReadiness::MachineMissing.summary().contains(&hint));
+        let ReadyAction::Fail(message) = ready_action(PodmanReadiness::MachineMissing) else {
+            panic!("a missing machine fails");
+        };
+        assert!(message.contains(&hint), "{message}");
+        assert!(message.contains("axocoatl onboard"), "{message}");
+        if cfg!(target_os = "macos") {
+            assert!(manual_install_hint().contains(&hint));
+        }
+    }
+
+    #[cfg(unix)]
+    fn shim(directory: &std::path::Path, body: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = directory.join("podman");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> \"{}/calls.log\"\n{body}\n",
+                directory.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.display().to_string()
+    }
+
+    #[cfg(unix)]
+    fn calls(directory: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(directory.join("calls.log"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// A Podman that answers `podman info` is ready however it is reached:
+    /// preflight never lists machines then (CONTAINER_HOST or
+    /// CONTAINER_CONNECTION setups have none).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn preflight_asks_the_runtime_first() {
+        let directory = tempfile::tempdir().unwrap();
+        let podman = shim(
+            directory.path(),
+            r#"case "$*" in
+  "info --format json") echo '{"host":{},"store":{}}' ;;
+  *) echo "unexpected: $*" >&2; exit 125 ;;
+esac"#,
+        );
+        assert_eq!(preflight_with(&podman).await, PodmanReadiness::Ready);
+        assert_eq!(calls(directory.path()), ["info --format json"]);
+    }
+
+    /// When the runtime does not answer, preflight says why: a stopped
+    /// machine (which `ensure_ready` starts), no machine, or no Podman.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn preflight_explains_a_runtime_that_does_not_answer() {
+        let directory = tempfile::tempdir().unwrap();
+        let podman = shim(
+            directory.path(),
+            r#"case "$*" in
+  "--version") echo "podman version 5.8.2" ;;
+  "machine list --format json") echo '[{"Name":"podman-machine-default","Running":false}]' ;;
+  *) echo "Cannot connect to Podman" >&2; exit 125 ;;
+esac"#,
+        );
+        let expected = if needs_machine() {
+            PodmanReadiness::MachineStopped
+        } else {
+            PodmanReadiness::Unavailable(String::new())
+        };
+        match (preflight_with(&podman).await, expected) {
+            (PodmanReadiness::Unavailable(error), PodmanReadiness::Unavailable(_)) => {
+                assert!(error.contains("Cannot connect to Podman"), "{error}")
+            }
+            (actual, expected) => assert_eq!(actual, expected),
+        }
+        assert_eq!(calls(directory.path())[0], "info --format json");
+        let missing = directory.path().join("absent").display().to_string();
+        assert_eq!(
+            preflight_with(&missing).await,
+            PodmanReadiness::NotInstalled
+        );
+    }
+
+    /// With CONTAINER_HOST or CONTAINER_CONNECTION set, a Podman that does
+    /// not answer through it is unavailable, never "no machine": the
+    /// default machine is not the one in use, so nothing offers to create
+    /// it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_named_connection_that_does_not_answer_is_unavailable() {
+        let directory = tempfile::tempdir().unwrap();
+        let podman = shim(
+            directory.path(),
+            r#"case "$*" in
+  "--version") echo "podman version 5.8.2" ;;
+  "machine list --format json") echo '[]' ;;
+  *) echo "Cannot connect to Podman" >&2; exit 125 ;;
+esac"#,
+        );
+        let readiness = preflight_through(
+            &podman,
+            &ConnectionOverride::Host("unix:///tmp/x.sock".into()),
+        )
+        .await;
+        let PodmanReadiness::Unavailable(error) = readiness else {
+            panic!("{readiness:?}");
+        };
+        assert!(
+            error.starts_with("CONTAINER_HOST=unix:///tmp/x.sock is set"),
+            "{error}"
+        );
+        assert!(error.contains("Cannot connect to Podman"), "{error}");
+        assert!(!calls(directory.path())
+            .iter()
+            .any(|call| call.starts_with("machine")));
+        if needs_machine() {
+            assert_eq!(
+                preflight_through(&podman, &ConnectionOverride::None).await,
+                PodmanReadiness::MachineMissing
+            );
+        }
+    }
+
+    /// `CONTAINER_CONNECTION` naming a stopped machine is that machine,
+    /// stopped (it starts on first use, by name); naming anything else that
+    /// does not answer is unavailable.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn container_connection_naming_a_stopped_machine_starts_it_by_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let podman = shim(
+            directory.path(),
+            r#"case "$*" in
+  "--version") echo "podman version 5.8.2" ;;
+  "machine list --format json") echo '[{"Name":"podman-machine-default","Default":true,"Running":false},{"Name":"axocoatl","Default":false,"Running":false}]' ;;
+  "machine start axocoatl") touch "$(dirname "$0")/running" ;;
+  "info --format json") if [ -f "$(dirname "$0")/running" ]; then echo '{"host":{}}'; else echo "Cannot connect to Podman" >&2; exit 125; fi ;;
+  *) echo "unexpected: $*" >&2; exit 125 ;;
+esac"#,
+        );
+        let named = ConnectionOverride::Connection("axocoatl".into());
+        let other = ConnectionOverride::Connection("remote-box".into());
+        if needs_machine() {
+            assert_eq!(
+                preflight_through(&podman, &named).await,
+                PodmanReadiness::MachineStopped
+            );
+        }
+        let PodmanReadiness::Unavailable(error) = preflight_through(&podman, &other).await else {
+            panic!("a connection that is not a machine is unavailable");
+        };
+        assert!(
+            error.starts_with("CONTAINER_CONNECTION=remote-box is set"),
+            "{error}"
+        );
+        machine_start(&podman, &named).await.unwrap();
+        assert!(calls(directory.path())
+            .iter()
+            .any(|call| call == "machine start axocoatl"));
+        assert!(!calls(directory.path())
+            .iter()
+            .any(|call| call == "machine start"));
+    }
+
+    /// The machine `ensure_ready` starts is named: the one
+    /// `CONTAINER_CONNECTION` names, else the default, else the only one.
+    #[test]
+    fn the_machine_to_start_is_named() {
+        let machine = |name: &str, default: bool| crate::podman_report::MachineInfo {
+            name: name.to_string(),
+            default,
+            ..Default::default()
+        };
+        let none = ConnectionOverride::None;
+        assert_eq!(
+            machine_to_start(&[machine("dev", false)], &none).as_deref(),
+            Some("dev")
+        );
+        assert_eq!(
+            machine_to_start(&[machine("a", false), machine("b", true)], &none).as_deref(),
+            Some("b")
+        );
+        assert_eq!(
+            machine_to_start(&[machine("a", false), machine("b", false)], &none),
+            None
+        );
+        assert_eq!(
+            machine_to_start(
+                &[machine("a", true), machine("axocoatl", false)],
+                &ConnectionOverride::Connection("axocoatl".into())
+            )
+            .as_deref(),
+            Some("axocoatl")
+        );
+        assert_eq!(
+            machine_to_start(
+                &[machine("a", true)],
+                &ConnectionOverride::Connection("remote".into())
+            ),
+            None
+        );
+    }
 
     #[test]
     fn missing_runtime_requires_explicit_host_install() {

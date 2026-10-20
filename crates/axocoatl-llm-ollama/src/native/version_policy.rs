@@ -5,30 +5,40 @@
 //! `shift:false` never slides the context) were audited in the Ollama 0.40.6
 //! source, where every GGUF model runs in llama.cpp's `llama-server`
 //! (`llm/server.go` `NewLlamaServer`; `server/sched.go` uses it for every model
-//! that is not safetensors). Later patch releases of the same minor line are
-//! accepted, and each server is still checked by the contract probes on the
-//! person's own model before a Team uses it. Pre-releases, development builds,
-//! other minor lines and the releases on [`DENIED_OLLAMA_VERSIONS`] are refused.
+//! that is not safetensors). Later releases of 0.40 and later 0.x minor
+//! releases are accepted as well, because native execution never trusts the
+//! audit alone: before a Team or a run uses a model, the contract probes
+//! (`contract_probe`) check both guarantees on the person's own server and
+//! model, and a server whose version changed is probed again before it
+//! serves. A release newer than the audited minor line is accepted only
+//! through those probes and is reported as unaudited
+//! ([`ollama_version_unaudited`]): `doctor` warns about it, onboarding says
+//! so, and a run's receipt records it. Pre-releases, development builds,
+//! releases older than the audited one, a new major release and the releases
+//! on [`DENIED_OLLAMA_VERSIONS`] are refused.
 
 /// The Ollama release whose source the native guarantees were audited
-/// against. Native execution accepts this release and later patch releases
-/// of its minor line (`0.40.P`, `P >= 6`).
+/// against. Native execution accepts this release, later patch releases of
+/// its minor line (`0.40.P`, `P >= 6`) and, through the contract probes,
+/// later 0.x minor releases.
 pub const AUDITED_OLLAMA_VERSION: &str = "0.40.6";
 
 const ACCEPTED_MAJOR: u64 = 0;
-const ACCEPTED_MINOR: u64 = 40;
+const AUDITED_MINOR: u64 = 40;
 const FIRST_ACCEPTED_PATCH: u64 = 6;
 
 /// The last release native execution accepted before 0.40, refused now with
 /// its own explanation.
 const PREVIOUS_AUDITED_VERSION: &str = "0.20.6";
 
-/// Releases of the accepted line that are refused anyway, because one breaks a
-/// guarantee native execution relies on. Empty: none is known.
+/// Releases that are refused anyway, because one breaks a guarantee native
+/// execution relies on. Empty: none is known.
 pub const DENIED_OLLAMA_VERSIONS: &[&str] = &[];
 
 /// Why native execution refuses an Ollama server that reports `version`, or
-/// `None` when the version is accepted.
+/// `None` when the version is accepted. An accepted version newer than the
+/// audited minor line is still unaudited ([`ollama_version_unaudited`]); the
+/// contract probes decide whether a model may run on it.
 pub fn ollama_version_refusal(version: &str) -> Option<String> {
     refusal_with(version, DENIED_OLLAMA_VERSIONS)
 }
@@ -36,6 +46,27 @@ pub fn ollama_version_refusal(version: &str) -> Option<String> {
 /// Native execution accepts an Ollama server that reports `version`.
 pub fn ollama_version_accepted(version: &str) -> bool {
     ollama_version_refusal(version).is_none()
+}
+
+/// `version` is accepted but newer than the audited minor line (0.41 or a
+/// later 0.x release): native execution runs a model on it only after the
+/// contract probes pass for that model, and says the version is unaudited.
+pub fn ollama_version_unaudited(version: &str) -> bool {
+    ollama_version_accepted(version)
+        && release_numbers(version)
+            .is_some_and(|[major, minor, _]| major == ACCEPTED_MAJOR && minor > AUDITED_MINOR)
+}
+
+/// What setup, `doctor` and a receipt say about an accepted version that is
+/// newer than the audited one, or `None` for an audited or refused version.
+pub fn ollama_version_note(version: &str) -> Option<String> {
+    ollama_version_unaudited(version).then(|| {
+        let shown: String = version.chars().take(64).collect();
+        format!(
+            "Ollama {shown} is newer than the audited {AUDITED_OLLAMA_VERSION}; native Sessions \
+             and runs use a model on it only after the contract probes pass for that model"
+        )
+    })
 }
 
 fn refusal_with(version: &str, denied: &[&str]) -> Option<String> {
@@ -51,13 +82,13 @@ fn refusal_with(version: &str, denied: &[&str]) -> Option<String> {
     if version.contains('-') || version.contains('+') {
         return Some(format!(
             "Ollama {shown} is a pre-release or a local build; native Sessions accept only a \
-             released Ollama {AUDITED_OLLAMA_VERSION} or a later 0.{ACCEPTED_MINOR} release"
+             released Ollama {AUDITED_OLLAMA_VERSION} or a later 0.x release"
         ));
     }
     let Some([major, minor, patch]) = release_numbers(version) else {
         return Some(format!(
             "Ollama reported the version {shown:?}, which is not a release number; install Ollama \
-             {AUDITED_OLLAMA_VERSION} or a later 0.{ACCEPTED_MINOR} release"
+             {AUDITED_OLLAMA_VERSION} or a later 0.x release"
         ));
     };
     if (major, minor, patch) == (0, 0, 0) {
@@ -66,14 +97,14 @@ fn refusal_with(version: &str, denied: &[&str]) -> Option<String> {
              a released Ollama {AUDITED_OLLAMA_VERSION} or later"
         ));
     }
-    if (major, minor) > (ACCEPTED_MAJOR, ACCEPTED_MINOR) {
+    if major > ACCEPTED_MAJOR {
         return Some(format!(
-            "Ollama {shown} is newer than this Axocoatl supports (Ollama {AUDITED_OLLAMA_VERSION} \
-             or a later 0.{ACCEPTED_MINOR} release); upgrade Axocoatl, or install a 0.{ACCEPTED_MINOR} \
-             release of Ollama"
+            "Ollama {shown} is a new major release, which this Axocoatl has not been checked \
+             against; install Ollama {AUDITED_OLLAMA_VERSION} or a later 0.x release, or upgrade \
+             Axocoatl"
         ));
     }
-    if (major, minor, patch) < (ACCEPTED_MAJOR, ACCEPTED_MINOR, FIRST_ACCEPTED_PATCH) {
+    if (major, minor, patch) < (ACCEPTED_MAJOR, AUDITED_MINOR, FIRST_ACCEPTED_PATCH) {
         return Some(format!(
             "Ollama {shown} is older than native Sessions support; upgrade Ollama to \
              {AUDITED_OLLAMA_VERSION} or later"
@@ -82,8 +113,8 @@ fn refusal_with(version: &str, denied: &[&str]) -> Option<String> {
     if denied.contains(&version) {
         return Some(format!(
             "Ollama {shown} is refused: this release is known to break a guarantee native \
-             Sessions rely on; install another 0.{ACCEPTED_MINOR} release, {AUDITED_OLLAMA_VERSION} \
-             or later"
+             Sessions rely on; install {AUDITED_OLLAMA_VERSION} or another release that is not \
+             refused"
         ));
     }
     None
@@ -112,15 +143,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_audited_release_and_later_patches_of_its_line_are_accepted() {
+    fn the_audited_release_and_later_patches_of_its_line_are_accepted_and_audited() {
         for version in [AUDITED_OLLAMA_VERSION, "0.40.6", "0.40.7", "0.40.12"] {
             assert_eq!(ollama_version_refusal(version), None, "{version}");
             assert!(ollama_version_accepted(version));
+            assert!(!ollama_version_unaudited(version), "{version}");
+            assert_eq!(ollama_version_note(version), None, "{version}");
+        }
+    }
+
+    /// Ollama ships a minor release every few weeks and Homebrew and the
+    /// app serve only the latest: a newer 0.x minor is accepted, unaudited,
+    /// and the contract probes decide for each model.
+    #[test]
+    fn a_newer_minor_release_is_accepted_as_unaudited() {
+        for version in ["0.41.0", "0.41.3", "0.52.1", "0.99.0"] {
+            assert_eq!(ollama_version_refusal(version), None, "{version}");
+            assert!(ollama_version_accepted(version));
+            assert!(ollama_version_unaudited(version), "{version}");
+            let note = ollama_version_note(version).unwrap();
+            assert!(note.contains(&format!(
+                "Ollama {version} is newer than the audited 0.40.6"
+            )));
+            assert!(note.contains("contract probes pass"), "{note}");
         }
     }
 
     #[test]
-    fn older_newer_pre_release_and_development_builds_are_refused_with_their_reason() {
+    fn older_major_pre_release_and_development_builds_are_refused_with_their_reason() {
         for (version, reason) in [
             (
                 "0.40.5",
@@ -128,10 +178,10 @@ mod tests {
             ),
             ("0.39.9", "older than native Sessions support"),
             ("0.12.3", "older than native Sessions support"),
-            ("0.41.0", "newer than this Axocoatl supports"),
-            ("1.0.0", "newer than this Axocoatl supports"),
+            ("1.0.0", "new major release"),
+            ("2.3.4", "new major release"),
             ("0.40.7-rc0", "pre-release"),
-            ("0.40.6-rc1", "pre-release"),
+            ("0.41.0-rc1", "pre-release"),
             ("0.40.6+local", "pre-release or a local build"),
             ("0.0.0", "development build"),
             ("", "not a release number"),
@@ -145,6 +195,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("{version:?} must be refused"));
             assert!(refusal.contains(reason), "{version:?}: {refusal}");
             assert!(!ollama_version_accepted(version));
+            assert!(!ollama_version_unaudited(version), "{version:?}");
+            assert_eq!(ollama_version_note(version), None, "{version:?}");
         }
     }
 
@@ -164,12 +216,16 @@ mod tests {
     #[test]
     fn the_denylist_refuses_an_otherwise_accepted_release() {
         assert!(DENIED_OLLAMA_VERSIONS.is_empty());
-        let denied = ["0.40.8"];
+        let denied = ["0.40.8", "0.41.2"];
         assert_eq!(refusal_with("0.40.7", &denied), None);
-        let refusal = refusal_with("0.40.8", &denied).unwrap();
-        assert!(refusal.contains("known to break a guarantee"), "{refusal}");
+        assert_eq!(refusal_with("0.41.1", &denied), None);
+        for version in denied {
+            let refusal = refusal_with(version, &denied).unwrap();
+            assert!(refusal.contains("known to break a guarantee"), "{refusal}");
+        }
         // The denylist never turns a refused version into an accepted one.
-        assert!(refusal_with("0.41.0", &denied).is_some());
+        assert!(refusal_with("1.0.0", &denied).is_some());
+        assert!(refusal_with("0.40.5", &denied).is_some());
     }
 
     #[test]

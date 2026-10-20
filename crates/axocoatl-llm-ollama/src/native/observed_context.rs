@@ -508,3 +508,5 @@ impl NativeOllamaProvider {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod watch;

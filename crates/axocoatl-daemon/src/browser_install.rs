@@ -79,20 +79,46 @@ fn write_context_files(kind: &str, files: &[(&str, &str)]) -> std::io::Result<Co
     Ok(context)
 }
 
-/// Whether `image` exists in Podman's local storage.
+/// Whether `image` exists in Podman's local storage. When Podman cannot say,
+/// the error carries what Podman printed (or that it is not installed),
+/// never a bare `os error 2`.
 pub async fn image_present(image: &str) -> Result<bool, String> {
-    let status = Command::new("podman")
+    image_present_with("podman", image).await
+}
+
+async fn image_present_with(program: &str, image: &str) -> Result<bool, String> {
+    let output = Command::new(program)
         .args(["image", "exists", "--", image])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .stderr(Stdio::piped())
+        .output()
         .await
-        .map_err(|error| format!("running podman: {error}"))?;
-    match status.code() {
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => {
+                "podman is not installed: run `axocoatl onboard` (it installs Podman after asking)"
+                    .to_string()
+            }
+            _ => format!("running podman: {error}"),
+        })?;
+    match output.status.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
-        _ => Err("podman could not check the image".into()),
+        _ => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            match stderr
+                .lines()
+                .rev()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+            {
+                Some(line) => Err(format!("podman could not check the image: {line}")),
+                None => Err(format!(
+                    "podman could not check the image ({})",
+                    output.status
+                )),
+            }
+        }
     }
 }
 
@@ -190,6 +216,41 @@ pub async fn build_recipe_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Podman's own words reach the person when it cannot check an image,
+    /// and a missing Podman says so.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_image_check_says_what_podman_said() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let podman = directory.path().join("podman");
+        std::fs::write(
+            &podman,
+            "#!/bin/sh\necho 'Error: unable to connect to Podman socket: dial unix: no such file' >&2\nexit 125\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = image_present_with(podman.to_str().unwrap(), "localhost/x:1")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "podman could not check the image: Error: unable to connect to Podman socket: dial \
+             unix: no such file"
+        );
+        let missing = directory.path().join("absent");
+        let error = image_present_with(missing.to_str().unwrap(), "localhost/x:1")
+            .await
+            .unwrap_err();
+        assert!(error.starts_with("podman is not installed"), "{error}");
+        std::fs::write(&podman, "#!/bin/sh\nexit 1\n").unwrap();
+        assert!(
+            !image_present_with(podman.to_str().unwrap(), "localhost/x:1")
+                .await
+                .unwrap()
+        );
+    }
 
     #[test]
     fn the_build_uses_the_embedded_pinned_context() {

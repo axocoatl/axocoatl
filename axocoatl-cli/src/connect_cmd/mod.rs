@@ -39,11 +39,11 @@ mod browser;
 mod codex;
 mod codex_container;
 mod codex_sign_in;
+mod next_step;
 pub(crate) mod openrouter;
 mod openrouter_api;
 mod openrouter_config;
 mod openrouter_pkce;
-mod next_step;
 mod redact;
 mod relay;
 mod screen;
@@ -933,6 +933,10 @@ async fn cmd_connect_codex(
                     eprintln!("✗ {error}");
                     return exit::USAGE;
                 }
+            }
+            if let Err(error) = crate::podman_preflight().await {
+                eprintln!("✗ {error}");
+                return exit::USAGE;
             }
             let image = match codex_container::recipe_image(&data_dir).await {
                 Ok(image) => image,

@@ -80,7 +80,7 @@ impl NativeOllamaServerCheck {
             Some(version) => ollama_version_refusal(version),
             None => Some(format!(
                 "Ollama did not report its version; native Sessions need Ollama {} or a later \
-                 0.40 release",
+                 0.x release",
                 super::AUDITED_OLLAMA_VERSION
             )),
         }

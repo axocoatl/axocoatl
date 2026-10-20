@@ -213,7 +213,8 @@ pub async fn vendor_asset(Path(file): Path<String>) -> Response {
 pub struct HealthResponse {
     pub status: String,
     pub agents: usize,
-    /// The running Axocoatl's version.
+    /// The Axocoatl version this daemon runs, so `axocoatl doctor` can say
+    /// when it differs from the CLI's (an upgrade that was not restarted).
     pub version: &'static str,
 }
 

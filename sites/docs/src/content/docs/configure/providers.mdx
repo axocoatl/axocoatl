@@ -268,16 +268,14 @@ are unsupported. A model Axocoatl cannot run says why when Team & budget is appl
 
 ## Configure Ollama
 
-Native execution requires a loopback Ollama **0.40.6 or a later 0.x release** that
-reports cloud-disabled mode, and a local GGUF completion model. Axocoatl checks the
-exact model identity, loaded context, and capabilities during Team review and before
-inference. The native guarantees were audited in the Ollama 0.40.6 source, and the
-contract probes check them on your own server and model before a Team or a run uses it.
-On a release newer than the 0.40 line (0.41 or later) a model serves only after those
-probes pass, `doctor` warns that the version is unaudited, and a run's receipt names it
-as `ollama 0.41.0 (unaudited, contract probes passed)`. Other versions (0.20.6 included,
-which earlier Axocoatl releases required; pre-releases and local builds; a new major
-release), remote routing, and a generic compatible server do not satisfy this native
+Native execution requires a loopback Ollama **0.40.6 or later** that reports
+cloud-disabled mode, and a local GGUF completion model. Axocoatl checks the exact model
+identity, loaded context, and capabilities during Team review and before inference.
+Later 0.40 releases are accepted; a later 0.x release (0.41 or later) is accepted only
+once the contract probes below pass on each model, and `doctor`, onboarding and a run's
+receipt say it is newer than the audited 0.40.6. Older versions (0.20.6 included, which
+earlier Axocoatl releases required), pre-releases, development builds, a new major
+release, remote routing, and a generic compatible server do not satisfy this native
 contract. The broader Ollama adapter remains available for compatibility execution.
 
 **GGUF only.** Ollama 0.40 runs every GGUF model in llama.cpp's `llama-server`, which
@@ -298,7 +296,8 @@ must stop after one token. A model that fails either is refused, and the error n
 the guarantee that failed. The result is kept per Ollama version, model digest and
 context; after an upgrade to another accepted Ollama version, the probes run again on
 it before it serves an existing Team, and a Team reviewed on Ollama 0.20.6 asks to be
-reviewed again.
+reviewed again. Axocoatl's own scheduled check runs the same two probes against each
+new Ollama release and release candidate, with a small model, as they are published.
 
 ```yaml
 agents:
@@ -316,11 +315,13 @@ providers:
 endpoint must respond, be a loopback address, report an accepted Ollama version (it
 prints the version and the reason for a refusal) and its cloud features disabled, and
 have the configured Agent models present as local GGUF completion models, with tool
-calling for an Agent that lists tools. To disable
-Ollama's cloud features, add `{"disable_ollama_cloud": true}` to
-`~/.ollama/server.json` of the user that runs Ollama, or start the server with
-`OLLAMA_NO_CLOUD=1`, then restart it; see
-[Configure Axocoatl](/start/onboard/#ollama).
+calling for an Agent that lists tools and a loaded context of at least 16384 tokens.
+`axocoatl onboard` turns Ollama's cloud features off where the running server reads
+them: `{"disable_ollama_cloud": true}` in `~/.ollama/server.json` of the user that
+runs Ollama (the Homebrew service or an `ollama serve` you run), the app's Settings, or
+`Environment="OLLAMA_NO_CLOUD=1"` in a systemd drop-in for the Linux service, which runs
+as the user `ollama`; then it restarts the server. See
+[Set up Axocoatl](/start/onboard/#step-3a-a-local-writer-and-reviewer-ollama).
 
 Some Ollama-served models return a requested tool call as response text instead
 of the structured field. Axocoatl recovers only complete, bounded calls whose

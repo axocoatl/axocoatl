@@ -1,5 +1,6 @@
 //! `axocoatl doctor` against a stand-in Ollama server: a server native
-//! Sessions refuse must fail doctor, with the setting that fixes it.
+//! Sessions refuse must fail doctor, with the setting that fixes it. A shim
+//! Podman stands in for a ready rootless runtime, so only Ollama decides.
 
 use std::path::Path;
 use std::process::Command;
@@ -23,6 +24,44 @@ async fn ollama(version: Value, status: Option<Value>) -> MockServer {
 
 async fn ollama_showing(version: Value, status: Option<Value>, show: Value) -> MockServer {
     let server = MockServer::start().await;
+    // What loading a model without generating answers, the loaded model's
+    // 32768-token context, and the contract probes.
+    Mock::given(method("POST"))
+        .and(path("/api/generate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": "qwen3-coder:30b", "created_at": "2026-10-19T00:00:00Z",
+            "response": "", "done": true, "done_reason": "load"})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/ps"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models": [{
+            "name": "qwen3-coder:30b", "model": "qwen3-coder:30b", "digest": "0".repeat(64),
+            "details": {"format": "gguf"}, "context_length": 32768, "runner": "llamacpp"}]})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(|request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            let content = body["messages"][0]["content"].as_str().unwrap_or_default();
+            if content.starts_with("x x ") {
+                ResponseTemplate::new(400)
+                    .set_body_json(json!({"error": "the prompt is longer than the context"}))
+            } else {
+                ResponseTemplate::new(200).set_body_raw(
+                    format!(
+                        "{}\n",
+                        json!({"model": "qwen3-coder:30b", "message": {"role": "assistant",
+                            "content": "ready"}, "done": true, "done_reason": "length",
+                            "prompt_eval_count": 14, "eval_count": 1})
+                    ),
+                    "application/x-ndjson",
+                )
+            }
+        })
+        .mount(&server)
+        .await;
     Mock::given(method("POST"))
         .and(path("/api/show"))
         .respond_with(ResponseTemplate::new(200).set_body_json(show))
@@ -56,6 +95,31 @@ async fn ollama_showing(version: Value, status: Option<Value>, show: Value) -> M
     server
 }
 
+/// A Podman that answers as a ready rootless runtime, logging nothing and
+/// changing nothing.
+pub fn ready_podman(root: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let podman = bin.join("podman");
+    std::fs::write(
+        &podman,
+        r#"#!/bin/sh
+case "$*" in
+  "--version") echo "podman version 5.8.2" ;;
+  "info --format json") echo '{"host":{"security":{"rootless":true},"idMappings":{"uidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}],"gidmap":[{"container_id":0,"host_id":1000,"size":1},{"container_id":1,"host_id":100000,"size":65536}]}},"version":{"Version":"5.8.2"}}' ;;
+  "machine list --format json") echo '[{"Name":"podman-machine-default","Default":true,"Running":true,"VMType":"applehv","CPUs":6,"Memory":"8589934592"}]' ;;
+  "machine inspect podman-machine-default") echo '[{"Name":"podman-machine-default","Rootful":false,"Resources":{"CPUs":6,"Memory":8192}}]' ;;
+  "machine info --format json") echo '{"Host":{"VMType":"applehv"}}' ;;
+  *) exit 125 ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
 /// Run doctor on an explicit configuration naming `base_url`, isolated from
 /// the user's configuration, data, daemon socket and Podman.
 fn doctor(root: &Path, base_url: &str) -> (bool, String) {
@@ -65,6 +129,12 @@ fn doctor(root: &Path, base_url: &str) -> (bool, String) {
 /// [`doctor`] with the Lead Agent on `model`.
 fn doctor_with_model(root: &Path, base_url: &str, model: &str) -> (bool, String) {
     let config = root.join("axocoatl.yaml");
+    let bin = ready_podman(root);
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     std::fs::write(
         &config,
         format!(
@@ -77,6 +147,8 @@ fn doctor_with_model(root: &Path, base_url: &str, model: &str) -> (bool, String)
 providers:
   ollama:
     base_url: "{base_url}"
+server:
+  port: {port}
 "#
         ),
     )
@@ -87,7 +159,7 @@ providers:
         .arg(&config)
         .current_dir(root)
         .env("HOME", root)
-        .env("PATH", "/usr/bin:/bin")
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
         .env("AXOCOATL_DATA_DIR", root.join("data"))
         .env("AXOCOATL_SOCKET_PATH", root.join("no-daemon.sock"))
         .env_remove("CONTAINER_CONNECTION")
@@ -114,10 +186,6 @@ async fn doctor_fails_an_ollama_server_with_cloud_models_enabled() {
     assert!(!ok, "doctor must fail:\n{stdout}");
     let url = server.uri();
     assert!(
-        stdout.contains(&format!("[ OK ] Ollama reachable at {url}")),
-        "{stdout}"
-    );
-    assert!(
         stdout.contains(&format!(
             "[FAIL] Ollama at {url} has cloud models enabled; native Sessions refuse it"
         )),
@@ -127,7 +195,9 @@ async fn doctor_fails_an_ollama_server_with_cloud_models_enabled() {
     assert!(stdout.contains("OLLAMA_NO_CLOUD=1 ollama serve"));
     assert!(stdout.contains("set providers.ollama.base_url to another Ollama server"));
     assert!(!stdout.contains("cloud models disabled"), "{stdout}");
-    assert!(stdout.contains("Some required checks FAILED"));
+    assert!(!stdout.contains("launchctl"), "{stdout}");
+    assert!(stdout.contains("Not ready yet"), "{stdout}");
+    assert!(stdout.ends_with("Ready: no\n"), "{stdout}");
 }
 
 #[tokio::test]
@@ -150,7 +220,9 @@ async fn doctor_passes_a_cloud_disabled_audited_server() {
     );
     assert!(
         stdout.contains(
-            "[ OK ] Model 'qwen3-coder:30b' is a local GGUF model native Sessions can run (completion, tools)"
+            "[ OK ] qwen3-coder:30b: GGUF; 18.6 GB, fits in memory; 32768-token context, contract probes passed"
+        ) || stdout.contains(
+            "[WARN] qwen3-coder:30b: GGUF; 18.6 GB, too large for this computer's"
         ),
         "{stdout}"
     );
@@ -160,8 +232,9 @@ async fn doctor_passes_a_cloud_disabled_audited_server() {
         )),
         "{stdout}"
     );
-    assert!(stdout.contains("[ OK ] Model 'qwen3-coder:30b' is pulled"));
     assert!(!stdout.contains("[FAIL]"), "{stdout}");
+    assert!(stdout.contains("Ready for: workbench Sessions"), "{stdout}");
+    assert!(stdout.ends_with("Ready: yes\n"), "{stdout}");
 }
 
 #[tokio::test]
@@ -200,7 +273,16 @@ async fn doctor_refuses_ollama_0_20_6_and_says_why() {
         "{stdout}"
     );
     assert!(stdout.contains("0.20.6 is no longer supported"), "{stdout}");
-    assert!(stdout.contains("brew upgrade ollama"), "{stdout}");
+    // No ollama CLI here: upgrade, the way this platform installs it.
+    if cfg!(target_os = "macos") {
+        assert!(stdout.contains("brew upgrade ollama"), "{stdout}");
+    } else {
+        assert!(
+            stdout.contains("curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.40.6 sh"),
+            "{stdout}"
+        );
+        assert!(!stdout.contains("brew"), "{stdout}");
+    }
 }
 
 #[tokio::test]
@@ -271,4 +353,26 @@ async fn doctor_fails_an_untagged_model_that_only_another_tag_satisfies() {
         !stdout.contains("[ OK ] Model 'qwen3-coder' is pulled"),
         "{stdout}"
     );
+}
+
+/// A newer Ollama minor passes doctor with a warning once the contract
+/// probes pass on the model; it is no longer refused.
+#[tokio::test]
+async fn doctor_warns_about_a_newer_minor_and_passes_it_through_the_probes() {
+    let server = ollama(
+        json!({"version": "0.41.0"}),
+        Some(json!({"cloud": {"disabled": true, "source": "config"}})),
+    )
+    .await;
+    let root = tempfile::tempdir().unwrap();
+    let (ok, stdout) = doctor(root.path(), &server.uri());
+    assert!(ok, "doctor must pass:\n{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "[WARN] Ollama 0.41.0 at {}, newer than the audited 0.40.6",
+            server.uri()
+        )),
+        "{stdout}"
+    );
+    assert!(stdout.contains("contract probes passed"), "{stdout}");
 }
