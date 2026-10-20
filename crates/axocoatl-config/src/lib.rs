@@ -621,6 +621,7 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
     egress_host_ollama::validate_host_ollama(config)?;
     validate_web(config)?;
     validate_browser(config)?;
+    validate_provider_key_secrets(&config.providers)?;
 
     for webhook in &config.webhooks {
         if webhook.name.trim().is_empty() {
@@ -642,6 +643,64 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
         }
     }
 
+    Ok(())
+}
+
+/// Each hosted provider's credential block, by its key under `providers:`.
+pub fn provider_credentials(
+    providers: &ProvidersConfigYaml,
+) -> [(&'static str, Option<&ProviderCredentials>); 5] {
+    [
+        ("openai", providers.openai.as_ref()),
+        ("anthropic", providers.anthropic.as_ref()),
+        ("gemini", providers.gemini.as_ref()),
+        ("mistral", providers.mistral.as_ref()),
+        ("openrouter", providers.openrouter.as_ref()),
+    ]
+}
+
+/// `api_key_secret` names a secret (the secret store's name rule) and is
+/// not given together with a non-empty `api_key`. Neither value is
+/// repeated: a key written where the name belongs would otherwise be
+/// printed.
+fn validate_provider_key_secrets(providers: &ProvidersConfigYaml) -> Result<(), ConfigError> {
+    for (provider, credentials) in provider_credentials(providers) {
+        let Some(credentials) = credentials else {
+            continue;
+        };
+        let Some(name) = credentials.api_key_secret.as_deref() else {
+            continue;
+        };
+        let field = format!("providers.{provider}.api_key_secret");
+        if !egress_routes::is_valid_credential_name(name) {
+            return Err(ConfigError::InvalidField {
+                field,
+                value: "(not shown, in case it is a key)".to_string(),
+                reason: "api_key_secret names a secret in Axocoatl's secret store: 1-64 \
+                         letters, digits, '_', '.' or '-', starting with a letter or digit"
+                    .to_string(),
+                suggestion: format!(
+                    "Write the secret's name, for example api_key_secret: {provider}, and \
+                     store the key with `axocoatl connect openrouter` (OpenRouter) or \
+                     `axocoatl secret set {provider}`"
+                ),
+            });
+        }
+        if !credentials.api_key.is_empty() {
+            return Err(ConfigError::InvalidField {
+                field,
+                value: format!("{name:?}"),
+                reason: format!(
+                    "providers.{provider} gives both api_key and api_key_secret, so which key \
+                     is sent is unclear"
+                ),
+                suggestion: format!(
+                    "Remove providers.{provider}.api_key: the key is read from the secret \
+                     {name}"
+                ),
+            });
+        }
+    }
     Ok(())
 }
 
@@ -2036,5 +2095,57 @@ mcp_servers:
                 "{refused}"
             );
         }
+    }
+
+    /// A provider's key can live in the secret store: `api_key_secret`
+    /// names it, `api_key` may then be left out, and the two together, or a
+    /// name the store would refuse, are refused without repeating a value.
+    #[test]
+    fn a_provider_key_can_be_named_by_its_secret() {
+        let config = parse_config(
+            "providers:\n  openrouter_billing: credits\n  openrouter:\n    api_key_secret: openrouter\n",
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap();
+        let openrouter = config.providers.openrouter.unwrap();
+        assert!(openrouter.api_key.is_empty());
+        assert_eq!(openrouter.api_key_secret.as_deref(), Some("openrouter"));
+        // A plain key still reads as before, with no secret named.
+        let plain = parse_config(
+            "providers:\n  openrouter:\n    api_key: sk-or-plain\n",
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap();
+        assert_eq!(plain.providers.openrouter.unwrap().api_key_secret, None);
+        // Serialized, an unset secret name is left out.
+        let yaml = crate::yaml::to_string(&ProviderCredentials {
+            api_key: "x".into(),
+            api_key_secret: None,
+            base_url: None,
+            fallback: None,
+        })
+        .unwrap();
+        assert!(!yaml.contains("api_key_secret"), "{yaml}");
+
+        let both = parse_config(
+            "providers:\n  openrouter:\n    api_key: sk-or-both-TYPED\n    api_key_secret: openrouter\n",
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(both.contains("both api_key and api_key_secret"), "{both}");
+        assert!(!both.contains("TYPED"), "{both}");
+
+        let not_a_name = parse_config(
+            "providers:\n  anthropic:\n    api_key_secret: \"sk-ant TYPEDKEY\"\n",
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            not_a_name.contains("providers.anthropic.api_key_secret"),
+            "{not_a_name}"
+        );
+        assert!(!not_a_name.contains("TYPEDKEY"), "{not_a_name}");
     }
 }

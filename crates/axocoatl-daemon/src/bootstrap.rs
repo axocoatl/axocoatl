@@ -4788,6 +4788,17 @@ impl AxocoatlDaemon {
                 .map_err(|e| DaemonError::Provider(format!("Token counter init: {e}")))?,
         );
 
+        // Provider keys kept in the secret store (`api_key_secret`) are read
+        // once, here. A reload is compared with the file's own reading
+        // (`file_config`), which names the secret and holds no key.
+        let file_config = config.clone();
+        let mut config = config;
+        for warning in
+            crate::provider_secrets::resolve_provider_key_secrets(&mut config, Path::new(&data_dir))
+        {
+            tracing::warn!("{warning}");
+        }
+
         // 1. Set up providers
         let mut provider_registry = ProviderRegistry::new();
         Self::setup_providers(&config, &mut provider_registry)?;
@@ -5412,7 +5423,7 @@ impl AxocoatlDaemon {
         let session_sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>> =
             Arc::new(tokio::sync::Mutex::new(HashMap::new()));
         let session_egress = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-        let network_policy = Arc::new(session_network_policy::LiveNetworkPolicy::new(&config));
+        let network_policy = Arc::new(session_network_policy::LiveNetworkPolicy::new(&file_config));
         let egress_points = Arc::new(session_network_policy::SessionEgressPoints::new(
             session_dispatch_lifecycles.clone(),
             session_egress.clone(),

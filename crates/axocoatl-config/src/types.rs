@@ -586,7 +586,17 @@ pub enum OpenRouterBilling {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderCredentials {
+    /// The key itself, or `${VARIABLE}` for one in the environment. Empty
+    /// (or absent) with [`ProviderCredentials::api_key_secret`] set.
+    #[serde(default)]
     pub api_key: SecretString,
+    /// The name of a secret in Axocoatl's secret store (`{data root}/secrets/<name>`)
+    /// that holds the key, in place of `api_key`: the daemon reads it when it
+    /// starts, so the key is never in this file. `axocoatl connect openrouter`
+    /// stores OpenRouter's key as `openrouter` and writes
+    /// `api_key_secret: openrouter`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_secret: Option<String>,
     /// Optional base URL override for OpenAI-compatible servers (LM Studio,
     /// MLX/oMLX, vLLM, etc.). When set on the `openai` provider, requests go
     /// here instead of api.openai.com. Must include the API version suffix
