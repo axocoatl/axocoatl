@@ -323,7 +323,8 @@ models included, paid with OpenRouter credits. OpenRouter requires
 `providers.openrouter_billing: credits`, a normal API key, and an account with no
 connected BYOK provider keys. BYOK is not supported. A compatible HTTP API alone does not establish a bound.
 The onboarding wizard offers Ollama and OpenRouter for native Sessions. For Ollama it
-checks that the server is a loopback Ollama 0.40.6 or a later 0.40 release with its
+checks that the server is a loopback Ollama 0.40.6 or a later 0.x release (one after
+0.40 only once the contract probes pass on its models) with its
 cloud features disabled (`OLLAMA_NO_CLOUD=1`, or `{"disable_ollama_cloud": true}` in
 `~/.ollama/server.json`), and suggests Lead and Reviewer models from the GGUF models
 installed on it (`qwen3-coder:30b` and `gpt-oss:20b` when none is); `axocoatl doctor`

@@ -109,7 +109,9 @@ Local models need memory. With 48 GB, `qwen3-coder:30b` (18.6 GB) writes and
 below 48 GB; there onboarding suggests OpenRouter for the reviewer, or for both.
 They are large downloads. A fix run needs a context of at least 16384 tokens, and
 Ollama gives a model 4096 on computers with less than about 23 GiB of graphics memory;
-onboarding then sets `OLLAMA_CONTEXT_LENGTH=32768` for the Ollama service. Native
+onboarding then offers to set `OLLAMA_CONTEXT_LENGTH=32768` for the Homebrew or
+systemd Ollama service and restart it (for the app or an `ollama serve` you run, it
+says what to set). Native
 Sessions run only GGUF models: on Apple silicon, Ollama pulls the MLX variant of some
 models, which Axocoatl refuses; `ollama pull --runner llamacpp <model>` (an
 undocumented Ollama flag) pulls the GGUF one.

@@ -56,7 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     refuses Podman older than 4.3 (Ubuntu 22.04's 3.4.4), adds a range of subordinate ids,
     reports Landlock, and proves the setup with one throwaway keep-id container. It never
     creates a machine where Podman has a connection defined, or when `CONTAINER_HOST` or
-    `CONTAINER_CONNECTION` names one.
+    `CONTAINER_CONNECTION` names one. Every `podman machine` command it runs or prints
+    names the machine in use (Podman acts on `podman-machine-default` without a name), and
+    nothing is changed through `CONTAINER_HOST` or a connection that is not a machine. A
+    Podman installed outside `PATH` is a step left, since the daemon looks on `PATH`.
   - Ollama: installs it (`brew install ollama && brew services start ollama`, or Ollama's
     Linux installer pinned to 0.40.6), upgrades one that is too old, restarts a server
     older than its upgraded CLI, never suggests `brew upgrade` for one that is too new,
@@ -66,10 +69,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     so. Models follow memory: none larger than about 0.65 of it is preselected
     (`gpt-oss:120b` was preselected on 48 GB Macs), 96 GB or more gets the measured
     `gpt-oss:120b` reviewer, 48 to 95 GB `gpt-oss:20b`, and below 48 GB no local pair is
-    offered by default. Pulls show their sizes and the free disk, check each exit status
-    and show Ollama's error, and each model is loaded once to read its context; below
-    16384 tokens onboarding sets `OLLAMA_CONTEXT_LENGTH=32768` for the service
-    (Homebrew's `services/ollama.env`, or a systemd drop-in) after asking.
+    offered by default (with `--yes`, an explicit `--writer ollama` there needs the models
+    named; it is never switched to OpenRouter). Pulls show their sizes and the free disk
+    they need, check each exit status and show Ollama's error, and with `--yes` a pull
+    that does not fit the disk is a step left; each model is loaded once to read its
+    context; below 16384 tokens onboarding sets `OLLAMA_CONTEXT_LENGTH=32768` for the
+    service (Homebrew's `services/ollama.env`, recognised from the real `brew services
+    --help`, or a systemd drop-in) after asking. Writing into an existing `server.json`,
+    service environment file or drop-in defaults to no.
   - Claude Code and Codex: finds the CLI, states the subscription each needs, builds the
     recipe image and signs in through `axocoatl recipe build` and `axocoatl connect`
     after asking, sets up the reviewer alone on Ollama or OpenRouter, and names Codex's
@@ -79,14 +86,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (it was 2048 for every Agent), the key from an environment variable or a hidden
     prompt, and the key and both models checked before anything is written.
   - The configuration holds `run.models`, the defaults `axocoatl run` uses for
-    `writer_model` and `reviewer_model`, and the first free port from 8080 in
-    `server.port`. An existing configuration is updated (backed up, shown as a diff,
-    changed only where needed), replaced, or left alone.
+    `writer_model` and `reviewer_model`, a `# Writer:` comment naming who writes (and
+    Codex's credential), and the first free port from 8080 in `server.port`. An existing
+    configuration is updated (backed up, shown as a diff with every secret hidden,
+    changed only where needed, keeping its writer, models, Codex credential and
+    OpenRouter key unless flags name others), replaced (only the new file is shown), or
+    left alone and checked.
+  - The first run uses the daemon that runs, waiting for a service Step 6 just started,
+    and never starts a second one beside it; it works in a new owner-only temporary
+    directory. `--start dev` runs `axocoatl dev` as its own process.
   - `--yes` with `--writer`, `--reviewer`, `--writer-model`, `--ollama-url`, `--podman`,
     `--machine-cpus`, `--machine-memory`, `--pull`, `--recipe-build`, `--connect`,
     `--openrouter-key-env`, `--port`, `--start`, `--smoke-test`, `--allow-sudo`,
-    `--update` and `--replace` runs it unattended; `--plan` prints every action and writes
-    nothing. Without a terminal and without `--yes` it exits 3 and changes nothing (it
+    `--update` and `--replace` runs it unattended; `--plan` prints every action, Steps 6
+    and 7 and the Podman checks included, and writes nothing. Without a terminal and without `--yes` it exits 3 and changes nothing (it
     used to write an Ollama configuration and exit 0). `--install-daemon` is now
     `--start service`.
 - **`axocoatl doctor` says what is ready.** It reports Sandbox, Models, Writers and
@@ -97,12 +110,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passed"), rootless is always probed, and a stopped machine is OK because it starts on
   first use. Each configured Ollama model shows its size against memory and the context
   Ollama loads it with (below 16384 fails); the Writers section shows built recipe
-  images, stored credential names and the `claude`, `codex` and `gh` CLIs; the Daemon
-  section compares the running daemon's version with the CLI's and names the program the
-  Always-On Service runs. The Rust toolchain warning is gone, and a missing configuration
-  points to `axocoatl onboard`.
+  images, stored credential names and the `claude`, `codex` and `gh` CLIs, and fails the
+  Claude Code or Codex writer a setup chose while its image or sign-in is missing; the
+  Daemon section compares the running daemon's version with the CLI's and names the
+  program the Always-On Service runs. Each loaded model shows how much of it is in GPU
+  memory. With `sandbox.backend: e2b`, `axocoatl run` still needs Podman. The Rust
+  toolchain warning is gone, and a missing configuration points to `axocoatl onboard`.
 - **One Podman preflight and machine size everywhere.** `recipe build` and `connect
-  codex` start a stopped machine and name a missing Podman or machine with its fix,
+  codex` start a stopped machine (by its name, or the one `CONTAINER_CONNECTION` names)
+  and name a missing Podman or machine with its fix,
   instead of `os error 2` or `podman build failed (exit status: 125)`; every hint that
   says to create a machine prints the sized command instead of Podman's 2 GiB default.
 - **`axocoatl dev` and `serve` hold their port before they start.** A taken port fails at
