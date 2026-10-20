@@ -515,7 +515,14 @@ export class AxSessionHome extends HTMLElement {
    *  Create session with the exact fix. */
   get readiness() { return this.#readiness; }
   set readiness(value) {
-    this.#readiness = value && typeof value === 'object' ? value : null;
+    const report = value && typeof value === 'object' ? value : null;
+    // The report this component read itself comes back through the shell's
+    // readiness-change listener, and #loadPickerReadiness renders the picker
+    // once for it. Rendering it here too, before that render returned focus
+    // to the field the person was in, could send focus to the dialog: a
+    // click into Session name while readiness loaded ended on the dialog.
+    if (report === this.#readiness) return;
+    this.#readiness = report;
     this.#renderPicker();
   }
 
