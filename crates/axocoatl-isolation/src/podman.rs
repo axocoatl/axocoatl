@@ -9,7 +9,10 @@
 //! those changes require an explicit user action outside Session startup
 //! (`axocoatl onboard` asks before it does either). [`preflight`] asks the
 //! runtime first, so a setup that reaches Podman through `CONTAINER_HOST` or
-//! `CONTAINER_CONNECTION` passes without a local machine. [`machine_spec`]
+//! `CONTAINER_CONNECTION` passes without a local machine. [`detect`] is the
+//! same decision, so onboarding, doctor, the daemon's start and its Session
+//! cleanup, and the workbench's readiness report never disagree about
+//! whether Podman is ready. [`machine_spec`]
 //! sizes the machine onboarding creates, and every hint that tells someone to
 //! create one prints the same sized command ([`machine_create_hint`]).
 
@@ -248,8 +251,8 @@ impl ConnectionOverride {
 
 /// Ask the runtime first: when `podman info` answers, Podman is ready,
 /// however it is reached (a local machine, `CONTAINER_HOST` or
-/// `CONTAINER_CONNECTION`). Only when it does not does [`detect`] say why
-/// (not installed, no machine, a stopped machine, or the error).
+/// `CONTAINER_CONNECTION`). Only when it does not does it say why (not
+/// installed, no machine, a stopped machine, or the error).
 pub async fn preflight() -> PodmanReadiness {
     preflight_with(PODMAN).await
 }
@@ -280,7 +283,7 @@ pub async fn preflight_through(program: &str, connection: &ConnectionOverride) -
         ))
     };
     match connection {
-        ConnectionOverride::None => detect_with(program).await,
+        ConnectionOverride::None => default_connection_unanswered(program, error).await,
         ConnectionOverride::Host(_) => unavailable(connection.describe().unwrap_or_default()),
         ConnectionOverride::Connection(name) => {
             let stopped_machine = needs_machine()
@@ -361,35 +364,39 @@ fn command_exists(program: &str) -> bool {
     command_exists_on_path(program)
 }
 
-/// Inspect the current podman readiness.
+/// Inspect the current podman readiness: [`preflight`], the decision
+/// onboarding and doctor report, so the daemon's start, its Session
+/// cleanup and its readiness report honour `CONTAINER_HOST` and
+/// `CONTAINER_CONNECTION` as they do. A Podman that answers through either
+/// is ready although `podman machine list` lists no machine.
 pub async fn detect() -> PodmanReadiness {
     detect_with(PODMAN).await
 }
 
 /// [`detect`] with the Podman client at `program`.
 pub async fn detect_with(program: &str) -> PodmanReadiness {
-    let installed = if command_exists(program) {
-        match has(program).await {
-            Ok(installed) => installed,
-            Err(error) => return PodmanReadiness::Unavailable(error.to_string()),
-        }
-    } else {
-        false
-    };
-    if !installed {
-        return PodmanReadiness::NotInstalled;
+    preflight_with(program).await
+}
+
+/// Why Podman's default connection (neither `CONTAINER_HOST` nor
+/// `CONTAINER_CONNECTION` is set) did not answer `podman info`, which
+/// failed with `error`: Podman is not installed, it has no machine or a
+/// stopped one (macOS/Windows), or that error.
+async fn default_connection_unanswered(program: &str, error: IsolationError) -> PodmanReadiness {
+    match has(program).await {
+        Ok(true) => {}
+        Ok(false) => return PodmanReadiness::NotInstalled,
+        Err(error) => return PodmanReadiness::Unavailable(error.to_string()),
     }
     if !needs_machine() {
         // Linux / WSL — podman runs containers natively, no VM.
-        return match runtime_available_with(program).await {
-            Ok(()) => PodmanReadiness::Ready,
-            Err(error) => PodmanReadiness::Unavailable(error.to_string()),
-        };
+        return PodmanReadiness::Unavailable(error.to_string());
     }
     match machine_state_with(program).await {
         Err(error) => PodmanReadiness::Unavailable(error.to_string()),
         Ok((false, _)) => PodmanReadiness::MachineMissing,
         Ok((true, false)) => PodmanReadiness::MachineStopped,
+        // A machine runs: it may have finished starting since `error`.
         Ok((true, true)) => match runtime_available_with(program).await {
             Ok(()) => PodmanReadiness::Ready,
             Err(error) => PodmanReadiness::Unavailable(error.to_string()),
@@ -838,6 +845,192 @@ esac"#,
         assert!(!calls(directory.path())
             .iter()
             .any(|call| call == "machine start"));
+    }
+
+    /// Runs [`detect_with_honours_the_connection_override_like_onboarding`]
+    /// as a child that prints one verdict: `detect` or `report`.
+    #[cfg(unix)]
+    const DETECT_CHILD: &str = "AXOCOATL_PODMAN_DETECT_CHILD";
+
+    /// The daemon (`detect_with`: its start, its Session cleanup and its
+    /// readiness report) and onboarding and doctor (`podman_report`) read
+    /// `CONTAINER_HOST` and `CONTAINER_CONNECTION` from the environment and
+    /// reach the same verdict. A Podman that answers through
+    /// `CONTAINER_HOST` is ready although `podman machine list` lists no
+    /// machine (1.5.0's daemon said "no machine" there while onboarding
+    /// said ready); one that does not answer through it is unavailable,
+    /// never "no machine" or "stopped". Without an override the machine
+    /// path is unchanged. Each case runs in a child process with exactly
+    /// the variables it names, so no test changes this process's
+    /// environment.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn detect_with_honours_the_connection_override_like_onboarding() {
+        if let Ok(mode) = std::env::var(DETECT_CHILD) {
+            let program = std::env::var("AXOCOATL_PODMAN_DETECT_PROGRAM").unwrap();
+            let readiness = match mode.as_str() {
+                "detect" => detect_with(&program).await,
+                "report" => crate::podman_report::inspect_with(&program).await.readiness,
+                other => panic!("unknown child mode {other}"),
+            };
+            println!("READINESS={readiness:?}");
+            return;
+        }
+
+        async fn verdict(mode: &str, podman: &str, env: &[(&str, &str)]) -> String {
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "podman::tests::detect_with_honours_the_connection_override_like_onboarding",
+                    "--nocapture",
+                ])
+                .env_remove("CONTAINER_HOST")
+                .env_remove("CONTAINER_CONNECTION")
+                .env(DETECT_CHILD, mode)
+                .env("AXOCOATL_PODMAN_DETECT_PROGRAM", podman)
+                .kill_on_drop(true);
+            for (name, value) in env {
+                command.env(name, value);
+            }
+            let output = tokio::time::timeout(Duration::from_secs(60), command.output())
+                .await
+                .expect("the child finishes")
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success(),
+                "{mode} {env:?}: {stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            stdout
+                .lines()
+                .find_map(|line| line.strip_prefix("READINESS="))
+                .unwrap_or_else(|| panic!("{mode} {env:?} printed no verdict: {stdout}"))
+                .to_string()
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        // `info` answers only when the case says Podman answers (through
+        // the override when one is set); `machine list` prints the case's
+        // machines.
+        let podman = shim(
+            directory.path(),
+            r#"case "$*" in
+  "--version") echo "podman version 6.1.4" ;;
+  "machine list --format json") echo "$SHIM_MACHINES" ;;
+  "machine inspect "*) echo '[]' ;;
+  "machine info --format json") echo '{"Host":{}}' ;;
+  "info --format json")
+    if [ -n "$SHIM_ANSWERS" ]; then
+      echo '{"host":{"security":{"rootless":true}}}'
+    else
+      echo "Cannot connect to Podman" >&2; exit 125
+    fi ;;
+  *) echo "unexpected: $*" >&2; exit 125 ;;
+esac"#,
+        );
+        const NO_MACHINE: &str = "[]";
+        const STOPPED: &str =
+            r#"[{"Name":"podman-machine-default","Default":true,"Running":false}]"#;
+        const RUNNING: &str =
+            r#"[{"Name":"podman-machine-default","Default":true,"Running":true}]"#;
+        const NAMED_STOPPED: &str = concat!(
+            r#"[{"Name":"podman-machine-default","Default":true,"Running":true},"#,
+            r#"{"Name":"axocoatl","Default":false,"Running":false}]"#
+        );
+        let host = (
+            "CONTAINER_HOST",
+            "unix:///run/axocoatl-test/podman-api.sock",
+        );
+        let named = |name| ("CONTAINER_CONNECTION", name);
+        let machines = |list| ("SHIM_MACHINES", list);
+        let answers = ("SHIM_ANSWERS", "1");
+        let host_down = "Unavailable(\"CONTAINER_HOST=unix:///run/axocoatl-test/podman-api.sock \
+                         is set, and Podman does not answer through it: ";
+        let named_down = "Unavailable(\"CONTAINER_CONNECTION=axocoatl is set, and Podman does \
+                          not answer through it: ";
+        let default_down = "Unavailable(\"OCI container setup failed: podman info failed: \
+                            Cannot connect to Podman\")";
+        let mac = needs_machine();
+        // (what the case is, its variables, the verdict on macOS, on Linux)
+        let cases = [
+            (
+                "CONTAINER_HOST answers, no machine is listed",
+                vec![host, machines(NO_MACHINE), answers],
+                "Ready",
+                "Ready",
+            ),
+            (
+                "CONTAINER_HOST does not answer, no machine is listed",
+                vec![host, machines(NO_MACHINE)],
+                host_down,
+                host_down,
+            ),
+            (
+                "CONTAINER_HOST does not answer, the default machine is stopped",
+                vec![host, machines(STOPPED)],
+                host_down,
+                host_down,
+            ),
+            (
+                "CONTAINER_CONNECTION answers and is no machine",
+                vec![named("remote-box"), machines(NO_MACHINE), answers],
+                "Ready",
+                "Ready",
+            ),
+            (
+                "CONTAINER_CONNECTION names a stopped machine",
+                vec![named("axocoatl"), machines(NAMED_STOPPED)],
+                "MachineStopped",
+                named_down,
+            ),
+            (
+                "no override, the default machine runs and answers",
+                vec![machines(RUNNING), answers],
+                "Ready",
+                "Ready",
+            ),
+            (
+                "no override, no machine",
+                vec![machines(NO_MACHINE)],
+                "MachineMissing",
+                default_down,
+            ),
+            (
+                "no override, the default machine is stopped",
+                vec![machines(STOPPED)],
+                "MachineStopped",
+                default_down,
+            ),
+            (
+                "no override, the default machine runs and does not answer",
+                vec![machines(RUNNING)],
+                default_down,
+                default_down,
+            ),
+        ];
+        for (case, env, on_mac, on_linux) in cases {
+            let expected = if mac { on_mac } else { on_linux };
+            let _ = std::fs::remove_file(directory.path().join("calls.log"));
+            let detected = verdict("detect", &podman, &env).await;
+            let detect_calls = calls(directory.path());
+            let reported = verdict("report", &podman, &env).await;
+            assert!(
+                detected.starts_with(expected),
+                "{case}: detect said {detected}, want {expected}"
+            );
+            assert_eq!(
+                detected, reported,
+                "{case}: the daemon and onboarding disagree"
+            );
+            if env.iter().any(|(name, _)| *name == "CONTAINER_HOST") {
+                assert!(
+                    !detect_calls.iter().any(|call| call.starts_with("machine")),
+                    "{case}: a CONTAINER_HOST setup never asks about machines: {detect_calls:?}"
+                );
+            }
+        }
     }
 
     /// The machine `ensure_ready` starts is named: the one
