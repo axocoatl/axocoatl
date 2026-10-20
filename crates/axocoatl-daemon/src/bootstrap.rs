@@ -664,6 +664,41 @@ fn never_prepared_local_session(session: &Session) -> bool {
         )
 }
 
+/// How many times the Session's Git is probed when Git in the sandbox fails
+/// to read its configuration, and how long it waits between probes.
+const SESSION_GIT_PROBE_ATTEMPTS: usize = 8;
+const SESSION_GIT_PROBE_RETRY: Duration = Duration::from_millis(250);
+
+/// Whether a failed probe is Git in the sandbox failing to read its
+/// configuration files. Host Git replaces `.git/config` by rename (`git
+/// config user.name …` in the folder, which a refused commit asks for), and
+/// the container's view of the shared folder can hold the replaced file for
+/// a moment; the next look reads the new one.
+fn session_git_probe_unsettled(probe: &ExecResult) -> bool {
+    !probe.ok()
+        && probe
+            .stderr
+            .contains("error occurred while reading the configuration files")
+}
+
+/// Run the Session's Git probe, again while it fails only because the
+/// sandbox has not yet seen a file host Git just replaced, within a bound.
+async fn probe_session_git<F, Fut>(mut probe: F) -> Result<ExecResult, DaemonError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<ExecResult, DaemonError>>,
+{
+    let mut result = probe().await?;
+    for _ in 1..SESSION_GIT_PROBE_ATTEMPTS {
+        if !session_git_probe_unsettled(&result) {
+            break;
+        }
+        tokio::time::sleep(SESSION_GIT_PROBE_RETRY).await;
+        result = probe().await?;
+    }
+    Ok(result)
+}
+
 /// Whether a `git rev-parse --is-inside-work-tree` result names a work tree;
 /// otherwise the refusal with the code [`NOT_A_REPOSITORY_CODE`].
 fn session_git_repository(probe: &ExecResult) -> Result<(), DaemonError> {
@@ -12832,9 +12867,10 @@ trap - EXIT HUP INT TERM
     /// actions, never make a folder a repository: only [`Self::git_init`]
     /// does, at the person's request.
     pub async fn ensure_session_git(&self, session_id: &str) -> Result<(), DaemonError> {
-        let probe = self
-            .session_git(session_id, &["rev-parse", "--is-inside-work-tree"])
-            .await?;
+        let probe = probe_session_git(|| {
+            self.session_git(session_id, &["rev-parse", "--is-inside-work-tree"])
+        })
+        .await?;
         session_git_repository(&probe)
     }
 
@@ -12844,10 +12880,20 @@ trap - EXIT HUP INT TERM
     /// already a repository is left as it is.
     pub async fn git_init(&self, session_id: &str) -> Result<crate::git::GitStatus, DaemonError> {
         let writer = self.session_writer(session_id).await?;
-        let probe = self
-            .session_git_with_writer(&writer, session_id, &["rev-parse", "--is-inside-work-tree"])
-            .await?;
-        if session_git_repository(&probe).is_err() {
+        let probe = probe_session_git(|| {
+            self.session_git_with_writer(
+                &writer,
+                session_id,
+                &["rev-parse", "--is-inside-work-tree"],
+            )
+        })
+        .await?;
+        // Only a folder that is not a repository is initialized; a Git that
+        // cannot be read is reported, never initialized over.
+        if let Err(refusal) = session_git_repository(&probe) {
+            if refusal.code() != Some(NOT_A_REPOSITORY_CODE) {
+                return Err(refusal);
+            }
             let init = self
                 .session_git_with_writer(&writer, session_id, &["init", "-q"])
                 .await?;
@@ -26557,6 +26603,69 @@ agents:
             session_git_repository(&broken),
             Err(DaemonError::Session(message)) if message.contains("dubious ownership")
         ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_that_cannot_read_git_configuration_yet_is_looked_at_again() {
+        let unsettled = || ExecResult {
+            stdout: String::new(),
+            stderr: "fatal: unknown error occurred while reading the configuration files".into(),
+            exit_code: 128,
+        };
+        let work_tree = || ExecResult {
+            stdout: "true\n".into(),
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        // Right after host Git rewrote .git/config: the next look reads it.
+        let probes = std::sync::atomic::AtomicUsize::new(0);
+        let probe = probe_session_git(|| {
+            let seen = probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let result = if seen < 2 { unsettled() } else { work_tree() };
+            async move { Ok(result) }
+        })
+        .await
+        .unwrap();
+        assert!(session_git_repository(&probe).is_ok());
+        assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        // A Git that stays unreadable is reported after a bounded wait.
+        probes.store(0, std::sync::atomic::Ordering::SeqCst);
+        let probe = probe_session_git(|| {
+            probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { Ok(unsettled()) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            probes.load(std::sync::atomic::Ordering::SeqCst),
+            SESSION_GIT_PROBE_ATTEMPTS
+        );
+        assert!(matches!(
+            session_git_repository(&probe),
+            Err(DaemonError::Session(message)) if message.contains("reading the configuration files")
+        ));
+
+        // Any other answer is taken at once.
+        for answer in [
+            ExecResult {
+                stdout: String::new(),
+                stderr: "fatal: not a git repository (or any of the parent directories): .git"
+                    .into(),
+                exit_code: 128,
+            },
+            work_tree(),
+        ] {
+            probes.store(0, std::sync::atomic::Ordering::SeqCst);
+            let answer = &answer;
+            probe_session_git(|| {
+                probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move { Ok(answer.clone()) }
+            })
+            .await
+            .unwrap();
+            assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
     }
 
     #[test]

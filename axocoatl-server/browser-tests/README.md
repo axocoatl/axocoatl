@@ -102,7 +102,11 @@ untracked suite from producing a green build.
 The default suite needs no running Podman service, Ollama model, provider
 credential, or external application server. The optional compatibility reference
 journey requires a real Podman runtime image selected with
-`AXOCOATL_REFERENCE_RUNTIME_IMAGE`. A cold embedding cache can require downloading
+`AXOCOATL_REFERENCE_RUNTIME_IMAGE`. The first-turn journey
+(`native-turn-git.test.mjs`) runs one native turn on Podman against a stub
+Ollama server, in `docker.io/library/rust:bookworm` (or the curated image with
+Git that `AXOCOATL_NATIVE_TURN_IMAGE` names); it is skipped, not pulled, when
+that image is not on the machine. A cold embedding cache can require downloading
 the pinned local embedding model. The harness starts only a fresh loopback Axocoatl daemon; its
 Sessions remain at environment review, while controlled browser responses mock
 the Preview and failure paths called out below.
@@ -132,6 +136,10 @@ the Preview and failure paths called out below.
 - Team and budget opens a new Session with the suggested limits filled in,
   applies them without typing, and shows Preview's refusal of a token limit a
   turn cannot use.
+- A first native turn on the suggested limits edits a file, Source Control's
+  Last turn marks it before and after a daemon restart, and a commit right
+  after `git config user.name …` in the folder is by that identity, with
+  nothing of Axocoatl's written to the repository's configuration.
 - The first screen lists what the first Session still needs, with each fix's
   commands, the rail pill opens the same checklist, and Create session stays
   blocked while Podman has no machine.

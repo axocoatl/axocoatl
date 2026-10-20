@@ -121,9 +121,14 @@ impl AxocoatlDaemon {
         session_id: &str,
         writer: &SessionWriterLease,
     ) -> Result<()> {
-        let probe = self
-            .session_git_with_writer(writer, session_id, &["rev-parse", "--is-inside-work-tree"])
-            .await?;
+        let probe = super::probe_session_git(|| {
+            self.session_git_with_writer(
+                writer,
+                session_id,
+                &["rev-parse", "--is-inside-work-tree"],
+            )
+        })
+        .await?;
         super::session_git_repository(&probe)
     }
 }
