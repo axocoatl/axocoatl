@@ -499,6 +499,31 @@ fn only_a_release_evidence_manifest_is_signed() {
     }
 }
 
+/// The refusal names the schema as the file has it, never as Rust debug
+/// output (`Some("…")` or `None`).
+#[test]
+fn a_refused_manifest_names_its_schema_plainly() {
+    let fixture = Fixture::new();
+    for (bytes, expected) in [
+        (
+            br#"{"schema":"other/1"}"#.to_vec(),
+            r#"its schema is "other/1", not axocoatl.release-evidence/1"#,
+        ),
+        (
+            br#"{"version":"1.5.0"}"#.to_vec(),
+            "it has no schema, so it is not axocoatl.release-evidence/1",
+        ),
+        (br#"{"schema":7}"#.to_vec(), "its schema is not a string"),
+    ] {
+        let error = sign_evidence(&fixture.key, &bytes).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+        assert!(
+            !error.contains("Some(") && !error.contains("None"),
+            "{error}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn sign_evidence_writes_the_envelope_beside_the_manifest_and_needs_an_existing_key() {

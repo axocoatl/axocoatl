@@ -611,11 +611,19 @@ fn check_evidence_manifest(bytes: &[u8]) -> Result<(), String> {
     }
     let value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|error| format!("not JSON: {error}"))?;
-    match value.get("schema").and_then(serde_json::Value::as_str) {
-        Some(EVIDENCE_SCHEMA) => Ok(()),
-        other => Err(format!(
+    match value.get("schema") {
+        Some(serde_json::Value::String(schema)) if schema == EVIDENCE_SCHEMA => Ok(()),
+        Some(serde_json::Value::String(schema)) => Err(format!(
             "its schema is {:?}, not {EVIDENCE_SCHEMA}; only a release-evidence manifest is signed",
-            other.map(|schema| schema.chars().take(80).collect::<String>())
+            schema.chars().take(80).collect::<String>()
+        )),
+        Some(_) => Err(format!(
+            "its schema is not a string, so it is not {EVIDENCE_SCHEMA}; only a release-evidence \
+             manifest is signed"
+        )),
+        None => Err(format!(
+            "it has no schema, so it is not {EVIDENCE_SCHEMA}; only a release-evidence manifest is \
+             signed"
         )),
     }
 }
