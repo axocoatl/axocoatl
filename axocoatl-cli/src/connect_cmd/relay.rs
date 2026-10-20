@@ -248,9 +248,7 @@ pub(crate) fn run_program(
         .master
         .try_clone_reader()
         .map_err(|error| format!("could not read the pseudo-terminal: {error}"))?;
-    let writer = pair
-        .master
-        .take_writer()
+    let writer = keystroke_writer(&*pair.master)
         .map_err(|error| format!("could not write the pseudo-terminal: {error}"))?;
     let mut command = CommandBuilder::new(path);
     command.args(program.args);
@@ -325,6 +323,27 @@ pub(crate) fn run_program(
     }
     drop(raw);
     result
+}
+
+/// Where keystrokes are written to the program: its terminal's master side,
+/// through a descriptor of its own. Not portable-pty's `take_writer`, whose
+/// writer, when dropped, types a line break and an end-of-file into the
+/// program's terminal: it is dropped once the program has exited (or is
+/// being stopped), and the terminal could then echo that line break into
+/// the output still being read, an extra blank line after the program's
+/// last line (or after the error line held for the caller), or hand it to a
+/// program still running as a keystroke nobody typed.
+fn keystroke_writer(master: &dyn portable_pty::MasterPty) -> std::io::Result<std::fs::File> {
+    let fd = portable_pty::MasterPty::as_raw_fd(master).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "the pseudo-terminal has no descriptor",
+        )
+    })?;
+    // SAFETY: `fd` is `master`'s, open for as long as `master` is borrowed
+    // here; it is duplicated before this returns.
+    let fd = unsafe { BorrowedFd::borrow_raw(fd) };
+    Ok(std::fs::File::from(fd.try_clone_to_owned()?))
 }
 
 /// The user's terminal and the program's, for resizes.
@@ -430,7 +449,7 @@ fn wait_readable(input: &OwnedFd, timeout: &Timespec, use_select: &mut bool) -> 
 /// terminal on macOS and `poll` every one on Linux; were neither able to,
 /// reads would still return within a tenth of a second (the raw mode's
 /// `VTIME`), so `stop` is seen within it.
-fn relay_keystrokes(input: OwnedFd, mut writer: Box<dyn Write + Send>, stop: &AtomicBool) {
+fn relay_keystrokes(input: OwnedFd, mut writer: std::fs::File, stop: &AtomicBool) {
     let mut buffer = [0u8; 1024];
     let timeout = Timespec {
         tv_sec: 0,
