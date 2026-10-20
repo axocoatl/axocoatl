@@ -224,7 +224,7 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
    lacks them, must exit 0. `node-plain`, onboarding's first-run sample, has
    another bug than the README's task describes, so it runs the command its
    own README gives (`"command": "fixture-readme"` in `fixtures.json`). Each
-   run's start line must name the image the fixture needs (and the setup,
+   run's plan line must name the image the fixture needs (and the setup,
    for `node-deps` and `python-pytest`). The documented
    `axocoatl receipt verify receipt.json --key "$(axocoatl receipt key)" --repo .`
    and `axocoatl record verify` must exit 0, and the receipt must match the
@@ -300,8 +300,9 @@ built; until they land, Tier A fails at the first step that needs them:
 - run defaults from `run.models`, admission that refuses an absent check
   program and a reviewer that cannot review with exit 3 before any model call
   (and, for the reviewer, before any Session: `axocoatl session list` must
-  not change), and the run's `image: … · check: … · setup: …` start line
-  with the image chosen by detection;
+  not change), and the run's plan line `image … · toolchain … · check … ·
+  setup …` (printed as `· note: image …` and under `Notes:`) with the image
+  chosen by detection;
 - the `node-plain` fixture (onboarding's first-run sample; its
   `stub-fixes.json` entry matches onboarding's `src/paging.js`);
 - the installer's `add this line to <profile>:` output (or a profile change),

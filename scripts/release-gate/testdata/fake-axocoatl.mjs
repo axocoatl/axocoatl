@@ -135,9 +135,20 @@ async function main() {
         return 3;
       }
       const manifest = ['package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod'].find((file) => existsSync(file));
-      const image = { 'package.json': 'node:20-slim', 'pyproject.toml': 'python:3.12-slim', 'Cargo.toml': 'rust:bookworm', 'go.mod': 'golang:1.23' }[manifest];
-      const setup = existsSync('package-lock.json') ? 'npm ci' : manifest === 'pyproject.toml' ? "pip install --user -e '.[test]'" : 'none';
-      err(`image: ${image} · check: detected · setup: ${setup}`);
+      // The plan line the product printed in CI on the fixture this
+      // repository is (run-plan-lines.txt), as the CLI prints it.
+      const fixture = {
+        'package.json': existsSync('package-lock.json') ? 'node-deps' : 'node-plain',
+        'pyproject.toml': 'python-pytest',
+        'Cargo.toml': 'rust',
+        'go.mod': 'go',
+      }[manifest];
+      const plan = readFileSync(new URL('run-plan-lines.txt', import.meta.url), 'utf8')
+        .split('\n')
+        .filter((line) => line && !line.startsWith('#'))
+        .map((line) => line.split('\t'))
+        .find(([name]) => name === fixture)?.[1];
+      if (plan) err(`· note: ${plan}`);
       if (manifest === 'package.json' && readFileSync('package.json', 'utf8').includes('axocoatl-gate-absent')) {
         err('axocoatl run: the check program is not in the image; exit 3 before any model call');
         return 3;
@@ -169,6 +180,7 @@ async function main() {
         if (flag(option)) writeFileSync(flag(option), body);
       }
       out(`Verdict: ${pass ? 'pass (exit 0)' : 'checks failed (exit 1)'}`);
+      if (plan) out(`Notes:\n  ${plan}`);
       return pass ? 0 : 1;
     }
     default:
