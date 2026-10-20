@@ -58,6 +58,9 @@ pub(crate) mod external_agent_host;
 pub(crate) mod keep_pr_host;
 #[path = "bootstrap_loadout_runs.rs"]
 pub mod loadout_runs;
+// 1.5 repository toolchains.
+#[path = "bootstrap_loadout_toolchain.rs"]
+pub(crate) mod loadout_toolchain;
 #[path = "bootstrap_qa_repro.rs"]
 pub(crate) mod qa_repro_host;
 // 1.4 receipts.
@@ -8732,8 +8735,11 @@ impl AxocoatlDaemon {
                 };
                 // A loadout with an e2e check replays `.e2e/cache` but never
                 // records into it: the cache is mounted read-only.
+                // A loadout run's toolchain image keeps its package caches in
+                // the Workspace's toolchain cache volume.
                 let mounts = axocoatl_isolation::WorkspaceMounts {
                     read_only_e2e_cache: self.session_has_e2e_check(session),
+                    toolchain_cache: self.session_mounts_toolchain_cache(session),
                 };
                 let sandbox = match SessionSandbox::start_in_with_mounts(
                     &session.id,

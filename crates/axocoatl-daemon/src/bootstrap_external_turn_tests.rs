@@ -1392,6 +1392,7 @@ async fn pinned_run(
         // repository does not have.
         check_command: builtin.then(|| "test -f fixed.txt".to_string()),
         setup_command: None,
+        environment: Default::default(),
         request_id: loadout_id.clone(),
     };
     let result = async {

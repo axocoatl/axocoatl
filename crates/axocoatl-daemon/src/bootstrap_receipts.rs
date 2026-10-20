@@ -311,6 +311,12 @@ impl AxocoatlDaemon {
                 network,
                 workload: "hardened".into(),
                 policies: self.receipt_policies(&manifest.session_id).await,
+                // What admission chose and what the toolchain setup did
+                // (`bootstrap_loadout_toolchain.rs`), as the manifest keeps it.
+                environment: manifest
+                    .options
+                    .get("environment")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok()),
             },
             network: outcome.network.clone(),
             checks: outcome

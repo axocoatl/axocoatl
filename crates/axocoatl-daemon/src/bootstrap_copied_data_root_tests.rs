@@ -90,6 +90,7 @@ fn run_request(repo: &std::path::Path, id: &str) -> RunRequest {
         keep: Default::default(),
         check_command: None,
         setup_command: None,
+        environment: Default::default(),
         request_id: id.into(),
     }
 }

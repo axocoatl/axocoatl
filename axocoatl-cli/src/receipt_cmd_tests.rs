@@ -68,6 +68,7 @@ fn statement(signer: &receipt_key::SigningKey) -> Statement {
                     rules: Vec::new(),
                     routes: Vec::new(),
                 }],
+                environment: None,
             },
             network: NetworkSummary::default(),
             checks: vec![CheckFacts {

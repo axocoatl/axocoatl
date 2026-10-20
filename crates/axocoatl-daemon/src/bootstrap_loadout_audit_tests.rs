@@ -925,6 +925,7 @@ async fn audit_on_podman(scenario: Scenario, files: &[(&str, &[u8])], task: &str
             keep: Default::default(),
             check_command: None,
             setup_command: None,
+            environment: Default::default(),
             request_id: "podman-audit".into(),
         })
         .await

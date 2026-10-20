@@ -110,6 +110,14 @@ pub struct RunRequest {
     pub check_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_command: Option<String>,
+    /// The run's toolchain, image and setup choices (`axocoatl run
+    /// --toolchain --image --no-setup --no-build`); see
+    /// [`crate::loadout::toolchain`].
+    #[serde(
+        default,
+        skip_serializing_if = "crate::loadout::toolchain::EnvironmentRequest::is_default"
+    )]
+    pub environment: crate::loadout::toolchain::EnvironmentRequest,
     /// Idempotency key: a repeat with the same key returns the same run.
     pub request_id: String,
 }

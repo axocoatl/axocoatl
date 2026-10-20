@@ -58,6 +58,11 @@ const NAMED_REMOVE_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const DEPENDENCY_VOLUME_CREATE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The `io.axocoatl.role` of a Node dependency volume.
 const DEPENDENCY_VOLUME_ROLE: &str = "node-dependencies";
+/// The `io.axocoatl.role` of a Workspace's toolchain cache volume.
+pub const TOOLCHAIN_CACHE_VOLUME_ROLE: &str = "toolchain-cache";
+/// The name prefix of a Workspace's toolchain cache volume
+/// ([`SessionSandbox::toolchain_cache_volume_name`]).
+pub const TOOLCHAIN_CACHE_VOLUME_PREFIX: &str = "axo-tc-";
 const NAMED_REMOVE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SANDBOX_READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 const SANDBOX_PROVISION_TIMEOUT: Duration = Duration::from_secs(300);
@@ -362,6 +367,14 @@ pub struct WorkspaceMounts {
     /// missing; a symlink anywhere on its path refuses the start, and its
     /// identity is verified immediately before and after `podman run`.
     pub read_only_e2e_cache: bool,
+    /// Mount the Workspace's toolchain cache volume
+    /// ([`SessionSandbox::toolchain_cache_volume_name`]) at
+    /// [`crate::recipes::TOOLCHAIN_CACHE_DIR`], owned by the writer: the
+    /// package caches (and a Python virtual environment) a toolchain image
+    /// keeps there outlive the Session, so the next run of the Workspace
+    /// installs from them. Needs the policy's runtime authority, which the
+    /// volume is labelled and named with.
+    pub toolchain_cache: bool,
 }
 
 /// One Workspace directory mounted read-only over the Workspace mount, at
@@ -898,6 +911,8 @@ pub struct SessionSandbox {
     /// Deterministic Podman volume mounted over the repository's root
     /// `node_modules`, when this sandbox was started for a Node project.
     node_dependency_volume: Option<String>,
+    /// The Workspace's toolchain cache volume, when this sandbox mounts it.
+    toolchain_cache_volume: Option<String>,
     /// Recovery containers are deliberately setup-free and execute only
     /// daemon-authored Git plumbing. Their execs are serialized, followed by
     /// an idle-process proof, and fail closed by removing the exact container.
@@ -1012,6 +1027,65 @@ impl SessionSandbox {
             ),
             volume.into(),
         ]
+    }
+
+    /// The toolchain cache volume of the Workspace at `workspace` for the
+    /// daemon whose runtime authority is `runtime_authority` (pure):
+    /// `axo-tc-` and 24 hex digits of the SHA-256 of both, so each daemon
+    /// and each Workspace has its own, and every Session of a Workspace the
+    /// same.
+    pub fn toolchain_cache_volume_name(runtime_authority: &str, workspace: &Path) -> String {
+        let mut hash = Sha256::new();
+        hash.update(runtime_authority.as_bytes());
+        hash.update([0]);
+        hash.update(workspace.as_os_str().as_encoded_bytes());
+        let digest = hash.finalize();
+        let hex: String = digest.iter().take(12).map(|b| format!("{b:02x}")).collect();
+        format!("{TOOLCHAIN_CACHE_VOLUME_PREFIX}{hex}")
+    }
+
+    /// `podman volume create` for a toolchain cache volume (pure): labelled
+    /// with the daemon's runtime authority and its role, and left as it is
+    /// when it exists already.
+    pub fn toolchain_cache_volume_create_args(
+        volume: &str,
+        runtime_authority: &str,
+    ) -> Vec<String> {
+        vec![
+            "volume".into(),
+            "create".into(),
+            "--ignore".into(),
+            "--label".into(),
+            format!("{RUNTIME_AUTHORITY_LABEL}={runtime_authority}"),
+            "--label".into(),
+            format!(
+                "{}={TOOLCHAIN_CACHE_VOLUME_ROLE}",
+                crate::egress_image::ROLE_LABEL
+            ),
+            volume.into(),
+        ]
+    }
+
+    /// Remove the toolchain cache volume `volume` (its packages and, for
+    /// Python, its virtual environment). The next run downloads them again.
+    pub async fn remove_toolchain_cache_volume(volume: &str) -> Result<(), IsolationError> {
+        if !volume.starts_with(TOOLCHAIN_CACHE_VOLUME_PREFIX)
+            || volume.len() <= TOOLCHAIN_CACHE_VOLUME_PREFIX.len()
+        {
+            return Err(IsolationError::OciSetupFailed(format!(
+                "{volume:?} is not a toolchain cache volume"
+            )));
+        }
+        let mut remove = Command::new(PODMAN);
+        remove.args(["volume", "rm", "--", volume]);
+        let output = Self::run_bounded_command(remove, DEPENDENCY_VOLUME_CREATE_TIMEOUT).await?;
+        if output.timed_out || !output.status.success() {
+            return Err(IsolationError::OciSetupFailed(format!(
+                "removing the toolchain cache volume {volume}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(())
     }
 
     /// Resolve and validate the exact image that a local Session may start.
@@ -1579,6 +1653,44 @@ impl SessionSandbox {
             }
         }
 
+        // A loadout run's toolchain image keeps its package caches in the
+        // Workspace's own volume, which outlives this Session.
+        let toolchain_cache_volume = if mounts.toolchain_cache && !policy.passive_start {
+            let authority = policy.runtime_authority.as_deref().ok_or_else(|| {
+                IsolationError::OciSetupFailed(
+                    "a toolchain cache volume needs the daemon's runtime authority".into(),
+                )
+            })?;
+            let volume = Self::toolchain_cache_volume_name(authority, &working_dir_path);
+            let mut create = Command::new(PODMAN);
+            create.args(Self::toolchain_cache_volume_create_args(&volume, authority));
+            let output =
+                Self::run_bounded_command(create, DEPENDENCY_VOLUME_CREATE_TIMEOUT).await?;
+            if output.timed_out || !output.status.success() {
+                return Err(IsolationError::OciSetupFailed(format!(
+                    "creating the toolchain cache volume {volume}: {}",
+                    if output.timed_out {
+                        format!(
+                            "timed out after {} s",
+                            DEPENDENCY_VOLUME_CREATE_TIMEOUT.as_secs()
+                        )
+                    } else {
+                        String::from_utf8_lossy(&output.stderr).trim().to_string()
+                    }
+                )));
+            }
+            Some(volume)
+        } else {
+            None
+        };
+        let mut named_volumes: Vec<(String, String)> = Vec::new();
+        if let Some(volume) = &toolchain_cache_volume {
+            named_volumes.push((
+                volume.clone(),
+                crate::recipes::TOOLCHAIN_CACHE_DIR.to_string(),
+            ));
+        }
+
         // Under egress the sidecar must be answering before the Session
         // container exists, so its bridge never starts without a proxy. The
         // guard stops the sidecar again if anything below fails.
@@ -1707,6 +1819,7 @@ impl SessionSandbox {
                 &publish,
                 &effective_policy,
                 &read_only_paths,
+                &named_volumes,
             )
             .await
             {
@@ -1850,6 +1963,7 @@ impl SessionSandbox {
             published_ports,
             effective_image: Some(image.clone()),
             node_dependency_volume,
+            toolchain_cache_volume,
             passive_start: policy.passive_start,
             passive_execution_usable: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             passive_exec_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
@@ -2299,6 +2413,7 @@ impl SessionSandbox {
             published_ports: HashMap::new(),
             effective_image: None,
             node_dependency_volume: None,
+            toolchain_cache_volume: None,
             passive_start: false,
             passive_execution_usable: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             passive_exec_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
@@ -2720,7 +2835,10 @@ impl SessionSandbox {
     /// entries for ids the image does not name (tools that look up their
     /// own user then work), and the Node dependency volume, which Podman
     /// creates owned by the container's root, handed to the writer.
-    fn workload_setup_script(users: &WorkloadUsers, dependency_dir: Option<&str>) -> String {
+    /// The root script that readies a hardened container's users and hands
+    /// the writer its volume directories (the root `node_modules`, the
+    /// toolchain cache).
+    fn workload_setup_script_for(users: &WorkloadUsers, writer_dirs: &[&str]) -> String {
         let (writer_uid, writer_gid) = users.writer;
         let (helper_uid, helper_gid) = users.helper;
         let mut script = format!(
@@ -2734,7 +2852,7 @@ impl SessionSandbox {
              has /etc/passwd {writer_uid} || printf 'axocoatl:x:{writer_uid}:{writer_gid}:Axocoatl:{WRITER_HOME}:/bin/sh\\n' >> /etc/passwd\n\
              has /etc/passwd {helper_uid} || printf 'axocoatl-helper:x:{helper_uid}:{helper_gid}:Axocoatl helper:/tmp:/bin/sh\\n' >> /etc/passwd\n"
         );
-        if let Some(directory) = dependency_dir {
+        for directory in writer_dirs {
             // Only a volume that is not yet the writer's is changed, and then
             // whole: one left from an earlier start as another user may
             // already hold packages.
@@ -2768,10 +2886,14 @@ impl SessionSandbox {
                 "the Workspace path cannot be quoted for the dependency volume".into(),
             ));
         }
+        let mut writer_dirs: Vec<&str> = dependency_dir.iter().map(String::as_str).collect();
+        if self.toolchain_cache_volume.is_some() {
+            writer_dirs.push(crate::recipes::TOOLCHAIN_CACHE_DIR);
+        }
         let output = Self::podman_exec_shell(
             container,
             &exec_user_args(None, ExecIdentity::Root),
-            &Self::workload_setup_script(users, dependency_dir.as_deref()),
+            &Self::workload_setup_script_for(users, &writer_dirs),
             SANDBOX_READINESS_TIMEOUT,
         )
         .await?;
@@ -3310,6 +3432,27 @@ impl SessionSandbox {
         )
     }
 
+    /// Add `--mount type=volume,...` for each `(volume, destination)` right
+    /// after the Workspace's working-directory option, ahead of the image
+    /// and its command.
+    fn insert_named_volume_mounts(args: &mut Vec<String>, named_volumes: &[(String, String)]) {
+        if named_volumes.is_empty() {
+            return;
+        }
+        let at = args
+            .iter()
+            .position(|arg| arg == "-w")
+            .map(|index| index + 2)
+            .unwrap_or(args.len().min(6));
+        let mounts = named_volumes.iter().flat_map(|(volume, destination)| {
+            [
+                "--mount".to_string(),
+                format!("type=volume,source={volume},destination={destination}"),
+            ]
+        });
+        args.splice(at..at, mounts);
+    }
+
     /// [`Self::build_run_args`] with `read_only` Workspace directories
     /// (canonical paths below `dir`) bound read-only at their own paths over
     /// the read-write Workspace mount. Podman mounts the deeper destination
@@ -3564,8 +3707,9 @@ impl SessionSandbox {
         ports: &[u16],
         policy: &SandboxPolicy,
         read_only: &[String],
+        named_volumes: &[(String, String)],
     ) -> Result<String, String> {
-        let args = Self::build_run_args_with_mounts(
+        let mut args = Self::build_run_args_with_mounts(
             session_id,
             container,
             dir,
@@ -3576,6 +3720,7 @@ impl SessionSandbox {
             policy,
             read_only,
         );
+        Self::insert_named_volume_mounts(&mut args, named_volumes);
 
         let mut command = Command::new(PODMAN);
         command.args(&args);
@@ -5071,6 +5216,20 @@ pub trait Sandbox: Send + Sync {
         )))
     }
 
+    /// Run explicitly approved setup commands in a sandbox that is already
+    /// ready, each with its own setup credential under `network: egress`
+    /// (a loadout run's toolchain setup), and stop after the first that
+    /// fails. Backends without local setup refuse.
+    async fn run_approved_setup(
+        &self,
+        _commands: &[String],
+    ) -> Result<Vec<SandboxSetupResult>, IsolationError> {
+        Err(IsolationError::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "backend does not run approved setup after start",
+        )))
+    }
+
     /// Prepare the owned supervisor without starting the repository command.
     /// Unsupported backends must not substitute an ordinary exec result.
     async fn prepare_supervised_command(
@@ -5300,6 +5459,13 @@ impl Sandbox for SessionSandbox {
     async fn exec(&self, argv: &[&str], timeout: Duration) -> Result<ExecResult, IsolationError> {
         self.exec(argv, timeout).await
     }
+    async fn run_approved_setup(
+        &self,
+        commands: &[String],
+    ) -> Result<Vec<SandboxSetupResult>, IsolationError> {
+        self.run_setup_commands(commands).await
+    }
+
     async fn exec_observed(
         &self,
         argv: &[&str],
@@ -5349,6 +5515,7 @@ impl Sandbox for SessionSandbox {
             published_ports: self.published_ports.clone(),
             effective_image: self.effective_image.clone(),
             node_dependency_volume: self.node_dependency_volume.clone(),
+            toolchain_cache_volume: self.toolchain_cache_volume.clone(),
             passive_start: self.passive_start,
             passive_execution_usable: self.passive_execution_usable.clone(),
             passive_exec_lock: self.passive_exec_lock.clone(),
@@ -6371,6 +6538,101 @@ mod tests {
                 "axo-ses-ses-1-node-modules".into(),
             ]
         );
+    }
+
+    #[test]
+    fn toolchain_cache_volumes_belong_to_one_daemon_and_one_workspace() {
+        let authority = "a".repeat(64);
+        let workspace = Path::new("/Users/me/src/app");
+        let volume = SessionSandbox::toolchain_cache_volume_name(&authority, workspace);
+        assert!(
+            volume.starts_with(TOOLCHAIN_CACHE_VOLUME_PREFIX),
+            "{volume}"
+        );
+        assert_eq!(volume.len(), TOOLCHAIN_CACHE_VOLUME_PREFIX.len() + 24);
+        assert_eq!(
+            volume,
+            SessionSandbox::toolchain_cache_volume_name(&authority, workspace)
+        );
+        assert_ne!(
+            volume,
+            SessionSandbox::toolchain_cache_volume_name(&"b".repeat(64), workspace)
+        );
+        assert_ne!(
+            volume,
+            SessionSandbox::toolchain_cache_volume_name(
+                &authority,
+                Path::new("/Users/me/src/other")
+            )
+        );
+        assert_eq!(
+            SessionSandbox::toolchain_cache_volume_create_args(&volume, &authority),
+            [
+                "volume".to_string(),
+                "create".into(),
+                "--ignore".into(),
+                "--label".into(),
+                format!("io.axocoatl.runtime-authority={authority}"),
+                "--label".into(),
+                "io.axocoatl.role=toolchain-cache".into(),
+                volume.clone(),
+            ]
+        );
+        // Not a Session volume: the leaked-volume sweep never matches it.
+        assert!(!crate::runtime_volumes::RUNTIME_VOLUME_PREFIXES
+            .iter()
+            .any(|prefix| volume.starts_with(prefix)));
+        assert!(!volume.starts_with(crate::runtime_volumes::DEPENDENCY_VOLUME_PREFIX));
+    }
+
+    #[test]
+    fn the_toolchain_cache_is_mounted_before_the_image_and_owned_by_the_writer() {
+        let mut args = SessionSandbox::build_run_args(
+            "test-session",
+            "axo-ses-primary",
+            "/workspace",
+            DEFAULT_IMAGE,
+            None,
+            true,
+            &[],
+            &SandboxPolicy::default(),
+        );
+        let image_at = args.iter().position(|arg| arg == DEFAULT_IMAGE).unwrap();
+        SessionSandbox::insert_named_volume_mounts(
+            &mut args,
+            &[(
+                "axo-tc-0123".into(),
+                crate::recipes::TOOLCHAIN_CACHE_DIR.into(),
+            )],
+        );
+        let mount = args
+            .iter()
+            .position(|arg| arg == "type=volume,source=axo-tc-0123,destination=/opt/axocoatl-cache")
+            .expect("the cache is mounted");
+        assert_eq!(args[mount - 1], "--mount");
+        assert!(mount < args.iter().position(|arg| arg == DEFAULT_IMAGE).unwrap());
+        assert_eq!(
+            args.iter().position(|arg| arg == DEFAULT_IMAGE).unwrap(),
+            image_at + 2
+        );
+        let script = SessionSandbox::workload_setup_script_for(
+            &WorkloadUsers {
+                writer: (1200, 1300),
+                helper: (1400, 1500),
+            },
+            &["/w/node_modules", crate::recipes::TOOLCHAIN_CACHE_DIR],
+        );
+        assert!(
+            script.contains("chown -R 1200:1300 '/w/node_modules'"),
+            "{script}"
+        );
+        assert!(
+            script.contains("chown -R 1200:1300 '/opt/axocoatl-cache'"),
+            "{script}"
+        );
+        let mut unchanged = vec!["run".to_string()];
+        SessionSandbox::insert_named_volume_mounts(&mut unchanged, &[]);
+        assert_eq!(unchanged, ["run"]);
     }
 
     #[test]
@@ -7535,12 +7797,12 @@ mod tests {
 
     #[test]
     fn the_workload_setup_script_readies_home_users_and_dependencies() {
-        let script = SessionSandbox::workload_setup_script(
+        let script = SessionSandbox::workload_setup_script_for(
             &WorkloadUsers {
                 writer: (1200, 1300),
                 helper: (1400, 1500),
             },
-            Some("/w/node_modules"),
+            &["/w/node_modules"],
         );
         for expected in [
             "set -eu",
@@ -7556,7 +7818,7 @@ mod tests {
             assert!(script.contains(expected), "{expected}\n{script}");
         }
         assert!(
-            !SessionSandbox::workload_setup_script(&test_users(), None).contains("node_modules")
+            !SessionSandbox::workload_setup_script_for(&test_users(), &[]).contains("node_modules")
         );
     }
 
@@ -8260,6 +8522,7 @@ mod tests {
         // Missing: created empty, owner-only, at its canonical path.
         let mounts = WorkspaceMounts {
             read_only_e2e_cache: true,
+            ..WorkspaceMounts::default()
         };
         let binds = SessionSandbox::read_only_binds(&opened, &canonical, mounts).unwrap();
         assert_eq!(binds.len(), 1);
@@ -8296,6 +8559,7 @@ mod tests {
         std::fs::create_dir(outside.path().join("cache")).unwrap();
         let mounts = WorkspaceMounts {
             read_only_e2e_cache: true,
+            ..WorkspaceMounts::default()
         };
         let refused = |prepare: &dyn Fn(&Path)| {
             let workspace = tempfile::tempdir().unwrap();
@@ -8411,6 +8675,7 @@ mod tests {
             &policy,
             WorkspaceMounts {
                 read_only_e2e_cache: true,
+                ..WorkspaceMounts::default()
             },
         )
         .await

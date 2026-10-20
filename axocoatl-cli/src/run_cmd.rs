@@ -25,6 +25,9 @@ use axocoatl_session::run_outcome::{
 use axocoatl_session::run_record::RunEvent;
 use clap::{Args, Subcommand};
 
+#[path = "run_toolchain.rs"]
+mod toolchain;
+
 /// `axocoatl run <loadout> --task "..."`.
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -55,12 +58,31 @@ pub struct RunArgs {
     #[arg(long = "param", value_name = "NAME=VALUE")]
     pub params: Vec<String>,
     /// The command a `detected` check runs, in place of the repository's
-    /// detected check command (needed when none is detected)
+    /// check command (a `Check command:` line of AXOCOATL.md, else detected
+    /// from its files; needed when neither gives one)
     #[arg(long)]
     pub check: Option<String>,
-    /// The exact setup command this run approves
-    #[arg(long)]
+    /// The exact setup command this run approves. With a toolchain it
+    /// replaces the detected dependency install and may reach that
+    /// toolchain's package registries while it runs
+    #[arg(long, conflicts_with = "no_setup")]
     pub setup: Option<String>,
+    /// The repository's language toolchain: detected (from its files), node,
+    /// python, rust, go, or none (the image as the loadout names it). The
+    /// default is detected for a loadout that runs the repository's check
+    #[arg(long, value_name = "TOOLCHAIN")]
+    pub toolchain: Option<String>,
+    /// Run this image as it is, without a toolchain (a curated or trusted
+    /// image; give its installs with --setup)
+    #[arg(long, value_name = "REF")]
+    pub image: Option<String>,
+    /// Run no setup, not even the toolchain's detected dependency install
+    #[arg(long)]
+    pub no_setup: bool,
+    /// Do not build a missing toolchain image: refuse the run, naming the
+    /// `axocoatl recipe build` command
+    #[arg(long)]
+    pub no_build: bool,
     /// What to do with a passing run's changes: none, branch or pr
     #[arg(long, default_value = "none")]
     pub keep: String,
@@ -150,6 +172,8 @@ pub struct RunPlan {
     pub keep: Keep,
     pub check_command: Option<String>,
     pub setup_command: Option<String>,
+    /// `--toolchain`, `--image`, `--no-setup` and `--no-build`.
+    pub environment: axocoatl_daemon::loadout::toolchain::EnvironmentRequest,
 }
 
 /// Check the flags of `axocoatl run`: `--model ROLE=provider:model` is
@@ -237,6 +261,12 @@ pub fn plan(args: &RunArgs, task_from_file: Option<String>) -> Result<RunPlan, F
         keep,
         check_command: args.check.clone(),
         setup_command: args.setup.clone(),
+        environment: toolchain::request(
+            args.toolchain.as_deref(),
+            args.image.as_deref(),
+            args.no_setup,
+            args.no_build,
+        ),
     })
 }
 
@@ -849,7 +879,9 @@ async fn run(
     };
     let plan = plan(args, task_from_file)?;
     let daemon = Daemon::locate(args.url.as_deref(), &args.config).await?;
-    let request = serde_json::json!({
+    // A missing toolchain image is built here, its progress on stderr.
+    toolchain::prepare_image(&daemon, &plan, &args.config, console).await?;
+    let mut request = serde_json::json!({
         "loadout": plan.loadout,
         "task": plan.task,
         "repo": plan.repo.display().to_string(),
@@ -859,6 +891,10 @@ async fn run(
         "setup_command": plan.setup_command,
         "request_id": format!("cli-{}", uuid::Uuid::new_v4()),
     });
+    if !plan.environment.is_default() {
+        request["environment"] = serde_json::to_value(&plan.environment)
+            .map_err(|error| Failure::infrastructure(error.to_string()))?;
+    }
     let accepted = admit(&daemon, &request, console, note_after).await?;
     *admitted = true;
     // Only an admitted run starts: a refused one prints its reason and

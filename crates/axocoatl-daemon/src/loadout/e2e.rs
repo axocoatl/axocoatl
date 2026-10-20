@@ -187,6 +187,7 @@ pub fn e2e_checks(resolved: &ResolvedLoadout) -> impl Iterator<Item = (&Resolved
 pub fn workspace_mounts(resolved: &ResolvedLoadout) -> axocoatl_isolation::WorkspaceMounts {
     axocoatl_isolation::WorkspaceMounts {
         read_only_e2e_cache: e2e_checks(resolved).next().is_some(),
+        ..Default::default()
     }
 }
 

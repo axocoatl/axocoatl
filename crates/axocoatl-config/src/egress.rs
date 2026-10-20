@@ -381,10 +381,12 @@ fn validate_egress_block(egress: &EgressConfigYaml) -> Result<Vec<ConfigWarning>
     Ok(warnings)
 }
 
-/// The warning for `sandbox.egress` fields that do nothing under `bridge`
-/// or `none`. `allow`, `private_destinations` and `routes` apply only to
-/// `network: egress`. The browser's own proxy also reads `sidecar_network`
-/// and `max_connections` in those modes.
+/// The warning for `sandbox.egress` fields that interactive Sessions do not
+/// use under `bridge` or `none`. `allow`, `private_destinations` and
+/// `routes` apply only to `network: egress`. The browser's own proxy also
+/// reads `sidecar_network` and `max_connections` in those modes. Loadout
+/// runs always run under `egress`, so they use every one of them: the
+/// warning says so rather than calling them ignored.
 fn unused_egress_fields(
     egress: &EgressConfigYaml,
     browser: bool,
@@ -414,9 +416,10 @@ fn unused_egress_fields(
     Some(ConfigWarning {
         field: "sandbox.egress".into(),
         message: format!(
-            "{} ignored because sandbox.network is {network:?}: allow, private_destinations and \
-             routes apply only to network: egress, and sidecar_network and max_connections only \
-             to it and the browser's own proxy",
+            "{} not used by interactive Sessions, because sandbox.network is {network:?}: allow, \
+             private_destinations and routes apply only to network: egress, and sidecar_network \
+             and max_connections only to it and the browser's own proxy. Loadout runs \
+             (`axocoatl run`) always run under network: egress and use them",
             unused.join(", ")
         ),
     })
@@ -783,7 +786,10 @@ mod tests {
             validate_egress(config)
                 .unwrap()
                 .into_iter()
-                .filter(|w| w.field == "sandbox.egress" && w.message.contains("ignored"))
+                .filter(|w| {
+                    w.field == "sandbox.egress"
+                        && w.message.contains("not used by interactive Sessions")
+                })
                 .map(|w| w.message)
                 .collect()
         };
@@ -794,7 +800,10 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert!(
             messages[0].starts_with(
-                "sidecar_network, max_connections ignored because sandbox.network is \"bridge\""
+                "sidecar_network, max_connections not used by interactive Sessions, because \
+                 sandbox.network is \"bridge\""
+            ) && messages[0].ends_with(
+                "Loadout runs (`axocoatl run`) always run under network: egress and use them"
             ),
             "{messages:?}"
         );
@@ -802,7 +811,10 @@ mod tests {
         assert!(ignored(&config).is_empty());
         config.sandbox.egress.as_mut().unwrap().allow = vec![host("a.example", None)];
         let messages = ignored(&config);
-        assert!(messages[0].starts_with("allow ignored"), "{messages:?}");
+        assert!(
+            messages[0].starts_with("allow not used by interactive Sessions"),
+            "{messages:?}"
+        );
         config.browser = None;
         config.sandbox.egress = Some(EgressConfigYaml {
             allow: vec![host("a.example", None)],
