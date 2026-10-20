@@ -440,6 +440,10 @@ pub(crate) async fn tls_client(
         .await
 }
 
+/// Send a GET on the connection and read the whole answer. The connection
+/// takes the next request only once its task has finished with the last
+/// response, which may be after that response's body was read: until then
+/// `send_request` fails with "connection was not ready", so wait for it.
 pub(crate) async fn send(
     sender: &mut hyper::client::conn::http1::SendRequest<Empty<Bytes>>,
     path: &str,
@@ -450,6 +454,7 @@ pub(crate) async fn send(
     if let Some(value) = authorization {
         request = request.header(hyper::header::AUTHORIZATION, value);
     }
+    sender.ready().await.unwrap();
     let response = sender
         .send_request(request.body(Empty::new()).unwrap())
         .await
