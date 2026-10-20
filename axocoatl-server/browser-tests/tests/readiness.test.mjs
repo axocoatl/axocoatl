@@ -1,17 +1,23 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { createServer } from 'node:http';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { browserEngines, launchTestDaemon, newAuthorizedContext } from '../support/daemon.mjs';
 
 // The workbench's first screen says what the first Session still needs.
-// The daemon here sees a Podman that is installed but has no machine (a
-// shim on its PATH that runs nothing), and an Ollama server that reports
-// 0.20.6, a version native Sessions refuse.
+// The daemon here sees a Podman it cannot use, and an Ollama server that
+// reports 0.20.6, a version native Sessions refuse. On macOS that Podman is
+// installed but has no machine (a shim on its PATH that runs nothing). On
+// Linux Podman needs no machine, and a Podman that does not answer
+// `podman info` stops the daemon's start (it cannot prove that no old
+// Session container exposes its data), so the state a new user reaches this
+// screen in is Podman not installed: the daemon's PATH is the test's with
+// every `podman` left out.
 const engines = await browserEngines();
+const macos = process.platform === 'darwin';
 let runtime;
 let ollama;
 let shims;
@@ -31,8 +37,16 @@ async function fakeOllama(version) {
 before(async () => {
   ollama = await fakeOllama('0.20.6');
   shims = await mkdtemp(path.join(tmpdir(), 'axocoatl-readiness-shims-'));
-  await mkdir(path.join(shims, 'bin'));
-  const podman = path.join(shims, 'bin', 'podman');
+  runtime = await launchTestDaemon({
+    ollamaBaseUrl: `http://127.0.0.1:${ollama.address().port}`,
+    env: { PATH: macos ? await pathWithMachinelessPodman(shims) : await pathWithoutPodman(shims) },
+  });
+});
+
+/** The test's PATH behind a Podman that is installed but has no machine. */
+async function pathWithMachinelessPodman(root) {
+  await mkdir(path.join(root, 'bin'));
+  const podman = path.join(root, 'bin', 'podman');
   await writeFile(podman, `#!/bin/sh
 case "$*" in
   --version) echo 'podman version 5.6.0' ;;
@@ -41,11 +55,28 @@ case "$*" in
 esac
 `);
   await chmod(podman, 0o755);
-  runtime = await launchTestDaemon({
-    ollamaBaseUrl: `http://127.0.0.1:${ollama.address().port}`,
-    env: { PATH: `${path.join(shims, 'bin')}:${process.env.PATH}` },
-  });
-});
+  return `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH}`;
+}
+
+/**
+ * The test's PATH with no `podman` on it: each directory that holds one is
+ * replaced by a directory of links to everything else it holds.
+ */
+async function pathWithoutPodman(root) {
+  const directories = [];
+  for (const [index, directory] of (process.env.PATH || '').split(path.delimiter).entries()) {
+    let entries;
+    try { entries = await readdir(directory); } catch { continue; }
+    if (!entries.includes('podman')) { directories.push(directory); continue; }
+    const mirror = path.join(root, `path-${index}`);
+    await mkdir(mirror);
+    for (const entry of entries.filter((name) => name !== 'podman')) {
+      await symlink(path.join(directory, entry), path.join(mirror, entry));
+    }
+    directories.push(mirror);
+  }
+  return directories.join(path.delimiter);
+}
 
 after(async () => {
   await runtime?.stop();
@@ -53,19 +84,16 @@ after(async () => {
   if (shims) await rm(shims, { recursive: true, force: true });
 });
 
-test('GET /api/readiness names a missing Podman machine and a refused Ollama version', async () => {
+test('GET /api/readiness names a missing Podman (no machine on macOS, not installed on Linux) and a refused Ollama version', async () => {
   const response = await fetch(`${runtime.baseUrl}/api/readiness`);
   assert.equal(response.status, 200);
   const report = await response.json();
   assert.equal(report.ready, false);
   const podman = report.sections.sandbox.find((item) => item.id === 'podman');
-  if (process.platform === 'darwin') {
-    assert.equal(podman.status, 'fail');
-    assert.match(podman.fix, /axocoatl onboard/);
-    assert.match(report.sessions_blocked, /no machine/);
-  } else {
-    assert.equal(podman.status, 'fail', 'the shim answers no readiness probe');
-  }
+  assert.equal(podman.status, 'fail', JSON.stringify(podman));
+  assert.match(podman.fix, /axocoatl onboard/);
+  assert.match(report.sessions_blocked, macos ? /has no machine/ : /Podman is not installed/);
+  assert.equal(report.sessions_blocked, podman.detail);
   const version = report.sections.models.find((item) => item.id === 'ollama.version');
   assert.equal(version.status, 'fail');
   assert.match(version.detail, /reports version 0\.20\.6; native Sessions refuse it/);
@@ -101,9 +129,7 @@ for (const engine of engines) {
       assert.equal(await version.locator('.fix-text code').textContent(), 'axocoatl doctor');
       const podman = checklist.locator('.inline li[data-id="podman"]');
       assert.equal(await podman.getAttribute('data-status'), 'fail');
-      if (process.platform === 'darwin') {
-        assert.equal(await podman.locator('.fix-text code').first().textContent(), 'axocoatl onboard');
-      }
+      assert.equal(await podman.locator('.fix-text code').first().textContent(), 'axocoatl onboard');
       // No default model is suggested anywhere.
       assert.doesNotMatch(await checklist.textContent(), /llama3\.2/);
 
@@ -118,16 +144,15 @@ for (const engine of engines) {
       await dialog.getByRole('button', { name: 'Close', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });
 
-      if (process.platform === 'darwin') {
-        // Without a Podman machine, Create session is blocked with the fix.
-        const workspace = runtime.fixtures.alpha.workspace;
-        await page.evaluate((id) => document.querySelector('ax-session-home').newSession(id), workspace.id);
-        const blocked = page.locator('ax-session-home .picker-blocked');
-        await blocked.waitFor();
-        assert.match(await blocked.textContent(), /No Session can run yet/);
-        assert.match(await blocked.textContent(), /axocoatl onboard/);
-        assert.equal(await page.locator('ax-session-home [data-action="picker-use"]').isDisabled(), true);
-      }
+      // Without a usable Podman, Create session is blocked with the fix.
+      const workspace = runtime.fixtures.alpha.workspace;
+      await page.evaluate((id) => document.querySelector('ax-session-home').newSession(id), workspace.id);
+      const blocked = page.locator('ax-session-home .picker-blocked');
+      await blocked.waitFor();
+      assert.match(await blocked.textContent(), /No Session can run yet/);
+      assert.match(await blocked.textContent(), macos ? /has no machine/ : /Podman is not installed/);
+      assert.match(await blocked.textContent(), /axocoatl onboard/);
+      assert.equal(await page.locator('ax-session-home [data-action="picker-use"]').isDisabled(), true);
       assert.deepEqual(errors, []);
     } finally {
       await context.close();
