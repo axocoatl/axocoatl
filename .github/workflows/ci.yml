@@ -230,6 +230,7 @@ jobs:
           go-version: '1.26.2'
           cache: false
       - name: Build and package this commit's release archive
+        id: build
         env:
           TARGET: ${{ matrix.target }}
         run: |
@@ -242,10 +243,17 @@ jobs:
           cargo build --locked --release -p axocoatl-cli
           ./scripts/release-artifact.sh package "v$version" "$TARGET" target/release/axocoatl dist
           echo "TARBALL=dist/axocoatl-v$version-$TARGET.tar.gz" >> "$GITHUB_ENV"
-      - name: Report the runner's Podman and user-ID ranges
+      - name: Report the runner's Podman, user-ID ranges and journal access
         run: |
           podman version || echo "no podman on this runner image"
           grep "^$(id -un):" /etc/subuid /etc/subgid || echo "no subordinate ID range for $(id -un)"
+          id
+          # The gate reads sudo calls from the system journal.
+          if [ -n "$(journalctl -q -n 1 _UID=0 -o cat 2>/dev/null)" ]; then
+            echo "the system journal is readable"
+          else
+            echo "the system journal is NOT readable"
+          fi
       - name: Install Podman when the runner image lacks it
         if: matrix.expect_refusal == ''
         run: command -v podman >/dev/null || { sudo apt-get update && sudo apt-get install -y podman; }
@@ -259,15 +267,17 @@ jobs:
         env:
           AXOCOATL_BIN: target/release/axocoatl
         run: ./scripts/release-gate/test-release-gate.sh
+      # It runs even when the checks above fail, so CI shows how far the
+      # product gets; it needs only the archive.
       - name: A brand-new user, from the install command to a passing signed run
-        if: matrix.expect_refusal == ''
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.expect_refusal == '' }}
         env:
           EVIDENCE: ${{ matrix.evidence }}
         run: |
           ./scripts/release-gate/newuser-linux.sh --tarball "$TARBALL" \
             --commit "$GITHUB_SHA" --label "$EVIDENCE" --system-changes
       - name: Onboarding and doctor refuse this machine cleanly
-        if: matrix.expect_refusal != ''
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.expect_refusal != '' }}
         env:
           EVIDENCE: ${{ matrix.evidence }}
           EXPECT_REFUSAL: ${{ matrix.expect_refusal }}
