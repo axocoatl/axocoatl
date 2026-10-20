@@ -1377,7 +1377,11 @@ agent:**
   (`{dir}:{dir}:rw`). Nothing else of the host is visible — not your home
   directory, SSH keys, or sibling projects. A root Node project additionally
   receives a Podman-managed volume over `{dir}/node_modules`; it masks the host
-  dependency tree rather than exposing another host path. If the canonical data root or
+  dependency tree rather than exposing another host path. When `{dir}` has no
+  `node_modules`, the start makes that mount point as the person (left to the OCI
+  runtime, it would belong to the container's root, a subordinate uid under rootless
+  Podman), and every container removal removes it again once no container mounts it,
+  if it is still empty (`crates/axocoatl-isolation/src/dependency_mountpoint.rs`). If the canonical data root or
   external lease root is below the Workspace, an exact nested `tmpfs` masks that protected
   directory inside the container. A Workspace equal to or below either protected root is
   rejected; canonicalizing the Workspace before mounting prevents a symlink spelling from

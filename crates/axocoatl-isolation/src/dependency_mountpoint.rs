@@ -23,8 +23,9 @@
 //! This process remembers the mount points it made. A container that mounts
 //! one carries [`DEPENDENCY_MOUNTPOINT_LABEL`] naming it, so after a daemon
 //! that stopped without removing its containers (a crash, `kill -9`), the next
-//! one removes the mount point once it removed those containers
-//! (`SessionSandbox::remove_owned_containers`).
+//! one learns of the mount point when it removes those containers, by its
+//! runtime authority ([`adopt_labelled`]) or by name ([`adopt_labelled_named`]),
+//! and removes it with them.
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -267,40 +268,54 @@ fn plausible_mountpoint(path: &Path) -> bool {
             .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
 }
 
-/// The container mount destinations and dependency mount point labels in
-/// `podman ps -a --format json` output.
-fn parse_listing(stdout: &[u8]) -> Result<(HashSet<String>, Vec<PathBuf>), String> {
-    #[derive(serde::Deserialize)]
-    struct Listed {
-        #[serde(rename = "Mounts", default)]
-        mounts: Option<Vec<String>>,
-        #[serde(rename = "Labels", default)]
-        labels: Option<HashMap<String, String>>,
-    }
-    let text = std::str::from_utf8(stdout).map_err(|error| error.to_string())?;
-    let text = text.trim();
-    if text.is_empty() || text == "null" {
-        return Ok((HashSet::new(), Vec::new()));
-    }
-    let listed: Vec<Listed> = serde_json::from_str(text).map_err(|error| error.to_string())?;
-    let mut mounted = HashSet::new();
-    let mut labelled = Vec::new();
-    for container in listed {
-        mounted.extend(container.mounts.unwrap_or_default());
-        if let Some(path) = container
-            .labels
+/// One container in `podman ps -a --format json` output.
+#[derive(Debug, Default, serde::Deserialize)]
+struct Listed {
+    #[serde(rename = "Names", default)]
+    names: Option<Vec<String>>,
+    #[serde(rename = "Mounts", default)]
+    mounts: Option<Vec<String>>,
+    #[serde(rename = "Labels", default)]
+    labels: Option<HashMap<String, String>>,
+}
+
+impl Listed {
+    /// The mount point its label says Axocoatl made for it, when plausible.
+    fn labelled_mountpoint(&self) -> Option<PathBuf> {
+        self.labels
             .as_ref()
             .and_then(|labels| labels.get(DEPENDENCY_MOUNTPOINT_LABEL))
             .map(PathBuf::from)
             .filter(|path| plausible_mountpoint(path))
-        {
-            labelled.push(path);
-        }
     }
-    Ok((mounted, labelled))
+
+    fn named_any_of(&self, names: &[String]) -> bool {
+        self.names.iter().flatten().any(|name| {
+            names
+                .iter()
+                .any(|wanted| name.trim_start_matches('/') == wanted)
+        })
+    }
 }
 
-async fn list(filters: &[String]) -> Result<(HashSet<String>, Vec<PathBuf>), String> {
+fn parse_listing(stdout: &[u8]) -> Result<Vec<Listed>, String> {
+    let text = std::str::from_utf8(stdout).map_err(|error| error.to_string())?;
+    let text = text.trim();
+    if text.is_empty() || text == "null" {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(text).map_err(|error| error.to_string())
+}
+
+/// Every mount destination of the listed containers.
+fn mounted(listed: &[Listed]) -> HashSet<String> {
+    listed
+        .iter()
+        .flat_map(|container| container.mounts.iter().flatten().cloned())
+        .collect()
+}
+
+async fn list(filters: &[String]) -> Result<Vec<Listed>, String> {
     let mut command = Command::new("podman");
     command.args(["ps", "-a"]);
     command.args(filters);
@@ -320,6 +335,17 @@ async fn list(filters: &[String]) -> Result<(HashSet<String>, Vec<PathBuf>), Str
     parse_listing(&output.stdout)
 }
 
+fn adopt_from(listed: &[Listed], keep: impl Fn(&Listed) -> bool) {
+    let paths: Vec<PathBuf> = listed
+        .iter()
+        .filter(|container| keep(container))
+        .filter_map(Listed::labelled_mountpoint)
+        .collect();
+    if !paths.is_empty() {
+        registry().adopt(paths);
+    }
+}
+
 /// Remember the mount points the containers of `runtime_authority` are
 /// labelled with, before a daemon removes those containers at start. Best
 /// effort: a mount point it cannot learn of stays, as it did before.
@@ -332,11 +358,30 @@ pub(crate) async fn adopt_labelled(runtime_authority: &str) {
         ),
     ];
     match list(&filters).await {
-        Ok((_, labelled)) if !labelled.is_empty() => registry().adopt(labelled),
-        Ok(_) => {}
+        Ok(listed) => adopt_from(&listed, |_| true),
         Err(error) => tracing::debug!(
             %error,
             "could not list the dependency mount points of this daemon's containers"
+        ),
+    }
+}
+
+/// Remember the mount points the containers named exactly `containers` are
+/// labelled with, before they are removed by name: after a restart, this
+/// process did not make them, but a daemon before it did. Best effort.
+pub(crate) async fn adopt_labelled_named(containers: &[String]) {
+    if containers.is_empty() {
+        return;
+    }
+    let filters: Vec<String> = containers
+        .iter()
+        .flat_map(|name| ["--filter".to_string(), format!("name={name}")])
+        .collect();
+    match list(&filters).await {
+        Ok(listed) => adopt_from(&listed, |container| container.named_any_of(containers)),
+        Err(error) => tracing::debug!(
+            %error,
+            "could not list the dependency mount points of the containers being removed"
         ),
     }
 }
@@ -351,7 +396,7 @@ pub(crate) async fn release_unused() {
         return;
     }
     let mounted = match list(&[]).await {
-        Ok((mounted, _)) => mounted,
+        Ok(listed) => mounted(&listed),
         Err(error) => {
             tracing::debug!(%error, "kept Node dependency mount points: Podman did not list its containers");
             return;
@@ -381,7 +426,7 @@ pub(crate) async fn release_unused() {
 mod tests {
     use super::*;
 
-    fn mounted(paths: &[&Path]) -> HashSet<String> {
+    fn mounting(paths: &[&Path]) -> HashSet<String> {
         paths
             .iter()
             .map(|path| path.to_string_lossy().into_owned())
@@ -413,14 +458,14 @@ mod tests {
         let candidates = registry.candidates();
         assert_eq!(candidates.len(), 1);
         assert!(registry
-            .release(candidates, &mounted(&[repo.path(), &path]))
+            .release(candidates, &mounting(&[repo.path(), &path]))
             .is_empty());
         assert!(path.is_dir());
 
         // No container mounts it any more: removed.
         let candidates = registry.candidates();
         assert_eq!(
-            registry.release(candidates, &mounted(&[repo.path()])),
+            registry.release(candidates, &mounting(&[repo.path()])),
             vec![(path.clone(), Released::Removed)]
         );
         assert!(!path.exists());
@@ -540,9 +585,22 @@ mod tests {
             { "Names": ["bad2"], "Labels": { DEPENDENCY_MOUNTPOINT_LABEL: "/x/../etc" } },
             { "Names": ["bad3"], "Labels": { DEPENDENCY_MOUNTPOINT_LABEL: "/home/person/src" } }
         ]);
-        let (in_use, labelled) = parse_listing(listing.to_string().as_bytes()).unwrap();
+        let listed = parse_listing(listing.to_string().as_bytes()).unwrap();
+        let in_use = mounted(&listed);
         assert!(in_use.contains(path.to_string_lossy().as_ref()));
+        let labelled: Vec<PathBuf> = listed
+            .iter()
+            .filter_map(Listed::labelled_mountpoint)
+            .collect();
         assert_eq!(labelled, vec![path.clone()]);
+        // Only the containers being removed, by exact name.
+        assert!(listed[0].named_any_of(&["axo-ses-ses-1".to_string()]));
+        assert!(!listed[0].named_any_of(&["axo-ses-ses".to_string()]));
+        assert!(Listed {
+            names: Some(vec!["/axo-ses-ses-1".into()]),
+            ..Listed::default()
+        }
+        .named_any_of(&["axo-ses-ses-1".to_string()]));
 
         let mut registry = Registry::default();
         registry.adopt(labelled);
@@ -560,8 +618,10 @@ mod tests {
     #[test]
     fn an_empty_listing_parses() {
         for text in ["", "null", "[]", " []\n"] {
-            let (mounted, labelled) = parse_listing(text.as_bytes()).unwrap();
-            assert!(mounted.is_empty() && labelled.is_empty(), "{text:?}");
+            assert!(
+                parse_listing(text.as_bytes()).unwrap().is_empty(),
+                "{text:?}"
+            );
         }
         assert!(parse_listing(b"not json").is_err());
     }

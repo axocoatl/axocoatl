@@ -5206,6 +5206,9 @@ impl SessionSandbox {
         // therefore never return while an older cancelled start can still
         // create the deterministic container or dependency volume afterward.
         let _starts = Self::lock_container_starts(&containers).await;
+        // After a restart these containers are a former daemon's: their
+        // labels name the Node dependency mount points it made.
+        crate::dependency_mountpoint::adopt_labelled_named(&containers).await;
         Self::remove_exact_container_names(&containers, timeout).await?;
         Self::remove_session_dependents(session_ids, timeout).await
     }
@@ -5358,6 +5361,7 @@ impl SessionSandbox {
         let containers = Self::container_names(session_ids);
         let _starts = Self::lock_container_starts(&containers).await;
         if !containers.is_empty() {
+            crate::dependency_mountpoint::adopt_labelled_named(&containers).await;
             Self::remove_exact_container_names(&containers, timeout).await?;
         }
         Self::remove_session_dependents(session_ids, timeout).await?;
