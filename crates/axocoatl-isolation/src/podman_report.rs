@@ -29,8 +29,22 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 pub const MIN_PODMAN_VERSION: (u64, u64) = (4, 3);
 /// The Podman Axocoatl is tested with on Linux (Ubuntu 24.04's).
 pub const TESTED_LINUX_PODMAN: (u64, u64) = (4, 9);
-/// The Podman minor releases Axocoatl is tested with on macOS.
-pub const TESTED_MACOS_PODMAN: &[(u64, u64)] = &[(5, 8)];
+/// The Podman minor releases Axocoatl is tested with on macOS (6.1 is what
+/// Homebrew installs for onboarding today).
+pub const TESTED_MACOS_PODMAN: &[(u64, u64)] = &[(5, 8), (6, 1)];
+
+/// "5.8 is", or "5.8 and 6.1 are": the tested macOS releases, for a warning.
+fn tested_macos_text() -> String {
+    let versions: Vec<String> = TESTED_MACOS_PODMAN
+        .iter()
+        .map(|(major, minor)| format!("{major}.{minor}"))
+        .collect();
+    match versions.split_last() {
+        Some((last, [])) => format!("{last} is"),
+        Some((last, rest)) => format!("{} and {last} are", rest.join(", ")),
+        None => String::new(),
+    }
+}
 
 /// What `podman info --format json` said.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -565,12 +579,8 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
                 Level::Warn,
                 "Podman version",
                 format!(
-                    "Podman {version} has not been tested with Axocoatl on macOS yet ({} is)",
-                    TESTED_MACOS_PODMAN
-                        .iter()
-                        .map(|(major, minor)| format!("{major}.{minor}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "Podman {version} has not been tested with Axocoatl on macOS yet ({})",
+                    tested_macos_text()
                 ),
                 None,
             ));
@@ -761,6 +771,17 @@ mod tests {
         );
     }
 
+    /// Podman 6.1, what Homebrew installs for onboarding, is tested on macOS
+    /// too: no version warning.
+    #[test]
+    fn podman_6_1_on_a_mac_is_tested() {
+        let mut report = mac_report();
+        report.client_version = Some("6.1.4".to_string());
+        let findings = findings(&report, &platform(true));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].level, Level::Ok);
+    }
+
     #[test]
     fn missing_podman_or_machine_fail_with_the_sized_create_command() {
         let mut report = mac_report();
@@ -882,7 +903,7 @@ mod tests {
     #[test]
     fn a_small_machine_an_untested_provider_and_version_warn() {
         let mut report = mac_report();
-        report.client_version = Some("6.1.4".to_string());
+        report.client_version = Some("6.2.0".to_string());
         report.machines[0].memory_mib = Some(2048);
         report.machines[0].vm_type = Some("libkrun".to_string());
         let list = findings(&report, &platform(true));
@@ -896,9 +917,9 @@ mod tests {
                 ("Machine provider", Level::Warn),
             ]
         );
-        assert!(list[1]
-            .detail
-            .contains("not been tested with Axocoatl on macOS yet (5.8 is)"));
+        assert!(list[1].detail.contains(
+            "Podman 6.2.0 has not been tested with Axocoatl on macOS yet (5.8 and 6.1 are)"
+        ));
         assert_eq!(
             list[2].fix.as_deref(),
             Some("podman machine stop && podman machine set --memory 8192 && podman machine start")

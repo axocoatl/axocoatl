@@ -17,10 +17,12 @@ use super::host::Cmd;
 use super::ui::Mode;
 use super::{Choice, Onboarding, WriterChoice};
 
-/// The note until fix-claude-code and fix-codex run in toolchain images.
-pub(crate) const NODE_ONLY: &str =
-    "runs in a Node image: Node repositories only for now (Python, Rust and Go checks have no \
-     toolchain there yet)";
+/// What fix-claude-code and fix-codex run in: the repository's toolchain.
+pub(crate) const TOOLCHAIN_NOTE: &str =
+    "runs in your repository's language image (Node.js, Python, Go or Rust, detected from \
+     package.json, pyproject.toml or requirements, go.mod or Cargo.toml), with the \
+     dependencies installed first and only the package registries open for that step \
+     (https://docs.axocoatl.ai/configure/toolchains/)";
 
 fn stored(o: &Onboarding, names: &[&str]) -> Option<String> {
     let secrets = axocoatl_daemon::secret_store::list_secrets(&o.data_dir()).unwrap_or_default();
@@ -241,7 +243,7 @@ pub(crate) async fn run(
     } else {
         "Codex"
     };
-    o.ui.say(format!("  {name} {NODE_ONLY}."));
+    o.ui.say(format!("  {name} {TOOLCHAIN_NOTE}."));
     reviewer(o, choice).await;
 }
 

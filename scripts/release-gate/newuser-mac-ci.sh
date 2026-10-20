@@ -189,7 +189,7 @@ for state in none no-machine stopped running rootful podman6; do
         "stopped": [() => fails.length === 0 && has("ok", "stopped"), "OK: the stopped machine starts on first use; no FAIL"],
         "running": [() => fails.length === 0 && has("ok", "ready"), "OK: ready; no FAIL"],
         "rootful": [() => has("fail", "--rootful=false"), "a FAIL whose fix switches the machine to rootless"],
-        "podman6": [() => fails.length === 0 && has("warn", "6.1.4"), "a WARN naming the untested Podman 6.1.4; no FAIL"],
+        "podman6": [() => fails.length === 0 && has("warn", "libkrun") && !sandbox.some((item) => item.name === "Podman version"), "Podman 6.1.4 is tested: no version WARN; a WARN naming the untested libkrun provider; no FAIL"],
       }[state];
       const summary = sandbox.map((item) => `${item.status} ${item.name}`).join("; ");
       console.log(`${expect[1]} | doctor: ${summary}`);

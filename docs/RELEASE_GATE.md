@@ -331,7 +331,7 @@ machine, so this checks the plumbing a new Mac user meets:
    | machine stopped | OK: it starts on first use; no FAIL |
    | running, rootless | OK: ready; no FAIL |
    | running, rootful | FAIL, fix sets `--rootful=false` |
-   | Podman 6.1.4 (numeric memory, libkrun) | WARN naming the untested version; no FAIL |
+   | Podman 6.1.4 (numeric memory, libkrun) | no version WARN (6.1 is tested on macOS); WARN naming the untested libkrun provider; no FAIL |
 
 4. `axocoatl onboard --plan` (nothing changes) must show the consent it would
    ask for: `brew install podman`, the podman.io installer when there is no

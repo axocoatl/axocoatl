@@ -1220,7 +1220,11 @@ async fn claude_code_builds_the_image_and_leaves_sign_in_to_a_terminal() {
     let output = o.ui.output();
     assert_eq!(code, exit::NOT_READY, "{output}");
     assert!(output.contains("needs a subscription"), "{output}");
-    assert!(output.contains("Node repositories only for now"));
+    assert!(
+        output.contains("Claude Code runs in your repository's language image"),
+        "{output}"
+    );
+    assert!(!output.contains("Node repositories only"), "{output}");
     let calls = shims.calls();
     assert!(
         calls
