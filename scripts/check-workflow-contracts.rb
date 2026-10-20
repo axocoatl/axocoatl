@@ -171,6 +171,8 @@ contracts = {
   ],
   "scripts/verify-docs-gate.sh" => [
     "node ./scripts/audit-gate.mjs",
+    'node --test "$repo_root/scripts/check-copy-paste.test.mjs"',
+    'node "$repo_root/scripts/check-copy-paste.mjs"',
   ],
   "scripts/verify-native-gate.sh" => [
     "cargo +1.88.0 check --locked --workspace --all-targets --all-features --jobs 1",
