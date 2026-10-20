@@ -111,7 +111,12 @@ On **macOS**:
 - A rootful machine (Podman Desktop creates one by default): every `axocoatl run`
   would stop with exit 5, so onboarding asks, with **no** as the default, to switch it:
   `podman machine stop`, `podman machine set --rootful=false`, `podman machine start`.
-  This affects other tools that use the machine. Answering no leaves a step that names
+  This affects other tools that use the machine. Answering no offers the other way
+  out, also with **no** as the default: keep that machine and create a separate rootless
+  machine named `axocoatl` (`podman machine init … axocoatl`). Only one machine runs at a
+  time, so the step left says to stop the other one and to start Axocoatl from a shell
+  with `export CONTAINER_CONNECTION=axocoatl` (`axocoatl service install` records it;
+  Sessions and runs start that machine). Answering no twice leaves a step that names
   both ways out.
 - A machine with less than 4 GiB: onboarding offers `podman machine set --memory`
   (default no).

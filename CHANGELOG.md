@@ -52,7 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     creates and starts the machine at `podman machine init --cpus 6 --memory 8192
     --disk-size 60` clamped to half the computer (never rootful; applehv pinned when
     Podman would use another provider), starts a stopped machine, offers to switch a
-    rootful machine (Podman Desktop's default) to rootless and to grow one under 4 GiB,
+    rootful machine (Podman Desktop's default) to rootless (or, keeping it, to create a
+    separate rootless `axocoatl` machine for `CONTAINER_CONNECTION`) and to grow one under
+    4 GiB,
     refuses Podman older than 4.3 (Ubuntu 22.04's 3.4.4), adds a range of subordinate ids,
     reports Landlock, and proves the setup with one throwaway keep-id container. It never
     creates a machine where Podman has a connection defined, or when `CONTAINER_HOST` or

@@ -482,20 +482,64 @@ async fn rootless(o: &mut Onboarding) -> bool {
         return true;
     }
     let spec = spec(o);
+    let init = Cmd {
+        args: spec.init_args(Some(OWN_MACHINE)),
+        ..Cmd::new("podman", &[])
+    };
+    let exists = o
+        .facts
+        .podman
+        .machines
+        .iter()
+        .any(|machine| machine.name == OWN_MACHINE);
+    // Step 2d: keep that machine as it is and give Axocoatl its own. Only a
+    // person answers this (--yes switched the machine above).
+    let created = exists
+        || (o.ui.mode != super::ui::Mode::Yes
+            && o.ui.consent(
+                &format!(
+                    "Keep {name} as it is and create a separate rootless machine for Axocoatl \
+                     instead? This runs `{}`, which downloads {MACHINE_DOWNLOAD} and uses up to \
+                     {} of memory while it runs. Only one machine runs at a time: Sessions and \
+                     runs start `{OWN_MACHINE}` when {name} is stopped.",
+                    init.display(),
+                    spec.memory_text()
+                ),
+                false,
+                false,
+            )
+            && match o.ui.execute(&o.host, &init).await {
+                Ok(()) => true,
+                Err(error) => {
+                    o.ui.fail(error);
+                    false
+                }
+            });
+    if created {
+        o.step_left(format!(
+            "Use Axocoatl's own rootless machine: stop {name} (`{}`), then start Axocoatl from a \
+             shell with `export CONTAINER_CONNECTION={OWN_MACHINE}` (`axocoatl service install` \
+             records it; Sessions and runs start the machine), and run `axocoatl onboard` again \
+             from that shell",
+            machine_cmd(&["stop"], &name).display()
+        ));
+        return false;
+    }
     o.step_left(format!(
         "Podman runs as root, which Axocoatl runs refuse. Either switch {name} to rootless ({}), \
          or keep it and give Axocoatl its own rootless machine: {} && podman machine start \
-         axocoatl, then `export CONTAINER_CONNECTION=axocoatl` in the shell that starts \
-         Axocoatl (`axocoatl service install` records it; only one machine can run at a time)",
+         {OWN_MACHINE}, then `export CONTAINER_CONNECTION={OWN_MACHINE}` in the shell that \
+         starts Axocoatl (`axocoatl service install` records it; only one machine can run at a \
+         time)",
         rootless_switch_command(&name),
-        Cmd {
-            args: spec.init_args(Some("axocoatl")),
-            ..Cmd::new("podman", &[])
-        }
-        .display()
+        init.display()
     ));
     false
 }
+
+/// The rootless machine onboarding offers when the one in use is rootful
+/// and stays so.
+pub(crate) const OWN_MACHINE: &str = "axocoatl";
 
 async fn machine_memory(o: &mut Onboarding) -> bool {
     if !o.facts.os.is_macos() {

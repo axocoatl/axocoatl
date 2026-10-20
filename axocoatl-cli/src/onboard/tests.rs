@@ -673,18 +673,24 @@ async fn ubuntu_22_04_is_refused_with_the_podman_floor() {
 }
 
 /// A rootful machine (Podman Desktop's default): the switch is asked with
-/// No as the default; yes runs stop, set --rootful=false and start; no
-/// leaves a step with both ways out.
+/// No as the default; yes runs stop, set --rootful=false and start. No
+/// offers Axocoatl its own rootless machine instead (also No by default):
+/// yes creates it and leaves the step to use it, no leaves a step with both
+/// ways out.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_rootful_machine_is_switched_only_with_consent() {
-    for answer in [Answer::Yes, Answer::No] {
+    for answers in [
+        vec![Answer::Yes, Answer::Yes],
+        vec![Answer::No, Answer::No],
+        vec![Answer::No, Answer::Yes],
+    ] {
         let shims = Shims::new();
         podman_shim(&shims);
         podman_state(&shims, &["machine", "running", "rootful"]);
         let report = podman_report(&shims).await;
         assert_eq!(report.rootless(), Some(false));
-        let facts = facts(
+        let found = facts(
             mac("26.6"),
             48,
             report,
@@ -695,8 +701,8 @@ async fn a_rootful_machine_is_switched_only_with_consent() {
         .await;
         let mut o = onboarding(
             &shims,
-            Ui::scripted(vec![answer.clone(), Answer::Yes]),
-            facts,
+            Ui::scripted(answers.clone()),
+            found,
             OnboardArgs::default(),
         );
         let ready = sandbox::run(&mut o).await;
@@ -704,31 +710,53 @@ async fn a_rootful_machine_is_switched_only_with_consent() {
         let output = o.ui.output();
         assert!(output.contains("would stop with exit 5"), "{output}");
         assert!(output.contains("[y/N]"), "{output}");
-        if answer == Answer::Yes {
-            assert!(ready, "{output}\n{:?}", o.steps);
-            for expected in [
-                "podman machine stop",
-                "podman machine set --rootful=false",
-                "podman machine start",
-            ] {
-                assert!(calls.iter().any(|call| call == expected), "{calls:?}");
+        match answers[..] {
+            [Answer::Yes, _] => {
+                assert!(ready, "{output}\n{:?}", o.steps);
+                for expected in [
+                    "podman machine stop",
+                    "podman machine set --rootful=false",
+                    "podman machine start",
+                ] {
+                    assert!(calls.iter().any(|call| call == expected), "{calls:?}");
+                }
             }
-        } else {
-            assert!(!ready);
-            assert!(
-                !calls.iter().any(|call| call.contains("--rootful")),
-                "{calls:?}"
-            );
-            assert!(
-                o.steps[0].contains("podman machine set --rootful=false"),
-                "{:?}",
-                o.steps
-            );
-            assert!(
-                o.steps[0].contains("CONTAINER_CONNECTION=axocoatl"),
-                "{:?}",
-                o.steps
-            );
+            [Answer::No, Answer::No] => {
+                assert!(!ready);
+                assert!(
+                    !calls.iter().any(|call| call.contains("--rootful")
+                        || call.starts_with("podman machine init")),
+                    "{calls:?}"
+                );
+                assert!(
+                    o.steps[0].contains("podman machine set --rootful=false"),
+                    "{:?}",
+                    o.steps
+                );
+                assert!(
+                    o.steps[0].contains("CONTAINER_CONNECTION=axocoatl"),
+                    "{:?}",
+                    o.steps
+                );
+            }
+            _ => {
+                assert!(!ready);
+                assert!(
+                    calls.iter().any(|call| call
+                        == "podman machine init --cpus 6 --memory 8192 --disk-size 60 axocoatl"),
+                    "{calls:?}"
+                );
+                assert!(!calls.iter().any(|call| call.contains("--rootful")));
+                assert!(
+                    o.steps[0].starts_with(
+                        "Use Axocoatl's own rootless machine: stop \
+                         podman-machine-default (`podman machine stop`), then start Axocoatl \
+                         from a shell with `export CONTAINER_CONNECTION=axocoatl`"
+                    ),
+                    "{:?}",
+                    o.steps
+                );
+            }
         }
     }
 }
