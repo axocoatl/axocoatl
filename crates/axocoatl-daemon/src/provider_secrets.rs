@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use axocoatl_config::{AxocoatlConfig, ProviderCredentials, SecretString};
+use axocoatl_config::{shown_secret_name, AxocoatlConfig, ProviderCredentials, SecretString};
 
 use crate::secret_store;
 
@@ -22,19 +22,22 @@ pub const OPENROUTER_SECRET: &str = "openrouter";
 pub enum KeySource {
     /// `api_key` holds a value (written in the file, or from `${VARIABLE}`).
     Config,
-    /// `api_key_secret` names a secret, stored or not.
+    /// `api_key_secret` names a secret, stored or not. A name that
+    /// [`never_a_provider_key`] refuses for this provider counts as not
+    /// stored. Show `name` with [`shown_secret_name`]: a key written where
+    /// the name belongs must not be printed.
     Secret { name: String, stored: bool },
     /// Neither: the provider is not registered.
     Missing,
 }
 
-/// Where `credentials`' key comes from in the data root `data_dir`. A name
-/// the store cannot answer for counts as not stored.
-pub fn key_source(credentials: &ProviderCredentials, data_dir: &Path) -> KeySource {
+/// Where `provider`'s key (`credentials`) comes from in the data root
+/// `data_dir`. A name the store cannot answer for counts as not stored.
+pub fn key_source(provider: &str, credentials: &ProviderCredentials, data_dir: &Path) -> KeySource {
     match credentials.api_key_secret.as_deref() {
         Some(name) => KeySource::Secret {
             name: name.to_string(),
-            stored: refused_secret(name).is_none()
+            stored: never_a_provider_key(provider, name).is_none()
                 && secret_store::has_secret(data_dir, name).unwrap_or(false),
         },
         None if credentials.api_key.is_empty() => KeySource::Missing,
@@ -42,8 +45,24 @@ pub fn key_source(credentials: &ProviderCredentials, data_dir: &Path) -> KeySour
     }
 }
 
-/// How to store the key a provider's `api_key_secret` names.
+/// How to store the key a provider's `api_key_secret` names. A name that
+/// may be a key is not repeated; the advice is then to write a name there.
 pub fn how_to_store_key(provider: &str, name: &str) -> String {
+    let shown = shown_secret_name(name);
+    if shown != name {
+        return format!(
+            "write the name of a secret in providers.{provider}.api_key_secret, never the key \
+             itself (delete a key written there from the file and its backups), then {}",
+            how_to_store_key(
+                provider,
+                if provider == "openrouter" {
+                    OPENROUTER_SECRET
+                } else {
+                    provider
+                }
+            )
+        );
+    }
     if provider == "openrouter" {
         if name == OPENROUTER_SECRET {
             "run `axocoatl connect openrouter`, which signs you in to OpenRouter in the browser \
@@ -63,30 +82,44 @@ pub fn how_to_store_key(provider: &str, name: &str) -> String {
     }
 }
 
-/// Why the secret `name` never holds a provider key, if it is one of those:
-/// the receipt signing key, and the ChatGPT sign-in `axocoatl connect codex`
-/// stores. Such a secret is never sent as a key, and a command that stores
-/// a key refuses to store it there (it would replace that secret).
-pub fn never_a_provider_key(name: &str) -> Option<String> {
-    refused_secret(name)
-}
-
-fn refused_secret(name: &str) -> Option<String> {
+/// Why the secret `name` never holds `provider`'s API key, if it is one of
+/// the secrets another command owns: the receipt signing key, the Claude
+/// Code sign-in (`axocoatl connect claude-code`), the ChatGPT sign-in
+/// (`axocoatl connect codex`), and, for any provider but OpenAI, the OpenAI
+/// API key `axocoatl connect codex --api-key` stores. Such a secret is never
+/// sent as that provider's key, and a command that stores a provider key
+/// refuses to store it there (it would replace that secret) or remove it.
+pub fn never_a_provider_key(provider: &str, name: &str) -> Option<String> {
     if crate::receipt_key::is_receipt_key_name(name) {
         return Some(crate::receipt_key::NEVER_A_ROUTE_CREDENTIAL.to_string());
     }
     if name == crate::external_agent::codex::CODEX_CHATGPT_SECRET {
         return Some(
-            "it holds a ChatGPT sign-in for Codex's route, not a provider API key".to_string(),
+            "it holds the ChatGPT sign-in `axocoatl connect codex` stores for Codex's route, not \
+             a provider API key"
+                .to_string(),
         );
+    }
+    if name == crate::external_agent::claude_code::CLAUDE_CODE_SECRET {
+        return Some(
+            "it holds the Claude Code sign-in `axocoatl connect claude-code` stores, not a \
+             provider API key"
+                .to_string(),
+        );
+    }
+    if name == crate::external_agent::codex::CODEX_SECRET && provider != "openai" {
+        return Some(format!(
+            "it holds the OpenAI API key `axocoatl connect codex --api-key` stores, not a key \
+             for providers.{provider}"
+        ));
     }
     None
 }
 
 /// Read every `api_key_secret` in `config` from the secret store under
 /// `data_dir` into its provider's `api_key`. Returns one warning per key
-/// that could not be read (never a value); those providers keep an empty
-/// key and are not registered.
+/// that could not be read (never a value, and never a name that may be a
+/// key); those providers keep an empty key and are not registered.
 pub fn resolve_provider_key_secrets(config: &mut AxocoatlConfig, data_dir: &Path) -> Vec<String> {
     let providers = &mut config.providers;
     let mut warnings = Vec::new();
@@ -103,15 +136,16 @@ pub fn resolve_provider_key_secrets(config: &mut AxocoatlConfig, data_dir: &Path
         let Some(name) = credentials.api_key_secret.clone() else {
             continue;
         };
-        match read_key(&name, data_dir) {
+        let shown = shown_secret_name(&name);
+        match read_key(provider, &name, data_dir) {
             Ok(Some(key)) => credentials.api_key = key,
             Ok(None) => warnings.push(format!(
-                "providers.{provider}.api_key_secret names the secret {name}, which is not \
+                "providers.{provider}.api_key_secret names the secret {shown}, which is not \
                  stored, so {provider} is not configured; {}",
                 how_to_store_key(provider, &name)
             )),
             Err(reason) => warnings.push(format!(
-                "providers.{provider}.api_key_secret names the secret {name}, which cannot be \
+                "providers.{provider}.api_key_secret names the secret {shown}, which cannot be \
                  used ({reason}), so {provider} is not configured"
             )),
         }
@@ -120,9 +154,13 @@ pub fn resolve_provider_key_secrets(config: &mut AxocoatlConfig, data_dir: &Path
 }
 
 /// The value of secret `name`, `None` when it is not stored.
-fn read_key(name: &str, data_dir: &Path) -> Result<Option<SecretString>, String> {
-    if let Some(reason) = refused_secret(name) {
+fn read_key(provider: &str, name: &str, data_dir: &Path) -> Result<Option<SecretString>, String> {
+    if let Some(reason) = never_a_provider_key(provider, name) {
         return Err(reason);
+    }
+    if shown_secret_name(name) != name {
+        // Not a secret name the store takes, or one that reads as a key.
+        return Ok(None);
     }
     let Some(lock) = secret_store::lock_secrets(data_dir, false).map_err(|e| e.to_string())? else {
         return Ok(None);
@@ -171,21 +209,33 @@ mod tests {
         });
 
         assert_eq!(
-            key_source(config.providers.openrouter.as_ref().unwrap(), root.path()),
+            key_source(
+                "openrouter",
+                config.providers.openrouter.as_ref().unwrap(),
+                root.path()
+            ),
             KeySource::Secret {
                 name: OPENROUTER_SECRET.into(),
                 stored: true
             }
         );
         assert_eq!(
-            key_source(config.providers.anthropic.as_ref().unwrap(), root.path()),
+            key_source(
+                "anthropic",
+                config.providers.anthropic.as_ref().unwrap(),
+                root.path()
+            ),
             KeySource::Secret {
                 name: "anthropic-key".into(),
                 stored: false
             }
         );
         assert_eq!(
-            key_source(config.providers.openai.as_ref().unwrap(), root.path()),
+            key_source(
+                "openai",
+                config.providers.openai.as_ref().unwrap(),
+                root.path()
+            ),
             KeySource::Config
         );
 
@@ -239,33 +289,90 @@ mod tests {
     }
 
     #[test]
-    fn the_receipt_key_and_a_chatgpt_sign_in_are_never_sent_as_a_provider_key() {
+    fn another_commands_secret_is_never_sent_as_a_provider_key() {
         let root = data_root();
         for name in [
             crate::receipt_key::RECEIPT_KEY_SECRET,
             crate::external_agent::codex::CODEX_CHATGPT_SECRET,
+            crate::external_agent::claude_code::CLAUDE_CODE_SECRET,
+            crate::external_agent::codex::CODEX_SECRET,
         ] {
             secret_store::set_secret(root.path(), name, b"never-sent-value").unwrap();
             let mut config = AxocoatlConfig::default();
             config.providers.openrouter = Some(named(name));
+            config.providers.anthropic = Some(named(name));
             let warnings = resolve_provider_key_secrets(&mut config, root.path());
-            assert!(config
-                .providers
-                .openrouter
-                .as_ref()
-                .unwrap()
-                .api_key
-                .is_empty());
-            assert_eq!(warnings.len(), 1, "{name}: {warnings:?}");
-            assert!(warnings[0].contains("cannot be used"), "{}", warnings[0]);
-            assert!(!warnings[0].contains("never-sent-value"));
+            for credentials in [&config.providers.openrouter, &config.providers.anthropic] {
+                assert!(credentials.as_ref().unwrap().api_key.is_empty(), "{name}");
+            }
+            assert_eq!(warnings.len(), 2, "{name}: {warnings:?}");
+            for warning in &warnings {
+                assert!(warning.contains("cannot be used"), "{warning}");
+                assert!(!warning.contains("never-sent-value"));
+            }
             assert_eq!(
-                key_source(config.providers.openrouter.as_ref().unwrap(), root.path()),
+                key_source(
+                    "openrouter",
+                    config.providers.openrouter.as_ref().unwrap(),
+                    root.path()
+                ),
                 KeySource::Secret {
                     name: name.into(),
                     stored: false
                 }
             );
+            assert!(never_a_provider_key("openrouter", name).is_some(), "{name}");
+        }
+        // The OpenAI key `connect codex --api-key` stores is OpenAI's key.
+        let codex_openai = crate::external_agent::codex::CODEX_SECRET;
+        assert_eq!(never_a_provider_key("openai", codex_openai), None);
+        let mut config = AxocoatlConfig::default();
+        config.providers.openai = Some(named(codex_openai));
+        assert!(resolve_provider_key_secrets(&mut config, root.path()).is_empty());
+        assert_eq!(
+            config
+                .providers
+                .openai
+                .as_ref()
+                .unwrap()
+                .api_key
+                .expose_secret(),
+            "never-sent-value"
+        );
+    }
+
+    /// A key written where the secret's name belongs is never repeated in
+    /// a warning or in the advice, even when the store would take it as a
+    /// name.
+    #[test]
+    fn a_name_that_may_be_a_key_is_never_repeated() {
+        let root = data_root();
+        for (provider, key) in [
+            ("mistral", "FAKEmistralKEY0123456789abcdef"),
+            ("gemini", "AIzaFAKEgeminiKEY0123456789abcd"),
+            (
+                "openrouter",
+                "sk-or-v1-FAKE0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab",
+            ),
+        ] {
+            let mut config = AxocoatlConfig::default();
+            match provider {
+                "mistral" => config.providers.mistral = Some(named(key)),
+                "gemini" => config.providers.gemini = Some(named(key)),
+                _ => config.providers.openrouter = Some(named(key)),
+            }
+            let warnings = resolve_provider_key_secrets(&mut config, root.path());
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            let advice = how_to_store_key(provider, key);
+            assert!(
+                warnings[0].contains(axocoatl_config::SECRET_NAME_NOT_SHOWN),
+                "{}",
+                warnings[0]
+            );
+            for text in [&warnings[0], &advice] {
+                assert!(!text.contains("FAKE"), "{text}");
+                assert!(text.contains("never the key"), "{text}");
+            }
         }
     }
 }

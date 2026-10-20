@@ -543,9 +543,49 @@ async fn a_sign_in_cancelled_in_the_browser_exchanges_nothing() {
     assert_eq!(stored(root.path(), OPENROUTER_SECRET), None);
 }
 
+/// A return with another state (a stale tab, or a forged request) and a
+/// bare request are ignored: the sign-in still takes its real answer, and
+/// only its code is exchanged.
 #[tokio::test]
-async fn a_return_with_another_state_exchanges_nothing() {
+async fn a_return_with_another_state_is_ignored_and_the_sign_in_goes_on() {
     let server = openrouter(issued(), described()).await;
+    let root = data_root();
+    let returning = Browser::Fake(Box::new(move |address: String| {
+        let url = reqwest::Url::parse(&address).unwrap();
+        let get = |name: &str| {
+            url.query_pairs()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.into_owned())
+                .unwrap()
+        };
+        let (callback, state) = (get("callback_url"), get("state"));
+        tokio::spawn(async move {
+            use super::openrouter_pkce::tests::{browse, request as curl};
+            browse(&format!("{callback}?code=stolen&state=someone-elses")).await;
+            curl(&callback, None).await;
+            browse(&format!("{callback}?code={CODE}&state={state}")).await;
+        });
+    }));
+    let connected = sign_in(
+        request(
+            root.path(),
+            &[],
+            returning,
+            endpoints(&server),
+            Duration::from_secs(30),
+        ),
+        &mut Vec::new(),
+        &Interrupt::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(connected.secret, OPENROUTER_SECRET);
+    let bodies = exchange_bodies(&server).await;
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(bodies[0]["code"], CODE);
+    assert_eq!(stored(root.path(), OPENROUTER_SECRET).as_deref(), Some(KEY));
+
+    // Only forged returns: nothing is exchanged, and the time limit says so.
     let root = data_root();
     let (browser, _) = browser(|_| Some(format!("code={CODE}&state=someone-elses")));
     let Failure { code, message } = sign_in(
@@ -554,7 +594,7 @@ async fn a_return_with_another_state_exchanges_nothing() {
             &[],
             browser,
             endpoints(&server),
-            Duration::from_secs(30),
+            Duration::from_millis(1500),
         ),
         &mut Vec::new(),
         &Interrupt::default(),
@@ -562,8 +602,14 @@ async fn a_return_with_another_state_exchanges_nothing() {
     .await
     .unwrap_err();
     assert_eq!(code, exit::NO_TOKEN);
-    assert!(message.contains("its state did not match"), "{message}");
-    assert!(exchange_bodies(&server).await.is_empty());
+    assert!(
+        message.contains(
+            "One return to this computer carried a code without this sign-in's state, so it was \
+             not used."
+        ),
+        "{message}"
+    );
+    assert_eq!(exchange_bodies(&server).await.len(), 1);
     assert_eq!(stored(root.path(), OPENROUTER_SECRET), None);
 }
 
@@ -687,6 +733,71 @@ async fn models_are_checked_in_the_catalog_before_any_sign_in() {
     assert!(!seen.opened());
 }
 
+/// The catalog refusing the request (4xx) or not answering in time stops
+/// the command before any sign-in, with nothing stored.
+#[tokio::test]
+async fn a_catalog_that_refuses_or_times_out_stops_before_the_sign_in() {
+    for (template, code_wanted, said) in [
+        (
+            ResponseTemplate::new(429)
+                .set_body_json(json!({"error": {"message": "Rate limit exceeded"}})),
+            exit::UNVERIFIED,
+            "answered HTTP 429: Rate limit exceeded",
+        ),
+        (
+            ResponseTemplate::new(403),
+            exit::UNVERIFIED,
+            "OpenRouter answered HTTP 403",
+        ),
+        (
+            ResponseTemplate::new(200)
+                .set_body_json(catalog())
+                .set_delay(Duration::from_secs(3)),
+            exit::UNVERIFIED,
+            "did not answer within 1 seconds",
+        ),
+        (
+            ResponseTemplate::new(200).set_body_string("<html>not json</html>"),
+            exit::UNVERIFIED,
+            "something other than JSON",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models"))
+            .respond_with(template)
+            .mount(&server)
+            .await;
+        let root = data_root();
+        let (browser, seen) = signing_in();
+        let endpoints = Endpoints {
+            auth_page: format!("{}/auth", server.uri()),
+            api: Api::for_test(&format!("{}/api/v1", server.uri()), Duration::from_secs(1)),
+        };
+        let Failure { code, message } = sign_in(
+            request(
+                root.path(),
+                &[("reviewer", "openai/gpt-oss-120b")],
+                browser,
+                endpoints,
+                Duration::from_secs(30),
+            ),
+            &mut Vec::new(),
+            &Interrupt::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(code, code_wanted, "{message}");
+        assert!(message.contains(said), "{said}: {message}");
+        assert!(
+            message.contains("Nothing was signed in or stored"),
+            "{message}"
+        );
+        assert!(!seen.opened());
+        assert_eq!(stored(root.path(), OPENROUTER_SECRET), None);
+    }
+}
+
 #[test]
 fn the_chosen_models_are_openrouter_ids_never_repeated_when_they_may_be_a_key() {
     assert_eq!(
@@ -772,6 +883,7 @@ async fn connect_stores_the_key_and_points_the_configuration_at_it() {
     let mut out = Vec::new();
     let (code, text) = connect_and_configure(
         &flags,
+        None,
         root.path().to_path_buf(),
         models,
         browser,
@@ -807,9 +919,12 @@ async fn connect_stores_the_key_and_points_the_configuration_at_it() {
         "✓ Connected OpenRouter: stored the key as secret openrouter (it was never shown)",
         "providers.openrouter reads the key from secret openrouter, and openrouter_billing: \
          credits",
-        "A running Axocoatl reads provider keys when it starts",
-        "Next, in your repository, with OpenRouter as the reviewer (fix-codex takes it the \
-         same way):\n    axocoatl run fix-claude-code --task \"Describe the bug\" --model \
+        "Axocoatl reads provider keys when it starts: start it with `axocoatl dev`",
+        // No Lead in the file and no external sign-in stored: the writer is
+        // the user's to choose.
+        "Next, in your repository, choose a writer on another model (ollama:MODEL, or \
+         openrouter:VENDOR/MODEL for another OpenRouter model):\n    axocoatl run fix --task \
+         \"Describe the bug\" --model writer=PROVIDER:MODEL --model \
          reviewer=openrouter:openai/gpt-oss-120b",
     ] {
         assert!(text.contains(said), "{said}\n{text}");
@@ -819,6 +934,7 @@ async fn connect_stores_the_key_and_points_the_configuration_at_it() {
     let (browser, _) = signing_in();
     let (code, text) = connect_and_configure(
         &flags,
+        None,
         root.path().to_path_buf(),
         Vec::new(),
         browser,
@@ -849,6 +965,7 @@ async fn with_no_config_only_the_key_is_stored_and_the_lines_are_shown() {
     let models = chosen_models(flags.writer.as_deref(), flags.reviewer.as_deref()).unwrap();
     let (code, text) = connect_and_configure(
         &flags,
+        None,
         root.path().to_path_buf(),
         models,
         browser,
@@ -1100,17 +1217,23 @@ fn a_value_on_the_command_line_is_never_repeated() {
 }
 
 #[tokio::test]
-async fn the_receipt_key_and_the_chatgpt_sign_in_are_never_replaced_or_removed() {
+async fn another_commands_secret_is_never_replaced_removed_or_sent() {
     let root = data_root();
     let directory = tempfile::tempdir().unwrap();
     let config = directory.path().join("config.yaml");
     std::fs::write(&config, CONFIG).unwrap();
-    for name in ["receipt-signing-key", "codex-chatgpt"] {
+    for name in [
+        "receipt-signing-key",
+        "codex-chatgpt",
+        "claude-code-oauth",
+        "codex-openai",
+    ] {
         axocoatl_daemon::secret_store::set_secret(root.path(), name, b"kept-value").unwrap();
-        for remove in [false, true] {
+        for (remove, status) in [(false, false), (true, false), (false, true)] {
             let mut flags = flags(&config);
             flags.secret = name.to_string();
             flags.remove = remove;
+            flags.status = status;
             assert_eq!(cmd_connect_openrouter(flags).await, exit::USAGE, "{name}");
         }
         assert_eq!(stored(root.path(), name).as_deref(), Some("kept-value"));
@@ -1133,4 +1256,426 @@ async fn status_and_remove_before_any_data_root_say_nothing_is_stored() {
     );
     assert_eq!(code, exit::NO_TOKEN, "{text}");
     assert!(!missing.exists());
+}
+
+const ONBOARDED_OLLAMA: &str = "# Axocoatl — local Ollama setup\nagents:\n  - id: lead\n    \
+                                name: \"Lead\"\n    provider: ollama\n    model: \
+                                \"qwen3-coder:30b\"\n  - id: reviewer\n    name: \"Reviewer\"\n    \
+                                provider: ollama\n    model: \"gpt-oss:20b\"\n\nproviders:\n  \
+                                ollama:\n    base_url: \"http://127.0.0.1:11434\"\n\nserver:\n  \
+                                port: 8080\n";
+
+/// With only a reviewer named, the writer suggested is the configuration's
+/// Lead model when it runs natively, else a loadout whose writer's sign-in
+/// is stored, else the user's choice.
+#[tokio::test]
+async fn the_suggested_writer_fits_the_configuration_and_the_stored_sign_ins() {
+    let reviewer = "openai/gpt-oss-120b";
+    let root = data_root();
+    assert_eq!(
+        writer_hint(Some(ONBOARDED_OLLAMA), root.path(), reviewer),
+        WriterHint::Configured("ollama:qwen3-coder:30b".into())
+    );
+    let openrouter_lead = "agents:\n  - id: lead\n    name: Lead\n    provider: openrouter\n    \
+                           model: openai/gpt-oss-120b\n";
+    assert_eq!(
+        writer_hint(Some(openrouter_lead), root.path(), reviewer),
+        WriterHint::Unknown
+    );
+    assert_eq!(
+        writer_hint(Some(openrouter_lead), root.path(), "qwen/qwen3-coder"),
+        WriterHint::Configured("openrouter:openai/gpt-oss-120b".into())
+    );
+    assert_eq!(
+        writer_hint(None, root.path(), reviewer),
+        WriterHint::Unknown
+    );
+    axocoatl_daemon::secret_store::set_secret(root.path(), "codex-chatgpt", b"{}").unwrap();
+    assert_eq!(
+        writer_hint(Some("agents: []\n"), root.path(), reviewer),
+        WriterHint::External("fix-codex")
+    );
+    axocoatl_daemon::secret_store::set_secret(root.path(), "claude-code-oauth", b"x").unwrap();
+    assert_eq!(
+        writer_hint(None, root.path(), reviewer),
+        WriterHint::External("fix-claude-code")
+    );
+
+    // End to end, on an onboarded Ollama configuration.
+    let server = openrouter(issued(), described()).await;
+    let root = data_root();
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("config.yaml");
+    std::fs::write(&config, ONBOARDED_OLLAMA).unwrap();
+    let (browser, _) = signing_in();
+    let flags = flags(&config);
+    let models = chosen_models(None, Some(reviewer)).unwrap();
+    let (code, text) = connect_and_configure(
+        &flags,
+        None,
+        root.path().to_path_buf(),
+        models,
+        browser,
+        endpoints(&server),
+        &mut Vec::new(),
+        &Interrupt::default(),
+    )
+    .await;
+    assert_eq!(code, exit::CONNECTED, "{text}");
+    assert!(
+        text.contains(
+            "  axocoatl run fix --task \"Describe the bug\" --model \
+             writer=ollama:qwen3-coder:30b --model reviewer=openrouter:openai/gpt-oss-120b"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("fix-claude-code --task"), "{text}");
+}
+
+/// `--remove` keeps the configuration's reference while Agents still use
+/// OpenRouter, so `doctor` keeps saying how to connect again.
+#[test]
+fn remove_keeps_the_reference_while_agents_use_openrouter() {
+    let root = data_root();
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("config.yaml");
+    let text = "agents:\n  - id: lead\n    name: Lead\n    provider: openrouter\n    model: \
+                qwen/qwen3-coder\n  - id: reviewer\n    name: Reviewer\n    provider: openrouter\n    \
+                model: openai/gpt-oss-120b\n\nproviders:\n  openrouter_billing: credits\n  \
+                openrouter:\n    api_key_secret: openrouter\n";
+    std::fs::write(&config, text).unwrap();
+    axocoatl_daemon::secret_store::set_secret(root.path(), OPENROUTER_SECRET, KEY.as_bytes())
+        .unwrap();
+    let (code, said) = remove(root.path(), &config, OPENROUTER_SECRET, false);
+    assert_eq!(code, exit::CONNECTED, "{said}");
+    assert_eq!(stored(root.path(), OPENROUTER_SECRET), None);
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
+    assert!(
+        said.contains("Kept providers.openrouter's api_key_secret: openrouter in"),
+        "{said}"
+    );
+    assert!(
+        said.contains("its Agents lead, reviewer use provider openrouter"),
+        "{said}"
+    );
+    // doctor now says the secret is not stored, and how to connect again.
+    let loaded = axocoatl_config::parse_config(text, &config).unwrap();
+    assert!(matches!(
+        doctor_key_line("OpenRouter", loaded.providers.openrouter.as_ref().unwrap(), root.path()),
+        Some(Err((line, hint))) if line == "OpenRouter API key secret openrouter is not stored"
+            && hint.contains("axocoatl connect openrouter")
+    ));
+}
+
+/// On a computer with no configuration, `connect` writes one at the user's
+/// configuration path after the key is stored (and none when the sign-in
+/// fails); a missing file named with -c elsewhere is refused before the
+/// sign-in.
+#[tokio::test]
+async fn a_missing_user_configuration_is_written_after_the_sign_in() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let paths = crate::user_paths::UserPaths {
+        config_dir: home.path().join("Axocoatl"),
+        config_path: home.path().join("Axocoatl").join("config.yaml"),
+        data_dir: home.path().join("Axocoatl").join("data"),
+    };
+    axocoatl_daemon::AxocoatlDaemon::initialize_data_root(&paths.data_dir).unwrap();
+    let mut flags = flags(&paths.config_path);
+    flags.writer = Some("qwen/qwen3-coder".into());
+
+    // Cancelled in the browser: nothing is written.
+    let server = openrouter(issued(), described()).await;
+    let (browser, _) = browser(|_| Some("error=access_denied".to_string()));
+    let (code, _) = connect_and_configure(
+        &flags,
+        Some(&paths),
+        paths.data_dir.clone(),
+        Vec::new(),
+        browser,
+        endpoints(&server),
+        &mut Vec::new(),
+        &Interrupt::default(),
+    )
+    .await;
+    assert_eq!(code, exit::NO_TOKEN);
+    assert!(!paths.config_path.exists());
+
+    let (browser, _) = signing_in();
+    let models = chosen_models(flags.writer.as_deref(), flags.reviewer.as_deref()).unwrap();
+    let (code, text) = connect_and_configure(
+        &flags,
+        Some(&paths),
+        paths.data_dir.clone(),
+        models,
+        browser,
+        endpoints(&server),
+        &mut Vec::new(),
+        &Interrupt::default(),
+    )
+    .await;
+    assert_eq!(code, exit::CONNECTED, "{text}");
+    assert!(text.contains("Wrote a new configuration"), "{text}");
+    assert!(
+        text.contains(
+            "axocoatl run fix --task \"Describe the bug\" --model \
+             writer=openrouter:qwen/qwen3-coder --model reviewer=openrouter:openai/gpt-oss-120b"
+        ),
+        "{text}"
+    );
+    let written = std::fs::read_to_string(&paths.config_path).unwrap();
+    assert!(!written.contains(KEY));
+    let loaded = axocoatl_config::parse_config(&written, &paths.config_path).unwrap();
+    assert!(loaded.agents.is_empty());
+    assert_eq!(
+        loaded
+            .providers
+            .openrouter
+            .unwrap()
+            .api_key_secret
+            .as_deref(),
+        Some(OPENROUTER_SECRET)
+    );
+    assert_eq!(
+        loaded.providers.openrouter_billing,
+        Some(axocoatl_config::OpenRouterBilling::Credits)
+    );
+    assert_eq!(
+        std::fs::metadata(&paths.config_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert_eq!(
+        std::fs::metadata(&paths.config_dir)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o077,
+        0
+    );
+    assert_eq!(
+        stored(&paths.data_dir, OPENROUTER_SECRET).as_deref(),
+        Some(KEY)
+    );
+    // Running it again edits the file it wrote: nothing changes.
+    let (browser, _) = signing_in();
+    let (code, text) = connect_and_configure(
+        &flags,
+        Some(&paths),
+        paths.data_dir.clone(),
+        Vec::new(),
+        browser,
+        endpoints(&server),
+        &mut Vec::new(),
+        &Interrupt::default(),
+    )
+    .await;
+    assert_eq!(code, exit::CONNECTED, "{text}");
+    assert!(text.contains("already reads the key"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&paths.config_path).unwrap(),
+        written
+    );
+
+    // A missing file given with -c elsewhere: refused before any sign-in.
+    let elsewhere = home.path().join("typo.yaml");
+    assert_eq!(
+        cmd_connect_openrouter(self::flags(&elsewhere)).await,
+        exit::USAGE
+    );
+    assert!(!elsewhere.exists());
+}
+
+/// `--status` sends only an OpenRouter key to OpenRouter.
+#[tokio::test]
+async fn status_never_sends_a_secret_that_is_not_an_openrouter_key() {
+    let root = data_root();
+    let server = openrouter(issued(), described()).await;
+    let api = Api::for_test(&format!("{}/api/v1", server.uri()), Duration::from_secs(5));
+    axocoatl_daemon::secret_store::set_secret(
+        root.path(),
+        "work",
+        b"sk-ant-oat01-NOT-AN-OPENROUTER-KEY",
+    )
+    .unwrap();
+    let (code, lines) = status_lines(root.path(), "work", &api).await;
+    assert_eq!(code, exit::FAILURE, "{lines:?}");
+    let text = lines.join("\n");
+    assert!(
+        text.contains("does not hold an OpenRouter key (they start with sk-or-)"),
+        "{text}"
+    );
+    assert!(!text.contains("NOT-AN-OPENROUTER-KEY"), "{text}");
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+/// A name that may be a key, written in api_key_secret or given to
+/// --secret, is never repeated.
+#[tokio::test]
+async fn a_key_given_where_a_secret_name_belongs_is_never_repeated() {
+    let root = data_root();
+    let credentials = |secret: &str| axocoatl_config::ProviderCredentials {
+        api_key: Default::default(),
+        api_key_secret: Some(secret.to_string()),
+        base_url: None,
+        fallback: None,
+    };
+    for (provider, key) in [
+        ("Mistral", "FAKEmistralKEY0123456789abcdef"),
+        ("Gemini", "AIzaFAKEgeminiKEY0123456789abcd"),
+        ("OpenRouter", KEY),
+    ] {
+        let Some(Err((line, hint))) = doctor_key_line(provider, &credentials(key), root.path())
+        else {
+            panic!("{provider}: no warning");
+        };
+        for text in [&line, &hint] {
+            assert!(
+                !text.contains("FAKE") && !text.contains("TESTKEY"),
+                "{text}"
+            );
+        }
+        assert!(
+            line.contains("(a name not shown, in case it is a key)"),
+            "{line}"
+        );
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("leak.yaml");
+    std::fs::write(
+        &config,
+        format!("providers:\n  openrouter:\n    api_key_secret: \"{KEY}\"\n"),
+    )
+    .unwrap();
+    let said = configured_key(&config, OPENROUTER_SECRET);
+    assert!(!said.contains("TESTKEY"), "{said}");
+    assert!(said.contains("not a secret's name"), "{said}");
+
+    std::fs::write(&config, CONFIG).unwrap();
+    let mut flags = flags(&config);
+    flags.secret = "FAKEmistralKEY0123456789abcdef".to_string();
+    assert_eq!(cmd_connect_openrouter(flags).await, exit::USAGE);
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), CONFIG);
+}
+
+/// The onboarding sign-in stops when the caller raises its interrupt,
+/// with nothing stored.
+#[tokio::test]
+async fn the_callers_interrupt_stops_the_onboarding_sign_in() {
+    let server = openrouter(issued(), described()).await;
+    let directory = tempfile::tempdir().unwrap();
+    let data_dir = directory.path().join("data");
+    let interrupt = Interrupt::default();
+    let browser = Browser::Fake(Box::new({
+        let interrupt = interrupt.clone();
+        move |_| interrupt.raise()
+    }));
+    let refused = onboarding_sign_in(
+        &data_dir,
+        None,
+        Some("openai/gpt-oss-120b"),
+        browser,
+        endpoints(&server),
+        &mut Vec::new(),
+        &interrupt,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.code, exit::INTERRUPTED);
+    assert!(
+        refused.message.contains("nothing was stored"),
+        "{}",
+        refused.message
+    );
+    assert!(exchange_bodies(&server).await.is_empty());
+    assert_eq!(stored(&data_dir, OPENROUTER_SECRET), None);
+}
+
+/// `sign_in_for_onboarding` installs no signal handling: a `SIGTERM` while
+/// it waits for the browser ends the process as it would without it (run
+/// in a child process of this test binary).
+#[test]
+fn the_onboarding_sign_in_leaves_signals_to_the_process() {
+    use std::io::BufRead as _;
+    use std::os::unix::process::ExitStatusExt as _;
+    const CHILD: &str = "AXOCOATL_TEST_ONBOARDING_SIGN_IN_DATA";
+    if let Some(data_dir) = std::env::var_os(CHILD) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(sign_in_for_onboarding(
+            Path::new(&data_dir),
+            None,
+            None,
+            true,
+        ));
+        // Reached only if a signal stopped the sign-in instead of the
+        // process: the parent sees a normal exit and fails.
+        eprintln!(
+            "SIGN-IN RETURNED: {:?}",
+            result.err().map(|failure| failure.code)
+        );
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let data_dir = directory.path().join("data");
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "connect_cmd::openrouter_tests::the_onboarding_sign_in_leaves_signals_to_the_process",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, &data_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stderr).lines() {
+            let Ok(line) = line else { break };
+            let _ = sender.send(line);
+        }
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let mut seen = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match receiver.recv_timeout(left) {
+            Ok(line) => {
+                let waiting = line.starts_with("Waiting up to");
+                seen.push(line);
+                if waiting {
+                    break;
+                }
+            }
+            Err(_) => {
+                let _ = child.kill();
+                panic!("the child never waited for the browser: {seen:?}");
+            }
+        }
+    }
+    let killed = std::process::Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if started.elapsed() > Duration::from_secs(20) {
+            let _ = child.kill();
+            panic!("SIGTERM did not end the child: {seen:?}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let rest: Vec<String> = receiver.try_iter().collect();
+    assert_eq!(status.signal(), Some(15), "{status:?} {seen:?} {rest:?}");
+    assert_eq!(stored(&data_dir, OPENROUTER_SECRET), None);
 }

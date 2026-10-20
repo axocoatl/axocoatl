@@ -32,6 +32,7 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use axocoatl_config::shown_secret_name;
 use axocoatl_daemon::provider_secrets::{
     how_to_store_key, key_source, never_a_provider_key, KeySource,
 };
@@ -47,10 +48,14 @@ use super::openrouter_api::{catalog_model, dollars, model_id, Api, ApiError, Key
 use super::openrouter_config as config_file;
 use super::openrouter_pkce::{auth_url, Callback, Pkce, Returned, AUTH_PAGE};
 use super::{exit, failure, Failure, Interrupt};
+use crate::user_paths::UserPaths;
 
 /// How long the sign-in may take by default. OpenRouter's codes expire 10
 /// minutes after they are issued.
 pub(crate) const DEFAULT_SIGN_IN_MINUTES: u64 = 10;
+
+/// How OpenRouter's keys start; `--status` sends nothing else to OpenRouter.
+const OPENROUTER_KEY_PREFIX: &str = "sk-or-";
 
 /// Where OpenRouter's account pages are.
 const KEYS_PAGE: &str = "https://openrouter.ai/settings/keys";
@@ -286,11 +291,21 @@ pub(crate) async fn sign_in(
     let returned = tokio::select! {
         returned = callback.wait(&pkce) => returned,
         () = tokio::time::sleep(sign_in_time) => {
+            let ignored = match callback.ignored() {
+                0 => String::new(),
+                1 => " One return to this computer carried a code without this sign-in's state, \
+                      so it was not used."
+                    .to_string(),
+                count => format!(
+                    " {count} returns to this computer carried a code without this sign-in's \
+                     state, so they were not used."
+                ),
+            };
             return Err(failure(
                 exit::NO_TOKEN,
                 format!(
-                    "The OpenRouter sign-in was not completed within {}; nothing was stored. \
-                     {again} Give it more time with --sign-in-timeout MINUTES.",
+                    "The OpenRouter sign-in was not completed within {}; nothing was \
+                     stored.{ignored} {again} Give it more time with --sign-in-timeout MINUTES.",
                     minutes(sign_in_time)
                 ),
             ));
@@ -314,15 +329,6 @@ pub(crate) async fn sign_in(
                 format!(
                     "The OpenRouter sign-in was cancelled in the browser{said}, so no key was \
                      made and nothing was stored. {again}"
-                ),
-            ));
-        }
-        Returned::WrongState => {
-            return Err(failure(
-                exit::NO_TOKEN,
-                format!(
-                    "The browser returned an answer that was not for this sign-in (its state \
-                     did not match), so it was not used and nothing was stored. {again}"
                 ),
             ));
         }
@@ -397,10 +403,18 @@ pub(crate) async fn sign_in(
 /// printed either way), and store the key as the secret
 /// [`OPENROUTER_SECRET`] in `data_dir` (created if needed). Progress goes
 /// to standard error. It does not ask the BYOK question (onboarding asks
-/// it first) and writes no configuration: put [`provider_yaml`]`(&connected
-/// .secret)` under the `providers:` of the configuration onboarding
-/// writes, and show [`connected_lines`]. A signal stops it with
-/// [`exit::INTERRUPTED`]; every [`Failure`] says that nothing was stored.
+/// it first) and writes no configuration: in the configuration onboarding
+/// writes, the whole OpenRouter part of `providers:` (its
+/// `openrouter_billing:` line and its `openrouter:` block) is
+/// [`provider_yaml`]`(&connected.secret)`; show [`connected_lines`]. Every
+/// [`Failure`] says that nothing was stored.
+///
+/// It installs no signal handling, so the process keeps its own: Ctrl-C,
+/// `SIGTERM` or a hang-up during the sign-in ends onboarding as it would at
+/// any other step, with nothing stored (the key is stored last, in one
+/// atomic write). A caller that handles signals itself passes its own
+/// [`Interrupt`] to [`onboarding_sign_in`] and raises it instead; the
+/// sign-in then stops with [`exit::INTERRUPTED`].
 // Called by onboarding's OpenRouter step, which another change adds.
 #[allow(dead_code)]
 pub(crate) async fn sign_in_for_onboarding(
@@ -410,9 +424,9 @@ pub(crate) async fn sign_in_for_onboarding(
     no_browser: bool,
 ) -> Result<Connected, Failure> {
     let endpoints = Endpoints::openrouter().map_err(|error| failure(exit::FAILURE, error))?;
+    // Never raised: signals keep the process's own handling.
     let interrupt = Interrupt::default();
-    let listeners = interrupt.listen();
-    let result = onboarding_sign_in(
+    onboarding_sign_in(
         data_dir,
         writer,
         reviewer,
@@ -421,15 +435,11 @@ pub(crate) async fn sign_in_for_onboarding(
         &mut std::io::stderr(),
         &interrupt,
     )
-    .await;
-    for listener in listeners {
-        listener.abort();
-    }
-    result
+    .await
 }
 
 /// [`sign_in_for_onboarding`] with its browser, endpoints, output and
-/// interrupt.
+/// `interrupt`, which the caller raises to stop the sign-in.
 pub(crate) async fn onboarding_sign_in(
     data_dir: &Path,
     writer: Option<&str>,
@@ -559,9 +569,43 @@ pub(crate) fn connected_lines(connected: &Connected) -> Vec<String> {
     lines
 }
 
+/// The writer to suggest with an OpenRouter reviewer, when no writer was
+/// named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WriterHint {
+    /// The configuration's Lead model (`provider:model`).
+    Configured(String),
+    /// A loadout whose external writer has a stored sign-in
+    /// (`fix-claude-code`, `fix-codex`).
+    External(&'static str),
+    /// Nothing says which.
+    Unknown,
+}
+
+/// The writer to suggest with the reviewer `reviewer` (an OpenRouter model
+/// id): the configuration's Lead model when it runs natively and is not
+/// the reviewer, else a loadout whose writer's sign-in is stored in
+/// `data_dir`.
+pub(crate) fn writer_hint(config: Option<&str>, data_dir: &Path, reviewer: &str) -> WriterHint {
+    if let Some(writer) = config.and_then(config_file::lead_writer) {
+        if writer != format!("openrouter:{reviewer}") {
+            return WriterHint::Configured(writer);
+        }
+    }
+    let stored = |name: &str| secret_store::has_secret(data_dir, name).unwrap_or(false);
+    use axocoatl_daemon::external_agent::{claude_code, codex};
+    if stored(claude_code::CLAUDE_CODE_SECRET) {
+        WriterHint::External("fix-claude-code")
+    } else if stored(codex::CODEX_CHATGPT_SECRET) || stored(codex::CODEX_SECRET) {
+        WriterHint::External("fix-codex")
+    } else {
+        WriterHint::Unknown
+    }
+}
+
 /// What to run next with the models checked: a sentence, and a command
 /// that runs as written when there is one.
-fn next_lines(models: &[(String, ModelRow)]) -> Vec<String> {
+pub(crate) fn next_lines(models: &[(String, ModelRow)], hint: &WriterHint) -> Vec<String> {
     let find = |wanted: &str| {
         models
             .iter()
@@ -576,24 +620,45 @@ fn next_lines(models: &[(String, ModelRow)]) -> Vec<String> {
                  writer=openrouter:{writer} --model reviewer=openrouter:{reviewer}"
             ),
         ],
-        (None, Some(reviewer)) => vec![
-            "Next, in your repository, with OpenRouter as the reviewer (fix-codex takes it \
-             the same way):"
-                .to_string(),
-            format!(
-                "  axocoatl run fix-claude-code --task \"Describe the bug\" --model \
-                 reviewer=openrouter:{reviewer}"
-            ),
-        ],
+        (None, Some(reviewer)) => match hint {
+            WriterHint::Configured(writer) => vec![
+                format!(
+                    "Next, in your repository, with your configuration's Lead model ({writer}) \
+                     as the writer and OpenRouter as the reviewer:"
+                ),
+                format!(
+                    "  axocoatl run fix --task \"Describe the bug\" --model writer={writer} \
+                     --model reviewer=openrouter:{reviewer}"
+                ),
+            ],
+            WriterHint::External(loadout) => vec![
+                "Next, in your repository, with OpenRouter as the reviewer:".to_string(),
+                format!(
+                    "  axocoatl run {loadout} --task \"Describe the bug\" --model \
+                     reviewer=openrouter:{reviewer}"
+                ),
+            ],
+            WriterHint::Unknown => vec![
+                "Next, in your repository, choose a writer on another model (ollama:MODEL, or \
+                 openrouter:VENDOR/MODEL for another OpenRouter model):"
+                    .to_string(),
+                format!(
+                    "  axocoatl run fix --task \"Describe the bug\" --model \
+                     writer=PROVIDER:MODEL --model reviewer=openrouter:{reviewer}"
+                ),
+                "(`axocoatl run fix-claude-code` and `fix-codex` take the same --model \
+                 reviewer=… after `axocoatl connect claude-code` or `axocoatl connect codex`)"
+                    .to_string(),
+            ],
+        },
         (Some(writer), None) => vec![format!(
             "Next: run with --model writer=openrouter:{writer} and a reviewer on a different \
              model, --model reviewer=PROVIDER:MODEL (connect it with `axocoatl connect \
              openrouter --reviewer VENDOR/MODEL` for one on OpenRouter)"
         )],
         (None, None) => vec![
-            "Next: name OpenRouter models as openrouter:VENDOR/MODEL in \
-                              --model writer=… or --model reviewer=… (models: \
-                              https://openrouter.ai/models)"
+            "Next: name OpenRouter models as openrouter:VENDOR/MODEL in --model writer=… or \
+             --model reviewer=… (models: https://openrouter.ai/models)"
                 .to_string(),
         ],
     }
@@ -609,18 +674,22 @@ pub(crate) fn doctor_key_line(
     data_dir: &Path,
 ) -> Option<Result<String, (String, String)>> {
     let provider = name.to_ascii_lowercase();
-    match key_source(credentials, data_dir) {
+    match key_source(&provider, credentials, data_dir) {
         KeySource::Secret {
             name: secret,
             stored: true,
         } => Some(Ok(format!(
-            "{name} API key present (secret {secret}, never shown)"
+            "{name} API key present (secret {}, never shown)",
+            shown_secret_name(&secret)
         ))),
         KeySource::Secret {
             name: secret,
             stored: false,
         } => Some(Err((
-            format!("{name} API key secret {secret} is not stored"),
+            format!(
+                "{name} API key secret {} is not stored",
+                shown_secret_name(&secret)
+            ),
             capitalized(&how_to_store_key(&provider, &secret)),
         ))),
         KeySource::Missing if provider == "openrouter" => Some(Err((
@@ -661,18 +730,37 @@ pub(crate) struct Flags {
     pub(crate) remove: bool,
 }
 
-/// The configuration file's planned edit, checked before the sign-in.
-fn plan_config(path: &Path, secret: &str) -> Result<config_file::Planned, Failure> {
+/// What `connect` does to the configuration file.
+pub(crate) enum ConfigPlan {
+    /// Edit it (or leave it, when it already says this).
+    Edit(config_file::Planned),
+    /// There is none at the user's configuration path: write
+    /// [`config_file::new_configuration`] there.
+    Create(UserPaths),
+}
+
+/// The configuration file's planned change, checked before the sign-in.
+/// A missing file is created only at the user's configuration path
+/// (`creatable`), where `axocoatl onboard` writes it.
+fn plan_config(
+    path: &Path,
+    secret: &str,
+    creatable: Option<&UserPaths>,
+) -> Result<ConfigPlan, Failure> {
     let manual = config_file::manual_lines(secret);
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(paths) = creatable.filter(|paths| paths.config_path == path) {
+                return Ok(ConfigPlan::Create(paths.clone()));
+            }
             return Err(failure(
                 exit::USAGE,
                 format!(
-                    "there is no Axocoatl configuration at {}. Run `axocoatl onboard` first \
-                     (it can set up OpenRouter), pass the configuration with -c, or run again \
-                     with --no-config to only store the key. Nothing was signed in or stored.",
+                    "there is no configuration file at {}. Pass an existing configuration with \
+                     -c (without -c, Axocoatl uses the one at its usual place, and writes one \
+                     there when there is none), or run again with --no-config to only store \
+                     the key. Nothing was signed in or stored.",
                     path.display()
                 ),
             ));
@@ -689,6 +777,7 @@ fn plan_config(path: &Path, secret: &str) -> Result<config_file::Planned, Failur
     };
     config_file::check_writable(path)
         .and_then(|()| config_file::plan_connect(&text, secret))
+        .map(ConfigPlan::Edit)
         .map_err(|reason| {
             failure(
                 exit::USAGE,
@@ -703,14 +792,31 @@ fn plan_config(path: &Path, secret: &str) -> Result<config_file::Planned, Failur
         })
 }
 
+/// The user's configuration path, when `config` is it: a missing file there
+/// is written by `connect`.
+fn creatable(config: &Path) -> Option<UserPaths> {
+    UserPaths::discover()
+        .ok()
+        .filter(|paths| paths.config_path == config)
+}
+
 /// `axocoatl connect openrouter`. Returns the process exit code.
 pub(crate) async fn cmd_connect_openrouter(flags: Flags) -> i32 {
     if !axocoatl_config::egress_routes::is_valid_credential_name(&flags.secret) {
         eprintln!("✗ --secret: {}", secret_store::INVALID_NAME);
         return exit::USAGE;
     }
-    // Storing or removing a key there would replace or delete that secret.
-    if let Some(reason) = never_a_provider_key(&flags.secret) {
+    if axocoatl_config::may_be_a_key(&flags.secret) {
+        eprintln!(
+            "✗ --secret takes the name of the secret to store the key as, and the value given \
+             reads as a key, so it is not repeated and nothing was run, stored or removed. You \
+             never type or paste a key: leave --secret out to store it as {OPENROUTER_SECRET}."
+        );
+        return exit::USAGE;
+    }
+    // Storing or removing a key there would replace or delete that secret,
+    // and --status would send it to OpenRouter.
+    if let Some(reason) = never_a_provider_key("openrouter", &flags.secret) {
         eprintln!(
             "✗ --secret {}: that secret never holds a provider key: {reason}. Nothing was run, \
              stored or removed.",
@@ -731,8 +837,11 @@ pub(crate) async fn cmd_connect_openrouter(flags: Flags) -> i32 {
             return code;
         }
     };
+    let creatable = creatable(&flags.config);
     if !flags.no_config {
-        if let Err(Failure { code, message }) = plan_config(&flags.config, &flags.secret) {
+        if let Err(Failure { code, message }) =
+            plan_config(&flags.config, &flags.secret, creatable.as_ref())
+        {
             eprintln!("✗ {message}");
             return code;
         }
@@ -776,6 +885,7 @@ pub(crate) async fn cmd_connect_openrouter(flags: Flags) -> i32 {
     let browser = Browser::for_this_computer(flags.no_browser);
     let (code, text) = connect_and_configure(
         &flags,
+        creatable.as_ref(),
         data_dir,
         models,
         browser,
@@ -796,9 +906,12 @@ pub(crate) async fn cmd_connect_openrouter(flags: Flags) -> i32 {
 }
 
 /// Sign in, store the key, and update the configuration (unless
-/// `--no-config`): the exit code and what to print.
+/// `--no-config`; written new at `creatable` when it has no file there):
+/// the exit code and what to print.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn connect_and_configure(
     flags: &Flags,
+    creatable: Option<&UserPaths>,
     data_dir: PathBuf,
     models: Vec<(String, String)>,
     browser: Browser,
@@ -808,7 +921,7 @@ pub(crate) async fn connect_and_configure(
 ) -> (i32, String) {
     let result = sign_in(
         SignIn {
-            data_dir,
+            data_dir: data_dir.clone(),
             secret: flags.secret.clone(),
             models,
             browser,
@@ -835,16 +948,20 @@ pub(crate) async fn connect_and_configure(
         ));
     } else {
         // Planned again: the file may have changed during the sign-in.
-        let written = plan_config(&flags.config, &connected.secret).and_then(|planned| {
-            if planned.unchanged {
-                return Ok(planned);
+        let written = plan_config(&flags.config, &connected.secret, creatable).and_then(|plan| {
+            match &plan {
+                ConfigPlan::Edit(planned) if planned.unchanged => {}
+                ConfigPlan::Edit(planned) => config_file::write(&flags.config, &planned.text)
+                    .map_err(|error| failure(exit::FAILURE, error))?,
+                ConfigPlan::Create(paths) => {
+                    config_file::create(paths, &config_file::new_configuration(&connected.secret))
+                        .map_err(|error| failure(exit::FAILURE, error))?
+                }
             }
-            config_file::write(&flags.config, &planned.text)
-                .map(|()| planned)
-                .map_err(|error| failure(exit::FAILURE, error))
+            Ok(plan)
         });
         match written {
-            Ok(planned) => {
+            Ok(ConfigPlan::Edit(planned)) => {
                 lines.push(if planned.unchanged {
                     format!(
                         "{} already reads the key from secret {} (openrouter_billing: credits)",
@@ -866,6 +983,14 @@ pub(crate) async fn connect_and_configure(
                     ));
                 }
             }
+            Ok(ConfigPlan::Create(paths)) => lines.push(format!(
+                "Wrote a new configuration, {} (0600): providers.openrouter reads the key from \
+                 secret {}, with openrouter_billing: credits, and the server's defaults. It has \
+                 no Agents: `axocoatl run` takes its models with --model, and `axocoatl \
+                 onboard` adds a team for workbench Sessions",
+                paths.config_path.display(),
+                connected.secret
+            )),
             Err(Failure { message, .. }) => {
                 code = exit::FAILURE;
                 lines.push(format!(
@@ -875,11 +1000,22 @@ pub(crate) async fn connect_and_configure(
         }
     }
     lines.push(
-        "A running Axocoatl reads provider keys when it starts: restart it (`axocoatl service \
-         stop` then `axocoatl service start`, or stop `axocoatl dev` and start it again)"
+        "Axocoatl reads provider keys when it starts: start it with `axocoatl dev` (or \
+         `axocoatl service start` for the always-on service), or, if it is running, restart it \
+         (`axocoatl service stop` then `axocoatl service start`, or stop `axocoatl dev` and \
+         start it again)"
             .to_string(),
     );
-    lines.extend(next_lines(&connected.models));
+    let reviewer_only = connected.models.iter().all(|(role, _)| role == "reviewer");
+    let hint = match connected.models.iter().find(|(role, _)| role == "reviewer") {
+        Some((_, reviewer)) if reviewer_only => writer_hint(
+            std::fs::read_to_string(&flags.config).ok().as_deref(),
+            &data_dir,
+            &reviewer.id,
+        ),
+        _ => WriterHint::Unknown,
+    };
+    lines.extend(next_lines(&connected.models, &hint));
     let mark = if code == exit::CONNECTED { '✓' } else { '!' };
     let text = lines
         .iter()
@@ -897,7 +1033,7 @@ pub(crate) async fn connect_and_configure(
 }
 
 /// What the configuration says about OpenRouter's key, in words.
-fn configured_key(path: &Path, secret: &str) -> String {
+pub(crate) fn configured_key(path: &Path, secret: &str) -> String {
     let Ok(text) = std::fs::read_to_string(path) else {
         return format!("{}: no configuration file", path.display());
     };
@@ -918,6 +1054,12 @@ fn configured_key(path: &Path, secret: &str) -> String {
     ) {
         (Some(Value::String(named)), _) if named == secret => {
             format!("providers.openrouter reads the key from secret {secret}")
+        }
+        (Some(Value::String(named)), _) if shown_secret_name(named) != named => {
+            "providers.openrouter's api_key_secret holds something that is not a secret's name \
+             (it is not shown, in case it is a key): write a name there, never the key, and \
+             delete a key written there from the file and its backups"
+                .to_string()
         }
         (Some(Value::String(named)), _) => format!(
             "providers.openrouter reads the key from secret {named}, not {secret} (check \
@@ -983,7 +1125,22 @@ pub(crate) async fn status_lines(data_dir: &Path, secret: &str, api: &Api) -> (i
     };
     let key = match stored {
         Ok(Some(value)) => match String::from_utf8(value.to_vec()) {
-            Ok(text) => super::openrouter_api::ApiKey::from_stored(text),
+            // Only an OpenRouter key is sent to OpenRouter: a secret that
+            // holds anything else stays here.
+            Ok(text) if text.starts_with(OPENROUTER_KEY_PREFIX) => {
+                super::openrouter_api::ApiKey::from_stored(text)
+            }
+            Ok(text) => {
+                drop(zeroize::Zeroizing::new(text));
+                return (
+                    exit::FAILURE,
+                    vec![format!(
+                        "secret {secret} does not hold an OpenRouter key (they start with \
+                         {OPENROUTER_KEY_PREFIX}), so it was not sent to OpenRouter; run \
+                         `axocoatl connect openrouter --secret NAME` with another name"
+                    )],
+                );
+            }
             Err(_) => {
                 return (
                     exit::FAILURE,
@@ -1087,6 +1244,22 @@ pub(crate) fn remove(
     let mut changed_config = false;
     if !no_config {
         match std::fs::read_to_string(config) {
+            // Agents still on OpenRouter: the configuration keeps naming
+            // the secret, so `doctor` says it is not stored and how to
+            // connect again, rather than the provider vanishing.
+            Ok(text)
+                if !config_file::openrouter_agents(&text).is_empty()
+                    && matches!(config_file::plan_remove(&text, secret), Ok(Some(_))) =>
+            {
+                let agents = config_file::openrouter_agents(&text).join(", ");
+                lines.push(format!(
+                    "! Kept providers.openrouter's api_key_secret: {secret} in {}: its Agents \
+                     {agents} use provider openrouter, so Axocoatl will not start with this \
+                     configuration until you run `axocoatl connect openrouter` again or move \
+                     them to another provider (`axocoatl doctor` warns until then)",
+                    config.display()
+                ));
+            }
             Ok(text) => match config_file::plan_remove(&text, secret) {
                 Ok(Some(new)) => match config_file::write(config, &new) {
                     Ok(()) => {

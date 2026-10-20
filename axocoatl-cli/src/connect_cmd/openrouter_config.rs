@@ -14,15 +14,122 @@
 //! configuration when the original did; otherwise nothing is written and
 //! the lines to add are shown instead ([`manual_lines`], which hold no
 //! value). The file is replaced atomically with its own permissions.
+//!
+//! When there is no configuration yet at the user's configuration path,
+//! [`create`] writes [`new_configuration`]: these entries and the server's
+//! defaults, no Agents, in a new `0600` file it never writes over.
 
+use std::io::Write as _;
 use std::path::Path;
 
 use axocoatl_config::yaml::Value;
 
-/// The lines to put under `providers:`, two spaces in, for the secret
-/// `secret`.
+use crate::user_paths::UserPaths;
+
+/// OpenRouter's whole part of `providers:`, two spaces in, for the secret
+/// `secret`: the `openrouter_billing:` line and the `openrouter:` block. A
+/// configuration template puts it in place of both, not only of an
+/// `api_key:` line.
 pub(crate) fn provider_yaml(secret: &str) -> String {
     format!("  openrouter_billing: credits\n  openrouter:\n    api_key_secret: {secret}\n")
+}
+
+/// A configuration for a computer that has none: OpenRouter's entries and
+/// the server's defaults. It has no Agents: `axocoatl run` takes its models
+/// with `--model`, and `axocoatl onboard` writes a team for workbench
+/// Sessions.
+pub(crate) fn new_configuration(secret: &str) -> String {
+    format!(
+        "# Axocoatl — written by `axocoatl connect openrouter`.\n\
+         # OpenRouter's key is in Axocoatl's secret store (secret {secret}), never in this file.\n\
+         # Native Sessions use OpenRouter credits; BYOK is not supported.\n\
+         # `axocoatl run` takes its models with --model; `axocoatl onboard` writes a default\n\
+         # team of Agents for workbench Sessions.\n\
+         {}\n\
+         server:\n  port: 8080\n  host: \"127.0.0.1\"\n",
+        manual_lines(secret)
+    )
+}
+
+/// Write `text` as the configuration at `paths.config_path`: its directory
+/// created if needed and kept private, the file new (never written over:
+/// one that appeared since is an error) with `0600`.
+pub(crate) fn create(paths: &UserPaths, text: &str) -> Result<(), String> {
+    let name = paths
+        .config_path
+        .file_name()
+        .ok_or_else(|| format!("{} names no file", paths.config_path.display()))?;
+    let directory = axocoatl_core::SecureDir::open_or_create_all(&paths.config_dir)
+        .and_then(|directory| crate::admit_private_directory(&directory).map(|()| directory))
+        .map_err(|error| format!("{}: {error}", paths.config_dir.display()))?;
+    let mut file = directory.create_new(name).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            format!(
+                "{} appeared during the sign-in, so it was not written over",
+                paths.config_path.display()
+            )
+        } else {
+            format!("creating {}: {error}", paths.config_path.display())
+        }
+    })?;
+    let written = file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.sync_all());
+    if let Err(error) = written {
+        drop(file);
+        let _ = directory.remove_file(name);
+        return Err(format!("writing {}: {error}", paths.config_path.display()));
+    }
+    Ok(())
+}
+
+/// The ids of the Agents in the configuration `text` whose provider is
+/// OpenRouter.
+pub(crate) fn openrouter_agents(text: &str) -> Vec<String> {
+    agents(text)
+        .into_iter()
+        .filter(|(_, provider, _)| provider == "openrouter")
+        .map(|(id, _, _)| id)
+        .collect()
+}
+
+/// The model the configuration's Lead writes with, as `provider:model`
+/// for `--model writer=…`, when it runs natively (Ollama or OpenRouter):
+/// the Agent `lead`, or else the first Agent on one of those.
+pub(crate) fn lead_writer(text: &str) -> Option<String> {
+    let agents = agents(text);
+    let native = |provider: &str| provider == "ollama" || provider == "openrouter";
+    agents
+        .iter()
+        .find(|(id, _, _)| id == "lead")
+        .filter(|(_, provider, _)| native(provider))
+        .or_else(|| agents.iter().find(|(_, provider, _)| native(provider)))
+        .map(|(_, provider, model)| format!("{provider}:{model}"))
+}
+
+/// Each Agent's (id, provider, model) in the configuration `text`.
+fn agents(text: &str) -> Vec<(String, String, String)> {
+    let Ok(document) = axocoatl_config::yaml::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    let Some(Value::Sequence(agents)) = document.get("agents") else {
+        return Vec::new();
+    };
+    let field = |agent: &Value, name: &str| match agent.get(name) {
+        Some(Value::String(text)) => text.clone(),
+        _ => String::new(),
+    };
+    agents
+        .iter()
+        .map(|agent| {
+            (
+                field(agent, "id"),
+                field(agent, "provider"),
+                field(agent, "model"),
+            )
+        })
+        .filter(|(id, provider, model)| !id.is_empty() && !provider.is_empty() && !model.is_empty())
+        .collect()
 }
 
 /// [`provider_yaml`] under its `providers:` line, for a message.
@@ -650,6 +757,64 @@ server:
         // Another secret, or none: nothing to remove.
         assert_eq!(plan_remove(&planned, "work").unwrap(), None);
         assert_eq!(plan_remove(ONBOARDED_OLLAMA, "openrouter").unwrap(), None);
+    }
+
+    /// Onboarding's OpenRouter configuration with the key left blank (its
+    /// `${OPENROUTER_API_KEY}` placeholder, which the always-on service
+    /// cannot read) holds no placeholder once connected.
+    #[test]
+    fn an_onboarded_placeholder_is_replaced_so_the_service_needs_no_variable() {
+        let onboarded = "# Axocoatl — OpenRouter setup\n# OpenRouter uses your normal API key and \
+                         OpenRouter credits.\nagents:\n  - id: lead\n    name: \"Lead\"\n    \
+                         provider: openrouter\n    model: \"qwen/qwen3-coder\"\n\nproviders:\n  \
+                         openrouter_billing: credits\n  openrouter:\n    api_key: \
+                         \"${OPENROUTER_API_KEY}\"\n\nserver:\n  port: 8080\n  host: \
+                         \"127.0.0.1\"\n";
+        let planned = plan_connect(onboarded, "openrouter").unwrap();
+        assert!(planned.removed_key);
+        assert!(!planned.text.contains("${"), "{}", planned.text);
+        assert_eq!(
+            planned.text,
+            onboarded.replace(
+                "    api_key: \"${OPENROUTER_API_KEY}\"\n",
+                "    api_key_secret: openrouter\n"
+            )
+        );
+        axocoatl_config::parse_config(&planned.text, Path::new("c.yaml")).unwrap();
+    }
+
+    #[test]
+    fn a_new_configuration_holds_only_the_openrouter_entries_and_the_servers_defaults() {
+        let text = new_configuration("openrouter");
+        let config = axocoatl_config::parse_config(&text, Path::new("c.yaml")).unwrap();
+        assert!(config.agents.is_empty());
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(
+            config
+                .providers
+                .openrouter
+                .unwrap()
+                .api_key_secret
+                .as_deref(),
+            Some("openrouter")
+        );
+        assert!(!text.contains("${"));
+        // It is the file `connect` edits: connecting again changes nothing.
+        assert!(plan_connect(&text, "openrouter").unwrap().unchanged);
+    }
+
+    #[test]
+    fn the_lead_and_the_agents_on_openrouter_are_read_from_the_file() {
+        let text = "agents:\n  - id: scout\n    name: S\n    provider: ollama\n    model: \
+                    \"qwen3:8b\"\n  - id: lead\n    name: L\n    provider: anthropic\n    \
+                    model: claude\n  - id: reviewer\n    name: R\n    provider: openrouter\n    \
+                    model: openai/gpt-oss-120b\n";
+        // The Lead is not native: the first native Agent's model.
+        assert_eq!(lead_writer(text).as_deref(), Some("ollama:qwen3:8b"));
+        assert_eq!(openrouter_agents(text), vec!["reviewer".to_string()]);
+        assert_eq!(lead_writer("agents: []\n"), None);
+        assert_eq!(lead_writer("not: [valid\n"), None);
+        assert!(openrouter_agents("providers: {}\n").is_empty());
     }
 
     #[test]

@@ -210,7 +210,8 @@ pub enum ConnectCommands {
     /// providers.openrouter at it with openrouter_billing: credits
     Openrouter {
         /// Path to config file (selects the data directory; providers.openrouter
-        /// is written here)
+        /// is written here, and at the default path a new file when there is
+        /// none)
         #[arg(short, long, default_value_os_t = crate::default_config_path_for_clap())]
         config: PathBuf,
         /// Name of the secret to store the key as

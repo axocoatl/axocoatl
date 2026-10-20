@@ -13,10 +13,17 @@
 //! system chose: only a request for that path, with this computer's
 //! address as its `Host`, is read as the sign-in's answer, and its state
 //! must be this sign-in's (compared in constant time) before its code is
-//! used. A code without the state, or with another state, ends the sign-in
-//! without exchanging anything. An answer without a code is a cancelled
-//! sign-in (OpenRouter returns no state when access is denied).
+//! used. A code without the state, or with another state, is answered
+//! `400`, counted ([`Callback::ignored`]) and never exchanged; the sign-in
+//! goes on waiting, so a stray or forged request cannot end it. A return
+//! without a code is a cancelled sign-in (OpenRouter returns no state when
+//! access is denied) only when the browser navigated to it
+//! (`Sec-Fetch-Mode: navigate`), or, from a client that sends no
+//! `Sec-Fetch-Mode` at all, when it carries OpenRouter's `error`; any other
+//! request without a code is answered and ignored.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -133,8 +140,6 @@ pub(crate) enum Returned {
     /// No code: the sign-in was cancelled or access was denied. The error
     /// OpenRouter named, when it is a short word that can be shown.
     Cancelled(Option<String>),
-    /// A code without a state, or with another sign-in's.
-    WrongState,
 }
 
 /// What one request to the loopback server was.
@@ -144,6 +149,8 @@ enum Request {
     Other(u16, &'static str),
     Code(String),
     Cancelled(Option<String>),
+    /// A code without this sign-in's state: answered `400`, counted and
+    /// ignored.
     WrongState,
 }
 
@@ -151,6 +158,7 @@ enum Request {
 pub(crate) struct Callback {
     listener: TcpListener,
     port: u16,
+    ignored: Arc<AtomicUsize>,
 }
 
 impl Callback {
@@ -158,7 +166,17 @@ impl Callback {
     pub(crate) async fn bind() -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
-        Ok(Self { listener, port })
+        Ok(Self {
+            listener,
+            port,
+            ignored: Arc::default(),
+        })
+    }
+
+    /// How many returns carried a code without this sign-in's state (each
+    /// answered `400` and never exchanged).
+    pub(crate) fn ignored(&self) -> usize {
+        self.ignored.load(Ordering::SeqCst)
     }
 
     /// The port the system chose.
@@ -171,11 +189,14 @@ impl Callback {
         format!("http://127.0.0.1:{}{CALLBACK_PATH}", self.port)
     }
 
-    /// Serve requests until one is this sign-in's answer. Each connection
-    /// is read on its own task, so one that sends nothing (it is dropped
-    /// after [`REQUEST_WAIT`]) holds up no other. A request for another
-    /// path or host is answered and ignored, and a connection that fails
-    /// before it is accepted is skipped. The caller bounds the wait.
+    /// Serve requests until one is this sign-in's answer: its code with
+    /// this sign-in's state, or a cancellation. Each connection is read on
+    /// its own task, so one that sends nothing (it is dropped after
+    /// [`REQUEST_WAIT`]) holds up no other. A request for another path or
+    /// host, a code with another state or none, and a request without a
+    /// code that is not a cancellation are answered and ignored, and a
+    /// connection that fails before it is accepted is skipped. The caller
+    /// bounds the wait.
     pub(crate) async fn wait(&self, pkce: &Pkce) -> Returned {
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<Request>(8);
         loop {
@@ -207,9 +228,11 @@ impl Callback {
                 }
                 Some(request) = receiver.recv() => match request {
                     Request::Other(..) => {}
+                    Request::WrongState => {
+                        self.ignored.fetch_add(1, Ordering::SeqCst);
+                    }
                     Request::Code(code) => return Returned::Code(Zeroizing::new(code)),
                     Request::Cancelled(error) => return Returned::Cancelled(error),
-                    Request::WrongState => return Returned::WrongState,
                 },
             }
         }
@@ -221,6 +244,9 @@ struct RawRequest {
     method: String,
     target: String,
     host: Option<String>,
+    /// `Sec-Fetch-Mode`, which browsers send: `navigate` for a page the
+    /// browser opens, as OpenRouter's redirect is.
+    fetch_mode: Option<String>,
 }
 
 async fn read_request(stream: &mut TcpStream) -> Option<RawRequest> {
@@ -250,16 +276,23 @@ async fn read_request(stream: &mut TcpStream) -> Option<RawRequest> {
     if request_line.next().is_some() || !version.starts_with("HTTP/1.") {
         return None;
     }
-    let host = lines.find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        name.trim()
-            .eq_ignore_ascii_case("host")
-            .then(|| value.trim().to_string())
-    });
+    let headers: Vec<(&str, &str)> = lines
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim(), value.trim()))
+        })
+        .collect();
+    let header = |wanted: &str| {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
+            .map(|(_, value)| value.to_string())
+    };
     Some(RawRequest {
         method: method.to_string(),
         target: target.to_string(),
-        host,
+        host: header("host"),
+        fetch_mode: header("sec-fetch-mode"),
     })
 }
 
@@ -314,7 +347,19 @@ fn classify(request: &RawRequest, port: u16, expected_state: &str) -> Request {
         return Request::WrongState;
     };
     let Some(code) = code.filter(|code| !code.is_empty()) else {
-        return Request::Cancelled(shown_error(error));
+        // A browser navigating here (OpenRouter's redirect) without a code,
+        // or a client that sends no `Sec-Fetch-Mode` naming OpenRouter's
+        // error, cancels. A page's own request (`cors`, `no-cors`) or a
+        // bare request never does.
+        let cancels = match request.fetch_mode.as_deref() {
+            Some(mode) => mode.eq_ignore_ascii_case("navigate"),
+            None => error.is_some(),
+        };
+        return if cancels {
+            Request::Cancelled(shown_error(error))
+        } else {
+            Request::Other(400, NOT_HERE_PAGE)
+        };
     };
     let code_ok = code.len() <= MAX_CODE_BYTES && code.bytes().all(|byte| byte.is_ascii_graphic());
     match state {
@@ -356,8 +401,9 @@ const CANCELLED_PAGE: &str = "<h1>Sign-in cancelled</h1><p>OpenRouter returned n
      Axocoatl stored nothing. You can close this tab; run <code>axocoatl connect \
      openrouter</code> again to retry.</p>";
 const WRONG_STATE_PAGE: &str = "<h1>Not this sign-in</h1><p>This answer was not for the \
-     sign-in the Axocoatl command waiting here started, so it used nothing and stored nothing. \
-     Run <code>axocoatl connect openrouter</code> again.</p>";
+     sign-in the Axocoatl command waiting here started, so it was not used. That sign-in is \
+     still waiting: finish it in the browser tab it opened, or run <code>axocoatl connect \
+     openrouter</code> again.</p>";
 const NOT_HERE_PAGE: &str = "<h1>Axocoatl</h1><p>Nothing here.</p>";
 
 #[cfg(test)]
@@ -461,7 +507,13 @@ pub(crate) mod tests {
             method: method.into(),
             target: target.into(),
             host: host.map(str::to_string),
+            fetch_mode: Some("navigate".into()),
         }
+    }
+
+    fn with_mode(mut request: RawRequest, mode: Option<&str>) -> RawRequest {
+        request.fetch_mode = mode.map(str::to_string);
+        request
     }
 
     #[test]
@@ -491,7 +543,7 @@ pub(crate) mod tests {
             ),
             Request::Code("c".into())
         );
-        // Another state, none, or two: never exchanged.
+        // Another state, none, or two: never exchanged, the sign-in waits on.
         for query in [
             "code=abc".to_string(),
             "code=abc&state=forged".to_string(),
@@ -505,11 +557,35 @@ pub(crate) mod tests {
                 "{query}"
             );
         }
-        // No code: cancelled, with OpenRouter's reason when it is a word.
+        // No code, when the browser navigated here: cancelled, with
+        // OpenRouter's reason when it is a word.
         assert_eq!(
             classify(&callback("error=access_denied"), 4100, pkce.state()),
             Request::Cancelled(Some("access_denied".into()))
         );
+        // From a client without Sec-Fetch-Mode, only with OpenRouter's error.
+        assert_eq!(
+            classify(
+                &with_mode(callback("error=access_denied"), None),
+                4100,
+                pkce.state()
+            ),
+            Request::Cancelled(Some("access_denied".into()))
+        );
+        // A bare request (curl), or a page's own request: ignored.
+        for request in [
+            with_mode(raw("GET", "/callback", host), None),
+            with_mode(raw("GET", "/callback", host), Some("no-cors")),
+            with_mode(callback("error=access_denied"), Some("cors")),
+        ] {
+            assert_eq!(
+                classify(&request, 4100, pkce.state()),
+                Request::Other(400, NOT_HERE_PAGE),
+                "{} {:?}",
+                request.target,
+                request.fetch_mode
+            );
+        }
         assert_eq!(
             classify(&callback("error=%3Cscript%3E"), 4100, pkce.state()),
             Request::Cancelled(None)
@@ -564,16 +640,20 @@ pub(crate) mod tests {
         }
     }
 
-    /// What a browser gets from `url`: its status line and body.
+    /// What a browser opening `url` gets: its status line and body.
     pub(crate) async fn browse(url: &str) -> (u16, String) {
-        let response = reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .unwrap()
-            .get(url)
-            .send()
-            .await
-            .unwrap();
+        request(url, Some("navigate")).await
+    }
+
+    /// What a request to `url` with `Sec-Fetch-Mode: mode` (none: curl)
+    /// gets.
+    pub(crate) async fn request(url: &str, mode: Option<&str>) -> (u16, String) {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut request = client.get(url);
+        if let Some(mode) = mode {
+            request = request.header("Sec-Fetch-Mode", mode);
+        }
+        let response = request.send().await.unwrap();
         let status = response.status().as_u16();
         (status, response.text().await.unwrap())
     }
@@ -613,30 +693,63 @@ pub(crate) mod tests {
         }
     }
 
+    /// A forged or stale return, a bare request and a page's own request
+    /// are answered and ignored: the sign-in still takes its real answer.
     #[tokio::test]
-    async fn a_cancelled_or_forged_return_ends_the_sign_in_without_a_code() {
-        for (query, cancelled) in [
-            ("error=access_denied", true),
-            ("code=x&state=forged", false),
+    async fn stray_and_forged_returns_do_not_end_the_sign_in() {
+        let callback = Callback::bind().await.unwrap();
+        let pkce = Pkce::from_random(&[8; 32], &[9; 16]);
+        let url = callback.url();
+        let state = pkce.state().to_string();
+        let browser = tokio::spawn(async move {
+            let forged = browse(&format!("{url}?code=x&state=forged")).await;
+            let no_state = browse(&format!("{url}?code=x")).await;
+            let bare = request(&url, None).await;
+            let page = request(&format!("{url}?error=access_denied"), Some("no-cors")).await;
+            let answer = browse(&format!("{url}?code=real&state={state}")).await;
+            (forged, no_state, bare, page, answer)
+        });
+        let returned = tokio::time::timeout(Duration::from_secs(30), callback.wait(&pkce))
+            .await
+            .unwrap();
+        let (forged, no_state, bare, page, answer) = browser.await.unwrap();
+        for (status, body) in [&forged, &no_state] {
+            assert_eq!(*status, 400);
+            assert!(body.contains("Not this sign-in"), "{body}");
+            assert!(body.contains("still waiting"), "{body}");
+        }
+        assert_eq!(bare.0, 400);
+        assert_eq!(page.0, 400);
+        assert_eq!(answer.0, 200);
+        assert_eq!(callback.ignored(), 2);
+        match returned {
+            Returned::Code(code) => assert_eq!(code.as_str(), "real"),
+            Returned::Cancelled(_) => panic!("cancelled"),
+        }
+    }
+
+    /// The browser returning without a code ends the sign-in as cancelled.
+    #[tokio::test]
+    async fn a_return_without_a_code_cancels_the_sign_in() {
+        for (mode, query) in [
+            (Some("navigate"), "error=access_denied"),
+            (Some("navigate"), ""),
+            (None, "error=access_denied"),
         ] {
             let callback = Callback::bind().await.unwrap();
             let pkce = Pkce::from_random(&[8; 32], &[9; 16]);
             let url = format!("{}?{query}", callback.url());
-            let browser = tokio::spawn(async move { browse(&url).await });
+            let browser = tokio::spawn(async move { request(&url, mode).await });
             let returned = callback.wait(&pkce).await;
             let (status, page) = browser.await.unwrap();
+            assert_eq!(status, 200);
+            assert!(page.contains("Sign-in cancelled"), "{page}");
             match returned {
-                Returned::Cancelled(error) => {
-                    assert!(cancelled);
-                    assert_eq!(error.as_deref(), Some("access_denied"));
-                    assert_eq!(status, 200);
-                    assert!(page.contains("Sign-in cancelled"), "{page}");
-                }
-                Returned::WrongState => {
-                    assert!(!cancelled);
-                    assert_eq!(status, 400);
-                    assert!(page.contains("Not this sign-in"), "{page}");
-                }
+                Returned::Cancelled(error) => assert_eq!(
+                    error.as_deref(),
+                    (!query.is_empty()).then_some("access_denied"),
+                    "{mode:?} {query}"
+                ),
                 Returned::Code(_) => panic!("{query} gave a code"),
             }
         }

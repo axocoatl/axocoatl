@@ -659,10 +659,70 @@ pub fn provider_credentials(
     ]
 }
 
-/// `api_key_secret` names a secret (the secret store's name rule) and is
-/// not given together with a non-empty `api_key`. Neither value is
-/// repeated: a key written where the name belongs would otherwise be
-/// printed.
+/// The prefixes API keys and tokens start with (compared ignoring case).
+const KEY_PREFIXES: [&str; 17] = [
+    "sk-",
+    "sk_",
+    "aiza",
+    "xai-",
+    "gsk_",
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "ghu_",
+    "github_pat_",
+    "hf_",
+    "glpat-",
+    "pplx-",
+    "nvapi-",
+    "csk-",
+    "r8_",
+    "sess-",
+];
+
+/// Whether `value`, written where the *name* of a secret belongs, may be a
+/// key itself, so that it is never repeated in a message: it starts the way
+/// API keys do (`sk-`, `AIza`, ...), or it reads as a random token rather
+/// than words: a run of 20 or more characters without a `-`, `_` or `.`
+/// that mixes letters and digits (a 32-character Mistral key), or 32 or
+/// more characters with such a run of 8 (a UUID). A heuristic: names such
+/// as `openrouter`, `anthropic-work`, `claude-code-oauth` or
+/// `openrouter-key-20261019` are none of these.
+pub fn may_be_a_key(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    if KEY_PREFIXES.iter().any(|prefix| lower.starts_with(prefix)) {
+        return true;
+    }
+    let mixes = |text: &str| {
+        text.bytes().any(|byte| byte.is_ascii_alphabetic())
+            && text.bytes().any(|byte| byte.is_ascii_digit())
+    };
+    let longest_mixed_run = value
+        .split(['-', '_', '.'])
+        .filter(|run| mixes(run))
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    longest_mixed_run >= 20 || (value.len() >= 32 && longest_mixed_run >= 8)
+}
+
+/// What a message shows for a secret's name: the name, unless it is not a
+/// secret name or [`may_be_a_key`].
+pub fn shown_secret_name(name: &str) -> &str {
+    if egress_routes::is_valid_credential_name(name) && !may_be_a_key(name) {
+        name
+    } else {
+        SECRET_NAME_NOT_SHOWN
+    }
+}
+
+/// [`shown_secret_name`] of a name it does not show.
+pub const SECRET_NAME_NOT_SHOWN: &str = "(a name not shown, in case it is a key)";
+
+/// `api_key_secret` names a secret (the secret store's name rule, and not
+/// something that [`may_be_a_key`]) and is not given together with a
+/// non-empty `api_key`. Neither value is repeated: a key written where the
+/// name belongs would otherwise be printed.
 fn validate_provider_key_secrets(providers: &ProvidersConfigYaml) -> Result<(), ConfigError> {
     for (provider, credentials) in provider_credentials(providers) {
         let Some(credentials) = credentials else {
@@ -672,17 +732,19 @@ fn validate_provider_key_secrets(providers: &ProvidersConfigYaml) -> Result<(), 
             continue;
         };
         let field = format!("providers.{provider}.api_key_secret");
-        if !egress_routes::is_valid_credential_name(name) {
+        if !egress_routes::is_valid_credential_name(name) || may_be_a_key(name) {
             return Err(ConfigError::InvalidField {
                 field,
                 value: "(not shown, in case it is a key)".to_string(),
-                reason: "api_key_secret names a secret in Axocoatl's secret store: 1-64 \
-                         letters, digits, '_', '.' or '-', starting with a letter or digit"
+                reason: "api_key_secret holds the name of a secret in Axocoatl's secret store, \
+                         never the key: 1-64 letters, digits, '_', '.' or '-', starting with a \
+                         letter or digit, and not something that reads as a key"
                     .to_string(),
                 suggestion: format!(
                     "Write the secret's name, for example api_key_secret: {provider}, and \
                      store the key with `axocoatl connect openrouter` (OpenRouter) or \
-                     `axocoatl secret set {provider}`"
+                     `axocoatl secret set {provider}`. If a key was written here, delete it \
+                     from this file and its backups"
                 ),
             });
         }
@@ -2147,5 +2209,87 @@ mcp_servers:
             "{not_a_name}"
         );
         assert!(!not_a_name.contains("TYPEDKEY"), "{not_a_name}");
+    }
+
+    /// A key written where the secret's name belongs, which the secret
+    /// store's name rule would take (a 32-character Mistral key, a
+    /// 39-character Gemini key) or not (a 73-character OpenRouter key), is
+    /// refused without being repeated; names are not.
+    #[test]
+    fn a_key_written_as_api_key_secret_is_refused_without_repeating_it() {
+        let keys = [
+            "FAKEmistralKEY0123456789abcdef",
+            "AIzaFAKEgeminiKEY0123456789abcd",
+            "sk-or-v1-FAKE0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab",
+            "123e4567-e89b-12d3-a456-426614174000",
+            "sk-ant-api03-FAKE",
+        ];
+        for key in keys {
+            assert!(may_be_a_key(key), "{key}");
+            assert_eq!(shown_secret_name(key), SECRET_NAME_NOT_SHOWN);
+            for provider in ["mistral", "gemini", "openrouter"] {
+                let refused = parse_config(
+                    &format!("providers:\n  {provider}:\n    api_key_secret: \"{key}\"\n"),
+                    &PathBuf::from("test.yaml"),
+                )
+                .unwrap_err()
+                .to_string();
+                assert!(
+                    refused.contains(&format!("providers.{provider}.api_key_secret")),
+                    "{refused}"
+                );
+                assert!(!refused.contains(key), "{refused}");
+                assert!(!refused.contains("FAKE"), "{refused}");
+            }
+        }
+        for name in [
+            "openrouter",
+            "anthropic-work",
+            "claude-code-oauth",
+            "codex-chatgpt",
+            "receipt-signing-key",
+            "openrouter-key-20261019",
+            "my-openrouter-key-for-work-2026-10",
+            "OpenRouter.Personal",
+        ] {
+            assert!(!may_be_a_key(name), "{name}");
+            assert_eq!(shown_secret_name(name), name);
+            parse_config(
+                &format!("providers:\n  openrouter:\n    api_key_secret: {name}\n"),
+                &PathBuf::from("test.yaml"),
+            )
+            .unwrap();
+        }
+    }
+
+    /// A hosted provider block must name a key: `api_key` (empty accepted,
+    /// as before, and so is an unset `${VARIABLE}`) or `api_key_secret`.
+    #[test]
+    fn a_provider_block_without_any_key_is_refused() {
+        for provider in ["openai", "anthropic", "gemini", "mistral", "openrouter"] {
+            let refused = parse_config(
+                &format!("providers:\n  {provider}:\n    base_url: \"http://127.0.0.1:1234/v1\"\n"),
+                &PathBuf::from("test.yaml"),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(refused.contains("missing field `api_key`"), "{refused}");
+            assert!(refused.contains("api_key_secret"), "{refused}");
+        }
+        for block in [
+            "api_key: \"\"",
+            "api_key: \"${AXOCOATL_TEST_DEFINITELY_UNSET_KEY_VARIABLE}\"",
+            "api_key_secret: openai",
+        ] {
+            let config = parse_config(
+                &format!("providers:\n  openai:\n    {block}\n"),
+                &PathBuf::from("test.yaml"),
+            )
+            .unwrap();
+            assert!(
+                config.providers.openai.unwrap().api_key.is_empty(),
+                "{block}"
+            );
+        }
     }
 }
