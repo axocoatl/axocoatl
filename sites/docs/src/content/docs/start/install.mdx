@@ -146,8 +146,8 @@ A run's sandbox also pulls its base image and packages the first time it starts.
   project's checks run inside it, while Ollama runs on the Mac itself. A rootful
   machine (Podman Desktop's default) does not work for `axocoatl run`; onboarding
   offers to switch it to rootless. On Linux, Podman runs containers directly and needs
-  no machine: install Podman 4.3 or later (4.9 is tested; Ubuntu 22.04's 3.4.4 does not
-  work), for example `sudo apt-get install -y podman`, and give your user a range of
+  no machine: install Podman 4.3 or later (4.9 is tested; Ubuntu 22.04 ships 3.4.4, which
+  onboarding refuses, so Ubuntu 22.04 is not yet verified), for example `sudo apt-get install -y podman`, and give your user a range of
   subordinate ids (`sudo usermod --add-subuids 100000-165535 --add-subgids
   100000-165535 $USER && podman system migrate`) if it has none.
 - **A writer and a different reviewer model**: Claude Code (a Claude Pro or Max plan),
