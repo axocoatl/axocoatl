@@ -126,6 +126,17 @@ async function openSession(
   beforeGoto = null,
 ) {
   const context = await newAuthorizedContext(browser, { viewport });
+  try {
+    return await openSessionInContext(context, session, targetRuntime, beforeGoto);
+  } catch (error) {
+    // A Session that did not open closes its page, so nothing keeps
+    // reconnecting to a daemon the caller is about to stop.
+    await context.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function openSessionInContext(context, session, targetRuntime, beforeGoto) {
   const page = await context.newPage();
   const browserErrors = [];
   const browserRequests = [];
@@ -5412,19 +5423,30 @@ test('operator devcontainer policy is visible and reversible while package-lock 
   // the primary suite is pinned to port 8080, policy requests must reach this
   // fixture's listener rather than the first daemon's healthy endpoint.
   const policyRuntime = await launchTestDaemon({ allowPostCreateCommand: true, port: 0 });
-  assert.notEqual(policyRuntime.baseUrl, runtime.baseUrl, 'different daemon configurations need independent listeners');
   const markerName = '.axocoatl-policy-marker';
   const postCreateCommand = `touch ${markerName}`;
-  const policyProject = await policyRuntime.createProjectWorkspace(
-    'operator-policy-project',
-    'Operator Policy Workspace',
-    { packageLock: false, devcontainer: { postCreateCommand } },
-  );
-  const { context, page, browserRequests, assertNoBrowserErrors } = await openSession(
-    policyRuntime.fixtures.alpha.sessions[0],
-    { width: 1280, height: 800 },
-    policyRuntime,
-  );
+  // Until the journey's own try below owns it, a failure stops this second
+  // daemon here: a running daemon would keep this file's process (and the
+  // whole suite) waiting forever.
+  let policyProject;
+  let opened;
+  try {
+    assert.notEqual(policyRuntime.baseUrl, runtime.baseUrl, 'different daemon configurations need independent listeners');
+    policyProject = await policyRuntime.createProjectWorkspace(
+      'operator-policy-project',
+      'Operator Policy Workspace',
+      { packageLock: false, devcontainer: { postCreateCommand } },
+    );
+    opened = await openSession(
+      policyRuntime.fixtures.alpha.sessions[0],
+      { width: 1280, height: 800 },
+      policyRuntime,
+    );
+  } catch (error) {
+    await policyRuntime.stop();
+    throw error;
+  }
+  const { context, page, browserRequests, assertNoBrowserErrors } = opened;
   try {
     // A detected package-lock command is only a suggestion even when the
     // operator has enabled the separate devcontainer post-create policy.

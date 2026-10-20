@@ -36,27 +36,34 @@ async function removeByPath(folder) {
 
 async function openHome(engine) {
   const browser = await engine.launch();
-  const context = await newAuthorizedContext(browser, { viewport: { width: 1280, height: 800 } });
-  const page = await context.newPage();
-  const errors = [];
-  page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
-  page.on('console', (message) => {
-    // The refusals this journey exercises are 409s, which the browser logs.
-    if (message.type() === 'error' && !/status of 409/.test(message.text())) {
-      errors.push(`console: ${message.text()}`);
-    }
-  });
-  // Provider health is outside this journey; keep its toast away.
-  await page.route('**/api/llm-health', (route) => route.fulfill({
-    json: { ollama: { base_url: 'http://127.0.0.1:9', reachable: true, configured: true, missing_models: [] } },
-  }));
-  await page.goto(`${runtime.baseUrl}/`, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => customElements.get('ax-rail') && customElements.get('ax-session-home')
-    && document.querySelector('ax-rail')?.shadowRoot);
-  return {
-    browser, page, errors,
-    async close() { await context.close(); await browser.close(); },
-  };
+  // A home that does not open closes its browser, so a failed journey cannot
+  // keep this file's process (and the suite) waiting on it.
+  try {
+    const context = await newAuthorizedContext(browser, { viewport: { width: 1280, height: 800 } });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
+    page.on('console', (message) => {
+      // The refusals this journey exercises are 409s, which the browser logs.
+      if (message.type() === 'error' && !/status of 409/.test(message.text())) {
+        errors.push(`console: ${message.text()}`);
+      }
+    });
+    // Provider health is outside this journey; keep its toast away.
+    await page.route('**/api/llm-health', (route) => route.fulfill({
+      json: { ollama: { base_url: 'http://127.0.0.1:9', reachable: true, configured: true, missing_models: [] } },
+    }));
+    await page.goto(`${runtime.baseUrl}/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => customElements.get('ax-rail') && customElements.get('ax-session-home')
+      && document.querySelector('ax-rail')?.shadowRoot);
+    return {
+      browser, page, errors,
+      async close() { await context.close(); await browser.close(); },
+    };
+  } catch (error) {
+    await browser.close();
+    throw error;
+  }
 }
 
 async function openPicker(page) {

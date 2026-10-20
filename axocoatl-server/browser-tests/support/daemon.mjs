@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { writeSync } from 'node:fs';
 import { createServer } from 'node:net';
 import {
   access,
@@ -21,6 +22,21 @@ export const TEST_ROOT = path.resolve(SUPPORT_DIR, '..');
 export const REPOSITORY_ROOT = path.resolve(TEST_ROOT, '..', '..');
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+// Every fixture daemon this process started that is still running. A test
+// file that finishes with one running would wait on it forever; the runner
+// passes --test-force-exit, so the file ends anyway, and here the daemon is
+// killed, named, and the file fails, so a journey that does not stop its
+// daemon on every path is caught instead of hanging the suite.
+const runningDaemons = new Map();
+process.on('exit', () => {
+  for (const [child, label] of runningDaemons) {
+    if (child.exitCode !== null || child.signalCode !== null) continue;
+    try { child.kill('SIGKILL'); } catch {}
+    writeSync(2, `browser test teardown: the fixture daemon ${label} was still running when this file ended; it was killed. A journey that launches a daemon must stop it on every path.\n`);
+    process.exitCode = 1;
+  }
+});
 
 async function freeLoopbackPort() {
   const server = createServer();
@@ -486,6 +502,9 @@ consolidation:
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    const started = child;
+    runningDaemons.set(started, `pid ${started.pid} at ${baseUrl} (${runRoot})`);
+    started.once('exit', () => runningDaemons.delete(started));
     child.stdout.on('data', (chunk) => { stdout = boundedLog(stdout, chunk); });
     child.stderr.on('data', (chunk) => { stderr = boundedLog(stderr, chunk); });
     await waitForHealth(baseUrl, child, logs);

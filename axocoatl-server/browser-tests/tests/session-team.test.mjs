@@ -199,8 +199,10 @@ test('Add Agent adds the template chosen beside it',async()=>{
 test('On a real daemon, a new Session on the lead offers its read-only Worker helpers by name',async()=>{
  const daemon=await launchTestDaemon({nativeDataRoot:true,agentTools:['read_file','bash'],
   helpers:[{id:'scout',name:'Scout',tools:['read_file','grep','bash'],writes:[]},{id:'reviewer',name:'Reviewer',tools:['read_file','bash'],writes:[]}]});
- const context=await newAuthorizedContext(browser, {viewport:{width:1100,height:820}}),page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
+ // From here every failure stops the daemon: a daemon left running keeps this file's process, and so the suite, waiting forever.
+ let context;
  try{
+  context=await newAuthorizedContext(browser, {viewport:{width:1100,height:820}});const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
   const session=daemon.fixtures.alpha.sessions[0].id;
   await page.route('**/team-fixture',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html><head><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-session-team session="${session}"></ax-session-team><script type="module" src="/ui/session-team.js"></script></body></html>`}));
   await page.goto(`${daemon.baseUrl}/team-fixture`);await page.getByRole('button',{name:'Team and budget',exact:true}).click();
@@ -217,7 +219,7 @@ test('On a real daemon, a new Session on the lead offers its read-only Worker he
   assert.equal(await page.getByText('Add a Worker in Settings',{exact:false}).count(),0);
   assert.equal(await page.getByLabel('Maximum Agents in the turn, helpers included',{exact:true}).inputValue(),'6');
   assert.deepEqual(errors,[]);
- }finally{await context.close();await daemon.stop();}
+ }finally{await context?.close();await daemon.stop();}
 });
 
 test('A required review names a read-only Worker, its rounds and its budget, and the review says what it enforces',async()=>{
