@@ -72,8 +72,7 @@ pub const TOOLCHAIN_RECIPES: [Recipe; 4] = [
     },
     Recipe {
         name: "rust",
-        description: "Rust 1.99 with cargo, rustc and gcc (loadout runs refuse it for now: \
-                      cargo's renames are blocked in hardened Sessions)",
+        description: "Rust 1.99 with cargo, rustc and gcc",
         fragment: include_str!("../assets/recipes/toolchains/rust.Containerfile"),
     },
     Recipe {

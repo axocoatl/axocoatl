@@ -52,7 +52,7 @@ each step.
 
 | Flag | Meaning |
 | --- | --- |
-| `--toolchain <NAME>` | `detected` (the default for such a loadout), `node`, `python` or `go`, or `none` for the image as the loadout names it, with no detected install. Several toolchains whose check does not say which is a usage error that lists them. `rust`, named or detected, is refused (exit code 3): Rust checks cannot run in a loadout run's hardened Session yet. |
+| `--toolchain <NAME>` | `detected` (the default for such a loadout), `node`, `python`, `rust` or `go`, or `none` for the image as the loadout names it, with no detected install. Several toolchains whose check does not say which is a usage error that lists them. |
 | `--image <REF>` | Run this curated or trusted image as it is, without a toolchain. Give its installs with `--setup`. You cannot combine it with `--toolchain <language>`. |
 | `--no-setup` | Run no setup, not even the detected install. |
 | `--no-build` | Refuse the run when its toolchain image is not built, naming the `axocoatl recipe build` command. Without this flag, `axocoatl run` builds the image first and prints what it builds, its size and Podman's progress on standard error. |
@@ -100,8 +100,8 @@ with every problem it found, in one message:
    the `--model ROLE=provider:model` (or `--param`) that sets it and the `run.models` key
    that can.
 3. The run's environment: its toolchain, image and setup, from the
-   [toolchain flags](#toolchain-flags), the loadout and the repository's files (a Rust
-   repository, or `--toolchain` with `--image`, is refused). A `detected` check needs a
+   [toolchain flags](#toolchain-flags), the loadout and the repository's files
+   (`--toolchain` with `--image` is refused). A `detected` check needs a
    check command: `--check`, a `Check command:` line of `AXOCOATL.md`, or one detected in
    the repository.
 4. Each external writer's stored credential: the one it names, or for `credential: auto`

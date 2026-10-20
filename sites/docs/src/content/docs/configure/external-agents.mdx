@@ -50,9 +50,9 @@ daemon also keeps the access token current on your computer.
 - **Podman**, which runs the program's Session container, and a **reviewer**: a
   different model that only reads, on Ollama or OpenRouter. Claude Code and Codex can
   write but cannot review.
-- **A Node, Python or Go repository.** The program runs in an image with your
+- **A Node, Python, Rust or Go repository.** The program runs in an image with your
   repository's [toolchain](/configure/toolchains/), and the run installs the repository's
-  dependencies before the first model call. Rust checks do not run in a loadout run yet.
+  dependencies before the first model call.
 - The program's images download about 0.6 to 0.9 GB (Claude Code) and 0.8 to 1.2 GB
   (Codex) before the toolchain's; `axocoatl run` prints the size of an image it builds.
 </Aside>

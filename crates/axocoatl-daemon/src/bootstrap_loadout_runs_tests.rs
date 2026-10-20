@@ -1718,7 +1718,8 @@ async fn toolchain_admission_child_body() {
     assert!(message.contains("--toolchain node|go"), "{message}");
     assert!(daemon.list_loadout_runs().await.unwrap().is_empty());
 
-    // A Rust repository is refused before any image, Session or model call.
+    // A Rust repository is planned like the others: with building turned
+    // off, its missing image is refused naming the rust recipe's build.
     let rust = repo(&[
         (
             "Cargo.toml",
@@ -1726,12 +1727,14 @@ async fn toolchain_admission_child_body() {
         ),
         ("src/lib.rs", ""),
     ]);
-    let message = usage(
-        daemon
-            .admit_loadout_run(request(rust.path(), "rust", None))
-            .await,
+    let mut rust_no_build = request(rust.path(), "rust-no-build", None);
+    rust_no_build.environment.build_images = false;
+    let message = usage(daemon.admit_loadout_run(rust_no_build).await);
+    assert!(
+        message.contains("Build it with `axocoatl recipe build rust`"),
+        "{message}"
     );
-    assert!(message.contains("Invalid cross-device link"), "{message}");
+    assert!(!message.contains("Invalid cross-device link"), "{message}");
     assert!(daemon.list_loadout_runs().await.unwrap().is_empty());
 
     let python = repo(&[

@@ -1,6 +1,6 @@
 ---
 title: Repository toolchains
-description: How axocoatl run gives a fix run your repository's language. It detects Node.js, Python or Go, runs an official Debian-based image of that language, installs the dependencies with only that ecosystem's registries open, and checks the test command can run before any model call.
+description: How axocoatl run gives a fix run your repository's language. It detects Node.js, Python, Rust or Go, runs an official Debian-based image of that language, installs the dependencies with only that ecosystem's registries open, and checks the test command can run before any model call.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -10,7 +10,8 @@ A `fix` run judges the writer's change by running your repository's own check, s
 dependencies. Before the writer starts, [`axocoatl run`](/reference/run/) does three
 things:
 
-1. It reads your repository's files to choose a **toolchain**: `node`, `python` or `go`.
+1. It reads your repository's files to choose a **toolchain**: `node`, `python`, `rust`
+   or `go`.
    The Session runs an official Debian-based image of that language, pinned by digest.
    Axocoatl builds the image once on your computer.
 2. It runs a **setup** that installs your dependencies, such as `npm ci` or
@@ -36,12 +37,12 @@ any loadout with a [`detected` check](/configure/loadouts/#checks). `qa` and `au
 not run your tests, so they keep their images. With `--toolchain none`, a run works the
 way it did before toolchains existed.
 
-<Aside type="caution" title="Rust is not supported by axocoatl run yet">
-A loadout run's Session is always hardened, and its sandbox refuses every rename of a
-file into another directory ("Invalid cross-device link"). cargo and rustc make such
-renames in every build, so no Rust check can pass there. A run that would use the `rust`
-toolchain is refused at once with exit code 3, before any download or model call. The
-`rust` recipe still builds (`axocoatl recipe build rust`) for interactive use.
+<Aside type="note" title="Rust on Linux before 5.19">
+cargo and rustc rename files into other directories in every build. A loadout run's
+Session is always hardened, and its sandbox allows those renames on Linux 5.19 or later
+(Landlock ABI 2). On Linux 5.13 to 5.18 (Landlock ABI 1) the kernel refuses them with
+"Invalid cross-device link", so no Rust check can pass there: the [probe](#the-probe)
+ends the run with exit code 5 before any writer or reviewer turn.
 </Aside>
 
 ## How the toolchain is chosen
@@ -51,7 +52,7 @@ toolchain is refused at once with exit code 3, before any download or model call
 | `node` | `package.json` | Node.js 24.21.0 with npm, plus pnpm and yarn through corepack, and make |
 | `python` | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements*.txt` or `pytest.ini` | Python 3.13.16 with pip and venv, and make |
 | `go` | `go.mod` | Go 1.27.2 with gcc and make |
-| `rust` | `Cargo.toml` | Refused for loadout runs (see above) |
+| `rust` | `Cargo.toml` | Rust 1.99.1 with cargo, rustc and gcc, and make |
 
 A repository can have the files of more than one toolchain. In that case the run uses
 the toolchain of the check command's program: `pytest` and `python3` are Python, `cargo`
@@ -91,6 +92,7 @@ The setup installs the dependencies that the repository declares:
 | --- | --- |
 | `node` | `npm ci` with `package-lock.json`; `pnpm install --frozen-lockfile` with `pnpm-lock.yaml`; with `yarn.lock`, `yarn install --frozen-lockfile` for Yarn 1 and `yarn install --immutable` for Yarn 2 or later (named by `packageManager`, or a Berry lockfile); otherwise `npm install --no-package-lock`. Skipped when `package.json` declares no dependencies. |
 | `python` | `pip install` into a virtual environment: `-e '.[test]'` for an installable project (or `tests`, `testing` or `dev`, whichever extra it declares first), `--group` for a matching PEP 735 dependency group, and `-r` for each root `requirements*.txt`. Test or dev lists that pip cannot read (Poetry's dependency groups, uv's `dev-dependencies`, PDM's and Hatch's) are given as requirements, with Poetry's `^` and `~` constraints translated. When the check runs pytest and nothing the command installs brings it, `pytest` is added. |
+| `rust` | `cargo fetch`, when `Cargo.toml` declares dependencies or a workspace. |
 | `go` | `go mod download`, when `go.mod` requires modules. |
 
 `--setup "<command>"` replaces the detected install, and it gets the same registries.
@@ -103,6 +105,7 @@ the setup's own processes can reach these registries, and only while it runs:
 | --- | --- |
 | `node` | `registry.npmjs.org`, plus `registry.yarnpkg.com` and `repo.yarnpkg.com` for a `yarn.lock` |
 | `python` | `pypi.org`, `files.pythonhosted.org` |
+| `rust` | `index.crates.io`, `static.crates.io`, `crates.io` |
 | `go` | `proxy.golang.org`, `sum.golang.org` |
 
 Axocoatl opens each registry as a per-Session allow and revokes it when the setup ends.
@@ -130,11 +133,12 @@ your daemon's data root and the repository path. Runs mount it at
 - **Node.js:** the npm cache, plus the pnpm store, the Yarn caches and the package
   managers corepack downloads. `npm ci --prefer-offline` installs from the cache.
 - **Python:** the pip cache and the virtual environment.
+- **Rust:** cargo's registry (`CARGO_HOME`).
 - **Go:** the module cache.
 
 When your dependency files, the command and the image are unchanged since the
-Workspace's last Python or Go setup, the next run installs nothing and opens no registry
-(`nothing to install` in its note). Node.js installs into each Session's own
+Workspace's last Python, Rust or Go setup, the next run installs nothing and opens no
+registry (`nothing to install` in its note). Node.js installs into each Session's own
 `node_modules` volume, so `npm ci` runs every time, from the cache and without
 downloads.
 
@@ -144,8 +148,9 @@ the Session's users, before the first model call, whether the setup succeeded or
 The writer's turns and the checks run from the cache but cannot change it. A writer can
 therefore not change the test runner, a dependency or the virtual environment that its
 own run's checks, or any later run's checks, use. Build output is not cached: Go's build
-cache is in the Session user's home directory, so nothing one run builds is reused by
-another.
+cache is in the Session user's home directory and cargo's target directory is under the
+Session's `/tmp`, so nothing one run builds is reused by another, and no `target/`
+directory is written into your repository.
 
 To start a Workspace's cache over, remove its volume: `podman volume ls --filter
 label=io.axocoatl.role=toolchain-cache`, then `podman volume rm axo-tc-…`.
@@ -177,9 +182,9 @@ the image. To build it ahead of time, run `axocoatl recipe build python`.
 lists the toolchains and the images you have built.
 
 `fix-claude-code` and `fix-codex` combine their agent recipe with the toolchain into a
-single image, such as `axocoatl recipe build claude-code python`. On a Python or Go image,
-Node.js from the recipe base's own pinned image is copied in, because the agent's install
-needs it. The build line adds the agent's size: about 645 MB on disk for
+single image, such as `axocoatl recipe build claude-code python`. On a Python, Rust or Go
+image, Node.js from the recipe base's own pinned image is copied in, because the agent's
+install needs it. The build line adds the agent's size: about 645 MB on disk for
 `claude-code python`.
 
 No directory that a Session user can write is on the `PATH` of root's commands: every
@@ -215,7 +220,7 @@ The run is refused before any writer or reviewer turn when:
   `unittest discover` finds only pytest-style functions (exit code 3), because no change
   can make such a check pass;
 - the Session's sandbox refuses what the check does, such as a cross-directory rename
-  (exit code 5).
+  on Linux before 5.19 (exit code 5).
 
 The message names the image, the check, what is missing, and the fixes, which depend on
 the language and the program. `--no-probe` skips the probe, for a check it is wrong
@@ -237,7 +242,7 @@ are not loaded yet, loading them comes first.
 
 | Flag | Loadout field | Effect |
 | --- | --- | --- |
-| `--toolchain node\|python\|go` | `environment.toolchain`, or the toolchain among `environment.recipes` | Use this toolchain whatever the files say. `rust` is refused. |
+| `--toolchain node\|python\|rust\|go` | `environment.toolchain`, or the toolchain among `environment.recipes` | Use this toolchain whatever the files say. |
 | `--toolchain detected` | `environment.toolchain: detected` | Detect it (the default for a loadout with a `detected` check). |
 | `--toolchain none` | `environment.toolchain: none` | No toolchain: the image as the loadout names it (`alpine:3.20` for `fix`), the setup only from `--setup` or `environment.setup`, and only your configured egress lists. |
 | `--image <ref>` | `environment.image` | Run this image as it is, without a toolchain. It must be a [curated or trusted image](/configure/sandboxes/). Give its installs with `--setup`. You cannot combine it with `--toolchain <language>`. |

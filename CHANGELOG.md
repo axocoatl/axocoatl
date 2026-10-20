@@ -234,21 +234,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   work is refused before any model call.** A loadout with a `detected` check (`fix`,
   `fix-claude-code`, `fix-codex`) now detects the repository's language from its root
   files (`package.json`, `pyproject.toml`/`setup.py`/`setup.cfg`/`requirements*.txt`,
-  `go.mod`; with several, the check command's program chooses, else the run is refused
-  naming `--toolchain`) and runs an image of it built from the new toolchain recipes
-  `node` (Node 24.21.0), `python` (Python 3.13.16) and `go` (Go 1.27.2), each an official
-  Debian-based image pinned by its multi-architecture index digest plus git and make.
-  `axocoatl run` builds a missing image first and prints what it builds and its size,
-  an agent's included (`--no-build` refuses, naming `axocoatl recipe build`); an external
-  writer's recipe composes with the toolchain into one image (`claude-code python`).
-  Before the first model call a setup installs the declared dependencies (`npm ci`,
-  `pnpm` and Yarn 1 or Yarn 2+ through corepack, `pip install -e '.[test]'` into a
-  virtual environment with the test extra or group, Poetry, uv, PDM and Hatch test lists
-  given as requirements, and `pytest` whenever the check runs it and nothing installed
-  brings it, `go mod download`) as the writer, with only that ecosystem's registries
-  open (a per-Session allow recorded with the run as actor, revoked before the writer
-  starts; a setup refused 30 connections is stopped). The installed packages persist in
-  a per-Workspace cache volume, so a second run installs offline; only the setup writes
+  `Cargo.toml`, `go.mod`; with several, the check command's program chooses, else the
+  run is refused naming `--toolchain`) and runs an image of it built from the new
+  toolchain recipes `node` (Node 24.21.0), `python` (Python 3.13.16), `rust` (Rust
+  1.99.1) and `go` (Go 1.27.2), each an official Debian-based image pinned by its
+  multi-architecture index digest plus git and make. `axocoatl run` builds a missing
+  image first and prints what it builds and its size, an agent's included (`--no-build`
+  refuses, naming `axocoatl recipe build`); an external writer's recipe composes with
+  the toolchain into one image (`claude-code python`). Before the first model call a
+  setup installs the declared dependencies (`npm ci`, `pnpm` and Yarn 1 or Yarn 2+
+  through corepack, `pip install -e '.[test]'` into a virtual environment with the test
+  extra or group, Poetry, uv, PDM and Hatch test lists given as requirements, and
+  `pytest` whenever the check runs it and nothing installed brings it, `cargo fetch`,
+  `go mod download`) as the writer, with only that ecosystem's registries open (a
+  per-Session allow recorded with the run as actor, revoked before the writer starts; a
+  setup refused 30 connections is stopped). The installed packages persist in a
+  per-Workspace cache volume, so a second run installs offline; only the setup writes
   it, and root takes it back read-only before the first model call, so a writer cannot
   change what its own or a later run's checks run. A failed setup ends the run with exit
   code 5 and the installer's last lines. Then a probe runs the check once on the
@@ -257,16 +258,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declares, or a check that runs none of the repository's test files refuses the run
   with exit code 3, naming the image, the check, what is missing and the fixes
   (`--no-probe` skips it). The check is `--check`, else a `Check command:` line of
-  `AXOCOATL.md`, else detected; Python repositories get `python3 -m pytest` when they use
-  pytest (including plain `def test_` files), else `python3 -m unittest discover`. New
-  flags `--toolchain detected|node|python|go|none`, `--image`, `--no-setup`, `--no-build`,
-  `--no-probe` and the loadout field `environment.toolchain`; `none` keeps the earlier
-  behavior. The run's notes, manifest and receipt (`predicate.sandbox.environment`,
-  ignored by 1.4 verifiers) record the toolchain and why, the image, the check, the setup
-  command, exit code, duration, registries and its connections, and the probe. Rust
-  repositories are refused with exit code 3 before any download or model call: the
-  hardened Session's Landlock domain refuses the cross-directory renames cargo and rustc
-  make, so no Rust check can pass yet (the `rust` recipe still builds).
+  `AXOCOATL.md`, else detected; Python repositories get `python3 -m pytest` when they
+  use pytest (including plain `def test_` files), else `python3 -m unittest discover`.
+  New flags `--toolchain detected|node|python|rust|go|none`, `--image`, `--no-setup`,
+  `--no-build`, `--no-probe` and the loadout field `environment.toolchain`; `none` keeps
+  the earlier behavior. The run's notes, manifest and receipt
+  (`predicate.sandbox.environment`, ignored by 1.4 verifiers) record the toolchain and
+  why, the image, the check, the setup command, exit code, duration, registries and its
+  connections, and the probe. Rust repositories are supported like the others: from
+  Landlock ABI 2 (Linux 5.19) the hardened Session's Landlock domain now allows the
+  cross-directory renames cargo and rustc make in every build (Fixed, below). On a
+  kernel with only ABI 1 the kernel still refuses them, and the probe ends the run with
+  exit code 5, naming "Invalid cross-device link".
 - **`axocoatl connect openrouter`: OpenRouter through a browser sign-in, with no key to
   paste.** It runs OpenRouter's OAuth PKCE flow: a loopback server on `127.0.0.1` (a
   port the system picks), OpenRouter's sign-in page opened in the browser and printed
@@ -360,6 +363,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Fixed
+- **Hardened commands can rename files into other directories.** From Landlock ABI 2
+  (Linux 5.19), a Landlock domain that does not handle `REFER` refuses every rename or
+  link into another directory. The hardened supervisor's domain handled only creating
+  block devices, so cargo and rustc, which rename across directories in every build,
+  failed with "Invalid cross-device link" and no Rust check could pass in a loadout run.
+  The domain now also handles `REFER` and allows it beneath `/`, so renames work as they
+  do outside it; creating block devices stays refused. Landlock ABI 1 cannot handle
+  `REFER`, so on Linux 5.13 to 5.18 such renames are still refused, and the probe names
+  them. The embedded execution supervisors were rebuilt with this change.
 - A run that ended at admission (a failed environment or setup) reported "0 recorded
   events" in its network summary; it now counts what the Session's record holds.
 - The `sandbox.egress` warning under `sandbox.network: bridge` said `allow` was

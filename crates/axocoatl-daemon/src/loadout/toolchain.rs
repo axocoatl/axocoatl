@@ -27,9 +27,11 @@
 //! toolchains: the setup runs through the Session's environment with only
 //! the configured egress lists.
 //!
-//! Rust is refused for now ([`RUST_BLOCKED`]): a loadout Session is always
-//! hardened, and the hardened supervisor's Landlock domain refuses the
-//! cross-directory renames cargo and rustc make for every build.
+//! Node, Python, Rust and Go are planned alike. A loadout Session is always
+//! hardened; from Landlock ABI 2 the hardened supervisor's domain allows the
+//! cross-directory renames cargo and rustc make for every build. A kernel
+//! with only ABI 1 still refuses them with EXDEV ("Invalid cross-device
+//! link"), which the check probe names ([`ProbeMissing::Sandbox`]).
 
 use std::path::Path;
 
@@ -386,9 +388,6 @@ pub fn plan(repo: &Path, input: PlanInput<'_>) -> Result<EnvironmentPlan, String
             probe,
         });
     };
-    if toolchain == Toolchain::Rust && RUST_BLOCKED {
-        return Err(rust_refusal(&reason));
-    }
     let mut recipes: Vec<String> = environment
         .recipes
         .iter()
@@ -454,30 +453,6 @@ pub fn plan(repo: &Path, input: PlanInput<'_>) -> Result<EnvironmentPlan, String
     })
 }
 
-/// Whether a loadout run refuses the Rust toolchain. Every loadout Session
-/// is hardened, and the hardened supervisor's Landlock domain
-/// (`axocoatl_exec::supervisor`, `DOMAIN_ONLY`) does not grant
-/// `LANDLOCK_ACCESS_FS_REFER`, so the kernel refuses every rename or link
-/// into another directory with EXDEV ("Invalid cross-device link"). cargo
-/// and rustc make such renames for every build (rustc writes its metadata
-/// and archives in a temporary directory and moves them out), so no Rust
-/// check can pass: refusing at admission spends no download, setup or
-/// model call on it. Set to `false` with the supervisor change that grants
-/// REFER.
-pub const RUST_BLOCKED: bool = true;
-
-/// The usage error of a run whose toolchain is Rust while [`RUST_BLOCKED`].
-pub fn rust_refusal(reason: &str) -> String {
-    format!(
-        "this run would use the rust toolchain ({reason}), and Rust checks cannot run in a \
-         loadout run's hardened Session yet: its sandbox refuses the cross-directory renames \
-         cargo and rustc make for every build (\"Invalid cross-device link\"), so the run is \
-         refused before any download or model call. Rust repositories are not supported by \
-         `axocoatl run` in this release; a repository that also has another language's files \
-         can choose it with --toolchain node|python|go"
-    )
-}
-
 /// The probe's hints for `check`, read on the host.
 fn probe_hints(
     dir: &SecureDir,
@@ -519,8 +494,9 @@ pub enum ProbeMissing {
     /// The check ran no test although the repository has test files: it
     /// does not find them, so no change can make it pass.
     NoTests { files: Vec<String> },
-    /// The Session's sandbox refuses what the check does (a cross-directory
-    /// rename under the hardened supervisor's Landlock domain).
+    /// The Session's sandbox refuses what the check does: a cross-directory
+    /// rename under the hardened supervisor's Landlock domain on a kernel
+    /// with only Landlock ABI 1 (before Linux 5.19), which cannot allow it.
     Sandbox(String),
 }
 
@@ -754,8 +730,9 @@ pub fn probe_refusal(
                 .into(),
         ),
         ProbeMissing::Sandbox(_) => fixes.push(
-            "pass --check \"<command>\" for a check that does not need it; this is a limit of \
-             Axocoatl's sandbox, not of the repository"
+            "pass --check \"<command>\" for a check that does not need it; on a Linux kernel \
+             before 5.19 (Landlock ABI 1) Axocoatl's sandbox refuses every rename into another \
+             directory, a limit of the sandbox, not of the repository"
                 .into(),
         ),
         ProbeMissing::Program(_) => {}
@@ -768,8 +745,8 @@ pub fn probe_refusal(
             // A missing module already named the Python toolchain.
             if !matches!(missing, ProbeMissing::Module(_)) {
                 fixes.push(
-                    "pass --toolchain node|python|go for Axocoatl's image of the repository's \
-                     language"
+                    "pass --toolchain node|python|rust|go for Axocoatl's image of the \
+                     repository's language"
                         .into(),
                 );
             }
@@ -1007,7 +984,7 @@ mod tests {
         .unwrap();
         assert_eq!(go.toolchain, Some(Toolchain::Go));
         assert_eq!(go.reason, "--toolchain go");
-        // TC-NU-3: Rust is refused before any download or model call.
+        // TC-NU-3: Rust is planned like the others.
         let rust = run_plan(
             dir.path(),
             "fix",
@@ -1018,9 +995,10 @@ mod tests {
             Some("cargo test"),
             None,
         )
-        .unwrap_err();
-        assert!(rust.contains("--toolchain rust"), "{rust}");
-        assert!(rust.contains("Invalid cross-device link"), "{rust}");
+        .unwrap();
+        assert_eq!(rust.toolchain, Some(Toolchain::Rust));
+        assert_eq!(rust.reason, "--toolchain rust");
+        assert_eq!(rust.recipes, ["rust"]);
         let error = run_plan(
             dir.path(),
             "fix",
@@ -1098,16 +1076,53 @@ mod tests {
             Some(("go test ./pkg/...".into(), detect::CheckSource::AxocoatlMd))
         );
         assert_eq!(plan.setup, None, "no dependencies to fetch");
-        // A Rust repository is refused at admission, whatever names it.
+        // A Rust repository is planned like the others: its image, its
+        // check and `cargo fetch` with crates.io open.
         let dir = repo(&[
             ("AXOCOATL.md", "Check command: `cargo test --lib`\n"),
-            ("Cargo.toml", "[package]\nname = 'x'\n"),
+            (
+                "Cargo.toml",
+                "[package]\nname = 'x'\n[dev-dependencies]\nitoa = '1'\n",
+            ),
             ("package.json", MOCHA),
         ]);
-        let error =
-            run_plan(dir.path(), "fix", EnvironmentRequest::default(), None, None).unwrap_err();
-        assert!(error.contains("rust toolchain"), "{error}");
-        assert!(error.contains("--toolchain node|python|go"), "{error}");
+        let plan = run_plan(dir.path(), "fix", EnvironmentRequest::default(), None, None).unwrap();
+        assert_eq!(plan.toolchain, Some(Toolchain::Rust));
+        assert_eq!(plan.recipes, ["rust"]);
+        assert_eq!(plan.image, None);
+        assert!(plan
+            .image_text()
+            .starts_with("localhost/axocoatl-recipe-rust:"));
+        assert_eq!(
+            plan.build_command().as_deref(),
+            Some("axocoatl recipe build rust")
+        );
+        assert_eq!(
+            plan.check,
+            Some(("cargo test --lib".into(), detect::CheckSource::AxocoatlMd))
+        );
+        let setup = plan.setup.expect("cargo fetch");
+        assert_eq!(setup.command, "cargo fetch");
+        assert_eq!(setup.source, SetupSource::Detected);
+        assert_eq!(
+            setup.registry_hosts(),
+            ["index.crates.io", "static.crates.io", "crates.io"]
+        );
+        // Without AXOCOATL.md the detected check is `cargo test`.
+        let dir = repo(&[(
+            "Cargo.toml",
+            "[package]\nname = 'x'\n[dependencies]\nitoa = '1'\n",
+        )]);
+        let plan = run_plan(dir.path(), "fix", EnvironmentRequest::default(), None, None).unwrap();
+        assert_eq!(plan.toolchain, Some(Toolchain::Rust));
+        assert_eq!(
+            plan.check,
+            Some(("cargo test".into(), detect::CheckSource::Detected))
+        );
+        assert_eq!(
+            plan.setup.map(|setup| setup.command).as_deref(),
+            Some("cargo fetch")
+        );
     }
 
     /// TC-DOC-1: under `network: none` the summary says no registry opens.
@@ -1462,7 +1477,7 @@ mod tests {
             "{message}"
         );
         assert!(!message.contains("pip install <package>"), "{message}");
-        assert!(!message.contains("node|python|go"), "{message}");
+        assert!(!message.contains("node|python|rust|go"), "{message}");
     }
 
     /// The probe's hints come from the repository's files.
