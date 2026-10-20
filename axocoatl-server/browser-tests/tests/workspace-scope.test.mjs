@@ -142,6 +142,13 @@ for (const engine of engines) {
     const created = await runtime.createProjectWorkspace(`removable-${engine.name}`, `Removable ${engine.name}`);
     const { page, errors, close } = await openHome(engine);
     try {
+      // The workbench reopens the last Session of the most recently active
+      // Workspace. The Workspace created above can tie with Alpha, seeded the
+      // same second, and the tie goes to Alpha by name, so an Alpha Session
+      // can cover the home surface that lists the Workspaces. Wait for that
+      // restore, then go home.
+      await page.waitForFunction(() => Boolean(document.querySelector('ax-rail')?.workspace));
+      await page.evaluate(() => closeCockpit({ homeScope: 'all' }));
       await page.evaluate(() => document.querySelector('ax-session-home')?.showWorkspaces());
       const home = page.locator('ax-session-home');
       await home.locator(`.side-row[data-workspace-id="${created.workspace.id}"]`).waitFor({ state: 'visible' });
