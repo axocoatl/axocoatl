@@ -8600,22 +8600,23 @@ impl AxocoatlDaemon {
         if self.config.sandbox.backend == "e2b" || !prepares_now {
             return Ok(());
         }
-        let ready = if self.local_cleanup_pending.load(Ordering::Acquire) {
-            self.ensure_deferred_local_cleanup().await
-        } else {
-            axocoatl_isolation::podman::ensure_ready()
-                .await
-                .map_err(|error| DaemonError::Session(error.to_string()))
-        };
-        ready.map_err(|error| {
+        let refused = |reason: String| {
             DaemonError::Session(format!(
                 "No Session was created: local Podman cannot run it yet. {}",
-                error
-                    .to_string()
-                    .trim_start_matches("Session error: ")
+                reason
+                    .trim_start_matches("OCI container setup failed: ")
                     .trim_start_matches("OCI container execution failed: ")
             ))
-        })
+        };
+        axocoatl_isolation::podman::ensure_ready()
+            .await
+            .map_err(|error| refused(error.to_string()))?;
+        if self.local_cleanup_pending.load(Ordering::Acquire) {
+            self.ensure_deferred_local_cleanup()
+                .await
+                .map_err(|error| refused(error.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Preserve the existing config-level postCreate trust decision for
