@@ -1359,3 +1359,38 @@ fn connection_names_are_read_from_podman() {
     assert!(sandbox::connection_names("[]").is_empty());
     assert!(sandbox::connection_names("not json").is_empty());
 }
+
+/// Step 0 says what this computer has and what is missing.
+#[tokio::test]
+async fn step_0_names_the_computer_and_what_is_missing() {
+    let shims = Shims::new();
+    let mut facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Manual,
+    )
+    .await;
+    facts.brew = Some("7.0.10".into());
+    let lines = detect::summary(&facts);
+    assert_eq!(
+        lines[0],
+        "This computer: macOS 26.6, Apple M5 Pro, 48 GB memory, 18 cores, 400 GB free."
+    );
+    assert_eq!(lines[1], "Found: Homebrew 7.0.10, git 2.39.5.");
+    assert_eq!(lines[2], "Not found: Podman, Ollama, claude, codex, gh.");
+    facts.os = Os::Linux {
+        release: OsRelease::parse("PRETTY_NAME=\"Ubuntu 24.04.5 LTS\"\nID=ubuntu\n"),
+        wsl: Some(detect::Wsl::Two),
+        systemd: false,
+    };
+    let lines = detect::summary(&facts);
+    assert!(
+        lines[0].starts_with("This computer: Ubuntu 24.04.5 LTS (WSL2), "),
+        "{}",
+        lines[0]
+    );
+    assert!(lines[0].contains("48 GB memory (by default WSL gives Linux half of Windows' memory)"));
+}

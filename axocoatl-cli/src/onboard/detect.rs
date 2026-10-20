@@ -644,7 +644,11 @@ pub(crate) fn summary(facts: &Facts) -> Vec<String> {
         }
     }
     if let Some(gb) = facts.memory_gb() {
-        computer.push(format!("{gb} GB memory"));
+        computer.push(if facts.os.wsl().is_some() {
+            format!("{gb} GB memory (by default WSL gives Linux half of Windows' memory)")
+        } else {
+            format!("{gb} GB memory")
+        });
     }
     computer.push(format!("{} cores", facts.cpus));
     if let Some(free) = facts.disk_free_bytes {
