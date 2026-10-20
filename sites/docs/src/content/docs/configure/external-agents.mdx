@@ -73,7 +73,11 @@ daemon also keeps the access token current on your computer.
 The reviewer is one of Axocoatl's own Agents, on a provider your configuration defines
 and native Sessions accept, such as Ollama or OpenRouter (see
 [Providers](/configure/providers/)). It has no default: choose a model other than the
-writer's. A reviewer on the writer's model, through any provider, is warned about
+writer's. For a reviewer on OpenRouter, connect it once by signing in in the browser:
+`axocoatl connect openrouter --reviewer <vendor/model>` checks the model, stores the key
+OpenRouter issues without showing it and adds OpenRouter to your configuration (see
+[Configure OpenRouter](/configure/providers/#configure-openrouter)); then pass
+`--model reviewer=openrouter:<vendor/model>`. A reviewer on the writer's model, through any provider, is warned about
 (`same_model_reviewer`), not refused (see [Choose the models](#choose-the-models)).
 
 Every other flag of [`axocoatl run`](/reference/run/) applies: `--check "<command>"` when

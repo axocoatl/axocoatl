@@ -94,6 +94,10 @@ BYOK provider keys are connected. It suggests a non-reasoning text/tool model an
 an explicit output limit; any eligible model id works, reasoning models included. Native Sessions do not support BYOK. Review the Session's **Team &
 budget** before execution; see [OpenRouter configuration](/configure/providers/#configure-openrouter).
 
+To connect OpenRouter without typing a key, run `axocoatl connect openrouter`: it signs
+you in to OpenRouter in the browser, stores the key OpenRouter issues in Axocoatl's
+secret store (not in the configuration) and adds OpenRouter to your configuration.
+
 When using `axocoatl onboard --install-daemon` with a hosted provider, enter the
 key during onboarding. The generated service does not inherit shell environment
 variables, so onboarding refuses to install it while the configuration still
@@ -170,7 +174,7 @@ Doctor performs these checks against the resolved user configuration:
 | Every present configured Ollama model is a local GGUF completion model, with tool calling for an Agent that lists tools (`POST /api/show`) | Required when configured | Choose another model, or pull the GGUF variant of an MLX model with `ollama pull --runner llamacpp <model>` (an undocumented Ollama flag). |
 | Data directory is writable | Required | Fix permissions or set `AXOCOATL_DATA_DIR`. |
 | Rust toolchain | Warning | Needed only to build from source. |
-| Hosted-provider key appears present | Warning | Supply the key during onboarding or export the referenced environment variable before using that Agent. OpenAI, Anthropic, Gemini, Mistral, and OpenRouter are checked when configured. |
+| Hosted-provider key appears present | Warning | For OpenRouter, run `axocoatl connect openrouter`. For the others, supply the key during onboarding or export the referenced environment variable before using that Agent. A key named by `api_key_secret` must be stored in the secret store. OpenAI, Anthropic, Gemini, Mistral, and OpenRouter are checked when configured. |
 | Daemon IPC is reachable | Warning | Start `axocoatl dev` or `axocoatl serve` when you need it. |
 | Podman runtime answers a bounded `podman info --format json` probe | Warning | Required for default folder Sessions and several Ways; follow the reported install, machine, or runtime guidance. |
 | Configured webhooks | Egress notice | Confirm that each named destination is intentional. |

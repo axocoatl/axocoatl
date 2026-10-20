@@ -62,7 +62,7 @@ workbench uses.
 | Team & budget refuses an Ollama model because it is not GGUF or runs with MLX | On Apple silicon, Ollama pulls the MLX variant of some models; MLX does not hold `num_ctx` as a hard limit | Pull the GGUF variant with `ollama pull --runner llamacpp <model>` (an undocumented Ollama flag) or choose another model, such as `qwen3-coder:30b` or `gpt-oss:20b` |
 | Team & budget refuses an Ollama model with "failed the over-long prompt refusal" or "failed the output limit" check | The contract probes found that this Ollama and model do not refuse a prompt longer than the context, or do not stop at the output limit | Use another model or Ollama release; Axocoatl cannot bound calls to this one |
 | `doctor` passes but a hosted request fails | Doctor checks key presence, not provider access | Verify exported key, model entitlement, endpoint, and provider response |
-| OpenRouter credential warning | The configured key is empty or an unresolved environment reference | Re-run onboarding to store the key in the owner-only user config, or export the referenced key in the process environment; doctor checks presence but does not make a live OpenRouter request |
+| OpenRouter credential warning | No key is configured, or the secret `providers.openrouter.api_key_secret` names is not stored | Run `axocoatl connect openrouter`: it signs you in to OpenRouter in the browser and stores the key without showing it. Doctor checks that a key is there but does not ask OpenRouter; `axocoatl connect openrouter --status` does |
 
 ## Sessions and tools
 
