@@ -625,6 +625,63 @@ gate_flag_value() {
   printf '%s\n' "$1" | awk -v flag="$2" '{ for (i = 1; i < NF; i++) if ($i == flag) { print $(i + 1); exit } }'
 }
 
+# gate_chosen_image LOG: the image a run says it chose, from its plan line
+# `image X · toolchain Y (why) · check Z · setup W` (or `image X · no
+# toolchain (why) · …`), which PlanSummary::summary in
+# crates/axocoatl-daemon/src/loadout/toolchain.rs formats and the CLI prints
+# as `· note: image …` when the run starts and as `  image …` under Notes:.
+# testdata/run-plan-lines.txt holds the lines CI's runs printed; the fake
+# axocoatl prints them, and test-release-gate.sh fails when toolchain.rs
+# stops formatting the line this way. Prints nothing when LOG has no plan
+# line (`· building the run's image X (…)` is not one).
+gate_chosen_image() {
+  LC_ALL=C sed -nE 's/^(.*[[:space:]])?image ([^[:space:]]+) · (no )?toolchain .*/\2/p' "$1" 2>/dev/null | head -n 1
+}
+
+# gate_image_is IMAGE NAME: NAME (node, python, rust, go) is a whole part of
+# IMAGE's repository, its reference without tag or digest:
+# localhost/axocoatl-recipe-go:6063b3e9fdc6 is a go image;
+# docker.io/library/mongo:7 and localhost/axocoatl-recipe-node:go are not.
+gate_image_is() {
+  local repository=${1%%@*}
+  case "${repository##*/}" in *:*) repository=${repository%:*} ;; esac
+  case "$2" in '' | *[!a-z0-9]*) return 1 ;; esac
+  printf '%s\n' "$repository" | LC_ALL=C grep -qiE -- "(^|[/._-])$2([/._-]|\$)"
+}
+
+# gate_check_image LABEL NAME LOG: record whether the run whose output is
+# LOG chose a NAME image (fixtures.json image_contains), by its plan line.
+gate_check_image() {
+  local chosen
+  chosen=$(gate_chosen_image "$3")
+  if [ -n "$chosen" ] && gate_image_is "$chosen" "$2"; then
+    gate_record "run on $1 chose a $2 image" pass '' '' '' "$chosen"
+  else
+    gate_record "run on $1 chose a $2 image" fail '' '' '' "expected the run's plan line (image … · toolchain …) to name a $2 image; found '${chosen:-none}'"
+  fi
+}
+
+# gate_copy_paste_lint REPO NPM_CACHE: scripts/check-copy-paste.mjs on REPO,
+# as the docs gate runs it. It parses YAML with js-yaml, a devDependency of
+# sites/docs; when REPO has not installed it, `npm ci` in sites/docs (as
+# verify-product-browser-gate.sh runs it) installs it first, as its own
+# step, with npm's cache in NPM_CACHE. A failed install fails that step and
+# the lint then fails every YAML block: nothing is skipped.
+gate_copy_paste_lint() {
+  if ! node -e '
+    const { createRequire } = require("module");
+    for (const base of process.argv.slice(1)) {
+      try { createRequire(base).resolve("js-yaml"); process.exit(0); } catch {}
+    }
+    process.exit(1);
+  ' "$1/sites/docs/package.json" "$1/scripts/package.json" >/dev/null 2>&1; then
+    gate_step "install the lint's YAML parser (npm ci in sites/docs)" -- /bin/bash -c \
+      'cd "$1/sites/docs" && npm_config_cache="$2" npm ci --ignore-scripts --no-audit --no-fund' \
+      gate-npm "$1" "$2"
+  fi
+  gate_step "copy-paste lint (scripts/check-copy-paste.mjs)" -- node "$1/scripts/check-copy-paste.mjs"
+}
+
 # gate_run_fixture FIXTURE COMMAND REPO_DIR [WRITER_LABEL]: run COMMAND (as
 # published, plus outputs) in a fresh copy of FIXTURE, then verify its
 # receipt with the documented command and its record. Records each check.
@@ -653,14 +710,11 @@ gate_run_fixture() {
   done
   (cd "$repo" && git status --porcelain && git diff) >"$keep/changes.txt" 2>&1 || true
   # The run says which image and setup it chose (fixtures.json).
-  local image setup line
+  local image setup
   image=$(gate_fixture_expect "$fixture" image_contains)
   setup=$(gate_fixture_expect "$fixture" setup_contains)
-  line=$(grep -Eo 'image: [^ ]+' "$keep/run.log" 2>/dev/null | head -n 1)
-  if [ -n "$line" ] && printf '%s' "${line#image: }" | grep -qi -- "$image"; then
-    gate_record "run on $label chose a $image image" pass '' '' '' "$line"
-  else
-    gate_record "run on $label chose a $image image" fail '' '' '' "expected an 'image: …' line naming $image; found '${line:-none}'"
+  if [ -n "$image" ]; then
+    gate_check_image "$label" "$image" "$keep/run.log"
   fi
   if [ -n "$setup" ]; then
     if grep -q -- "$setup" "$keep/run.log" 2>/dev/null || { [ -f "$keep/${record##*/}" ] && grep -q -- "$setup" "$keep/${record##*/}"; }; then

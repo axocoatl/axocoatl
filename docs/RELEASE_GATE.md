@@ -224,7 +224,7 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
    lacks them, must exit 0. `node-plain`, onboarding's first-run sample, has
    another bug than the README's task describes, so it runs the command its
    own README gives (`"command": "fixture-readme"` in `fixtures.json`). Each
-   run's start line must name the image the fixture needs (and the setup,
+   run's plan line must name the image the fixture needs (and the setup,
    for `node-deps` and `python-pytest`). The documented
    `axocoatl receipt verify receipt.json --key "$(axocoatl receipt key)" --repo .`
    and `axocoatl record verify` must exit 0, and the receipt must match the
@@ -241,7 +241,9 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
      refused unless `GITHUB_ACTIONS=true`. The case runs only after both
      files are backed up and the copies match. If restoring them fails, the
      backup and the work directory are kept and the gate says where they are.
-9. `scripts/check-copy-paste.mjs`, when the tree has it.
+9. `scripts/check-copy-paste.mjs`, when the tree has it. When `sites/docs` has
+   not installed its YAML parser (js-yaml), the gate runs `npm ci` there first,
+   as its own step; the lint never runs without it.
 10. Ctrl+C stops `axocoatl dev` with exit 0 (recorded, not required).
 
 The ubuntu-22.04 leg (`--expect-refusal "Podman 3.4.4"`) checks only that
@@ -300,8 +302,9 @@ built; until they land, Tier A fails at the first step that needs them:
 - run defaults from `run.models`, admission that refuses an absent check
   program and a reviewer that cannot review with exit 3 before any model call
   (and, for the reviewer, before any Session: `axocoatl session list` must
-  not change), and the run's `image: … · check: … · setup: …` start line
-  with the image chosen by detection;
+  not change), and the run's plan line `image … · toolchain … · check … ·
+  setup …` (printed as `· note: image …` and under `Notes:`) with the image
+  chosen by detection;
 - the `node-plain` fixture (onboarding's first-run sample; its
   `stub-fixes.json` entry matches onboarding's `src/paging.js`);
 - the installer's `add this line to <profile>:` output (or a profile change),

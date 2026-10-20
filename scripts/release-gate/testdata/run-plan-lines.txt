@@ -1,0 +1,12 @@
+# The plan line `axocoatl run fix` printed on each tests/fixtures/newuser
+# fixture in CI ("New user (Linux, x86_64)", commit 583320b7, 2026-10-20),
+# as PlanSummary::summary (crates/axocoatl-daemon/src/loadout/toolchain.rs)
+# returns it; the CLI prints it as `· note: <line>` and as `  <line>` under
+# Notes:. One fixture and its line per row, separated by a tab.
+# lib.sh's gate_chosen_image reads these lines, fake-axocoatl.mjs prints them,
+# and test-release-gate.sh checks both.
+node-plain	image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+node-deps	image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+python-pytest	image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e '.[test]' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+rust	image localhost/axocoatl-recipe-rust:0e5acf3d40e2 · toolchain rust (Cargo.toml at the repository root) · check cargo test (detected from the repository) · setup cargo fetch (detected; registries index.crates.io, static.crates.io, crates.io open for it alone)
+go	image localhost/axocoatl-recipe-go:6063b3e9fdc6 · toolchain go (go.mod at the repository root) · check go test ./... (detected from the repository) · setup none

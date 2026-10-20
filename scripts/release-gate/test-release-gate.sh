@@ -252,6 +252,149 @@ else
   fail "lib.sh helpers"
 fi
 
+# --- The image a run chose, read from the plan line the product prints.
+# testdata/run-plan-lines.txt holds the lines CI's runs printed on each
+# fixture; the stand-in axocoatl prints the same lines. A wrong image, no
+# plan line, or the retired `image: …` form fails the check.
+(
+  export HOME="$work/plan-home"
+  mkdir -p "$HOME"
+  # shellcheck source=scripts/release-gate/lib.sh
+  . "$script_dir/lib.sh"
+  # The product formats the line in PlanSummary::summary. When this fails,
+  # change gate_chosen_image (lib.sh), testdata/run-plan-lines.txt and
+  # fake-axocoatl.mjs with the product.
+  for literal in '"image {} · {toolchain} · {check} · {setup}"' '"toolchain {} ({})"' '"no toolchain ({})"'; do
+    grep -qF -- "$literal" "$repo_root/crates/axocoatl-daemon/src/loadout/toolchain.rs" \
+      || { echo "toolchain.rs no longer formats the plan line with $literal" >&2; exit 1; }
+  done
+  gate_begin "$work/evidence-plan" 1.5.0 "$(printf 'f%.0s' $(seq 1 40))" A-plan A
+  seen=''
+  while IFS=$'\t' read -r fixture plan; do
+    case "$fixture" in '' | '#'*) continue ;; esac
+    want=$(gate_fixture_expect "$fixture" image_contains)
+    image=${plan#image }
+    image=${image%% *}
+    { [ -n "$want" ] && [ "$image" != "$plan" ]; } || { echo "run-plan-lines.txt: no image or fixture for $fixture" >&2; exit 1; }
+    # As the CLI prints it when the run starts, and under Notes: at its end.
+    printf "· building the run's image %s (%s, from …)\n· note: %s\nVerdict: pass (exit 0)\nNotes:\n  %s\n" \
+      "$image" "$want" "$plan" "$plan" >"$work/plan-$fixture.log"
+    printf 'Verdict: pass (exit 0)\nNotes:\n  %s\n' "$plan" >"$work/plan-$fixture-notes.log"
+    for log in "$work/plan-$fixture.log" "$work/plan-$fixture-notes.log"; do
+      [ "$(gate_chosen_image "$log")" = "$image" ] || { echo "gate_chosen_image $log: '$(gate_chosen_image "$log")'" >&2; exit 1; }
+    done
+    gate_check_image "$fixture" "$want" "$work/plan-$fixture.log" 2>/dev/null
+    for other in node python rust go; do
+      [ "$other" = "$want" ] || gate_check_image "$fixture-as-$other" "$other" "$work/plan-$fixture.log" 2>/dev/null
+    done
+    seen="$seen $fixture"
+  done <"$script_dir/testdata/run-plan-lines.txt"
+  [ "$(printf '%s' "$seen" | tr ' ' '\n' | sed '/^$/d' | sort)" = "$(gate_fixture_names | sort)" ] \
+    || { echo "run-plan-lines.txt covers$seen, not every fixture in fixtures.json" >&2; exit 1; }
+  printf "· building the run's image localhost/axocoatl-recipe-node:3b267c748259 (node, from …)\nVerdict: pass (exit 0)\n" >"$work/plan-none.log"
+  printf 'image: node:20-slim · check: detected · setup: none\n' >"$work/plan-retired.log"
+  printf '· note: image docker.io/library/alpine:3.20 · no toolchain (no manifest at the repository root) · no repository check · setup none\n' >"$work/plan-no-toolchain.log"
+  [ "$(gate_chosen_image "$work/plan-no-toolchain.log")" = docker.io/library/alpine:3.20 ] || { echo "no toolchain plan line" >&2; exit 1; }
+  for case in none retired no-toolchain missing; do
+    gate_check_image "$case" node "$work/plan-$case.log" 2>/dev/null
+  done
+  gate_image_is localhost/axocoatl-recipe-python@sha256:0123 python || { echo "a digest reference" >&2; exit 1; }
+  gate_image_is localhost:5000/axocoatl-recipe-claude-code-rust:0e5a rust || { echo "a registry port, two recipes" >&2; exit 1; }
+  gate_image_is localhost/axocoatl-recipe-node:go go && { echo "a tag named the language" >&2; exit 1; }
+  gate_image_is docker.io/library/mongo:7 go && { echo "mongo is a go image" >&2; exit 1; }
+  gate_image_is localhost/axocoatl-recipe-nodejs:1 node && { echo "nodejs is a node image" >&2; exit 1; }
+  node -e '
+    const steps = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map(JSON.parse);
+    const fixtures = process.argv[2].trim().split(" ");
+    const wrong = [];
+    for (const step of steps) {
+      const [, label, name] = step.name.match(/^run on (\S+) chose a (\S+) image$/) || [];
+      const want = fixtures.includes(label) ? "pass" : "fail";
+      if (!label || step.status !== want || step.required === false) wrong.push(`${step.name}: ${step.status} (want ${want})`);
+      if (want === "fail" && !/^expected the run.s plan line/.test(step.detail)) wrong.push(`${step.name}: ${step.detail}`);
+    }
+    if (steps.length !== fixtures.length * 4 + 4) wrong.push(`${steps.length} steps`);
+    for (const label of ["none", "retired", "no-toolchain", "missing"]) {
+      const step = steps.find((s) => s.name === `run on ${label} chose a node image`);
+      const found = label === "no-toolchain" ? "docker.io/library/alpine:3.20" : "none";
+      if (!step?.detail.endsWith(`found \u0027${found}\u0027`)) wrong.push(`${label}: ${step?.detail}`);
+    }
+    if (wrong.length) { console.error(wrong.join("\n")); process.exit(1); }
+  ' "$GATE_STEPS" "$seen" || exit 1
+  rm -rf -- "$GATE_TMP"
+)
+plan_status=$?
+if [ "$plan_status" = 0 ]; then
+  pass "run plan line: the image is read from each line CI printed (as a note and under Notes:) and must name the fixture's language; a wrong image, no plan line or the retired 'image:' form fails"
+else
+  fail "run plan line"
+fi
+
+# --- The copy-paste lint always has its YAML parser: when sites/docs has
+# not installed js-yaml, the gate runs npm ci there first (a stand-in npm and
+# a stand-in lint that loads js-yaml as scripts/check-copy-paste.mjs does).
+(
+  export HOME="$work/lint-home"
+  mkdir -p "$HOME"
+  unset NODE_PATH
+  # shellcheck source=scripts/release-gate/lib.sh
+  . "$script_dir/lib.sh"
+  lint_repo="$work/lint-repo"
+  mkdir -p "$lint_repo/scripts" "$lint_repo/sites/docs" "$work/lint-bin"
+  printf '{"name":"docs","private":true}\n' >"$lint_repo/sites/docs/package.json"
+  cat >"$lint_repo/scripts/check-copy-paste.mjs" <<'LINT'
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+try {
+  createRequire(join(dirname(fileURLToPath(import.meta.url)), '../sites/docs/package.json'))('js-yaml');
+  console.log('YAML checked');
+} catch {
+  console.log('cannot check YAML: js-yaml is not installed (run npm ci in sites/docs)');
+  process.exit(1);
+}
+LINT
+  cat >"$work/lint-bin/npm" <<NPM
+#!/bin/sh
+printf '%s|%s|%s\n' "\$(pwd -P)" "\$*" "\${npm_config_cache:-}" >>"$work/npm.log"
+[ -z "\${NPM_FAILS:-}" ] || { echo 'npm error network'; exit 1; }
+mkdir -p node_modules/js-yaml
+printf '{"name":"js-yaml","main":"index.js"}\n' >node_modules/js-yaml/package.json
+echo 'module.exports = {};' >node_modules/js-yaml/index.js
+NPM
+  chmod +x "$work/lint-bin/npm"
+  export PATH="$work/lint-bin:$PATH"
+  gate_begin "$work/evidence-lint" 1.5.0 "$(printf '9%.0s' $(seq 1 40))" A-lint A
+  export NPM_FAILS=1
+  gate_copy_paste_lint "$lint_repo" "$work/npm-cache" >/dev/null 2>&1
+  unset NPM_FAILS
+  gate_copy_paste_lint "$lint_repo" "$work/npm-cache" >/dev/null 2>&1
+  gate_copy_paste_lint "$lint_repo" "$work/npm-cache" >/dev/null 2>&1
+  docs=$(cd "$lint_repo/sites/docs" && pwd -P)
+  expected=$(printf '%s|ci --ignore-scripts --no-audit --no-fund|%s\n' "$docs" "$work/npm-cache" "$docs" "$work/npm-cache")
+  [ "$(cat "$work/npm.log")" = "$expected" ] || { echo "npm ran: $(cat "$work/npm.log")" >&2; exit 1; }
+  node -e '
+    const steps = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map(JSON.parse);
+    const got = steps.map((s) => `${s.name}: ${s.status}${s.required === false ? " (optional)" : ""}`);
+    const want = [
+      "install the lint\u0027s YAML parser (npm ci in sites/docs): fail",
+      "copy-paste lint (scripts/check-copy-paste.mjs): fail",
+      "install the lint\u0027s YAML parser (npm ci in sites/docs): pass",
+      "copy-paste lint (scripts/check-copy-paste.mjs): pass",
+      "copy-paste lint (scripts/check-copy-paste.mjs): pass",
+    ];
+    if (got.join("\n") !== want.join("\n")) { console.error(got.join("\n")); process.exit(1); }
+    if (!/js-yaml is not installed/.test(steps[1].detail)) { console.error(steps[1].detail); process.exit(1); }
+  ' "$GATE_STEPS" || exit 1
+  rm -rf -- "$GATE_TMP"
+)
+lint_status=$?
+if [ "$lint_status" = 0 ]; then
+  pass "copy-paste lint: npm ci in sites/docs when js-yaml is missing (its failure fails the step and the lint), nothing installed when present, the lint runs every time"
+else
+  fail "copy-paste lint's YAML parser"
+fi
+
 # The installer under test either prints the line that keeps axocoatl on a
 # new terminal's PATH (the gate then adds it and checks), or only an export
 # for the current shell, which the gate fails.
@@ -520,6 +663,22 @@ PODMAN
     const step = (name) => e.steps.find((s) => s.name === name)?.status;
     if (step("run fix on go") !== "fail" || step("run fix on rust") !== "pass") { console.error(JSON.stringify(e.steps.filter((s) => /go|rust/.test(s.name)))); process.exit(1); }
   ' "$sim/evidence/$version/$commit/A-sim-broken.json"
+  # The gate read the image and setup each fixture's run chose from the plan
+  # line the stand-in printed (the product's, testdata/run-plan-lines.txt).
+  node -e '
+    const e = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const expects = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8")).fixtures;
+    const wrong = [];
+    for (const fixture of process.argv[3].trim().split(" ")) {
+      const { image_contains: image, setup_contains: setup } = expects[fixture];
+      const names = [`run on ${fixture} chose a ${image} image`, ...(setup ? [`run on ${fixture} ran setup (${setup})`] : [])];
+      for (const name of names) {
+        const step = e.steps.find((s) => s.name === name);
+        if (step?.status !== "pass") wrong.push(`${name}: ${step ? `${step.status} ${step.detail}` : "not recorded"}`);
+      }
+    }
+    if (wrong.length) { console.error(wrong.join("\n")); process.exit(1); }
+  ' "$sim/evidence/$version/$commit/A-sim.json" "$repo_root/tests/fixtures/newuser/fixtures.json" "$present"
 
   # --live (D1): this account's own brand-new HOME, interactive onboarding
   # that is told --start none, and the daemon checked on the port

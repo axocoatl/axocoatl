@@ -31,7 +31,7 @@
 #
 # Depends on (being built in parallel; see docs/RELEASE_GATE.md):
 #   onboard --yes/--writer/--ollama-url/--no-pull/--start/--port flags and its
-#   exit codes, doctor --json, and the run's `image: …` start line.
+#   exit codes, doctor --json, and the run's `image … · toolchain …` plan line.
 # Scripts handed to `bash -c` take their values as positional parameters.
 # shellcheck disable=SC2016
 set -uo pipefail
@@ -476,7 +476,7 @@ fi
 
 # 9. The copy-paste lint, when the tree has it.
 if [ -f "$gate_repo/scripts/check-copy-paste.mjs" ]; then
-  gate_step "copy-paste lint (scripts/check-copy-paste.mjs)" -- node "$gate_repo/scripts/check-copy-paste.mjs"
+  gate_copy_paste_lint "$gate_repo" "$work/npm-cache"
 else
   gate_skip "copy-paste lint" "scripts/check-copy-paste.mjs is not in this tree" optional
 fi
