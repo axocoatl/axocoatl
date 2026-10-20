@@ -41,40 +41,66 @@ daemon also keeps the access token current on your computer.
 
 ## Run Claude Code or Codex
 
+<Aside title="Before you start">
+- **Claude Code** runs on your Claude Pro or Max plan: `claude setup-token` needs a
+  subscription, and the `claude` CLI must be on this computer. Anthropic API keys,
+  Bedrock and Vertex are not supported by `fix-claude-code`.
+- **Codex** signs in with your ChatGPT plan, in a browser; its runs count against your
+  plan's usage limits.
+- **Podman**, which runs the program's Session container, and a **reviewer**: a
+  different model that only reads, on Ollama or OpenRouter. Claude Code and Codex can
+  write but cannot review.
+- **Node repositories only, for now.** Both programs run in a Node image
+  (`node:24-bookworm-slim` with the pinned CLI and `git`), and a run installs no project
+  dependencies, so the repository's check must run with Node.js alone, such as
+  `node --test`. Python, Rust and Go checks do not work in these images yet.
+- The images download about 0.6 to 0.9 GB (Claude Code) and 0.8 to 1.2 GB (Codex).
+</Aside>
+
 <Steps>
 
-1. Build the program's Session image, once per upgrade (see [Build the image](#build-the-image)):
+1. Set up this computer once. `axocoatl onboard` asks who writes the code; choose
+   Claude Code or Codex. It installs or starts Podman, builds the program's image, signs
+   you in through your browser and sets up the reviewer, asking before each download or
+   change:
+
+   ```sh
+   axocoatl onboard
+   ```
+
+   The next steps do the same by hand.
+
+2. Build the program's Session image, once per upgrade (see [Build the image](#build-the-image)):
 
    ```sh
    axocoatl recipe build claude-code     # or: axocoatl recipe build codex
    ```
 
-2. Connect its account, once, by signing in in your browser (see
+3. Connect its account, once, by signing in in your browser (see
    [Store the credential](#store-the-credential)). You never see, copy, paste or type a
    token:
 
    ```sh
    axocoatl connect claude-code          # Claude Code: stores claude-code-oauth
    axocoatl connect codex                # Codex on your ChatGPT plan: stores codex-chatgpt
-   axocoatl connect codex --api-key      # Codex on an OpenAI API key: also stores codex-openai
    ```
 
-3. Run it in your repository, naming the reviewer's model:
+4. With the daemon running (`axocoatl dev`), run it in your repository:
 
    ```sh
    cd ~/src/my-app
-   axocoatl run fix-claude-code --task "Paging skips the last item when the total is a multiple of the page size" \
-     --model reviewer=ollama:gpt-oss:20b
-   axocoatl run fix-codex --task "…" --model reviewer=openrouter:qwen/qwen3-coder
+   axocoatl run fix-claude-code --task "Paging skips the last item when the total is a multiple of the page size"
+   axocoatl run fix-codex --task "Paging skips the last item when the total is a multiple of the page size"
    ```
 
 </Steps>
 
 The reviewer is one of Axocoatl's own Agents, on a provider your configuration defines
-and native Sessions accept, such as Ollama or OpenRouter (see
-[Providers](/configure/providers/)). It has no default: choose a model other than the
-writer's. A reviewer on the writer's model, through any provider, is warned about
-(`same_model_reviewer`), not refused (see [Choose the models](#choose-the-models)).
+and native Sessions accept, Ollama or OpenRouter (see [Providers](/configure/providers/)).
+A run uses the reviewer onboarding set up; `--model reviewer=…`, such as
+`--model reviewer=ollama:gpt-oss:20b`, names another for one run. Choose a model other
+than the writer's: a reviewer on the writer's model, through any provider, is warned
+about (`same_model_reviewer`), not refused (see [Choose the models](#choose-the-models)).
 
 Every other flag of [`axocoatl run`](/reference/run/) applies: `--check "<command>"` when
 Axocoatl detects no check command in the repository, `--junit` and `--record`, and
@@ -117,7 +143,7 @@ run both built-ins with their default models, from the recipe images, against a 
 model API: Claude Code's requests named `claude-sonnet-5-5`, and Codex's code mode ran
 its command in the Session.
 
-`--model reviewer=…` is required. The same-model check compares the reviewer's model with
+The reviewer comes from your setup or `--model reviewer=…`. The same-model check compares the reviewer's model with
 the writer's through whichever provider each runs: a reviewer on
 `openrouter:anthropic/claude-sonnet-5.5` is warned about for the default Claude Code
 writer, since `sonnet` runs `claude-sonnet-5-5`, and one on `openrouter:openai/gpt-6.1-sol`
@@ -195,6 +221,7 @@ base image and the programs; that is network access you start, on your computer.
 
 A loadout names the image by its recipes, as the built-ins do:
 
+{/* copy-paste: excerpt */}
 ```yaml
 environment:
   recipes: [claude-code]
@@ -271,9 +298,9 @@ axocoatl connect codex --api-key       # also stores the OpenAI API key OpenAI i
 This runs the official `codex login` for you and stores the ChatGPT sign-in it makes as
 the secret `codex-chatgpt`. You approve the sign-in in the browser (or, with
 `--device-auth`, enter the code Codex shows at the address it gives); you never see, copy,
-paste or type a token. Nothing but Podman needs to be installed on your computer: by
-default the pinned Codex 0.160.1, the one the `codex` recipe installs, runs in a
-throwaway container.
+paste or type a token. Nothing but Podman (and, on a Mac, its machine, which
+`axocoatl onboard` sets up) needs to be installed on your computer: by default the pinned
+Codex 0.160.1, the one the `codex` recipe installs, runs in a throwaway container.
 
 - **The image.** It is the `codex` recipe image recorded in the data root by
   `axocoatl recipe build codex`, used by its exact image id. When none is recorded (or
@@ -429,6 +456,11 @@ without authentication (`server.auth.allow_unauthenticated`) refuses it with `40
 so does any daemon for a request from an address that is not a loopback address.
 
 ### Codex with an OpenAI API key: `axocoatl connect codex --api-key`
+
+<Aside type="caution">
+This route has not been tested live. It needs an OpenAI Platform organization, and it
+bills Codex runs at API rates instead of your ChatGPT plan.
+</Aside>
 
 ```sh
 axocoatl connect codex --api-key        # the API key and the ChatGPT sign-in
@@ -591,6 +623,7 @@ that is stored when the run is admitted, as `fix-codex` does). It can be a `text
 parameter, so a run chooses it with `--param`. Both credentials run the same program from
 the same `codex` image:
 
+{/* copy-paste: excerpt */}
 ```yaml
 params:
   writer_model: { kind: model, required: true, description: "openai:<model> for Codex" }

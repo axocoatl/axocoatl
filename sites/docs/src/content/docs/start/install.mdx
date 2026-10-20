@@ -1,14 +1,21 @@
 ---
 title: Install Axocoatl
-description: Install the release binary on macOS 11 or newer, Linux, or WSL2, or build the CLI from source.
+description: Install the release binary on macOS 11 or newer, on Linux, or inside WSL2 on Windows (not yet verified), or build the CLI from source. What has been tested, what it needs and what it downloads.
 ---
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
 Axocoatl publishes release binaries for Linux and macOS 11 or newer on x86_64 and aarch64.
-Windows runs through WSL2; there is no native Windows binary.
+On Windows it runs inside WSL2 (not yet verified): run the installer in the Linux
+distribution, not in PowerShell; there is no native Windows binary.
 The Linux archives target GNU libc 2.35 or newer. They do not run on
 musl-based distributions such as Alpine; use the Cargo or source path there.
+
+| | |
+| --- | --- |
+| Tested end to end | macOS 26 on Apple silicon, rootless Podman 5.8, a 48 GB Mac |
+| Verified in CI | Ubuntu 24.04 on x86_64, rootless Podman 4.9.3, against a stub model server |
+| Not yet verified | Intel Macs, Podman 6, arm64 Linux, Ubuntu 22.04, Debian 12, Fedora with SELinux, WSL2 on Windows |
 
 ## Install the binary
 
@@ -23,7 +30,9 @@ musl-based distributions such as Alpine; use the Cargo or source path there.
     A missing, malformed, or mismatched checksum stops installation. The script
     also stops before download when Linux does not report GNU libc 2.35 or
     newer, or when macOS is older than version 11. It installs to
-    `/usr/local/bin` when writable and otherwise to `~/.local/bin`.
+    `/usr/local/bin` when writable and otherwise to `~/.local/bin`. When that
+    directory is not on your `PATH`, it asks, on the terminal, before adding one line
+    to your shell's profile, and prints that line when it cannot ask.
   </TabItem>
   <TabItem label="Cargo">
     ```sh
@@ -58,15 +67,53 @@ axocoatl --version
 axocoatl --help
 ```
 
-If installation used `~/.local/bin`, add it to your shell path:
+If `axocoatl` is not found, the installer used `~/.local/bin` and did not add it to
+your `PATH`. Open a new terminal if you let it add the line; otherwise add the line it
+printed to your shell's profile (`~/.zprofile` for zsh on macOS, `~/.bashrc` for bash on
+Linux), or set it for this shell only:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+`AXOCOATL_MODIFY_PATH=yes` makes the installer add the line without asking, and
+`AXOCOATL_MODIFY_PATH=no` stops it from asking:
+
+```sh
+curl -fsSL https://axocoatl.ai/install.sh | AXOCOATL_MODIFY_PATH=no sh
+```
+
 The binary is installed once for the current user or system. The next command,
 `axocoatl onboard`, creates user-level Axocoatl configuration and data; it does
 not create a repository or Workspace.
+
+## What it needs and downloads
+
+Every run has a writer, which changes the code, and a reviewer, a different model that
+only reads. `axocoatl onboard` sets up both, and Podman, and asks before each download
+or change.
+
+- **Writer.** Claude Code needs a Claude Pro or Max plan and the `claude` CLI on this
+  computer. Codex signs in with your ChatGPT plan. A local writer runs on Ollama.
+- **Reviewer.** A local model on Ollama, or a hosted one paid with OpenRouter credits.
+- **Memory for local models.** The local pair, `qwen3-coder:30b` writing and
+  `gpt-oss:20b` reviewing, was tested on a 48 GB Mac, one model loaded at a time. No
+  local pair has been tested with less memory: there, use a reviewer through
+  OpenRouter. `gpt-oss:120b`, the reviewer we measured, needs about 96 GB or more.
+- **Docker** is not supported; Axocoatl runs Podman, which can run alongside Docker.
+- **For `--keep pr`:** `git`, the `gh` CLI signed in, and a GitHub remote.
+
+| Download | Size |
+| --- | --- |
+| Podman machine image (macOS) | about 0.9 GB |
+| Claude Code image | about 0.6 to 0.9 GB |
+| Codex image | about 0.8 to 1.2 GB |
+| `qwen3-coder:30b` | 18.6 GB |
+| `gpt-oss:20b` | 13.8 GB |
+| `gpt-oss:120b` (about 96 GB of memory) | 65.4 GB |
+| Embedding model, from huggingface.co on the first daemon start | 87 MB |
+
+A run's sandbox also pulls its base image and packages the first time it starts.
 
 ## Runtime prerequisites
 
@@ -114,6 +161,9 @@ ones installed on your server; see [Configure Axocoatl](/start/onboard/#ollama).
 
 ## Windows through WSL2
 
+WSL2 is not yet verified: no Windows run has been done yet. These are the steps it is
+designed for.
+
 <Steps>
 
 1. In an administrator PowerShell, install WSL2 and reboot when requested:
@@ -122,14 +172,15 @@ ones installed on your server; see [Configure Axocoatl](/start/onboard/#ollama).
    wsl --install
    ```
 
-2. Open the Linux distribution and install Podman. On Ubuntu:
+2. Open the Linux distribution and install Podman, or let `axocoatl onboard` install
+   it in step 3. On Ubuntu:
 
    ```sh
    sudo apt-get update
    sudo apt-get install -y podman
    ```
 
-3. Run the release installer **inside WSL2**, then continue with
+3. Run the release installer **inside WSL2**, not in PowerShell, then continue with
    [user-level onboarding](/start/onboard/).
 
 </Steps>
@@ -139,10 +190,10 @@ ones installed on your server; see [Configure Axocoatl](/start/onboard/#ollama).
 forwards that loopback port to the host.
 
 <Aside type="caution" title="The default sandbox still needs Podman">
-Installing the Axocoatl binary does not install or start Podman. Without a ready
-Podman runtime, `doctor` warns and folder Sessions cannot use the default local
-sandbox. A deliberately configured E2B Cloud backend is the separate
-remote option.
+Installing the Axocoatl binary does not install or start Podman; `axocoatl onboard`
+does, after asking. Without a ready Podman runtime, `doctor` reports it, and Sessions
+and runs cannot use the default local sandbox. A deliberately configured E2B Cloud
+backend is the separate remote option.
 </Aside>
 
 ## Next

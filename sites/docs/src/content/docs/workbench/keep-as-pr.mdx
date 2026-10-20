@@ -89,8 +89,11 @@ directly:
 
 ```sh
 gh pr view 7 --json body --jq .body > body.md
-axocoatl receipt verify body.md --keys trusted-keys --repo .
+axocoatl receipt verify body.md --key "$(axocoatl receipt key)" --repo .
 ```
+
+On another computer, give the signer's key line instead, or a file of trusted key lines
+with `--keys` (see [Verifying a receipt](/workbench/receipts/#verifying-a-receipt)).
 
 `git` and `gh` run on your computer with your own credentials and configuration. Nothing
 runs in a container for this, and Axocoatl reads no credential. Your global and system git

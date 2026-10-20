@@ -23,8 +23,8 @@ on your computer.
 
 <CardGrid>
   <Card title="Run it headless" icon="seti:shell">
-    One command per task, from a shell or a CI job, ending with an exit code and a
-    signed receipt.
+    One command per task, from your shell, ending with an exit code and a signed
+    receipt.
 
     - [`axocoatl run fix`](/workbench/fix-qa-audit/#fix) with a local writer and a
       different reviewer, or [`fix-claude-code` and `fix-codex`](/configure/external-agents/)
@@ -81,13 +81,13 @@ completes, are opt-in.
     The host runs required checks on the exact final files. Budgets you approve are
     charged with what each call actually used and carry across restarts. The Session
     durably records every model call, tool call, budget decision and check, and every
-    finished loadout run gets a signed receipt.
+    `axocoatl run` that finishes gets a signed receipt.
     [Native authority and budgets →](/configure/agents/#native-authority-and-budgets)
   </Card>
   <Card title="Any model, per Agent" icon="random">
     Each Agent has its own provider and model: local models through Ollama, hosted models
     through OpenRouter, with Anthropic, OpenAI, Gemini and Mistral adapters on the
-    compatibility path. A local writer can be reviewed by a stronger model. The
+    compatibility path. A local writer can be reviewed by a different model. The
     reviewer we measured ran locally; reviewers through OpenRouter have not been measured.
     [Cross-model review →](/configure/cross-model-review/)
   </Card>
@@ -111,9 +111,9 @@ findings across Sessions.
 
 <Steps>
 
-1. [Install the binary](/start/install/).
-2. Run [`axocoatl onboard`](/start/onboard/) to configure Axocoatl for this user, then run [`axocoatl doctor`](/start/onboard/#run-doctor). Onboarding does not create a project or Workspace.
-3. Start `axocoatl dev` and leave it running. From another shell, in a repository, run `axocoatl run fix --task "…" --model writer=… --model reviewer=… --receipt receipt.json` ([`axocoatl run`](/reference/run/)).
+1. [Install the binary](/start/install/) on macOS, on Linux, or inside WSL2 on Windows (WSL2 not yet verified).
+2. Run [`axocoatl onboard`](/start/onboard/) to configure Axocoatl for this user: it sets up Podman, a writer and a reviewer, and asks before each download or change. Then run [`axocoatl doctor`](/start/onboard/#run-doctor). Onboarding does not create a project or Workspace.
+3. Start `axocoatl dev` and leave it running. From another shell, in a repository, run `axocoatl run fix --task "Paging skips the last item" --receipt receipt.json`, which uses the writer and the reviewer onboarding set up ([`axocoatl run`](/reference/run/)).
 4. Or open the sign-in link `axocoatl dev` prints, choose **Open workspace…**, and [create a Session](/start/first-session/). Apply **Team & budget**: Lead's limits, its helpers' limits, and any required checks or review. Then ask for a bounded change and inspect Git.
 
 </Steps>
@@ -126,7 +126,7 @@ findings across Sessions.
     [Begin →](/start/install/)
   </Card>
   <Card title="Run headless" icon="seti:shell">
-    Run `fix`, `qa` or `audit` from a shell or CI, keep a passing run as a pull request, and verify its receipt.
+    Run `fix`, `qa` or `audit` from your shell, keep a passing run as a pull request, and verify its receipt.
     [Fix, QA and audit runs →](/workbench/fix-qa-audit/)
   </Card>
   <Card title="Use the workbench" icon="puzzle">
@@ -158,6 +158,7 @@ product telemetry. That does not mean every configured path is offline: the
 container's network is on by default, so set `network: none` for repositories
 you don't trust. Hosted
 model providers, remote MCP servers, web search, webhooks, bridged sandbox
-networking, embedding-model downloads, and an E2B Cloud remote sandbox can
-send data over the network. [Review the security boundary before using untrusted
+networking, embedding-model downloads (the first daemon start downloads an 87 MB
+model from huggingface.co), and an E2B Cloud remote sandbox can send data over the
+network. [Review the security boundary before using untrusted
 input →](/operate/security/)

@@ -304,7 +304,8 @@ failed, 2 needs attention, 3 usage, 4 daemon unavailable, 5 infrastructure, 6
 interrupted. It can write JUnit and a single-file record bundle, and Keep as PR commits a
 passing run to a new branch and, opt-in, opens a pull request with host `git` and `gh`.
 
-Every finished run, whatever its verdict, gets a signed receipt: a small statement of
+Every finished loadout run, whatever its verdict, gets a signed receipt (workbench turns
+get none): a small statement of
 which files it changed (each with the SHA-256 of its content as the required checks
 judged it, in a repository of any size, up to 10,000 changed paths), what the host
 enforced (sandbox, network policy, checks, review, adjudications), which programs and

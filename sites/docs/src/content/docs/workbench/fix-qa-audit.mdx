@@ -73,6 +73,16 @@ outcome panel, the [pull request body](/workbench/keep-as-pr/) and the record.
 The run passes (exit code 0) when the check passes on the final result, the reviewer
 approves that result, and every finding the host sent back was answered.
 
+Without `--model`, a run uses the writer and the reviewer `axocoatl onboard` set up.
+
+<Aside title="Which repositories work today">
+The check runs inside the run's sandbox image. `fix` uses a small Alpine Linux image with
+Node.js, npm and Python 3; `fix-claude-code` and `fix-codex` a Node image. A run installs
+no project dependencies, so the check must work with what the image has: a check such as
+`node --test` or a shell script can run; one that needs `npm ci` first, pytest, cargo or
+go cannot yet. Name the check with `--check` when Axocoatl detects none.
+</Aside>
+
 ### With Claude Code or Codex as the writer
 
 ```sh
@@ -81,7 +91,8 @@ axocoatl run fix-codex --task "…" --model reviewer=ollama:gpt-oss:20b
 ```
 
 `fix-claude-code` and `fix-codex` run the same turn with the pinned Claude Code or Codex
-CLI as the writer, inside the Session container, from its recipe image: the same check,
+CLI as the writer, inside the Session container, from its recipe image (a Node image, so
+for now Node repositories only): the same check,
 the same review for up to 3 rounds and the same adjudications. The writer's model has a
 default (`anthropic:sonnet`, `openai:gpt-6.1-sol`), so a run names only the reviewer;
 `fix-codex` sends an OpenAI API key when one is stored, else your ChatGPT sign-in
@@ -109,7 +120,8 @@ tokens.
 
 That reviewer was a local model on the same machine; `gpt-oss:120b` (65 GB) needs
 roughly 96 GB of memory or more, so the commands on this page use `gpt-oss:20b`
-(14 GB), which fits a 48 GB Mac with `qwen3-coder:30b`. A hosted reviewer through
+(14 GB), which fits a 48 GB Mac with `qwen3-coder:30b`. `gpt-oss:20b` as reviewer has
+not been measured. A hosted reviewer through
 OpenRouter works the same way in Axocoatl but was not measured. See
 [What we measured](/understand/what-we-measured/).
 

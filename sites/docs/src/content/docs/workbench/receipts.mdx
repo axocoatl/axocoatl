@@ -1,6 +1,6 @@
 ---
 title: Signed receipts
-description: Every finished loadout run gets a receipt signed with this computer's key. It says which files the run changed, what the host enforced, which models wrote and reviewed, and the verdict. Anyone can verify it offline against the keys they trust.
+description: Every axocoatl run that finishes gets a receipt signed with this computer's key. It says which files the run changed, what the host enforced, which models wrote and reviewed, and the verdict. Anyone can verify it offline against the keys they trust.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -143,7 +143,15 @@ changed by it.
 `axocoatl receipt verify` needs no daemon, no Podman and no network.
 
 ```sh
+axocoatl receipt key > trusted-keys     # this computer's key; add the lines of others you trust
 axocoatl receipt verify run.receipt.json --keys trusted-keys --repo . --record run.axorecord.jsonl
+```
+
+To check a receipt this computer signed, `--key "$(axocoatl receipt key)"` does the same
+without a file:
+
+```sh
+axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo .
 ```
 
 1. It reads the receipt: a DSSE envelope, or text holding an
@@ -195,18 +203,59 @@ cuts.
 ## Checking pull requests in GitHub Actions
 
 `axocoatl/axocoatl/actions/verify-receipt` is a composite action that checks the receipt a
-pull request's description carries, the way Keep as PR puts it there:
+pull request's description carries, the way Keep as PR puts it there. Set it up in this
+order, each step through a pull request of its own:
+
+1. Trust the computer that signs. On it, with the daemon's `--config` and data
+   directory, add its key line to the keys file, and merge that file into the branch pull
+   requests merge into (see
+   [Trusting a computer's receipts](#trusting-a-computers-receipts-in-a-repository)):
+
+   ```sh
+   mkdir -p .axocoatl && axocoatl receipt key >> .axocoatl/receipt-keys
+   git add .axocoatl/receipt-keys
+   ```
+
+2. Add the workflow. This one checks every receipt a pull request carries and lets a
+   pull request without one (from a person or Dependabot, or the pull request that adds
+   the workflow) pass with a notice:
+
+   ```yaml
+   name: Axocoatl receipt
+   on:
+     pull_request:
+       types: [opened, edited, synchronize, reopened]
+   permissions:
+     contents: read
+     pull-requests: read
+   jobs:
+     receipt:
+       runs-on: ubuntu-24.04
+       steps:
+         - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+           with:
+             ref: ${{ github.event.pull_request.head.sha }}
+             persist-credentials: false
+         - uses: axocoatl/axocoatl/actions/verify-receipt@v1.4.0
+           with:
+             require-receipt: false
+   ```
+
+<Aside type="caution" title="Requiring a receipt">
+Without `require-receipt: false` (the action's default is `true`), a pull request without
+a receipt fails: every pull request a person or Dependabot opens, the one that adds the
+keys file and the one that adds this workflow. Require receipts only on pull requests
+that Keep as PR opened, whose branches are named `axocoatl/<loadout>-<run id prefix>` by
+default.
+</Aside>
+
+The strict variant runs the job only on those branches and leaves `require-receipt` at
+its default, so such a pull request without a valid receipt fails:
 
 ```yaml
-name: Axocoatl receipt
-on:
-  pull_request:
-    types: [opened, edited, synchronize, reopened]
-permissions:
-  contents: read
-  pull-requests: read
 jobs:
   receipt:
+    if: startsWith(github.head_ref, 'axocoatl/')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -216,7 +265,7 @@ jobs:
       - uses: axocoatl/axocoatl/actions/verify-receipt@v1.4.0
 ```
 
-It runs on Linux x86_64 and ARM64 runners and needs `git`, `gh` and `jq`, which
+The action runs on Linux x86_64 and ARM64 runners and needs `git`, `gh` and `jq`, which
 GitHub-hosted runners have. In order, it:
 
 1. installs the Axocoatl release named by `version` (the archive for the runner,
@@ -275,10 +324,10 @@ prints it, with `#` comments and blank lines allowed. To trust the receipts a co
 signs, run on that computer, with the daemon's `--config` and data directory:
 
 ```sh
-axocoatl receipt key >> .axocoatl/receipt-keys
+mkdir -p .axocoatl && axocoatl receipt key >> .axocoatl/receipt-keys
 ```
 
 and commit the file to the branch pull requests merge into, through a pull request of its
-own. Only lines the base commit holds are trusted, so a key added in the pull request
+own, before the workflow that reads it. Only lines the base commit holds are trusted, so a key added in the pull request
 being checked is not. To stop trusting a key, delete its line; to keep accepting receipts
 an old key signed after `axocoatl receipt key --rotate`, keep its line next to the new one.

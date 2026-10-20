@@ -12,47 +12,54 @@ host enforced. One open-source Rust executable; no Axocoatl account or telemetry
 [![CI](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml/badge.svg)](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/axocoatl-cli.svg)](https://crates.io/crates/axocoatl-cli) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 ```bash
-curl -fsSL https://axocoatl.ai/install.sh | sh   # macOS 11+, glibc 2.35+ Linux, or WSL2
-axocoatl onboard   # configure this OS user; choose Ollama or OpenRouter
-axocoatl doctor    # check Podman (the sandbox) and the provider
+curl -fsSL https://axocoatl.ai/install.sh | sh   # macOS, Linux, or inside WSL2 on Windows (not PowerShell; WSL2 not yet verified)
+axocoatl onboard   # set up Podman, a writer and a reviewer for this OS user; it asks before each change
+axocoatl doctor    # check the sandbox, the models, the writers and the daemon
 axocoatl dev       # start the daemon and leave it running
 
 cd ~/src/my-app    # then, in another shell
 axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" \
-  --model writer=ollama:qwen3-coder:30b --model reviewer=ollama:gpt-oss:20b \
-  --junit axocoatl-junit.xml --record run.axorecord.jsonl
+  --junit axocoatl-junit.xml --record run.axorecord.jsonl --receipt run.receipt.json
+axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo .
 ```
 
-`qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) fit a 48 GB Mac, one at a time, on
-Ollama 0.40.6 or later. The stronger reviewer in the measurements below, `gpt-oss:120b`
-(65 GB), needs a machine with roughly 96 GB of memory or more.
+`axocoatl run fix` uses the writer and the reviewer onboarding set up; `--model writer=…` or
+`--model reviewer=…` chooses another for one run. On a Mac with 48 GB of memory,
+onboarding offers `qwen3-coder:30b` (19 GB) to write and `gpt-oss:20b` (14 GB) to review,
+on Ollama 0.40.6 or a later 0.40 release. That pair has run end to end on a 48 GB Mac;
+`gpt-oss:20b` as reviewer has not been measured. The reviewer in the measurements below,
+`gpt-oss:120b` (65 GB), needs about 96 GB of memory or more. With less memory, use a
+reviewer through OpenRouter. What each path needs and downloads is on
+[the install page](https://axocoatl.ai/install#what-it-needs).
 
-An example of the summary a passing run prints on standard output, in the format
-`axocoatl run` prints it (progress goes to standard error):
+The summary one real run printed on standard output (progress goes to standard error):
+`axocoatl run fix` on a development build of 1.5.0, on a small test repository whose check
+is `sh test.sh`, with `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing on Ollama 0.40.6
+on a 48 GB Mac. It shows the format, not a measurement.
 
 ```text
 Verdict: pass (exit 0)
 Loadout: fix@1 sha256:b579bd67515486bebaf28d2bbfc76853260abef7623a05d2d5f83c1593cc9b41
 Checks:
   tests            passed, exit 0
-Review: approved after 2 of 3 rounds by ollama:gpt-oss:20b
-Adjudications:
-  round 1 F1   accept: the last page was dropped when total % size == 0; fixed, with a test
-  round 1 F2   reject: Paginator.__init__ already refuses size 0 (pages.py:12)
-Usage: 412907 input + 23118 output tokens, $0.0000
-Network: 0 recorded events, 0 allowed and 0 refused connections, 0 route requests
-Record: run-7f3c9a2e-4b1d-4c8a-9e6f-2d5b8a1c0e47
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Usage: 49623 input + 1783 output tokens, $0.0000
+Network: 10 recorded events, 1 allowed and 0 refused connections, 0 route requests
+Record: run-f2e15292-1497-4c77-a1d8-858da9e35630
 ```
 
 - **Claude Code or Codex as the writer, in one command.**
-  `axocoatl run fix-claude-code --task "…" --model reviewer=ollama:gpt-oss:20b` (or
-  `fix-codex`) runs the built-in `fix` with the pinned Claude Code CLI or Codex CLI as the
-  writer, inside the Session container as a non-root user, and the host runs the same
-  checks and review on what it leaves. `axocoatl connect claude-code` (it runs
-  `claude setup-token`) or `axocoatl connect codex` (your ChatGPT sign-in, in a browser)
-  stores the credential on your computer without showing it; the daemon adds it on the host
-  to each model request, and the container holds a placeholder. To change the model, the
-  budgets or the checks,
+  `axocoatl run fix-claude-code --task "…"` (or `fix-codex`) runs the built-in `fix` with
+  the pinned Claude Code CLI or Codex CLI as the writer, inside the Session container as a
+  non-root user, and the host runs the same checks and the review by the reviewer onboarding
+  set up on what it leaves. Claude Code needs a Claude Pro or Max plan and the `claude` CLI
+  on your computer; Codex signs in with your ChatGPT plan. Choose either when
+  `axocoatl onboard` asks who writes the code: it builds the program's image and signs you
+  in through your browser (`axocoatl connect claude-code` runs `claude setup-token`;
+  `axocoatl connect codex` your ChatGPT sign-in) and stores the credential on your computer
+  without showing it; the daemon adds it on the host to each model request, and the
+  container holds a placeholder. For now both run in a Node image, so they support Node
+  repositories only. To change the model, the budgets or the checks,
   [write your own loadout](https://docs.axocoatl.ai/configure/external-agents/#write-your-own-loadout).
 
 <p align="center">
@@ -91,8 +98,8 @@ run in, and its record.
   the checks, review, adjudications, findings and coverage. `--record` writes the whole
   run as one JSON Lines file ending with its line count and SHA-256, which
   `axocoatl record verify` checks; it is checksummed, not signed.
-- **A signed receipt.** Every finished run, passing or not, gets a receipt signed with an
-  Ed25519 key kept in your data directory: an in-toto statement in a DSSE envelope that
+- **A signed receipt.** Every `axocoatl run` that finishes, passing or not, gets a receipt
+  signed with an Ed25519 key kept in your data directory (workbench turns get none): an in-toto statement in a DSSE envelope that
   lists the files the run changed with their SHA-256 (as the required checks judged them,
   when they ran), the sandbox and network policy, the checks, the review, the models and
   the verdict. `--receipt` writes it. `axocoatl receipt verify` checks it offline against
@@ -144,7 +151,7 @@ A stronger, different reviewer helped a small local writer; a second look from t
 model didn't: extra tokens helped when they bought a stronger model's judgment, not
 more looks from the same model. That is one small benchmark with two local models, not
 a claim that Axocoatl makes agents better. Axocoatl lets each Agent use its own model,
-so a local writer can be reviewed by a stronger model, and the host still runs your
+so a local writer can be reviewed by a different model, and the host still runs your
 checks and records every step. The reviewer we measured ran locally; reviewers through OpenRouter
 have not been measured, and neither have the built-in loadouts. We do not claim
 the default team beats a single Agent; one Agent remains the cheaper choice for small
@@ -213,7 +220,7 @@ The same daemon serves a workbench in your browser for work you want to watch: t
 default is one Agent, the Lead, which writes; read-only helpers it can delegate to,
 and checks and a review the host runs before a turn completes, are opt-in.
 
-The execution contracts below describe the 1.4.0 source tree. The installer and
+The execution contracts below describe the 1.5.0 source tree. The installer and
 `cargo install` select published releases; see the [changelog](CHANGELOG.md)
 for versioned changes.
 
@@ -227,8 +234,14 @@ axocoatl dev       # start the daemon and the one app
 ```
 
 Prebuilt releases support macOS 11 or newer and GNU/Linux with glibc 2.35 or
-newer on x86_64 and ARM64. Windows runs through WSL2; there is no native Windows
-binary.
+newer on x86_64 and ARM64; on Windows, Axocoatl runs inside WSL2, and there is no native
+Windows binary. What has been tested: end to end on macOS 26 on Apple silicon with
+rootless Podman 5.8; in CI on Ubuntu 24.04 on x86_64 with rootless Podman 4.9.3, against a
+stub model server. Not yet verified: Intel Macs, Podman 6, arm64 Linux, Ubuntu 22.04,
+Debian 12, Fedora with SELinux, and WSL2 on Windows. Docker is not supported; Podman can
+run alongside it. The first daemon start downloads an 87 MB embedding model from
+huggingface.co. To remove Axocoatl, see
+[Uninstall](https://docs.axocoatl.ai/operate/uninstall/).
 
 Prefer Cargo? `cargo install axocoatl-cli` (requires Rust 1.88+).
 
@@ -322,7 +335,7 @@ reviewed local Ollama profiles and eligible OpenRouter text/tool endpoints, reas
 models included, paid with OpenRouter credits. OpenRouter requires
 `providers.openrouter_billing: credits`, a normal API key, and an account with no
 connected BYOK provider keys. BYOK is not supported. A compatible HTTP API alone does not establish a bound.
-The onboarding wizard offers Ollama and OpenRouter for native Sessions. For Ollama it
+Axocoatl's own Agents, in runs and native Sessions, use Ollama or OpenRouter. For Ollama, onboarding
 checks that the server is a loopback Ollama 0.40.6 or a later 0.40 release with its
 cloud features disabled (`OLLAMA_NO_CLOUD=1`, or `{"disable_ollama_cloud": true}` in
 `~/.ollama/server.json`), and suggests Lead and Reviewer models from the GGUF models
@@ -363,7 +376,8 @@ role was not recorded stays archived instead of becoming future model context.
   search and `web_fetch`, webhooks, E2B Cloud, Podman image or package downloads,
   repository traffic, the browser tool's declared hosts and the downloads
   `axocoatl browser install` makes, requests the daemon sends on egress routes, and
-  the embedding-model download can use the network. `sandbox.network: none` blocks
+  the embedding-model download (87 MB from huggingface.co, on the first daemon start)
+  can use the network. `sandbox.network: none` blocks
   the local container and turns off native Sessions' web tools; the daemon's other
   integrations remain separate paths.
 
@@ -443,7 +457,7 @@ axocoatl loadouts list|show|validate
 axocoatl record verify <file>    Check a run's record bundle
 axocoatl connect claude-code     Sign in Claude Code and store its token, never shown
 axocoatl connect codex           Sign in Codex with your ChatGPT plan, never shown
-axocoatl connect codex --api-key  Also store the OpenAI API key OpenAI issues, never shown
+axocoatl connect codex --api-key  Also store the OpenAI API key OpenAI issues (not yet tested live)
 axocoatl connect codex --status|--refresh  Show the sign-in, or refresh it now (no token shown)
 axocoatl secret set <name>       Store another route credential from stdin or --from-env VAR
 axocoatl recipe build <recipe>…  Build a Session image (claude-code, codex, e2e)

@@ -36,8 +36,10 @@
 
 <span class="code-key">agents:</span>
   - <span class="code-key">id:</span> <span class="code-string">builder</span>
+    <span class="code-key">name:</span> <span class="code-string">Builder</span>
     <span class="code-key">provider:</span> <span class="code-string">openrouter</span>
     <span class="code-key">model:</span> <span class="code-string">"${OPENROUTER_MODEL}"</span>
+    <span class="code-key">tools:</span> [read_file, list_dir, grep, glob, write_file, edit_file, bash]
     <span class="code-key">sampling:</span>
       <span class="code-key">max_tokens:</span> 2048</code></pre></div>
       </div>

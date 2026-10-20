@@ -101,13 +101,13 @@ hunk review, branch checkout, and commit as deliberate user actions.
 
 ## If creation fails
 
-- Run `axocoatl doctor` and resolve the Podman warning.
+- Run `axocoatl doctor` and resolve what it reports for Podman.
 - Confirm the selected Agent exists in the active user configuration (or the
   explicit file passed with `--config`).
 - An image outside Axocoatl's curated presets is rejected unless
   `sandbox.allow_untrusted_images: true`.
-- Axocoatl does not install Podman or create a Podman VM during Session startup.
-  Follow the explicit `doctor` guidance, then retry.
+- Session startup never installs Podman or creates its VM; `axocoatl onboard` does,
+  after asking. Run it, or follow the `doctor` guidance, then retry.
 - With `sandbox.network: none`, the local image must already contain Axocoatl's
   required repository commands; offline startup cannot download missing tools.
 - E2B uses one daemon-global template and rejects a per-Session or devcontainer

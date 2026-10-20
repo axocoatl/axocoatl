@@ -12,7 +12,7 @@ import { Aside } from '@astrojs/starlight/components';
 A loadout is one YAML file that says everything a run needs: its Agents, their roles and
 models, the required checks with their timeouts, an optional required reviewer, the hosts
 the Session may reach, its budgets and the prompt. [`axocoatl run`](/reference/run/) runs
-one headless against the running daemon and exits with a code a script or CI job can act
+one headless against the running daemon and exits with a code a script can act
 on. Settings displays loadouts; nothing in the workbench runs one.
 
 Five loadouts are built in:
@@ -41,8 +41,8 @@ axocoatl run fix --task "Paging skips the last item when the total is a multiple
 ```
 
 `qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) fit a 48 GB Mac, one at a time;
-`gpt-oss:120b` (65 GB) is a stronger reviewer for a machine with roughly 96 GB of memory
-or more.
+`gpt-oss:20b` as reviewer has not been measured. `gpt-oss:120b` (65 GB), the reviewer we
+measured, needs a machine with roughly 96 GB of memory or more.
 
 `--model writer=…` is the same as `--param writer_model=…`. A model value is
 `provider:model`, split at the first `:`, so `ollama:qwen3:32b` and

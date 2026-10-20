@@ -1,16 +1,18 @@
 ---
 title: Cross-model review
-description: Have a different, stronger model review a writer's change as the team's required review. We measured a bigger local reviewer through Ollama; a hosted reviewer through OpenRouter is configured the same way but was not measured.
+description: Have a different model review a writer's change as the team's required review. We measured one local reviewer, gpt-oss 120B through Ollama; the 48 GB default gpt-oss:20b and hosted reviewers through OpenRouter are configured the same way but were not measured.
 ---
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
 Each Agent template names its own provider and model, so the Agent that writes and the
 Agent that reviews do not have to share one. A common setup is a local model as the
-lead, which writes, and a stronger model as the team's required reviewer, which only
-reads. In [our benchmark](/understand/what-we-measured/), a stronger local reviewer,
-gpt-oss 120B through Ollama, helped where more looks from the same model did not. A
-hosted reviewer through OpenRouter is set up the same way, but we have not measured one.
+lead, which writes, and a different model as the team's required reviewer, which only
+reads. In [our benchmark](/understand/what-we-measured/), a larger local reviewer,
+gpt-oss 120B through Ollama, helped where more looks from the same model did not. The
+reviewer that fits a 48 GB Mac next to the writer is smaller than the writer and has
+not been measured, and neither has a hosted reviewer through OpenRouter, which is set up
+the same way.
 
 The built-in [`fix` loadout](/workbench/fix-qa-audit/#fix) runs this pattern headless:
 one writer, the repository's checks, and a required review by `reviewer_model`, which
@@ -24,14 +26,14 @@ usage, verdict and findings stay in the Session.
 
 ## 1. Define a reviewer on another model
 
-Add a read-only Worker template with the stronger model. `writes: []` makes it
+Add a read-only Worker template with the other model. `writes: []` makes it
 read-only, which a required reviewer must be: it is not offered `write_file` or
 `edit_file`, and its `bash` runs where it cannot write, create, rename or delete
 repository files (see [Security](/operate/security/#constrain-sandbox-execution) for
 what that leaves open).
 
 <Tabs>
-<TabItem label="Bigger local model (Ollama)">
+<TabItem label="Local model (Ollama)">
 
 ```yaml
 agents:
@@ -43,8 +45,8 @@ agents:
     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
     system_prompt: "You own this change. 1. Look first: find the relevant files and tests for code you do not know. 2. Make the change. 3. Run the check command from the project instructions (AXOCOATL.md), or the tests, and fix failures. 4. Check your diff against the task. When a reviewer reports defects, check each reported defect against the requirements before changing code; fix only the ones the requirements support. Then summarize what you changed."
     sampling: { max_tokens: 4096 }
-  - id: strong-reviewer
-    name: Strong reviewer
+  - id: cross-reviewer
+    name: Cross-model reviewer
     provider: ollama
     model: gpt-oss:20b
     role: worker
@@ -57,17 +59,18 @@ agents:
 Both models run on the same [native Ollama server](/configure/providers/#configure-ollama).
 Ollama has to hold both models: if they do not fit in memory together, it unloads one
 to load the other. `qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) fit a 48 GB Mac
-that way. The measured reviewer, `gpt-oss:120b` (65 GB), needs a machine with roughly
-96 GB of memory or more.
+that way; `gpt-oss:20b` as reviewer has not been measured. The measured reviewer,
+`gpt-oss:120b` (65 GB), needs a machine with roughly 96 GB of memory or more.
 
 </TabItem>
 <TabItem label="Hosted model (OpenRouter)">
 
+{/* copy-paste: excerpt */}
 ```yaml
 agents:
   # lead: unchanged from the Ollama tab
-  - id: strong-reviewer
-    name: Strong reviewer
+  - id: cross-reviewer
+    name: Cross-model reviewer
     provider: openrouter
     model: meta-llama/llama-3.3-70b-instruct   # an example; use any eligible model
     role: worker
@@ -107,7 +110,7 @@ helper beside the new template.
 
 1. Open the Session's **Team & budget** and enter the lead's limits. Its activation
    limit must be at least the number of review rounds.
-2. Open **Required review** and choose **Strong reviewer**.
+2. Open **Required review** and choose **Cross-model reviewer**.
 3. Choose how many rounds the host runs (1 to 3, two by default), the reviewer's
    maximum output per request, and its budget for all rounds of one turn: one
    activation and one invocation per round, three invocations per round with `bash`.
@@ -135,13 +138,13 @@ turn needs your attention with the findings. The full rules are in
 
 ## A reviewer the lead asks, instead
 
-To leave the decision with the lead, approve the stronger template as one of the lead's
+To leave the decision with the lead, approve that template as one of the lead's
 helpers instead: select **Let this Agent delegate to helpers** and keep the template
 in the list. The lead then asks for a review when it chooses, and its answer is advice,
 not a gate. A required review runs every turn whatever the lead decides.
 
 <Aside type="caution">
-A review is another model's judgment, not a proof. A stronger reviewer can still miss
-a defect or report one that is not there, and every round costs tokens on top of the
+A review is another model's judgment, not a proof. Any reviewer can miss a defect or
+report one that is not there, and every round costs tokens on top of the
 lead's. Required review does not run on attempts made with **Explore several ways**.
 </Aside>

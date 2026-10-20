@@ -1,7 +1,7 @@
 # Axocoatl — a local-first harness for coding agents
-> Axocoatl v1.4: run coding agents unattended. Claude Code, Codex or a local model works in a sandbox its model credential never enters; when it says it is done, the host runs your tests on the final files and a different model reviews the change; the run ends with an exit code for CI, a checksummed record of every step and a receipt signed on your computer. Agents write the code; Axocoatl writes the receipt.
+> Axocoatl v1.5: run coding agents unattended. Claude Code, Codex or a local model works in a sandbox its model credential never enters; when it says it is done, the host runs your tests on the final files and a different model reviews the change; the run ends with an exit code for CI, a checksummed record of every step and a receipt signed on your computer. Agents write the code; Axocoatl writes the receipt.
 
-Axocoatl v1.4 is an Apache-2.0, local-first harness for coding agents working in
+Axocoatl v1.5 is an Apache-2.0, local-first harness for coding agents working in
 real repositories. One Rust executable runs a daemon that executes the Agents and a
 browser workbench. Open a repository and work in a
 durable, folder-anchored Session: conversation stays at the center while Files,
@@ -25,7 +25,7 @@ around it.
   decision and check.
 - Any model, per Agent: local models through Ollama and hosted models through
   OpenRouter in native Sessions, each Agent with its own provider and model, so a
-  local writer can be reviewed by a stronger model. Anthropic, OpenAI, Gemini and
+  local writer can be reviewed by a different model. Anthropic, OpenAI, Gemini and
   Mistral adapters remain on the compatibility path.
 
 The default team is Lead, an Agent that edits files, and two read-only helpers it
@@ -82,10 +82,11 @@ routes, budgets and the prompt. Five are built in: fix (one writer, the reposito
 checks, a required review by a different model for up to 3 rounds, and the writer's
 accept-or-reject answer with a reason to every finding), fix-claude-code and fix-codex
 (fix with the pinned Claude Code or Codex CLI as the writer, from its recipe image; the
-writer's model defaults to anthropic:sonnet or openai:gpt-6.1-sol, so
-`axocoatl run fix-codex --task "..." --model reviewer=...` is the whole command, and
-fix-codex sends an OpenAI API key when one is stored, else the ChatGPT sign-in, and
-records which), qa (one browser explorer;
+writer's model defaults to anthropic:sonnet or openai:gpt-6.1-sol and the reviewer to the
+one onboarding set up, so `axocoatl run fix-claude-code --task "..."` is the whole
+command; Claude Code needs a Claude Pro or Max plan and the claude CLI, Codex signs in
+with a ChatGPT plan, and for now both run in a Node image, so they support Node
+repositories only; the run records which stored credential it sent), qa (one browser explorer;
 each finding carries a Playwright reproduction the host re-runs, and is confirmed only
 when it fails on the build under test and passes on a clean reference build) and audit
 (opt-in: a planner splits the scope into 2 to 8 areas, read-only workers audit them in
@@ -100,7 +101,7 @@ change. Exit codes: 0 pass, 1 required checks failed, 2 needs attention (review 
 passed, a finding unanswered, anything not covered, budget), 3 usage, 4 daemon
 unavailable, 5 infrastructure, 6 interrupted, 7 busy (another run or turn holds the repository). `--junit` writes JUnit of checks and
 findings; `--record` writes the whole Session record as one JSON Lines file that
-`axocoatl record verify` checks (the file is checksummed, not signed). Every finished run, whatever its verdict, gets a receipt
+`axocoatl record verify` checks (the file is checksummed, not signed). Every `axocoatl run` that finishes, whatever its verdict, gets a receipt (workbench turns get none)
 signed with an Ed25519 key kept in the data directory (an in-toto statement in a DSSE
 envelope: the changed files with their SHA-256 as the required checks judged them, up to
 10,000 changed paths in a repository of any size, the sandbox and network policy, checks,
@@ -108,8 +109,9 @@ review, models and verdict); `--receipt` writes it, and `axocoatl receipt verify
 it offline against trusted key lines (`axocoatl receipt key`), a checkout and the record.
 It proves who signed which facts, not that the change is correct. The GitHub Action
 `axocoatl/axocoatl/actions/verify-receipt` checks a pull request's receipt against keys
-on its base branch (`.axocoatl/receipt-keys`) and that it covers every changed file
-`--keep branch|pr` commits a
+on its base branch (`.axocoatl/receipt-keys`) and that it covers every changed file; a
+pull request without a receipt fails by default, or passes with a notice with
+`require-receipt: false`. `--keep branch|pr` commits a
 passing run to a new branch with host git (only the files its receipt covers, with
 `Axocoatl-Run` and `Axocoatl-Receipt` trailers) and, opt-in, opens a pull request with gh
 that carries the receipt; it never force-pushes and never pushes to the default branch.
@@ -120,9 +122,9 @@ without showing it), `axocoatl connect codex` (which runs the pinned `codex logi
 container with a private in-memory CODEX_HOME, or a host Codex with `--codex PATH`, and
 stores the ChatGPT sign-in without showing it; the daemon
 refreshes its access token on the host, for a Codex writer with
-`credential: codex-chatgpt`; with `--api-key` it also stores the OpenAI API key OpenAI
-issues with the browser sign-in as `codex-openai`, the default Codex credential, billed at
-API rates) or, for other credentials and automation without a browser,
+`credential: codex-chatgpt`; with `--api-key`, not yet tested live, it also stores the
+OpenAI API key OpenAI issues with the browser sign-in as `codex-openai`, which the default
+Codex credential then prefers, billed at API rates) or, for other credentials and automation without a browser,
 `axocoatl secret set` (stdin or `--from-env`, never argv)
 and added on the host by an egress route, so the container sees a placeholder; tester-army/e2e can run as a required check.
 
@@ -137,13 +139,19 @@ cleanup, under explicit storage limits.
 ## Start
 
 ```bash
-# Install the checksum-verified axocoatl executable on supported macOS or glibc Linux.
+# Install the checksum-verified axocoatl executable: macOS, Linux, or inside WSL2 on
+# Windows (not PowerShell; WSL2 not yet verified).
 curl -fsSL https://axocoatl.ai/install.sh | sh
 
-# Configure Axocoatl once for this OS user, check host prerequisites, and run.
+# Configure Axocoatl once for this OS user: onboard sets up Podman, a writer and a
+# reviewer, asking before each change; doctor checks what is ready; dev starts the daemon.
 axocoatl onboard
 axocoatl doctor
 axocoatl dev
+
+# Then, in a repository, from another shell: a fix with the models onboarding set up.
+axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" --receipt run.receipt.json
+axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo .
 ```
 
 Open the sign-in link `axocoatl dev` prints (or run `axocoatl url`). The default
@@ -155,8 +163,17 @@ separate frontend install or bundled browser runtime. Rootless Podman remains th
 local sandbox requirement for repository Sessions.
 
 Install from Cargo instead with `cargo install axocoatl-cli` and Rust 1.88 or
-newer. Native Windows is not a release target; Windows users run Axocoatl through
-WSL2.
+newer. Native Windows is not a release target; Windows users run Axocoatl inside WSL2 (not yet
+verified).
+
+Tested: end to end on macOS 26 on Apple silicon with rootless Podman 5.8 (the local pair,
+qwen3-coder:30b writing and gpt-oss:20b reviewing, on a 48 GB Mac; with less memory, use a
+reviewer through OpenRouter), and in CI on Ubuntu 24.04 on x86_64 with rootless Podman
+4.9.3 against a stub model server. Not yet verified: Intel Macs, Podman 6, arm64 Linux,
+Ubuntu 22.04, Debian 12, Fedora with SELinux, and WSL2 on Windows. Docker is not
+supported; Podman can run alongside it. The first daemon start downloads an 87 MB
+embedding model from huggingface.co. Removing Axocoatl:
+https://docs.axocoatl.ai/operate/uninstall/
 
 ## Product model
 

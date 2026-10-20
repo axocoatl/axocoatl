@@ -50,6 +50,7 @@ workbench uses.
 | Config parses in one shell but not the service | An environment placeholder is not injected into the service | Configure the service environment; Axocoatl does not create or load `.env` |
 | Expected Sessions are missing | The process uses an explicit `--config` or `AXOCOATL_DATA_DIR` different from the normal user paths | Start without the override, or inspect the exact explicit config and sibling/overridden data root |
 | “Address/socket already in use” | Another daemon owns HTTP or IPC | Stop the service/other process; do not run two default daemons |
+| The first `axocoatl dev` waits before it prints its sign-in link, or a firewall reports a connection to huggingface.co | The first daemon start downloads an 87 MB embedding model (all-MiniLM-L6-v2) from huggingface.co into the data root, once | Let it finish. Without network access the daemon starts anyway and uses lexical search for memory recall instead |
 | “Data directory is already owned” | Another daemon or direct CLI bootstrap holds the same durable runtime authority | Use the running daemon or stop that process; never point two live Axocoatl processes at one data root |
 | “failed data-directory format ownership admission … differently owned manifest” | Axocoatl 1.1.0 through 1.4.0 on a data root that was copied (a restored backup, a migrated Mac) or moved | Start 1.5.0 or later: it records the new location and keeps the Sessions. `axocoatl doctor` says whether the next start will. See [Data and backup](/operate/data-backup/#restore) |
 | Non-loopback bind is refused | Authentication is absent | Configure API keys or bearer tokens; keep loopback for local use |
@@ -73,7 +74,8 @@ workbench uses.
 | Session environment failed | Read the retained setup result/error, correct the runtime or command, then choose Rebuild environment |
 | Files, Source Control, Terminal, Preview, or Send returns a lifecycle conflict | The Session is not Ready; review or rebuild its environment. These tools do not fall back to the host checkout |
 | Session creation fails | Podman readiness, existing canonical directory, curated/arbitrary image policy, malformed `.devcontainer` metadata, selected Agent |
-| Podman is missing | Install and initialize it yourself using `axocoatl doctor` guidance; Session startup never runs a host package manager or creates the VM |
+| Podman is missing | Run `axocoatl onboard`: it installs Podman and, on a Mac, creates and starts its machine, asking first. Session startup and runs never run a host package manager or create the VM |
+| Docker is installed, and Axocoatl still asks for Podman | Docker is not supported; Axocoatl runs only `podman`. Podman can run alongside Docker; on a Mac, both virtual machines need memory |
 | A `network: none` Session lacks `git`, `realpath`, or another required command | Select an image that already contains Axocoatl's repository commands; in-container readiness provisioning cannot download them without a network |
 | Host `node_modules` is absent inside a root Node Session | Expected on local Podman: a Session-owned Linux volume masks the host dependency tree; run approved setup inside the sandbox |
 | E2B rejects the selected image | Clear the Session/devcontainer OCI image or switch the daemon to Podman; E2B uses one daemon-global template |
