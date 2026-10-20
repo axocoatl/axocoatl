@@ -373,6 +373,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Fixed
+- **Onboarding and doctor read the user's subordinate ids from `/etc/subuid` and
+  `/etc/subgid`.** They judged the range only from `podman info`, which reports the user
+  namespace Podman's pause process already holds. After a user's range was removed
+  (seen in the release gate's CI case), that namespace kept the old range, so doctor
+  said OK and exited 0 while every `keep-id` container, which Podman maps from the
+  files, failed in crun with "write to `/proc/sys/net/ipv4/ping_group_range`: Invalid
+  argument", and onboarding showed only that message. On Linux both now read the files
+  (by user name or uid, as Podman does): no range, or fewer than 65536 ids, is a FAIL
+  ("User ID ranges", so doctor exits 1) whose fix is `sudo usermod --add-subuids
+  <first>-<last> --add-subgids <first>-<last> <user> && podman system migrate`, with a
+  range no line of either file uses (100000-165535 when they are empty). Onboarding asks
+  before running it and, under `--yes`, runs it only with `--allow-sudo`. A range in the
+  files that Podman has not picked up yet fails with `podman system migrate` alone (no
+  sudo; it stops running containers). A sandbox check container that still fails on
+  `ping_group_range` names the same fix. Ranges that `nsswitch.conf` takes from SSSD
+  are not judged from the files.
 - **Hardened commands can rename files into other directories.** From Landlock ABI 2
   (Linux 5.19), a Landlock domain that does not handle `REFER` refuses every rename or
   link into another directory. The hardened supervisor's domain handled only creating

@@ -144,9 +144,15 @@ On **Linux and WSL2**:
 - Ubuntu 22.04 ships Podman 3.4.4. Axocoatl runs need Podman 4.3 or later (4.9 is
   tested), so onboarding stops there and asks for Ubuntu 24.04 or newer. Podman 4.3
   to 4.8 works but is reported as not tested.
-- No range of subordinate user ids (rootless Podman cannot unpack images or start
-  Sessions without one): `sudo usermod --add-subuids 100000-165535 --add-subgids
-  100000-165535 <user> && podman system migrate`.
+- No range of subordinate user ids, or fewer than 65536, in `/etc/subuid` and
+  `/etc/subgid` (rootless Podman cannot unpack images or start Sessions without one;
+  its sandbox container fails with `crun: write to /proc/sys/net/ipv4/ping_group_range:
+  Invalid argument`): `sudo usermod --add-subuids <first>-<last> --add-subgids
+  <first>-<last> <user> && podman system migrate`, with a range of 65536 that no line
+  of either file uses (100000-165535 when they are empty). Onboarding and doctor read
+  both files and print the exact command; with `--yes`, onboarding runs it only with
+  `--allow-sudo`. A range that is in the files but that Podman has not picked up yet
+  needs only `podman system migrate`, which stops your running containers.
 - Landlock: below ABI 3 (Linux 6.2) fix, fix-claude-code, fix-codex and audit cannot
   run their read-only reviewer, and onboarding says how to get a newer kernel (Debian
   12: bookworm-backports; WSL: `wsl --update`). ABI 3 works, but read-only helper

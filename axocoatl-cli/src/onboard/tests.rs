@@ -557,13 +557,16 @@ async fn yes_without_allow_sudo_lists_the_sudo_steps_and_runs_none() {
 #[tokio::test]
 async fn linux_uses_apt_usermod_and_a_systemd_drop_in_with_allow_sudo() {
     let shims = Shims::new();
+    // No range in /etc/subuid and /etc/subgid until usermod adds one.
+    shims.subordinate_ids(None);
     let dir = shims.dir.path().display().to_string();
+    let etc = shims.root.path().join("etc").display().to_string();
     shims.add(
         "sudo",
         &format!(
             r#"case "$*" in
   "apt-get install -y podman") cp "{dir}/podman.real" "{dir}/podman"; chmod +x "{dir}/podman"; touch "{dir}/machine" "{dir}/running" "{dir}/no-ids" ;;
-  usermod*) rm -f "{dir}/no-ids" ;;
+  usermod*) rm -f "{dir}/no-ids"; echo "alex:100000:65536" >> "{etc}/subuid"; echo "alex:100000:65536" >> "{etc}/subgid" ;;
   tee*) cat > "{dir}/drop-in" ;;
   "systemctl restart ollama") [ -f "{dir}/drop-in" ] && grep -q OLLAMA_NO_CLOUD "{dir}/drop-in" && touch "{dir}/no-cloud" ;;
 esac"#
@@ -637,6 +640,244 @@ esac"#
     );
     assert!(!shims.home.path().join(".ollama/server.json").exists());
     assert!(!calls.iter().any(|call| call.contains("launchctl")));
+}
+
+/// Ubuntu 24.04 with a ready rootless Podman (the shim's `podman info`
+/// maps a range), the computer's `/etc/subuid` and `/etc/subgid` as the
+/// shims' root has them, and `sudo` running `sudo_body`.
+async fn linux_sandbox(shims: &Shims, sudo_body: &str, args: OnboardArgs) -> Onboarding {
+    shims.add("sudo", sudo_body);
+    if !shims.dir.path().join("podman").exists() {
+        podman_shim(shims);
+    }
+    podman_state(shims, &["machine", "running"]);
+    let mut found = facts(
+        ubuntu(),
+        64,
+        podman_report(shims).await,
+        shims,
+        "http://127.0.0.1:9",
+        OllamaService::Manual,
+    )
+    .await;
+    found.podman.subordinate_ids =
+        crate::doctor::subordinate_ids(&shims.host(false), &found.os, &found.user);
+    let ui = Ui::new(Mode::Yes, args.allow_sudo, None);
+    onboarding(shims, ui, found, args)
+}
+
+/// The release gate's case: the user's lines are gone from /etc/subuid and
+/// /etc/subgid, while Podman's pause process still holds the old range, so
+/// `podman info` reports one. Onboarding reads the files, names the exact
+/// usermod fix (a range no other user has) and, under --yes without
+/// --allow-sudo, runs no sudo and no sandbox container (which would fail
+/// in crun on ping_group_range).
+#[cfg(unix)]
+#[tokio::test]
+async fn a_user_without_a_subuid_range_gets_the_usermod_fix_and_no_sudo() {
+    let shims = Shims::new();
+    shims.subordinate_ids(Some("newuser:100000:65536\n"));
+    let mut o = linux_sandbox(&shims, "exit 0", yes(WriterChoice::Ollama)).await;
+    assert_eq!(
+        axocoatl_isolation::podman_report::id_range_problem(&o.facts.podman),
+        Some(axocoatl_isolation::podman_report::IdRangeProblem::Missing)
+    );
+    assert!(!sandbox::run(&mut o).await);
+    let output = o.ui.output();
+    let calls = shims.calls();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("sudo")
+            || call.starts_with("podman run")
+            || call == "podman system migrate"),
+        "{calls:?}"
+    );
+    assert_eq!(
+        o.steps,
+        ["alex has no range of subordinate user and group IDs in /etc/subuid and /etc/subgid, so \
+          rootless Podman cannot unpack images or start Sessions: sudo usermod --add-subuids \
+          165536-231071 --add-subgids 165536-231071 alex && podman system migrate"]
+    );
+    assert!(
+        output.contains("not done: it needs sudo, and --yes runs sudo only with --allow-sudo"),
+        "{output}"
+    );
+}
+
+/// With --allow-sudo the same case adds the range, restarts rootless
+/// Podman, and the sandbox check container runs.
+#[cfg(unix)]
+#[tokio::test]
+async fn allow_sudo_adds_a_free_subuid_range_and_then_checks_the_sandbox() {
+    let shims = Shims::new();
+    shims.subordinate_ids(Some("newuser:100000:65536\n"));
+    let etc = shims.root.path().join("etc").display().to_string();
+    let sudo = format!(
+        r#"case "$*" in
+  "usermod --add-subuids 165536-231071 --add-subgids 165536-231071 alex") echo "alex:165536:65536" >> "{etc}/subuid"; echo "alex:165536:65536" >> "{etc}/subgid" ;;
+  *) exit 1 ;;
+esac"#
+    );
+    let mut o = linux_sandbox(
+        &shims,
+        &sudo,
+        OnboardArgs {
+            allow_sudo: true,
+            ..yes(WriterChoice::Ollama)
+        },
+    )
+    .await;
+    assert!(
+        sandbox::run(&mut o).await,
+        "{:?}\n{}",
+        o.steps,
+        o.ui.output()
+    );
+    let calls = shims.calls();
+    let usermod = calls
+        .iter()
+        .position(|call| {
+            call == "sudo usermod --add-subuids 165536-231071 --add-subgids 165536-231071 alex"
+        })
+        .unwrap_or_else(|| panic!("{calls:?}"));
+    let migrate = calls
+        .iter()
+        .position(|call| call == "podman system migrate")
+        .unwrap_or_else(|| panic!("{calls:?}"));
+    let proof = calls
+        .iter()
+        .position(|call| call.starts_with("podman run --rm --pull=never --userns=keep-id"))
+        .unwrap_or_else(|| panic!("{calls:?}"));
+    assert!(usermod < migrate && migrate < proof, "{calls:?}");
+    assert!(o.steps.is_empty(), "{:?}", o.steps);
+}
+
+/// A range in the files that Podman's pause process does not map yet (it
+/// started before the range was added) needs `podman system migrate`, no
+/// sudo; --yes runs it, and the sandbox check follows.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_range_podman_has_not_applied_is_picked_up_with_migrate() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    let script = std::fs::read_to_string(shims.dir.path().join("podman")).unwrap();
+    let script = script
+        .replace(
+            r#"if [ -f "$D/rootful" ]; then"#,
+            r#"if [ -f "$D/stale" ]; then echo "$info" | sed 's/{"container_id":1,"host_id":100000,"size":65536}//g; s/},\]/}]/g'; elif [ -f "$D/rootful" ]; then"#,
+        )
+        .replace(
+            r#""system migrate") ;;"#,
+            r#""system migrate") rm -f "$D/stale" ;;"#,
+        );
+    std::fs::write(shims.dir.path().join("podman"), script).unwrap();
+    podman_state(&shims, &["stale"]);
+    let mut o = linux_sandbox(&shims, "exit 1", yes(WriterChoice::Ollama)).await;
+    assert_eq!(
+        axocoatl_isolation::podman_report::id_range_problem(&o.facts.podman),
+        Some(axocoatl_isolation::podman_report::IdRangeProblem::NotApplied)
+    );
+    assert!(
+        sandbox::run(&mut o).await,
+        "{:?}\n{}",
+        o.steps,
+        o.ui.output()
+    );
+    let calls = shims.calls();
+    assert!(
+        calls.iter().any(|call| call == "podman system migrate"),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.starts_with("sudo")),
+        "{calls:?}"
+    );
+    assert!(
+        calls.iter().any(|call| call.starts_with("podman run")),
+        "{calls:?}"
+    );
+}
+
+/// A sandbox check container that fails in crun on ping_group_range (no
+/// group 0: keep-id had no subordinate range) is a step left with the
+/// usermod fix, not "see the log".
+#[cfg(unix)]
+#[tokio::test]
+async fn the_crun_ping_group_range_error_names_the_subuid_fix() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    let script = std::fs::read_to_string(shims.dir.path().join("podman")).unwrap();
+    std::fs::write(
+        shims.dir.path().join("podman"),
+        script.replace(
+            "  run*) echo 1000 ;;",
+            "  run*) echo 'Error: OCI runtime error: crun: write to `/proc/sys/net/ipv4/ping_group_range`: Invalid argument' >&2; exit 126 ;;",
+        ),
+    )
+    .unwrap();
+    // The files cannot tell (ranges from SSSD), so the container decides.
+    std::fs::write(shims.root.path().join("etc/nsswitch.conf"), "subid: sss\n").unwrap();
+    let mut o = linux_sandbox(&shims, "exit 1", yes(WriterChoice::Ollama)).await;
+    assert!(o.facts.podman.subordinate_ids.is_none());
+    assert!(!sandbox::run(&mut o).await);
+    assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+    assert!(
+        o.steps[0].ends_with(
+            "Invalid argument): sudo usermod --add-subuids 100000-165535 --add-subgids \
+             100000-165535 alex && podman system migrate"
+        ),
+        "{:?}",
+        o.steps
+    );
+}
+
+/// Doctor on Linux reads the files too: without the user's range it FAILs
+/// "User ID ranges" with the usermod fix (so `doctor` exits 1), although
+/// `podman info` still shows the old range; with the range it does not.
+#[cfg(unix)]
+#[tokio::test]
+async fn doctor_fails_a_missing_subuid_range_on_linux() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    shims.subordinate_ids(Some("newuser:100000:65536\n"));
+    let env = crate::doctor::Environment {
+        os: ubuntu(),
+        host: shims.host(false),
+        ..doctor_env(&shims)
+    };
+    let config_path = shims.home.path().join("config.yaml");
+    let report = crate::doctor::collect(&config_path, &env).await;
+    assert!(!report.ready);
+    let ranges = report
+        .sections
+        .sandbox
+        .iter()
+        .find(|item| item.name == "User ID ranges")
+        .unwrap_or_else(|| panic!("{:?}", report.sections.sandbox));
+    assert_eq!(ranges.status, crate::doctor::Status::Fail);
+    assert_eq!(
+        ranges.fix.as_deref(),
+        Some(
+            "sudo usermod --add-subuids 165536-231071 --add-subgids 165536-231071 alex && podman \
+             system migrate"
+        )
+    );
+    assert!(report
+        .steps_left
+        .iter()
+        .any(|step| step.contains("usermod --add-subuids")));
+
+    shims.subordinate_ids(Some("newuser:100000:65536\nalex:165536:65536\n"));
+    let report = crate::doctor::collect(&config_path, &env).await;
+    assert!(
+        !report
+            .sections
+            .sandbox
+            .iter()
+            .any(|item| item.name == "User ID ranges"),
+        "{:?}",
+        report.sections.sandbox
+    );
 }
 
 /// Ubuntu 22.04's Podman 3.4.4 is refused by name, before any install.

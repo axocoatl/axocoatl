@@ -151,7 +151,8 @@ A run's sandbox also pulls its base image and packages the first time it starts.
   no machine: install Podman 4.3 or later (4.9 is tested; Ubuntu 22.04 ships 3.4.4, which
   onboarding refuses, so Ubuntu 22.04 is not yet verified), for example `sudo apt-get install -y podman`, and give your user a range of
   subordinate ids (`sudo usermod --add-subuids 100000-165535 --add-subgids
-  100000-165535 $USER && podman system migrate`) if it has none.
+  100000-165535 $USER && podman system migrate`, or the free range `axocoatl doctor`
+  names when another user already has that one) if it has none.
 - **A writer and a different reviewer model**: Claude Code (a Claude Pro or Max plan),
   Codex (a ChatGPT plan or an OpenAI API key), a local Ollama pair, or OpenRouter
   credits. Claude Code and Codex write but do not review, so they need a reviewer on

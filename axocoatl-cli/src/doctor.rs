@@ -233,6 +233,31 @@ pub(crate) fn podman_install_fix(os: &Os) -> String {
     }
 }
 
+/// Linux: the subordinate ids `/etc/subuid` and `/etc/subgid` (under the
+/// host's root) give `user`, this process's user. `None` on macOS, where
+/// the machine has its own.
+pub(crate) fn subordinate_ids(
+    host: &crate::onboard::host::Host,
+    os: &Os,
+    user: &str,
+) -> Option<podman_report::SubordinateIds> {
+    if os.is_macos() {
+        return None;
+    }
+    let uid = {
+        #[cfg(unix)]
+        {
+            // SAFETY: getuid takes no arguments and cannot fail.
+            Some(unsafe { libc::getuid() })
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    };
+    podman_report::read_subordinate_ids(&host.root, user, uid)
+}
+
 /// The Landlock line for a Linux kernel with `abi` (`None`: no Landlock).
 pub(crate) fn landlock_item(
     abi: Option<i64>,
@@ -386,7 +411,8 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         });
 
     // ── Sandbox ──
-    let report = podman_report::inspect_with(&env.podman).await;
+    let mut report = podman_report::inspect_with(&env.podman).await;
+    report.subordinate_ids = subordinate_ids(&env.host, &env.os, &env.user);
     let e2b = config
         .as_ref()
         .is_some_and(|config| config.sandbox.backend == "e2b");
