@@ -5,9 +5,9 @@
 //! It names the built-in loadout (`fix-claude-code` or `fix-codex`), says to
 //! build the recipe image only when none is recorded, and names the reviewer:
 //! the configured `run.models.reviewer` when there is one (the command then
-//! needs no `--model`), else the `--model reviewer=…` the run needs. The
-//! command is [`crate::run_cmd::run_command`]'s, so it is the one
-//! `axocoatl loadouts show` prints.
+//! needs no `--model`), else it asks to choose one first. The command is
+//! [`crate::run_cmd::run_command`]'s, as `axocoatl loadouts show` prints
+//! it, with an example task.
 
 use std::path::Path;
 
@@ -36,10 +36,18 @@ pub(crate) fn image_recorded(data_dir: &Path, recipe: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The task the next step's command shows, to be replaced with the
+/// person's own.
+const EXAMPLE_TASK: &str = "Describe the bug";
+
 /// The next step after a sign-in for the built-in `loadout`, whose writer
 /// runs in the image of `recipe`: build the image when `image_built` is
-/// false, start the daemon, then the exact `axocoatl run` command, with the
-/// reviewer `models` gives it or the `--model reviewer=…` it needs.
+/// false, then the exact `axocoatl run` command. With a reviewer in
+/// `models`, the command runs as written once the daemon runs (restarted if
+/// it started before run.models was set). Without one, the step says to
+/// choose it first (`axocoatl onboard`, or `--model reviewer=…`), and the
+/// command is the one that runs once it is saved: it never carries a
+/// placeholder model a pasted command would send.
 pub(crate) fn next_step(
     loadout: &str,
     recipe: &str,
@@ -55,36 +63,42 @@ pub(crate) fn next_step(
     };
     let mut given = ParamValues::new();
     let defaults = apply_run_model_defaults(&found.file, models, &mut given);
+    let reviewer = defaults
+        .iter()
+        .find(|default| default.param == "reviewer_model" && default.skipped.is_none());
     let mut summary = axocoatl_daemon::bootstrap::loadout_runs::loadout_summary(&found);
-    // A parameter the configuration gives is not needed on the command line.
+    // A parameter the configuration gives is not needed on the command line,
+    // nor is the reviewer the step asks to save first.
     for param in &mut summary.params {
-        if given.contains_key(&param.name) {
+        if given.contains_key(&param.name) || param.name == "reviewer_model" {
             param.required = false;
         }
     }
-    let command = crate::run_cmd::run_command(&summary);
+    let command = crate::run_cmd::run_command(&summary).replacen(
+        "--task \"...\"",
+        &format!("--task \"{EXAMPLE_TASK}\""),
+        1,
+    );
     let build = if image_built {
         String::new()
     } else {
         format!("build the Session image once with `axocoatl recipe build {recipe}`, then ")
     };
-    let reviewer = match defaults
-        .iter()
-        .find(|default| default.param == "reviewer_model" && default.skipped.is_none())
-    {
+    match reviewer {
         Some(default) => format!(
-            " Its reviewer is {}, from run.models.reviewer in your configuration.",
+            "Next: {build}start the daemon (`axocoatl dev`; restart it if it started before \
+             run.models was set), then run in your repository: `{command}`. Its reviewer is {}, \
+             from run.models.reviewer in your configuration.",
             default.value
         ),
-        None => " Name the reviewer, a different model that only reads the change, on \
-                  Ollama (such as ollama:gpt-oss:20b) or OpenRouter; `axocoatl onboard` can \
-                  save one as run.models.reviewer, and the command then needs no --model."
-            .to_string(),
-    };
-    format!(
-        "Next: {build}start the daemon if it is not running (`axocoatl dev`), then run in your \
-         repository: `{command}`.{reviewer}"
-    )
+        None => format!(
+            "Next: {build}choose the run's reviewer, a different model that only reads the \
+             change, on Ollama or OpenRouter: `axocoatl onboard` sets one up and saves it as \
+             run.models.reviewer. Then start the daemon (`axocoatl dev`) and run in your \
+             repository: `{command}`. Or name the reviewer on the command line instead: \
+             --model reviewer=ollama:<model> or --model reviewer=openrouter:<vendor>/<model>."
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -99,8 +113,9 @@ mod tests {
     }
 
     /// Before the image is built and with no reviewer configured, the step
-    /// builds the image and names the reviewer the run needs; once both
-    /// exist, it is one command that runs as written.
+    /// builds the image and asks to choose the reviewer first, with a
+    /// command that carries no placeholder model; once both exist, it is
+    /// one command that runs as written.
     #[test]
     fn the_next_step_names_the_loadout_the_image_and_the_reviewer() {
         let step = next_step(
@@ -112,18 +127,21 @@ mod tests {
         assert_eq!(
             step,
             "Next: build the Session image once with `axocoatl recipe build claude-code`, then \
-             start the daemon if it is not running (`axocoatl dev`), then run in your \
-             repository: `axocoatl run fix-claude-code --task \"...\" --model \
-             reviewer=provider:model`. Name the reviewer, a different model that only reads the \
-             change, on Ollama (such as ollama:gpt-oss:20b) or OpenRouter; `axocoatl onboard` \
-             can save one as run.models.reviewer, and the command then needs no --model."
+             choose the run's reviewer, a different model that only reads the change, on Ollama \
+             or OpenRouter: `axocoatl onboard` sets one up and saves it as run.models.reviewer. \
+             Then start the daemon (`axocoatl dev`) and run in your repository: `axocoatl run \
+             fix-claude-code --task \"Describe the bug\"`. Or name the reviewer on the command \
+             line instead: --model reviewer=ollama:<model> or --model \
+             reviewer=openrouter:<vendor>/<model>."
         );
+        assert!(!step.contains("provider:model"), "{step}");
         let step = next_step("fix-codex", "codex", true, &reviewer("ollama:gpt-oss:20b"));
         assert_eq!(
             step,
-            "Next: start the daemon if it is not running (`axocoatl dev`), then run in your \
-             repository: `axocoatl run fix-codex --task \"...\"`. Its reviewer is \
-             ollama:gpt-oss:20b, from run.models.reviewer in your configuration."
+            "Next: start the daemon (`axocoatl dev`; restart it if it started before run.models \
+             was set), then run in your repository: `axocoatl run fix-codex --task \"Describe the \
+             bug\"`. Its reviewer is ollama:gpt-oss:20b, from run.models.reviewer in your \
+             configuration."
         );
     }
 

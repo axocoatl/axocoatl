@@ -528,7 +528,8 @@ async fn the_colored_token_is_captured_checked_and_stored_and_never_shown() {
     );
     assert!(
         next.contains("`axocoatl recipe build claude-code`")
-            && next.contains("`axocoatl run fix-claude-code --task \"...\" --model reviewer="),
+            && next.contains("`axocoatl run fix-claude-code --task \"Describe the bug\"`")
+            && next.contains("`axocoatl onboard`"),
         "{next}"
     );
     assert_eq!(fixture.stored().unwrap(), fixture.token.as_bytes());
