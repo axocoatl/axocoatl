@@ -372,7 +372,7 @@ fn yes(writer: WriterChoice) -> OnboardArgs {
 /// server.json and the brew service restarted, the pair pulled, the small
 /// context fixed in Homebrew's service environment, the run defaults
 /// written, and the same check as doctor passing.
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn a_new_mac_is_set_up_with_yes_and_ends_ready() {
     let shims = Shims::new();

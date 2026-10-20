@@ -86,17 +86,30 @@ fn onboard_usage_errors_exit_3() {
     assert!(tree(home.path()).is_empty());
 }
 
-/// The regular files under `directory` and their contents.
+/// Podman's own state under a HOME: asked for its version or state, Podman
+/// may create its settings and (on Linux) storage directories there.
+fn podmans_own(home: &Path, path: &Path) -> bool {
+    let relative = path.strip_prefix(home).unwrap();
+    relative.starts_with(".config/containers")
+        || relative.starts_with(".local/share/containers")
+        || [".config", ".local", ".local/share"]
+            .iter()
+            .any(|parent| relative == Path::new(parent))
+}
+
+/// The regular files under `directory` and their contents, leaving out
+/// Podman's own.
 fn files(directory: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     tree(directory)
         .into_iter()
-        .filter(|(path, _)| path.is_file())
+        .filter(|(path, _)| path.is_file() && !podmans_own(directory, path))
         .collect()
 }
 
 /// `--plan` prints what this computer has and what onboarding would do,
 /// and writes no file under HOME. (Podman, asked for its version or state,
-/// may create its own empty settings directories in a HOME that has none.)
+/// may create its own settings and storage directories in a HOME that has
+/// none.)
 #[test]
 fn onboard_plan_changes_nothing() {
     let home = tempfile::tempdir().unwrap();
@@ -125,15 +138,7 @@ fn onboard_plan_changes_nothing() {
     assert!(stdout.contains("would"), "{stdout}");
     assert_eq!(files(home.path()), before);
     for (path, _) in tree(home.path()) {
-        let relative = path.strip_prefix(home.path()).unwrap();
-        assert!(
-            relative.starts_with(".config/containers")
-                || relative.starts_with(".local/share/containers")
-                || [".config", ".local", ".local/share"]
-                    .iter()
-                    .any(|parent| relative == Path::new(parent)),
-            "{relative:?}"
-        );
+        assert!(podmans_own(home.path(), &path), "{path:?}");
     }
 }
 

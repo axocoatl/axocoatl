@@ -601,7 +601,10 @@ pub(crate) fn landlock_abi() -> Option<i64> {
                 LANDLOCK_CREATE_RULESET_VERSION,
             )
         };
-        (abi > 0).then_some(abi as i64)
+        // `c_long` is `i64` on the 64-bit targets Axocoatl ships for.
+        #[allow(clippy::unnecessary_cast)]
+        let abi = abi as i64;
+        (abi > 0).then_some(abi)
     }
     #[cfg(not(target_os = "linux"))]
     {
