@@ -59,10 +59,10 @@
 <span class="code-key">axocoatl receipt verify</span> receipt.json --key <span class="code-string">"$(axocoatl receipt key)"</span> --repo .
 <span class="code-comment"># exit 0: signed by this computer's key, and the files match</span></code></pre>
         </div>
-        <p class="hero-run-note">Before you start: Claude Code needs a Claude Pro or Max plan and the <code>claude</code> CLI on this computer. Every run also needs a reviewer, a different model that only reads: a local one through Ollama, or a hosted one through OpenRouter. For now, Claude Code and Codex runs support Node repositories only. <a href="https://docs.axocoatl.ai/configure/external-agents/">Set up Claude Code or Codex →</a></p>
+        <p class="hero-run-note">Before you start: Claude Code needs a Claude Pro or Max plan and the <code>claude</code> CLI on this computer. Every run also needs a reviewer, a different model that only reads: a local one through Ollama, or a hosted one through OpenRouter. For now a run installs none of the repository's dependencies, so its check must run with what the sandbox has, such as <code>node --test</code>. <a href="https://docs.axocoatl.ai/configure/external-agents/">Set up Claude Code or Codex →</a></p>
         <p class="hero-run-note">Local models only, once onboarding has set them up:</p>
         <ax-cli-snippet>axocoatl run fix --task "Paging skips the last item"</ax-cli-snippet>
-        <p class="hero-run-note">On a Mac with 48 GB of memory, <code>qwen3-coder:30b</code> writes and <code>gpt-oss:20b</code> reviews (about 33 GB to download). With less memory, use a reviewer through OpenRouter. <a href="/install#what-it-needs">What it needs and downloads →</a></p>
+        <p class="hero-run-note">On a Mac with 48 GB of memory, <code>qwen3-coder:30b</code> writes and <code>gpt-oss:20b</code> reviews (about 33 GB to download). With less memory, use OpenRouter for the reviewer (or both), or Claude Code or Codex as the writer. <a href="/install#what-it-needs">What it needs and downloads →</a></p>
       </div>
       <div class="hero-actions">
         <a class="btn btn-primary" href="/install">Install →</a>
@@ -174,7 +174,7 @@ Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211
           <span class="eyebrow">External agents</span>
           <h2>Claude Code and Codex, inside the sandbox.</h2>
           <p>The built-in <code>fix-claude-code</code> and <code>fix-codex</code> run <code>fix</code> with the pinned Claude Code CLI or Codex CLI as the writer. It runs inside the Session container as the non-root writer user, not in your shell, and the host runs the same checks and review on what it leaves.</p>
-          <p>Claude Code needs a Claude Pro or Max plan and the <code>claude</code> CLI on your computer; Codex signs in with your ChatGPT plan. For now both run in a Node image, so they support Node repositories only.</p>
+          <p>Claude Code needs a Claude Pro or Max plan and the <code>claude</code> CLI on your computer; Codex signs in with your ChatGPT plan. For now both run in a Node image and install no project dependencies, so the repository's check must run with Node.js alone, such as <code>node --test</code>.</p>
           <p>Its credential stays on your computer. <code>axocoatl connect claude-code</code> runs <code>claude setup-token</code> and stores the token without showing it; <code>axocoatl connect codex</code> runs <code>codex login</code> in a throwaway container and stores your ChatGPT sign-in. The daemon adds the credential on the host to each model request the route allows, and the container holds a placeholder. Every model call is in the Session's network record, and the program's output is parsed into the Session record.</p>
           <p>To change the model, the budgets or the checks, <a href="https://docs.axocoatl.ai/configure/external-agents/#write-your-own-loadout">write your own loadout</a> with <code>runtime: claude-code</code> or <code>runtime: codex</code>.</p>
           <a href="https://docs.axocoatl.ai/configure/external-agents/">Set up Claude Code or Codex →</a>

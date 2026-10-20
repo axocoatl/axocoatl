@@ -50,10 +50,11 @@ daemon also keeps the access token current on your computer.
 - **Podman**, which runs the program's Session container, and a **reviewer**: a
   different model that only reads, on Ollama or OpenRouter. Claude Code and Codex can
   write but cannot review.
-- **Node repositories only, for now.** Both programs run in a Node image
+- **A check that runs with Node.js alone, for now.** Both programs run in a Node image
   (`node:24-bookworm-slim` with the pinned CLI and `git`), and a run installs no project
   dependencies, so the repository's check must run with Node.js alone, such as
-  `node --test`. Python, Rust and Go checks do not work in these images yet.
+  `node --test`. A check that needs `npm ci` first (jest, mocha or vitest from
+  `devDependencies`), and Python, Rust and Go checks, do not work in these images yet.
 - The images download about 0.6 to 0.9 GB (Claude Code) and 0.8 to 1.2 GB (Codex).
 </Aside>
 

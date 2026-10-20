@@ -209,13 +209,17 @@ are unsupported. A model Axocoatl cannot run says why when Team & budget is appl
 
 ## Configure Ollama
 
-Native execution requires a loopback Ollama **0.40.6 or a later 0.40 release** that
+Native execution requires a loopback Ollama **0.40.6 or a later 0.x release** that
 reports cloud-disabled mode, and a local GGUF completion model. Axocoatl checks the
 exact model identity, loaded context, and capabilities during Team review and before
-inference. Other versions (0.20.6 included, which earlier Axocoatl releases required;
-pre-releases; 0.41 and later until Axocoatl is updated for them), remote routing, and a
-generic compatible server do not satisfy this native contract. The broader Ollama
-adapter remains available for compatibility execution.
+inference. The native guarantees were audited in the Ollama 0.40.6 source, and the
+contract probes check them on your own server and model before a Team or a run uses it.
+On a release newer than the 0.40 line (0.41 or later) a model serves only after those
+probes pass, `doctor` warns that the version is unaudited, and a run's receipt names it
+as `ollama 0.41.0 (unaudited, contract probes passed)`. Other versions (0.20.6 included,
+which earlier Axocoatl releases required; pre-releases and local builds; a new major
+release), remote routing, and a generic compatible server do not satisfy this native
+contract. The broader Ollama adapter remains available for compatibility execution.
 
 **GGUF only.** Ollama 0.40 runs every GGUF model in llama.cpp's `llama-server`, which
 holds the context Axocoatl sends as a hard limit. On Apple silicon it runs some models

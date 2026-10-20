@@ -32,7 +32,9 @@ musl-based distributions such as Alpine; use the Cargo or source path there.
     newer, or when macOS is older than version 11. It installs to
     `/usr/local/bin` when writable and otherwise to `~/.local/bin`. When that
     directory is not on your `PATH`, it asks, on the terminal, before adding one line
-    to your shell's profile, and prints that line when it cannot ask.
+    to your shell's profile, and prints that line when it cannot ask or you answer with
+    end of input (Ctrl-D). In a GitHub Actions step it adds the directory to
+    `$GITHUB_PATH` instead, for the job's later steps.
   </TabItem>
   <TabItem label="Cargo">
     ```sh
@@ -83,6 +85,15 @@ export PATH="$HOME/.local/bin:$PATH"
 curl -fsSL https://axocoatl.ai/install.sh | AXOCOATL_MODIFY_PATH=no sh
 ```
 
+`AXOCOATL_VERSION` installs a given release instead of the latest one, and
+`AXOCOATL_INSTALL_BASE_URL` (`https://` or `file://`, together with `AXOCOATL_VERSION`)
+names a directory that holds that release's archive and its `.sha256` file, such as a
+mirror or a release you built; the checksum is still required:
+
+```sh
+curl -fsSL https://axocoatl.ai/install.sh | AXOCOATL_VERSION=v1.5.0 sh
+```
+
 The binary is installed once for the current user or system. The next command,
 `axocoatl onboard`, creates user-level Axocoatl configuration and data; it does
 not create a repository or Workspace.
@@ -98,8 +109,9 @@ or change.
 - **Reviewer.** A local model on Ollama, or a hosted one paid with OpenRouter credits.
 - **Memory for local models.** The local pair, `qwen3-coder:30b` writing and
   `gpt-oss:20b` reviewing, was tested on a 48 GB Mac, one model loaded at a time. No
-  local pair has been tested with less memory: there, use a reviewer through
-  OpenRouter. `gpt-oss:120b`, the reviewer we measured, needs about 96 GB or more.
+  local pair has been tested with less memory: there, use OpenRouter for the reviewer
+  (or for both), or Claude Code or Codex as the writer. `gpt-oss:120b`, the reviewer we
+  measured, needs about 96 GB or more.
 - **Docker** is not supported; Axocoatl runs Podman, which can run alongside Docker.
 - **For `--keep pr`:** `git`, the `gh` CLI signed in, and a GitHub remote.
 

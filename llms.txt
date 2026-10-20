@@ -85,8 +85,9 @@ accept-or-reject answer with a reason to every finding), fix-claude-code and fix
 writer's model defaults to anthropic:sonnet or openai:gpt-6.1-sol and the reviewer to the
 one onboarding set up, so `axocoatl run fix-claude-code --task "..."` is the whole
 command; Claude Code needs a Claude Pro or Max plan and the claude CLI, Codex signs in
-with a ChatGPT plan, and for now both run in a Node image, so they support Node
-repositories only; the run records which stored credential it sent), qa (one browser explorer;
+with a ChatGPT plan, and for now both run in a Node image and install no project
+dependencies, so the repository's check must run with Node.js alone, such as node --test;
+the run records which stored credential it sent), qa (one browser explorer;
 each finding carries a Playwright reproduction the host re-runs, and is confirmed only
 when it fails on the build under test and passes on a clean reference build) and audit
 (opt-in: a planner splits the scope into 2 to 8 areas, read-only workers audit them in
@@ -149,10 +150,16 @@ axocoatl onboard
 axocoatl doctor
 axocoatl dev
 
-# Then, in a repository, from another shell: a fix with the models onboarding set up.
+# Then, in a repository, from another shell: a fix with the writer and the reviewer
+# onboarding set up. That is `run fix` for a local or OpenRouter writer; with Claude Code
+# or Codex as the writer, run `fix-claude-code` or `fix-codex` with the same flags.
 axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" --receipt run.receipt.json
 axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo .
 ```
+
+For now a run installs none of the repository's dependencies, so its check must run with
+what the sandbox image has, such as `node --test` or a shell script; a check that needs
+`npm ci` first, pytest, cargo or go does not work yet.
 
 Open the sign-in link `axocoatl dev` prints (or run `axocoatl url`). The default
 listener is loopback-only, and its API requires a per-daemon token.
@@ -167,8 +174,9 @@ newer. Native Windows is not a release target; Windows users run Axocoatl inside
 verified).
 
 Tested: end to end on macOS 26 on Apple silicon with rootless Podman 5.8 (the local pair,
-qwen3-coder:30b writing and gpt-oss:20b reviewing, on a 48 GB Mac; with less memory, use a
-reviewer through OpenRouter), and in CI on Ubuntu 24.04 on x86_64 with rootless Podman
+qwen3-coder:30b writing and gpt-oss:20b reviewing on Ollama 0.40.6, on a 48 GB Mac; with
+less memory, use OpenRouter for the reviewer or both, or Claude Code or Codex as the
+writer), and in CI on Ubuntu 24.04 on x86_64 with rootless Podman
 4.9.3 against a stub model server. Not yet verified: Intel Macs, Podman 6, arm64 Linux,
 Ubuntu 22.04, Debian 12, Fedora with SELinux, and WSL2 on Windows. Docker is not
 supported; Podman can run alongside it. The first daemon start downloads an 87 MB

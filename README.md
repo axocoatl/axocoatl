@@ -18,18 +18,27 @@ axocoatl doctor    # check the sandbox, the models, the writers and the daemon
 axocoatl dev       # start the daemon and leave it running
 
 cd ~/src/my-app    # then, in another shell
+# With a local or OpenRouter writer; with Claude Code or Codex, run fix-claude-code or fix-codex
 axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" \
   --junit axocoatl-junit.xml --record run.axorecord.jsonl --receipt run.receipt.json
 axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo .
 ```
 
-`axocoatl run fix` uses the writer and the reviewer onboarding set up; `--model writer=…` or
-`--model reviewer=…` chooses another for one run. On a Mac with 48 GB of memory,
-onboarding offers `qwen3-coder:30b` (19 GB) to write and `gpt-oss:20b` (14 GB) to review,
-on Ollama 0.40.6 or a later 0.40 release. That pair has run end to end on a 48 GB Mac;
-`gpt-oss:20b` as reviewer has not been measured. The reviewer in the measurements below,
-`gpt-oss:120b` (65 GB), needs about 96 GB of memory or more. With less memory, use a
-reviewer through OpenRouter. What each path needs and downloads is on
+Run the loadout that matches the writer you chose in onboarding: `axocoatl run fix` for a
+local or OpenRouter writer, `axocoatl run fix-claude-code` or `axocoatl run fix-codex`,
+with the same flags, for Claude Code or Codex. Each uses the reviewer onboarding set up;
+`--model writer=…` or `--model reviewer=…` chooses another for one run. For now a run
+installs none of the repository's dependencies, so its check must run with what the
+sandbox image has, such as `node --test` or a shell script; a check that needs `npm ci`
+first, pytest, cargo or go does not work yet
+([which repositories work today](https://docs.axocoatl.ai/workbench/fix-qa-audit/#fix)).
+
+On a Mac with 48 GB of memory, onboarding offers `qwen3-coder:30b` (19 GB) to write and
+`gpt-oss:20b` (14 GB) to review, on Ollama 0.40.6 or a later 0.x release. That pair has run end to end on
+a 48 GB Mac; `gpt-oss:20b` as reviewer has not been measured. The reviewer in the
+measurements below, `gpt-oss:120b` (65 GB), needs about 96 GB of memory or more. With less
+memory, use OpenRouter for the reviewer (or for both), or Claude Code or Codex as the
+writer. What each path needs and downloads is on
 [the install page](https://axocoatl.ai/install#what-it-needs).
 
 The summary one real run printed on standard output (progress goes to standard error):
@@ -58,8 +67,9 @@ Record: run-f2e15292-1497-4c77-a1d8-858da9e35630
   in through your browser (`axocoatl connect claude-code` runs `claude setup-token`;
   `axocoatl connect codex` your ChatGPT sign-in) and stores the credential on your computer
   without showing it; the daemon adds it on the host to each model request, and the
-  container holds a placeholder. For now both run in a Node image, so they support Node
-  repositories only. To change the model, the budgets or the checks,
+  container holds a placeholder. For now both run in a Node image and install no project
+  dependencies, so the repository's check must run with Node.js alone, such as
+  `node --test`. To change the model, the budgets or the checks,
   [write your own loadout](https://docs.axocoatl.ai/configure/external-agents/#write-your-own-loadout).
 
 <p align="center">
@@ -336,9 +346,11 @@ models included, paid with OpenRouter credits. OpenRouter requires
 `providers.openrouter_billing: credits`, a normal API key, and an account with no
 connected BYOK provider keys. BYOK is not supported. A compatible HTTP API alone does not establish a bound.
 Axocoatl's own Agents, in runs and native Sessions, use Ollama or OpenRouter. For Ollama, onboarding
-checks that the server is a loopback Ollama 0.40.6 or a later 0.40 release with its
+checks that the server is a loopback Ollama 0.40.6 or a later 0.x release with its
 cloud features disabled (`OLLAMA_NO_CLOUD=1`, or `{"disable_ollama_cloud": true}` in
-`~/.ollama/server.json`), and suggests Lead and Reviewer models from the GGUF models
+`~/.ollama/server.json`); a release newer than the audited 0.40 line serves a model only
+after the contract probes pass for that model, and a run's receipt marks it unaudited. It
+suggests Lead and Reviewer models from the GGUF models
 installed on it (`qwen3-coder:30b` and `gpt-oss:20b` when none is); `axocoatl doctor`
 reports the same requirements. Native Sessions run only GGUF models, which Ollama runs
 in llama.cpp's `llama-server`: on Apple silicon, a model Ollama runs with MLX is

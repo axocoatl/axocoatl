@@ -73,7 +73,9 @@ outcome panel, the [pull request body](/workbench/keep-as-pr/) and the record.
 The run passes (exit code 0) when the check passes on the final result, the reviewer
 approves that result, and every finding the host sent back was answered.
 
-Without `--model`, a run uses the writer and the reviewer `axocoatl onboard` set up.
+Without `--model`, `fix` uses the writer and the reviewer `axocoatl onboard` set up when
+you chose a local or OpenRouter writer; with Claude Code or Codex as the writer, run
+`fix-claude-code` or `fix-codex` ([below](#with-claude-code-or-codex-as-the-writer)).
 
 <Aside title="Which repositories work today">
 The check runs inside the run's sandbox image. `fix` uses a small Alpine Linux image with
@@ -86,15 +88,17 @@ go cannot yet. Name the check with `--check` when Axocoatl detects none.
 ### With Claude Code or Codex as the writer
 
 ```sh
-axocoatl run fix-claude-code --task "…" --model reviewer=ollama:gpt-oss:20b
-axocoatl run fix-codex --task "…" --model reviewer=ollama:gpt-oss:20b
+axocoatl run fix-claude-code --task "Paging skips the last item"
+axocoatl run fix-codex --task "Paging skips the last item"
 ```
 
 `fix-claude-code` and `fix-codex` run the same turn with the pinned Claude Code or Codex
 CLI as the writer, inside the Session container, from its recipe image (a Node image, so
-for now Node repositories only): the same check,
+for now the check must run with Node.js alone): the same check,
 the same review for up to 3 rounds and the same adjudications. The writer's model has a
-default (`anthropic:sonnet`, `openai:gpt-6.1-sol`), so a run names only the reviewer;
+default (`anthropic:sonnet`, `openai:gpt-6.1-sol`), so a run needs only a reviewer, which
+onboarding sets up; `--model reviewer=…`, such as `--model reviewer=ollama:gpt-oss:20b`,
+names another for one run;
 `fix-codex` sends an OpenAI API key when one is stored, else your ChatGPT sign-in
 (`credential: auto`), and the run's notes say which. Building the image, connecting the
 account and the budgets are in [External agents](/configure/external-agents/#run-claude-code-or-codex).
