@@ -183,6 +183,19 @@ export async function newAuthorizedContext(browser, options) {
   return authorizeContext(await browser.newContext(options));
 }
 
+// WebKit logs a refused or cancelled load ("Fetch API cannot load <url> due
+// to access control checks.") and a cross-origin frame read that returned
+// null ("Blocked a frame with origin … from accessing a frame with origin
+// …") to the console, and Playwright reports each line as a page error even
+// when the page handled it. They are diagnostics, not exceptions: an
+// unhandled rejection or an uncaught SecurityError is reported separately
+// ("Unhandled Promise Rejection", "SecurityError") and still counts.
+// Playwright splits these lines at the URL's colon, so the diagnostic is in
+// the error's name.
+export function isWebKitLoadDiagnostic(error) {
+  return /^(Fetch API cannot load|XMLHttpRequest cannot load|Blocked a frame with origin) /.test(error?.name || '');
+}
+
 // Wait until no CSS transition runs in the page or in any shadow root, so
 // computed colors are read at their end values. Controls ease their colors,
 // and the components' reduced-motion sheet makes every property change a

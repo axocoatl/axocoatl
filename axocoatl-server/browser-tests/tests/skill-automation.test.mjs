@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
 
-import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext } from '../support/daemon.mjs';
+import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext, isWebKitLoadDiagnostic } from '../support/daemon.mjs';
 
 let runtime;
 let browser;
@@ -97,7 +97,9 @@ async function openSession(session) {
   const context = await newAuthorizedContext(browser, { viewport: { width: 1400, height: 900 } });
   const page = await context.newPage();
   const browserErrors = [];
-  page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`));
+  page.on('pageerror', (error) => {
+    if (!isWebKitLoadDiagnostic(error)) browserErrors.push(`pageerror: ${error.message}`);
+  });
   await page.goto(`${runtime.baseUrl}/?session=${encodeURIComponent(session.id)}`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction((sessionId) => {
     const rail = document.querySelector('ax-rail');

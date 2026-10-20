@@ -40,6 +40,13 @@ harness reads that file and registers the daemon for the test process:
   after `goto`;
 - Node `WebSocket` clients pass the header explicitly with `runtime.token`.
 
+Two helpers keep journeys engine-neutral. `settleTransitions(page)` waits two
+frames and then until no CSS transition runs, before a test reads computed
+colors. `isWebKitLoadDiagnostic(error)` recognizes the console lines WebKit
+reports as page errors for a load it refused or cancelled, or for a
+cross-origin frame read that returned null; an unhandled rejection or an
+uncaught `SecurityError` is reported separately and still fails a journey.
+
 `runtime.fetchWithoutToken`, `runtime.signInUrl`, and a plain
 `browser.newContext()` exercise the signed-out paths; `local-api-token.test.mjs`
 covers the real sign-in link. The daemon runs in its temporary directory with a

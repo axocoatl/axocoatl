@@ -4,7 +4,9 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
-import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext, settleTransitions } from '../support/daemon.mjs';
+import {
+  launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext, settleTransitions, isWebKitLoadDiagnostic,
+} from '../support/daemon.mjs';
 
 test('a reconnect snapshot preserves its already-owned cold runtime preparation request', async () => {
   const session = readySessionFixture(runtime.fixtures.alpha.sessions[0]);
@@ -73,9 +75,13 @@ function requestPathname(request) {
   try { return new URL(request.url).pathname; } catch { return ''; }
 }
 
+// How a request the page aborted fails: `net::ERR_ABORTED` in Chromium,
+// `cancelled` in WebKit.
+const ABORTED_REQUEST_ERRORS = ['net::ERR_ABORTED', 'cancelled'];
+
 function isAbortedGet(request, pathname) {
   return request.method === 'GET'
-    && request.error === 'net::ERR_ABORTED'
+    && ABORTED_REQUEST_ERRORS.includes(request.error)
     && requestPathname(request) === pathname;
 }
 
@@ -143,7 +149,9 @@ async function openSessionInContext(context, session, targetRuntime, beforeGoto)
   const browserResponses = [];
   const requestFailures = [];
   const consoleMessages = [];
-  page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`));
+  page.on('pageerror', (error) => {
+    if (!isWebKitLoadDiagnostic(error)) browserErrors.push(`pageerror: ${error.message}`);
+  });
   page.on('console', (message) => {
     if (message.type() === 'error' || message.type() === 'warning') {
       consoleMessages.push(`${message.type()}: ${message.text()}`);
@@ -2680,13 +2688,18 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
             });
             const compressed = await fetch('/compressed.json').then((response) => response.json());
             globalThis.__fixtureStage = 'encoding';
-            let controlWritable = false;
+            // A blind write gets a network error (Chromium refuses it) or an
+            // opaque response the Preview cannot read (WebKit sends it and the
+            // main-origin guard refuses it with 403, asserted below); never a
+            // response the Preview can read.
+            let controlWrite = 'rejected';
             try {
               const response = await fetch(${JSON.stringify(`${runtime.baseUrl}${rebuildPath}`)}, {
                 method: 'POST', mode: 'no-cors', body: 'blind-write',
               });
               await response.text();
-              controlWritable = true;
+              controlWrite = response.type === 'opaque' && response.status === 0
+                ? 'opaque' : 'readable ' + response.type + ' ' + response.status;
             } catch {}
             globalThis.__fixtureStage = 'control-write';
             let controlReadable = false;
@@ -2725,7 +2738,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
                 moduleValue, fetched, xhr, form, asset, compressed, hmr,
                 storage, styled,
                 sourceHasHostCookie,
-                parentReadable, controlReadable, controlWritable, crossPreviewWritable,
+                parentReadable, controlReadable, controlWrite, crossPreviewWritable,
                 origin: location.origin,
               };
               globalThis.__fixtureStage = 'done';
@@ -2836,7 +2849,9 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
       ].join('\n'));
     }
 
-    assert.deepEqual(await previewFrame.evaluate(() => globalThis.__previewFunctionalResult), {
+    const { controlWrite, ...previewResult } = await previewFrame.evaluate(() => globalThis.__previewFunctionalResult);
+    assert.ok(['rejected', 'opaque'].includes(controlWrite), `a blind control write gave the Preview: ${controlWrite}`);
+    assert.deepEqual(previewResult, {
       moduleValue: 'module-ok',
       fetched: { method: 'POST', body: 'fetch-body' },
       xhr: 'xhr-ok',
@@ -2849,7 +2864,6 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
       sourceHasHostCookie: false,
       parentReadable: false,
       controlReadable: false,
-      controlWritable: false,
       crossPreviewWritable: false,
       origin: previewOrigin,
     });
@@ -2877,6 +2891,8 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
       'the no-CORS blind write must reach the main-origin guard',
     );
     assert.ok(controlResponses.every((status) => status === 403));
+    // Where the write was sent, the guard answered it, with 403.
+    if (controlWrite === 'opaque') assert.deepEqual(controlResponses, [403]);
 
     await page.locator('[data-session-view="browser"]').click();
     await page.locator('#bx-pick').click();
