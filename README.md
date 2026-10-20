@@ -48,7 +48,7 @@ on a 48 GB Mac. It shows the format, not a measurement.
 
 ```text
 Verdict: pass (exit 0)
-Loadout: fix@1 sha256:b579bd67515486bebaf28d2bbfc76853260abef7623a05d2d5f83c1593cc9b41
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
 Checks:
   tests            passed, exit 0
 Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b

@@ -228,6 +228,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   obfuscation turned it, and `e2e@0.18.0`, into "[email protected]" on the served page.
   Every built docs page now wraps its body in `<!--email_off-->`, which Cloudflare leaves
   alone, and the docs gate refuses a page without it.
+- **The fix loadouts' writer cleans up before its final answer.** The writer instructions
+  of `fix`, `fix-claude-code` and `fix-codex` now also say to leave no file created only
+  for testing or debugging (scratch scripts, test binaries such as `go test -c` output,
+  build outputs, reports), to delete them, and to run the project's check command one
+  last time before the final answer. On a clean Mac a Go fix run wrote a correct fix but
+  left a `test_fix.go` of package `main` beside the package, so `go test ./...` failed
+  with "found packages pages and main" and the run ended `checks_failed`. The three
+  loadouts' digests change with their text.
 
 ### Added
 - **Runs get the repository's toolchain and dependencies, and a run whose check cannot

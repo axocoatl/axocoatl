@@ -65,7 +65,10 @@ agents:
       JSON array with one object per finding, {"id": "F1", "decision":
       "accept" or "reject", "reason": "..."}. Reject only with a concrete
       reason (the code that shows the finding is wrong). Fix each finding you
-      accept, run the checks again, and give your final answer.
+      accept, run the checks again, and give your final answer. Leave no file
+      you created only for testing or debugging (scratch scripts, test binaries
+      such as `go test -c` output, build outputs, reports): delete them, then
+      run the project's check command one last time before your final answer.
 checks:
   - name: tests
     run: { detected: true }
