@@ -71,7 +71,7 @@ pub(crate) async fn run(o: &mut Onboarding) -> bool {
         if !ready {
             o.step_left(format!(
                 "Set up Podman: {}",
-                crate::doctor::podman_install_fix(&o.facts.os)
+                crate::doctor::podman_install_fix(&o.facts.os, o.facts.brew.is_some())
             ));
         }
         return ready;
@@ -219,7 +219,10 @@ async fn install(o: &mut Onboarding) -> bool {
     match o.facts.os.clone() {
         Os::MacOs { apple_silicon, .. } => {
             if !apple_silicon {
-                o.step_left(crate::doctor::podman_install_fix(&o.facts.os));
+                o.step_left(crate::doctor::podman_install_fix(
+                    &o.facts.os,
+                    o.facts.brew.is_some(),
+                ));
                 return false;
             }
             if o.facts.brew.is_none() {

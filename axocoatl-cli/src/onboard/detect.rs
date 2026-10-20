@@ -525,10 +525,7 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str, check_port_8080: bool)
         Some(probe) if probe.success => first_word_version(&probe.stdout),
         _ => None,
     };
-    let brew = match host.probe("brew", &["--version"]).await {
-        Some(probe) if probe.success => probe.stdout.lines().next().and_then(first_word_version),
-        _ => None,
-    };
+    let brew = homebrew_version(host).await;
     let podman_path = host.find("podman");
     let user = current_user();
     let mut podman = match &podman_path {
@@ -605,6 +602,19 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str, check_port_8080: bool)
         xdg_config_home,
         landlock_abi: landlock_abi(),
         os,
+    }
+}
+
+/// `brew --version`, on macOS only, where onboarding installs Podman and
+/// Ollama with Homebrew. On Linux nothing runs `brew`, or any package
+/// manager, except an install the user agreed to.
+pub(crate) async fn homebrew_version(host: &Host) -> Option<String> {
+    if !host.macos {
+        return None;
+    }
+    match host.probe("brew", &["--version"]).await {
+        Some(probe) if probe.success => probe.stdout.lines().next().and_then(first_word_version),
+        _ => None,
     }
 }
 
@@ -946,6 +956,23 @@ mod tests {
         .unwrap();
         assert_eq!(ollama_service(&linux, None, 11434), OllamaService::Manual);
         assert_eq!(ollama_service(&linux, None, 11445), OllamaService::Systemd);
+    }
+
+    /// Linux onboarding never runs `brew`, even when one is on PATH (the
+    /// release gate's guard shims put one there); macOS asks it its
+    /// version.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn only_macos_runs_brew() {
+        let shims = Shims::new();
+        shims.add("brew", "echo 'Homebrew 7.0.10'");
+        assert_eq!(homebrew_version(&shims.host(false)).await, None);
+        assert!(shims.calls().is_empty(), "{:?}", shims.calls());
+        assert_eq!(
+            homebrew_version(&shims.host(true)).await.as_deref(),
+            Some("7.0.10")
+        );
+        assert_eq!(shims.calls(), ["brew --version"]);
     }
 
     #[test]

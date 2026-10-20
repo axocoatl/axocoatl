@@ -196,7 +196,10 @@ impl Environment {
         Platform {
             machine: self.os.is_macos(),
             user: self.user.clone(),
-            install_fix: podman_install_fix(&self.os),
+            install_fix: podman_install_fix(
+                &self.os,
+                self.os.is_macos() && self.host.find("brew").is_some(),
+            ),
             too_old_note: self
                 .os
                 .release()
@@ -207,8 +210,9 @@ impl Environment {
     }
 }
 
-/// How to install Podman here.
-pub(crate) fn podman_install_fix(os: &Os) -> String {
+/// How to install Podman here; `homebrew`: Homebrew is installed (macOS),
+/// so onboarding can install Podman with it.
+pub(crate) fn podman_install_fix(os: &Os, homebrew: bool) -> String {
     match os {
         Os::MacOs {
             apple_silicon: false,
@@ -217,10 +221,14 @@ pub(crate) fn podman_install_fix(os: &Os) -> String {
               5.8 amd64 package from https://github.com/containers/podman/releases (Axocoatl has \
               not been tested on Intel Macs), then run `axocoatl onboard`"
             .to_string(),
-        Os::MacOs { .. } => {
+        Os::MacOs { .. } if homebrew => {
             "Run `axocoatl onboard` (it installs Podman after asking), or: brew install podman"
                 .to_string()
         }
+        Os::MacOs { .. } => "Install Podman with the installer from https://podman.io (or \
+                             install Homebrew and run `brew install podman`), then run \
+                             `axocoatl onboard`"
+            .to_string(),
         Os::Linux { release, .. } => match release.package_manager() {
             Some(manager) => format!(
                 "Run `axocoatl onboard` (it installs Podman after asking), or: {}",
@@ -1512,25 +1520,42 @@ mod tests {
 
     #[test]
     fn podman_install_fixes_follow_the_platform() {
-        let intel = podman_install_fix(&Os::MacOs {
+        let intel_mac = Os::MacOs {
             version: None,
             apple_silicon: false,
             chip: None,
-        });
-        assert!(intel.contains("Podman 6 no longer supports Intel Macs"));
-        assert!(!intel.contains("brew install"));
-        let arm = podman_install_fix(&Os::MacOs {
+        };
+        for homebrew in [true, false] {
+            let intel = podman_install_fix(&intel_mac, homebrew);
+            assert!(intel.contains("Podman 6 no longer supports Intel Macs"));
+            assert!(!intel.contains("brew install"));
+        }
+        let mac = Os::MacOs {
             version: None,
             apple_silicon: true,
             chip: None,
-        });
+        };
+        let arm = podman_install_fix(&mac, true);
+        assert!(arm.contains("it installs Podman after asking"), "{arm}");
         assert!(arm.contains("brew install podman"));
-        let ubuntu = podman_install_fix(&Os::Linux {
+        // Without Homebrew onboarding cannot install Podman: the installer.
+        let no_brew = podman_install_fix(&mac, false);
+        assert!(no_brew.starts_with("Install Podman with the installer from https://podman.io"));
+        assert!(
+            no_brew.ends_with("then run `axocoatl onboard`"),
+            "{no_brew}"
+        );
+        assert!(!no_brew.contains("it installs Podman"), "{no_brew}");
+        let ubuntu = Os::Linux {
             release: detect::OsRelease::parse("ID=ubuntu\nID_LIKE=debian\n"),
             wsl: None,
             systemd: true,
-        });
-        assert!(ubuntu.ends_with("sudo apt-get install -y podman"));
+        };
+        for homebrew in [true, false] {
+            let fix = podman_install_fix(&ubuntu, homebrew);
+            assert!(fix.ends_with("sudo apt-get install -y podman"), "{fix}");
+            assert!(!fix.contains("brew"), "{fix}");
+        }
     }
 
     #[test]

@@ -2632,3 +2632,52 @@ fn doctor_env(shims: &Shims) -> crate::doctor::Environment {
         landlock_abi: Some(6),
     }
 }
+
+/// A Mac with neither Podman nor Homebrew: onboarding, --plan included,
+/// points to the installer from podman.io and asks for onboard to run again;
+/// it runs nothing and writes nothing.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_mac_without_homebrew_is_pointed_to_the_podman_installer() {
+    for mode in [Mode::Plan, Mode::Yes] {
+        let shims = Shims::new();
+        ollama_shim(&shims);
+        let ollama = FakeOllama::start("0.40.6", shims.home.path(), shims.dir.path(), &[]).await;
+        let facts = facts(
+            mac("26.6"),
+            48,
+            no_podman(),
+            &shims,
+            &ollama.url(),
+            OllamaService::Manual,
+        )
+        .await;
+        assert_eq!(facts.brew, None);
+        let plan = mode == Mode::Plan;
+        let mut o = onboarding(
+            &shims,
+            Ui::new(mode, false, None),
+            facts,
+            OnboardArgs {
+                plan,
+                yes: !plan,
+                writer: Some(WriterChoice::Ollama),
+                ollama_url: Some(ollama.url()),
+                start: Some(StartChoice::None),
+                ..OnboardArgs::default()
+            },
+        );
+        let before = tree(shims.home.path());
+        assert!(!sandbox::run(&mut o).await);
+        let output = o.ui.output();
+        assert_eq!(
+            o.steps,
+            ["Install Podman with the installer from https://podman.io (or install Homebrew and \
+              run `brew install podman`), then run `axocoatl onboard` again"],
+            "{output}"
+        );
+        assert!(output.contains("https://podman.io"), "{output}");
+        assert!(shims.calls().is_empty(), "{:?}", shims.calls());
+        assert_eq!(tree(shims.home.path()), before);
+    }
+}
