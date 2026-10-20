@@ -215,11 +215,14 @@ built; until they land, Tier A fails at the first step that needs them:
   ready with steps listed, 3 usage), and its writing of `run.models` and
   `server.port`;
 - `axocoatl doctor --json` (`{"ready", "sections": {"sandbox", "models",
-  "writers", "daemon"}}`, items `{"name", "status", "detail", "fix"}`);
+  "writers", "daemon"}}`, items `{"name", "status", "detail", "fix"}`), the
+  document alone on standard output (logs may go to standard error), exit 0
+  when ready and 1 when not;
 - run defaults from `run.models`, admission that refuses an absent check
-  program and a reviewer that cannot review with exit 3 before any model call,
-  and the run's `image: … · check: … · setup: …` start line with the image
-  chosen by detection;
+  program and a reviewer that cannot review with exit 3 before any model call
+  (and, for the reviewer, before any Session: `axocoatl session list` must
+  not change), and the run's `image: … · check: … · setup: …` start line
+  with the image chosen by detection;
 - the `node-plain` fixture (onboarding's first-run sample) and its entry in
   `stub-fixes.json` (a provisional entry is there; the stub's tests fail until
   it matches the real fixture);
