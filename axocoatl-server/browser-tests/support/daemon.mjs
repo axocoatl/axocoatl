@@ -183,6 +183,27 @@ export async function newAuthorizedContext(browser, options) {
   return authorizeContext(await browser.newContext(options));
 }
 
+// Wait until no CSS transition runs in the page or in any shadow root, so
+// computed colors are read at their end values. Controls ease their colors,
+// and the components' reduced-motion sheet makes every property change a
+// 0.001 ms transition, which WebKit reports at its start value until the
+// next rendering update; a fixed delay can still read a busy machine
+// mid-transition. Two frames let the change start (or, in WebKit, apply)
+// its transitions, then the wait covers any that are still running.
+export async function settleTransitions(page) {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await page.waitForFunction(() => {
+    const roots = [document];
+    for (let index = 0; index < roots.length; index += 1) {
+      for (const element of roots[index].querySelectorAll('*')) {
+        if (element.shadowRoot) roots.push(element.shadowRoot);
+      }
+    }
+    return roots.every((root) => root.getAnimations()
+      .every((animation) => !(animation instanceof CSSTransition) || animation.playState !== 'running'));
+  });
+}
+
 async function api(baseUrl, method, pathname, body) {
   const headers = new Headers();
   if (body !== undefined) headers.set('content-type', 'application/json');

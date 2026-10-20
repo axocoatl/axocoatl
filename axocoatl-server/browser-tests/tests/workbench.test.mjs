@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
-import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext } from '../support/daemon.mjs';
+import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext, settleTransitions } from '../support/daemon.mjs';
 
 test('a reconnect snapshot preserves its already-owned cold runtime preparation request', async () => {
   const session = readySessionFixture(runtime.fixtures.alpha.sessions[0]);
@@ -467,7 +467,9 @@ test('enabled composer controls inherit readable light and dark theme tokens', a
 
     for (const theme of ['dark', 'light']) {
       await page.evaluate((selectedTheme) => setThemePref(selectedTheme), theme);
-      await page.waitForTimeout(200);
+      // Controls ease their colors (`transition: color .15s`): read them once
+      // every transition the theme change started has ended.
+      await settleTransitions(page);
       const colors = await page.evaluate(() => {
         const resolveColor = (token) => {
           const probe = document.createElement('span');
