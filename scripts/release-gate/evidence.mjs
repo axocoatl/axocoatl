@@ -20,6 +20,11 @@
 //            [--attach REL]...
 //   manifest <bundle-dir> --version V --commit C
 //   verify-bundle <bundle-dir> --keys FILE [--version V] [--commit C]
+//            [--required docs/RELEASE_GATE.md --root DIR]
+//            without --required every path in the bundle must pass; with
+//            it, the bundle passes when it verifies and every required path
+//            passes (other failing paths are warnings), as release.yml
+//            decides
 //   compare <previous-path.json> <path.json>   time and download vs the
 //            previous release, flagging growth over 20%
 
@@ -318,9 +323,10 @@ function git(root, ...args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-/** What may change between the tested commit and the tag: evidence and the gate keys. */
+/** What may change between the tested commit and the tag: evidence and the gate's own lists. */
 export const GATE_KEYS_FILE = '.axocoatl/gate-keys';
-const evidenceOnly = (file) => file.startsWith(`${EVIDENCE_ROOT}/`) || file === GATE_KEYS_FILE;
+export const OVERRIDE_ACTORS_FILE = '.axocoatl/gate-override-actors';
+const evidenceOnly = (file) => file.startsWith(`${EVIDENCE_ROOT}/`) || file === GATE_KEYS_FILE || file === OVERRIDE_ACTORS_FILE;
 
 /**
  * Whether a bundle for `commit` is evidence for `tagCommit`: the same commit,
@@ -342,7 +348,7 @@ export function commitMatches(root, commit, tagCommit) {
   const changed = git(root, 'diff', '--name-only', '--no-renames', commit, tagCommit)
     .split('\n').filter(Boolean).filter((file) => !evidenceOnly(file));
   if (changed.length > 0) {
-    return { ok: false, reason: `the tag changes ${changed.length} file(s) after ${commit.slice(0, 12)} outside ${EVIDENCE_ROOT}/ and ${GATE_KEYS_FILE}: ${changed.slice(0, 5).join(', ')}${changed.length > 5 ? ', ...' : ''}` };
+    return { ok: false, reason: `the tag changes ${changed.length} file(s) after ${commit.slice(0, 12)} outside ${EVIDENCE_ROOT}/, ${GATE_KEYS_FILE} and ${OVERRIDE_ACTORS_FILE}: ${changed.slice(0, 5).join(', ')}${changed.length > 5 ? ', ...' : ''}` };
   }
   return { ok: true };
 }
@@ -352,19 +358,66 @@ export function overridePhrase(version) {
   return `publish v${version} without the new-user gate`;
 }
 
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+
+/**
+ * The GitHub logins a gate-override-actors file lists (one per line, `#`
+ * comments allowed), lowercased; a line that is not a login is an error.
+ */
+export function parseActors(text) {
+  const actors = [];
+  text.split('\n').forEach((line, index) => {
+    const login = line.replace(/#.*$/, '').trim();
+    if (!login) return;
+    if (!GITHUB_LOGIN.test(login)) throw new Error(`line ${index + 1}: ${JSON.stringify(login.slice(0, 40))} is not a GitHub login`);
+    actors.push(login.toLowerCase());
+  });
+  return actors;
+}
+
+/**
+ * The paths a release needs: every `always` path, and the C2 paths when the
+ * public copy names 16 GB. Returns `{ needed, mentions }`.
+ */
+export function neededPaths(root, requiredFile) {
+  const required = parseRequiredPaths(readFileSync(requiredFile, 'utf8'));
+  const mentions = sixteenGbMentions(root);
+  return {
+    needed: required.filter((entry) => entry.when === 'always' || mentions.length > 0).map((entry) => entry.name),
+    mentions,
+  };
+}
+
+/**
+ * One bundle judged as the release judges it: it must verify, and every
+ * needed path must be in it and pass. Paths it holds that the release does
+ * not need may fail; they are listed as `extraFailing`.
+ */
+export function bundleDecision(dir, { keys, version, commit, needed }) {
+  const bundle = verifyBundle(dir, { keys, version, commit });
+  const missing = needed.filter((name) => !bundle.paths.has(name));
+  const failing = needed.filter((name) => bundle.paths.has(name) && !bundle.paths.get(name).pass);
+  const extraFailing = [...bundle.paths.keys()].filter((name) => !needed.includes(name) && !bundle.paths.get(name).pass);
+  return {
+    ...bundle, missing, failing, extraFailing,
+    ok: bundle.problems.length === 0 && missing.length === 0 && failing.length === 0,
+  };
+}
+
 /**
  * The release decision for `version` at `tagCommit`: `{ ok, status, lines }`,
  * `status` one of `pass`, `fail`, `overridden`.
  */
-export function decideRelease({ root, version, tagCommit, keysFile, requiredFile, override = '', event = '', actor = '' }) {
+export function decideRelease({
+  root, version, tagCommit, keysFile, requiredFile, overrideActorsFile = path.join(root, OVERRIDE_ACTORS_FILE),
+  override = '', event = '', actor = '', triggeringActor = '',
+}) {
   const lines = [];
   const fail = (reason) => ({ ok: false, status: 'fail', lines: [...lines, reason] });
   if (!VERSION.test(version ?? '')) return fail(`invalid version ${JSON.stringify(version)}`);
   if (!COMMIT.test(tagCommit ?? '')) return fail(`invalid tag commit ${JSON.stringify(tagCommit)}`);
   const evaluate = () => {
-    const required = parseRequiredPaths(readFileSync(requiredFile, 'utf8'));
-    const mentions = sixteenGbMentions(root);
-    const needed = required.filter((entry) => entry.when === 'always' || mentions.length > 0).map((entry) => entry.name);
+    const { needed, mentions } = neededPaths(root, requiredFile);
     if (mentions.length > 0) lines.push(`The public copy names 16 GB (${mentions.slice(0, 5).join(', ')}), so the C2 paths are required.`);
     const problems = [];
     let keys = [];
@@ -389,11 +442,10 @@ export function decideRelease({ root, version, tagCommit, keysFile, requiredFile
         problems.push(`${EVIDENCE_ROOT}/${version}/${commit}: ${match.reason}`);
         continue;
       }
-      const bundle = verifyBundle(path.join(versionDir, commit), { keys, version, commit });
-      const missing = needed.filter((name) => !bundle.paths.has(name));
-      const failing = needed.filter((name) => bundle.paths.has(name) && !bundle.paths.get(name).pass);
+      const bundle = bundleDecision(path.join(versionDir, commit), { keys, version, commit, needed });
+      const { missing, failing } = bundle;
       const result = { commit, bundle, missing, failing };
-      if (bundle.problems.length === 0 && missing.length === 0 && failing.length === 0) {
+      if (bundle.ok) {
         return { ok: true, result, needed, problems };
       }
       if (!best || missing.length + failing.length < best.missing.length + best.failing.length) best = result;
@@ -431,7 +483,27 @@ export function decideRelease({ root, version, tagCommit, keysFile, requiredFile
     lines.unshift('New-user gate: FAIL: the override phrase does not match the one docs/RELEASE_GATE.md gives for this version.');
     return { ok: false, status: 'fail', lines };
   }
-  lines.unshift(`New-user gate: OVERRIDDEN for v${version} at ${tagCommit.slice(0, 12)} by ${actor || 'an unnamed actor'}, who typed the override phrase. This release is published WITHOUT complete new-user evidence:`);
+  // Only a login listed in the tagged commit's override list may override:
+  // the phrase is public, so typing it is not enough.
+  const listName = path.relative(root, overrideActorsFile);
+  let actors = [];
+  try {
+    actors = existsSync(overrideActorsFile) ? parseActors(readFileSync(overrideActorsFile, 'utf8')) : [];
+  } catch (error) {
+    lines.unshift(`New-user gate: FAIL: ${listName}: ${error.message}; no one may override.`);
+    return { ok: false, status: 'fail', lines };
+  }
+  if (actors.length === 0) {
+    lines.unshift(`New-user gate: FAIL: ${listName} lists no GitHub login, so no one may override the gate.`);
+    return { ok: false, status: 'fail', lines };
+  }
+  for (const [role, login] of [['actor', actor], ['triggering actor', triggeringActor || actor]]) {
+    if (!actors.includes(String(login).toLowerCase())) {
+      lines.unshift(`New-user gate: FAIL: the run's ${role} ${JSON.stringify(login)} is not listed in ${listName}; only a listed login may override.`);
+      return { ok: false, status: 'fail', lines };
+    }
+  }
+  lines.unshift(`New-user gate: OVERRIDDEN for v${version} at ${tagCommit.slice(0, 12)} by ${actor}${triggeringActor && triggeringActor !== actor ? ` (run by ${triggeringActor})` : ''}, listed in ${listName}, who typed the override phrase. This release is published WITHOUT complete new-user evidence:`);
   return { ok: true, status: 'overridden', lines };
 }
 
@@ -586,7 +658,25 @@ function main(argv) {
       const flags = parseFlags(rest);
       const [dir] = flags._;
       if (!dir || !flags.keys) throw new Error('verify-bundle needs a bundle directory and --keys');
-      const result = verifyBundle(dir, { keys: parseKeys(readFileSync(flags.keys, 'utf8')), version: flags.version, commit: flags.commit });
+      const keys = parseKeys(readFileSync(flags.keys, 'utf8'));
+      if (flags.required) {
+        // As release.yml decides: required paths must pass; others may not.
+        const { needed, mentions } = neededPaths(path.resolve(flags.root ?? '.'), flags.required);
+        if (mentions.length > 0) console.log(`The public copy names 16 GB (${mentions.slice(0, 5).join(', ')}), so the C2 paths are required.`);
+        const result = bundleDecision(dir, { keys, version: flags.version, commit: flags.commit, needed });
+        for (const problem of result.problems) console.log(`problem: ${problem}`);
+        for (const [name, entry] of result.paths) {
+          const required = needed.includes(name);
+          console.log(`${name}: ${entry.pass ? 'pass' : required ? 'FAIL' : 'warning: failed (not a required path)'}`);
+          for (const problem of entry.problems) console.log(`  ${problem}`);
+        }
+        if (result.missing.length > 0) console.log(`missing required paths: ${result.missing.join(', ')}`);
+        if (result.problems.length > 0) console.log('bundle does NOT verify');
+        else if (result.ok) console.log(`bundle verifies, signed by gate key ${result.key.shortId}, and every required path passes`);
+        else console.log(`bundle verifies, signed by gate key ${result.key.shortId}, but the release needs: ${[...result.missing, ...result.failing].join(', ')}`);
+        return result.ok ? 0 : 1;
+      }
+      const result = verifyBundle(dir, { keys, version: flags.version, commit: flags.commit });
       for (const problem of result.problems) console.log(`problem: ${problem}`);
       for (const [name, entry] of result.paths) {
         console.log(`${name}: ${entry.pass ? 'pass' : 'FAIL'}`);

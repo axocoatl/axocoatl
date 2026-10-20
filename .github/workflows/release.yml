@@ -12,7 +12,8 @@ on:
         description: >-
           Leave empty. To publish without complete new-user evidence, type
           exactly: publish vX.Y.Z without the new-user gate (with this tag's
-          version). The run logs who did it and what was missing.
+          version). Only a login listed in .axocoatl/gate-override-actors may
+          do this; the run logs who did it and what was missing.
         type: string
         required: false
         default: ''
@@ -131,6 +132,7 @@ jobs:
           NEW_USER_GATE_OVERRIDE: ${{ inputs.new_user_gate_override }}
           EVENT_NAME: ${{ github.event_name }}
           ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
           node scripts/release-gate/check-evidence.mjs \
@@ -138,7 +140,8 @@ jobs:
             --tag-commit "$(git rev-parse "$GITHUB_SHA^{commit}")" \
             --override "${NEW_USER_GATE_OVERRIDE:-}" \
             --event "$EVENT_NAME" \
-            --actor "$ACTOR"
+            --actor "$ACTOR" \
+            --triggering-actor "$TRIGGERING_ACTOR"
 
   marketing-site:
     name: Release gate — marketing site
@@ -1034,6 +1037,7 @@ jobs:
           NEW_USER_GATE_OVERRIDE: ${{ inputs.new_user_gate_override }}
           EVENT_NAME: ${{ github.event_name }}
           ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
           node scripts/release-gate/check-evidence.mjs \
@@ -1041,7 +1045,8 @@ jobs:
             --tag-commit "$(git rev-parse "$GITHUB_SHA^{commit}")" \
             --override "${NEW_USER_GATE_OVERRIDE:-}" \
             --event "$EVENT_NAME" \
-            --actor "$ACTOR"
+            --actor "$ACTOR" \
+            --triggering-actor "$TRIGGERING_ACTOR"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: verified-release-${{ github.run_id }}-${{ github.ref_name }}

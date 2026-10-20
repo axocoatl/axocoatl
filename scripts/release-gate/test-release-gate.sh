@@ -521,42 +521,136 @@ done
   git -C "$repo" -c user.name=t -c user.email=t@example.invalid add -A
   git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm product
   commit=$(git -C "$repo" rev-parse HEAD)
-  from="$work/from"
-  mkdir -p "$from"
-  for name in $(node -e '
+  # The paths a release needs; Tier A comes from a CI run, the rest from
+  # the live tiers.
+  required=$(node -e '
       import("'"$script_dir"'/evidence.mjs").then((m) => {
         const text = require("fs").readFileSync(process.argv[1], "utf8");
         console.log(m.parseRequiredPaths(text).filter((p) => p.when === "always").map((p) => p.name).join(" "));
-      });' "$repo/docs/RELEASE_GATE.md"); do
-    mkdir -p "$from/$name"
-    printf '%s transcript\n' "$name" >"$from/$name/transcript.txt"
-    node "$script_dir/evidence.mjs" add-step --file "$from/$name.steps" --name "run fix" --status pass --exit 0 --seconds 2 --bytes 10
-    node "$script_dir/evidence.mjs" path-file --steps "$from/$name.steps" --out "$from/$name.json" --path "$name" \
-      --tier "${name%%-*}" --version 1.5.0 --commit "$commit" --attach "$name/transcript.txt" >/dev/null
-    rm "$from/$name.steps"
+      });' "$repo/docs/RELEASE_GATE.md")
+  make_path() { # make_path DIR NAME STATUS
+    mkdir -p "$1/$2"
+    printf '%s transcript\n' "$2" >"$1/$2/transcript.txt"
+    node "$script_dir/evidence.mjs" add-step --file "$1/$2.steps" --name "run fix" --status "$3" --exit 0 --seconds 2 --bytes 10
+    node "$script_dir/evidence.mjs" path-file --steps "$1/$2.steps" --out "$1/$2.json" --path "$2" \
+      --tier "${2%%-*}" --version 1.5.0 --commit "$commit" --attach "$2/transcript.txt" >/dev/null || true
+    rm "$1/$2.steps"
+  }
+  from="$work/from"
+  mkdir -p "$from"
+  for name in $required; do
+    case "$name" in A-*) ;; *) make_path "$from" "$name" pass ;; esac
   done
-  # A transcript holding something that looks like a key is refused.
-  cp -R "$from" "$work/leaky"
-  printf 'OPENROUTER_API_KEY=sk-or-v1-0123456789abcdef0123456789\n' >>"$work/leaky/D1/transcript.txt"
-  if "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" --from "$work/leaky" --no-sign >"$work/leaky.log" 2>&1; then
-    echo "a credential-looking transcript was collected" >&2
-    exit 1
-  fi
-  grep -q 'look like they hold a credential' "$work/leaky.log"
+  # A path the release does not require may fail: a warning, not a refusal.
+  make_path "$from" C1-real-repo fail
+
+  # A stand-in gh: run 111 is CI's push run of this commit; 222 is a fork's
+  # pull request; 333 ran another commit; 444 is the release workflow.
+  mkdir -p "$work/gh-bin"
+  cat >"$work/gh-bin/gh" <<GH
+#!/bin/sh
+run() { printf '{"head_sha":"%s","event":"%s","path":"%s","status":"completed","head_branch":"main","head_repository":{"full_name":"%s"},"repository":{"full_name":"axocoatl/axocoatl"}}\n' "\$1" "\$2" "\$3" "\$4"; }
+case "\$1 \$2" in
+  "api repos/axocoatl/axocoatl/actions/runs/111") run $commit push .github/workflows/ci.yml axocoatl/axocoatl ;;
+  "api repos/axocoatl/axocoatl/actions/runs/222") run $commit pull_request .github/workflows/ci.yml someone/axocoatl ;;
+  "api repos/axocoatl/axocoatl/actions/runs/333") run $(printf 'f%.0s' $(seq 1 40)) push .github/workflows/ci.yml axocoatl/axocoatl ;;
+  "api repos/axocoatl/axocoatl/actions/runs/444") run $commit push .github/workflows/release.yml axocoatl/axocoatl ;;
+  "run download")
+    [ "\$3" = 111 ] || { echo "gh stand-in: downloaded run \$3" >>"$work/gh-downloads"; }
+    shift 2; dir=''
+    while [ \$# -gt 0 ]; do [ "\$1" = --dir ] && dir=\$2; shift; done
+    # Each leg uploads its own release-evidence/ (one path).
+    for label in A-x86 A-arm; do
+      mkdir -p "\$dir/newuser-\$label/1.5.0/$commit"
+      cp -R "$work/ci-evidence/1.5.0/$commit/\$label.json" "$work/ci-evidence/1.5.0/$commit/\$label" \
+        "\$dir/newuser-\$label/1.5.0/$commit/"
+    done ;;
+  *) echo "gh stand-in: unexpected \$*" >&2; exit 1 ;;
+esac
+GH
+  chmod +x "$work/gh-bin/gh"
+  for name in A-x86 A-arm; do
+    make_path "$work/ci-evidence/1.5.0/$commit" "$name" pass
+  done
+  for bad in 222:'pull_request run' 333:'not '"$commit" 444:'not .github/workflows/ci.yml'; do
+    if PATH="$work/gh-bin:$PATH" "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" \
+      --ci-run "${bad%%:*}" --no-sign >"$work/bad-run.log" 2>&1; then
+      echo "run ${bad%%:*} was collected" >&2
+      exit 1
+    fi
+    grep -q "refusing run ${bad%%:*}: .*${bad#*:}" "$work/bad-run.log" || { cat "$work/bad-run.log" >&2; exit 1; }
+  done
+  [ ! -s "$work/gh-downloads" ] || { echo "a refused run was downloaded" >&2; exit 1; }
   rm -rf "$repo/release-evidence"
+
+  # A transcript or file that looks like a credential is refused.
+  for leak in 'OPENROUTER_API_KEY=sk-or-v1-0123456789abcdef0123456789' \
+    'id_token=eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzNDU2In0.c2lnbmF0dXJl' \
+    'GH=github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz' \
+    'OPENAI_API_KEY=sk-svcacct-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789' \
+    'file:C1-local/secrets/openrouter'; do
+    rm -rf "$work/leaky" "$repo/release-evidence"
+    cp -R "$from" "$work/leaky"
+    case "$leak" in
+      file:*) mkdir -p "$(dirname "$work/leaky/${leak#file:}")" && printf 'x\n' >"$work/leaky/${leak#file:}" ;;
+      *) printf '%s\n' "$leak" >>"$work/leaky/D1/transcript.txt" ;;
+    esac
+    if "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" --from "$work/leaky" --no-sign >"$work/leaky.log" 2>&1; then
+      echo "a credential-looking transcript was collected: $leak" >&2
+      exit 1
+    fi
+    grep -q 'look like they hold a credential' "$work/leaky.log" || { cat "$work/leaky.log" >&2; exit 1; }
+  done
+  # Prose that merely contains "sk-" is not a key.
+  rm -rf "$work/leaky" "$repo/release-evidence"
+  cp -R "$from" "$work/leaky"
+  printf 'the risk-assessment-of-the-installer-and-everything-else step\n' >>"$work/leaky/D1/transcript.txt"
+  "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" --from "$work/leaky" --no-sign >"$work/prose.log" 2>&1 \
+    || { cat "$work/prose.log" >&2; exit 1; }
+  rm -rf "$repo/release-evidence"
+
   if [ -n "$bin" ]; then
+    # The gate account: its own Axocoatl data root (which every reset
+    # removes) and the gate's signing key, made once, apart from it. A data
+    # root named by AXOCOATL_DATA_DIR must never be touched.
     sign_home="$work/sign-home"
-    mkdir -p "$sign_home"
-    HOME="$sign_home" "$bin" receipt key 2>/dev/null >"$repo/.axocoatl/gate-keys"
-    HOME="$sign_home" "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" \
-      --from "$from" --axocoatl "$bin" >"$work/collect.log" 2>&1 || { cat "$work/collect.log" >&2; exit 1; }
+    pretend="$work/pretend-real-data-root"
+    mkdir -p "$sign_home" "$pretend"
+    export AXOCOATL_DATA_DIR="$pretend"
+    HOME="$sign_home" "$script_dir/collect-evidence.sh" --init-signer --axocoatl "$bin" 2>/dev/null >"$repo/.axocoatl/gate-keys"
+    grep -q '^ed25519 ' "$repo/.axocoatl/gate-keys"
+    HOME="$sign_home" env -u AXOCOATL_DATA_DIR "$bin" receipt key >"$work/product-key" 2>/dev/null
+    cmp -s "$work/product-key" "$repo/.axocoatl/gate-keys" && { echo "the gate key is the product's own receipt key" >&2; exit 1; }
+    # A reset between the key's registration and the next collect.
+    while IFS= read -r path; do rm -rf "$path"; done < <(HOME="$sign_home" "$script_dir/reset-mac-account.sh" --print-paths)
+    HOME="$sign_home" PATH="$work/gh-bin:$PATH" "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" \
+      --from "$from" --ci-run 111 --axocoatl "$bin" >"$work/collect.log" 2>&1 || { cat "$work/collect.log" >&2; exit 1; }
+    grep -q 'C1-real-repo: warning: failed (not a required path)' "$work/collect.log" || { cat "$work/collect.log" >&2; exit 1; }
+    grep -q 'collected A-arm from' "$work/collect.log"
+    grep -q '^Next:' "$work/collect.log"
+    [ -z "$(ls -A "$pretend")" ] || { echo "AXOCOATL_DATA_DIR was written: $(ls -A "$pretend")" >&2; exit 1; }
+    [ -n "$(find "$sign_home/.axocoatl-gate-signer" -name 'receipt-signing-key*' 2>/dev/null)" ] \
+      || { echo "the gate key is not in the signer" >&2; exit 1; }
     git -C "$repo" -c user.name=t -c user.email=t@example.invalid add -A
     git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm evidence
     node "$script_dir/check-evidence.mjs" --root "$repo" --version 1.5.0 --tag-commit "$(git -C "$repo" rev-parse HEAD)" >"$work/check.log" 2>&1 \
       || { cat "$work/check.log" >&2; exit 1; }
     grep -q '^New-user gate: PASS for v1.5.0' "$work/check.log"
+    # A required path that fails: written and signed, but collect exits 1
+    # after the comparison and the next steps, naming what is missing.
+    make_path "$work/failing" D1 fail
+    set +e
+    HOME="$sign_home" "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" \
+      --from "$work/failing" --replace --axocoatl "$bin" >"$work/collect-fail.log" 2>&1
+    status=$?
+    set -e
+    if [ "$status" != 1 ] || ! grep -q 'release needs: D1' "$work/collect-fail.log" || ! grep -q '^Next:' "$work/collect-fail.log"; then
+      cat "$work/collect-fail.log" >&2
+      exit 1
+    fi
   else
-    "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" --from "$from" --no-sign >"$work/collect.log" 2>&1
+    PATH="$work/gh-bin:$PATH" "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" \
+      --from "$from" --ci-run 111 --no-sign >"$work/collect.log" 2>&1
     git -C "$repo" -c user.name=t -c user.email=t@example.invalid add -A
     git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm evidence
     if node "$script_dir/check-evidence.mjs" --root "$repo" --version 1.5.0 --tag-commit "$(git -C "$repo" rev-parse HEAD)" >"$work/check.log" 2>&1; then
@@ -568,11 +662,15 @@ done
 )
 collect_status=$?
 if [ -n "$bin" ]; then
-  signed="a bundle signed by ${bin#"$repo_root"/} passes check-evidence"
+  signed="a bundle signed by ${bin#"$repo_root"/}'s gate signer, after a reset, passes check-evidence; a failing optional path warns, a failing required one exits 1"
 else
   signed="an unsigned bundle fails check-evidence (no axocoatl built)"
 fi
-if [ "$collect_status" = 0 ]; then pass "collect-evidence.sh: refuses credential-looking files; $signed"; else fail "collect-evidence.sh"; fi
+if [ "$collect_status" = 0 ]; then
+  pass "collect-evidence.sh: takes Tier A only from the canonical repository's ci.yml push run of the commit; refuses credential-looking files and secret file names; $signed"
+else
+  fail "collect-evidence.sh"
+fi
 
 echo "Release gate scripts: $((checks - failures))/$checks passed"
 [ "$failures" = 0 ]

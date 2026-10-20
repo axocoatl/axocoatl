@@ -19,9 +19,9 @@ import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  ENVELOPE_FILE, MANIFEST_FILE, PATH_SCHEMA, PAYLOAD_TYPE, buildManifest, commitMatches,
-  compareTotals, decideRelease, overridePhrase, pae, parseKeys, parseRequiredPaths,
-  sixteenGbMentions, stepsPass, verifyBundle,
+  ENVELOPE_FILE, MANIFEST_FILE, PATH_SCHEMA, PAYLOAD_TYPE, buildManifest, bundleDecision,
+  commitMatches, compareTotals, decideRelease, overridePhrase, pae, parseActors, parseKeys,
+  parseRequiredPaths, sixteenGbMentions, stepsPass, verifyBundle,
 } from './evidence.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -103,6 +103,10 @@ function trust(root, ...keys) {
   writeFileSync(path.join(root, '.axocoatl', 'gate-keys'), `# gate account keys\n${keys.map((key) => key.line).join('\n')}\n`);
 }
 
+function allowOverride(root, ...logins) {
+  writeFileSync(path.join(root, '.axocoatl', 'gate-override-actors'), `# who may override\n${logins.join('\n')}\n`);
+}
+
 function commitAll(root, message = 'evidence') {
   git(root, 'add', '-A');
   git(root, 'commit', '-qm', message);
@@ -172,7 +176,7 @@ test('a product change after the tested commit makes its bundle no evidence for 
   const tag = commitAll(root);
   const decision = decide(root, tag);
   assert.equal(decision.ok, false);
-  assert.ok(decision.lines.some((line) => /outside release-evidence\/ and \.axocoatl\/gate-keys: .*README\.md/.test(line)), decision.lines.join('\n'));
+  assert.ok(decision.lines.some((line) => /outside release-evidence\/, \.axocoatl\/gate-keys and \.axocoatl\/gate-override-actors: .*README\.md/.test(line)), decision.lines.join('\n'));
 });
 
 test('evidence for a commit that is not an ancestor of the tag is refused', () => {
@@ -296,6 +300,7 @@ test('naming 16 GB anywhere in the public copy makes the C2 paths required', () 
 test('the override passes a failing gate only from workflow_dispatch with the exact phrase, and says so loudly', () => {
   const { root } = makeRepo();
   trust(root, makeKey());
+  allowOverride(root, 'Founder');
   const tag = commitAll(root);
   assert.equal(overridePhrase(VERSION), 'publish v1.5.0 without the new-user gate');
   const pushed = decide(root, tag, { override: overridePhrase(VERSION), event: 'push' });
@@ -309,8 +314,62 @@ test('the override passes a failing gate only from workflow_dispatch with the ex
   const overridden = decide(root, tag, { override: overridePhrase(VERSION), event: 'workflow_dispatch', actor: 'founder' });
   assert.equal(overridden.ok, true);
   assert.equal(overridden.status, 'overridden');
-  assert.match(overridden.lines[0], /OVERRIDDEN for v1\.5\.0 .* by founder, who typed the override phrase/);
+  assert.match(overridden.lines[0], /OVERRIDDEN for v1\.5\.0 .* by founder, listed in \.axocoatl\/gate-override-actors, who typed the override phrase/);
   assert.ok(overridden.lines.includes('Missing evidence for: A-x86, C1-local'));
+});
+
+test('only a login listed in .axocoatl/gate-override-actors may override, as actor and as the one who ran it', () => {
+  const { root } = makeRepo();
+  trust(root, makeKey());
+  const tag = commitAll(root);
+  const phrase = { override: overridePhrase(VERSION), event: 'workflow_dispatch' };
+  const unlisted = decide(root, tag, { ...phrase, actor: 'founder' });
+  assert.equal(unlisted.ok, false);
+  assert.match(unlisted.lines[0], /gate-override-actors lists no GitHub login, so no one may override/);
+  allowOverride(root, 'founder  # the founder', '', '# a comment');
+  const stranger = decide(root, tag, { ...phrase, actor: 'someone-else' });
+  assert.equal(stranger.ok, false);
+  assert.match(stranger.lines[0], /actor "someone-else" is not listed/);
+  const rerun = decide(root, tag, { ...phrase, actor: 'founder', triggeringActor: 'someone-else' });
+  assert.equal(rerun.ok, false);
+  assert.match(rerun.lines[0], /triggering actor "someone-else" is not listed/);
+  const listed = decide(root, tag, { ...phrase, actor: 'FOUNDER', triggeringActor: 'founder' });
+  assert.equal(listed.status, 'overridden', listed.lines.join('\n'));
+  // Without the phrase, a listed login changes nothing.
+  assert.equal(decide(root, tag, { event: 'workflow_dispatch', actor: 'founder' }).ok, false);
+  allowOverride(root, 'not a login!');
+  assert.match(decide(root, tag, { ...phrase, actor: 'founder' }).lines[0], /is not a GitHub login; no one may override/);
+  assert.deepEqual(parseActors('# x\nA-b\n\n  c  # d\n'), ['a-b', 'c']);
+  assert.throws(() => parseActors('-bad'), /not a GitHub login/);
+});
+
+test('a bundle is judged on the required paths; another path in it may fail, and the override list may change after the tested commit', () => {
+  const { root, commit } = makeRepo();
+  const key = makeKey();
+  trust(root, key);
+  const dir = writeBundle(root, commit, { ...passingPaths(commit), 'C1-real-repo': pathEvidence('C1-real-repo', commit, { pass: false }) }, key);
+  allowOverride(root, 'founder');
+  const tag = commitAll(root);
+  const judged = bundleDecision(dir, { keys: parseKeys(key.line), version: VERSION, commit, needed: ['A-x86', 'C1-local'] });
+  assert.equal(judged.ok, true);
+  assert.deepEqual(judged.extraFailing, ['C1-real-repo']);
+  assert.equal(decide(root, tag).ok, true);
+  const short = bundleDecision(dir, { keys: parseKeys(key.line), version: VERSION, commit, needed: ['A-x86', 'C1-local', 'D1', 'C1-real-repo'] });
+  assert.equal(short.ok, false);
+  assert.deepEqual(short.missing, ['D1']);
+  assert.deepEqual(short.failing, ['C1-real-repo']);
+  // verify-bundle --required decides the same way (collect-evidence.sh).
+  writeFileSync(path.join(scratch, `keys-${counter}`), `${key.line}\n`);
+  const cli = (...args) => spawnSync(process.execPath, [path.join(HERE, 'evidence.mjs'), 'verify-bundle', dir, '--keys', path.join(scratch, `keys-${counter}`), ...args], { encoding: 'utf8' });
+  const required = cli('--required', path.join(root, 'docs', 'RELEASE_GATE.md'), '--root', root);
+  assert.equal(required.status, 0, required.stdout);
+  assert.match(required.stdout, /C1-real-repo: warning: failed \(not a required path\)/);
+  assert.match(required.stdout, /every required path passes/);
+  assert.equal(cli().status, 1, 'without --required every path must pass');
+  writeFileSync(path.join(root, 'docs', 'RELEASE_GATE.md'), REQUIRED.replace('- `C1-local`', '- `D1`: Tier D\n- `C1-local`'));
+  const missing = cli('--required', path.join(root, 'docs', 'RELEASE_GATE.md'), '--root', root);
+  assert.equal(missing.status, 1);
+  assert.match(missing.stdout, /missing required paths: D1/);
 });
 
 test('check-evidence.mjs exits 0, 1 or 2 and writes the job summary', () => {
@@ -329,7 +388,10 @@ test('check-evidence.mjs exits 0, 1 or 2 and writes the job summary', () => {
   const refused = run('--version', '1.5.1', '--tag-commit', tag);
   assert.equal(refused.status, 1, refused.stdout);
   assert.match(refused.stdout, /::error title=New-user gate::New-user gate: FAIL for v1\.5\.1/);
-  const overridden = run('--version', '1.5.1', '--tag-commit', tag, '--override', overridePhrase('1.5.1'), '--event', 'workflow_dispatch', '--actor', 'founder');
+  const notListed = run('--version', '1.5.1', '--tag-commit', tag, '--override', overridePhrase('1.5.1'), '--event', 'workflow_dispatch', '--actor', 'founder');
+  assert.equal(notListed.status, 1, notListed.stdout);
+  allowOverride(root, 'founder');
+  const overridden = run('--version', '1.5.1', '--tag-commit', tag, '--override', overridePhrase('1.5.1'), '--event', 'workflow_dispatch', '--actor', 'founder', '--triggering-actor', 'founder');
   assert.equal(overridden.status, 0, overridden.stdout);
   assert.match(overridden.stdout, /::warning title=New-user gate overridden::/);
   assert.match(readFileSync(summary, 'utf8'), /## New-user gate: OVERRIDDEN/);

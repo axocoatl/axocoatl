@@ -336,6 +336,14 @@ end
         && step["run"].to_s.include?('--event "$EVENT_NAME"')
       errors << ".github/workflows/release.yml: #{job}'s evidence check must take the override from env NEW_USER_GATE_OVERRIDE and pass the event"
     end
+    # Only a login listed in .axocoatl/gate-override-actors may override:
+    # the check must see who started the run and who ran it.
+    unless step.dig("env", "ACTOR") == "${{ github.actor }}" \
+        && step.dig("env", "TRIGGERING_ACTOR") == "${{ github.triggering_actor }}" \
+        && step["run"].to_s.include?('--actor "$ACTOR"') \
+        && step["run"].to_s.include?('--triggering-actor "$TRIGGERING_ACTOR"')
+      errors << ".github/workflows/release.yml: #{job}'s evidence check must pass --actor and --triggering-actor from github.actor and github.triggering_actor"
+    end
   end
 end
 release_triggers = release.fetch(true, release["on"]) || {}

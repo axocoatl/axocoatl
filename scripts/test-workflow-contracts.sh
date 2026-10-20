@@ -153,6 +153,11 @@ with_change refused 'the override input expanded in a script' \
   "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); s.sub!(%q(--override \"\${NEW_USER_GATE_OVERRIDE:-}\"), %q(--override \"\${{ inputs.new_user_gate_override }}\")) or abort(\"no anchor\"); File.write(p, s)'" \
   .github/workflows/release.yml
 
+with_change refused 'an evidence check that no longer names who ran the override' \
+  'must pass --actor and --triggering-actor' \
+  "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); s.sub!(%q(--triggering-actor \"\$TRIGGERING_ACTOR\"), %q(--triggering-actor \"\$ACTOR\")) or abort(\"no anchor\"); File.write(p, s)'" \
+  .github/workflows/release.yml
+
 if ((failures)); then
   echo "Workflow contract self-test: FAIL ($failures failed, $pass_count passed)" >&2
   exit 1
