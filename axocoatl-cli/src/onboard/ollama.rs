@@ -550,8 +550,8 @@ async fn install(o: &mut Onboarding) -> bool {
         }
         match o.ui.execute_showing_output(&o.host, &cmd).await {
             Ok(output) => {
-                if installer_found_no_gpu(&output) {
-                    o.ui.warn(CPU_ONLY);
+                if let Some(note) = installer_gpu_note(&output) {
+                    o.ui.warn(note);
                 }
                 true
             }
@@ -573,10 +573,25 @@ pub(crate) const CPU_ONLY: &str =
      models can take a long time. A hosted writer and reviewer (OpenRouter, Claude Code \
      or Codex) do not use this computer's processor for the model.";
 
-/// Ollama's Linux installer said `WARNING: No NVIDIA/AMD GPU detected.
-/// Ollama will run in CPU-only mode.`
-pub(crate) fn installer_found_no_gpu(output: &str) -> bool {
-    output.contains("CPU-only mode") || output.contains("No NVIDIA/AMD GPU detected")
+/// What onboarding says when Ollama's Linux installer could not look for a
+/// GPU (it needs `lspci` or `lshw`).
+pub(crate) const GPU_UNKNOWN: &str =
+    "Ollama's installer could not look for a GPU here (it needs lspci or lshw). Without an \
+     NVIDIA or AMD GPU, Ollama runs models on the CPU alone: a local model answers much more \
+     slowly than on a GPU or Apple silicon, and a fix run with local models can take a long \
+     time.";
+
+/// What to say about what Ollama's Linux installer printed about the GPU:
+/// `WARNING: No NVIDIA/AMD GPU detected. Ollama will run in CPU-only mode.`,
+/// or `WARNING: Unable to detect NVIDIA/AMD GPU. Install lspci or lshw …`.
+pub(crate) fn installer_gpu_note(output: &str) -> Option<&'static str> {
+    if output.contains("CPU-only mode") || output.contains("No NVIDIA/AMD GPU detected") {
+        Some(CPU_ONLY)
+    } else if output.contains("Unable to detect NVIDIA/AMD GPU") {
+        Some(GPU_UNKNOWN)
+    } else {
+        None
+    }
 }
 
 /// Start the server the way it runs here; `false` when nothing was started

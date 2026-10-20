@@ -512,15 +512,24 @@ async fn yes_never_pulls_a_model_too_large_for_the_memory() {
 #[cfg(unix)]
 #[tokio::test]
 async fn the_installers_cpu_only_warning_is_explained() {
-    for gpu in [false, true] {
+    // What the installer prints (install.sh's `warning` and `status`), and
+    // what onboarding then says.
+    for (said, note) in [
+        (
+            "WARNING: No NVIDIA/AMD GPU detected. Ollama will run in CPU-only mode.",
+            Some(ollama::CPU_ONLY),
+        ),
+        (
+            "WARNING: Unable to detect NVIDIA/AMD GPU. Install lspci or lshw to automatically \
+             detect and install GPU dependencies.",
+            Some(ollama::GPU_UNKNOWN),
+        ),
+        (">>> NVIDIA GPU installed.", None),
+    ] {
         let shims = Shims::new();
         shims.add("zstd", "exit 0");
         shims.add("sh", "exec /bin/sh \"$@\"");
-        let warning = if gpu {
-            ">>> NVIDIA GPU installed."
-        } else {
-            "WARNING: No NVIDIA/AMD GPU detected. Ollama will run in CPU-only mode."
-        };
+        let warning = said;
         shims.add(
             "curl",
             &format!("printf '%s\\n' 'echo \">>> Install complete.\"' 'echo \"{warning}\"'"),
@@ -563,11 +572,13 @@ async fn the_installers_cpu_only_warning_is_explained() {
             "{:?}",
             shims.calls()
         );
-        assert_eq!(
-            output.contains(ollama::CPU_ONLY),
-            !gpu,
-            "gpu {gpu}: {output}"
-        );
+        for possible in [ollama::CPU_ONLY, ollama::GPU_UNKNOWN] {
+            assert_eq!(
+                output.contains(possible),
+                note == Some(possible),
+                "{said}: {output}"
+            );
+        }
     }
 }
 
