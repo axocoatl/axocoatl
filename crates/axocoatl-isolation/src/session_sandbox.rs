@@ -2019,6 +2019,15 @@ impl SessionSandbox {
             ));
         }
         let mut dynamic_port_retries = 0_usize;
+        // The dependency volume is mounted over `<repository>/node_modules`
+        // in the host's own tree. Make that mount point as the person when the
+        // repository has none, rather than let the OCI runtime make it as
+        // the container's root (a subordinate uid under rootless Podman, which
+        // the person cannot write into). It is removed again once no
+        // container mounts it (`dependency_mountpoint`).
+        let dependency_mountpoint = node_dependency_volume
+            .is_some()
+            .then(|| crate::dependency_mountpoint::MountpointLease::acquire(&working_dir_path));
         let container_id = loop {
             Self::verify_start_authorities(working_dir, &policy.control_plane_roots)?;
             Self::verify_supervisor_policy(&effective_policy)?;
@@ -2029,6 +2038,9 @@ impl SessionSandbox {
                 &dir,
                 run_image,
                 node_dependency_volume.as_deref(),
+                dependency_mountpoint
+                    .as_ref()
+                    .and_then(crate::dependency_mountpoint::MountpointLease::label_value),
                 with_limits,
                 &publish,
                 &effective_policy,
@@ -2082,6 +2094,8 @@ impl SessionSandbox {
             )
             .await;
         };
+        // The container exists and mounts it now.
+        drop(dependency_mountpoint);
 
         // From this point onward a live container exists. Keep cleanup owned
         // by an independent task until every readiness/setup step succeeds, so
@@ -3525,6 +3539,12 @@ impl SessionSandbox {
             )));
         }
         let candidates = Self::parse_owned_container_candidates(&listed.stdout)?;
+        // A daemon that stopped without removing its containers left the Node
+        // dependency mount points it made; their labels name them, so they go
+        // with the containers.
+        if !candidates.is_empty() {
+            crate::dependency_mountpoint::adopt_labelled(runtime_authority).await;
+        }
         for (container_id, _) in &candidates {
             Self::remove_exact_container_identity(container_id, NAMED_REMOVE_COMMAND_TIMEOUT)
                 .await?;
@@ -3762,7 +3782,9 @@ impl SessionSandbox {
             // Podman named volumes do not copy destination content unless its
             // explicit `copy` mount option is present. Omit that option so the
             // empty nested volume masks host `node_modules` instead of importing
-            // native packages from the bind-mounted checkout.
+            // native packages from the bind-mounted checkout. The mount point
+            // is in the host tree: when the repository has none, the start
+            // makes it as the person first (`dependency_mountpoint`).
             args.push(format!(
                 "type=volume,source={volume},destination={dir}/node_modules"
             ));
@@ -3948,6 +3970,7 @@ impl SessionSandbox {
         dir: &str,
         image: &str,
         node_dependency_volume: Option<&str>,
+        dependency_mountpoint_label: Option<&str>,
         with_limits: bool,
         ports: &[u16],
         policy: &SandboxPolicy,
@@ -3966,6 +3989,9 @@ impl SessionSandbox {
             read_only,
         );
         Self::insert_named_volume_mounts(&mut args, named_volumes);
+        if let Some(path) = dependency_mountpoint_label {
+            crate::dependency_mountpoint::insert_label(&mut args, path);
+        }
 
         let mut command = Command::new(PODMAN);
         command.args(&args);
@@ -4505,6 +4531,7 @@ impl SessionSandbox {
             let mut remove = Command::new(PODMAN);
             remove.args(["rm", "-f", &self.container]);
             let _ = Self::run_bounded_command(remove, NAMED_REMOVE_COMMAND_TIMEOUT).await;
+            crate::dependency_mountpoint::release_unused().await;
         }
         if let Some(preview) = &self.preview_container {
             let _ = Self::remove_exact_container_names(
@@ -5094,7 +5121,19 @@ impl SessionSandbox {
         }
     }
 
+    /// Remove one exact container identity, then the Node dependency mount
+    /// points Axocoatl made that no container mounts any more
+    /// (`dependency_mountpoint::release_unused`).
     async fn remove_exact_container_identity(
+        container_id: &str,
+        timeout: Duration,
+    ) -> Result<(), IsolationError> {
+        let removed = Self::remove_exact_container_identity_inner(container_id, timeout).await;
+        crate::dependency_mountpoint::release_unused().await;
+        removed
+    }
+
+    async fn remove_exact_container_identity_inner(
         container_id: &str,
         timeout: Duration,
     ) -> Result<(), IsolationError> {
@@ -5221,7 +5260,19 @@ impl SessionSandbox {
         guards
     }
 
+    /// Remove exact containers by name, then the Node dependency mount
+    /// points Axocoatl made that no container mounts any more
+    /// (`dependency_mountpoint::release_unused`).
     async fn remove_exact_container_names(
+        containers: &[String],
+        timeout: Duration,
+    ) -> Result<(), IsolationError> {
+        let removed = Self::remove_exact_container_names_inner(containers, timeout).await;
+        crate::dependency_mountpoint::release_unused().await;
+        removed
+    }
+
+    async fn remove_exact_container_names_inner(
         containers: &[String],
         timeout: Duration,
     ) -> Result<(), IsolationError> {
@@ -8864,6 +8915,79 @@ mod tests {
         .await
         .unwrap()
         .is_empty());
+    }
+
+    /// End-to-end: needs Podman. A repository without `node_modules` keeps
+    /// none: the mount point is the person's while a container mounts it,
+    /// and is gone once no container does.
+    #[tokio::test]
+    #[ignore = "requires podman; run this test explicitly"]
+    async fn a_repository_without_node_modules_has_none_left_behind() {
+        use std::os::unix::fs::MetadataExt;
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("package.json"), "{}").unwrap();
+        let mountpoint = std::fs::canonicalize(directory.path())
+            .unwrap()
+            .join("node_modules");
+        let first_id = format!("node-mountpoint-test-{}", uuid::Uuid::new_v4());
+        let second_id = format!("node-mountpoint-test-{}", uuid::Uuid::new_v4());
+        let start = |id: String| {
+            let path = directory.path().to_path_buf();
+            async move {
+                SessionSandbox::start(&id, &path, None, &[], &[], &SandboxPolicy::default())
+                    .await
+                    .expect("Node sandbox should start")
+            }
+        };
+
+        let first = start(first_id.clone()).await;
+        assert!(first.uses_node_dependency_volume());
+        let metadata = std::fs::symlink_metadata(&mountpoint).unwrap();
+        assert!(metadata.is_dir());
+        assert_eq!(metadata.uid(), rustix::process::getuid().as_raw());
+        assert_eq!(
+            metadata.mode() & 0o1000,
+            0,
+            "not the OCI runtime's 01755 mount point"
+        );
+        assert!(first
+            .exec(
+                &[
+                    "sh",
+                    "-c",
+                    "printf container-only > node_modules/container-marker"
+                ],
+                Duration::from_secs(20),
+            )
+            .await
+            .unwrap()
+            .ok());
+        assert_eq!(std::fs::read_dir(&mountpoint).unwrap().count(), 0);
+
+        // A second Session on the same repository shares the mount point:
+        // removing the first container keeps it.
+        let second = start(second_id.clone()).await;
+        first.stop_checked().await.unwrap();
+        assert!(mountpoint.is_dir(), "the second container still mounts it");
+        second.stop_checked().await.unwrap();
+        assert!(
+            !mountpoint.exists(),
+            "no container mounts it and it is empty: removed"
+        );
+
+        // What the person installs on the host while a container mounts it
+        // stays theirs.
+        let third = start(first_id.clone()).await;
+        std::fs::write(mountpoint.join("host-installed"), "x").unwrap();
+        third.stop_checked().await.unwrap();
+        assert!(mountpoint.join("host-installed").is_file());
+
+        SessionSandbox::remove_named_many_with_dependencies(
+            &[first_id, second_id],
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
     }
 
     /// End-to-end cancellation: needs Podman and package-network access.
