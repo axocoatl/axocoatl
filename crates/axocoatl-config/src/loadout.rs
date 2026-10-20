@@ -63,6 +63,14 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 8192;
 /// only at run admission; a loadout whose tokens cannot hold even this
 /// context plus the output bound can never make a call.
 pub const MIN_CALL_CONTEXT_TOKENS: u64 = 2048;
+/// The smallest context a native Ollama model of a loadout run may be
+/// loaded with. The built-in fix writer's first call alone needs about
+/// 9,700 tokens (its instructions, the task and its tool definitions), and
+/// the conversation grows from there: below this, admission refuses the
+/// run before any model call instead of letting it fail on its first one.
+/// Ollama loads models with 4,096 tokens on a computer with less than about
+/// 24 GB of GPU memory unless `OLLAMA_CONTEXT_LENGTH` says otherwise.
+pub const MIN_RUN_CONTEXT_TOKENS: u64 = 16_384;
 
 const FIX_YAML: &str = include_str!("../loadouts/fix.yaml");
 const FIX_CLAUDE_CODE_YAML: &str = include_str!("../loadouts/fix-claude-code.yaml");
@@ -590,6 +598,9 @@ pub enum LoadoutError {
     Invalid { field: String, reason: String },
     #[error("loadout parameter {param}: {reason}")]
     Param { param: String, reason: String },
+    /// Several required parameters have no value: all are named at once.
+    #[error("loadout parameters {}: {reason}", and_list(params))]
+    Params { params: Vec<String>, reason: String },
     #[error("no loadout named {0:?}")]
     NotFound(String),
     /// A user loadout file declares the id of a built-in loadout. It is
@@ -1511,6 +1522,139 @@ pub struct ResolvedCheck {
     pub e2e: Option<E2eCheck>,
 }
 
+/// `items` joined as `a`, `a and b` or `a, b and c`.
+pub fn and_list<T: AsRef<str>>(items: &[T]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.as_ref().to_string(),
+        [rest @ .., last] => format!(
+            "{} and {}",
+            rest.iter()
+                .map(|item| item.as_ref())
+                .collect::<Vec<_>>()
+                .join(", "),
+            last.as_ref()
+        ),
+    }
+}
+
+/// The flag that gives parameter `name` a value on `axocoatl run`: a model
+/// parameter `<role>_model` is `--model <role>=provider:model`, any other
+/// `--param <name>=...`.
+pub fn param_flag(name: &str, declared: &LoadoutParam) -> String {
+    match (name.strip_suffix("_model"), declared.kind) {
+        (Some(role), ParamKind::Model) if !role.is_empty() => {
+            format!("--model {role}=provider:model")
+        }
+        (_, ParamKind::Model) => format!("--param {name}=provider:model"),
+        _ => format!("--param {name}=..."),
+    }
+}
+
+/// The configuration key that gives parameter `name` a default for every
+/// run, when there is one (`run.models`).
+fn configured_default_key(name: &str) -> Option<&'static str> {
+    match name {
+        "writer_model" => Some("run.models.writer"),
+        "reviewer_model" => Some("run.models.reviewer"),
+        _ => None,
+    }
+}
+
+/// The error for required parameters without a value, naming each one with
+/// the flag that sets it, what it is, and the configuration default that can
+/// set it for every run.
+fn missing_params_error(missing: &[(&str, &LoadoutParam)]) -> LoadoutError {
+    let flags = missing
+        .iter()
+        .map(|(name, declared)| param_flag(name, declared))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let described: Vec<String> = missing
+        .iter()
+        .filter(|(_, declared)| !declared.description.is_empty())
+        .map(|(name, declared)| match missing {
+            [_] => declared.description.clone(),
+            _ => format!("{name}: {}", declared.description),
+        })
+        .collect();
+    let described = if described.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", described.join("; "))
+    };
+    let keys: Vec<&str> = missing
+        .iter()
+        .filter_map(|(name, _)| configured_default_key(name))
+        .collect();
+    let configured = if keys.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ", or set {} in the configuration (`axocoatl onboard` writes {})",
+            and_list(&keys),
+            if keys.len() == 1 { "it" } else { "them" }
+        )
+    };
+    let reason = format!("required: pass {flags}{described}{configured}");
+    match missing {
+        [(name, _)] => LoadoutError::Param {
+            param: name.to_string(),
+            reason,
+        },
+        _ => LoadoutError::Params {
+            params: missing.iter().map(|(name, _)| name.to_string()).collect(),
+            reason,
+        },
+    }
+}
+
+/// Every required parameter of `file` that neither `values` nor a default
+/// gives a value, in the order the loadout uses them: its Agents' models,
+/// their credentials, the reviewer's model, then the others by name.
+fn missing_required_params<'a>(
+    file: &'a LoadoutFile,
+    values: &ParamValues,
+) -> Vec<(&'a str, &'a LoadoutParam)> {
+    let mut order: Vec<&str> = Vec::new();
+    let mut note = |value: Option<&'a String>| {
+        if let Some(name) = value {
+            if !order.contains(&name.as_str()) {
+                order.push(name);
+            }
+        }
+    };
+    for agent in &file.agents {
+        note(match &agent.model {
+            ParamOr::Param { param } => Some(param),
+            ParamOr::Value(_) => None,
+        });
+    }
+    for agent in &file.agents {
+        note(match &agent.credential {
+            Some(ParamOr::Param { param }) => Some(param),
+            _ => None,
+        });
+    }
+    if let Some(review) = &file.review {
+        note(match &review.model {
+            ParamOr::Param { param } => Some(param),
+            ParamOr::Value(_) => None,
+        });
+    }
+    for name in file.params.keys() {
+        note(Some(name));
+    }
+    order
+        .into_iter()
+        .filter_map(|name| file.params.get_key_value(name))
+        .filter(|(name, declared)| {
+            declared.required && declared.default.is_none() && !values.contains_key(*name)
+        })
+        .map(|(name, declared)| (name.as_str(), declared))
+        .collect()
+}
+
 fn param_value(
     file: &LoadoutFile,
     values: &ParamValues,
@@ -1525,17 +1669,7 @@ fn param_value(
         .cloned()
         .or_else(|| declared.default.clone());
     match (&value, declared.required) {
-        (None, true) => Err(LoadoutError::Param {
-            param: name.into(),
-            reason: format!(
-                "required: pass --param {name}=... ({})",
-                if declared.description.is_empty() {
-                    "no description"
-                } else {
-                    declared.description.as_str()
-                }
-            ),
-        }),
+        (None, true) => Err(missing_params_error(&[(name, declared)])),
         (Some(text), _) => {
             match declared.kind {
                 ParamKind::Model if ModelSpec::parse(text).is_none() => {
@@ -1591,41 +1725,16 @@ fn resolve_text(
     }
 }
 
-/// Resolve every parameter of `loadout` with `values`. Unknown parameter
-/// names are refused, so a typo never silently runs with a default.
-pub fn resolve_loadout(
-    loadout: &Loadout,
+/// The credential each external Agent of `file` sends, by Agent id, as
+/// [`resolve_loadout`] resolves it: the loadout's `credential` (a literal
+/// or its parameter's value), or the runtime's default when it names none.
+/// [`AUTO_CREDENTIAL`] stays until the daemon's admission chooses the one
+/// that is stored. Admission also calls it when another parameter does not
+/// resolve, so a missing credential is reported with that parameter.
+pub fn resolve_credentials(
+    file: &LoadoutFile,
     values: &ParamValues,
-    task: &str,
-    repo: &str,
-) -> Result<ResolvedLoadout, LoadoutError> {
-    let file = &loadout.file;
-    if let Some(unknown) = values.keys().find(|key| !file.params.contains_key(*key)) {
-        return Err(LoadoutError::Param {
-            param: unknown.clone(),
-            reason: format!("loadout {} declares no such parameter", file.id),
-        });
-    }
-    if task.trim().is_empty() {
-        return Err(LoadoutError::Param {
-            param: "task".into(),
-            reason: "the task is empty".into(),
-        });
-    }
-    let mut agent_models = BTreeMap::new();
-    for agent in &file.agents {
-        let model = resolve_model(file, values, &agent.model)?;
-        if let Some(reason) = agent.runtime.model_refusal(&model) {
-            return Err(match &agent.model {
-                ParamOr::Param { param } => LoadoutError::Param {
-                    param: param.clone(),
-                    reason,
-                },
-                ParamOr::Value(_) => invalid(format!("agents.{}.model", agent.id), reason),
-            });
-        }
-        agent_models.insert(agent.id.clone(), model);
-    }
+) -> Result<BTreeMap<String, String>, LoadoutError> {
     let mut agent_credentials = BTreeMap::new();
     for agent in &file.agents {
         let Some(default) = agent.runtime.credentials().first() else {
@@ -1649,6 +1758,98 @@ pub fn resolve_loadout(
         }
         agent_credentials.insert(agent.id.clone(), credential);
     }
+    Ok(agent_credentials)
+}
+
+/// One native model caller of a loadout (a native Agent or the reviewer)
+/// with the model a run gives it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeCaller {
+    /// `Agent writer` or `the reviewer`.
+    pub who: String,
+    /// The parameter that sets its model, when one does.
+    pub param: Option<String>,
+    pub model: ModelSpec,
+}
+
+/// Each native model caller of `file` whose model `values` or a parameter
+/// default gives (a value that does not parse, or none, is left out:
+/// resolution reports it): what admission checks for a native provider
+/// before, and whether or not, every parameter resolves.
+pub fn native_callers(file: &LoadoutFile, values: &ParamValues) -> Vec<NativeCaller> {
+    let given = |model: &ParamOr<ModelSpec>| -> Option<(Option<String>, ModelSpec)> {
+        match model {
+            ParamOr::Value(spec) => Some((None, spec.clone())),
+            ParamOr::Param { param } => values
+                .get(param)
+                .cloned()
+                .or_else(|| file.params.get(param).and_then(|p| p.default.clone()))
+                .and_then(|text| ModelSpec::parse(&text))
+                .map(|spec| (Some(param.clone()), spec)),
+        }
+    };
+    let agents = file
+        .agents
+        .iter()
+        .filter(|agent| agent.runtime == AgentRuntime::Native)
+        .filter_map(|agent| {
+            given(&agent.model).map(|(param, model)| NativeCaller {
+                who: format!("Agent {}", agent.id),
+                param,
+                model,
+            })
+        });
+    let reviewer = file.review.iter().filter_map(|review| {
+        given(&review.model).map(|(param, model)| NativeCaller {
+            who: "the reviewer".into(),
+            param,
+            model,
+        })
+    });
+    agents.chain(reviewer).collect()
+}
+
+/// Resolve every parameter of `loadout` with `values`. Unknown parameter
+/// names are refused, so a typo never silently runs with a default.
+pub fn resolve_loadout(
+    loadout: &Loadout,
+    values: &ParamValues,
+    task: &str,
+    repo: &str,
+) -> Result<ResolvedLoadout, LoadoutError> {
+    let file = &loadout.file;
+    if let Some(unknown) = values.keys().find(|key| !file.params.contains_key(*key)) {
+        return Err(LoadoutError::Param {
+            param: unknown.clone(),
+            reason: format!("loadout {} declares no such parameter", file.id),
+        });
+    }
+    if task.trim().is_empty() {
+        return Err(LoadoutError::Param {
+            param: "task".into(),
+            reason: "the task is empty".into(),
+        });
+    }
+    // Every missing parameter at once, not one per try.
+    let missing = missing_required_params(file, values);
+    if !missing.is_empty() {
+        return Err(missing_params_error(&missing));
+    }
+    let mut agent_models = BTreeMap::new();
+    for agent in &file.agents {
+        let model = resolve_model(file, values, &agent.model)?;
+        if let Some(reason) = agent.runtime.model_refusal(&model) {
+            return Err(match &agent.model {
+                ParamOr::Param { param } => LoadoutError::Param {
+                    param: param.clone(),
+                    reason,
+                },
+                ParamOr::Value(_) => invalid(format!("agents.{}.model", agent.id), reason),
+            });
+        }
+        agent_models.insert(agent.id.clone(), model);
+    }
+    let agent_credentials = resolve_credentials(file, values)?;
     let reviewer_model = match &file.review {
         Some(review) => Some(resolve_model(file, values, &review.model)?),
         None => None,
@@ -1791,11 +1992,80 @@ mod tests {
             .any(|w| w.code == "same_model_reviewer"));
     }
 
+    /// Every missing parameter is named at once, in the order the loadout
+    /// uses them, with the `--model` flag that sets it and the
+    /// configuration default that can.
     #[test]
     fn a_missing_required_model_is_a_parameter_error() {
         let fix = builtin("fix");
         let error = resolve_loadout(&fix, &ParamValues::new(), "task", "/repo").unwrap_err();
+        assert!(matches!(error, LoadoutError::Params { .. }), "{error}");
+        assert_eq!(
+            error.to_string(),
+            "loadout parameters writer_model and reviewer_model: required: pass --model \
+             writer=provider:model --model reviewer=provider:model (writer_model: \
+             provider:model of the writer; reviewer_model: provider:model of the reviewer (use \
+             a different model than the writer)), or set run.models.writer and \
+             run.models.reviewer in the configuration (`axocoatl onboard` writes them)"
+        );
+        let mut values = ParamValues::new();
+        values.insert("writer_model".into(), "ollama:qwen3-coder:30b".into());
+        let error = resolve_loadout(&fix, &values, "task", "/repo").unwrap_err();
         assert!(matches!(error, LoadoutError::Param { .. }), "{error}");
+        assert_eq!(
+            error.to_string(),
+            "loadout parameter reviewer_model: required: pass --model reviewer=provider:model \
+             (provider:model of the reviewer (use a different model than the writer)), or set \
+             run.models.reviewer in the configuration (`axocoatl onboard` writes it)"
+        );
+        // fix-codex needs only its reviewer: the writer and the credential
+        // have defaults.
+        let error = resolve_loadout(&builtin("fix-codex"), &ParamValues::new(), "task", "/repo")
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("loadout parameter reviewer_model: required: pass --model reviewer="),
+            "{error}"
+        );
+        // A parameter that is not a model is set with --param.
+        let qa = builtin("qa");
+        let mut declared = qa.file.params["target_url"].clone();
+        declared.default = None;
+        assert_eq!(
+            param_flag("target_url", &declared),
+            "--param target_url=..."
+        );
+        assert_eq!(
+            param_flag("model", &qa.file.params["explorer_model"]),
+            "--param model=provider:model"
+        );
+        assert_eq!(and_list(&["a", "b", "c"]), "a, b and c");
+    }
+
+    /// The native callers admission checks are known from the parameters
+    /// given, before every parameter resolves.
+    #[test]
+    fn native_callers_are_read_from_the_parameters_given() {
+        let mut values = ParamValues::new();
+        values.insert("reviewer_model".into(), "anthropic:opus".into());
+        let callers = native_callers(&builtin("fix").file, &values);
+        assert_eq!(
+            callers,
+            [NativeCaller {
+                who: "the reviewer".into(),
+                param: Some("reviewer_model".into()),
+                model: ModelSpec::parse("anthropic:opus").unwrap(),
+            }]
+        );
+        // An external writer is not a native caller.
+        let callers = native_callers(&builtin("fix-claude-code").file, &values);
+        assert_eq!(callers.len(), 1);
+        assert_eq!(callers[0].who, "the reviewer");
+        assert_eq!(
+            resolve_credentials(&builtin("fix-claude-code").file, &values).unwrap()["writer"],
+            "claude-code-oauth"
+        );
     }
 
     #[test]
