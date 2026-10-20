@@ -143,6 +143,9 @@ contracts = {
     "./scripts/verify-product-browser-gate.sh",
     "./scripts/verify-cross-linux-gate.sh build",
     "cargo check --locked --workspace --all-targets --all-features --jobs 1",
+    "./scripts/release-gate/newuser-linux.sh",
+    "./scripts/release-gate/test-release-gate.sh",
+    "node --test scripts/release-gate/*.test.mjs",
   ],
   ".github/workflows/release.yml" => [
     "./scripts/verify-marketing-gate.sh source-bound",
@@ -154,6 +157,8 @@ contracts = {
     "./scripts/release-plan.sh",
     "./scripts/verify-product-browser-gate.sh",
     "./scripts/check-no-live-verify.sh target/${{ matrix.target }}/release/axocoatl",
+    "node scripts/release-gate/check-evidence.mjs",
+    "./scripts/release-gate/newuser-linux.sh",
   ],
   ".github/workflows/marketing-deploy.yml" => [
     "./scripts/verify-public-release.sh",
@@ -285,9 +290,10 @@ end
 release = YAML.load_file(ROOT.join(".github/workflows/release.yml"))
 jobs = release.fetch("jobs")
 expected_needs = {
-  "build" => %w[test-gate marketing-site docs-site product-browser],
+  "build" => %w[test-gate marketing-site docs-site product-browser new-user-evidence],
   "prove-artifacts" => %w[build],
-  "prepare-release" => %w[prove-artifacts],
+  "new-user-linux" => %w[build],
+  "prepare-release" => %w[prove-artifacts new-user-linux],
   "publish-crates" => %w[prepare-release],
   "release" => %w[prepare-release publish-crates],
   "deploy-marketing" => %w[release marketing-site],
@@ -301,6 +307,49 @@ end
 
 release_steps = lambda do |job|
   jobs.fetch(job).fetch("steps")
+end
+
+# The clean-machine new-user gate (docs/RELEASE_GATE.md): nothing is built
+# without signed evidence, the draft waits for Tier A on the release's own
+# archives, and the publish job checks the evidence again before touching the
+# release. The override input reaches the check only through env, and only a
+# workflow_dispatch run can carry it.
+evidence_check = "node scripts/release-gate/check-evidence.mjs"
+evidence_steps = lambda do |job|
+  release_steps.call(job).select { |step| step["run"].to_s.include?(evidence_check) }
+end
+if evidence_steps.call("new-user-evidence").empty?
+  errors << ".github/workflows/release.yml: new-user-evidence does not run #{evidence_check}"
+end
+publish_check = release_steps.call("release").index { |step| step["run"].to_s.include?(evidence_check) }
+publish_mutation = release_steps.call("release").index { |step| step["name"] == "Publish verified release" }
+unless publish_check && publish_mutation && publish_check < publish_mutation
+  errors << ".github/workflows/release.yml: the release job must run #{evidence_check} before \"Publish verified release\""
+end
+unless Array(jobs.dig("new-user-linux", "steps")).any? { |step| step["run"].to_s.include?("./scripts/release-gate/newuser-linux.sh") }
+  errors << ".github/workflows/release.yml: new-user-linux does not run ./scripts/release-gate/newuser-linux.sh"
+end
+%w[new-user-evidence release].each do |job|
+  evidence_steps.call(job).each do |step|
+    unless step.dig("env", "NEW_USER_GATE_OVERRIDE") == "${{ inputs.new_user_gate_override }}" \
+        && step["run"].to_s.include?('--override "${NEW_USER_GATE_OVERRIDE:-}"') \
+        && step["run"].to_s.include?('--event "$EVENT_NAME"')
+      errors << ".github/workflows/release.yml: #{job}'s evidence check must take the override from env NEW_USER_GATE_OVERRIDE and pass the event"
+    end
+  end
+end
+release_triggers = release.fetch(true, release["on"]) || {}
+unless release_triggers.is_a?(Hash) && release_triggers.keys.sort == %w[push workflow_dispatch] \
+    && Array(release_triggers.dig("push", "tags")) == ["v*"] \
+    && release_triggers.dig("workflow_dispatch", "inputs").is_a?(Hash) \
+    && release_triggers.dig("workflow_dispatch", "inputs").keys == ["new_user_gate_override"]
+  errors << ".github/workflows/release.yml: triggers must be v* tag pushes and a workflow_dispatch whose only input is new_user_gate_override"
+end
+jobs.each do |job_name, job|
+  Array(job["steps"]).each do |step|
+    next unless step["run"].to_s.match?(/\$\{\{\s*inputs\./)
+    errors << ".github/workflows/release.yml: #{job_name} step #{step["name"].inspect} expands an input in its script; pass it through env"
+  end
 end
 step_position = lambda do |job, name|
   release_steps.call(job).index { |step| step["name"] == name }

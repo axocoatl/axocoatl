@@ -36,6 +36,10 @@ jobs:
         run: ./scripts/test-film-gate.sh
       - name: Exercise public release-state evaluation
         run: ./scripts/test-public-release.sh
+      - name: Exercise the new-user gate's stub, fixtures table and release decision
+        run: node --test scripts/release-gate/*.test.mjs
+      - name: Exercise the new-user gate's scripts and evidence bundle
+        run: ./scripts/release-gate/test-release-gate.sh
 
   marketing-site:
     name: Marketing site
@@ -182,3 +186,119 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Build the CLI for aarch64-linux
         run: ./scripts/verify-cross-linux-gate.sh build
+
+  new-user-linux:
+    # docs/RELEASE_GATE.md, Tier A: a brand-new user on a stock runner, from
+    # the published install command to a passing, signed run on every
+    # tests/fixtures/newuser fixture, against this build's release archive.
+    name: New user (Linux, ${{ matrix.leg }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            evidence: A-x86
+            expect_refusal: ''
+          - leg: aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            evidence: A-arm
+            expect_refusal: ''
+          - leg: ubuntu-22.04 refusal
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            evidence: A-x86-refusal
+            expect_refusal: 'Podman 3.4.4'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-23
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: new-user-${{ matrix.runner }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        if: matrix.expect_refusal == ''
+        with:
+          go-version: '1.26.2'
+          cache: false
+      - name: Build and package this commit's release archive
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          version="$(awk '
+            $0 == "[package]" { package_section = 1; next }
+            package_section && /^\[/ { exit }
+            package_section && $1 == "version" { gsub(/"/, "", $3); print $3; exit }
+          ' axocoatl-cli/Cargo.toml)"
+          cargo build --locked --release -p axocoatl-cli
+          ./scripts/release-artifact.sh package "v$version" "$TARGET" target/release/axocoatl dist
+          echo "TARBALL=dist/axocoatl-v$version-$TARGET.tar.gz" >> "$GITHUB_ENV"
+      - name: Report the runner's Podman and user-ID ranges
+        run: |
+          podman version || echo "no podman on this runner image"
+          grep "^$(id -un):" /etc/subuid /etc/subgid || echo "no subordinate ID range for $(id -un)"
+      - name: Install Podman when the runner image lacks it
+        if: matrix.expect_refusal == ''
+        run: command -v podman >/dev/null || { sudo apt-get update && sudo apt-get install -y podman; }
+      - name: Prove each fixture fails before the stub's fix and passes after it
+        if: matrix.expect_refusal == ''
+        env:
+          GATE_REQUIRE_ALL_TOOLCHAINS: '1'
+        run: ./scripts/release-gate/test-fixtures.sh
+      - name: Exercise the gate's scripts with this build's binary
+        if: matrix.expect_refusal == ''
+        env:
+          AXOCOATL_BIN: target/release/axocoatl
+        run: ./scripts/release-gate/test-release-gate.sh
+      - name: A brand-new user, from the install command to a passing signed run
+        if: matrix.expect_refusal == ''
+        env:
+          EVIDENCE: ${{ matrix.evidence }}
+        run: |
+          ./scripts/release-gate/newuser-linux.sh --tarball "$TARBALL" \
+            --commit "$GITHUB_SHA" --label "$EVIDENCE" --system-changes
+      - name: Onboarding and doctor refuse this machine cleanly
+        if: matrix.expect_refusal != ''
+        env:
+          EVIDENCE: ${{ matrix.evidence }}
+          EXPECT_REFUSAL: ${{ matrix.expect_refusal }}
+        run: |
+          ./scripts/release-gate/newuser-linux.sh --tarball "$TARBALL" \
+            --commit "$GITHUB_SHA" --label "$EVIDENCE" --expect-refusal "$EXPECT_REFUSAL"
+      - name: Keep the new-user evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: newuser-${{ matrix.evidence }}
+          path: release-evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+  podman-suites:
+    # The Podman suites ignored by default, against the runner's rootless
+    # Podman (docs/RELEASE_GATE.md). The egress and workload suites need
+    # prepared local images and are not wired yet.
+    name: Podman suites (ignored tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-23
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: podman-suites
+      - name: Pull the image the Session trust suite runs with --pull=never
+        run: podman pull docker.io/library/alpine:3.20
+      - name: Session trust volume on rootless Podman
+        run: cargo test --locked -p axocoatl-isolation --test session_trust_podman -- --ignored --test-threads=1

@@ -69,6 +69,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   service is installed but not running and its log's last start attempt failed, it
   prints that `Failed to bootstrap daemon: …` line, read from the end of
   `~/Library/Logs/Axocoatl/daemon.log` on macOS or of the user journal on Linux.
+- **A clean-machine new-user gate blocks every release** (`docs/RELEASE_GATE.md`). The
+  release workflow builds nothing until a signed evidence bundle for the tagged commit
+  (`release-evidence/<version>/<commit>/`) passes every required path: a brand-new
+  user from the published install command to a passing, signed `axocoatl run fix` on
+  Linux x86_64 and ARM64 in CI, and live runs on a clean Mac account (local models,
+  Claude Code, Codex, OpenRouter, the workbench in Safari) and an Ubuntu 24.04 VM. The
+  bundle's manifest is signed with the gate account's receipt key
+  (`axocoatl receipt sign-evidence`, hidden) and checked against `.axocoatl/gate-keys`;
+  the release workflow also runs the Linux new-user flow again on its own archives. The
+  only way past it is a manual run on the tag with a typed override phrase, which is
+  logged. CI runs the Linux flow on every pull request against the commit's release
+  archive, with a scripted Ollama-compatible model server and fixture repositories in
+  Node, Python, Rust and Go (`tests/fixtures/newuser`), plus an Ubuntu 22.04 leg that
+  must refuse cleanly.
 
 
 ### Fixed

@@ -78,11 +78,13 @@ unset SHELLCHECK_OPTS
   "$@"
 
 # actionlint reads workflows, not composite actions: check the actions'
-# scripts, and the script that tests them, with the same pinned ShellCheck.
+# scripts, the script that tests them, and the new-user gate's scripts
+# (docs/RELEASE_GATE.md), with the same pinned ShellCheck.
 if [[ $# -eq 0 ]]; then
   repo_root=$(git rev-parse --show-toplevel)
   action_scripts=()
-  for script in "$repo_root"/actions/*/*.sh "$repo_root"/scripts/test-verify-receipt-action.sh; do
+  for script in "$repo_root"/actions/*/*.sh "$repo_root"/scripts/test-verify-receipt-action.sh \
+    "$repo_root"/scripts/release-gate/*.sh; do
     [[ -f "$script" ]] && action_scripts+=("$script")
   done
   if [[ ${#action_scripts[@]} -gt 0 ]]; then
