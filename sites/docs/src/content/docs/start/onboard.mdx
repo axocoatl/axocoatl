@@ -240,7 +240,10 @@ Choose the reviewer
   OpenRouter (hosted, credits)
 ```
 
-Claude Code runs in a Node image: Node repositories only for now.
+Claude Code runs in your repository's language image (Node.js, Python, Go or Rust,
+detected from `package.json`, `pyproject.toml` or requirements, `go.mod` or
+`Cargo.toml`), with the dependencies installed first and only the package registries
+open for that step; see [Repository toolchains](/configure/toolchains/).
 
 ### Step 3C: Codex
 

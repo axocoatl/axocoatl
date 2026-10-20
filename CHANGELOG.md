@@ -199,17 +199,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in onboarding (`fix` for a local or OpenRouter writer, `fix-claude-code` or `fix-codex`
   otherwise).
 - **The public pages say what has been tested.** End to end: macOS 26 on Apple silicon
-  with rootless Podman 5.8; in CI: Ubuntu 24.04 on x86_64 with rootless Podman 4.9.3.
-  Intel Macs, Podman 6, arm64 Linux, Ubuntu 22.04, Debian 12, Fedora with SELinux and WSL2
-  are labelled "not yet verified", and the install command says it runs in macOS, Linux
-  or WSL2, not PowerShell. The pages name the prerequisites (a Claude Pro or Max plan and
+  (48 GB) with rootless Podman 6.1.4 and 5.8, and Ubuntu 24.04 on arm64 with rootless
+  Podman 4.9.3; in CI: Ubuntu 24.04 on x86_64 with rootless Podman 4.9.3. Intel Macs, Macs
+  with less than 48 GB for local models, Ubuntu 22.04, Debian 12, Fedora with SELinux and
+  WSL2 are labelled "not yet verified", and the install command says it runs in macOS,
+  Linux or WSL2, not PowerShell. The pages name the prerequisites (a Claude Pro or Max plan and
   the `claude` CLI for Claude Code, a reviewer model, Podman), the memory the local pair
   was tested on (48 GB; with less, OpenRouter for the reviewer or both, or Claude Code or
   Codex as the writer), what gets downloaded
   (including the 87 MB embedding model the first daemon start fetches from
-  huggingface.co), that for now a run installs no project dependencies, so the
-  repository's check must run with what the sandbox image has (such as `node --test`),
-  and that Docker is not supported (Podman can run alongside it).
+  huggingface.co), how a run detects the repository's language and installs its
+  dependencies before the writer starts (for `fix-claude-code` and `fix-codex` too), and
+  that Docker is not supported (Podman can run alongside it). `axocoatl doctor` and
+  onboarding treat Podman 6.1 on macOS as tested, like 5.8.
 - **Claims withdrawn from the site and docs.** The default reviewer, `gpt-oss:20b`, is
   "a different reviewer", not a stronger one: it is smaller than its writer and has not
   been measured. The example run summary is now the real output of one run. The why page
@@ -452,6 +454,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.1.4; it opens `.npz` and `.pth` archives entry by entry and never calls `extract()`,
   and Axocoatl loads its embedding model from safetensors, so `.cargo/audit.toml` records
   those three IDs as not reachable until candle-core moves to zip 9.
+
+### Verified
+- **The release candidate was verified live on clean machines.** On macOS 26.6 on an
+  Apple M5 Pro with 48 GB, wiped of Podman, Ollama and Axocoatl, the published install
+  command installed 1.5.0, and `axocoatl onboard` installed Podman 6.1.4 and Ollama 0.40.6
+  with Homebrew, created a 6 CPU / 8 GiB applehv machine, turned Ollama's cloud models
+  off, pulled `qwen3-coder:30b` and `gpt-oss:20b` (about 33 GB), probed both at a
+  32,768-token context, wrote the configuration, and passed its first-run sample fix with
+  a verified receipt. There `axocoatl run fix` (`qwen3-coder:30b` writing, `gpt-oss:20b`
+  reviewing), `fix-claude-code` (Claude Code 2.1.292) and `fix-codex` (Codex 0.160.1)
+  each passed on Node.js (`npm ci`), Python (`pip install -e '.[test]'`, pytest), Go and
+  Rust repositories, every receipt verified against the computer's key and the checkout;
+  `axocoatl connect claude-code`, `connect codex` (ChatGPT sign-in) and
+  `connect openrouter` signed in through the browser, and `fix-claude-code` with an
+  OpenRouter `openai/gpt-oss-120b` reviewer passed on Python. On Ubuntu 24.04 (arm64 VM,
+  a fresh user, rootless Podman 4.9.3, Landlock ABI 4, the models served from the Mac's
+  Ollama), `fix` passed on Node.js, Python and Go.
 
 ## [1.4.0] - 2026-10-14
 

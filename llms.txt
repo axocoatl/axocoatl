@@ -85,9 +85,9 @@ accept-or-reject answer with a reason to every finding), fix-claude-code and fix
 writer's model defaults to anthropic:sonnet or openai:gpt-6.1-sol and the reviewer to the
 one onboarding set up, so `axocoatl run fix-claude-code --task "..."` is the whole
 command; Claude Code needs a Claude Pro or Max plan and the claude CLI, Codex signs in
-with a ChatGPT plan, and for now both run in a Node image and install no project
-dependencies, so the repository's check must run with Node.js alone, such as node --test;
-the run records which stored credential it sent), qa (one browser explorer;
+with a ChatGPT plan, and both run in an image that adds the program to the repository's
+toolchain, with its dependencies installed first; the run records which stored
+credential it sent), qa (one browser explorer;
 each finding carries a Playwright reproduction the host re-runs, and is confirmed only
 when it fails on the build under test and passes on a clean reference build) and audit
 (opt-in: a planner splits the scope into 2 to 8 areas, read-only workers audit them in
@@ -157,9 +157,12 @@ axocoatl run fix --task "Paging skips the last item when the total is a multiple
 axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo .
 ```
 
-For now a run installs none of the repository's dependencies, so its check must run with
-what the sandbox image has, such as `node --test` or a shell script; a check that needs
-`npm ci` first, pytest, cargo or go does not work yet.
+The run detects the repository's language from package.json, pyproject.toml or
+requirements*.txt, go.mod or Cargo.toml, runs in that language's official image, and
+installs the dependencies (such as `npm ci` or `pip install -e '.[test]'`) with only that
+ecosystem's package registries open for that step; then the writer works, and the host
+runs the check, such as `npm test`, `pytest` or `go test ./...`. Details:
+https://docs.axocoatl.ai/configure/toolchains/
 
 Open the sign-in link `axocoatl dev` prints (or run `axocoatl url`). The default
 listener is loopback-only, and its API requires a per-daemon token.
@@ -173,12 +176,17 @@ Install from Cargo instead with `cargo install axocoatl-cli` and Rust 1.88 or
 newer. Native Windows is not a release target; Windows users run Axocoatl inside WSL2 (not yet
 verified).
 
-Tested: end to end on macOS 26 on Apple silicon with rootless Podman 5.8 (the local pair,
-qwen3-coder:30b writing and gpt-oss:20b reviewing on Ollama 0.40.6, on a 48 GB Mac; with
-less memory, use OpenRouter for the reviewer or both, or Claude Code or Codex as the
-writer), and in CI on Ubuntu 24.04 on x86_64 with rootless Podman
-4.9.3 against a stub model server. Not yet verified: Intel Macs, Podman 6, arm64 Linux,
-Ubuntu 22.04, Debian 12, Fedora with SELinux, and WSL2 on Windows. Docker is not
+Tested end to end on the 1.5.0 release candidate: from a clean install on macOS 26 on
+Apple silicon (48 GB) with rootless Podman 6.1.4 and 5.8 and Ollama 0.40.6 (the local
+pair, qwen3-coder:30b writing and gpt-oss:20b reviewing; with less memory, use
+OpenRouter for the reviewer or both, or Claude Code or Codex as the writer), and on
+Ubuntu 24.04 on arm64 with rootless Podman 4.9.3, in a VM, with the models served from
+the Mac's Ollama; CI also runs on Ubuntu 24.04 on x86_64 against a stub model server.
+On macOS, `axocoatl run fix` with local models, fix-claude-code and fix-codex each passed
+on Node.js (with npm ci), Python (pytest), Go and Rust repositories, every receipt
+verified; on Ubuntu, fix passed on Node.js, Python and Go. Not yet verified: Intel Macs, Macs with less than
+48 GB for local models, Ubuntu 22.04, Debian 12, Fedora with SELinux, and WSL2 on
+Windows. Docker is not
 supported; Podman can run alongside it. The first daemon start downloads an 87 MB
 embedding model from huggingface.co. Removing Axocoatl:
 https://docs.axocoatl.ai/operate/uninstall/

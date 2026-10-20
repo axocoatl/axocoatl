@@ -471,10 +471,11 @@ What `egress` does not do:
   tasks you start, Ways checks and, without workload users, every command have only
   Podman's default seccomp profile; and on macOS the Podman VM mounts your home
   directory.
-- What has been tested: macOS 26 on Apple silicon with rootless Podman 5.8, end to end;
-  and Ubuntu 24.04 on x86_64 with rootless Podman 4.9.3 in CI, where loadout runs go
-  through `egress` with the `hardened` workload against a stub model server. Not yet
-  verified: Podman 6, Intel Macs, arm64 Linux, Ubuntu 22.04, Debian 12, Fedora with
+- What has been tested: macOS 26 on Apple silicon (48 GB) with rootless Podman 6.1.4
+  and 5.8, end to end; Ubuntu 24.04 on arm64 with rootless Podman 4.9.3 (Landlock ABI
+  4), end to end in a VM; and Ubuntu 24.04 on x86_64 with rootless Podman 4.9.3 in CI,
+  where loadout runs go through `egress` with the `hardened` workload against a stub
+  model server. Not yet verified: Intel Macs, Ubuntu 22.04, Debian 12, Fedora with
   SELinux enforcing, WSL2 on Windows, and rootful Podman, which loadout runs refuse.
 
 ### Compared with OpenShell

@@ -27,11 +27,13 @@ axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo 
 Run the loadout that matches the writer you chose in onboarding: `axocoatl run fix` for a
 local or OpenRouter writer, `axocoatl run fix-claude-code` or `axocoatl run fix-codex`,
 with the same flags, for Claude Code or Codex. Each uses the reviewer onboarding set up;
-`--model writer=…` or `--model reviewer=…` chooses another for one run. For now a run
-installs none of the repository's dependencies, so its check must run with what the
-sandbox image has, such as `node --test` or a shell script; a check that needs `npm ci`
-first, pytest, cargo or go does not work yet
-([which repositories work today](https://docs.axocoatl.ai/workbench/fix-qa-audit/#fix)).
+`--model writer=…` or `--model reviewer=…` chooses another for one run. The run detects
+the repository's language from `package.json`, `pyproject.toml` or `requirements*.txt`,
+`go.mod` or `Cargo.toml`, runs in that language's official image, and installs the
+dependencies, such as `npm ci` or `pip install -e '.[test]'`, with only that ecosystem's
+package registries open for that step; then the writer works, and the host runs the
+check, such as `npm test`, `pytest` or `go test ./...`
+([repository toolchains](https://docs.axocoatl.ai/configure/toolchains/)).
 
 On a Mac with 48 GB of memory, onboarding offers `qwen3-coder:30b` (19 GB) to write and
 `gpt-oss:20b` (14 GB) to review, on Ollama 0.40.6 or a later 0.x release. That pair has run end to end on
@@ -42,9 +44,11 @@ writer. What each path needs and downloads is on
 [the install page](https://axocoatl.ai/install#what-it-needs).
 
 The summary one real run printed on standard output (progress goes to standard error):
-`axocoatl run fix` on a development build of 1.5.0, on a small test repository whose check
-is `sh test.sh`, with `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing on Ollama 0.40.6
-on a 48 GB Mac. It shows the format, not a measurement.
+`axocoatl run fix` on the 1.5.0 release candidate, on a small Go repository with the
+paging bug above whose check is `go test ./...`, with `qwen3-coder:30b` writing and
+`gpt-oss:20b` reviewing on Ollama 0.40.6, on a 48 GB Mac set up from a clean install by
+`axocoatl onboard`. Its receipt verified with `axocoatl receipt verify … --repo .`. It
+shows the format, not a measurement.
 
 ```text
 Verdict: pass (exit 0)
@@ -52,9 +56,13 @@ Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2
 Checks:
   tests            passed, exit 0
 Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
-Usage: 49623 input + 1783 output tokens, $0.0000
-Network: 10 recorded events, 1 allowed and 0 refused connections, 0 route requests
-Record: run-f2e15292-1497-4c77-a1d8-858da9e35630
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-go:6063b3e9fdc6 · toolchain go (go.mod at the repository root) · check go test ./... (detected from the repository) · setup none
+Usage: 72252 input + 3003 output tokens, $0.0000
+Network: 16 recorded events, 0 allowed and 0 refused connections, 0 route requests
+Record: run-289c0a31-ef02-42ac-b7a9-d21e8767ddae
 ```
 
 - **Claude Code or Codex as the writer, in one command.**
@@ -67,9 +75,9 @@ Record: run-f2e15292-1497-4c77-a1d8-858da9e35630
   in through your browser (`axocoatl connect claude-code` runs `claude setup-token`;
   `axocoatl connect codex` your ChatGPT sign-in) and stores the credential on your computer
   without showing it; the daemon adds it on the host to each model request, and the
-  container holds a placeholder. For now both run in a Node image and install no project
-  dependencies, so the repository's check must run with Node.js alone, such as
-  `node --test`. To change the model, the budgets or the checks,
+  container holds a placeholder. Both run in an image that adds the program to the
+  repository's toolchain, with its dependencies installed first, so the repository's
+  own check, such as `npm test`, `pytest` or `go test ./...`, runs as it does for `fix`. To change the model, the budgets or the checks,
   [write your own loadout](https://docs.axocoatl.ai/configure/external-agents/#write-your-own-loadout).
 
 <p align="center">
@@ -245,11 +253,16 @@ axocoatl dev       # start the daemon and the one app
 
 Prebuilt releases support macOS 11 or newer and GNU/Linux with glibc 2.35 or
 newer on x86_64 and ARM64; on Windows, Axocoatl runs inside WSL2, and there is no native
-Windows binary. What has been tested: end to end on macOS 26 on Apple silicon with
-rootless Podman 5.8; in CI on Ubuntu 24.04 on x86_64 with rootless Podman 4.9.3, against a
-stub model server. Not yet verified: Intel Macs, Podman 6, arm64 Linux, Ubuntu 22.04,
-Debian 12, Fedora with SELinux, and WSL2 on Windows. Docker is not supported; Podman can
-run alongside it. The first daemon start downloads an 87 MB embedding model from
+Windows binary. What has been tested, end to end: macOS 26 on Apple silicon (48 GB) with
+rootless Podman 6.1.4 and 5.8 and Ollama 0.40.6, where the 1.5.0 release candidate was
+installed and onboarded on a Mac wiped of Podman, Ollama and Axocoatl; and Ubuntu 24.04
+with rootless Podman 4.9.3 (arm64, in a VM, with the models served from the Mac's
+Ollama). CI also runs on Ubuntu 24.04 on x86_64 against a stub model server. On macOS,
+`axocoatl run fix` with local models, `fix-claude-code` and `fix-codex` each passed on
+Node.js (with `npm ci`), Python (pytest), Go and Rust repositories, every receipt
+verified; on Ubuntu, `fix` passed on Node.js, Python and Go. Not yet verified: Intel
+Macs, Macs with less than 48 GB for local models, Ubuntu 22.04, Debian 12, Fedora with
+SELinux, and WSL2 on Windows. Docker is not supported; Podman can run alongside it. The first daemon start downloads an 87 MB embedding model from
 huggingface.co. To remove Axocoatl, see
 [Uninstall](https://docs.axocoatl.ai/operate/uninstall/).
 

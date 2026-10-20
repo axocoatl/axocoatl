@@ -81,12 +81,18 @@ Without `--model`, `fix` uses the writer and the reviewer `axocoatl onboard` set
 you chose a local or OpenRouter writer; with Claude Code or Codex as the writer, run
 `fix-claude-code` or `fix-codex` ([below](#with-claude-code-or-codex-as-the-writer)).
 
-<Aside title="Which repositories work today">
-The check runs inside the run's sandbox image. `fix` uses a small Alpine Linux image with
-Node.js, npm and Python 3; `fix-claude-code` and `fix-codex` a Node image. A run installs
-no project dependencies, so the check must work with what the image has: a check such as
-`node --test` or a shell script can run; one that needs `npm ci` first, pytest, cargo or
-go cannot yet. Name the check with `--check` when Axocoatl detects none.
+<Aside title="Which repositories work">
+Before the writer starts, the run detects the repository's language from `package.json`,
+`pyproject.toml` or `requirements*.txt`, `go.mod` or `Cargo.toml`, runs the Session in
+that language's official image, and installs the dependencies, such as `npm ci`,
+`pip install -e '.[test]'`, `go mod download` or `cargo fetch`, with only that
+ecosystem's package registries open for that step. Then the writer works, and the host
+runs the check, such as `npm test`, `pytest`, `go test ./...` or `cargo test`. The same
+applies to `fix`, `fix-claude-code` and `fix-codex`; see
+[Repository toolchains](/configure/toolchains/). Verified live on the 1.5.0 release
+candidate: on macOS, `fix` with local models, `fix-claude-code` and `fix-codex` each
+passed on Node.js, Python, Go and Rust repositories; on Ubuntu 24.04, `fix` passed on
+Node.js, Python and Go. Name the check with `--check` when Axocoatl detects none.
 </Aside>
 
 ### With Claude Code or Codex as the writer
@@ -97,8 +103,8 @@ axocoatl run fix-codex --task "Paging skips the last item"
 ```
 
 `fix-claude-code` and `fix-codex` run the same turn with the pinned Claude Code or Codex
-CLI as the writer, inside the Session container, from its recipe image (a Node image, so
-for now the check must run with Node.js alone): the same check,
+CLI as the writer, inside the Session container, from an image that adds the program to
+your repository's [toolchain](/configure/toolchains/): the same check,
 the same review for up to 3 rounds and the same adjudications. The writer's model has a
 default (`anthropic:sonnet`, `openai:gpt-6.1-sol`), so a run needs only a reviewer, which
 onboarding sets up; `--model reviewer=…`, such as `--model reviewer=ollama:gpt-oss:20b`,
