@@ -116,6 +116,68 @@
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
 
       <article class="release">
+        <span class="release-tag">v1.5.0</span>
+        <span class="release-date">2026-10-20</span>
+        <h2>Native Sessions run on Ollama 0.40, and a restored data directory starts again.</h2>
+
+        <p>Native execution accepted only an Ollama reporting exactly 0.20.6, while Homebrew
+          and ollama.com ship 0.40.6. Native Sessions now run on Ollama 0.40.6 and later 0.40
+          releases, with GGUF models in llama.cpp's <code>llama-server</code> only, after two
+          small requests to your own server show that a prompt longer than the context is
+          refused before generation and that a one-token limit stops after one token. A data
+          directory restored from a backup or brought to a new Mac, which 1.1.0 through 1.4.0
+          refused to start on, starts again.</p>
+
+        <h3>Changed</h3>
+        <ul>
+          <li>Native Sessions accept Ollama <code>0.40.P</code> with <code>P</code> 6 or later
+              and refuse 0.20.6, older releases, a newer minor release, pre-releases and local
+              builds, each with what to do. A model that is not GGUF, or that Ollama runs with
+              its MLX runner, is refused.</li>
+          <li><code>axocoatl onboard</code> suggests <code>qwen3-coder:30b</code> for Lead and
+              <code>gpt-oss:20b</code> for Reviewer, a pair that fits a 48 GB Mac one at a
+              time.</li>
+          <li>When its install directory is not on PATH, the installer asks before adding one
+              line to the profile your shell reads. <code>AXOCOATL_VERSION</code> installs a
+              given release, and <code>AXOCOATL_INSTALL_BASE_URL</code> names where its archive
+              is.</li>
+          <li>Every command on the home page, /install, the README and the docs' first-run
+              pages runs as written, and the pages say what has been tested and what has
+              not.</li>
+        </ul>
+
+        <h3>Added</h3>
+        <ul>
+          <li><code>axocoatl connect openrouter</code> signs in to OpenRouter in the browser
+              and stores the key it gets, with no key to paste. It has not yet been run
+              against a real OpenRouter account.</li>
+          <li><code>api_key_secret</code> names a stored secret in place of a hosted
+              provider's <code>api_key</code>.</li>
+          <li>The Ollama version each native model ran on is in the run's record and its
+              receipt.</li>
+          <li><code>axocoatl doctor</code> checks the Ollama version, each configured model and
+              the data directory's ownership record; <code>axocoatl service status</code>
+              shows why the service last failed to start; the docs have an Uninstall
+              page.</li>
+        </ul>
+
+        <h3>Fixed</h3>
+        <ul>
+          <li>A data directory that was copied or moved starts again: the daemon records its
+              new location once, and 1.4.0 starts on it after that.</li>
+          <li>A Session keeps working in a repository restored or copied at the same
+              path.</li>
+        </ul>
+
+        <h3>Security</h3>
+        <ul>
+          <li>The route to Ollama on this computer refuses Ollama 0.40's new endpoints, and a
+              Session opens it only when Ollama reports its cloud features disabled.</li>
+          <li>Dependencies move to zip 9 for RUSTSEC-2026-0367, -0368 and -0369.</li>
+        </ul>
+      </article>
+
+      <article class="release">
         <span class="release-tag">v1.4.0</span>
         <span class="release-date">2026-10-14</span>
         <h2>Every run is signed, and Claude Code or Codex is one command.</h2>

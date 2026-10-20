@@ -7,9 +7,9 @@ use axocoatl_exec::protocol::{PROTOCOL_VERSION, SUPERVISOR_VERSION};
 use crate::IsolationError;
 
 const EMBEDDED_PROTOCOL_VERSION: u32 = 3;
-const EMBEDDED_PACKAGE_VERSION: &str = "1.4.0";
+const EMBEDDED_PACKAGE_VERSION: &str = "1.5.0";
 const EMBEDDED_SOURCE_SHA256: &str =
-    "5cb2fadd972a3f3bcd7da8fd46e93ac11310ee258eceaa284dc709b32e8f122f";
+    "1d2ea4d5c34344da21e28278d4b496e603498b4d6224b92045869072f1331d84";
 
 #[derive(Clone, Copy)]
 pub(crate) struct EmbeddedSupervisor {
@@ -45,7 +45,7 @@ impl EmbeddedSupervisor {
 const X86_64: EmbeddedSupervisor = EmbeddedSupervisor {
     architecture: "x86_64",
     bytes: include_bytes!("../assets/exec-supervisor/axocoatl-exec-supervisor-linux-x86_64"),
-    sha256: "d331eafc69d225172e01e4cb7b1ed958b1c059da756415ec930df371db987edb",
+    sha256: "820f869c7da20d9dad723133c2cb15c80cd54f84d2d13db9c6649f0591962af5",
     protocol_version: EMBEDDED_PROTOCOL_VERSION,
     package_version: EMBEDDED_PACKAGE_VERSION,
     source_sha256: EMBEDDED_SOURCE_SHA256,
@@ -54,7 +54,7 @@ const X86_64: EmbeddedSupervisor = EmbeddedSupervisor {
 const AARCH64: EmbeddedSupervisor = EmbeddedSupervisor {
     architecture: "aarch64",
     bytes: include_bytes!("../assets/exec-supervisor/axocoatl-exec-supervisor-linux-aarch64"),
-    sha256: "8a90c3d9a4268c37027bc887c3fb72a943cbcc66dfc2f1dc090a396f126ff4d9",
+    sha256: "80597920f8810e63fc8e7ab61bedadbffee75069211d159da633287e285ab1af",
     protocol_version: EMBEDDED_PROTOCOL_VERSION,
     package_version: EMBEDDED_PACKAGE_VERSION,
     source_sha256: EMBEDDED_SOURCE_SHA256,
