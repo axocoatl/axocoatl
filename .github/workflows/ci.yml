@@ -267,7 +267,9 @@ jobs:
           id
           # The gate reads sudo calls from the system journal.
           if [ -n "$(journalctl -q -n 1 _UID=0 -o cat 2>/dev/null)" ]; then
-            echo "the system journal is readable"
+            echo "the system journal is readable as $(id -un)"
+          elif [ -n "$(sudo -n journalctl -q -n 1 _UID=0 -o cat 2>/dev/null)" ]; then
+            echo "the system journal is readable through sudo"
           else
             echo "the system journal is NOT readable"
           fi

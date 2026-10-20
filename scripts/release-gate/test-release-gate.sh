@@ -136,7 +136,7 @@ fi
   cat >"$work/journal-bin/journalctl" <<JOURNAL
 #!/bin/sh
 case " \$* " in
-  *" _UID=0 "*) [ -f "$work/journal-readable" ] && echo "systemd: started" ;;
+  *" _UID=0 "*) { [ -f "$work/journal-readable" ] || [ -n "\${JOURNAL_AS_ROOT:-}" ]; } && echo "systemd: started" ;;
   *" --show-cursor "*) echo "last entry"; echo "-- cursor: s=1;i=2" ;;
   *" --after-cursor "*) cat "$work/journal-sudo" 2>/dev/null ;;
 esac
@@ -149,9 +149,18 @@ JOURNAL
     [ -z "$(gate_sudo_mark)" ] || { echo "an unreadable journal gave a mark" >&2; exit 1; }
     gate_sudo_check "sudo: journal unreadable here" "" 2>/dev/null
     GITHUB_ACTIONS=true gate_sudo_check "sudo: journal unreadable on CI" "" 2>/dev/null
+    # On CI with passwordless sudo, a journal only root reads is read with
+    # sudo, and those reads are not counted (a stand-in sudo here).
+    printf '#!/bin/sh\n[ "$1" = -n ] && shift\nJOURNAL_AS_ROOT=1 exec "$@"\n' >"$work/journal-bin/sudo"
+    chmod +x "$work/journal-bin/sudo"
+    mark=$(GITHUB_ACTIONS=true gate_sudo_mark)
+    [ "$mark" = 'sudo s=1;i=2' ] || { echo "sudo mark: $mark" >&2; exit 1; }
+    printf '  runner : PWD=/x ; USER=root ; COMMAND=/usr/bin/journalctl -q --after-cursor s=1;i=2 -t sudo -o cat\n' >"$work/journal-sudo"
+    GITHUB_ACTIONS=true gate_sudo_check "sudo: none (journal read with sudo)" "$mark" 2>/dev/null
+    rm -f "$work/journal-sudo"
     touch "$work/journal-readable"
     mark=$(gate_sudo_mark)
-    [ "$mark" = 's=1;i=2' ] || { echo "mark: $mark" >&2; exit 1; }
+    [ "$mark" = 'plain s=1;i=2' ] || { echo "mark: $mark" >&2; exit 1; }
     gate_sudo_check "sudo: none" "$mark" 2>/dev/null
     printf '  runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/apt-get install -y podman\n' >"$work/journal-sudo"
     gate_sudo_check "sudo: by absolute path" "$mark" 2>/dev/null
@@ -164,6 +173,7 @@ JOURNAL
       "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]": undefined,
       "sudo: journal unreadable here": "skip (optional)",
       "sudo: journal unreadable on CI": "fail",
+      "sudo: none (journal read with sudo)": "pass",
       "sudo: none": "pass",
       "sudo: by absolute path": "fail",
     };

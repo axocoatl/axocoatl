@@ -446,21 +446,40 @@ gate_run_model() {
        inside && $1 == role ":" { gsub(/"/, "", $2); print $2; exit }' "$1" 2>/dev/null
 }
 
-# gate_sudo_mark: a cursor into the system journal, so that gate_sudo_check
-# can find every sudo call made after it, by any path (not only through the
-# guard shims on PATH). Empty when this user cannot read the system journal.
-gate_sudo_mark() {
+# gate_journal_reader: how this user can read the system journal: "plain"
+# (journalctl as this user), "sudo" (only on a CI runner with passwordless
+# sudo, whose gate evidence relies on the journal), or nothing.
+gate_journal_reader() {
   command -v journalctl >/dev/null 2>&1 || return 0
   # Root's entries show only when the system journal is readable.
-  [ -n "$(journalctl -q -n 1 _UID=0 -o cat 2>/dev/null)" ] || return 0
-  journalctl -q -n 1 --show-cursor -o cat 2>/dev/null | sed -n 's/^-- cursor: //p' | tail -n 1
+  if [ -n "$(journalctl -q -n 1 _UID=0 -o cat 2>/dev/null)" ]; then
+    echo plain
+  elif [ "${GITHUB_ACTIONS:-}" = true ] && [ -n "$(sudo -n journalctl -q -n 1 _UID=0 -o cat 2>/dev/null)" ]; then
+    echo sudo
+  fi
+}
+
+# gate_sudo_mark: "READER CURSOR", a place in the system journal, so that
+# gate_sudo_check can find every sudo call made after it, by any path (not
+# only through the guard shims on PATH). Empty when this user cannot read
+# the system journal.
+gate_sudo_mark() {
+  local reader cursor
+  reader=$(gate_journal_reader)
+  case "$reader" in
+    plain) cursor=$(journalctl -q -n 1 --show-cursor -o cat 2>/dev/null | sed -n 's/^-- cursor: //p' | tail -n 1) ;;
+    sudo) cursor=$(sudo -n journalctl -q -n 1 --show-cursor -o cat 2>/dev/null | sed -n 's/^-- cursor: //p' | tail -n 1) ;;
+    *) return 0 ;;
+  esac
+  [ -n "$cursor" ] && printf '%s %s\n' "$reader" "$cursor"
 }
 
 # gate_sudo_check NAME MARK: record NAME as pass when the journal shows no
-# sudo command after MARK. Without a readable journal it is a failure on a
-# CI runner (whose evidence relies on it) and an optional skip elsewhere.
+# sudo command after MARK (the gate's own sudo journalctl reads aside).
+# Without a readable journal it is a failure on a CI runner (whose evidence
+# relies on it) and an optional skip elsewhere.
 gate_sudo_check() {
-  local name=$1 mark=$2 calls
+  local name=$1 mark=$2 calls reader cursor
   if [ -z "$mark" ]; then
     if [ "${GITHUB_ACTIONS:-}" = true ]; then
       gate_record "$name" fail '' '' '' "the system journal is not readable, so a sudo by absolute path would go unseen"
@@ -469,7 +488,14 @@ gate_sudo_check() {
     fi
     return 0
   fi
-  calls=$(journalctl -q --after-cursor "$mark" -t sudo -o cat 2>/dev/null | grep 'COMMAND=' || true)
+  reader=${mark%% *}
+  cursor=${mark#* }
+  if [ "$reader" = sudo ]; then
+    calls=$(sudo -n journalctl -q --after-cursor "$cursor" -t sudo -o cat 2>/dev/null)
+  else
+    calls=$(journalctl -q --after-cursor "$cursor" -t sudo -o cat 2>/dev/null)
+  fi
+  calls=$(printf '%s\n' "$calls" | grep 'COMMAND=' | grep -v 'COMMAND=[^ ]*journalctl ' || true)
   if [ -z "$calls" ]; then
     gate_record "$name" pass '' '' '' 'the journal shows no sudo command'
   else
