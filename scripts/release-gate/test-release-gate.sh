@@ -39,6 +39,15 @@ expect() {
 
 command -v node >/dev/null 2>&1 || { echo "test-release-gate: node is required" >&2; exit 1; }
 
+# Nothing here may reach the developer's own Axocoatl: every variable that
+# would point the CLI at another data root or configuration goes, so each
+# case's temporary HOME is the only one it sees.
+unset AXOCOATL_DATA_DIR AXOCOATL_CONFIG AXOCOATL_TOKEN AXOCOATL_SOCKET_PATH \
+  XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME GATE_SIGNER_DIR
+# The installer must never ask on this terminal (scripts/install.sh reads
+# AXOCOATL_INSTALL_TTY in place of /dev/tty, for tests).
+export AXOCOATL_INSTALL_TTY="$work/no-terminal"
+
 # --- The Node suites.
 if node --test "$script_dir"/*.test.mjs >"$work/node-tests.log" 2>&1; then
   pass "node --test scripts/release-gate/*.test.mjs ($(grep -c '^ok ' "$work/node-tests.log") passed)"
@@ -74,14 +83,134 @@ fi
   [ "$(gate_with_outputs 'axocoatl run fix --task "x" --junit j.xml')" = 'axocoatl run fix --task "x" --junit j.xml --record run.axorecord.jsonl --receipt receipt.json' ] \
     || { echo "gate_with_outputs" >&2; exit 1; }
   [ "$(gate_flag_value 'axocoatl run fix --record r.jsonl --receipt x.json' --receipt)" = x.json ] || { echo "gate_flag_value" >&2; exit 1; }
+  [ "$(gate_without_models 'axocoatl run fix --task "a b" --model writer=ollama:x:1 --model reviewer=openrouter:y/z --junit j.xml')" = 'axocoatl run fix --task "a b" --junit j.xml' ] \
+    || { echo "gate_without_models" >&2; exit 1; }
+
+  # The config readers.
+  printf 'server:\n  host: "127.0.0.1"\n  port: 8231\nrun:\n  models:\n    writer: "ollama:qwen3-coder:30b"\n    reviewer: openrouter:openai/gpt-oss-120b\nother:\n  port: 1\n' >"$work/config.yaml"
+  [ "$(gate_server_port "$work/config.yaml")" = 8231 ] || { echo "gate_server_port" >&2; exit 1; }
+  [ "$(gate_run_model "$work/config.yaml" writer)" = ollama:qwen3-coder:30b ] || { echo "gate_run_model writer" >&2; exit 1; }
+  [ "$(gate_run_model "$work/config.yaml" reviewer)" = openrouter:openai/gpt-oss-120b ] || { echo "gate_run_model reviewer" >&2; exit 1; }
+
+  # Names that could climb out of a bundle are refused before anything is
+  # removed.
+  mkdir -p "$work/bundles/1.5.0/keep-me"
+  for bad in '../keep-me' 'a/b' '-x' ''; do
+    (gate_begin "$work/bundles" 1.5.0 "$(printf 'c%.0s' $(seq 1 40))" "$bad" A) 2>/dev/null && { echo "gate_begin took '$bad'" >&2; exit 1; }
+  done
+  (gate_begin "$work/bundles" '../..' "$(printf 'c%.0s' $(seq 1 40))" A-x A) 2>/dev/null && { echo "gate_begin took a version of ../.." >&2; exit 1; }
+  (gate_begin "$work/bundles" 1.5.0 '..' A-x A) 2>/dev/null && { echo "gate_begin took a commit of .." >&2; exit 1; }
+  [ -d "$work/bundles/1.5.0/keep-me" ] || { echo "gate_begin removed another bundle" >&2; exit 1; }
+
+  # The installer's printed profile line, and a new shell that finds the
+  # binary once it is added.
+  printf 'axocoatl-install: installed axocoatl v1.5.0 -> %s/.local/bin/axocoatl\naxocoatl-install: ~/.local/bin is not on your PATH. For new terminals to find axocoatl, add this line to ~/.zprofile:\n\n    export PATH="$HOME/.local/bin:$PATH"\n' "$HOME" >"$work/persistent.log"
+  [ "$(gate_printed_profile_line "$work/persistent.log")" = "$HOME/.zprofile"$'\t''export PATH="$HOME/.local/bin:$PATH"' ] \
+    || { echo "gate_printed_profile_line: $(gate_printed_profile_line "$work/persistent.log")" >&2; exit 1; }
+  printf 'axocoatl-install: add /x/.local/bin to your PATH:  export PATH="/x/.local/bin:$PATH"\n' >"$work/transient.log"
+  [ -z "$(gate_printed_profile_line "$work/transient.log")" ] || { echo "a transient export counted as a profile line" >&2; exit 1; }
+  mkdir -p "$work/shell-bin"
+  printf '#!/bin/sh\n' >"$work/shell-bin/axocoatl"
+  chmod +x "$work/shell-bin/axocoatl"
+  GATE_BASE_PATH=/usr/bin:/bin
+  gate_new_shells_find "$work/shell-bin/axocoatl" >/dev/null && { echo "a new shell found a binary not on its PATH" >&2; exit 1; }
+  while read -r shell _; do
+    case "${shell##*/}" in
+      zsh) printf 'export PATH="%s:$PATH"\n' "$work/shell-bin" >>"$HOME/.zprofile" ;;
+      *) printf 'export PATH="%s:$PATH"\n' "$work/shell-bin" | tee -a "$HOME/.profile" >>"$HOME/.bashrc" ;;
+    esac
+  done < <(gate_new_shells)
+  gate_new_shells_find "$work/shell-bin/axocoatl" >/dev/null || { echo "new shells: $(gate_new_shells_find "$work/shell-bin/axocoatl")" >&2; exit 1; }
+
+  # Doctor's verdict as a new user reads it.
+  gate_begin "$work/evidence-lib" 1.5.0 "$(printf 'd%.0s' $(seq 1 40))" A-lib A
+  printf 'Axocoatl doctor\n  [OK] Podman\n\nReady for: axocoatl run fix, axocoatl run fix-codex\n  ✓ axocoatl run fix (ollama)\nReady: yes\n' >"$work/doctor-ready.log"
+  printf 'Axocoatl doctor\n  [FAIL] Podman\n\nReady for: axocoatl run fix\nReady: yes\n' >"$work/doctor-fail.log"
+  printf 'Axocoatl doctor\n\nAll required checks passed\n' >"$work/doctor-old.log"
+  gate_doctor_text_check "$work/doctor-ready.log" 2>/dev/null
+  gate_doctor_text_check "$work/doctor-fail.log" 2>/dev/null
+  gate_doctor_text_check "$work/doctor-old.log" 2>/dev/null
+
+  # sudo by any path, from the system journal (a stand-in journalctl).
+  mkdir -p "$work/journal-bin"
+  cat >"$work/journal-bin/journalctl" <<JOURNAL
+#!/bin/sh
+case " \$* " in
+  *" _UID=0 "*) [ -f "$work/journal-readable" ] && echo "systemd: started" ;;
+  *" --show-cursor "*) echo "last entry"; echo "-- cursor: s=1;i=2" ;;
+  *" --after-cursor "*) cat "$work/journal-sudo" 2>/dev/null ;;
+esac
+exit 0
+JOURNAL
+  chmod +x "$work/journal-bin/journalctl"
+  (
+    export PATH="$work/journal-bin:$PATH"
+    unset GITHUB_ACTIONS
+    [ -z "$(gate_sudo_mark)" ] || { echo "an unreadable journal gave a mark" >&2; exit 1; }
+    gate_sudo_check "sudo: journal unreadable here" "" 2>/dev/null
+    GITHUB_ACTIONS=true gate_sudo_check "sudo: journal unreadable on CI" "" 2>/dev/null
+    touch "$work/journal-readable"
+    mark=$(gate_sudo_mark)
+    [ "$mark" = 's=1;i=2' ] || { echo "mark: $mark" >&2; exit 1; }
+    gate_sudo_check "sudo: none" "$mark" 2>/dev/null
+    printf '  runner : PWD=/home/runner ; USER=root ; COMMAND=/usr/bin/apt-get install -y podman\n' >"$work/journal-sudo"
+    gate_sudo_check "sudo: by absolute path" "$mark" 2>/dev/null
+    cp "$GATE_STEPS" "$work/sudo-steps.jsonl"
+  ) || exit 1
+  node -e '
+    const steps = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map(JSON.parse);
+    const status = Object.fromEntries(steps.map((s) => [s.name, `${s.status}${s.required ? "" : " (optional)"}`]));
+    const want = {
+      "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]": undefined,
+      "sudo: journal unreadable here": "skip (optional)",
+      "sudo: journal unreadable on CI": "fail",
+      "sudo: none": "pass",
+      "sudo: by absolute path": "fail",
+    };
+    const doctor = steps.filter((s) => s.name.startsWith("doctor says")).map((s) => s.status);
+    if (doctor.join() !== "pass,fail,fail") { console.error(`doctor text checks: ${doctor}`); process.exit(1); }
+    for (const [name, value] of Object.entries(want)) {
+      if (value && status[name] !== value) { console.error(`${name}: ${status[name]} (want ${value})`); process.exit(1); }
+    }
+    if (!/apt-get install -y podman/.test(steps.find((s) => s.name === "sudo: by absolute path").detail)) process.exit(1);
+  ' "$work/sudo-steps.jsonl" || exit 1
+
+  # The command each fixture runs: the README's, or onboarding's own for its
+  # sample (fixtures.json "command": "fixture-readme").
+  [ "$(gate_fixture_command node-deps 'axocoatl run fix --task "README task"')" = 'axocoatl run fix --task "README task"' ] \
+    || { echo "gate_fixture_command node-deps" >&2; exit 1; }
+  if [ "$(gate_fixture_expect node-plain command)" != fixture-readme ]; then
+    echo "node-plain does not run its own README's command" >&2
+    exit 1
+  fi
+  if [ -f "$gate_repo/tests/fixtures/newuser/node-plain/README.md" ]; then
+    [ "$(gate_fixture_command node-plain 'axocoatl run fix --task "README task"')" = \
+      "$(node "$gate_commands_js" readme-run "$gate_repo/tests/fixtures/newuser/node-plain/README.md")" ] \
+      || { echo "gate_fixture_command node-plain" >&2; exit 1; }
+  else
+    [ -z "$(gate_fixture_command node-plain 'axocoatl run fix --task "README task"')" ] \
+      || { echo "gate_fixture_command for an absent node-plain printed a command" >&2; exit 1; }
+  fi
 )
 lib_status=$?
-if [ "$lib_status" = 0 ]; then pass "lib.sh: new-user PATH, hiding a program, guard shims, run outputs"; else fail "lib.sh helpers"; fi
+if [ "$lib_status" = 0 ]; then
+  pass "lib.sh: new-user PATH, hiding a program, guard shims, run outputs, config readers, name checks, new shells, doctor's verdict, sudo in the journal, fixture commands"
+else
+  fail "lib.sh helpers"
+fi
+
+# The installer under test either prints the line that keeps axocoatl on a
+# new terminal's PATH (the gate then adds it and checks), or only an export
+# for the current shell, which the gate fails.
+if grep -q 'add this line to' "$repo_root/scripts/install.sh"; then new_shell_expect=pass; else new_shell_expect=fail; fi
 
 # --- The installer step, end to end, against a fake release.
 (
   export HOME="$work/install-home"
   mkdir -p "$HOME"
+  # A new user's HOME and login shell, as newuser-linux.sh makes them.
+  [ -d /etc/skel ] && cp -R /etc/skel/. "$HOME/" 2>/dev/null
+  if [ "$(uname -s)" = Darwin ]; then export SHELL=/bin/zsh; else export SHELL=/bin/bash; fi
   # shellcheck source=scripts/release-gate/lib.sh
   . "$script_dir/lib.sh"
   version=$(awk '$0 == "[package]" { p = 1; next } p && /^\[/ { exit } p && $1 == "version" { gsub(/"/, "", $3); print $3; exit }' "$repo_root/axocoatl-cli/Cargo.toml")
@@ -110,7 +239,9 @@ if [ "$lib_status" = 0 ]; then pass "lib.sh: new-user PATH, hiding a program, gu
   export GATE_BASE_PATH PATH="$GATE_BASE_PATH:$node_dir"
   stage="$work/stage"
   [ "$(gate_stage_release "$tarball" "$stage")" = "v$version" ] || { echo "stage tag" >&2; exit 1; }
-  gate_install_new_user "$stage" "$work/site" >"$work/install-step.log" 2>&1 || { cat "$work/install-step.log" >&2; exit 1; }
+  GITHUB_PATH="$work/github-path" gate_install_new_user "$stage" "$work/site" >"$work/install-step.log" 2>&1 || { cat "$work/install-step.log" >&2; exit 1; }
+  [ ! -s "$work/github-path" ] || { echo "the installer wrote GITHUB_PATH: a new user's shell has none" >&2; exit 1; }
+  [ "$(cat "$GATE_ATTACH/install-command.txt")" = "$GATE_DEFAULT_INSTALL" ] || { echo "install command not recorded" >&2; exit 1; }
   [ "$GATE_INSTALLED" = "$HOME/.local/bin/axocoatl" ] || { echo "installed to $GATE_INSTALLED" >&2; exit 1; }
   [ "$(axocoatl --version)" = "axocoatl $version" ] || { echo "the installed axocoatl is not on PATH" >&2; exit 1; }
   grep -q "^file://" "$GATE_ATTACH/logs/install-curl-urls.log" 2>/dev/null \
@@ -123,21 +254,22 @@ if [ "$lib_status" = 0 ]; then pass "lib.sh: new-user PATH, hiding a program, gu
   gate_step "a step that passes" -- true >/dev/null 2>&1
   gate_step "a step expected to exit 3" --expect 3 -- sh -c 'exit 3' >/dev/null 2>&1
   gate_step "a step that fails" --optional -- sh -c 'echo why it failed; exit 1' >/dev/null 2>&1
-  gate_finish >/dev/null 2>&1 || { cat "$GATE_BUNDLE/A-test.json" >&2; exit 1; }
+  gate_finish >/dev/null 2>&1
+  [ -f "$GATE_BUNDLE/A-test.json" ] || { echo "gate_finish wrote no evidence" >&2; exit 1; }
   node -e '
     const e = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     const names = e.steps.map((s) => `${s.name}:${s.status}`);
     const want = ["install with the published command:pass", "installed binary is where the installer said:pass",
-      "a new login shell finds axocoatl:pass", "a step that passes:pass", "a step expected to exit 3:pass", "a step that fails:fail"];
+      `a new shell finds axocoatl:${process.argv[2]}`, "a step that passes:pass", "a step expected to exit 3:pass", "a step that fails:fail"];
     for (const w of want) if (!names.includes(w)) { console.error(`missing ${w} in ${names}`); process.exit(1); }
-    if (e.pass !== true) { console.error("an optional failure failed the path"); process.exit(1); }
+    if (e.pass !== (process.argv[2] === "pass")) { console.error("the path verdict does not follow its required steps"); process.exit(1); }
     if (!e.attachments.includes("A-test/logs/install.log")) { console.error("install.log is not attached"); process.exit(1); }
     if (!/why it failed/.test(e.steps.find((s) => s.name === "a step that fails").detail)) process.exit(1);
-  ' "$GATE_BUNDLE/A-test.json"
+  ' "$GATE_BUNDLE/A-test.json" "$new_shell_expect"
 )
 install_status=$?
 if [ "$install_status" = 0 ]; then
-  pass "installer step: published install.sh through the curl shim into ~/.local/bin, with steps recorded"
+  pass "installer step: published install.sh through the curl shim into ~/.local/bin, no GITHUB_PATH, a new shell's PATH $new_shell_expect (as this installer prints), steps recorded"
 else
   fail "installer step"
 fi
@@ -221,27 +353,32 @@ PODMAN
   chmod 0755 "$sim/fakebin/podman"
   commit=$(printf 'b%.0s' $(seq 1 40))
   set +e
-  GATE_SIMULATION=1 GATE_TMPDIR="$sim" FAKE_AXOCOATL_VERSION="$version" PATH="$sim/fakebin:$PATH" \
+  env -u GITHUB_ACTIONS GATE_SIMULATION=1 GATE_TMPDIR="$sim" FAKE_AXOCOATL_VERSION="$version" PATH="$sim/fakebin:$PATH" \
     "$script_dir/newuser-linux.sh" --tarball "$tarball" --commit "$commit" --label A-sim \
     --evidence-root "$sim/evidence" --port 8243 >"$sim/run.log" 2>&1
   status=$?
   set -e
   [ "$status" = 1 ] || { tail -n 30 "$sim/run.log" >&2; echo "simulation exit $status, expected 1" >&2; exit 1; }
+  # node-plain is onboarding's sample: checked once it is in the tree.
+  present=$(cd "$repo_root/tests/fixtures/newuser" && for f in node-plain node-deps python-pytest rust go; do [ -d "$f" ] && printf '%s ' "$f"; done)
   node -e '
     const e = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     const status = Object.fromEntries(e.steps.map((s) => [s.name, s.status]));
-    const fixtures = ["node-deps", "python-pytest", "rust", "go"];
+    const fixtures = process.argv[3].trim().split(" ");
     const want = {
       "simulation: a stand-in axocoatl and a sandboxed installer": "fail",
       "start without axocoatl on PATH": "pass",
       "install with the published command": "pass",
+      "a new shell finds axocoatl": process.argv[2],
       "installed binary is the tarball\u0027s": "pass",
       "onboard --yes --writer ollama with no terminal": "pass",
-      "onboard ran no sudo and no package manager": "pass",
+      "onboard ran no sudo and no package manager through PATH": "pass",
+      "onboard ran no sudo by any path (system journal)": ["pass", "skip"],
       "--no-pull pulled nothing": "pass",
       "config.yaml holds the run models (run.models)": "pass",
       "config.yaml uses the free port 8243": "pass",
       "doctor: ready, no FAIL in sandbox, models, writers, daemon": "pass",
+      "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]": "pass",
       "axocoatl dev serves on port 8243": "pass",
       "a check program that is absent: exit 3": "pass",
       "refused before any model call (0 tokens)": "pass",
@@ -249,17 +386,20 @@ PODMAN
       "no Session, container or model call for the refused run": "pass",
       "onboard without Podman: exit 1": "pass",
       "onboard prints the Podman install command": "pass",
-      "onboard did not run sudo without --allow-sudo": "pass",
+      "onboard did not run sudo without --allow-sudo (PATH)": "pass",
+      "onboard did not run sudo without --allow-sudo (system journal)": ["pass", "skip"],
       "doctor FAILs an empty /etc/subuid with the usermod fix": "skip",
       "Ctrl+C stops axocoatl dev with exit 0": "pass",
     };
     for (const fixture of fixtures) {
       for (const name of [`run fix on ${fixture}`, `receipt verify on ${fixture} (documented command)`, `record verify on ${fixture}`, `the model fixed ${fixture} once`]) want[name] = "pass";
     }
-    const wrong = Object.entries(want).filter(([name, value]) => status[name] !== value).map(([name, value]) => `${name}: ${status[name]} (want ${value})`);
+    if (!fixtures.includes("node-plain")) want["fixture node-plain exists"] = "fail";
+    const ok = (name, value) => (Array.isArray(value) ? value : [value]).includes(status[name]);
+    const wrong = Object.entries(want).filter(([name, value]) => !ok(name, value)).map(([name, value]) => `${name}: ${status[name]} (want ${value})`);
     if (wrong.length) { console.error(wrong.join("\n")); process.exit(1); }
     if (e.pass !== false) { console.error("a simulated path passed"); process.exit(1); }
-  ' "$sim/evidence/$version/$commit/A-sim.json"
+  ' "$sim/evidence/$version/$commit/A-sim.json" "$new_shell_expect" "$present"
   # A fixture the model cannot fix fails its run.
   node -e '
     const f = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
@@ -267,7 +407,7 @@ PODMAN
     require("fs").writeFileSync(process.argv[2], JSON.stringify(f));
   ' "$script_dir/stub-fixes.json" "$sim/no-go-fix.json"
   set +e
-  GATE_SIMULATION=1 GATE_TMPDIR="$sim" FAKE_AXOCOATL_VERSION="$version" GATE_STUB_FIXES="$sim/no-go-fix.json" PATH="$sim/fakebin:$PATH" \
+  env -u GITHUB_ACTIONS GATE_SIMULATION=1 GATE_TMPDIR="$sim" FAKE_AXOCOATL_VERSION="$version" GATE_STUB_FIXES="$sim/no-go-fix.json" PATH="$sim/fakebin:$PATH" \
     "$script_dir/newuser-linux.sh" --tarball "$tarball" --commit "$commit" --label A-sim-broken \
     --evidence-root "$sim/evidence" --port 8244 >"$sim/broken.log" 2>&1
   set -e
@@ -276,12 +416,93 @@ PODMAN
     const step = (name) => e.steps.find((s) => s.name === name)?.status;
     if (step("run fix on go") !== "fail" || step("run fix on rust") !== "pass") { console.error(JSON.stringify(e.steps.filter((s) => /go|rust/.test(s.name)))); process.exit(1); }
   ' "$sim/evidence/$version/$commit/A-sim-broken.json"
+
+  # --live (D1): this account's own brand-new HOME, interactive onboarding
+  # that is told --start none, and the daemon checked on the port
+  # onboarding chose (FAKE_DEFAULT_PORT stands for "8080 when free"). The
+  # stub stands for the models onboarding configured.
+  live_home="$sim/live-home"
+  mkdir -p "$live_home"
+  node "$script_dir/stub-model-server.mjs" --port 0 --port-file "$sim/live-stub.port" >"$sim/live-stub.log" 2>&1 &
+  live_stub=$!
+  for _ in $(seq 1 100); do [ -s "$sim/live-stub.port" ] && break; sleep 0.1; done
+  live_env=(env -u GITHUB_ACTIONS HOME="$live_home" GATE_SIMULATION=1 GATE_TMPDIR="$sim" GATE_IN_SCRIPT="$sim/live-transcript.txt"
+    FAKE_AXOCOATL_VERSION="$version" FAKE_ONBOARD_OPERATOR=1 FAKE_DEFAULT_PORT=8245
+    FAKE_OLLAMA_URL="http://127.0.0.1:$(cat "$sim/live-stub.port")" PATH="$sim/fakebin:$PATH")
+  set +e
+  "${live_env[@]}" "$script_dir/newuser-linux.sh" --live --tarball "$tarball" --commit "$commit" --label D1-sim \
+    --evidence-root "$sim/evidence" </dev/null >"$sim/live.log" 2>&1
+  status=$?
+  # The same account again is no longer brand-new: refused before anything.
+  "${live_env[@]}" "$script_dir/newuser-linux.sh" --live --tarball "$tarball" --commit "$commit" --label D1-again \
+    --evidence-root "$sim/evidence" </dev/null >"$sim/live-again.log" 2>&1
+  again=$?
+  set -e
+  kill "$live_stub" 2>/dev/null || true
+  [ "$status" = 1 ] || { tail -n 30 "$sim/live.log" >&2; echo "live simulation exit $status, expected 1" >&2; exit 1; }
+  node -e '
+    const e = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const status = Object.fromEntries(e.steps.map((s) => [s.name, s.status]));
+    const fixtures = process.argv[2].trim().split(" ");
+    const want = {
+      "onboard (interactive, every consent answered by the operator; --start none)": "pass",
+      "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]": "pass",
+      "axocoatl dev serves on port 8245": "pass",
+      "negative cases with the scripted model server": "skip",
+    };
+    for (const fixture of fixtures) for (const name of [`run fix on ${fixture}`, `record verify on ${fixture}`]) want[name] = "pass";
+    const config = e.steps.find((s) => s.name.startsWith("onboarding wrote "));
+    if (config?.status !== "pass" || !/server\.port 8245/.test(config.detail)) { console.error(JSON.stringify(config)); process.exit(1); }
+    const wrong = Object.entries(want).filter(([name, value]) => status[name] !== value).map(([name, value]) => `${name}: ${status[name]} (want ${value})`);
+    if (wrong.length) { console.error(wrong.join("\n")); process.exit(1); }
+    if (e.tier !== "D") { console.error(`tier ${e.tier}`); process.exit(1); }
+  ' "$sim/evidence/$version/$commit/D1-sim.json" "$present"
+  grep -q -- '--model' "$sim/evidence/$version/$commit/D1-sim/readme-command.txt" && { echo "the live run kept the README's --model options" >&2; exit 1; }
+  if [ "$again" != 2 ] || ! grep -q 'needs a brand-new account' "$sim/live-again.log"; then
+    cat "$sim/live-again.log" >&2
+    echo "a second live run in the same account was not refused" >&2
+    exit 1
+  fi
+  [ ! -e "$sim/evidence/$version/$commit/D1-again.json" ] || { echo "the refused live run wrote evidence" >&2; exit 1; }
+  [ -d "$live_home" ] || { echo "the live run removed the account's HOME" >&2; exit 1; }
 )
 sim_status=$?
 if [ "$sim_status" = 0 ]; then
-  pass "newuser-linux.sh against a stand-in axocoatl: every Tier A step recorded as the contract says; a fixture the model cannot fix fails its run"
+  pass "newuser-linux.sh against a stand-in axocoatl: every Tier A step recorded as the contract says; a fixture the model cannot fix fails its run; --live keeps the account's HOME, starts nothing from onboarding and finds the daemon on the port onboarding chose"
 else
   fail "newuser-linux.sh simulation"
+fi
+
+# --- newuser-linux.sh refuses what it must, before it changes anything.
+(
+  set -e
+  refusal_tar="$work/refusal/axocoatl-v1.5.0-x86_64-unknown-linux-gnu.tar.gz"
+  mkdir -p "${refusal_tar%/*}"
+  : >"$refusal_tar"
+  set +e
+  out=$(env -u GITHUB_ACTIONS GATE_SIMULATION=1 "$script_dir/newuser-linux.sh" --tarball "$refusal_tar" \
+    --commit "$(printf 'e%.0s' $(seq 1 40))" --system-changes 2>&1)
+  status=$?
+  set -e
+  if [ "$status" != 2 ] || ! printf '%s' "$out" | grep -q 'runs only on a CI runner'; then
+    echo "--system-changes outside CI: $status $out" >&2
+    exit 1
+  fi
+  set +e
+  out=$(GATE_SIMULATION=1 "$script_dir/newuser-linux.sh" --tarball "$refusal_tar" \
+    --commit "$(printf 'e%.0s' $(seq 1 40))" --label '../other-commit' 2>&1)
+  status=$?
+  set -e
+  if [ "$status" != 2 ] || ! printf '%s' "$out" | grep -q -- '--label must be'; then
+    echo "--label ../: $status $out" >&2
+    exit 1
+  fi
+)
+refusal_status=$?
+if [ "$refusal_status" = 0 ]; then
+  pass "newuser-linux.sh refuses --system-changes outside CI and a label that leaves its bundle"
+else
+  fail "newuser-linux.sh refusals"
 fi
 
 # --- collect-evidence.sh: a bundle for every required path, signed by the

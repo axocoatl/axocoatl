@@ -5,8 +5,8 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  commandsOf, decodeEntities, firstCommand, htmlBlocks, logicalLines, readmeRunCommand,
-  stripComment, yamlBlock,
+  commandsOf, decodeEntities, firstCommand, htmlBlocks, installCommand, logicalLines,
+  missingCommands, readmeRunCommand, stripComment, yamlBlock,
 } from './published-commands.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -43,6 +43,21 @@ test('the published install command is found on the home page and /install', () 
   for (const page of ['sites/marketing/index.html', 'sites/marketing/install/index.html']) {
     assert.equal(firstCommand(path.join(REPO, page), 'curl'), 'curl -fsSL https://axocoatl.ai/install.sh | sh', page);
   }
+});
+
+test('the install command is the curl piped to sh that the README and the site show', () => {
+  assert.equal(installCommand(path.join(REPO, 'README.md')), 'curl -fsSL https://axocoatl.ai/install.sh | sh');
+  assert.equal(installCommand(path.join(REPO, 'sites/marketing/index.html')), 'curl -fsSL https://axocoatl.ai/install.sh | sh');
+  // Another download first, or an install line that saves the script, is not the command.
+  assert.equal(installCommand('a.md', '```bash\ncurl -fsSLO https://example.com/x.tar.gz\ncurl -fsSL https://axocoatl.ai/install.sh | bash\n```\n'),
+    'curl -fsSL https://axocoatl.ai/install.sh | bash');
+  assert.throws(() => installCommand('a.md', '```bash\ncurl -fsSL https://axocoatl.ai/install.sh -o install.sh\n```\n'), /no `curl … install.sh \| sh`/);
+});
+
+test('missing commands are named, and a command must be shown exactly', () => {
+  const source = '```bash\naxocoatl onboard\naxocoatl doctor   # check\naxocoatl dev --port 9000\n```\n';
+  assert.deepEqual(missingCommands('a.md', ['axocoatl onboard', 'axocoatl doctor', 'axocoatl dev'], source), ['axocoatl dev']);
+  assert.deepEqual(missingCommands(path.join(REPO, 'README.md'), ['axocoatl onboard', 'axocoatl doctor', 'axocoatl dev']), []);
 });
 
 test('Markdown fences of other languages are not commands, and a yaml block can be taken by its content', () => {

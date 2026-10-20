@@ -13,7 +13,10 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 
 const VERSION = process.env.FAKE_AXOCOATL_VERSION || '0.0.0';
-const configPath = path.join(homedir(), '.config', 'axocoatl', 'config.yaml');
+// Where the product keeps config.yaml (axocoatl-cli/src/user_paths.rs).
+const configPath = process.platform === 'darwin'
+  ? path.join(homedir(), 'Library', 'Application Support', 'Axocoatl', 'config.yaml')
+  : path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config'), 'axocoatl', 'config.yaml');
 const [command, ...args] = process.argv.slice(2);
 const out = (text) => process.stdout.write(`${text}\n`);
 const err = (text) => process.stderr.write(`${text}\n`);
@@ -49,9 +52,17 @@ async function main() {
       out(`axocoatl ${VERSION}`);
       return 0;
     case 'onboard': {
-      if (!args.includes('--yes') && !process.stdin.isTTY) {
+      // FAKE_ONBOARD_OPERATOR=1 stands for a person answering every prompt
+      // (the gate's --live mode); otherwise, with no terminal, refuse.
+      const interactive = !args.includes('--yes');
+      if (interactive && !process.stdin.isTTY && process.env.FAKE_ONBOARD_OPERATOR !== '1') {
         err('axocoatl onboard: no terminal; pass --yes and the flags in --help');
         return 3;
+      }
+      if (interactive && !flag('--start')) {
+        // Step 6's default answer runs `axocoatl dev` in the foreground.
+        err('fake axocoatl: interactive onboarding without --start would run axocoatl dev in the foreground');
+        return 9;
       }
       if (!onPath('podman')) {
         out('Not ready yet, 1 step left:\n  1) Install Podman: sudo apt-get install -y podman');
@@ -62,12 +73,15 @@ async function main() {
         return 1;
       }
       mkdirSync(path.dirname(configPath), { recursive: true });
+      // Onboarding's port: --port, else 8080 when free (FAKE_DEFAULT_PORT
+      // stands for that choice, so tests never bind 8080).
       writeFileSync(configPath, [
-        'server:', `  port: ${flag('--port') || 8080}`, '  host: "127.0.0.1"',
-        'providers:', '  ollama:', `    base_url: "${flag('--ollama-url')}"`,
-        'run:', '  models:', `    writer: "${flag('--writer-model')}"`, `    reviewer: "${flag('--reviewer')}"`, '',
+        'server:', `  port: ${flag('--port') || process.env.FAKE_DEFAULT_PORT || 8080}`, '  host: "127.0.0.1"',
+        'providers:', '  ollama:', `    base_url: "${flag('--ollama-url') || process.env.FAKE_OLLAMA_URL}"`,
+        'run:', '  models:', `    writer: "${flag('--writer-model') || 'ollama:qwen3-coder:30b'}"`,
+        `    reviewer: "${flag('--reviewer') || 'ollama:gpt-oss:20b'}"`, '',
       ].join('\n'));
-      out('Ready for:\n  ✓ axocoatl run fix');
+      out('Ready for: axocoatl run fix\n  ✓ axocoatl run fix (ollama)\nReady: yes');
       return 0;
     }
     case 'doctor': {
@@ -86,7 +100,10 @@ async function main() {
         },
       };
       if (process.env.FAKE_NO_SUBUID) doc.sections.sandbox.push({ name: 'subuid', status: 'fail', detail: 'no range', fix: 'sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER' });
-      out(args.includes('--json') ? JSON.stringify(doc) : (ready ? 'Ready for: axocoatl run fix' : 'Not ready'));
+      const text = ready
+        ? 'Axocoatl doctor\n  [OK] Podman\n\nReady for: axocoatl run fix\n  ✓ axocoatl run fix (ollama)\nReady: yes'
+        : 'Axocoatl doctor\n  [FAIL] Podman\n\nNot ready yet, 1 step left:\n  1) Podman\nReady: no';
+      out(args.includes('--json') ? JSON.stringify(doc) : text);
       return ready ? 0 : 1;
     }
     case 'dev': {

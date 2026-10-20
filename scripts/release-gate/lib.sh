@@ -58,9 +58,19 @@ gate_sha256() {
 
 gate_slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-80; }
 
+# gate_valid_name NAME: a gate path name (A-x86, C1-local, D1): letters,
+# digits and dashes, so it can never climb out of its bundle.
+gate_valid_name() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,63}$ ]]; }
+gate_valid_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+gate_valid_commit() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
+
 # gate_begin BUNDLE_ROOT VERSION COMMIT PATH_NAME TIER
-# Starts a fresh record of PATH_NAME in BUNDLE_ROOT/VERSION/COMMIT/.
+# Starts a fresh record of PATH_NAME in BUNDLE_ROOT/VERSION/COMMIT/. The
+# names are checked first: the previous record of the path is removed.
 gate_begin() {
+  gate_valid_version "$2" || gate_die "invalid version '$2' (X.Y.Z)"
+  gate_valid_commit "$3" || gate_die "invalid commit '$3' (40 lowercase hex characters)"
+  gate_valid_name "$4" || gate_die "invalid path name '$4' (letters, digits and dashes)"
   GATE_VERSION=$2
   GATE_COMMIT=$3
   GATE_PATH_NAME=$4
@@ -290,13 +300,70 @@ gate_stage_release() {
   printf '%s\n' "$tag"
 }
 
-# gate_install_new_user STAGE_DIR SITE_DIR: run the published installer as
-# `curl -fsSL https://axocoatl.ai/install.sh | sh` does, against the staged
-# release, then check where the binary went and whether the user's next
-# shell finds it. Sets GATE_INSTALLED (the binary) and puts its directory on
+# The default published install command, for scripts given no other.
+GATE_DEFAULT_INSTALL='curl -fsSL https://axocoatl.ai/install.sh | sh'
+
+# gate_new_shells: the shells a new user's next terminal starts, one
+# "SHELL FLAGS" per line, for the user's login shell ($SHELL, bash or zsh).
+# macOS Terminal starts an interactive login shell. On Linux a new login
+# (SSH, a new desktop session) starts a login shell and a new terminal
+# window an interactive one, so both must find axocoatl.
+gate_new_shells() {
+  local shell=${SHELL:-}
+  case "${shell##*/}" in
+    bash | zsh) [ -x "$shell" ] || shell='' ;;
+    *) shell='' ;;
+  esac
+  if [ "$(uname -s)" = Darwin ]; then
+    printf '%s -ilc\n' "${shell:-/bin/zsh}"
+  else
+    shell=${shell:-/bin/bash}
+    printf '%s -lc\n%s -ic\n' "$shell" "$shell"
+  fi
+}
+
+# gate_new_shells_find BINARY: whether every new shell (gate_new_shells),
+# started with a clean environment and the new user's base PATH, resolves
+# axocoatl to BINARY. Prints what each one found.
+gate_new_shells_find() {
+  local binary=$1 shell flags found status=0 report=''
+  while read -r shell flags; do
+    found=$(env -i HOME="$HOME" USER="${USER:-}" LOGNAME="${USER:-}" SHELL="$shell" TERM=dumb \
+      PATH="$GATE_BASE_PATH" "$shell" "$flags" 'command -v axocoatl' 2>/dev/null </dev/null | tail -n 1)
+    report="$report${report:+; }${shell##*/} $flags: ${found:-not found}"
+    [ "$found" = "$binary" ] || status=1
+  done < <(gate_new_shells)
+  printf '%s\n' "$report"
+  return "$status"
+}
+
+# gate_printed_profile_line LOG: the shell startup file and the line the
+# installer asked the user to add to it ("add this line to FILE:", then the
+# line), as FILE<TAB>LINE with a leading ~/ expanded; nothing when it asked
+# for none. A bare `export PATH=...` for the current shell is not one.
+gate_printed_profile_line() {
+  awk -v home="$HOME" '
+    found && NF { sub(/^[ \t]+/, ""); print file "\t" $0; exit }
+    /add this line to .*:[ \t]*$/ {
+      file = $0
+      sub(/.*add this line to /, "", file)
+      sub(/:[ \t]*$/, "", file)
+      if (substr(file, 1, 2) == "~/") file = home substr(file, 2)
+      found = 1
+    }' "$1"
+}
+
+# gate_install_new_user STAGE_DIR SITE_DIR [COMMAND]: run the published
+# install COMMAND (default GATE_DEFAULT_INSTALL) exactly as written, against
+# the staged release, then check where the binary went and that the user's
+# next shell finds it. When the installer could not change a profile itself
+# (no terminal to ask on) and printed the line to add, the gate adds that
+# line as the user is told to and checks again; a transient `export` hint
+# alone fails. Sets GATE_INSTALLED (the binary) and puts its directory on
 # PATH for later steps the way the installer told the user to.
 gate_install_new_user() {
-  local stage=$1 site=$2 shim="$GATE_TMP/curl-shim" out="$GATE_ATTACH/logs/install.log"
+  local stage=$1 site=$2 command=${3:-$GATE_DEFAULT_INSTALL}
+  local shim="$GATE_TMP/curl-shim" out="$GATE_ATTACH/logs/install.log"
   # Never replace another install: where /usr/local/bin is writable and
   # already holds an axocoatl, the installer would overwrite it.
   if grep -q '/usr/local/bin' "$site/install.sh" && [ -w /usr/local/bin ] && [ -e /usr/local/bin/axocoatl ]; then
@@ -305,19 +372,22 @@ gate_install_new_user() {
     return 1
   fi
   gate_curl_shim "$shim" "$stage" "$site" "$GATE_TMP/curl.log"
+  printf '%s\n' "$command" >"$GATE_ATTACH/install-command.txt"
   local t0 b0 status seconds
   t0=$(gate_now_ms)
   b0=$(gate_rx_bytes)
-  env PATH="$shim:$PATH" sh -c 'curl -fsSL https://axocoatl.ai/install.sh | sh' >"$out" 2>&1
+  # A new user's shell: no CI PATH file to write, no installer overrides.
+  env -u GITHUB_PATH -u AXOCOATL_MODIFY_PATH -u AXOCOATL_VERSION -u AXOCOATL_INSTALL_BASE_URL \
+    -u AXOCOATL_INSTALL_SYSTEM_DIR PATH="$shim:$PATH" sh -c "$command" >"$out" 2>&1
   status=$?
   cat "$out" >&2
   cp "$GATE_TMP/curl.log" "$GATE_ATTACH/logs/install-curl-urls.log"
   seconds=$(node -e 'process.stdout.write(((Date.now() - Number(process.argv[1])) / 1000).toFixed(1))' "$t0")
   if [ "$status" != 0 ]; then
-    gate_record "install with the published command" fail "$status" "$seconds" "$(($(gate_rx_bytes) - b0))" "$(tail -n 2 "$out" | tr '\n' ' ')"
+    gate_record "install with the published command" fail "$status" "$seconds" "$(($(gate_rx_bytes) - b0))" "$command: $(tail -n 2 "$out" | tr '\n' ' ')"
     return 1
   fi
-  gate_record "install with the published command" pass 0 "$seconds" "$(($(gate_rx_bytes) - b0))" ''
+  gate_record "install with the published command" pass 0 "$seconds" "$(($(gate_rx_bytes) - b0))" "$command"
   if grep -q '^REFUSED' "$GATE_TMP/curl.log"; then
     gate_record "installer fetched only the release" fail '' '' '' "$(grep '^REFUSED' "$GATE_TMP/curl.log" | head -n 3 | tr '\n' ' ')"
   fi
@@ -327,18 +397,24 @@ gate_install_new_user() {
     return 1
   fi
   gate_record "installed binary is where the installer said" pass '' '' '' "$GATE_INSTALLED"
-  local dest=${GATE_INSTALLED%/*} shell_found='' login_shell=/bin/bash shell_flags=-lc
-  if [ "$(uname -s)" = Darwin ]; then
-    login_shell=/bin/zsh
-    shell_flags=-ilc
-  fi
-  shell_found=$(env -i HOME="$HOME" USER="${USER:-}" TERM=dumb PATH="$GATE_BASE_PATH" "$login_shell" "$shell_flags" 'command -v axocoatl' 2>/dev/null </dev/null | tail -n 1)
-  if [ "$shell_found" = "$GATE_INSTALLED" ]; then
-    gate_record "a new login shell finds axocoatl" pass '' '' '' "$login_shell -l resolves $shell_found"
-  elif grep -q "export PATH=\"$dest:" "$out"; then
-    gate_record "a new login shell finds axocoatl" pass '' '' '' "not on a new shell's PATH; the installer printed the export line for $dest"
+  local dest=${GATE_INSTALLED%/*} report printed profile line
+  if report=$(gate_new_shells_find "$GATE_INSTALLED"); then
+    gate_record "a new shell finds axocoatl" pass '' '' '' "$report"
   else
-    gate_record "a new login shell finds axocoatl" fail '' '' '' "a new $login_shell login shell does not find axocoatl, and the installer printed no PATH line for $dest"
+    printed=$(gate_printed_profile_line "$out")
+    if [ -n "$printed" ]; then
+      IFS=$'\t' read -r profile line <<<"$printed"
+      mkdir -p "$(dirname -- "$profile")" && printf '\n%s\n' "$line" >>"$profile"
+      if report=$(gate_new_shells_find "$GATE_INSTALLED"); then
+        gate_record "a new shell finds axocoatl" pass '' '' '' "after adding the line the installer printed to $profile ($line): $report"
+      else
+        gate_record "a new shell finds axocoatl" fail '' '' '' "the line the installer printed for $profile ($line) does not put axocoatl on a new shell's PATH: $report"
+      fi
+    elif grep -q 'export PATH=' "$out"; then
+      gate_record "a new shell finds axocoatl" fail '' '' '' "$report; the installer printed only an export for the current shell, which a new terminal does not keep"
+    else
+      gate_record "a new shell finds axocoatl" fail '' '' '' "$report; the installer printed no line that puts $dest on PATH"
+    fi
   fi
   case ":$PATH:" in
     *":$dest:"*) ;;
@@ -346,6 +422,73 @@ gate_install_new_user() {
   esac
   export PATH GATE_INSTALLED
   return 0
+}
+
+# gate_config_path: where Axocoatl keeps this user's config.yaml (as
+# axocoatl-cli/src/user_paths.rs says).
+gate_config_path() {
+  if [ "$(uname -s)" = Darwin ]; then
+    printf '%s\n' "$HOME/Library/Application Support/Axocoatl/config.yaml"
+  else
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/axocoatl/config.yaml"
+  fi
+}
+
+# gate_server_port CONFIG: server.port in CONFIG, or nothing.
+gate_server_port() {
+  awk '/^server:/ { inside = 1; next } inside && /^[^[:space:]#]/ { inside = 0 }
+       inside && /^[[:space:]]+port:/ { gsub(/"/, "", $2); print $2; exit }' "$1" 2>/dev/null
+}
+
+# gate_run_model CONFIG ROLE: run.models.ROLE in CONFIG, or nothing.
+gate_run_model() {
+  awk -v role="$2" '/^run:/ { inside = 1; next } inside && /^[^[:space:]#]/ { inside = 0 }
+       inside && $1 == role ":" { gsub(/"/, "", $2); print $2; exit }' "$1" 2>/dev/null
+}
+
+# gate_sudo_mark: a cursor into the system journal, so that gate_sudo_check
+# can find every sudo call made after it, by any path (not only through the
+# guard shims on PATH). Empty when this user cannot read the system journal.
+gate_sudo_mark() {
+  command -v journalctl >/dev/null 2>&1 || return 0
+  # Root's entries show only when the system journal is readable.
+  [ -n "$(journalctl -q -n 1 _UID=0 -o cat 2>/dev/null)" ] || return 0
+  journalctl -q -n 1 --show-cursor -o cat 2>/dev/null | sed -n 's/^-- cursor: //p' | tail -n 1
+}
+
+# gate_sudo_check NAME MARK: record NAME as pass when the journal shows no
+# sudo command after MARK. Without a readable journal it is a failure on a
+# CI runner (whose evidence relies on it) and an optional skip elsewhere.
+gate_sudo_check() {
+  local name=$1 mark=$2 calls
+  if [ -z "$mark" ]; then
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+      gate_record "$name" fail '' '' '' "the system journal is not readable, so a sudo by absolute path would go unseen"
+    else
+      gate_skip "$name" "the system journal is not readable here" optional
+    fi
+    return 0
+  fi
+  calls=$(journalctl -q --after-cursor "$mark" -t sudo -o cat 2>/dev/null | grep 'COMMAND=' || true)
+  if [ -z "$calls" ]; then
+    gate_record "$name" pass '' '' '' 'the journal shows no sudo command'
+  else
+    gate_record "$name" fail '' '' '' "$(printf '%s\n' "$calls" | head -n 3 | tr '\n' ' ')"
+  fi
+}
+
+# gate_doctor_text_check LOG: plain doctor's verdict as a new user reads it:
+# "Ready for: ... axocoatl run fix", a last "Ready: yes", no [FAIL] line.
+gate_doctor_text_check() {
+  local log=$1 problems=''
+  grep -Eq '^Ready for: (.*, )?axocoatl run fix(,|$)' "$log" || problems="no 'Ready for: axocoatl run fix'"
+  [ "$(grep -v '^[[:space:]]*$' "$log" | tail -n 1)" = 'Ready: yes' ] || problems="${problems:+$problems; }the last line is not 'Ready: yes'"
+  ! grep -q '\[FAIL\]' "$log" || problems="${problems:+$problems; }$(grep -m 1 '\[FAIL\]' "$log")"
+  if [ -z "$problems" ]; then
+    gate_record "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]" pass '' '' '' ''
+  else
+    gate_record "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]" fail '' '' '' "$problems"
+  fi
 }
 
 # gate_host_json FILE: what this host is, for the evidence.
@@ -408,6 +551,27 @@ gate_fixture_names() {
     "$gate_repo/tests/fixtures/newuser/fixtures.json"
 }
 
+# gate_fixture_command FIXTURE PUBLISHED: the command the gate runs on
+# FIXTURE. That is PUBLISHED (the README's command), except for a fixture
+# whose fixtures.json entry says `"command": "fixture-readme"`: onboarding's
+# first-run sample, whose own README gives the command onboarding runs on
+# it, because the README's task describes another bug. Prints nothing when
+# that README has no `axocoatl run fix` command.
+gate_fixture_command() {
+  case "$(gate_fixture_expect "$1" command)" in
+    fixture-readme)
+      node "$gate_commands_js" readme-run "$gate_repo/tests/fixtures/newuser/$1/README.md" 2>/dev/null || true
+      ;;
+    *) printf '%s\n' "$2" ;;
+  esac
+}
+
+# gate_without_models COMMAND: COMMAND without its --model ROLE=MODEL
+# options, so a run uses the models onboarding configured (run.models).
+gate_without_models() {
+  printf '%s\n' "$1" | sed -E 's/[[:space:]]+--model[[:space:]]+[^[:space:]]+//g'
+}
+
 # gate_with_outputs COMMAND: COMMAND plus --junit/--record/--receipt where
 # the published command lacks them (a run's outputs, kept as evidence).
 gate_with_outputs() {
@@ -431,6 +595,10 @@ gate_run_fixture() {
   keep="$GATE_ATTACH/$label"
   if ! gate_fixture_repo "$fixture" "$repo"; then
     gate_record "fixture $fixture exists" fail '' '' '' "tests/fixtures/newuser/$fixture is missing"
+    return 1
+  fi
+  if [ -z "$published" ]; then
+    gate_record "run fix on $label" fail '' '' '' "no command to run: tests/fixtures/newuser/$fixture/README.md shows no axocoatl run fix command"
     return 1
   fi
   command=$(gate_with_outputs "$published")

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Clean-machine new-user gate, Linux (docs/RELEASE_GATE.md, Tier A and D1).
 #
-# Tier A (CI, default): a brand-new HOME and a PATH without ~/.local/bin;
-# the published installer against the just-built release tarball; onboarding
-# with no terminal against a scripted model server (an Ollama 0.40.6 with
-# cloud models off); doctor; `axocoatl dev`; the README's `axocoatl run fix`
-# command verbatim on every tests/fixtures/newuser fixture; the documented
-# receipt and record checks; and the negative cases. Evidence goes to
+# Tier A (CI, default): a brand-new HOME (seeded from /etc/skel, as adduser
+# does) and a PATH without ~/.local/bin; the README's install command
+# against the just-built release tarball; onboarding with no terminal
+# against a scripted model server (an Ollama 0.40.6 with cloud models off);
+# doctor; `axocoatl dev`; the README's `axocoatl run fix` command verbatim on
+# every tests/fixtures/newuser fixture; the documented receipt and record
+# checks; and the negative cases. Evidence goes to
 # <evidence-root>/<version>/<commit>/<label>.json and <label>/.
 #
 # Usage:
@@ -15,13 +16,15 @@
 #   --label NAME            evidence path (default A-x86 or A-arm by machine)
 #   --commit SHA            commit the tarball was built from (default: HEAD)
 #   --evidence-root DIR     default: <repo>/release-evidence
-#   --port N                daemon port (default: a free one from 8200)
+#   --port N                daemon port (default: a free one from 8200; with
+#                           --live, the one onboarding chooses)
 #   --expect-refusal TEXT   only check that onboarding and doctor refuse this
 #                           machine, naming TEXT (the Ubuntu 22.04 leg)
-#   --live                  Tier D: no stub; run onboarding interactively and
-#                           use the models it configures
-#   --system-changes        allow the empty-/etc/subuid case, which edits
-#                           /etc/subuid with sudo and restores it (CI only)
+#   --live                  Tier D: no stub; in this account's own, brand-new
+#                           HOME, run onboarding interactively and use the
+#                           models it configures
+#   --system-changes        CI only: allow the empty-/etc/subuid case, which
+#                           edits /etc/subuid with sudo and restores it
 #   --command TEXT          run TEXT on each fixture instead of the README's
 #                           command (live VMs whose models differ)
 #   --keep-work             keep the temporary HOME and repositories
@@ -43,7 +46,7 @@ usage() {
 }
 
 original_args=("$@")
-tarball='' label='' commit='' evidence_root="$gate_repo/release-evidence" port=''
+tarball='' label='' commit='' evidence_root="$gate_repo/release-evidence" port='' port_given=0
 expect_refusal='' live=0 system_changes=0 keep_work=0 run_command=
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -51,7 +54,7 @@ while [ $# -gt 0 ]; do
     --label) label=${2:?}; shift ;;
     --commit) commit=${2:?}; shift ;;
     --evidence-root) evidence_root=${2:?}; shift ;;
-    --port) port=${2:?}; shift ;;
+    --port) port=${2:?}; port_given=1; shift ;;
     --expect-refusal) expect_refusal=${2:?}; shift ;;
     --live) live=1 ;;
     --system-changes) system_changes=1 ;;
@@ -76,10 +79,14 @@ for tool in node git curl tar; do
   command -v "$tool" >/dev/null 2>&1 || gate_die "$tool is required"
 done
 [ -n "$commit" ] || commit=$(git -C "$gate_repo" rev-parse HEAD)
-case "$commit" in *[!0-9a-f]* | '') gate_die "--commit must be a full commit SHA" ;; esac
-[ ${#commit} = 40 ] || gate_die "--commit must be a full 40-character commit SHA"
+gate_valid_commit "$commit" || gate_die "--commit must be a full 40-character commit SHA"
 version=${tarball##*/axocoatl-v}
 version=${version%%-*}
+gate_valid_version "$version" || gate_die "no X.Y.Z version in the tarball name ${tarball##*/}"
+case "$port" in *[!0-9]* | 0*) gate_die "--port must be a port number" ;; esac
+if [ "$system_changes" = 1 ] && [ "${GITHUB_ACTIONS:-}" != true ]; then
+  gate_die "--system-changes edits /etc/subuid and /etc/subgid with sudo; it runs only on a CI runner (GITHUB_ACTIONS=true)"
+fi
 if [ -z "$label" ]; then
   case "$(uname -m)" in
     x86_64 | amd64) label=A-x86 ;;
@@ -88,6 +95,17 @@ if [ -z "$label" ]; then
   esac
   [ -n "$expect_refusal" ] && label="$label-refusal"
   [ "$live" = 1 ] && label=D1
+fi
+gate_valid_name "$label" || gate_die "--label must be letters, digits and dashes (A-x86, D1, ...)"
+
+# A live run uses this account's own HOME, as a user made with adduser has
+# it: /etc/skel's files and nothing of Axocoatl's yet.
+if [ "$live" = 1 ]; then
+  for state in "${XDG_CONFIG_HOME:-$HOME/.config}/axocoatl" "${XDG_DATA_HOME:-$HOME/.local/share}/axocoatl" \
+    "$HOME/.local/state/axocoatl" "$HOME/.axocoatl" "$HOME/.local/bin/axocoatl" \
+    "$HOME/Library/Application Support/Axocoatl"; do
+    [ ! -e "$state" ] || gate_die "--live needs a brand-new account (made with adduser for the gate): $state already exists"
+  done
 fi
 
 work=$(mktemp -d "${GATE_TMPDIR:-/tmp}/axo-gate.XXXXXX")
@@ -105,11 +123,19 @@ cleanup() {
     HOME=$real_home podman unshare rm -rf "$work" 2>/dev/null || rm -rf "$work" 2>/dev/null
   fi
 }
+# Put /etc/subuid and /etc/subgid back from the backup; on any failure keep
+# the backup (and the whole work directory) and say where it is.
 restore_subuid() {
   [ -n "$subuid_backup" ] || return 0
-  sudo -n cp "$subuid_backup/subuid" /etc/subuid && sudo -n cp "$subuid_backup/subgid" /etc/subgid
-  subuid_backup=''
-  gate_say "restored /etc/subuid and /etc/subgid"
+  if sudo -n cp "$subuid_backup/subuid" /etc/subuid && sudo -n cp "$subuid_backup/subgid" /etc/subgid \
+    && cmp -s "$subuid_backup/subuid" /etc/subuid && cmp -s "$subuid_backup/subgid" /etc/subgid; then
+    subuid_backup=''
+    gate_say "restored /etc/subuid and /etc/subgid"
+    return 0
+  fi
+  keep_work=1
+  gate_say "FAILED to restore /etc/subuid and /etc/subgid; the originals are kept in $subuid_backup: restore them with sudo cp"
+  return 1
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -139,12 +165,19 @@ finish() {
   exit $?
 }
 
-# 1. A brand-new user: a fresh HOME, no ~/.local/bin, no axocoatl on PATH.
-new_home="$work/home"
-mkdir -p "$new_home"
+# 1. A brand-new user: a fresh HOME (or, live, this brand-new account's
+# own), no ~/.local/bin, no axocoatl on PATH.
 unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME AXOCOATL_DATA_DIR AXOCOATL_CONFIG AXOCOATL_TOKEN AXOCOATL_SOCKET_PATH OLLAMA_HOST CONTAINER_CONNECTION
+if [ "$live" = 0 ]; then
+  new_home="$work/home"
+  mkdir -p "$new_home"
+  [ -d /etc/skel ] && cp -R /etc/skel/. "$new_home/" 2>/dev/null
+  export HOME="$new_home"
+  # The login shell adduser gives a new user (zsh on a simulated macOS run).
+  if [ "$(uname -s)" = Darwin ]; then export SHELL=/bin/zsh; else export SHELL=/bin/bash; fi
+fi
 GATE_BASE_PATH=$(gate_new_user_path)
-export HOME="$new_home" PATH="$GATE_BASE_PATH" GATE_BASE_PATH
+export PATH="$GATE_BASE_PATH" GATE_BASE_PATH
 if command -v axocoatl >/dev/null 2>&1; then
   gate_record "start without axocoatl on PATH" fail '' '' '' "$(command -v axocoatl)"
 else
@@ -176,7 +209,7 @@ stub_stat() {
     });' "$1"
 }
 
-# 3. The published installer, against this tarball.
+# 3. The README's install command, as written, against this tarball.
 stage="$work/release"
 gate_stage_release "$tarball" "$stage" >/dev/null
 site="$gate_repo/scripts"
@@ -187,7 +220,11 @@ if [ "$simulation" = 1 ]; then
   sed "s#/usr/local/bin#$work/locked-bin#g" "$gate_repo/scripts/install.sh" >"$site/install.sh"
   gate_record "simulation: a stand-in axocoatl and a sandboxed installer" fail '' '' '' "GATE_SIMULATION=1 is never release evidence"
 fi
-gate_install_new_user "$stage" "$site" || finish
+if ! install_command=$(node "$gate_commands_js" install "$gate_repo/README.md" 2>&1); then
+  gate_record "the README shows the install command" fail '' '' '' "$install_command"
+  finish
+fi
+gate_install_new_user "$stage" "$site" "$install_command" || finish
 if [ "$(gate_sha256 "$GATE_INSTALLED")" = "$(tar -xzOf "$tarball" axocoatl | gate_sha256 /dev/stdin)" ]; then
   gate_record "installed binary is the tarball's" pass '' '' '' "$(gate_sha256 "$GATE_INSTALLED")"
 else
@@ -200,8 +237,9 @@ case "$GATE_AXOCOATL_VERSION" in
   *) gate_record "axocoatl --version names $version" fail '' '' '' "$GATE_AXOCOATL_VERSION" ;;
 esac
 
-# A port nothing listens on, from 8200.
-if [ -z "$port" ]; then
+# A port nothing listens on, from 8200. A live run lets onboarding choose
+# (8080 when it is free) unless --port was given, and reads it back.
+if [ -z "$port" ] && [ "$live" = 0 ]; then
   port=8200
   while (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; do port=$((port + 1)); done
 fi
@@ -214,6 +252,7 @@ onboard_flags=(--yes --writer ollama --ollama-url "$stub_url" --writer-model "$w
 
 # The Ubuntu 22.04 leg: onboarding and doctor refuse cleanly, naming why.
 if [ -n "$expect_refusal" ]; then
+  sudo_mark=$(gate_sudo_mark)
   gate_step "onboard refuses this machine (exit 1)" --expect 1 -- \
     env PATH="$guard:$PATH" axocoatl onboard "${onboard_flags[@]}" </dev/null
   if grep -q -- "$expect_refusal" "$GATE_ATTACH/logs/$(gate_slug "onboard refuses this machine (exit 1)").log"; then
@@ -231,30 +270,49 @@ if [ -n "$expect_refusal" ]; then
   else
     gate_record "doctor fails Podman, naming $expect_refusal" fail '' '' '' "no failing item naming $expect_refusal"
   fi
-  gate_check "nothing ran sudo or a package manager" "$(head -n 3 "$work/guard.log" | tr '\n' ' ')" -- \
+  gate_check "nothing ran sudo or a package manager through PATH" "$(head -n 3 "$work/guard.log" | tr '\n' ' ')" -- \
     test ! -s "$work/guard.log"
+  gate_sudo_check "nothing ran sudo by any path (system journal)" "$sudo_mark"
   finish
 fi
 
 # 4. Onboarding, then doctor.
 if [ "$live" = 1 ]; then
-  gate_step "onboard (interactive, every consent answered by the operator)" --interactive -- axocoatl onboard
+  # Every consent prompt is answered by the operator. --start none: the gate
+  # starts `axocoatl dev` itself, with its output (and sign-in link) kept
+  # out of the transcript.
+  onboard_live=(axocoatl onboard --start none)
+  [ "$port_given" = 1 ] && onboard_live+=(--port "$port")
+  gate_step "onboard (interactive, every consent answered by the operator; --start none)" --interactive -- "${onboard_live[@]}"
 else
+  sudo_mark=$(gate_sudo_mark)
   gate_step "onboard --yes --writer ollama with no terminal" -- \
     env PATH="$guard:$PATH" axocoatl onboard "${onboard_flags[@]}" </dev/null
-  gate_check "onboard ran no sudo and no package manager" "$(head -n 3 "$work/guard.log" | tr '\n' ' ')" -- \
+  gate_check "onboard ran no sudo and no package manager through PATH" "$(head -n 3 "$work/guard.log" | tr '\n' ' ')" -- \
     test ! -s "$work/guard.log"
+  gate_sudo_check "onboard ran no sudo by any path (system journal)" "$sudo_mark"
   gate_check "--no-pull pulled nothing" "the model server saw $(stub_stat pulls) pulls" -- \
     test "$(stub_stat pulls)" = 0
-  config=$(find "$HOME" -name config.yaml -path '*xocoatl*' 2>/dev/null | head -n 1)
-  if [ -n "$config" ] && grep -Eq "writer:[[:space:]]*\"?${writer_model}\"?" "$config" \
-    && grep -Eq "reviewer:[[:space:]]*\"?${reviewer_model}\"?" "$config"; then
+fi
+config=$(gate_config_path)
+if [ ! -f "$config" ]; then
+  gate_record "onboarding wrote $config" fail '' '' '' "no config.yaml where Axocoatl keeps it"
+elif [ "$live" = 0 ]; then
+  if [ "$(gate_run_model "$config" writer)" = "$writer_model" ] && [ "$(gate_run_model "$config" reviewer)" = "$reviewer_model" ]; then
     gate_record "config.yaml holds the run models (run.models)" pass '' '' '' "$config"
   else
-    gate_record "config.yaml holds the run models (run.models)" fail '' '' '' "${config:-no config.yaml} lacks run.models writer/reviewer"
+    gate_record "config.yaml holds the run models (run.models)" fail '' '' '' \
+      "run.models is writer '$(gate_run_model "$config" writer)', reviewer '$(gate_run_model "$config" reviewer)'"
   fi
-  gate_check "config.yaml uses the free port $port" "server.port is not $port" -- \
-    grep -Eq "^[[:space:]]*port:[[:space:]]*$port([^0-9]|$)" "${config:-/dev/null}"
+  gate_check "config.yaml uses the free port $port" "server.port is '$(gate_server_port "$config")'" -- \
+    test "$(gate_server_port "$config")" = "$port"
+else
+  configured=$(gate_server_port "$config")
+  if [ "$port_given" = 1 ] && [ "$configured" != "$port" ]; then
+    gate_record "config.yaml uses --port $port" fail '' '' '' "server.port is '$configured'"
+  fi
+  port=${configured:-8080}
+  gate_record "onboarding wrote $config" pass '' '' '' "server.port $port; writer $(gate_run_model "$config" writer); reviewer $(gate_run_model "$config" reviewer)"
 fi
 gate_doctor_json "doctor --json says ready" 0 "$GATE_ATTACH/doctor.json"
 if node -e '
@@ -271,6 +329,7 @@ else
   gate_record "doctor: ready, no FAIL in sandbox, models, writers, daemon" fail '' '' '' "$(cut -c1-500 "$work/doctor-check.txt")"
 fi
 gate_step "doctor exits 0" -- axocoatl doctor
+gate_doctor_text_check "$GATE_ATTACH/logs/$(gate_slug "doctor exits 0").log"
 
 # 5. The daemon, on its configured port.
 cd "$work" || finish
@@ -293,10 +352,9 @@ fi
 readme_command=$(node "$gate_commands_js" readme-run "$gate_repo/README.md") \
   || gate_record "README shows an axocoatl run fix command" fail '' '' '' "none found"
 if [ "$live" = 1 ] && [ -n "$readme_command" ]; then
-  # A live VM runs the models onboarding configured (run.models), so the
-  # README's task with no --model, as the docs give it for any provider.
-  readme_task=$(printf '%s\n' "$readme_command" | sed -n 's/.*--task "\([^"]*\)".*/\1/p')
-  readme_command="axocoatl run fix --task \"$readme_task\""
+  # A live VM runs the models onboarding configured (run.models): the
+  # README's command with any --model options left out.
+  readme_command=$(gate_without_models "$readme_command")
 fi
 [ -n "$run_command" ] && readme_command=$run_command
 printf '%s\n' "$readme_command" >"$GATE_ATTACH/readme-command.txt"
@@ -304,8 +362,10 @@ fixtures=()
 while IFS= read -r fixture; do fixtures+=("$fixture"); done < <(gate_fixture_names)
 for fixture in "${fixtures[@]}"; do
   [ -n "$readme_command" ] || break
+  fixture_command=$readme_command
+  [ -n "$run_command" ] || fixture_command=$(gate_fixture_command "$fixture" "$readme_command")
   [ "$live" = 0 ] && curl -fsS -X POST "$stub_url/__gate/reset" -d '{}' >/dev/null
-  gate_run_fixture "$fixture" "$readme_command" "$work/repos/$fixture"
+  gate_run_fixture "$fixture" "$fixture_command" "$work/repos/$fixture"
   if [ "$live" = 0 ]; then
     edits=$(curl -fsS "$stub_url/__gate/stats" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).edits.map(e=>e.fixture).join(",")))')
     gate_check "the model fixed $fixture once" "the stub's edits: ${edits:-none}" -- test "$edits" = "$fixture"
@@ -357,44 +417,56 @@ if [ "$live" = 0 ]; then
   mkdir -p "$nopodman_home"
   nopodman_path=$(gate_path_without podman "$work/no-podman-bin")
   : >"$work/guard.log"
+  sudo_mark=$(gate_sudo_mark)
   gate_step "onboard without Podman: exit 1" --expect 1 -- env HOME="$nopodman_home" \
     PATH="$guard:$nopodman_path" axocoatl onboard "${onboard_flags[@]}" </dev/null
   log="$GATE_ATTACH/logs/$(gate_slug "onboard without Podman: exit 1").log"
   gate_check "onboard prints the Podman install command" "no Podman install command in its output" -- \
     grep -Eq 'apt-get install -y podman|dnf install -y podman|install podman' "$log"
-  gate_check "onboard did not run sudo without --allow-sudo" "$(head -n 2 "$work/guard.log" | tr '\n' ' ')" -- \
+  gate_check "onboard did not run sudo without --allow-sudo (PATH)" "$(head -n 2 "$work/guard.log" | tr '\n' ' ')" -- \
     test ! -s "$work/guard.log"
+  gate_sudo_check "onboard did not run sudo without --allow-sudo (system journal)" "$sudo_mark"
 
-  # No subordinate user IDs: doctor fails with the usermod fix.
+  # No subordinate user IDs: doctor fails with the usermod fix. The case
+  # runs only when both files are backed up, and puts them back after.
   if [ "$system_changes" = 1 ] && sudo -n true 2>/dev/null; then
-    subuid_backup="$work/subuid-backup"
-    mkdir -p "$subuid_backup"
-    sudo -n cp /etc/subuid "$subuid_backup/subuid" && sudo -n cp /etc/subgid "$subuid_backup/subgid"
-    user=$(id -un)
-    sudo -n sed -i "/^$user:/d;/^$(id -u):/d" /etc/subuid /etc/subgid
-    # A new user's onboarding names the fix and stops...
-    subuid_home="$work/home-no-subuid"
-    mkdir -p "$subuid_home"
-    : >"$work/guard.log"
-    gate_step "onboard without a subuid range: exit 1" --expect 1 -- env HOME="$subuid_home" \
-      PATH="$guard:$PATH" axocoatl onboard "${onboard_flags[@]}" </dev/null
-    gate_check "onboard names the usermod --add-subuids fix" "its output does not name usermod --add-subuids" -- \
-      grep -q 'usermod --add-subuids' "$GATE_ATTACH/logs/$(gate_slug "onboard without a subuid range: exit 1").log"
-    gate_check "onboard did not run sudo for the subuid range" "$(head -n 2 "$work/guard.log" | tr '\n' ' ')" -- \
-      test ! -s "$work/guard.log"
-    # ...and doctor, on the configured user from step 4, fails the sandbox.
-    gate_doctor_json "doctor --json without a subuid range" 1 "$GATE_ATTACH/doctor-no-subuid.json"
-    log="$GATE_ATTACH/doctor-no-subuid.json"
-    if node -e '
-        const doc = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-        const items = Object.values(doc.sections || {}).flat();
-        process.exit(doc.ready === false && items.some((i) => i.status === "fail" && /usermod --add-subuids/.test(i.fix || "")) ? 0 : 1);
-      ' "$log" 2>/dev/null; then
-      gate_record "doctor FAILs the subuid range with the usermod fix" pass '' '' '' ''
+    backup="$work/subuid-backup"
+    mkdir -p "$backup"
+    if sudo -n cp /etc/subuid "$backup/subuid" && sudo -n cp /etc/subgid "$backup/subgid" \
+      && cmp -s /etc/subuid "$backup/subuid" && cmp -s /etc/subgid "$backup/subgid"; then
+      subuid_backup=$backup
+      user=$(id -un)
+      if sudo -n sed -i "/^$user:/d;/^$(id -u):/d" /etc/subuid /etc/subgid; then
+        # A new user's onboarding names the fix and stops...
+        subuid_home="$work/home-no-subuid"
+        mkdir -p "$subuid_home"
+        : >"$work/guard.log"
+        sudo_mark=$(gate_sudo_mark)
+        gate_step "onboard without a subuid range: exit 1" --expect 1 -- env HOME="$subuid_home" \
+          PATH="$guard:$PATH" axocoatl onboard "${onboard_flags[@]}" </dev/null
+        gate_check "onboard names the usermod --add-subuids fix" "its output does not name usermod --add-subuids" -- \
+          grep -q 'usermod --add-subuids' "$GATE_ATTACH/logs/$(gate_slug "onboard without a subuid range: exit 1").log"
+        gate_check "onboard did not run sudo for the subuid range (PATH)" "$(head -n 2 "$work/guard.log" | tr '\n' ' ')" -- \
+          test ! -s "$work/guard.log"
+        gate_sudo_check "onboard did not run sudo for the subuid range (system journal)" "$sudo_mark"
+        # ...and doctor, on the configured user from step 4, fails the sandbox.
+        gate_doctor_json "doctor --json without a subuid range" 1 "$GATE_ATTACH/doctor-no-subuid.json"
+        if node -e '
+            const doc = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const items = Object.values(doc.sections || {}).flat();
+            process.exit(doc.ready === false && items.some((i) => i.status === "fail" && /usermod --add-subuids/.test(i.fix || "")) ? 0 : 1);
+          ' "$GATE_ATTACH/doctor-no-subuid.json" 2>/dev/null; then
+          gate_record "doctor FAILs the subuid range with the usermod fix" pass '' '' '' ''
+        else
+          gate_record "doctor FAILs the subuid range with the usermod fix" fail '' '' '' "no failing item whose fix runs usermod --add-subuids"
+        fi
+      else
+        gate_record "remove this user's subuid range for the case" fail '' '' '' "sudo sed on /etc/subuid and /etc/subgid failed"
+      fi
+      restore_subuid || gate_record "restore /etc/subuid and /etc/subgid" fail '' '' '' "the originals are kept in $backup"
     else
-      gate_record "doctor FAILs the subuid range with the usermod fix" fail '' '' '' "no failing item whose fix runs usermod --add-subuids"
+      gate_record "back up /etc/subuid and /etc/subgid" fail '' '' '' "they could not be copied, so the case did not run and nothing was changed"
     fi
-    restore_subuid
   else
     gate_skip "doctor FAILs an empty /etc/subuid with the usermod fix" "needs --system-changes and passwordless sudo (CI)"
   fi

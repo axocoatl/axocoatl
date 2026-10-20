@@ -3,8 +3,10 @@
 // the new-user gate runs them exactly as written (docs/RELEASE_GATE.md).
 //
 //   readme-run <README.md>          the README's `axocoatl run fix` command
+//   install <file>                  the first `curl … install.sh | sh` command
 //   commands <file.md|.mdx|.html>   every shell command in code blocks, in order
 //   first <file> <prefix>           the first such command starting with prefix
+//   has <file> <command>...         exit 0 when every command is shown exactly
 //   yaml-block <file.md|.mdx> <text>  the first ```yaml block containing text
 //
 // A command is one logical line: backslash continuations are joined and a
@@ -111,20 +113,42 @@ export function readmeRunCommand(file, source) {
   return command;
 }
 
+/** The published install command: the first `curl … install.sh | sh`. */
+export function installCommand(file, source) {
+  const command = commandsOf(file, source).find((line) => /^curl\b[^|]*\binstall\.sh\b[^|]*\|\s*(?:sh|bash)$/.test(line));
+  if (!command) throw new Error(`${file} shows no \`curl … install.sh | sh\` command in a code block`);
+  return command;
+}
+
+/** Which of `wanted` the file does not show as a command, exactly. */
+export function missingCommands(file, wanted, source) {
+  const shown = new Set(commandsOf(file, source));
+  return wanted.filter((command) => !shown.has(command));
+}
+
 export function yamlBlock(file, contains, source = readFileSync(file, 'utf8')) {
   const block = markdownBlocks(source).find((candidate) => ['yaml', 'yml'].includes(candidate.lang) && candidate.text.includes(contains));
   if (!block) throw new Error(`${file} has no yaml block containing ${JSON.stringify(contains)}`);
   return block.text;
 }
 
-function main([command, file, extra]) {
+function main([command, file, ...rest]) {
+  const [extra] = rest;
   switch (command) {
     case 'readme-run':
       console.log(readmeRunCommand(file));
       return 0;
+    case 'install':
+      console.log(installCommand(file));
+      return 0;
     case 'commands':
       for (const line of commandsOf(file)) console.log(line);
       return 0;
+    case 'has': {
+      const missing = missingCommands(file, rest);
+      for (const command of missing) console.error(`published-commands: ${file} does not show \`${command}\``);
+      return missing.length === 0 ? 0 : 1;
+    }
     case 'first': {
       const found = firstCommand(file, extra);
       if (!found) {
@@ -138,7 +162,7 @@ function main([command, file, extra]) {
       process.stdout.write(yamlBlock(file, extra));
       return 0;
     default:
-      console.error('usage: published-commands.mjs readme-run|commands|first|yaml-block FILE [ARG]');
+      console.error('usage: published-commands.mjs readme-run|install|commands|first|has|yaml-block FILE [ARG...]');
       return 2;
   }
 }
