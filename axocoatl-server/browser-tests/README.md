@@ -62,6 +62,18 @@ Chromium-family executable. Set `AXOCOATL_E2E_BINARY` to select a binary other
 than `target/debug/axocoatl`; `npm run test:no-build` deliberately skips the
 Cargo build and uses that selected or default binary as-is.
 
+Journeys a new user takes first (the folder picker and Workspace scope, Source
+Control's commit identity, Team and budget's suggested limits, the readiness
+checklist) run once per browser engine from `browserEngines()`: Chromium always,
+and WebKit, the Safari engine and the default browser on a Mac, when Playwright's
+WebKit is installed (`npx playwright install webkit`). With
+`AXOCOATL_E2E_WEBKIT=1` a missing WebKit fails instead of being skipped; the
+gate script sets it when run with `AXO_BROWSER_WEBKIT=true`, which also installs
+WebKit. A journey that needs the daemon's own `HOME` (the folder picker starts
+there) passes `home: true` to `launchTestDaemon`, which gives the daemon a
+fixture home folder and keeps Podman's real configuration through the XDG
+directories.
+
 `npm test` builds the current `axocoatl-cli` package before opening the embedded
 page. The no-build command still discovers every `tests/*.test.mjs` file in
 sorted order and fails when the suite is empty, so adding a test file cannot
@@ -110,6 +122,19 @@ the Preview and failure paths called out below.
   Source Control plus `Ctrl/Cmd+P` to the environment review dialog without
   reaching execution, tree, file read/write, Git, Preview, or terminal mutation
   APIs.
+- Open workspace marks Git repositories, refuses the home folder until its
+  name is typed, and Remove from list forgets a Workspace without touching its
+  folder, refusing one with open Sessions.
+- Source Control names the person a commit is by, disables Commit with the
+  reason when no Git identity is set, shows a refused commit as Not committed
+  with Git's message, offers Initialize Git here in a folder that is not a
+  repository, and says when the last turn's files are not known.
+- Team and budget opens a new Session with the suggested limits filled in,
+  applies them without typing, and shows Preview's refusal of a token limit a
+  turn cannot use.
+- The first screen lists what the first Session still needs, with each fix's
+  commands, the rail pill opens the same checklist, and Create session stays
+  blocked while Podman has no machine.
 - Quick Open terminates directory-only and cyclic traversal at explicit entry,
   directory, and depth limits, and abandons a build when its Session changes.
 - Source Control attributes a normal turn's absolute-path tool write to **Last

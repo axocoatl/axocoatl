@@ -29,14 +29,24 @@ git -C "$repo_root" ls-files --error-unmatch \
   axocoatl-server/browser-tests/support/run-tests.mjs \
   axocoatl-server/browser-tests/tests/workbench.test.mjs >/dev/null
 
+# WebKit (the Safari engine, the default browser on a Mac) is opt-in until it
+# has passed this gate: with AXO_BROWSER_WEBKIT=true the gate installs
+# Playwright's WebKit and the journeys that run per engine must pass in it
+# too (AXOCOATL_E2E_WEBKIT=1 makes a missing WebKit a failure).
+browsers=(chromium)
+if [[ "${AXO_BROWSER_WEBKIT:-false}" == true ]]; then
+  browsers+=(webkit)
+  export AXOCOATL_E2E_WEBKIT=1
+fi
+
 (
   cd "$test_root"
   npm ci
   npm audit --audit-level=high
   if [[ "${AXO_BROWSER_INSTALL_WITH_DEPS:-false}" == true ]]; then
-    npx --no-install playwright install --with-deps chromium
+    npx --no-install playwright install --with-deps "${browsers[@]}"
   else
-    npx --no-install playwright install chromium
+    npx --no-install playwright install "${browsers[@]}"
   fi
 )
 
