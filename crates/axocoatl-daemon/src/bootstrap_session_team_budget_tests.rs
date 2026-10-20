@@ -66,12 +66,20 @@ fn edit_with_tokens(
 ) -> SessionTeamEdit {
     let mut slots = view.slots.clone();
     let budget = view.suggested_budget.clone().unwrap();
+    // The app fixes the suggested expiry when it fills a slot in.
+    let filled_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
     for slot in &mut slots {
         let mut limits = slot.limits.clone().unwrap_or(budget.agent.clone());
         limits.tokens = tokens;
         limits.cost_microunits = 0;
         slot.limits = Some(limits);
-        slot.expires_at_ms = Some(slot.expires_at_ms.unwrap_or(budget.expires_at_ms));
+        slot.expires_at_ms = Some(
+            slot.expires_at_ms
+                .unwrap_or(filled_at_ms + budget.expires_in_ms),
+        );
         slot.reset_history = reset_history;
     }
     SessionTeamEdit {
@@ -176,11 +184,20 @@ consolidation:
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
-    assert!(
-        budget.expires_at_ms > now_ms + day_ms - 60_000 && budget.expires_at_ms <= now_ms + day_ms
-    );
+    // The expiry is a lifetime the app turns into an instant when it fills a
+    // slot in, not an instant taken at each read.
+    assert_eq!(budget.expires_in_ms, day_ms);
     let json = serde_json::to_value(&view).unwrap();
     assert_eq!(json["suggested_budget"]["agent"]["tokens"], 4_000_000);
+    assert_eq!(json["suggested_budget"]["expires_in_ms"], 86_400_000);
+    assert!(json["suggested_budget"].get("expires_at_ms").is_none());
+    // Reading the same team again returns the same view, so a read cannot
+    // tell a changed team from an unchanged one by a drifting expiry.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    assert_eq!(
+        serde_json::to_value(daemon.session_team(&session.id).await.unwrap()).unwrap(),
+        json
+    );
 
     // Below one call: refused with the numbers.
     let refused = daemon
@@ -243,6 +260,12 @@ consolidation:
         .unwrap_or_else(|error| panic!("{error}"));
     let applied = daemon.session_team(&session.id).await.unwrap();
     assert!(applied.approved);
+    // An applied team reads the same twice too, suggestion included.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    assert_eq!(
+        serde_json::to_value(daemon.session_team(&session.id).await.unwrap()).unwrap(),
+        serde_json::to_value(&applied).unwrap()
+    );
 
     // Lowering the limit of the slot kept as it was (same definition, same
     // conversation) is checked too.

@@ -355,10 +355,14 @@ pub struct SessionTeamView {
 /// The limits the app pre-fills for an Agent or a helper that has none yet:
 /// the built-in `fix` loadout's budgets (its Agents' for an Agent, its
 /// reviewer's for a helper), with no cost for a model of a provider in
-/// `free_providers` (a local Ollama model costs nothing), and an expiry 24
-/// hours from when the team was read. A suggestion: nothing is approved
-/// until the person applies the team, and Preview refuses limits that
-/// cannot pay for a turn.
+/// `free_providers` (a local Ollama model costs nothing), and an expiry
+/// `expires_in_ms` after the app fills it in. A suggestion: nothing is
+/// approved until the person applies the team, and Preview refuses limits
+/// that cannot pay for a turn.
+///
+/// The expiry is a lifetime, not an instant: the app fixes the instant when
+/// it fills a slot, so every read of the same team returns the same view and
+/// an instant computed per read cannot drift between two reads.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct SuggestedBudget {
     /// The loadout the limits come from.
@@ -367,13 +371,15 @@ pub struct SuggestedBudget {
     pub helper: GrantLimits,
     /// Providers whose models cost nothing: their cost limit is 0.
     pub free_providers: Vec<&'static str>,
-    pub expires_at_ms: u64,
+    /// How long a filled-in budget lasts, from when the app fills it in.
+    pub expires_in_ms: u64,
 }
 
 /// How long a suggested budget lasts.
 const SUGGESTED_BUDGET_HOURS: u64 = 24;
 
-/// [`SuggestedBudget`] from the built-in `fix` loadout, read once.
+/// [`SuggestedBudget`] from the built-in `fix` loadout, read once. It
+/// depends on nothing but the build, so every read returns the same value.
 fn suggested_budget() -> Option<SuggestedBudget> {
     static FIX: std::sync::OnceLock<Option<(GrantLimits, GrantLimits)>> =
         std::sync::OnceLock::new();
@@ -393,16 +399,12 @@ fn suggested_budget() -> Option<SuggestedBudget> {
             Some((agent, helper))
         })
         .clone()?;
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|time| time.as_millis() as u64)
-        .ok()?;
     Some(SuggestedBudget {
         from: "fix",
         agent,
         helper,
         free_providers: vec!["ollama"],
-        expires_at_ms: now_ms.saturating_add(SUGGESTED_BUDGET_HOURS * 60 * 60 * 1000),
+        expires_in_ms: SUGGESTED_BUDGET_HOURS * 60 * 60 * 1000,
     })
 }
 /// Whether a tools list names a web tool.

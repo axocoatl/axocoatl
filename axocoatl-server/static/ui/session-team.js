@@ -108,19 +108,20 @@ export class AxSessionTeam extends HTMLElement {
     finally { this.busy = false; this.controls(); }
   }
   // Fill a slot's missing limits and expiry from the daemon's suggestion.
-  // Returns whether anything was filled.
+  // The suggested expiry is a lifetime: the instant is fixed here, when the
+  // slot is filled in. Returns whether anything was filled.
   prefill(slot) {
     const budget = this.view?.suggested_budget;
     if (!budget || !slot) return false;
     let filled = false;
     if (!slot.limits) { slot.limits = suggestedLimits(this.view, slot.provider, 'agent'); filled = Boolean(slot.limits); }
-    if (slot.expires_at_ms == null && Number.isSafeInteger(budget.expires_at_ms)) { slot.expires_at_ms = budget.expires_at_ms; filled = true; }
+    if (slot.expires_at_ms == null && Number.isSafeInteger(budget.expires_in_ms) && budget.expires_in_ms > 0) { slot.expires_at_ms = Date.now() + budget.expires_in_ms; filled = true; }
     return filled;
   }
   suggestionText() {
     const budget = this.view?.suggested_budget; if (!budget) return '';
     const agent = budget.agent, free = (budget.free_providers || []).join(', ');
-    const hours = Math.round((budget.expires_at_ms - Date.now()) / 3600000);
+    const hours = Math.round(budget.expires_in_ms / 3600000);
     return `Suggested limits are filled in from the built-in ${budget.from} loadout: ${agent.activations} activations, ${grouped(agent.invocations)} invocations and ${grouped(agent.tokens)} tokens per Agent, $${agent.cost_microunits / 1e6} of cost${free ? ` ($0 for a ${free} model)` : ''}, expiring in ${hours > 0 ? hours : 24} hours.`;
   }
   setMode(mode) { if (this.busy) return; if (mode === 'edit' && localStorage.getItem(this.storageKey)) { this.status('Resolve the pending Apply before editing this team.', true); return; } this.mode = mode; this.q('ax-lattice').setAttribute('mode', mode); for (const button of this.shadowRoot.querySelectorAll('[data-mode]')) button.setAttribute('aria-pressed', String(button.dataset.mode === mode)); for (const item of this.q('ax-lattice').querySelectorAll('ax-node')) { if (mode === 'edit') item.removeAttribute('draggable'); else item.setAttribute('draggable', 'false'); } this.renderPanel(); this.controls(); }
