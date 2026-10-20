@@ -2384,9 +2384,12 @@ fn doctor_env(shims: &Shims) -> crate::doctor::Environment {
         xdg_config_home: None,
         host: shims.host(true),
         load_models: false,
+        contexts_read: Default::default(),
         socket_path: home.join("no-daemon.sock"),
         podman: shims.dir.path().join("podman").display().to_string(),
         data_dir: Some(home.join("data")),
         landlock_abi: Some(6),
     }
 }
+
+mod interactive;

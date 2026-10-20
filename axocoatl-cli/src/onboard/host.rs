@@ -391,12 +391,32 @@ impl Host {
     /// keeping its last lines: the error a program such as `ollama pull`
     /// printed when it failed.
     pub(crate) async fn run_keeping_tail(&self, cmd: &Cmd) -> Result<(), (String, String)> {
+        self.run_teeing(cmd, false).await.map(|_| ())
+    }
+
+    /// Run a command that changes the machine with this terminal as its
+    /// input (an installer that asks for a password), showing its output
+    /// here and returning the last 8 KiB of it: what the installer said
+    /// about this computer (Ollama's: no GPU, so CPU only).
+    pub(crate) async fn run_showing_output(&self, cmd: &Cmd) -> Result<String, (String, String)> {
+        self.run_teeing(cmd, true).await
+    }
+
+    async fn run_teeing(
+        &self,
+        cmd: &Cmd,
+        terminal_input: bool,
+    ) -> Result<String, (String, String)> {
         use tokio::io::AsyncReadExt;
         self.log(&format!("$ {}", cmd.display()));
         let mut command = self.command(&cmd.program);
         command
             .args(&cmd.args)
-            .stdin(std::process::Stdio::null())
+            .stdin(if terminal_input {
+                std::process::Stdio::inherit()
+            } else {
+                std::process::Stdio::null()
+            })
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         for (name, value) in &cmd.env {
@@ -465,7 +485,7 @@ impl Host {
             indent(&last_lines(&tail, 5))
         ));
         if status.success() {
-            Ok(())
+            Ok(tail)
         } else {
             Err((
                 format!(

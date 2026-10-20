@@ -23,10 +23,12 @@ Axocoatl can use later through **Open workspace…** in the browser app.
 - Each change to the computer is its own question, showing the exact command, what it
   downloads, and what else it affects.
 - Enter answers **yes** only when the size is shown and the change fits this computer.
-  Enter answers **no** for anything that changes an existing setup: an existing Podman
-  machine, an existing Ollama configuration (`~/.ollama/server.json`, Homebrew's
-  `services/ollama.env`, a systemd drop-in onboarding wrote before), an existing
-  `config.yaml`.
+  Enter answers **no** for anything that changes an existing setup you did not ask to
+  change: an existing Podman machine, an existing Ollama configuration
+  (`~/.ollama/server.json`, Homebrew's `services/ollama.env`, a systemd drop-in
+  onboarding wrote before). The configuration is the exception: once you choose
+  **Update this setup** or **Replace it**, the change to `config.yaml` is shown and
+  Enter writes it.
 - A command that needs `sudo` asks for your password itself. With `--yes`, such a
   command runs only with `--allow-sudo`; otherwise it is listed as a step left.
 - Keys are never pasted into a command line. Claude Code and Codex sign in through
@@ -166,8 +168,12 @@ prints a line such as `✓ Sandbox ready: Podman 5.8.2, applehv, rootless, 6 CPU
    points to [ollama.com/download](https://ollama.com/download). Linux:
    `curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.40.6 sh`, which sets
    Ollama up as a systemd service and asks for your password (with `zstd` installed
-   first when it is missing). In WSL it is installed inside the distribution; the
-   Windows app is not reachable from WSL in its default NAT mode.
+   first when it is missing). When that installer finds no NVIDIA or AMD GPU,
+   onboarding says what it means: models run on the CPU alone, much more slowly. In
+   WSL it is installed inside the distribution; the Windows app is not reachable from
+   WSL in its default NAT mode. At a terminal, when nothing answers at the Ollama
+   address, onboarding first asks whether Ollama already runs at another address on
+   this computer, and uses that one (`--ollama-url URL` without a terminal).
 2. **Version.** Native Sessions accept Ollama 0.40.6 and later. A later 0.40 release
    is accepted as is; a later 0.x release (0.41 or later) is accepted only once the
    contract probes pass on each model, and onboarding, `doctor` and the run's receipt
@@ -200,16 +206,25 @@ prints a line such as `✓ Sandbox ready: Podman 5.8.2, applehv, rootless, 6 CPU
    | --- | --- | --- | --- |
    | 96 GB or more | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:120b` (65.4 GB) | gpt-oss 120B is the reviewer Axocoatl has measured |
    | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | Runs end to end on 48 GB; this reviewer's quality has not been measured |
-   | Under 48 GB | — | — | No local pair has been tested; onboarding offers OpenRouter for both, or for the reviewer |
+   | Under 48 GB | — | — | No local pair has been tested; onboarding says which of these models fit and offers OpenRouter, Claude Code or Codex instead |
 
-   The reviewer must be a different model from the writer. Under 48 GB with `--yes`,
-   `--writer ollama` stays local: without `--writer-model` and `--reviewer`, naming the
-   models is a step left (onboarding never switches it to OpenRouter by itself).
+   Under 48 GB onboarding suggests a model only when it fits this computer, as `doctor`
+   judges it: on 16 GB neither of the tested models does, on 24 GB only `gpt-oss:20b`
+   does. At a terminal it offers OpenRouter for both, Claude Code or Codex as the writer
+   (their setup follows), or local models you name. The reviewer must be a different
+   model from the writer. Under 48 GB with `--yes`, `--writer ollama` stays local:
+   without `--writer-model` and `--reviewer`, naming the models is a step left
+   (onboarding never switches it to OpenRouter by itself).
 5. **Pull.** One question shows each size and the free disk, counting a tenth more for
    Ollama's temporary files:
    `Pull qwen3-coder:30b (18.6 GB) and gpt-oss:20b (13.8 GB)? Needs 35.6 GB free; 412.0 GB
-   free here.` With `--yes` or `--pull`, a pull that does not fit the disk is not started
-   but left as a step. A failed pull shows Ollama's own error and offers to retry. After a pull,
+   free here.` A model too large for this computer's memory is named in that question,
+   and Enter does not pull it; `--yes` pulls it only with `--pull`. Its step left says
+   to choose a smaller model with `axocoatl onboard --update` (which, at a terminal, asks
+   again for a configured model that is too large) or a hosted writer and reviewer with
+   `axocoatl onboard --update --writer openrouter` (or `claude-code`, or `codex`). With
+   `--yes` or `--pull`, a pull that does not fit the disk is not started but left as a
+   step. A failed pull shows Ollama's own error and offers to retry. After a pull,
    onboarding reads the model again: if Ollama pulled a variant native Sessions refuse
    (the MLX variant on Apple silicon), it offers `ollama pull --runner llamacpp <model>`
    (an undocumented Ollama flag) to pull the GGUF one.
@@ -257,22 +272,32 @@ move a ChatGPT-plan setup to API billing.
 
 ### Step 3D: OpenRouter
 
-Onboarding asks for two models: the writer (default `qwen/qwen3-coder`) and the
-reviewer (default `openai/gpt-oss-120b`, another vendor), and refuses the same model
-for both. The writer's output limit is 4096 tokens. The key comes from
+Onboarding first says what BYOK is: another provider's API key (OpenAI's, say) added
+to your OpenRouter account at `https://openrouter.ai/settings/integrations`, so that
+provider bills you and Axocoatl cannot count the cost. Native Sessions refuse it, and a
+new account has none. It asks you to confirm that OpenRouter credits pay and the
+account has no BYOK keys, then asks for two models: the writer (default
+`qwen/qwen3-coder`) and the reviewer (default `openai/gpt-oss-120b`, another vendor),
+and refuses the same model for both. The writer's output limit is 4096 tokens. The key comes from
 `--openrouter-key-env VAR`, from the configuration when onboarding updates a setup
 that has one (a `${VAR}` reference is used when `VAR` is set; at a terminal you can
 answer no and enter another key), from `OPENROUTER_API_KEY` when it is set (the
 configuration then names the variable, not the key), or from a hidden prompt (the key
-is then stored in the owner-only configuration). With `--writer openrouter` the
+is then stored in the owner-only configuration); before that prompt it says to create
+a key at `https://openrouter.ai/settings/keys` and add credits at
+`https://openrouter.ai/settings/credits`. Without a key nothing is saved, and the step
+left gives the `axocoatl onboard` command with the models you chose. With `--writer openrouter` the
 reviewer runs on OpenRouter too; a `--reviewer ollama:…` is a usage error. Before writing anything, onboarding
 checks that OpenRouter accepts the key and lists both models. OpenRouter uses your
 OpenRouter credits; BYOK is not supported for native Sessions.
 
 ### Step 4: the configuration
 
-Onboarding shows what it writes, backs up an existing file as
-`config.yaml.bak-<time>` next to it, and writes `config.yaml`. Besides the
+Onboarding shows what it writes and writes `config.yaml`: for a new file, what it
+sets (the run models, the workbench team, the Ollama server or where the OpenRouter key
+comes from, and the port); for an existing file, the change as a diff, which it writes
+after one question (Enter writes it), backing the file up as `config.yaml.bak-<time>`
+next to it. Besides the
 [default team](#default-team) and the provider it needs, the configuration holds the
 defaults `axocoatl run` uses, so `axocoatl run fix --task "…"` needs no `--model`:
 
@@ -293,14 +318,15 @@ after it, written to `server.port` (`--port` chooses one).
 
 ### Step 5: check
 
-Onboarding runs the same checks as [`axocoatl doctor`](#run-doctor) and says exactly
-what is ready:
+Onboarding runs the same checks as [`axocoatl doctor`](#run-doctor), without loading
+again the models Step 3 just loaded, and says exactly what is ready. A `·` marks a
+writer you have not set up, which is optional, not a failure:
 
 ```text
 Ready for: axocoatl run fix, workbench Sessions
   ✓ axocoatl run fix (writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b)
-  ✗ axocoatl run fix-claude-code (not set up: run `axocoatl onboard --update --writer claude-code`)
-  ✗ axocoatl run fix-codex (not set up: run `axocoatl onboard --update --writer codex`)
+  · axocoatl run fix-claude-code (not set up: run `axocoatl onboard --update --writer claude-code`)
+  · axocoatl run fix-codex (not set up: run `axocoatl onboard --update --writer codex`)
   ✓ workbench Sessions (Lead ollama:qwen3-coder:30b)
 Ready: yes
 ```
@@ -312,6 +338,9 @@ Not ready yet, 2 steps left:
   1) …
   2) …
 ```
+
+When Step 4 wrote nothing (no OpenRouter key, say), the last line says so: nothing was
+saved, or your configuration was not changed.
 
 ### Step 6: start Axocoatl
 

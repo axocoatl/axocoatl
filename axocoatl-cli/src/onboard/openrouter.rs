@@ -144,10 +144,29 @@ fn kept_key(o: &mut Onboarding) -> Option<Option<(KeyRef, zeroize::Zeroizing<Str
     }
 }
 
+/// Where an OpenRouter key is made, and its credits added.
+pub(crate) const KEYS_PAGE: &str = "https://openrouter.ai/settings/keys";
+pub(crate) const CREDITS_PAGE: &str = "https://openrouter.ai/settings/credits";
+/// Where an OpenRouter account's BYOK keys are listed.
+pub(crate) const BYOK_PAGE: &str = "https://openrouter.ai/settings/integrations";
+
+/// What BYOK is, said before onboarding asks about it.
+fn byok_explained() -> String {
+    format!(
+        "Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count \
+         what each call costs. BYOK (\"bring your own key\") is another provider's API key, such \
+         as OpenAI's or Anthropic's, added to your OpenRouter account at {BYOK_PAGE}: OpenRouter \
+         then sends calls to that provider on your key and the provider bills you, so Axocoatl \
+         cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no \
+         BYOK keys."
+    )
+}
+
 /// The key: `--openrouter-key-env VAR`, else the one an existing
 /// configuration has, else (at a terminal) `OPENROUTER_API_KEY` when set,
-/// else a hidden prompt.
-fn key(o: &mut Onboarding) -> Option<(KeyRef, zeroize::Zeroizing<String>)> {
+/// else a hidden prompt. `again`: the `axocoatl onboard` command that
+/// repeats the models chosen, for the step left without a key.
+fn key(o: &mut Onboarding, again: &str) -> Option<(KeyRef, zeroize::Zeroizing<String>)> {
     if o.ui.plan() {
         let variable = o
             .args
@@ -212,16 +231,32 @@ fn key(o: &mut Onboarding) -> Option<(KeyRef, zeroize::Zeroizing<String>)> {
             ));
         }
     }
+    if o.ui.interactive() {
+        o.ui.say(format!(
+            "  An OpenRouter API key starts with sk-or-. Create one at {KEYS_PAGE} (sign in or \
+             sign up there) and add credits at {CREDITS_PAGE}; press Enter with no key to do it \
+             later."
+        ));
+    }
     match o
         .ui
         .secret("OpenRouter API key (hidden; stored in your owner-only Axocoatl configuration)")
     {
         Some(value) => Some((KeyRef::Value(value.clone()), value)),
+        None if o.ui.interactive() => {
+            o.step_left(format!(
+                "Create an OpenRouter API key at {KEYS_PAGE} and add credits at {CREDITS_PAGE}, \
+                 then run `{again}` and paste the key at its hidden prompt (or export \
+                 OPENROUTER_API_KEY first and add --openrouter-key-env OPENROUTER_API_KEY)"
+            ));
+            None
+        }
         None => {
-            o.step_left(
-                "Give onboarding your OpenRouter key: export OPENROUTER_API_KEY in this shell and \
-                 run `axocoatl onboard --openrouter-key-env OPENROUTER_API_KEY`",
-            );
+            o.step_left(format!(
+                "Give onboarding your OpenRouter key (create one at {KEYS_PAGE}, with credits \
+                 added at {CREDITS_PAGE}): export OPENROUTER_API_KEY in this shell and run \
+                 `{again} --openrouter-key-env OPENROUTER_API_KEY`"
+            ));
             None
         }
     }
@@ -229,13 +264,19 @@ fn key(o: &mut Onboarding) -> Option<(KeyRef, zeroize::Zeroizing<String>)> {
 
 /// Step 3D. With `with_writer`, the writer runs on OpenRouter too.
 pub(crate) async fn run(o: &mut Onboarding, choice: &mut Choice, with_writer: bool) {
-    if !o.ui.consent(
-        "Use OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not \
-         support BYOK)",
-        true,
-        false,
-    ) {
-        o.step_left("Native OpenRouter needs OpenRouter credit billing without BYOK provider keys");
+    if o.ui.interactive() {
+        o.ui.say(format!("  {}", byok_explained()));
+    }
+    // The question `axocoatl connect openrouter` asks too.
+    if !o
+        .ui
+        .consent(crate::connect_cmd::openrouter::BYOK_QUESTION, true, false)
+    {
+        o.step_left(format!(
+            "Native Sessions use OpenRouter only with OpenRouter credits and no BYOK keys: remove \
+             the BYOK keys at {BYOK_PAGE} (or use another OpenRouter account), then run `axocoatl \
+             onboard` again; or choose Claude Code, Codex or a local model there"
+        ));
         return;
     }
     let writer = if with_writer {
@@ -279,7 +320,21 @@ pub(crate) async fn run(o: &mut Onboarding, choice: &mut Choice, with_writer: bo
             DEFAULT_REVIEWER,
         );
     }
-    let Some((key_ref, key)) = key(o) else {
+    // Nothing is saved without a key: the command that gives the same
+    // models again.
+    let mut again = vec!["axocoatl onboard".to_string()];
+    match (&writer, &choice.writer_model) {
+        (Some(writer), _) => again.push(format!(
+            "--writer openrouter --writer-model openrouter:{writer}"
+        )),
+        (None, Some(model)) if model.provider == Provider::Ollama => {
+            again.push(format!("--writer ollama --writer-model {}", model.spec()))
+        }
+        _ => {}
+    }
+    again.push(format!("--reviewer openrouter:{reviewer}"));
+    let again = again.join(" ");
+    let Some((key_ref, key)) = key(o, &again) else {
         return;
     };
     if !o.ui.plan() {
@@ -287,9 +342,8 @@ pub(crate) async fn run(o: &mut Onboarding, choice: &mut Choice, with_writer: bo
             KeyCheck::Accepted => o.ui.ok("OpenRouter accepted the key"),
             KeyCheck::Refused(status) => {
                 o.step_left(format!(
-                    "OpenRouter refused the key ({status}): check it at \
-                     https://openrouter.ai/settings/keys, then run `axocoatl onboard --update` \
-                     in a terminal to enter another (or pass --openrouter-key-env VAR)"
+                    "OpenRouter refused the key ({status}): check it at {KEYS_PAGE}, then run \
+                     `{again}` in a terminal to enter another (or add --openrouter-key-env VAR)"
                 ));
                 return;
             }
