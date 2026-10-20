@@ -1,18 +1,23 @@
 //! Ollama checks and model defaults for `onboard` and `doctor`.
 //!
 //! Native Sessions accept only a loopback Ollama server whose version the
-//! version policy accepts (Ollama 0.40.6 or a later 0.40 release) and that
+//! version policy accepts (Ollama 0.40.6 or later: a later 0.40 release, or a
+//! later 0.x release once the contract probes pass on each model) and that
 //! reports its cloud features disabled, and only GGUF models that Ollama runs
 //! in llama.cpp's llama-server; `axocoatl_llm_ollama` owns that contract and
 //! this module reports it. Setup also reads the models installed on the
-//! chosen server to suggest the default team's models.
+//! chosen server to suggest the default team's models for this computer's
+//! memory, and what to do about each finding depends on how Ollama runs here
+//! ([`OllamaService`]).
 
 use axocoatl_llm_ollama::{
-    check_native_ollama_server, check_shown_model, show_native_ollama_model,
-    validate_native_ollama_endpoint, NativeOllamaServerCheck, OllamaCloudMode,
-    AUDITED_OLLAMA_VERSION,
+    check_native_ollama_server, check_shown_model, ollama_version_note, ollama_version_refusal,
+    show_native_ollama_model, validate_native_ollama_endpoint, NativeOllamaServerCheck,
+    OllamaCloudMode, AUDITED_OLLAMA_VERSION,
 };
 use serde_json::Value;
+
+use crate::onboard::detect::OllamaService;
 
 /// The Ollama server setup offers first.
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
@@ -27,9 +32,73 @@ pub const RECOMMENDED_LEAD_MODEL: &str = "qwen3-coder:30b";
 /// time.
 pub const RECOMMENDED_REVIEWER_MODEL: &str = "gpt-oss:20b";
 
+/// The reviewer for a computer with 96 GB of memory or more: the measured
+/// one (65.4 GB).
+pub const LARGE_REVIEWER_MODEL: &str = "gpt-oss:120b";
+
 /// The flag of `ollama pull` that selects the GGUF variant of a model whose
 /// tag also has an MLX variant. Ollama does not document it.
 pub const LLAMACPP_PULL_FLAG: &str = "--runner llamacpp";
+
+/// The smallest context, in tokens, a fix run's first writer call fits in
+/// (it needs about 9.7k); below it native Sessions and runs refuse the model
+/// up front instead of failing after the first call.
+pub const MIN_CONTEXT_TOKENS: usize = 16_384;
+
+/// The context onboarding sets with `OLLAMA_CONTEXT_LENGTH` when Ollama
+/// loads a model with less than [`MIN_CONTEXT_TOKENS`].
+pub const CONTEXT_FIX_TOKENS: usize = 32_768;
+
+/// The download size of the models setup suggests, as the Ollama library
+/// lists them.
+const KNOWN_SIZES: &[(&str, u64)] = &[
+    (RECOMMENDED_LEAD_MODEL, 18_556_700_761),
+    (RECOMMENDED_REVIEWER_MODEL, 13_780_173_839),
+    (LARGE_REVIEWER_MODEL, 65_369_818_941),
+];
+
+/// The download size of `model` when setup knows it.
+pub fn known_size(model: &str) -> Option<u64> {
+    KNOWN_SIZES
+        .iter()
+        .find(|(name, _)| *name == model)
+        .map(|(_, size)| *size)
+}
+
+/// A model of `size_bytes` leaves room for the rest of the computer (macOS,
+/// the Podman machine and Ollama's own buffers) when it is at most about
+/// 0.65 of the memory.
+pub fn fits_memory(size_bytes: u64, memory_bytes: u64) -> bool {
+    size_bytes as f64 <= memory_bytes as f64 * 0.65
+}
+
+/// `18.6 GB`.
+pub fn size_text(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / 1e9)
+}
+
+/// The local pair setup recommends for a computer with `memory_bytes`, and
+/// what is known about it; `None` below 48 GB, where no local pair has been
+/// tested.
+pub fn recommended_pair(memory_bytes: u64) -> Option<(TeamModels, &'static str)> {
+    let gb = axocoatl_isolation::host::memory_gb(memory_bytes);
+    if gb >= 96 {
+        Some((
+            TeamModels {
+                lead: RECOMMENDED_LEAD_MODEL.to_string(),
+                reviewer: LARGE_REVIEWER_MODEL.to_string(),
+            },
+            "recommended: gpt-oss 120B is the reviewer Axocoatl has measured",
+        ))
+    } else if gb >= 48 {
+        Some((
+            TeamModels::recommended(),
+            "runs end to end on 48 GB; this reviewer's quality has not been measured",
+        ))
+    } else {
+        None
+    }
+}
 
 /// The models the default team runs on. Lead, Scout and the chat Assistant
 /// use `lead`; Reviewer uses `reviewer`, which may be the same model.
@@ -40,14 +109,6 @@ pub struct TeamModels {
 }
 
 impl TeamModels {
-    #[cfg(test)]
-    pub fn same(model: &str) -> Self {
-        Self {
-            lead: model.to_string(),
-            reviewer: model.to_string(),
-        }
-    }
-
     /// The pair setup suggests when nothing suitable is installed: two
     /// different models, so review is cross-model by default.
     pub fn recommended() -> Self {
@@ -74,6 +135,14 @@ pub struct InstalledModel {
 }
 
 impl InstalledModel {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn size_bytes(&self) -> u64 {
+        self.size_bytes
+    }
+
     fn from_tag(record: &Value) -> Option<Self> {
         let name = record.get("name").and_then(Value::as_str)?.to_string();
         let text = |pointer: &str| {
@@ -282,8 +351,27 @@ pub async fn installed_models(base_url: &str) -> Result<Vec<InstalledModel>, Str
 /// without one it shares Lead's model. Cloud, MLX and embedding models are
 /// never suggested, and vision models only when nothing else fits. `None`
 /// when the server has no candidate ([`TeamModels::recommended`] then).
+#[cfg(test)]
 pub fn suggest_team_models(models: &[InstalledModel]) -> Option<TeamModels> {
-    let candidates = candidates(models);
+    suggest_from(candidates(models))
+}
+
+/// [`suggest_team_models`] among the installed models that fit a computer
+/// with `memory_bytes` ([`fits_memory`]): a model too large for it is never
+/// preselected.
+pub fn suggest_fitting_team_models(
+    models: &[InstalledModel],
+    memory_bytes: u64,
+) -> Option<TeamModels> {
+    suggest_from(
+        candidates(models)
+            .into_iter()
+            .filter(|model| model.size_bytes == 0 || fits_memory(model.size_bytes, memory_bytes))
+            .collect(),
+    )
+}
+
+fn suggest_from(candidates: Vec<InstalledModel>) -> Option<TeamModels> {
     let lead = candidates.iter().min_by(|a, b| {
         lead_tier(a)
             .cmp(&lead_tier(b))
@@ -344,20 +432,6 @@ pub enum ServerProbe {
     },
 }
 
-impl ServerProbe {
-    /// Native Sessions can use this server.
-    pub fn ready(&self) -> bool {
-        matches!(self, Self::Reachable { check: Ok(check), .. } if check.ready())
-    }
-
-    pub fn models(&self) -> &[InstalledModel] {
-        match self {
-            Self::Unreachable(_) => &[],
-            Self::Reachable { models, .. } => models,
-        }
-    }
-}
-
 /// List the server's models, then read its native requirements.
 pub async fn probe_server(base_url: &str) -> ServerProbe {
     match installed_models(base_url).await {
@@ -377,10 +451,13 @@ pub async fn native_check(base_url: &str) -> Result<NativeOllamaServerCheck, Str
         .map_err(|error| error.to_string())
 }
 
-/// One line of a check: a passed requirement, or a failed one with what to do.
+/// One line of a check: a passed requirement (possibly with a warning), or a
+/// failed one with what to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
     pub ok: bool,
+    /// Passed, with something to know (an unaudited Ollama version).
+    pub warn: bool,
     pub label: String,
     pub hint: Vec<String>,
 }
@@ -389,36 +466,160 @@ impl Finding {
     fn pass(label: String) -> Self {
         Self {
             ok: true,
+            warn: false,
             label,
             hint: Vec::new(),
+        }
+    }
+
+    fn warning(label: String, hint: Vec<String>) -> Self {
+        Self {
+            ok: true,
+            warn: true,
+            label,
+            hint,
         }
     }
 
     fn fail(label: String, hint: Vec<String>) -> Self {
         Self {
             ok: false,
+            warn: false,
             label,
             hint,
         }
     }
 }
 
-/// How to turn Ollama's cloud features off. Verified against Ollama 0.20.6 and
-/// 0.40.6 (the same code in both): `envconfig.NoCloud` is true when
-/// `OLLAMA_NO_CLOUD` parses as true or the server user's `~/.ollama/server.json`
-/// sets `disable_ollama_cloud`, and the server reads both once at start.
-pub fn disable_cloud_steps(base_url: &str) -> Vec<String> {
-    vec![
-        "To disable Ollama's cloud features, do one of these and restart Ollama:".to_string(),
-        "  - add {\"disable_ollama_cloud\": true} to ~/.ollama/server.json of the user that runs Ollama".to_string(),
-        "  - start the server with OLLAMA_NO_CLOUD=1, e.g. `OLLAMA_NO_CLOUD=1 ollama serve`".to_string(),
-        "    (macOS app: `launchctl setenv OLLAMA_NO_CLOUD 1`, then quit and reopen Ollama)".to_string(),
-        format!(
-            "Then `curl -s {}/api/status` shows \"disabled\":true.",
-            base_url.trim_end_matches('/')
-        ),
-    ]
+/// How Ollama runs here, for the commands a hint gives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OllamaHost {
+    pub service: OllamaService,
+    pub macos: bool,
+    /// Homebrew's service environment file (`~/.homebrew/services/ollama.env`).
+    pub brew_env_file: Option<std::path::PathBuf>,
+    /// The `ollama` CLI's own version, when one is installed.
+    pub cli_version: Option<String>,
 }
+
+impl OllamaHost {
+    /// Restart the server so it reads its settings again.
+    pub fn restart(&self) -> String {
+        match self.service {
+            OllamaService::Brew => "brew services restart ollama".to_string(),
+            OllamaService::Systemd => "sudo systemctl restart ollama".to_string(),
+            OllamaService::App => "quit and reopen the Ollama app".to_string(),
+            OllamaService::Manual => "stop and start your `ollama serve` again".to_string(),
+        }
+    }
+
+    /// Start a server that is not running.
+    pub fn start(&self) -> String {
+        match (self.service, self.cli_version.is_some(), self.macos) {
+            (OllamaService::Brew, _, _) => "brew services start ollama".to_string(),
+            (OllamaService::Systemd, _, _) => "sudo systemctl start ollama".to_string(),
+            (OllamaService::App, _, _) => "open the Ollama app".to_string(),
+            (OllamaService::Manual, true, _) => {
+                "run `OLLAMA_NO_CLOUD=1 ollama serve` in another terminal".to_string()
+            }
+            (OllamaService::Manual, false, true) => {
+                "brew install ollama && brew services start ollama (or install the app from \
+                 https://ollama.com/download)"
+                    .to_string()
+            }
+            (OllamaService::Manual, false, false) => PINNED_LINUX_INSTALL.to_string(),
+        }
+    }
+
+    /// Install the audited release, for a version that is refused as too
+    /// new or not a release (never `brew upgrade`).
+    pub fn pinned_install(&self) -> String {
+        if self.macos {
+            format!(
+                "install Ollama {AUDITED_OLLAMA_VERSION} from \
+                 https://github.com/ollama/ollama/releases/tag/v{AUDITED_OLLAMA_VERSION}"
+            )
+        } else {
+            PINNED_LINUX_INSTALL.to_string()
+        }
+    }
+
+    /// Upgrade an Ollama that is too old.
+    pub fn upgrade(&self) -> String {
+        match (self.service, self.macos) {
+            (OllamaService::Brew, _) => {
+                "brew upgrade ollama && brew services restart ollama".to_string()
+            }
+            (OllamaService::App, _) => {
+                "update the Ollama app (download it again from https://ollama.com/download), \
+                 then reopen it"
+                    .to_string()
+            }
+            (_, true) => "brew upgrade ollama (or download https://ollama.com/download), then \
+                          restart `ollama serve`"
+                .to_string(),
+            (_, false) => PINNED_LINUX_INSTALL.to_string(),
+        }
+    }
+
+    /// Turn the cloud features off.
+    pub fn cloud_off(&self) -> Vec<String> {
+        let json = r#"{"disable_ollama_cloud": true}"#;
+        match self.service {
+            OllamaService::Brew => vec![format!(
+                "Run `axocoatl onboard` (it turns them off after asking), or add {json} to \
+                 ~/.ollama/server.json and run `brew services restart ollama`."
+            )],
+            OllamaService::App => vec![
+                "In the Ollama app, turn off Cloud in Settings, then quit and reopen Ollama."
+                    .to_string(),
+            ],
+            OllamaService::Systemd => vec![
+                "Run `axocoatl onboard` (it adds a systemd drop-in after asking), or run \
+                 `sudo systemctl edit ollama`, add `[Service]` and \
+                 `Environment=\"OLLAMA_NO_CLOUD=1\"`, then `sudo systemctl restart ollama`."
+                    .to_string(),
+            ],
+            OllamaService::Manual => vec![format!(
+                "Add {json} to ~/.ollama/server.json of the user that runs Ollama, or start it \
+                 with `OLLAMA_NO_CLOUD=1 ollama serve`, then restart it."
+            )],
+        }
+    }
+
+    /// Give models a context of [`CONTEXT_FIX_TOKENS`].
+    pub fn context(&self) -> String {
+        match self.service {
+            OllamaService::Brew => format!(
+                "add OLLAMA_CONTEXT_LENGTH={CONTEXT_FIX_TOKENS} to {} and run `brew services \
+                 restart ollama` (`axocoatl onboard` does this after asking)",
+                self.brew_env_file
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "~/.homebrew/services/ollama.env".to_string())
+            ),
+            OllamaService::Systemd => format!(
+                "add a drop-in with `Environment=\"OLLAMA_CONTEXT_LENGTH={CONTEXT_FIX_TOKENS}\"` \
+                 (`sudo systemctl edit ollama`), then `sudo systemctl restart ollama` (`axocoatl \
+                 onboard` does this after asking)"
+            ),
+            OllamaService::App => format!(
+                "in the Ollama app's Settings, set the context length to {}k, then quit and \
+                 reopen Ollama",
+                CONTEXT_FIX_TOKENS / 1024
+            ),
+            OllamaService::Manual => format!(
+                "start Ollama with OLLAMA_CONTEXT_LENGTH={CONTEXT_FIX_TOKENS} (for example \
+                 `OLLAMA_CONTEXT_LENGTH={CONTEXT_FIX_TOKENS} OLLAMA_NO_CLOUD=1 ollama serve`)"
+            ),
+        }
+    }
+}
+
+/// Ollama's Linux installer, pinned to the audited release. It asks for the
+/// password itself and needs `zstd`.
+pub const PINNED_LINUX_INSTALL: &str =
+    "curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.40.6 sh";
 
 /// Whether native Sessions can use the Ollama server at `base_url`, one
 /// finding per requirement. `alternative` tells the person how to use a
@@ -427,6 +628,7 @@ pub fn native_findings(
     base_url: &str,
     check: &Result<NativeOllamaServerCheck, String>,
     alternative: &str,
+    host: &OllamaHost,
 ) -> Vec<Finding> {
     if let Err(error) = validate_native_ollama_endpoint(base_url) {
         return vec![Finding::fail(
@@ -449,11 +651,17 @@ pub fn native_findings(
     };
 
     let mut findings = Vec::new();
+    let version = check.version.as_deref().unwrap_or_default();
     findings.push(match check.version_refusal() {
-        None => Finding::pass(format!(
-            "Ollama {} at {base_url}, a version native Sessions accept ({AUDITED_OLLAMA_VERSION} or a later 0.40 release)",
-            check.version.as_deref().unwrap_or_default()
-        )),
+        None => match ollama_version_note(version) {
+            None => Finding::pass(format!(
+                "Ollama {version} at {base_url}, a version native Sessions accept"
+            )),
+            Some(note) => Finding::warning(
+                format!("Ollama {version} at {base_url}, newer than the audited {AUDITED_OLLAMA_VERSION}"),
+                vec![format!("{note}.")],
+            ),
+        },
         Some(refusal) => Finding::fail(
             format!(
                 "Ollama at {base_url} reports version {}; native Sessions refuse it",
@@ -461,9 +669,7 @@ pub fn native_findings(
             ),
             vec![
                 format!("{refusal}."),
-                format!(
-                    "Install Ollama {AUDITED_OLLAMA_VERSION} or a later 0.40 release on this machine (https://ollama.com/download, or `brew upgrade ollama`) and restart it."
-                ),
+                version_fix(check.version.as_deref(), host),
                 alternative.to_string(),
             ],
         ),
@@ -482,8 +688,14 @@ pub fn native_findings(
             format!("Ollama at {base_url} has cloud models enabled; native Sessions refuse it"),
             [
                 vec!["Native Sessions run only on a server whose cloud features are off.".to_string()],
-                disable_cloud_steps(base_url),
-                vec![alternative.to_string()],
+                host.cloud_off(),
+                vec![
+                    format!(
+                        "Then `curl -s {}/api/status` shows \"disabled\":true.",
+                        base_url.trim_end_matches('/')
+                    ),
+                    alternative.to_string(),
+                ],
             ]
             .concat(),
         ),
@@ -493,15 +705,58 @@ pub fn native_findings(
             ),
             [
                 vec![format!(
-                    "Native Sessions need Ollama {AUDITED_OLLAMA_VERSION} or a later 0.40 release with its cloud features off."
+                    "Native Sessions need Ollama {AUDITED_OLLAMA_VERSION} or later with its cloud features off."
                 )],
-                disable_cloud_steps(base_url),
+                host.cloud_off(),
                 vec![alternative.to_string()],
             ]
             .concat(),
         ),
     });
     findings
+}
+
+/// What to do about a refused server version: restart a server older than
+/// the CLI that is installed (the CLI was upgraded, the server was not),
+/// upgrade one that is too old, and install the audited release in place of
+/// a pre-release, a development build or a new major release.
+pub fn version_fix(server: Option<&str>, host: &OllamaHost) -> String {
+    let cli_accepted = host
+        .cli_version
+        .as_deref()
+        .is_some_and(|cli| ollama_version_refusal(cli).is_none());
+    let too_old = server.is_some_and(|server| {
+        axocoatl_isolation::podman_report::version_numbers(server)
+            .is_some_and(|numbers| numbers < (0, 40, 6))
+            && !server.contains('-')
+            && server != "0.0.0"
+    });
+    if too_old && cli_accepted && host.cli_version.as_deref() != server {
+        format!(
+            "The ollama on PATH is {} but the server still runs {}: {}.",
+            host.cli_version.as_deref().unwrap_or_default(),
+            server.unwrap_or_default(),
+            host.restart()
+        )
+    } else if too_old {
+        format!("Upgrade it: {}.", host.upgrade())
+    } else {
+        format!(
+            "Use a released Ollama {AUDITED_OLLAMA_VERSION} or a later 0.x release: {}.",
+            host.pinned_install()
+        )
+    }
+}
+
+/// The context Ollama loads `model` with on the server at `base_url`, read
+/// the way native admission reads it: the model is loaded without
+/// generating, its context read from `GET /api/ps`, and the contract probes
+/// run on it. Returns the context and the server version.
+pub async fn observed_context(base_url: &str, model: &str) -> Result<(usize, String), String> {
+    axocoatl_llm_ollama::observe_native_ollama_context(base_url, model)
+        .await
+        .map(|observation| (observation.context_tokens, observation.server_version))
+        .map_err(|error| error.to_string())
 }
 
 /// Whether a native Agent can run `model` on the server at `base_url`, read
@@ -839,27 +1094,63 @@ mod tests {
         })
     }
 
+    fn host(service: OllamaService, macos: bool) -> OllamaHost {
+        OllamaHost {
+            service,
+            macos,
+            brew_env_file: Some("/Users/a/.homebrew/services/ollama.env".into()),
+            cli_version: Some(AUDITED_OLLAMA_VERSION.to_string()),
+        }
+    }
+
+    fn manual() -> OllamaHost {
+        host(OllamaService::Manual, true)
+    }
+
+    /// The cloud fix depends on how Ollama runs: the brew service reads the
+    /// user's server.json, the systemd service (User=ollama) does not, and
+    /// the app has a setting. `launchctl setenv` is never suggested: it
+    /// does not survive a reboot.
     #[test]
-    fn cloud_enabled_fails_with_the_documented_ollama_settings() {
-        let findings = native_findings(
-            "http://localhost:11434",
-            &check(AUDITED_OLLAMA_VERSION, OllamaCloudMode::Enabled),
-            ALTERNATIVE,
-        );
-        assert_eq!(findings.len(), 2);
-        assert!(findings[0].ok, "{findings:?}");
-        let cloud = &findings[1];
-        assert!(!cloud.ok);
-        assert_eq!(
-            cloud.label,
-            "Ollama at http://localhost:11434 has cloud models enabled; native Sessions refuse it"
-        );
-        let hint = cloud.hint.join("\n");
-        assert!(hint.contains(r#"{"disable_ollama_cloud": true} to ~/.ollama/server.json"#));
-        assert!(hint.contains("OLLAMA_NO_CLOUD=1 ollama serve"));
-        assert!(hint.contains("launchctl setenv OLLAMA_NO_CLOUD 1"));
-        assert!(hint.contains("curl -s http://localhost:11434/api/status"));
-        assert!(hint.ends_with(ALTERNATIVE));
+    fn cloud_enabled_fails_with_the_fix_for_how_ollama_runs() {
+        for (service, expected, absent) in [
+            (
+                OllamaService::Brew,
+                r#"{"disable_ollama_cloud": true} to ~/.ollama/server.json and run `brew services restart ollama`"#,
+                "systemctl",
+            ),
+            (
+                OllamaService::Systemd,
+                r#"Environment="OLLAMA_NO_CLOUD=1"`, then `sudo systemctl restart ollama`"#,
+                "~/.ollama/server.json",
+            ),
+            (OllamaService::App, "turn off Cloud in Settings", "brew"),
+            (
+                OllamaService::Manual,
+                "`OLLAMA_NO_CLOUD=1 ollama serve`",
+                "systemctl",
+            ),
+        ] {
+            let findings = native_findings(
+                "http://localhost:11434",
+                &check(AUDITED_OLLAMA_VERSION, OllamaCloudMode::Enabled),
+                ALTERNATIVE,
+                &host(service, service != OllamaService::Systemd),
+            );
+            assert_eq!(findings.len(), 2);
+            assert!(findings[0].ok, "{findings:?}");
+            let cloud = &findings[1];
+            assert!(!cloud.ok);
+            assert_eq!(
+                cloud.label,
+                "Ollama at http://localhost:11434 has cloud models enabled; native Sessions refuse it"
+            );
+            let hint = cloud.hint.join("\n");
+            assert!(hint.contains(expected), "{service:?}: {hint}");
+            assert!(!hint.contains(absent), "{service:?}: {hint}");
+            assert!(!hint.contains("launchctl"), "{hint}");
+            assert!(hint.ends_with(ALTERNATIVE));
+        }
     }
 
     #[test]
@@ -873,8 +1164,12 @@ mod tests {
                 },
             ),
             ALTERNATIVE,
+            &manual(),
         );
-        assert!(findings.iter().all(|finding| finding.ok), "{findings:?}");
+        assert!(
+            findings.iter().all(|finding| finding.ok && !finding.warn),
+            "{findings:?}"
+        );
         assert_eq!(
             findings[1].label,
             "Ollama cloud models disabled at http://127.0.0.1:11436 (~/.ollama/server.json)"
@@ -882,22 +1177,31 @@ mod tests {
     }
 
     #[test]
-    fn an_unaudited_version_and_missing_status_both_fail() {
+    fn an_old_version_and_missing_status_both_fail() {
         let findings = native_findings(
             "http://localhost:11434",
             &check("0.12.3", OllamaCloudMode::Unreported),
             ALTERNATIVE,
+            &OllamaHost {
+                cli_version: None,
+                ..host(OllamaService::Brew, true)
+            },
         );
         assert!(findings.iter().all(|finding| !finding.ok), "{findings:?}");
         assert!(findings[0].label.contains("reports version 0.12.3"));
         let hint = findings[0].hint.join("\n");
         assert!(hint.contains("upgrade Ollama to 0.40.6 or later"), "{hint}");
-        assert!(hint.contains("brew upgrade ollama"), "{hint}");
+        assert!(
+            hint.contains("brew upgrade ollama && brew services restart ollama"),
+            "{hint}"
+        );
         assert!(findings[1].label.contains("does not report its cloud mode"));
     }
 
+    /// `brew upgrade` leaves the old server running until it restarts: when
+    /// the CLI is accepted and the server is older, the fix is the restart.
     #[test]
-    fn the_previously_supported_and_a_newer_minor_version_say_what_to_do() {
+    fn a_server_older_than_its_cli_is_restarted_not_upgraded() {
         let findings = native_findings(
             "http://localhost:11434",
             &check(
@@ -907,9 +1211,27 @@ mod tests {
                 },
             ),
             ALTERNATIVE,
+            &host(OllamaService::Brew, true),
         );
         assert!(!findings[0].ok);
         assert!(findings[0].hint[0].contains("0.20.6 is no longer supported"));
+        assert_eq!(
+            findings[0].hint[1],
+            "The ollama on PATH is 0.40.6 but the server still runs 0.20.6: brew services restart ollama."
+        );
+        let linux = native_findings(
+            "http://localhost:11434",
+            &check("0.20.6", OllamaCloudMode::Enabled),
+            ALTERNATIVE,
+            &host(OllamaService::Systemd, false),
+        );
+        assert!(linux[0].hint[1].contains("sudo systemctl restart ollama"));
+    }
+
+    /// A newer minor passes with a warning; a pre-release or a new major
+    /// release gets the pinned install, never `brew upgrade`.
+    #[test]
+    fn a_newer_minor_warns_and_a_pre_release_gets_the_pinned_install() {
         let findings = native_findings(
             "http://localhost:11434",
             &check(
@@ -919,9 +1241,31 @@ mod tests {
                 },
             ),
             ALTERNATIVE,
+            &host(OllamaService::Brew, true),
         );
-        assert!(!findings[0].ok);
-        assert!(findings[0].hint[0].contains("upgrade Axocoatl"));
+        assert!(findings[0].ok && findings[0].warn, "{findings:?}");
+        assert!(findings[0].label.contains("newer than the audited 0.40.6"));
+        assert!(findings[0].hint[0].contains("contract probes pass"));
+        for version in ["0.40.7-rc0", "1.0.0", "0.0.0"] {
+            for (macos, expected) in [
+                (
+                    true,
+                    "https://github.com/ollama/ollama/releases/tag/v0.40.6",
+                ),
+                (false, PINNED_LINUX_INSTALL),
+            ] {
+                let findings = native_findings(
+                    "http://localhost:11434",
+                    &check(version, OllamaCloudMode::Enabled),
+                    ALTERNATIVE,
+                    &host(OllamaService::Brew, macos),
+                );
+                let hint = findings[0].hint.join("\n");
+                assert!(!findings[0].ok);
+                assert!(hint.contains(expected), "{version}: {hint}");
+                assert!(!hint.contains("brew upgrade"), "{version}: {hint}");
+            }
+        }
     }
 
     #[test]
@@ -930,9 +1274,111 @@ mod tests {
             "http://192.0.2.10:11434",
             &Err("not requested".into()),
             ALTERNATIVE,
+            &manual(),
         );
         assert_eq!(findings.len(), 1);
         assert!(!findings[0].ok);
         assert!(findings[0].hint.join(" ").contains("loopback"));
+    }
+
+    /// The hints for each way Ollama runs on Linux name systemctl and never
+    /// launchctl; the macOS ones never name systemctl.
+    #[test]
+    fn hints_follow_the_operating_system_and_the_service() {
+        let systemd = host(OllamaService::Systemd, false);
+        assert_eq!(systemd.start(), "sudo systemctl start ollama");
+        assert_eq!(systemd.restart(), "sudo systemctl restart ollama");
+        assert_eq!(systemd.upgrade(), PINNED_LINUX_INSTALL);
+        assert!(systemd.context().contains("OLLAMA_CONTEXT_LENGTH=32768"));
+        let linux_manual = OllamaHost {
+            cli_version: None,
+            ..host(OllamaService::Manual, false)
+        };
+        assert_eq!(linux_manual.start(), PINNED_LINUX_INSTALL);
+        for hint in [
+            systemd.start(),
+            systemd.restart(),
+            systemd.context(),
+            systemd.cloud_off().join(" "),
+            linux_manual.start(),
+        ] {
+            assert!(
+                !hint.contains("launchctl") && !hint.contains("brew"),
+                "{hint}"
+            );
+        }
+        let brew = host(OllamaService::Brew, true);
+        assert_eq!(brew.start(), "brew services start ollama");
+        assert!(brew
+            .context()
+            .contains("/Users/a/.homebrew/services/ollama.env"));
+        for hint in [brew.start(), brew.restart(), brew.context(), brew.upgrade()] {
+            assert!(!hint.contains("systemctl"), "{hint}");
+        }
+        let mac_manual = OllamaHost {
+            cli_version: None,
+            ..host(OllamaService::Manual, true)
+        };
+        assert!(mac_manual.start().contains("brew install ollama"));
+    }
+
+    /// Models follow memory: nothing larger than about 0.65 of it is
+    /// preselected, and the pair recommended without installed models
+    /// depends on the tier (none below 48 GB).
+    #[test]
+    fn model_choice_follows_memory() {
+        const GIB: u64 = 1 << 30;
+        let installed = reported_machine();
+        let at = |gb: u64| suggest_fitting_team_models(&installed, gb * GIB).unwrap();
+        assert_eq!(at(128), suggest_team_models(&installed).unwrap());
+        assert_eq!(at(128).reviewer, "gpt-oss:120b");
+        // 48 GB: gpt-oss:120b (65.4 GB) does not fit; the largest that
+        // does reviews.
+        let at48 = at(48);
+        assert_eq!(at48.lead, "qwen3-coder:30b");
+        assert_ne!(at48.reviewer, "gpt-oss:120b");
+        assert!(!fits_memory(known_size("gpt-oss:120b").unwrap(), 48 * GIB));
+        assert!(fits_memory(
+            known_size("qwen3-coder:30b").unwrap(),
+            48 * GIB
+        ));
+        assert!(fits_memory(known_size("gpt-oss:20b").unwrap(), 24 * GIB));
+        assert!(!fits_memory(
+            known_size("qwen3-coder:30b").unwrap(),
+            24 * GIB
+        ));
+        assert!(!fits_memory(known_size("gpt-oss:20b").unwrap(), 16 * GIB));
+        let at16 = suggest_fitting_team_models(&installed, 16 * GIB).unwrap();
+        assert!(
+            installed
+                .iter()
+                .filter(|model| [at16.lead.as_str(), at16.reviewer.as_str()]
+                    .contains(&model.name()))
+                .all(|model| fits_memory(model.size_bytes(), 16 * GIB)),
+            "{at16:?}"
+        );
+
+        assert_eq!(
+            recommended_pair(128 * GIB).unwrap().0,
+            TeamModels {
+                lead: "qwen3-coder:30b".into(),
+                reviewer: "gpt-oss:120b".into()
+            }
+        );
+        assert_eq!(
+            recommended_pair(96 * GIB).unwrap().0.reviewer,
+            "gpt-oss:120b"
+        );
+        assert_eq!(
+            recommended_pair(48 * GIB).unwrap().0,
+            TeamModels::recommended()
+        );
+        assert!(recommended_pair(48 * GIB)
+            .unwrap()
+            .1
+            .contains("not been measured"));
+        assert_eq!(recommended_pair(24 * GIB), None);
+        assert_eq!(recommended_pair(16 * GIB), None);
+        assert_eq!(size_text(18_556_700_761), "18.6 GB");
     }
 }

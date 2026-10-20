@@ -5,7 +5,9 @@ use axocoatl_core::SecureDir;
 use clap::{Parser, Subcommand};
 
 mod connect_cmd;
+mod doctor;
 mod ollama_setup;
+mod onboard;
 mod receipt_cmd;
 mod recipe_cmd;
 mod run_cmd;
@@ -66,18 +68,18 @@ enum Commands {
         name: Option<String>,
     },
 
-    /// Configure Axocoatl for the current user
-    Onboard {
-        /// Also install a background daemon service unit
-        #[arg(long)]
-        install_daemon: bool,
-    },
+    /// Set up Axocoatl for the current user: the sandbox, the writer and
+    /// reviewer models, the configuration, and a first run
+    Onboard(Box<onboard::OnboardArgs>),
 
-    /// Check environment, dependencies, and config health
+    /// Check the sandbox, models, writers and daemon, and say what is ready
     Doctor {
         /// Path to config file
         #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Validate an Axocoatl configuration file
@@ -399,7 +401,7 @@ fn exit_for_parse_error(error: clap::Error, argv: &[std::ffi::OsString]) -> ! {
     // not verify, a receipt signed by an untrusted key): clap's own 2 for a
     // bad command line must not read as that.
     let documented = argv.get(1).is_some_and(|argument| {
-        ["run", "loadouts", "record", "receipt"]
+        ["run", "loadouts", "record", "receipt", "onboard"]
             .iter()
             .any(|command| argument == command)
     });
@@ -536,8 +538,10 @@ async fn main() {
 
     match cli.command {
         Commands::Init { name } => cmd_init(name).await,
-        Commands::Onboard { install_daemon } => cmd_onboard(install_daemon).await,
-        Commands::Doctor { config } => cmd_doctor(&config).await,
+        Commands::Onboard(args) => std::process::exit(onboard::cmd_onboard(*args).await),
+        Commands::Doctor { config, json } => {
+            std::process::exit(doctor::cmd_doctor(&config, json).await)
+        }
         Commands::Validate { config } => cmd_validate(&config).await,
         Commands::Dev { config } => cmd_dev(&config).await,
         Commands::Serve { config } => cmd_serve(&config).await,
@@ -938,77 +942,18 @@ fn scaffold_project(
     Ok(())
 }
 
-/// The default team in every starting configuration: Lead owns the change
-/// and is the only Agent that edits files; Scout and Reviewer are Workers with
-/// `writes: []`, read-only helpers Lead can delegate to. A new Session on Lead
-/// starts with Lead alone; Team & budget offers both helpers as an option,
-/// and the person approves every limit. Lead and Scout run on `lead_model`,
-/// Reviewer on `reviewer_model`; both are already-serialized YAML scalars.
-fn default_team_agents(
-    provider_id: &str,
-    lead_model: &str,
-    reviewer_model: &str,
-    max_tokens: Option<u32>,
-) -> String {
-    let sampling = max_tokens
-        .map(|max_tokens| format!("    sampling:\n      max_tokens: {max_tokens}\n"))
-        .unwrap_or_default();
-    format!(
-        r#"  # Default team. Lead owns the change; Scout and Reviewer are read-only
-  # helpers it can delegate to once you opt in and approve their limits in
-  # Team & budget. A new Session starts with Lead alone.
-  - id: lead
-    name: "Lead"
-    provider: {provider_id}
-    model: {lead_model}
-    role: autonomous
-    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
-    system_prompt: "{LEAD_PROMPT}"
-{sampling}
-  - id: scout
-    name: "Scout"
-    provider: {provider_id}
-    model: {lead_model}
-    role: worker
-    tools: [read_file, list_dir, grep, glob, bash]
-    writes: []
-    system_prompt: "{SCOUT_PROMPT}"
-{sampling}
-  - id: reviewer
-    name: "Reviewer"
-    provider: {provider_id}
-    model: {reviewer_model}
-    role: worker
-    tools: [read_file, list_dir, grep, glob, bash]
-    writes: []
-    system_prompt: "{REVIEWER_PROMPT}"
-{sampling}"#
-    )
-}
-
-const LEAD_PROMPT: &str = "You own this change. 1. Look first: find the relevant files and \
-    tests for code you do not know. If you have helpers, ask scout to find them. 2. Make the \
-    change. 3. Run the check command from the project instructions (AXOCOATL.md), or the tests, \
-    and fix failures. 4. Check your diff against the task. If you have helpers, ask reviewer to \
-    review it. Fix each defect found. Then summarize what you changed.";
-const SCOUT_PROMPT: &str = "Answer the lead's question with file paths, line numbers and short \
-    evidence. Change nothing.";
-const REVIEWER_PROMPT: &str = "Review the described change. Check it against the task and \
-    against every contract and edge case the docs, comments and tests describe, one by one. \
-    Report each defect with file:line, or say you found none. Change nothing.";
-
 /// The Ollama model the project-local `init` scaffold configures. `onboard`
 /// suggests models from what the chosen Ollama server has installed instead.
 const DEFAULT_OLLAMA_MODEL: &str = "llama3.2";
 
 /// The local Ollama configuration `init` scaffolds.
 fn init_configuration() -> String {
-    let team = default_team_agents(
-        "ollama",
-        DEFAULT_OLLAMA_MODEL,
-        DEFAULT_OLLAMA_MODEL,
-        Some(4096),
-    );
+    let model = onboard::config::AgentModel {
+        provider: "ollama",
+        model_yaml: DEFAULT_OLLAMA_MODEL,
+        max_tokens: Some(4096),
+    };
+    let team = onboard::config::team_agents(&model, &model);
     format!(
         r#"# Axocoatl — project-local configuration (local Ollama)
 # See: https://docs.axocoatl.ai/configure/agents/
@@ -1091,24 +1036,10 @@ fn print_next_steps(project_name: &str) {
     print!("{text}");
 }
 
-fn hosted_key_prompt(provider: &str) -> String {
-    format!(
-        "{provider} API key (stored in your private Axocoatl configuration; leave blank to use the process environment)"
-    )
-}
-
 fn missing_provider_key_hint(provider: &str) -> String {
     format!(
         "Export it in the process environment that starts Axocoatl before using {provider} Agents."
     )
-}
-
-fn config_secret(key: &str, environment_variable: &str) -> String {
-    if key.is_empty() {
-        format!("\"${{{environment_variable}}}\"")
-    } else {
-        serde_json::to_string(key).expect("serializing a string cannot fail")
-    }
 }
 
 fn config_uses_process_environment(config_yaml: &str) -> bool {
@@ -1118,7 +1049,7 @@ fn config_uses_process_environment(config_yaml: &str) -> bool {
 fn reject_uninherited_service_environment(config_yaml: &str) -> Result<(), &'static str> {
     if config_uses_process_environment(config_yaml) {
         Err(
-            "the generated background service does not inherit shell environment variables; rerun `axocoatl onboard` and enter the hosted provider key, or configure Axocoatl without `--install-daemon`",
+            "the background service does not inherit shell environment variables, and the configuration reads a key from one; run `axocoatl onboard --update` and enter the key at its hidden prompt, or start Axocoatl with `axocoatl dev` from a shell that has the variable",
         )
     } else {
         Ok(())
@@ -1201,319 +1132,6 @@ async fn cmd_init(name: Option<String>) {
 
     print_next_steps(&project_name);
     println!("Tip: `axocoatl onboard` configures the installed product for this user instead.");
-}
-
-/// `doctor`'s check of each configured Ollama model that is pulled, read
-/// from `POST /api/show` the way native admission reads it: a local GGUF
-/// model that completes text and, when an Agent that uses it lists tools,
-/// calls tools. Only for a loopback server: native Sessions use no other.
-async fn doctor_ollama_model_findings(
-    config: &axocoatl_config::AxocoatlConfig,
-    ollama: &axocoatl_config::OllamaCredentials,
-    installed: &[ollama_setup::InstalledModel],
-) -> Vec<ollama_setup::Finding> {
-    if axocoatl_llm_ollama::validate_native_ollama_endpoint(&ollama.base_url).is_err() {
-        return Vec::new();
-    }
-    let mut needs_tools: std::collections::BTreeMap<String, bool> = Default::default();
-    for agent in config.agents.iter().filter(|a| a.provider == "ollama") {
-        let model = if agent.model.is_empty() {
-            ollama
-                .model
-                .clone()
-                .unwrap_or_else(|| "llama3.2".to_string())
-        } else {
-            agent.model.clone()
-        };
-        *needs_tools.entry(model).or_default() |= !agent.tools.is_empty();
-    }
-    let mut findings = Vec::new();
-    for (model, tools) in needs_tools {
-        if ollama_setup::is_installed(&model, installed) {
-            findings.push(ollama_setup::model_finding(&ollama.base_url, &model, tools).await);
-        }
-    }
-    findings
-}
-
-/// Run environment health checks. Returns true if all *hard* checks passed.
-async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
-    let mut hard_ok = true;
-    let pass = |label: &str| println!("  [ OK ] {label}");
-    let warn = |label: &str, hint: &str| println!("  [WARN] {label}\n         → {hint}");
-    let fail = |label: &str, hint: &str| {
-        println!("  [FAIL] {label}\n         → {hint}");
-    };
-    // Continuation lines line up under the first line of a hint.
-    let hint_lines = |lines: &[String]| lines.join("\n           ");
-
-    println!("Axocoatl environment check:\n");
-
-    // 1. Rust toolchain (informational)
-    match std::process::Command::new("rustc")
-        .arg("--version")
-        .output()
-    {
-        Ok(o) if o.status.success() => {
-            pass(&format!(
-                "Rust toolchain: {}",
-                String::from_utf8_lossy(&o.stdout).trim()
-            ));
-        }
-        _ => warn(
-            "Rust toolchain not found",
-            "Only needed to build from source; prebuilt binaries don't require it.",
-        ),
-    }
-
-    // 2. Config file exists & validates
-    let config = match load_cli_config(config_path).await {
-        Ok(c) => {
-            pass(&format!("Config valid: {}", config_path.display()));
-            for warning in axocoatl_config::no_tools_warnings(&c) {
-                warn(&warning.problem(), axocoatl_config::NoToolsWarning::HINT);
-            }
-            for warning in axocoatl_config::network_warnings(&c) {
-                warn(&warning.field, &warning.message);
-            }
-            Some(c)
-        }
-        Err(e) => {
-            hard_ok = false;
-            fail(
-                &format!("Config invalid: {}", config_path.display()),
-                &e.to_string(),
-            );
-            None
-        }
-    };
-
-    if let Some(config) = &config {
-        // 3. Provider reachability / credentials
-        if let Some(ollama) = &config.providers.ollama {
-            match ollama_setup::installed_models(&ollama.base_url).await {
-                Ok(models) => {
-                    pass(&format!("Ollama reachable at {}", ollama.base_url));
-                    // Native Sessions refuse a server that is not on loopback,
-                    // whose version the version policy refuses, or that has
-                    // its cloud features on.
-                    let check = ollama_setup::native_check(&ollama.base_url).await;
-                    for finding in
-                        ollama_setup::native_findings(&ollama.base_url, &check, DOCTOR_OTHER_OLLAMA)
-                    {
-                        if finding.ok {
-                            pass(&finding.label);
-                        } else {
-                            hard_ok = false;
-                            fail(&finding.label, &hint_lines(&finding.hint));
-                        }
-                    }
-                    // 4. Are the configured models pulled?
-                    let wanted: std::collections::HashSet<String> = config
-                        .agents
-                        .iter()
-                        .filter(|a| a.provider == "ollama")
-                        .map(|a| {
-                            if a.model.is_empty() {
-                                ollama
-                                    .model
-                                    .clone()
-                                    .unwrap_or_else(|| "llama3.2".to_string())
-                            } else {
-                                a.model.clone()
-                            }
-                        })
-                        .collect();
-                    for m in &wanted {
-                        let have = models.iter().any(|installed| {
-                            installed.name == *m || installed.name.starts_with(&format!("{m}:"))
-                        });
-                        if have {
-                            pass(&format!("Model '{m}' is pulled"));
-                        } else {
-                            hard_ok = false;
-                            fail(
-                                &format!("Model '{m}' not pulled"),
-                                &format!("Run: ollama pull {m}"),
-                            );
-                        }
-                    }
-                    // 5. Can native Sessions run each pulled model?
-                    for finding in doctor_ollama_model_findings(config, ollama, &models).await {
-                        if finding.ok {
-                            pass(&finding.label);
-                        } else {
-                            hard_ok = false;
-                            fail(&finding.label, &hint_lines(&finding.hint));
-                        }
-                    }
-                }
-                Err(e) => {
-                    hard_ok = false;
-                    fail(
-                        &format!("Ollama not reachable at {}", ollama.base_url),
-                        &format!("Start it with `ollama serve` ({e})"),
-                    );
-                }
-            }
-        }
-        let cred_check = |name: &str, key: &str| {
-            if key.is_empty() || key.contains("your-key") || key.starts_with("${") {
-                warn(
-                    &format!("{name} API key not set"),
-                    &missing_provider_key_hint(name),
-                );
-            } else {
-                pass(&format!("{name} API key present"));
-            }
-        };
-        if let Some(c) = &config.providers.openai {
-            cred_check("OpenAI", c.api_key.expose_secret());
-        }
-        if let Some(c) = &config.providers.anthropic {
-            cred_check("Anthropic", c.api_key.expose_secret());
-        }
-        if let Some(c) = &config.providers.gemini {
-            cred_check("Gemini", c.api_key.expose_secret());
-        }
-        if let Some(c) = &config.providers.mistral {
-            cred_check("Mistral", c.api_key.expose_secret());
-        }
-        if let Some(c) = &config.providers.openrouter {
-            cred_check("OpenRouter", c.api_key.expose_secret());
-        }
-    }
-
-    // 5. Data dir writable
-    let data_dir = std::env::var("AXOCOATL_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
-    match probe_data_dir(std::path::Path::new(&data_dir)) {
-        Ok(()) => {
-            pass(&format!("Data dir writable: {data_dir}"));
-            // Read only, without a lease: a running daemon is unaffected.
-            let report = axocoatl_session::execution_ownership::inspect_format_ownership(&data_dir);
-            match format_ownership_doctor_line(&report) {
-                Ok(line) => pass(&line),
-                Err((line, hint)) => {
-                    hard_ok = false;
-                    fail(&line, &hint);
-                }
-            }
-        }
-        Err(e) => {
-            hard_ok = false;
-            fail(
-                &format!("Data dir not writable: {data_dir}"),
-                &format!("{e}"),
-            );
-        }
-    }
-
-    // 6. Daemon running?
-    let socket_path = axocoatl_daemon::ipc::default_socket_path();
-    if let Ok(mut client) = axocoatl_daemon::ipc::IpcClient::connect(&socket_path).await {
-        pass("Daemon is running (IPC reachable)");
-        // What it did about leaked Session volumes when it started.
-        let check = match client
-            .request(&axocoatl_daemon::ipc::IpcRequest::RuntimeVolumes)
-            .await
-        {
-            Ok(axocoatl_daemon::ipc::IpcResponse::RuntimeVolumes { check }) => Some(check),
-            _ => None,
-        };
-        match runtime_volume_doctor_line(check.as_ref()) {
-            Ok(line) => pass(&line),
-            Err((line, hint)) => warn(&line, &hint),
-        }
-    } else {
-        warn(
-            "No running daemon",
-            "Start one with `axocoatl dev` or `axocoatl serve` (not required for one-shot commands).",
-        );
-    }
-
-    // 7. Podman — the sandbox runtime for Directory Sessions.
-    match axocoatl_isolation::podman::detect().await {
-        axocoatl_isolation::podman::PodmanReadiness::Ready => {
-            pass("Podman ready — Directory Sessions run sandboxed");
-        }
-        other => warn(
-            "Podman not ready (needed for Directory Sessions)",
-            &other.summary(),
-        ),
-    }
-
-    // Outbound egress transparency — always surface what leaves the box.
-    if let Some(cfg) = &config {
-        pass(&sandbox_network_doctor_line(&cfg.sandbox));
-        // Rootless Podman matters only when the workload would be hardened.
-        let rootless = match axocoatl_config::workload::workload_settings(&cfg.sandbox) {
-            Ok(settings)
-                if settings.plan(&cfg.sandbox.network)
-                    != axocoatl_config::workload::WorkloadPlan::Image =>
-            {
-                axocoatl_isolation::session_sandbox::podman_rootless()
-                    .await
-                    .ok()
-            }
-            _ => None,
-        };
-        match sandbox_workload_doctor_line(&cfg.sandbox, rootless) {
-            Ok(line) => pass(&line),
-            Err((line, hint)) => warn(&line, &hint),
-        }
-        for line in credentials_doctor_lines(cfg) {
-            match line.hint {
-                None => pass(&line.text),
-                Some(hint) => warn(&line.text, hint),
-            }
-        }
-        if let Some(browser) = &cfg.browser {
-            let image = browser
-                .image
-                .clone()
-                .unwrap_or_else(|| axocoatl_config::DEFAULT_BROWSER_IMAGE.to_string());
-            match axocoatl_daemon::browser_install::image_present(&image).await {
-                Ok(true) => pass(&format!("Browser: image {image} present")),
-                Ok(false) => warn(
-                    &format!("Browser: image {image} missing"),
-                    "Run `axocoatl browser install` before Agents use the browser tools.",
-                ),
-                Err(error) => warn(&format!("Browser: image {image} not checked"), &error),
-            }
-            pass(&if browser.allow.is_empty() {
-                "Browser network: the browser container reaches only the Session's exposed ports"
-                    .to_string()
-            } else {
-                format!(
-                    "Browser network: the browser container reaches the Session's exposed ports and, through Axocoatl's egress proxy, only: {}",
-                    axocoatl_config::egress::allow_summary(&browser.allow)
-                )
-            });
-        }
-        if cfg.webhooks.is_empty() {
-            pass("Outbound webhooks: none (no event egress)");
-        } else {
-            let names: Vec<&str> = cfg
-                .webhooks
-                .iter()
-                .filter(|w| w.enabled)
-                .map(|w| w.name.as_str())
-                .collect();
-            println!(
-                "  [EGRESS] {} webhook(s) active — Skill events leave the box to: {}",
-                names.len(),
-                names.join(", ")
-            );
-        }
-    }
-
-    println!();
-    if hard_ok {
-        println!("All required checks passed.");
-    } else {
-        println!("Some required checks FAILED — see hints above.");
-    }
-    hard_ok
 }
 
 /// The `doctor` line for the data directory's format ownership record, as the
@@ -1831,512 +1449,8 @@ fn probe_data_dir(path: &std::path::Path) -> std::io::Result<()> {
     data.remove_file(name)
 }
 
-async fn cmd_doctor(config_path: &std::path::Path) {
-    let ok = run_doctor_checks(config_path).await;
-    if !ok {
-        std::process::exit(1);
-    }
-}
-
-fn onboard_completion_text(
-    paths: &user_paths::UserPaths,
-    missing_environment_variable: Option<&str>,
-) -> String {
-    let environment_hint = missing_environment_variable
-        .map(|variable| format!("Before starting Axocoatl, export {variable} in this shell.\n"))
-        .unwrap_or_default();
-    format!(
-        "\n✓ Axocoatl configured for this user.\n  Config: {}\n  Data:   {}\n\n{environment_hint}Next:\n  axocoatl dev\n  Open the sign-in link it prints (or run `axocoatl url`) and choose Open workspace…\n",
-        paths.config_path.display(),
-        paths.data_dir.display()
-    )
-}
-
-/// A hosted-provider first run defines the default team and keeps the direct
-/// Assistant for `axocoatl chat`. Provider ids and display names are fixed
-/// call-site constants. The model is serialized here and the secret arrives as
-/// an already-quoted YAML scalar.
-fn hosted_onboarding_configuration(
-    provider_name: &str,
-    provider_id: &str,
-    model: &str,
-    secret: &str,
-    per_execution: u32,
-    overflow_policy: &str,
-) -> String {
-    let model_yaml =
-        serde_json::to_string(model).expect("serializing a model identifier cannot fail");
-    let provider_note = if provider_id == "openrouter" {
-        "# OpenRouter uses your normal API key and OpenRouter credits.\n# BYOK is not supported for native Session execution.\n# Choose a model at https://openrouter.ai/models.\n"
-    } else {
-        ""
-    };
-    let billing = if provider_id == "openrouter" {
-        "  openrouter_billing: credits\n"
-    } else {
-        ""
-    };
-    let max_tokens = (provider_id == "openrouter").then_some(2048);
-    let sampling = max_tokens
-        .map(|max_tokens| format!("    sampling:\n      max_tokens: {max_tokens}\n"))
-        .unwrap_or_default();
-    let team = default_team_agents(provider_id, &model_yaml, &model_yaml, max_tokens);
-    format!(
-        r#"# Axocoatl — {provider_name} setup
-{provider_note}agents:
-{team}
-  # Plain chat for `axocoatl chat`; not part of the default team.
-  - id: assistant
-    name: "Assistant"
-    provider: {provider_id}
-    model: {model_yaml}
-    system_prompt: "You are a helpful assistant."
-    tools: [read_file, list_dir, grep, glob]
-{sampling}    token_budget:
-      per_execution: {per_execution}
-      per_call: 8192
-      overflow_policy: {overflow_policy}
-
-providers:
-{billing}  {provider_id}:
-    api_key: {secret}
-
-server:
-  port: 8080
-  host: "127.0.0.1"
-"#
-    )
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OnboardingProvider {
-    Ollama,
-    OpenRouter,
-}
-
-// Onboarding initializes native Session storage. Keep the displayed choices and
-// their configuration dispatch together; compatibility adapters remain available
-// through existing YAML configuration and commands.
-const ONBOARDING_PROVIDERS: [OnboardingProvider; 2] =
-    [OnboardingProvider::Ollama, OnboardingProvider::OpenRouter];
-
-impl std::fmt::Display for OnboardingProvider {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Ollama => "Ollama (local, no API key)",
-            Self::OpenRouter => "OpenRouter (cloud, OpenRouter credits)",
-        })
-    }
-}
-
-/// What the wizard collected for the chosen provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum OnboardingSetup {
-    Ollama {
-        base_url: String,
-        models: ollama_setup::TeamModels,
-    },
-    OpenRouter {
-        model: String,
-        key: String,
-    },
-}
-
-impl OnboardingSetup {
-    fn configuration(&self) -> (String, Option<&'static str>) {
-        match self {
-            Self::Ollama { base_url, models } => {
-                (local_onboarding_configuration(base_url, models), None)
-            }
-            Self::OpenRouter { model, key } => (
-                hosted_onboarding_configuration(
-                    "OpenRouter",
-                    "openrouter",
-                    model,
-                    &config_secret(key, "OPENROUTER_API_KEY"),
-                    16000,
-                    "warn",
-                ),
-                key.is_empty().then_some("OPENROUTER_API_KEY"),
-            ),
-        }
-    }
-}
-
-fn yaml_string(value: &str) -> String {
-    serde_json::to_string(value).expect("serializing a string cannot fail")
-}
-
-fn local_onboarding_configuration(base_url: &str, models: &ollama_setup::TeamModels) -> String {
-    let lead_yaml = yaml_string(&models.lead);
-    let reviewer_yaml = yaml_string(&models.reviewer);
-    let base_url_yaml = yaml_string(base_url);
-    let team = default_team_agents("ollama", &lead_yaml, &reviewer_yaml, Some(4096));
-
-    format!(
-        r#"# Axocoatl — local Ollama setup
-agents:
-{team}
-  # Plain chat for `axocoatl chat`; not part of the default team.
-  - id: assistant
-    name: "Assistant"
-    provider: ollama
-    model: {lead_yaml}
-    system_prompt: "You are a helpful assistant powered by Axocoatl."
-    tools: [read_file, list_dir, grep, glob]
-    token_budget:
-      per_execution: 16000
-      per_call: 8192
-      overflow_policy: warn
-
-providers:
-  ollama:
-    base_url: {base_url_yaml}
-
-server:
-  port: 8080
-  host: "127.0.0.1"
-"#
-    )
-}
-
-async fn cmd_onboard(install_daemon: bool) {
-    use dialoguer::{Confirm, Input, Password, Select};
-
-    println!("┌─────────────────────────────────────────┐");
-    println!("│   Axocoatl — interactive setup wizard    │");
-    println!("└─────────────────────────────────────────┘\n");
-
-    let paths = match user_paths::UserPaths::discover() {
-        Ok(paths) => paths,
-        Err(error) => {
-            eprintln!("Cannot determine user configuration location: {error}");
-            std::process::exit(1);
-        }
-    };
-
-    if paths.config_path.exists()
-        && !Confirm::new()
-            .with_prompt(format!(
-                "Replace the existing Axocoatl configuration at {}?",
-                paths.config_path.display()
-            ))
-            .default(false)
-            .interact()
-            .unwrap_or(false)
-    {
-        println!(
-            "Configuration left unchanged: {}",
-            paths.config_path.display()
-        );
-
-        if install_daemon {
-            let existing_config = match std::fs::read_to_string(&paths.config_path) {
-                Ok(config) => config,
-                Err(error) => {
-                    eprintln!("Failed to read the existing user configuration: {error}");
-                    std::process::exit(1);
-                }
-            };
-            if let Err(error) = reject_uninherited_service_environment(&existing_config) {
-                eprintln!("Cannot install the Always-On Service: {error}");
-                std::process::exit(1);
-            }
-            if let Err(error) = configure_data_dir(&paths.config_path) {
-                eprintln!("Failed to select the user data directory: {error}");
-                std::process::exit(1);
-            }
-            if !run_doctor_checks(&paths.config_path).await {
-                std::process::exit(1);
-            }
-            cmd_service_install(&paths.config_path);
-        }
-        return;
-    }
-
-    let provider_idx = Select::new()
-        .with_prompt("Choose your provider for native Sessions")
-        .items(&ONBOARDING_PROVIDERS)
-        .default(0)
-        .interact()
-        .unwrap_or(0);
-
-    let provider = ONBOARDING_PROVIDERS[provider_idx];
-    let setup = match provider {
-        OnboardingProvider::Ollama => onboard_ollama().await,
-        OnboardingProvider::OpenRouter => {
-            if !Confirm::new()
-                .with_prompt("Use OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK)")
-                .default(true)
-                .interact()
-                .unwrap_or(false)
-            {
-                eprintln!("Native OpenRouter requires OpenRouter credit billing and does not support BYOK provider keys; no configuration was written.");
-                return;
-            }
-            let key = Password::new()
-                .with_prompt(hosted_key_prompt("OpenRouter"))
-                .allow_empty_password(true)
-                .interact()
-                .unwrap_or_default();
-            let model: String = Input::new()
-                .with_prompt("Default model (vendor/model)")
-                .default("meta-llama/llama-3.3-70b-instruct".to_string())
-                .interact_text()
-                .unwrap_or_else(|_| "meta-llama/llama-3.3-70b-instruct".to_string());
-            OnboardingSetup::OpenRouter { model, key }
-        }
-    };
-    let (config_yaml, missing_environment_variable) = setup.configuration();
-
-    if install_daemon {
-        if let Err(error) = reject_uninherited_service_environment(&config_yaml) {
-            eprintln!("Cannot install the Always-On Service: {error}");
-            std::process::exit(1);
-        }
-    }
-
-    if let Err(error) = write_user_configuration(&paths, &config_yaml) {
-        eprintln!("Failed to save the user configuration: {error}");
-        std::process::exit(1);
-    }
-
-    if let Err(error) = configure_data_dir(&paths.config_path) {
-        eprintln!("Failed to select the user data directory: {error}");
-        std::process::exit(1);
-    }
-    let checks_ok = run_doctor_checks(&paths.config_path).await;
-
-    if checks_ok && install_daemon {
-        cmd_service_install(&paths.config_path);
-    }
-
-    print!(
-        "{}",
-        onboard_completion_text(&paths, missing_environment_variable)
-    );
-
-    if !checks_ok {
-        std::process::exit(1);
-    }
-}
-
-/// How the wizard tells someone to try another Ollama server.
-const ONBOARD_OTHER_OLLAMA: &str =
-    "Or choose \"Use a different Ollama server\" and enter one that meets this requirement.";
-
 /// How `doctor` tells someone to use another Ollama server.
 const DOCTOR_OTHER_OLLAMA: &str = "Or set providers.ollama.base_url to another Ollama server on this machine that meets this requirement.";
-
-/// Print a check's findings for the wizard.
-fn print_findings(findings: &[ollama_setup::Finding]) {
-    for finding in findings {
-        println!("  {} {}", if finding.ok { "✓" } else { "✗" }, finding.label);
-        for line in &finding.hint {
-            println!("      {line}");
-        }
-    }
-}
-
-/// The Ollama part of the wizard: choose a server native Sessions can use,
-/// then the team's models from what that server has installed.
-async fn onboard_ollama() -> OnboardingSetup {
-    use dialoguer::{Confirm, Input, Select};
-
-    if which_ollama().is_none() {
-        println!("\nOllama is not installed.");
-        println!("Install it from https://ollama.com/download, then re-run onboard.");
-        if !Confirm::new()
-            .with_prompt("Continue configuring Axocoatl anyway?")
-            .default(true)
-            .interact()
-            .unwrap_or(true)
-        {
-            std::process::exit(1);
-        }
-    }
-
-    // Only a URL that passed the endpoint check is kept as the next default,
-    // so a non-interactive run cannot loop on an invalid entry.
-    let mut base_url = ollama_setup::DEFAULT_OLLAMA_BASE_URL.to_string();
-    let models = 'server: loop {
-        let entered = match Input::<String>::new()
-            .with_prompt("Ollama server URL")
-            .default(base_url.clone())
-            .interact_text()
-        {
-            Ok(entered) => entered.trim().trim_end_matches('/').to_string(),
-            Err(_) => base_url.clone(),
-        };
-        if let Err(error) = axocoatl_llm_ollama::validate_native_ollama_endpoint(&entered) {
-            println!("  ✗ {error}");
-            println!(
-                "      Native Sessions use only an Ollama server on this machine, such as {}.",
-                ollama_setup::DEFAULT_OLLAMA_BASE_URL
-            );
-            continue;
-        }
-        base_url = entered;
-
-        loop {
-            let probe = ollama_setup::probe_server(&base_url).await;
-            match &probe {
-                ollama_setup::ServerProbe::Unreachable(error) => {
-                    println!("  ✗ Ollama is not reachable at {base_url}: {error}");
-                    println!("      Start Ollama (the app, `ollama serve`, or `brew services start ollama`).");
-                }
-                ollama_setup::ServerProbe::Reachable { check, models } => {
-                    print_findings(&ollama_setup::native_findings(
-                        &base_url,
-                        check,
-                        ONBOARD_OTHER_OLLAMA,
-                    ));
-                    if probe.ready() {
-                        println!("  ✓ {} models installed", models.len());
-                    }
-                }
-            }
-            if probe.ready() {
-                break 'server probe.models().to_vec();
-            }
-            let next = Select::new()
-                .with_prompt("What next?")
-                .items(&[
-                    "Check again (after fixing the server)",
-                    "Use a different Ollama server",
-                    "Continue with this server (native Sessions refuse it until it is fixed)",
-                ])
-                .default(0)
-                .interact();
-            match next {
-                Ok(0) => continue,
-                Ok(1) => continue 'server,
-                _ => break 'server probe.models().to_vec(),
-            }
-        }
-    };
-
-    let candidates = ollama_setup::candidates(&models);
-    for (name, why) in ollama_setup::refused_models(&models) {
-        println!("  Not offered: {name}: {why}.");
-    }
-    let suggested = ollama_setup::suggest_team_models(&models);
-    match &suggested {
-        Some(team) => println!(
-            "Suggested from the models on this server: Lead {}, Reviewer {}.",
-            team.lead, team.reviewer
-        ),
-        None => println!(
-            "No suitable local model is installed on this server. Suggested: Lead {} (a coding model, 19 GB) and Reviewer {} (a different model, so a second model checks Lead's work; 14 GB). Both fit a 48 GB Mac, one at a time; they are large downloads.",
-            ollama_setup::RECOMMENDED_LEAD_MODEL,
-            ollama_setup::RECOMMENDED_REVIEWER_MODEL
-        ),
-    }
-    let suggested = suggested.unwrap_or_else(ollama_setup::TeamModels::recommended);
-    let lead = choose_ollama_model(
-        "Model for Lead (writes the change; Scout and the chat Assistant use it too)",
-        &candidates,
-        &suggested.lead,
-    );
-    // Without a suggestion of its own, Reviewer follows the Lead just chosen.
-    let reviewer_default = if suggested.reviewer == suggested.lead {
-        lead.clone()
-    } else {
-        suggested.reviewer.clone()
-    };
-    let reviewer = choose_ollama_model(
-        "Model for Reviewer (reviews Lead's change)",
-        &candidates,
-        &reviewer_default,
-    );
-
-    let mut to_pull = vec![&lead];
-    if reviewer != lead {
-        to_pull.push(&reviewer);
-    }
-    for model in to_pull {
-        if ollama_setup::is_installed(model, &models) || which_ollama().is_none() {
-            continue;
-        }
-        if Confirm::new()
-            .with_prompt(format!("Pull '{model}' now with `ollama pull`?"))
-            .default(true)
-            .interact()
-            .unwrap_or(false)
-        {
-            println!("Pulling {model} (this can take a while)...");
-            let _ = std::process::Command::new("ollama")
-                .arg("pull")
-                .arg(model)
-                .env("OLLAMA_HOST", &base_url)
-                .status();
-            print_pulled_model_check(&base_url, model).await;
-        }
-    }
-
-    OnboardingSetup::Ollama {
-        base_url,
-        models: ollama_setup::TeamModels { lead, reviewer },
-    }
-}
-
-/// After a pull, read the model again: on Apple silicon Ollama pulls the MLX
-/// variant of some models, which native Sessions refuse. Say so and how to
-/// pull the GGUF variant.
-async fn print_pulled_model_check(base_url: &str, model: &str) {
-    let finding = ollama_setup::model_finding(base_url, model, false).await;
-    if finding.ok {
-        println!("  ✓ {model} is a local GGUF model native Sessions can run");
-    } else {
-        print_findings(&[finding]);
-    }
-}
-
-/// Choose one model: from the installed candidates with `suggested`
-/// preselected, or by name.
-fn choose_ollama_model(
-    prompt: &str,
-    candidates: &[ollama_setup::InstalledModel],
-    suggested: &str,
-) -> String {
-    use dialoguer::{Input, Select};
-
-    let typed = || {
-        Input::<String>::new()
-            .with_prompt(prompt)
-            .default(suggested.to_string())
-            .interact_text()
-            .map(|model| model.trim().to_string())
-            .unwrap_or_else(|_| suggested.to_string())
-    };
-    if candidates.is_empty() {
-        return typed();
-    }
-    let mut items: Vec<String> = candidates.iter().map(|model| model.label()).collect();
-    items.push("Another model (enter its name)".to_string());
-    let default = candidates
-        .iter()
-        .position(|model| model.name == suggested)
-        .unwrap_or(candidates.len());
-    match Select::new()
-        .with_prompt(prompt)
-        .items(&items)
-        .default(default)
-        .interact()
-    {
-        Ok(index) if index < candidates.len() => candidates[index].name.clone(),
-        Ok(_) => typed(),
-        Err(_) => suggested.to_string(),
-    }
-}
-
-/// Locate the `ollama` binary on PATH.
-fn which_ollama() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|p| p.join("ollama"))
-        .find(|p| p.is_file())
-}
 
 async fn cmd_validate(config_path: &std::path::Path) {
     match axocoatl_config::load_config(config_path).await {
@@ -2414,6 +1528,42 @@ fn start_cli_ipc(
     axocoatl_daemon::ipc::serve_ipc_listener(reservation.listener, state)
 }
 
+/// What `dev` and `serve` say when they cannot listen on `host:port`.
+fn bind_failure_message(
+    host: &str,
+    port: u16,
+    config_path: &std::path::Path,
+    error: &std::io::Error,
+) -> String {
+    if error.kind() == std::io::ErrorKind::AddrInUse {
+        let next = onboard::host::first_free_port(port.saturating_add(1), onboard::host::port_free);
+        format!(
+            "✗ Port {port} on {host} is already in use (by another program, or another \
+             Axocoatl), so Axocoatl did not start. Stop that program, or choose another port: \
+             set server.port in {} (for example `axocoatl onboard --update --port {next}`).\n  \
+             ({error})",
+            shell_word(config_path)
+        )
+    } else {
+        format!("✗ Axocoatl cannot listen on {host}:{port}: {error}")
+    }
+}
+
+/// Bind the server's port before anything starts or is printed, or exit.
+async fn bind_or_exit(
+    host: &str,
+    port: u16,
+    config_path: &std::path::Path,
+) -> axocoatl_server::BoundListeners {
+    match axocoatl_server::bind_server(host, port).await {
+        Ok(listeners) => listeners,
+        Err(error) => {
+            eprintln!("{}", bind_failure_message(host, port, config_path, &error));
+            std::process::exit(1);
+        }
+    }
+}
+
 async fn cmd_dev(config_path: &std::path::Path) {
     let config = match load_cli_config(config_path).await {
         Ok(c) => c,
@@ -2425,6 +1575,9 @@ async fn cmd_dev(config_path: &std::path::Path) {
 
     let host = config.server.host.clone();
     let port = config.server.port;
+    // The port is held before the banner: a taken port fails here, not
+    // after "Axocoatl is running".
+    let listeners = bind_or_exit(&host, port, config_path).await;
     let ipc_reservation = reserve_cli_ipc().await;
 
     println!("Axocoatl dev mode");
@@ -2479,7 +1632,7 @@ async fn cmd_dev(config_path: &std::path::Path) {
     println!("Axocoatl is running. Press Ctrl+C to stop.");
 
     // Start the HTTP server (blocks until shutdown) — shares state with IPC
-    let server = axocoatl_server::serve_shared(state, &host, port).await;
+    let server = axocoatl_server::serve_shared_bound(state, &host, port, listeners).await;
     ipc_handle.abort();
     let _ = ipc_handle.await;
     if let Err(e) = server {
@@ -2499,6 +1652,7 @@ async fn cmd_serve(config_path: &std::path::Path) {
 
     let host = config.server.host.clone();
     let port = config.server.port;
+    let listeners = bind_or_exit(&host, port, config_path).await;
     let ipc_reservation = reserve_cli_ipc().await;
 
     let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap(config).await {
@@ -2528,7 +1682,7 @@ async fn cmd_serve(config_path: &std::path::Path) {
     let consolidation = { state.read().await.config.consolidation.clone() };
     axocoatl_daemon::consolidation::start_consolidation(state.clone(), consolidation);
 
-    let server = axocoatl_server::serve_shared(state, &host, port).await;
+    let server = axocoatl_server::serve_shared_bound(state, &host, port, listeners).await;
     ipc_handle.abort();
     let _ = ipc_handle.await;
     if let Err(e) = server {
@@ -4506,13 +3660,36 @@ mod tests {
         reviewer_model: &str,
         max_tokens: Option<usize>,
     ) {
+        assert_mixed_default_team(
+            config,
+            (provider, lead_model, max_tokens),
+            (provider, reviewer_model, max_tokens),
+        );
+    }
+
+    /// [`assert_default_team`] with Reviewer on its own provider, model and
+    /// output limit.
+    fn assert_mixed_default_team(
+        config: &axocoatl_config::AxocoatlConfig,
+        lead: (&str, &str, Option<usize>),
+        reviewer: (&str, &str, Option<usize>),
+    ) {
+        let (provider, lead_model, max_tokens) = lead;
+        let reviewer_model = reviewer.1;
         let ids: Vec<_> = config
             .agents
             .iter()
             .map(|agent| agent.id.as_str())
             .collect();
         assert_eq!(ids, ["lead", "scout", "reviewer", "assistant"]);
-        assert!(config.agents.iter().all(|agent| agent.provider == provider));
+        for agent in &config.agents {
+            let expected = if agent.id == "reviewer" {
+                reviewer.0
+            } else {
+                provider
+            };
+            assert_eq!(agent.provider, expected, "{}", agent.id);
+        }
         for agent in &config.agents {
             let expected = if agent.id == "reviewer" {
                 reviewer_model
@@ -4563,7 +3740,12 @@ mod tests {
                 .ends_with("Change nothing."));
         }
         for agent in &config.agents[..3] {
-            assert_eq!(agent.sampling.max_tokens, max_tokens, "{}", agent.id);
+            let expected = if agent.id == "reviewer" {
+                reviewer.2
+            } else {
+                max_tokens
+            };
+            assert_eq!(agent.sampling.max_tokens, expected, "{}", agent.id);
             assert!(agent.depends_on.is_empty());
         }
         assert!(matches!(
@@ -4613,113 +3795,41 @@ mod tests {
         assert!(!dir.join("data").exists());
     }
 
-    #[test]
-    fn normal_onboarding_copy_describes_user_configuration_and_workspace_choice() {
-        let paths = user_paths::UserPaths {
-            config_dir: PathBuf::from("/users/alex/config"),
-            config_path: PathBuf::from("/users/alex/config/config.yaml"),
-            data_dir: PathBuf::from("/users/alex/data"),
-        };
-        let completion = onboard_completion_text(&paths, None);
-
-        assert!(completion.contains("configured for this user"));
-        assert!(completion.contains("Open workspace"));
-        assert!(completion.contains("axocoatl url"));
-        assert!(!completion.contains("http://localhost:8080"));
-        assert!(!completion.contains("Project"));
-        assert!(!completion.contains(".env"));
-
-        for provider in ["OpenRouter", "Anthropic", "OpenAI"] {
-            let prompt = hosted_key_prompt(provider);
-            let hint = missing_provider_key_hint(provider);
-
-            assert!(prompt.contains("private Axocoatl configuration"));
-            assert!(prompt.contains("process environment"));
-            assert!(!prompt.contains(".env"));
-            assert!(hint.contains("process environment that starts Axocoatl"));
-            assert!(!hint.contains(".env"));
+    fn plan(
+        lead: onboard::config::ModelRef,
+        reviewer: onboard::config::ModelRef,
+    ) -> onboard::config::ConfigPlan {
+        use onboard::config::{KeyRef, Provider};
+        let openrouter = [&lead, &reviewer]
+            .iter()
+            .any(|model| model.provider == Provider::OpenRouter);
+        let ollama = [&lead, &reviewer]
+            .iter()
+            .any(|model| model.provider == Provider::Ollama);
+        onboard::config::ConfigPlan {
+            ollama_base_url: ollama.then(|| ollama_setup::DEFAULT_OLLAMA_BASE_URL.to_string()),
+            openrouter_key: openrouter.then(|| KeyRef::Env("OPENROUTER_API_KEY".into())),
+            run_writer: Some(lead.clone()),
+            run_reviewer: Some(reviewer.clone()),
+            lead,
+            reviewer,
+            port: 8080,
+            note: "test setup".into(),
         }
     }
 
+    /// Every onboarding path writes the default team and only the
+    /// providers native Sessions accept: a local pair, an OpenRouter pair
+    /// (a different reviewer, the writer's limit 4096), and a local writer
+    /// with an OpenRouter reviewer.
     #[test]
-    fn onboarding_choices_generate_only_native_provider_templates() {
-        assert_eq!(
-            ONBOARDING_PROVIDERS,
-            [OnboardingProvider::Ollama, OnboardingProvider::OpenRouter],
-        );
-        let model = "model:quoted\"#with-yaml-punctuation";
-        let key = "sk-test: \"quoted\" #literal";
-        for provider in ONBOARDING_PROVIDERS {
-            let setup = match provider {
-                OnboardingProvider::Ollama => OnboardingSetup::Ollama {
-                    base_url: ollama_setup::DEFAULT_OLLAMA_BASE_URL.to_string(),
-                    models: ollama_setup::TeamModels::same(model),
-                },
-                OnboardingProvider::OpenRouter => OnboardingSetup::OpenRouter {
-                    model: model.to_string(),
-                    key: key.to_string(),
-                },
-            };
-            let (yaml, missing_variable) = setup.configuration();
-            let config = axocoatl_config::parse_config(&yaml, std::path::Path::new("config.yaml"))
-                .unwrap_or_else(|error| panic!("{provider} onboarding is invalid: {error}"));
-            let expected_provider = match provider {
-                OnboardingProvider::Ollama => "ollama",
-                OnboardingProvider::OpenRouter => "openrouter",
-            };
-            assert_eq!(missing_variable, None);
-            assert_default_team(
-                &config,
-                expected_provider,
-                model,
-                model,
-                Some(match provider {
-                    OnboardingProvider::Ollama => 4096,
-                    OnboardingProvider::OpenRouter => 2048,
-                }),
-            );
-            assert!(config.providers.openai.is_none());
-            assert!(config.providers.anthropic.is_none());
-            assert!(config.providers.gemini.is_none());
-            assert!(config.providers.mistral.is_none());
-            match provider {
-                OnboardingProvider::Ollama => {
-                    assert_eq!(
-                        config.providers.ollama.unwrap().base_url,
-                        "http://localhost:11434",
-                    );
-                    assert!(config.providers.openrouter.is_none());
-                    assert_eq!(config.providers.openrouter_billing, None);
-                }
-                OnboardingProvider::OpenRouter => {
-                    assert!(config.providers.ollama.is_none());
-                    let credentials = config.providers.openrouter.unwrap();
-                    assert_eq!(credentials.api_key.expose_secret(), key);
-                    assert!(credentials.base_url.is_none());
-                    assert!(credentials.fallback.is_none());
-                    assert_eq!(
-                        config.providers.openrouter_billing,
-                        Some(axocoatl_config::OpenRouterBilling::Credits),
-                    );
-                    assert!(config
-                        .agents
-                        .iter()
-                        .all(|agent| { agent.sampling.max_tokens == Some(2048) }));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn ollama_onboarding_writes_the_chosen_server_and_a_separate_reviewer_model() {
-        let setup = OnboardingSetup::Ollama {
-            base_url: "http://127.0.0.1:11436".to_string(),
-            models: ollama_setup::TeamModels::recommended(),
-        };
-        let (yaml, missing_variable) = setup.configuration();
-        assert_eq!(missing_variable, None);
-        assert!(reject_uninherited_service_environment(&yaml).is_ok());
-        let config = axocoatl_config::parse_config(&yaml, std::path::Path::new("config.yaml"))
+    fn onboarding_writes_the_default_team_on_native_providers_only() {
+        use onboard::config::{ModelRef, Provider};
+        let local = onboard::config::render(&plan(
+            ModelRef::new(Provider::Ollama, "qwen3-coder:30b"),
+            ModelRef::new(Provider::Ollama, "gpt-oss:20b"),
+        ));
+        let config = axocoatl_config::parse_config(&local, std::path::Path::new("config.yaml"))
             .expect("the local onboarding configuration is valid");
         assert_default_team(
             &config,
@@ -4729,16 +3839,58 @@ mod tests {
             Some(4096),
         );
         assert_eq!(
-            config.providers.ollama.unwrap().base_url,
-            "http://127.0.0.1:11436"
+            config.providers.ollama.as_ref().unwrap().base_url,
+            "http://localhost:11434"
         );
-        assert!(!yaml.contains("llama3.2"));
+        assert!(config.providers.openrouter.is_none());
+        assert!(!local.contains("llama3.2"));
+        assert!(reject_uninherited_service_environment(&local).is_ok());
+
+        let hosted = onboard::config::render(&plan(
+            ModelRef::new(Provider::OpenRouter, "qwen/qwen3-coder"),
+            ModelRef::new(Provider::OpenRouter, "openai/gpt-oss-120b"),
+        ));
+        let config = axocoatl_config::parse_config(&hosted, std::path::Path::new("config.yaml"))
+            .expect("the OpenRouter onboarding configuration is valid");
+        assert_mixed_default_team(
+            &config,
+            ("openrouter", "qwen/qwen3-coder", Some(4096)),
+            ("openrouter", "openai/gpt-oss-120b", Some(2048)),
+        );
+        assert_eq!(
+            config.providers.openrouter_billing,
+            Some(axocoatl_config::OpenRouterBilling::Credits)
+        );
+        assert!(config.providers.ollama.is_none());
+        // A key read from the environment cannot reach the service.
+        assert!(reject_uninherited_service_environment(&hosted).is_err());
+
+        let mixed = onboard::config::render(&plan(
+            ModelRef::new(Provider::Ollama, "qwen3-coder:30b"),
+            ModelRef::new(Provider::OpenRouter, "openai/gpt-oss-120b"),
+        ));
+        let config = axocoatl_config::parse_config(&mixed, std::path::Path::new("config.yaml"))
+            .expect("the mixed onboarding configuration is valid");
+        assert_mixed_default_team(
+            &config,
+            ("ollama", "qwen3-coder:30b", Some(4096)),
+            ("openrouter", "openai/gpt-oss-120b", Some(2048)),
+        );
+        for config in [&local, &hosted, &mixed] {
+            let config =
+                axocoatl_config::parse_config(config, std::path::Path::new("c.yaml")).unwrap();
+            assert!(config.providers.openai.is_none());
+            assert!(config.providers.anthropic.is_none());
+            assert!(config.providers.gemini.is_none());
+            assert!(config.providers.mistral.is_none());
+        }
     }
 
     /// The onboarding writers quote what the user typed as JSON strings,
     /// which YAML reads back exactly, whatever the text looks like.
     #[test]
     fn onboarding_writers_read_back_exactly_what_was_typed() {
+        use onboard::config::{KeyRef, ModelRef, Provider};
         let awkward = [
             "qwen3-coder:30b",
             "yes",
@@ -4757,43 +3909,31 @@ mod tests {
             "&anchor *alias",
             "[x]{y}",
             " spaced ",
-            "",
         ];
         for text in awkward {
-            let local = local_onboarding_configuration(
-                text,
-                &ollama_setup::TeamModels {
-                    lead: text.to_string(),
-                    reviewer: format!("{text}-reviewer"),
-                },
+            let mut setup = plan(
+                ModelRef::new(Provider::Ollama, text),
+                ModelRef::new(Provider::OpenRouter, &format!("{text}-reviewer")),
             );
-            let config: axocoatl_config::AxocoatlConfig = axocoatl_config::yaml::from_str(&local)
-                .unwrap_or_else(|error| panic!("{text:?}: {error}\n{local}"));
+            setup.ollama_base_url = Some(text.to_string());
+            setup.openrouter_key = Some(KeyRef::Value(zeroize::Zeroizing::new(text.to_string())));
+            let yaml = onboard::config::render(&setup);
+            let config: axocoatl_config::AxocoatlConfig = axocoatl_config::yaml::from_str(&yaml)
+                .unwrap_or_else(|error| panic!("{text:?}: {error}\n{yaml}"));
             assert_eq!(config.providers.ollama.unwrap().base_url, text);
             assert!(config.agents.iter().any(|agent| agent.model == text));
             assert!(config
                 .agents
                 .iter()
                 .any(|agent| agent.model == format!("{text}-reviewer")));
-
-            let hosted = hosted_onboarding_configuration(
-                "OpenRouter",
-                "openrouter",
-                text,
-                &config_secret(text, "OPENROUTER_API_KEY"),
-                16000,
-                "warn",
+            assert_eq!(
+                config.providers.openrouter.unwrap().api_key.expose_secret(),
+                text
             );
-            let config: axocoatl_config::AxocoatlConfig = axocoatl_config::yaml::from_str(&hosted)
-                .unwrap_or_else(|error| panic!("{text:?}: {error}\n{hosted}"));
-            assert!(config.agents.iter().all(|agent| agent.model == text));
-            let key = config.providers.openrouter.unwrap().api_key;
-            if text.is_empty() {
-                // A blank key leaves `${OPENROUTER_API_KEY}` for the environment.
-                assert_eq!(key.expose_secret(), "${OPENROUTER_API_KEY}");
-            } else {
-                assert_eq!(key.expose_secret(), text);
-            }
+            assert_eq!(
+                onboard::config::run_models(&yaml).writer,
+                Some(format!("ollama:{text}"))
+            );
         }
     }
 
@@ -4822,72 +3962,6 @@ mod tests {
                 "  logs:   /Users/test/Library/Logs/Axocoatl/daemon.log",
             ]
         );
-    }
-
-    #[test]
-    fn onboarding_openrouter_missing_key_retains_service_environment_guard() {
-        let openrouter = |key: &str| {
-            OnboardingSetup::OpenRouter {
-                model: "vendor/model".to_string(),
-                key: key.to_string(),
-            }
-            .configuration()
-        };
-        let (yaml, missing_variable) = openrouter("");
-        assert_eq!(missing_variable, Some("OPENROUTER_API_KEY"));
-        assert!(reject_uninherited_service_environment(&yaml).is_err());
-
-        let (yaml, missing_variable) = openrouter("sk-test");
-        assert_eq!(missing_variable, None);
-        assert!(reject_uninherited_service_environment(&yaml).is_ok());
-    }
-
-    #[test]
-    fn hosted_starter_configurations_define_the_default_team_and_keep_the_assistant() {
-        let cases = [
-            ("OpenRouter", "openrouter", "vendor/model:v1", 16000, "warn"),
-            (
-                "Anthropic",
-                "anthropic",
-                "claude-sonnet-4-6",
-                20000,
-                "summarize",
-            ),
-            ("OpenAI", "openai", "gpt-4o", 20000, "summarize"),
-        ];
-
-        for (provider_name, provider_id, model, per_execution, overflow_policy) in cases {
-            let yaml = hosted_onboarding_configuration(
-                provider_name,
-                provider_id,
-                model,
-                &config_secret("sk-test", "UNUSED_API_KEY"),
-                per_execution,
-                overflow_policy,
-            );
-            let config = axocoatl_config::parse_config(&yaml, std::path::Path::new("config.yaml"))
-                .unwrap_or_else(|error| {
-                    panic!("{provider_name} onboarding config is invalid: {error}")
-                });
-
-            let openrouter = provider_id == "openrouter";
-            assert_default_team(
-                &config,
-                provider_id,
-                model,
-                model,
-                openrouter.then_some(2048),
-            );
-            assert_eq!(
-                config.providers.openrouter_billing,
-                openrouter.then_some(axocoatl_config::OpenRouterBilling::Credits),
-            );
-            let assistant = &config.agents[3];
-            assert_eq!(assistant.id, "assistant");
-            assert_eq!(assistant.sampling.max_tokens, openrouter.then_some(2048));
-            let budget = assistant.token_budget.as_ref().unwrap();
-            assert_eq!(budget.per_execution, per_execution as usize);
-        }
     }
 
     #[test]
@@ -5075,7 +4149,7 @@ providers:
   openrouter:
     api_key: {}
 "#,
-            config_secret(key, "OPENROUTER_API_KEY")
+            onboard::config::yaml_string(key)
         );
         let config = axocoatl_config::parse_config(&yaml, std::path::Path::new("config.yaml"))
             .expect("quoted key should parse");
@@ -5088,10 +4162,6 @@ providers:
                 .api_key
                 .expose_secret(),
             key
-        );
-        assert_eq!(
-            config_secret("", "OPENROUTER_API_KEY"),
-            "\"${OPENROUTER_API_KEY}\""
         );
         assert!(
             reject_uninherited_service_environment("api_key: \"${OPENROUTER_API_KEY}\"").is_err()
