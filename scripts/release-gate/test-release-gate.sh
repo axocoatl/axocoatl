@@ -43,7 +43,7 @@ command -v node >/dev/null 2>&1 || { echo "test-release-gate: node is required" 
 # would point the CLI at another data root or configuration goes, so each
 # case's temporary HOME is the only one it sees.
 unset AXOCOATL_DATA_DIR AXOCOATL_CONFIG AXOCOATL_TOKEN AXOCOATL_SOCKET_PATH \
-  XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME GATE_SIGNER_DIR
+  XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME ZDOTDIR GATE_SIGNER_DIR
 # The installer must never ask on this terminal (scripts/install.sh reads
 # AXOCOATL_INSTALL_TTY in place of /dev/tty, for tests).
 export AXOCOATL_INSTALL_TTY="$work/no-terminal"
@@ -109,6 +109,10 @@ fi
     || { echo "gate_printed_profile_line: $(gate_printed_profile_line "$work/persistent.log")" >&2; exit 1; }
   printf 'axocoatl-install: add /x/.local/bin to your PATH:  export PATH="/x/.local/bin:$PATH"\n' >"$work/transient.log"
   [ -z "$(gate_printed_profile_line "$work/transient.log")" ] || { echo "a transient export counted as a profile line" >&2; exit 1; }
+  # A line for two files (Linux bash: a new terminal's and a new login's).
+  printf 'axocoatl-install: ~/.local/bin is not on your PATH. For new terminals to find axocoatl, add this line to ~/.bashrc and ~/.bash_profile:\n\n    export PATH="$HOME/.local/bin:$PATH"\n' >"$work/persistent-two.log"
+  [ "$(gate_printed_profile_line "$work/persistent-two.log")" = "$HOME/.bashrc"$'\t''export PATH="$HOME/.local/bin:$PATH"'$'\n'"$HOME/.bash_profile"$'\t''export PATH="$HOME/.local/bin:$PATH"' ] \
+    || { echo "gate_printed_profile_line for two files: $(gate_printed_profile_line "$work/persistent-two.log")" >&2; exit 1; }
   mkdir -p "$work/shell-bin"
   printf '#!/bin/sh\n' >"$work/shell-bin/axocoatl"
   chmod +x "$work/shell-bin/axocoatl"
@@ -116,11 +120,48 @@ fi
   gate_new_shells_find "$work/shell-bin/axocoatl" >/dev/null && { echo "a new shell found a binary not on its PATH" >&2; exit 1; }
   while read -r shell _; do
     case "${shell##*/}" in
-      zsh) printf 'export PATH="%s:$PATH"\n' "$work/shell-bin" >>"$HOME/.zprofile" ;;
+      zsh) printf 'export PATH="%s:$PATH"\n' "$work/shell-bin" | tee -a "$HOME/.zshrc" >>"$HOME/.zprofile" ;;
+      fish) mkdir -p "$HOME/.config/fish" && printf 'set -gx PATH %s $PATH\n' "$work/shell-bin" >>"$HOME/.config/fish/config.fish" ;;
       *) printf 'export PATH="%s:$PATH"\n' "$work/shell-bin" | tee -a "$HOME/.profile" >>"$HOME/.bashrc" ;;
     esac
   done < <(gate_new_shells)
   gate_new_shells_find "$work/shell-bin/axocoatl" >/dev/null || { echo "new shells: $(gate_new_shells_find "$work/shell-bin/axocoatl")" >&2; exit 1; }
+
+  # Every login shell a new user may have and this host has (bash, zsh,
+  # fish): the gate starts that shell, which finds the binary only once its
+  # own startup files put it on PATH. On Linux a line in ~/.bashrc alone is
+  # not enough: a new login shell reads ~/.bash_profile, ~/.bash_login or
+  # ~/.profile, and here (as on GitHub's Ubuntu runners) a ~/.bash_profile
+  # that reads neither ~/.profile nor ~/.bashrc.
+  for shell_name in bash zsh fish; do
+    shell_path=$(command -v "$shell_name" 2>/dev/null) || continue
+    (
+      export HOME="$work/shell-home-$shell_name" SHELL="$shell_path"
+      mkdir -p "$HOME"
+      line="export PATH=\"$work/shell-bin:\$PATH\""
+      [ "$(gate_new_shells | awk '{ print $1 }' | sort -u)" = "$shell_path" ] \
+        || { echo "gate_new_shells with SHELL=$shell_path: $(gate_new_shells | tr '\n' ' ')" >&2; exit 1; }
+      gate_new_shells_find "$work/shell-bin/axocoatl" >/dev/null \
+        && { echo "a new $shell_name found a binary not on its PATH" >&2; exit 1; }
+      case "$(uname -s):$shell_name" in
+        *:fish) mkdir -p "$HOME/.config/fish" && printf 'set -gx PATH %s $PATH\n' "$work/shell-bin" >"$HOME/.config/fish/config.fish" ;;
+        Darwin:zsh) printf '%s\n' "$line" >"$HOME/.zprofile" ;;
+        *:zsh) printf '%s\n' "$line" | tee "$HOME/.zshrc" >"$HOME/.zprofile" ;;
+        Darwin:bash) printf '%s\n' "$line" >"$HOME/.bash_profile" ;;
+        *:bash)
+          printf '%s\n' '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >"$HOME/.bash_profile"
+          printf '%s\n' "$line" >"$HOME/.bashrc"
+          if found=$(gate_new_shells_find "$work/shell-bin/axocoatl"); then
+            echo "with the line in ~/.bashrc alone, every new bash found the binary: $found" >&2
+            exit 1
+          fi
+          printf '%s\n' "$line" >>"$HOME/.bash_profile"
+          ;;
+      esac
+      gate_new_shells_find "$work/shell-bin/axocoatl" >/dev/null \
+        || { echo "new $shell_name shells: $(gate_new_shells_find "$work/shell-bin/axocoatl")" >&2; exit 1; }
+    ) || exit 1
+  done
 
   # Doctor's verdict as a new user reads it.
   gate_begin "$work/evidence-lib" 1.5.0 "$(printf 'd%.0s' $(seq 1 40))" A-lib A

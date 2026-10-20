@@ -304,14 +304,15 @@ gate_stage_release() {
 GATE_DEFAULT_INSTALL='curl -fsSL https://axocoatl.ai/install.sh | sh'
 
 # gate_new_shells: the shells a new user's next terminal starts, one
-# "SHELL FLAGS" per line, for the user's login shell ($SHELL, bash or zsh).
+# "SHELL FLAGS" per line, for the user's login shell ($SHELL: bash, zsh or
+# fish; any other counts as the platform's default).
 # macOS Terminal starts an interactive login shell. On Linux a new login
 # (SSH, a new desktop session) starts a login shell and a new terminal
 # window an interactive one, so both must find axocoatl.
 gate_new_shells() {
   local shell=${SHELL:-}
   case "${shell##*/}" in
-    bash | zsh) [ -x "$shell" ] || shell='' ;;
+    bash | zsh | fish) [ -x "$shell" ] || shell='' ;;
     *) shell='' ;;
   esac
   if [ "$(uname -s)" = Darwin ]; then
@@ -337,18 +338,27 @@ gate_new_shells_find() {
   return "$status"
 }
 
-# gate_printed_profile_line LOG: the shell startup file and the line the
-# installer asked the user to add to it ("add this line to FILE:", then the
-# line), as FILE<TAB>LINE with a leading ~/ expanded; nothing when it asked
-# for none. A bare `export PATH=...` for the current shell is not one.
+# gate_printed_profile_line LOG: the shell startup files and the line the
+# installer asked the user to add to them ("add this line to FILE:" or
+# "add this line to FILE and FILE:", then the line), one FILE<TAB>LINE per
+# file with a leading ~/ expanded; nothing when it asked for none. A bare
+# `export PATH=...` for the current shell is not one.
 gate_printed_profile_line() {
   awk -v home="$HOME" '
-    found && NF { sub(/^[ \t]+/, ""); print file "\t" $0; exit }
+    found && NF {
+      sub(/^[ \t]+/, "")
+      n = split(files, list, " and ")
+      for (i = 1; i <= n; i++) {
+        file = list[i]
+        if (substr(file, 1, 2) == "~/") file = home substr(file, 2)
+        print file "\t" $0
+      }
+      exit
+    }
     /add this line to .*:[ \t]*$/ {
-      file = $0
-      sub(/.*add this line to /, "", file)
-      sub(/:[ \t]*$/, "", file)
-      if (substr(file, 1, 2) == "~/") file = home substr(file, 2)
+      files = $0
+      sub(/.*add this line to /, "", files)
+      sub(/:[ \t]*$/, "", files)
       found = 1
     }' "$1"
 }
@@ -397,18 +407,20 @@ gate_install_new_user() {
     return 1
   fi
   gate_record "installed binary is where the installer said" pass '' '' '' "$GATE_INSTALLED"
-  local dest=${GATE_INSTALLED%/*} report printed profile line
+  local dest=${GATE_INSTALLED%/*} report printed profile line profiles=''
   if report=$(gate_new_shells_find "$GATE_INSTALLED"); then
     gate_record "a new shell finds axocoatl" pass '' '' '' "$report"
   else
     printed=$(gate_printed_profile_line "$out")
     if [ -n "$printed" ]; then
-      IFS=$'\t' read -r profile line <<<"$printed"
-      mkdir -p "$(dirname -- "$profile")" && printf '\n%s\n' "$line" >>"$profile"
+      while IFS=$'\t' read -r profile line; do
+        mkdir -p "$(dirname -- "$profile")" && printf '\n%s\n' "$line" >>"$profile"
+        profiles="$profiles${profiles:+ and }$profile"
+      done <<<"$printed"
       if report=$(gate_new_shells_find "$GATE_INSTALLED"); then
-        gate_record "a new shell finds axocoatl" pass '' '' '' "after adding the line the installer printed to $profile ($line): $report"
+        gate_record "a new shell finds axocoatl" pass '' '' '' "after adding the line the installer printed to $profiles ($line): $report"
       else
-        gate_record "a new shell finds axocoatl" fail '' '' '' "the line the installer printed for $profile ($line) does not put axocoatl on a new shell's PATH: $report"
+        gate_record "a new shell finds axocoatl" fail '' '' '' "the line the installer printed for $profiles ($line) does not put axocoatl on a new shell's PATH: $report"
       fi
     elif grep -q 'export PATH=' "$out"; then
       gate_record "a new shell finds axocoatl" fail '' '' '' "$report; the installer printed only an export for the current shell, which a new terminal does not keep"
