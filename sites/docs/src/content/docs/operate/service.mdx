@@ -94,11 +94,11 @@ axocoatl service install --config /absolute/path/to/axocoatl.yaml
 
 <Aside type="caution" title="Install does not start the service">
 `axocoatl service install` writes/registers the definition. Run `service start`
-separately. `axocoatl onboard --install-daemon` installs that real per-user
-definition with the user configuration, but it also does not start the service.
-For a hosted provider, that combined command requires a key stored by onboarding;
-it refuses to install a service that would depend on an uninherited shell
-environment placeholder.
+separately. `axocoatl onboard` installs and starts the per-user service only when you
+choose **Always on** in its last steps (or pass `--start service`). It refuses to
+install a service while the configuration reads a hosted-provider key from a shell
+environment variable, which a service does not inherit; give onboarding the key at its
+hidden prompt instead.
 </Aside>
 
 ## Supply environment variables

@@ -8,17 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.5.0] - Unreleased
 
 ### Changed
-- **Native Sessions run on Ollama 0.40.6 and later 0.40 releases; Ollama 0.20.6 is
-  refused.** Native execution accepted only an Ollama reporting exactly 0.20.6, while
-  Homebrew and ollama.com ship 0.40.6 and Ollama's registry refuses some models (gpt-oss,
+- **Native Sessions run on Ollama 0.40.6 and later; Ollama 0.20.6 is refused.** Native
+  execution accepted only an Ollama reporting exactly 0.20.6, while Homebrew and
+  ollama.com ship 0.40.6 and Ollama's registry refuses some models (gpt-oss,
   gemma3) to 0.20.6 clients. The guarantees native execution relies on were audited
   again in the Ollama 0.40.6 source, where every GGUF model runs in llama.cpp's
   `llama-server`: a prompt longer than the context is refused before generation with
   `truncate: false`, a positive `num_predict` stops generation, and `shift: false` never
   slides the context. Native Sessions now accept `0.40.P` with `P` 6 or later
-  (`AUDITED_OLLAMA_VERSION` is 0.40.6) and refuse, each with what to do, pre-releases and
-  local builds, `0.0.0`, older releases (upgrade Ollama), a newer minor release (upgrade
-  Axocoatl) and any release on a compiled-in denylist (empty). Ollama 0.20.6 gets its own
+  (`AUDITED_OLLAMA_VERSION` is 0.40.6) and later 0.x minor releases through the contract
+  probes (below), and refuse, each with what to do, pre-releases and local builds,
+  `0.0.0`, older releases (upgrade Ollama), a new major release and any release on a
+  compiled-in denylist (empty). Ollama 0.20.6 gets its own
   message: its engine and model digests changed; install 0.40.6 or later, then review
   Team & budget again. A Team reviewed on Ollama 0.20.6 by Axocoatl 1.4 says "Ollama was
   upgraded from 0.20.6 to 0.40.6; review Team & budget again" instead of a generic error.
@@ -30,12 +31,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The context observation loads the model with `shift: false`, as every inference
   request asks: Ollama 0.40 reloads a model whose context-shift setting differs. The
   observation records the Ollama version it saw (schema 2).
-- `axocoatl onboard` suggests `qwen3-coder:30b` for Lead and `gpt-oss:20b` for Reviewer
-  when the server has no suitable model (a cross-model pair that fits a 48 GB Mac, one at
-  a time; it suggested `qwen3-coder:30b` for both before), prefers gpt-oss of any size as
-  Reviewer, leaves out MLX and non-GGUF models and says why, and after a pull reads the
-  model again and names `ollama pull --runner llamacpp <model>` (an undocumented Ollama
-  flag) when Ollama pulled a variant native Sessions refuse.
+- **Newer Ollama minor releases are accepted through the contract probes.** Ollama ships
+  a minor release every few weeks and Homebrew and the app serve only the latest, so a
+  later 0.x release (0.41 or later) is no longer refused: a model on it serves only after
+  both contract probes pass for that model (they run before a Team or run uses a model,
+  and again whenever the server's version changes). `axocoatl doctor` and onboarding
+  warn that it is newer than the audited 0.40.6, and a run's receipt names it as
+  `ollama 0.41.0 (unaudited, contract probes passed)`.
+- **`axocoatl onboard` is the one setup command.** It detects what the computer has,
+  asks who writes the code (Claude Code, Codex, a local Ollama model or OpenRouter), sets
+  up the rootless Podman sandbox, the writer and a different reviewer, writes the user
+  configuration, checks it with doctor's code, and can start the daemon and run a first
+  fix on a sample repository (`tests/fixtures/newuser/node-plain`). It asks once per
+  change to the computer, showing the exact command and its size; Enter is yes only for a
+  change whose size is shown and that fits, and no for anything that changes an existing
+  setup. It ends ready (exit 0) or with a numbered list of the steps left (exit 1); it no
+  longer prints "✓ Axocoatl configured" after a failed check. Every command it runs is
+  logged under `~/Library/Logs/Axocoatl` (macOS) or `~/.local/state/axocoatl` (Linux).
+  - Sandbox: installs Podman (Homebrew, or apt, dnf, pacman or zypper with `sudo`),
+    creates and starts the machine at `podman machine init --cpus 6 --memory 8192
+    --disk-size 60` clamped to half the computer (never rootful; applehv pinned when
+    Podman would use another provider), starts a stopped machine, offers to switch a
+    rootful machine (Podman Desktop's default) to rootless and to grow one under 4 GiB,
+    refuses Podman older than 4.3 (Ubuntu 22.04's 3.4.4), adds a range of subordinate ids,
+    reports Landlock, and proves the setup with one throwaway keep-id container. It never
+    creates a machine where Podman has a connection defined, or when `CONTAINER_HOST` or
+    `CONTAINER_CONNECTION` names one.
+  - Ollama: installs it (`brew install ollama && brew services start ollama`, or Ollama's
+    Linux installer pinned to 0.40.6), upgrades one that is too old, restarts a server
+    older than its upgraded CLI, never suggests `brew upgrade` for one that is too new,
+    turns cloud models off where the running server reads them (`~/.ollama/server.json`,
+    merged and backed up, for the brew service; a systemd drop-in for the Linux service,
+    which runs as the user `ollama`; the app's setting) and waits until the server says
+    so. Models follow memory: none larger than about 0.65 of it is preselected
+    (`gpt-oss:120b` was preselected on 48 GB Macs), 96 GB or more gets the measured
+    `gpt-oss:120b` reviewer, 48 to 95 GB `gpt-oss:20b`, and below 48 GB no local pair is
+    offered by default. Pulls show their sizes and the free disk, check each exit status
+    and show Ollama's error, and each model is loaded once to read its context; below
+    16384 tokens onboarding sets `OLLAMA_CONTEXT_LENGTH=32768` for the service
+    (Homebrew's `services/ollama.env`, or a systemd drop-in) after asking.
+  - Claude Code and Codex: finds the CLI, states the subscription each needs, builds the
+    recipe image and signs in through `axocoatl recipe build` and `axocoatl connect`
+    after asking, sets up the reviewer alone on Ollama or OpenRouter, and names Codex's
+    credential (`codex-chatgpt` or `codex-openai`) on the run command instead of `auto`.
+  - OpenRouter: separate writer (default `qwen/qwen3-coder`) and reviewer (default
+    `openai/gpt-oss-120b`) models, the same model refused, the writer's output limit 4096
+    (it was 2048 for every Agent), the key from an environment variable or a hidden
+    prompt, and the key and both models checked before anything is written.
+  - The configuration holds `run.models`, the defaults `axocoatl run` uses for
+    `writer_model` and `reviewer_model`, and the first free port from 8080 in
+    `server.port`. An existing configuration is updated (backed up, shown as a diff,
+    changed only where needed), replaced, or left alone.
+  - `--yes` with `--writer`, `--reviewer`, `--writer-model`, `--ollama-url`, `--podman`,
+    `--machine-cpus`, `--machine-memory`, `--pull`, `--recipe-build`, `--connect`,
+    `--openrouter-key-env`, `--port`, `--start`, `--smoke-test`, `--allow-sudo`,
+    `--update` and `--replace` runs it unattended; `--plan` prints every action and writes
+    nothing. Without a terminal and without `--yes` it exits 3 and changes nothing (it
+    used to write an Ollama configuration and exit 0). `--install-daemon` is now
+    `--start service`.
+- **`axocoatl doctor` says what is ready.** It reports Sandbox, Models, Writers and
+  Daemon, each item OK, WARN or FAIL with its fix, then `Ready for: …` or the steps left,
+  ending with `Ready: yes` or `Ready: no`; `--json` prints the same report. A missing
+  Podman, a missing machine, a rootful runtime, Podman older than 4.3 and missing
+  subordinate ids now fail (they were warnings followed by "All required checks
+  passed"), rootless is always probed, and a stopped machine is OK because it starts on
+  first use. Each configured Ollama model shows its size against memory and the context
+  Ollama loads it with (below 16384 fails); the Writers section shows built recipe
+  images, stored credential names and the `claude`, `codex` and `gh` CLIs; the Daemon
+  section compares the running daemon's version with the CLI's and names the program the
+  Always-On Service runs. The Rust toolchain warning is gone, and a missing configuration
+  points to `axocoatl onboard`.
+- **One Podman preflight and machine size everywhere.** `recipe build` and `connect
+  codex` start a stopped machine and name a missing Podman or machine with its fix,
+  instead of `os error 2` or `podman build failed (exit status: 125)`; every hint that
+  says to create a machine prints the sized command instead of Podman's 2 GiB default.
+- **`axocoatl dev` and `serve` hold their port before they start.** A taken port fails at
+  once with which port and how to choose another, instead of "Axocoatl is running"
+  followed by "Address already in use". `GET /health` also returns the daemon's version.
 - The README, the site and the docs use `gpt-oss:20b` as the reviewer in their commands
   and configuration examples; `gpt-oss:120b` (65 GB) needs roughly 96 GB of memory or
   more. The measured results still name the gpt-oss 120B reviewer they used.

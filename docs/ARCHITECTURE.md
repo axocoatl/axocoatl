@@ -378,8 +378,10 @@ before canonical acceptance. Completion then leaves its dispatch gate closed.
 
 `NativeOllamaProvider` supplies an explicit bounded local capability alongside the existing
 compatible adapter. Its profile validates the configured local server's version against the
-version policy (Ollama 0.40.6, the audited release, or a later 0.40 release; pre-releases, other
-minor lines and a compiled-in denylist are refused), reported cloud-disabled mode, and a local
+version policy (Ollama 0.40.6, the audited release, a later 0.40 release, or a later 0.x
+release, which serves only after the contract probes pass on each model and is recorded as
+unaudited; pre-releases, development builds, older releases, a new major release and a
+compiled-in denylist are refused), reported cloud-disabled mode, and a local
 GGUF completion model before inference; a model Ollama shows as non-GGUF or MLX, or loads with
 any runner but llama.cpp's `llama-server`, is refused, since MLX does not hold `num_ctx` as a
 hard limit. Native `/api/chat` requests set finite context/prediction limits and disable implicit
