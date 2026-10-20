@@ -72,7 +72,8 @@ pub const TOOLCHAIN_RECIPES: [Recipe; 4] = [
     },
     Recipe {
         name: "rust",
-        description: "Rust 1.99 with cargo, rustc and gcc",
+        description: "Rust 1.99 with cargo, rustc and gcc (loadout runs refuse it for now: \
+                      cargo's renames are blocked in hardened Sessions)",
         fragment: include_str!("../assets/recipes/toolchains/rust.Containerfile"),
     },
     Recipe {
@@ -116,7 +117,7 @@ pub const TOOLCHAIN_IMAGES: [ToolchainImage; 4] = [
         index_digest: "sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20",
         base: None,
         download_mb: 100,
-        image_mb: 360,
+        image_mb: 365,
     },
     ToolchainImage {
         toolchain: "python",
@@ -153,6 +154,68 @@ pub const TOOLCHAIN_IMAGES: [ToolchainImage; 4] = [
 /// Node, npm and corepack for a `python`, `rust` or `go` image that also
 /// holds an agent or e2e recipe, copied from the recipe base's pinned image.
 pub const NODE_GRAFT: &str = include_str!("../assets/recipes/toolchains/node-graft.Containerfile");
+
+/// About how many megabytes an agent or check recipe, or the Node graft
+/// (`"node-graft"`), adds to an image on disk (its layers, measured on
+/// linux/arm64 with Podman 5.8 on 2026-10-19). `None` when not measured.
+pub fn recipe_disk_mb(name: &str) -> Option<u32> {
+    match name {
+        "claude-code" => Some(255),
+        "codex" => Some(405),
+        "node-graft" => Some(140),
+        _ => None,
+    }
+}
+
+/// What a first build of the image of `names` costs, about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageSize {
+    /// The toolchain's (or the recipe base's) official image to download.
+    pub base_image: &'static str,
+    /// About how many megabytes that image's download is.
+    pub base_download_mb: u32,
+    /// About how many megabytes the built image takes on disk, the
+    /// measured recipes summed.
+    pub disk_mb: u32,
+    /// Recipes whose own downloads (an agent's package, a browser) come on
+    /// top, and those whose size was not measured.
+    pub also_downloads: Vec<&'static str>,
+    pub unmeasured: Vec<&'static str>,
+}
+
+/// The approximate size of a first build of the image of `names`.
+pub fn image_size(names: &[String]) -> Result<ImageSize, RecipeError> {
+    let recipes = resolve(names)?;
+    let toolchain = recipes
+        .iter()
+        .find_map(|recipe| toolchain_image(recipe.name))
+        .or_else(|| toolchain_image("node"))
+        .expect("the node toolchain row exists");
+    let others: Vec<&Recipe> = recipes
+        .iter()
+        .copied()
+        .filter(|recipe| !is_toolchain(recipe.name))
+        .collect();
+    let mut size = ImageSize {
+        base_image: toolchain.image,
+        base_download_mb: toolchain.download_mb,
+        disk_mb: toolchain.image_mb,
+        also_downloads: Vec::new(),
+        unmeasured: Vec::new(),
+    };
+    if toolchain.base.is_some() && !others.is_empty() {
+        size.disk_mb += recipe_disk_mb("node-graft").unwrap_or_default();
+        size.also_downloads.push("Node.js");
+    }
+    for recipe in others {
+        size.also_downloads.push(recipe.name);
+        match recipe_disk_mb(recipe.name) {
+            Some(mb) => size.disk_mb += mb,
+            None => size.unmeasured.push(recipe.name),
+        }
+    }
+    Ok(size)
+}
 
 /// The toolchain recipe named `name`.
 pub fn toolchain_image(name: &str) -> Option<&'static ToolchainImage> {
@@ -498,6 +561,29 @@ mod tests {
             toolchain_of(&names(&["codex", "node"])).unwrap(),
             Some("node")
         );
+    }
+
+    /// TC-NU-6: a composed image's size adds its recipes' own.
+    #[test]
+    fn composed_images_add_their_recipes_sizes() {
+        let python = toolchain_image("python").unwrap();
+        let alone = image_size(&names(&["python"])).unwrap();
+        assert_eq!(alone.disk_mb, python.image_mb);
+        assert_eq!(alone.base_download_mb, python.download_mb);
+        assert!(alone.also_downloads.is_empty() && alone.unmeasured.is_empty());
+        let composed = image_size(&names(&["claude-code", "python"])).unwrap();
+        assert_eq!(composed.base_image, python.image);
+        assert_eq!(composed.disk_mb, python.image_mb + 140 + 255);
+        assert_eq!(composed.also_downloads, ["Node.js", "claude-code"]);
+        // On the node toolchain (the recipe base) there is no graft.
+        let node = image_size(&names(&["codex", "node"])).unwrap();
+        assert_eq!(
+            node.disk_mb,
+            toolchain_image("node").unwrap().image_mb + 405
+        );
+        assert_eq!(node.also_downloads, ["codex"]);
+        let e2e = image_size(&names(&["e2e", "go"])).unwrap();
+        assert_eq!(e2e.unmeasured, ["e2e"]);
     }
 
     #[test]

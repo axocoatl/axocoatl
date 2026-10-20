@@ -63,6 +63,158 @@ pub const TOOLCHAIN_CACHE_VOLUME_ROLE: &str = "toolchain-cache";
 /// The name prefix of a Workspace's toolchain cache volume
 /// ([`SessionSandbox::toolchain_cache_volume_name`]).
 pub const TOOLCHAIN_CACHE_VOLUME_PREFIX: &str = "axo-tc-";
+/// Longest a root step around a toolchain setup may take: it changes the
+/// owner of every file of one toolchain's cache directory.
+const TOOLCHAIN_CACHE_STEP_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// One root step around a loadout run's toolchain setup, on the
+/// toolchain's directory (`<cache>/<toolchain>`) of the Workspace's
+/// toolchain cache ([`SessionSandbox::toolchain_cache_step`]).
+///
+/// The cache outlives the Session, and the next run of the Workspace runs
+/// what it holds (a Python virtual environment, Cargo's and Go's module
+/// sources, corepack's package managers), so nothing in it may stay
+/// writable by the workload users once the setup is over: a writer's turn
+/// could otherwise change what its own and every later run's checks run.
+/// Only the setup itself, run as the writer between [`Self::Before`] and
+/// [`Self::After`], writes there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolchainCacheStep {
+    /// Before the setup. When `key` equals the directory's stamp, the setup
+    /// already installed exactly this: nothing is handed over (and anything
+    /// in the directory not root's and read-only is made so). Otherwise the
+    /// stamp and the `reset` entries are removed and the directory is
+    /// handed to the writer for the setup.
+    Before {
+        toolchain: String,
+        key: Option<String>,
+        reset: Vec<String>,
+    },
+    /// After the setup, whatever its outcome: the directory is root's again
+    /// and read-only to everyone else; with `key` (the setup succeeded) the
+    /// stamp records it.
+    After {
+        toolchain: String,
+        key: Option<String>,
+    },
+}
+
+/// What a [`ToolchainCacheStep`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolchainCacheState {
+    /// The stamp matched: the setup is not needed.
+    Unchanged,
+    /// The directory is the writer's until [`ToolchainCacheStep::After`].
+    Handed,
+    /// The directory is root's and read-only to the workload users.
+    Sealed,
+}
+
+impl ToolchainCacheStep {
+    /// The root script of this step and its positional arguments (no value
+    /// is ever interpolated into the script). Refuses names and keys that
+    /// are not plain words.
+    pub fn script_and_args(
+        &self,
+        owner: (u32, u32),
+    ) -> Result<(&'static str, Vec<String>), IsolationError> {
+        let word = |value: &str, what: &str| -> Result<(), IsolationError> {
+            let ok = !value.is_empty()
+                && value.len() <= 64
+                && value.bytes().all(|b| {
+                    b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_'
+                })
+                && !value.starts_with('-');
+            if ok {
+                Ok(())
+            } else {
+                Err(IsolationError::OciSetupFailed(format!(
+                    "the toolchain cache {what} {value:?} is not a plain name"
+                )))
+            }
+        };
+        let cache = crate::recipes::TOOLCHAIN_CACHE_DIR.to_string();
+        match self {
+            ToolchainCacheStep::Before {
+                toolchain,
+                key,
+                reset,
+            } => {
+                word(toolchain, "toolchain")?;
+                if let Some(key) = key {
+                    word(key, "key")?;
+                }
+                for entry in reset {
+                    word(entry, "entry")?;
+                }
+                let mut args = vec![
+                    cache,
+                    toolchain.clone(),
+                    key.clone().unwrap_or_default(),
+                    format!("{}:{}", owner.0, owner.1),
+                ];
+                args.extend(reset.iter().cloned());
+                Ok((TOOLCHAIN_CACHE_BEFORE_SCRIPT, args))
+            }
+            ToolchainCacheStep::After { toolchain, key } => {
+                word(toolchain, "toolchain")?;
+                if let Some(key) = key {
+                    word(key, "key")?;
+                }
+                Ok((
+                    TOOLCHAIN_CACHE_AFTER_SCRIPT,
+                    vec![cache, toolchain.clone(), key.clone().unwrap_or_default()],
+                ))
+            }
+        }
+    }
+}
+
+/// [`ToolchainCacheStep::Before`], as root: `$1` the cache, `$2` the
+/// toolchain, `$3` the key (may be empty), `$4` the writer's `uid:gid`, then
+/// the entries to reset. Prints `unchanged` or `handed`.
+const TOOLCHAIN_CACHE_BEFORE_SCRIPT: &str = r#"set -eu
+cache=$1 name=$2 key=$3 owner=$4
+shift 4
+if [ ! -d "$cache" ] || [ -L "$cache" ]; then
+  echo "the Workspace's toolchain cache is not mounted at $cache" >&2
+  exit 3
+fi
+chown 0:0 "$cache"
+chmod 0755 "$cache"
+dir="$cache/$name"
+if [ -L "$dir" ] || { [ -e "$dir" ] && [ ! -d "$dir" ]; }; then rm -f -- "$dir"; fi
+mkdir -p -- "$dir"
+stamp="$dir/setup.stamp"
+if [ -n "$key" ] && [ -f "$stamp" ] && [ ! -L "$stamp" ] && [ "$(head -c 128 -- "$stamp")" = "$key" ]; then
+  if [ -n "$(find "$dir" -xdev ! -type l \( ! -user 0 -o -perm -020 -o -perm -002 \) -print -quit)" ]; then
+    chown -R 0:0 -- "$dir"
+    chmod -R a+rX,go-w -- "$dir"
+  fi
+  echo unchanged
+  exit 0
+fi
+rm -f -- "$stamp"
+for entry in "$@"; do rm -rf -- "${dir:?}/$entry"; done
+chown -R "$owner" -- "$dir"
+echo handed
+"#;
+
+/// [`ToolchainCacheStep::After`], as root: `$1` the cache, `$2` the
+/// toolchain, `$3` the key to record (empty: none). Symbolic links are
+/// changed themselves, never followed. Prints `sealed`.
+const TOOLCHAIN_CACHE_AFTER_SCRIPT: &str = r#"set -eu
+cache=$1 name=$2 key=$3
+dir="$cache/$name"
+if [ -d "$dir" ] && [ ! -L "$dir" ]; then
+  chown -R 0:0 -- "$dir"
+  chmod -R a+rX,go-w -- "$dir"
+  rm -f -- "$dir/setup.stamp"
+  if [ -n "$key" ]; then printf '%s\n' "$key" > "$dir/setup.stamp"; fi
+fi
+echo sealed
+"#;
+
 const NAMED_REMOVE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SANDBOX_READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 const SANDBOX_PROVISION_TIMEOUT: Duration = Duration::from_secs(300);
@@ -474,15 +626,29 @@ const HARDENED_EGRESS_KEPT_CAPS: &[&str] = &["SYS_PTRACE"];
 /// capabilities.
 const HARDENED_KEPT_CAPS: &[&str] = &["DAC_READ_SEARCH"];
 
+/// The `PATH` of every root exec in a Session container. An image's own
+/// `PATH` can name directories its workload users can write (a toolchain's
+/// virtual environment in the Workspace's cache, a world-writable
+/// `/go/bin`), and root running a program a workload user, or a dependency's
+/// install script, put there would hand them root. Root's commands come only
+/// from the system's own directories.
+pub const ROOT_EXEC_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 /// `podman exec` options that select the user for `identity`. Without
 /// workload users only root is named; the image's user runs the rest.
+/// Root always gets [`ROOT_EXEC_PATH`].
 pub(crate) fn exec_user_args(
     workload: Option<&WorkloadUsers>,
     identity: ExecIdentity,
 ) -> Vec<String> {
     let user = |(uid, gid): (u32, u32)| format!("{uid}:{gid}");
     match (workload, identity) {
-        (_, ExecIdentity::Root) => vec!["--user".into(), "0".into()],
+        (_, ExecIdentity::Root) => vec![
+            "--user".into(),
+            "0".into(),
+            "--env".into(),
+            format!("PATH={ROOT_EXEC_PATH}"),
+        ],
         (None, ExecIdentity::Writer | ExecIdentity::Helper) => Vec::new(),
         (Some(users), ExecIdentity::Writer) => vec![
             "--user".into(),
@@ -1086,6 +1252,54 @@ impl SessionSandbox {
             )));
         }
         Ok(())
+    }
+
+    /// Run `step` as root on this Session's toolchain cache. Without
+    /// workload users every command runs as the image's user, which then
+    /// takes the directory.
+    pub async fn toolchain_cache_step(
+        &self,
+        step: &ToolchainCacheStep,
+    ) -> Result<ToolchainCacheState, IsolationError> {
+        if self.toolchain_cache_volume.is_none() {
+            return Err(IsolationError::OciSetupFailed(
+                "this Session does not mount its Workspace's toolchain cache".into(),
+            ));
+        }
+        let container = self.container_id.as_deref().ok_or_else(|| {
+            IsolationError::OciSetupFailed(
+                "a toolchain cache step requires an owned container".into(),
+            )
+        })?;
+        let owner = self.workload.map(|users| users.writer).unwrap_or((0, 0));
+        let (script, args) = step.script_and_args(owner)?;
+        let mut command = Command::new(PODMAN);
+        command
+            .arg("exec")
+            .args(exec_user_args(None, ExecIdentity::Root))
+            .args([container, "sh", "-c", script, "sh"])
+            .args(&args);
+        let output = Self::run_bounded_command(command, TOOLCHAIN_CACHE_STEP_TIMEOUT).await?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if output.timed_out || !output.status.success() {
+            return Err(IsolationError::OciContainerFailed(format!(
+                "the toolchain cache step failed{}: {}",
+                if output.timed_out {
+                    format!(" after {} s", TOOLCHAIN_CACHE_STEP_TIMEOUT.as_secs())
+                } else {
+                    String::new()
+                },
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        match stdout.trim() {
+            "unchanged" => Ok(ToolchainCacheState::Unchanged),
+            "handed" => Ok(ToolchainCacheState::Handed),
+            "sealed" => Ok(ToolchainCacheState::Sealed),
+            other => Err(IsolationError::OciContainerFailed(format!(
+                "the toolchain cache step said {other:?}"
+            ))),
+        }
     }
 
     /// Resolve and validate the exact image that a local Session may start.
@@ -2298,6 +2512,20 @@ impl SessionSandbox {
         &self,
         commands: &[String],
     ) -> Result<Vec<SandboxSetupResult>, IsolationError> {
+        self.run_setup_commands_with(commands, SandboxLifecycleDisposition::Remove)
+            .await
+    }
+
+    /// [`Self::run_setup_commands`], leaving the container as `failed`
+    /// says after a command fails or cannot finish: a setup at start removes
+    /// it, one after start (a loadout run's toolchain setup) keeps it for its
+    /// owner, which still has root's work to do in it and ends the Session
+    /// itself.
+    async fn run_setup_commands_with(
+        &self,
+        commands: &[String],
+        failed: SandboxLifecycleDisposition,
+    ) -> Result<Vec<SandboxSetupResult>, IsolationError> {
         if commands.is_empty() {
             return Ok(Vec::new());
         }
@@ -2359,7 +2587,7 @@ impl SessionSandbox {
             let output = match output {
                 Ok(output) => output,
                 Err(error) => {
-                    let cleanup = lifecycle.finish(SandboxLifecycleDisposition::Remove).await;
+                    let cleanup = lifecycle.finish(failed).await;
                     return Err(match cleanup {
                         Ok(()) => error,
                         Err(cleanup_error) => IsolationError::OciContainerFailed(format!(
@@ -2370,7 +2598,7 @@ impl SessionSandbox {
             };
             if output.timed_out {
                 let error = IsolationError::Timeout(SANDBOX_SETUP_COMMAND_TIMEOUT);
-                let cleanup = lifecycle.finish(SandboxLifecycleDisposition::Remove).await;
+                let cleanup = lifecycle.finish(failed).await;
                 return Err(match cleanup {
                     Ok(()) => error,
                     Err(cleanup_error) => IsolationError::OciContainerFailed(format!(
@@ -2391,9 +2619,7 @@ impl SessionSandbox {
             let ok = outcome.ok();
             results.push(outcome);
             if !ok {
-                lifecycle
-                    .finish(SandboxLifecycleDisposition::Remove)
-                    .await?;
+                lifecycle.finish(failed).await?;
                 return Ok(results);
             }
         }
@@ -2682,10 +2908,12 @@ impl SessionSandbox {
         env_file: Option<&Path>,
     ) -> Result<BoundedCommandOutput, IsolationError> {
         let mut command = Command::new(PODMAN);
-        command.args(["exec", "--user", "0"]);
+        command.arg("exec");
         if let Some(env_file) = env_file {
             command.arg("--env-file").arg(env_file);
         }
+        // After the file: `--env` wins over it.
+        command.args(exec_user_args(None, ExecIdentity::Root));
         command.args([container, "sh", "-c", script]);
         Self::run_bounded_command(command, timeout).await
     }
@@ -2833,12 +3061,17 @@ impl SessionSandbox {
     /// The root shell script that readies a hardened container for its
     /// users: the writer's private home directory, `passwd` and `group`
     /// entries for ids the image does not name (tools that look up their
-    /// own user then work), and the Node dependency volume, which Podman
-    /// creates owned by the container's root, handed to the writer.
-    /// The root script that readies a hardened container's users and hands
-    /// the writer its volume directories (the root `node_modules`, the
-    /// toolchain cache).
-    fn workload_setup_script_for(users: &WorkloadUsers, writer_dirs: &[&str]) -> String {
+    /// own user then work), and the volume directories Podman creates owned
+    /// by the container's root and the writer works in (the root
+    /// `node_modules`), handed to the writer. With `toolchain_cache`, the
+    /// Workspace's toolchain cache stays root's: only a loadout run's setup
+    /// writes a toolchain's directory of it, and root takes that back before
+    /// the first model call ([`SessionSandbox::toolchain_cache_step`]).
+    fn workload_setup_script_for(
+        users: &WorkloadUsers,
+        writer_dirs: &[&str],
+        toolchain_cache: bool,
+    ) -> String {
         let (writer_uid, writer_gid) = users.writer;
         let (helper_uid, helper_gid) = users.helper;
         let mut script = format!(
@@ -2859,6 +3092,17 @@ impl SessionSandbox {
             script.push_str(&format!(
                 "set -- $(ls -nd '{directory}')\n\
                  [ \"$3:$4\" = '{writer_uid}:{writer_gid}' ] || chown -R {writer_uid}:{writer_gid} '{directory}'\n"
+            ));
+        }
+        if toolchain_cache {
+            // Whatever an earlier Session left (a setup that never got its
+            // step after), nothing in the cache is the workload users' or
+            // writable by them when this Session's commands start.
+            let cache = crate::recipes::TOOLCHAIN_CACHE_DIR;
+            script.push_str(&format!(
+                "chown 0:0 '{cache}'\nchmod 0755 '{cache}'\n\
+                 if [ -n \"$(find '{cache}' -xdev ! -type l \\( ! -user 0 -o -perm -020 -o -perm -002 \\) -print -quit)\" ]; then \
+                 chown -R 0:0 -- '{cache}'; chmod -R a+rX,go-w -- '{cache}'; fi\n"
             ));
         }
         script
@@ -2886,14 +3130,15 @@ impl SessionSandbox {
                 "the Workspace path cannot be quoted for the dependency volume".into(),
             ));
         }
-        let mut writer_dirs: Vec<&str> = dependency_dir.iter().map(String::as_str).collect();
-        if self.toolchain_cache_volume.is_some() {
-            writer_dirs.push(crate::recipes::TOOLCHAIN_CACHE_DIR);
-        }
+        let writer_dirs: Vec<&str> = dependency_dir.iter().map(String::as_str).collect();
         let output = Self::podman_exec_shell(
             container,
             &exec_user_args(None, ExecIdentity::Root),
-            &Self::workload_setup_script_for(users, &writer_dirs),
+            &Self::workload_setup_script_for(
+                users,
+                &writer_dirs,
+                self.toolchain_cache_volume.is_some(),
+            ),
             SANDBOX_READINESS_TIMEOUT,
         )
         .await?;
@@ -5219,7 +5464,8 @@ pub trait Sandbox: Send + Sync {
     /// Run explicitly approved setup commands in a sandbox that is already
     /// ready, each with its own setup credential under `network: egress`
     /// (a loadout run's toolchain setup), and stop after the first that
-    /// fails. Backends without local setup refuse.
+    /// fails. The sandbox is kept even then: its owner ends it. Backends
+    /// without local setup refuse.
     async fn run_approved_setup(
         &self,
         _commands: &[String],
@@ -5227,6 +5473,18 @@ pub trait Sandbox: Send + Sync {
         Err(IsolationError::Io(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "backend does not run approved setup after start",
+        )))
+    }
+
+    /// Run one root step around a loadout run's toolchain setup on the
+    /// Workspace's toolchain cache. Backends without one refuse.
+    async fn toolchain_cache_step(
+        &self,
+        _step: &ToolchainCacheStep,
+    ) -> Result<ToolchainCacheState, IsolationError> {
+        Err(IsolationError::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "backend has no toolchain cache",
         )))
     }
 
@@ -5463,7 +5721,15 @@ impl Sandbox for SessionSandbox {
         &self,
         commands: &[String],
     ) -> Result<Vec<SandboxSetupResult>, IsolationError> {
-        self.run_setup_commands(commands).await
+        self.run_setup_commands_with(commands, SandboxLifecycleDisposition::Keep)
+            .await
+    }
+
+    async fn toolchain_cache_step(
+        &self,
+        step: &ToolchainCacheStep,
+    ) -> Result<ToolchainCacheState, IsolationError> {
+        SessionSandbox::toolchain_cache_step(self, step).await
     }
 
     async fn exec_observed(
@@ -6586,7 +6852,7 @@ mod tests {
     }
 
     #[test]
-    fn the_toolchain_cache_is_mounted_before_the_image_and_owned_by_the_writer() {
+    fn the_toolchain_cache_is_mounted_before_the_image_and_kept_roots() {
         let mut args = SessionSandbox::build_run_args(
             "test-session",
             "axo-ses-primary",
@@ -6615,24 +6881,160 @@ mod tests {
             args.iter().position(|arg| arg == DEFAULT_IMAGE).unwrap(),
             image_at + 2
         );
+        // TC-SEC-2: the cache is root's at every start, never the writer's.
         let script = SessionSandbox::workload_setup_script_for(
             &WorkloadUsers {
                 writer: (1200, 1300),
                 helper: (1400, 1500),
             },
-            &["/w/node_modules", crate::recipes::TOOLCHAIN_CACHE_DIR],
+            &["/w/node_modules"],
+            true,
         );
         assert!(
             script.contains("chown -R 1200:1300 '/w/node_modules'"),
             "{script}"
         );
         assert!(
-            script.contains("chown -R 1200:1300 '/opt/axocoatl-cache'"),
+            script.contains("chown 0:0 '/opt/axocoatl-cache'\nchmod 0755 '/opt/axocoatl-cache'\n"),
+            "{script}"
+        );
+        assert!(
+            script.contains("then chown -R 0:0 -- '/opt/axocoatl-cache'; chmod -R a+rX,go-w"),
+            "{script}"
+        );
+        assert!(
+            !script.contains("1200:1300 '/opt/axocoatl-cache'"),
             "{script}"
         );
         let mut unchanged = vec!["run".to_string()];
         SessionSandbox::insert_named_volume_mounts(&mut unchanged, &[]);
         assert_eq!(unchanged, ["run"]);
+    }
+
+    #[test]
+    fn toolchain_cache_steps_take_only_plain_words_as_arguments() {
+        let (script, args) = ToolchainCacheStep::Before {
+            toolchain: "python".into(),
+            key: Some("0123abcd".into()),
+            reset: vec!["venv".into()],
+        }
+        .script_and_args((1200, 1300))
+        .unwrap();
+        assert_eq!(script, TOOLCHAIN_CACHE_BEFORE_SCRIPT);
+        assert_eq!(
+            args,
+            [
+                "/opt/axocoatl-cache",
+                "python",
+                "0123abcd",
+                "1200:1300",
+                "venv"
+            ]
+        );
+        let (script, args) = ToolchainCacheStep::After {
+            toolchain: "node".into(),
+            key: None,
+        }
+        .script_and_args((1200, 1300))
+        .unwrap();
+        assert_eq!(script, TOOLCHAIN_CACHE_AFTER_SCRIPT);
+        assert_eq!(args, ["/opt/axocoatl-cache", "node", ""]);
+        for bad in ["../etc", "a b", "-rf", "x;y", "", "Venv"] {
+            assert!(ToolchainCacheStep::After {
+                toolchain: bad.into(),
+                key: None,
+            }
+            .script_and_args((1, 1))
+            .is_err());
+            assert!(ToolchainCacheStep::Before {
+                toolchain: "go".into(),
+                key: None,
+                reset: vec![bad.into()],
+            }
+            .script_and_args((1, 1))
+            .is_err());
+        }
+    }
+
+    /// The root steps' logic under a POSIX shell, with `chown` and `chmod`
+    /// recorded instead of run: a stamp that matches skips the setup, any
+    /// other hands the directory over after removing the stamp and the
+    /// reset entries, and the step after always takes it back and records
+    /// the key only when given.
+    #[cfg(unix)]
+    #[test]
+    fn toolchain_cache_steps_hand_the_directory_over_only_for_a_new_setup() {
+        let work = tempfile::tempdir().unwrap();
+        let cache = work.path().join("cache");
+        let bin = work.path().join("bin");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = work.path().join("log");
+        for stub in ["chown", "chmod"] {
+            let path = bin.join(stub);
+            std::fs::write(
+                &path,
+                format!("#!/bin/sh\necho {stub} \"$@\" >> '{}'\n", log.display()),
+            )
+            .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let run = |step: ToolchainCacheStep| -> String {
+            let (script, mut args) = step.script_and_args((1200, 1300)).unwrap();
+            args[0] = cache.display().to_string();
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .arg("sh")
+                .args(&args)
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        let log_text = || std::fs::read_to_string(&log).unwrap_or_default();
+        let before = |key: &str| ToolchainCacheStep::Before {
+            toolchain: "python".into(),
+            key: Some(key.into()),
+            reset: vec!["venv".into()],
+        };
+        let after = |key: Option<&str>| ToolchainCacheStep::After {
+            toolchain: "python".into(),
+            key: key.map(str::to_string),
+        };
+        // First setup: handed over.
+        assert_eq!(run(before("k1")), "handed");
+        assert!(log_text().contains(&format!("chown -R 1200:1300 -- {}/python", cache.display())));
+        std::fs::create_dir_all(cache.join("python/venv/bin")).unwrap();
+        std::fs::write(cache.join("python/venv/bin/pytest"), "x").unwrap();
+        // A failed setup: taken back, no stamp.
+        assert_eq!(run(after(None)), "sealed");
+        assert!(log_text().contains(&format!("chown -R 0:0 -- {}/python", cache.display())));
+        assert!(log_text().contains("chmod -R a+rX,go-w"));
+        assert!(!cache.join("python/setup.stamp").exists());
+        // It succeeded: the stamp records the key.
+        assert_eq!(run(after(Some("k1"))), "sealed");
+        assert_eq!(
+            std::fs::read_to_string(cache.join("python/setup.stamp")).unwrap(),
+            "k1\n"
+        );
+        // The same key: nothing to install, nothing handed over (the files,
+        // which are not root's here, are taken back again).
+        std::fs::remove_file(&log).unwrap();
+        assert_eq!(run(before("k1")), "unchanged");
+        assert!(!log_text().contains("1200:1300"), "{}", log_text());
+        assert!(log_text().contains("chown -R 0:0"), "{}", log_text());
+        assert!(cache.join("python/venv/bin/pytest").exists());
+        // Another key: the stamp and the virtual environment go first.
+        assert_eq!(run(before("k2")), "handed");
+        assert!(!cache.join("python/setup.stamp").exists());
+        assert!(!cache.join("python/venv").exists());
+        // A stamp that is a symbolic link is never read as a match.
+        std::os::unix::fs::symlink("/etc/hostname", cache.join("python/setup.stamp")).unwrap();
+        assert_eq!(run(before("k2")), "handed");
+        assert!(std::fs::symlink_metadata(cache.join("python/setup.stamp")).is_err());
     }
 
     #[test]
@@ -7594,14 +7996,20 @@ mod tests {
             !helper.iter().any(|arg| arg.starts_with("HOME=")),
             "{helper:?}"
         );
-        assert_eq!(
-            exec_user_args(Some(&users), ExecIdentity::Root),
-            ["--user", "0"]
-        );
+        // TC-SEC-1: root never runs a program from the image's PATH, which
+        // can name directories the workload users write.
+        let root = [
+            "--user",
+            "0",
+            "--env",
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        ];
+        assert_eq!(exec_user_args(Some(&users), ExecIdentity::Root), root);
         // Image mode leaves the image's user, except where root is needed.
         assert!(exec_user_args(None, ExecIdentity::Writer).is_empty());
         assert!(exec_user_args(None, ExecIdentity::Helper).is_empty());
-        assert_eq!(exec_user_args(None, ExecIdentity::Root), ["--user", "0"]);
+        assert_eq!(exec_user_args(None, ExecIdentity::Root), root);
+        assert!(!ROOT_EXEC_PATH.contains("axocoatl-cache") && !ROOT_EXEC_PATH.contains("/go"));
     }
 
     #[test]
@@ -7803,6 +8211,7 @@ mod tests {
                 helper: (1400, 1500),
             },
             &["/w/node_modules"],
+            false,
         );
         for expected in [
             "set -eu",
@@ -7818,7 +8227,12 @@ mod tests {
             assert!(script.contains(expected), "{expected}\n{script}");
         }
         assert!(
-            !SessionSandbox::workload_setup_script_for(&test_users(), &[]).contains("node_modules")
+            !SessionSandbox::workload_setup_script_for(&test_users(), &[], false)
+                .contains("node_modules")
+        );
+        assert!(
+            !SessionSandbox::workload_setup_script_for(&test_users(), &[], false)
+                .contains("axocoatl-cache")
         );
     }
 

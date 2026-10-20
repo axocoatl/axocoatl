@@ -1,10 +1,13 @@
 # Toolchain recipe: python. Owner: workstream toolchain.
 # Appended to the python toolchain base (Python 3.13.16 on Debian 12 slim,
-# git). A loadout run's setup makes a virtual environment in the
+# git, make). A loadout run's setup makes a virtual environment in the
 # Workspace's toolchain cache volume (mounted at /opt/axocoatl-cache), and
-# every command of the Session finds it first on PATH. Bytecode, pytest's
-# cache and an editable install's *.egg-info directory (setuptools reads
-# DIST_EXTRA_CONFIG) are not written into the repository.
+# the Session's users find it first on PATH. Root never does: every root
+# exec in a Session names its own PATH of system directories, and the
+# environment is root's and read-only to the Session's users once the
+# setup is over. Bytecode, pytest's cache and an editable install's
+# *.egg-info directory (setuptools reads DIST_EXTRA_CONFIG) are not written
+# into the repository.
 ENV AXOCOATL_TOOLCHAIN=python \
     AXOCOATL_CACHE=/opt/axocoatl-cache \
     VIRTUAL_ENV=/opt/axocoatl-cache/python/venv \
