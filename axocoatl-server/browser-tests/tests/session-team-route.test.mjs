@@ -64,7 +64,8 @@ test('native Team preview rejects unsupported repository tools before provider o
     const response = await fetch(`${teamUrl}/preview`, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(edit)});
     const value = await response.json();
     assert.ok(response.status >= 400, JSON.stringify(value));
-    assert.match(value.error, /native Session repository tool 'list_files'/);
+    // Team and budget refusals read as a sentence (capitalized).
+    assert.match(value.error, /^Native Session repository tool 'list_files'/);
     assert.match(value.error, /list_dir/);
     assert.equal(observed.length,before,'Invalid tool names must fail before model metadata or load calls');
     assert.equal((await (await fetch(teamUrl)).json()).configuration_revision,0);
