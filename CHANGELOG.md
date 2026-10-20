@@ -39,6 +39,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The README, the site and the docs use `gpt-oss:20b` as the reviewer in their commands
   and configuration examples; `gpt-oss:120b` (65 GB) needs roughly 96 GB of memory or
   more. The measured results still name the gpt-oss 120B reviewer they used.
+- **The installer keeps `axocoatl` on PATH for new terminals.** On a stock Mac
+  `/usr/local/bin` is not writable, the installer used `~/.local/bin`, which macOS does not
+  put on PATH, and the `axocoatl onboard` it printed next failed with "command not
+  found". When the install directory is not on PATH, the installer now asks on the
+  terminal before adding one marked line to the profile your shell reads (`~/.zprofile`
+  for zsh on macOS, `~/.zshrc` on Linux; for bash the login file that exists on macOS,
+  `~/.bashrc` on Linux; `fish_add_path` in fish's `config.fish`; `~/.profile` otherwise),
+  and prints that line when it cannot ask. `AXOCOATL_MODIFY_PATH=yes` adds it without
+  asking and `=no` never asks. The next commands are printed with the binary's full path
+  unless the shell already finds it, and an earlier `axocoatl` on PATH is named.
+- **Every command on the home page, /install, the README, `llms.txt` and the docs'
+  first-run pages runs as written.** The receipt check is
+  `axocoatl receipt verify receipt.json --key "$(axocoatl receipt key)" --repo .` (the
+  `--keys trusted-keys` it showed named a file no step created, exit 3); the local-models
+  command is one copyable line (its `<br>` made a paste run without the reviewer, then
+  `--model: command not found`); the home page's configuration snippet passes
+  `axocoatl validate`; and the commands use the writer and reviewer onboarding sets up.
+- **The public pages say what has been tested.** End to end: macOS 26 on Apple silicon
+  with rootless Podman 5.8; in CI: Ubuntu 24.04 on x86_64 with rootless Podman 4.9.3.
+  Intel Macs, Podman 6, arm64 Linux, Ubuntu 22.04, Debian 12, Fedora with SELinux and WSL2
+  are labelled "not yet verified", and the install command says it runs in macOS, Linux
+  or WSL2, not PowerShell. The pages name the prerequisites (a Claude Pro or Max plan and
+  the `claude` CLI for Claude Code, a reviewer model, Podman), the memory the local pair
+  was tested on (48 GB; with less, a reviewer through OpenRouter), what gets downloaded
+  (including the 87 MB embedding model the first daemon start fetches from
+  huggingface.co), that Claude Code and Codex runs support Node repositories only for
+  now, and that Docker is not supported (Podman can run alongside it).
+- **Claims withdrawn from the site and docs.** The default reviewer, `gpt-oss:20b`, is
+  "a different reviewer", not a stronger one: it is smaller than its writer and has not
+  been measured. The example run summary is now the real output of one run. The why page
+  no longer says the executable keeps working if the project stops: native Ollama
+  Sessions accept only audited Ollama releases. `axocoatl run` is "from your shell", not
+  "a shell or a CI job", and only `axocoatl run` gets a receipt, not every run. The
+  Codex API-key route (`connect codex --api-key`) is out of the quickstart and marked
+  not yet tested live.
+- **The verify-receipt workflow in the docs no longer fails every pull request without a
+  receipt.** Its example sets `require-receipt: false`, so pull requests from people,
+  Dependabot and the one that adds the workflow pass with a notice; a strict variant
+  limited to Keep as PR's `axocoatl/` branches is shown separately with a warning. The
+  keys file is created with `mkdir -p .axocoatl` first and merged before the workflow.
 
 ### Added
 - **Contract probes.** When Team & budget (or a loadout run's admission) observes an
@@ -65,6 +105,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory; `[ OK ]` with a note when the directory was copied or moved and the next
   start records its new location; `[FAIL]` with the reason and what to do when the daemon
   would refuse to start on it.
+- **An Uninstall page** (docs, Operate): stop the daemon and remove the service, the
+  Podman containers, volumes and images Axocoatl made, the configuration, data and logs,
+  the binary and the PATH line the installer added, and optionally the Podman machine,
+  the Ollama models and the sign-ins.
+- **`scripts/check-copy-paste.mjs`**, run by the docs gate with its tests, extracts every
+  shell command and YAML snippet from the README, `llms.txt`, the marketing site and the
+  docs' first-run pages, and refuses a `<br>` inside code, a copy button with a newline
+  or placeholder, a line that starts with a flag, a dangling backslash, an unbalanced
+  quote, an unknown `axocoatl` subcommand, `--keys FILE` that no earlier step creates,
+  YAML that does not parse or a configuration snippet `axocoatl validate` would refuse
+  (with `AXOCOATL_COPY_PASTE_BIN`, the binary validates each one), "stronger" next to
+  `gpt-oss:20b`, `gpt-oss:120b` without its 96 GB note, the withdrawn claims, and WSL2,
+  Fedora, Debian 12 or Ubuntu 22.04 named on an install page without "not yet verified".
+  `--json` lists every block for a gate that runs them verbatim.
 - **`axocoatl service status` shows why the service last failed to start.** When the
   service is installed but not running and its log's last start attempt failed, it
   prints that `Failed to bootstrap daemon: …` line, read from the end of
