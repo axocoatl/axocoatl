@@ -17,8 +17,8 @@ use serde_json::Value;
 use tokio::process::Command;
 
 use crate::podman::{
-    gib_text, preflight_with, MachineSpec, PodmanReadiness, MACHINE_PROVIDER,
-    MACHINE_START_COMMAND, MIN_MACHINE_MEMORY_MIB,
+    gib_text, preflight_through, ConnectionOverride, MachineSpec, PodmanReadiness,
+    MACHINE_PROVIDER, MACHINE_START_COMMAND, MIN_MACHINE_MEMORY_MIB,
 };
 use crate::session_sandbox::SessionSandbox;
 
@@ -97,17 +97,50 @@ pub struct PodmanReport {
     /// macOS and Windows: the provider a new machine gets
     /// (`podman machine info`), such as `applehv` or `libkrun`.
     pub default_provider: Option<String>,
+    /// The connection `CONTAINER_HOST` or `CONTAINER_CONNECTION` selects.
+    pub connection: ConnectionOverride,
 }
 
 impl PodmanReport {
-    /// The machine Podman uses: the default one, else the running one, else
-    /// the first.
+    /// Podman is not installed: nothing else is known.
+    pub fn not_installed() -> Self {
+        Self {
+            readiness: PodmanReadiness::NotInstalled,
+            client_version: None,
+            runtime: None,
+            machines: Vec::new(),
+            default_provider: None,
+            connection: ConnectionOverride::default(),
+        }
+    }
+
+    /// The machine Podman uses: the one `CONTAINER_CONNECTION` names, else
+    /// the default one, else the running one, else the first.
     pub fn machine(&self) -> Option<&MachineInfo> {
+        if let ConnectionOverride::Connection(name) = &self.connection {
+            if let Some(machine) = self.machines.iter().find(|machine| machine.name == *name) {
+                return Some(machine);
+            }
+        }
         self.machines
             .iter()
             .find(|machine| machine.default)
             .or_else(|| self.machines.iter().find(|machine| machine.running))
             .or_else(|| self.machines.first())
+    }
+
+    /// The machine Podman reaches, when it reaches one: `None` when
+    /// `CONTAINER_HOST` is set, or `CONTAINER_CONNECTION` names a connection
+    /// that is not a listed machine. Commands that change a machine
+    /// (`podman machine set`, `start`, `stop`) are given this one's name.
+    pub fn machine_in_use(&self) -> Option<&MachineInfo> {
+        match &self.connection {
+            ConnectionOverride::Host(_) => None,
+            ConnectionOverride::Connection(name) => {
+                self.machines.iter().find(|machine| machine.name == *name)
+            }
+            ConnectionOverride::None => self.machine(),
+        }
     }
 
     /// Podman runs containers rootless, as far as the runtime or the
@@ -137,13 +170,16 @@ pub async fn inspect() -> PodmanReport {
 /// Read Podman with the client at `program`. Only read-only commands run:
 /// `--version`, `info`, `machine list`, `machine inspect` and `machine info`.
 pub async fn inspect_with(program: &str) -> PodmanReport {
-    let readiness = preflight_with(program).await;
+    inspect_through(program, ConnectionOverride::from_env()).await
+}
+
+/// [`inspect_with`] given the connection the environment selects.
+pub async fn inspect_through(program: &str, connection: ConnectionOverride) -> PodmanReport {
+    let readiness = preflight_through(program, &connection).await;
     let mut report = PodmanReport {
         readiness,
-        client_version: None,
-        runtime: None,
-        machines: Vec::new(),
-        default_provider: None,
+        connection,
+        ..PodmanReport::not_installed()
     };
     if report.readiness == PodmanReadiness::NotInstalled {
         return report;
@@ -376,16 +412,22 @@ pub struct Platform {
     pub spec: MachineSpec,
 }
 
+/// `podman machine <verb>` for the machine `name`: the name is left out
+/// for `podman-machine-default` (or `None`), which Podman uses without one.
+pub fn machine_command(verb: &str, name: Option<&str>) -> String {
+    match name.filter(|name| *name != "podman-machine-default") {
+        Some(name) => format!("podman machine {verb} {name}"),
+        None => format!("podman machine {verb}"),
+    }
+}
+
 /// The command that switches the machine `name` to rootless.
 pub fn rootless_switch_command(name: &str) -> String {
-    let name = if name == "podman-machine-default" {
-        String::new()
-    } else {
-        format!(" {name}")
-    };
     format!(
-        "podman machine stop{name} && podman machine set --rootful=false{name} && podman machine \
-         start{name}"
+        "{} && {} && {}",
+        machine_command("stop", Some(name)),
+        machine_command("set --rootful=false", Some(name)),
+        machine_command("start", Some(name))
     )
 }
 
@@ -447,7 +489,8 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
             Some(if platform.machine {
                 format!(
                     "Check `podman machine list` and `podman system connection list`; start the \
-                     machine with `{MACHINE_START_COMMAND}`"
+                     machine with `{}`",
+                    machine_command("start", report.machine_in_use().map(|m| m.name.as_str()))
                 )
             } else {
                 "Run `podman info` to see why it fails".to_string()
@@ -535,23 +578,25 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
     }
 
     if report.rootless() == Some(false) {
-        let name = machine
-            .map(|m| m.name.clone())
-            .unwrap_or_else(|| "podman-machine-default".to_string());
+        let fix = match (platform.machine, report.machine_in_use()) {
+            (true, Some(machine)) => format!(
+                "{} (this also affects other tools that use this machine)",
+                rootless_switch_command(&machine.name)
+            ),
+            (true, None) => format!(
+                "Podman is reached through {}; point it at a rootless Podman machine, or unset \
+                 it to use your own machine",
+                report.connection.describe().unwrap_or_default()
+            ),
+            (false, _) => "Run Podman and Axocoatl as your normal user, not as root".to_string(),
+        };
         list.push(Finding::new(
             Level::Fail,
             "Rootless",
             "Podman runs containers as root; every axocoatl run (fix, qa, audit) needs rootless \
              Podman and stops with exit 5"
                 .to_string(),
-            Some(if platform.machine {
-                format!(
-                    "{} (this also affects other tools that use this machine)",
-                    rootless_switch_command(&name)
-                )
-            } else {
-                "Run Podman and Axocoatl as your normal user, not as root".to_string()
-            }),
+            Some(fix),
         ));
     }
 
@@ -595,8 +640,13 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
                         gib_text(machine.memory_mib.unwrap_or_default())
                     ),
                     Some(format!(
-                        "podman machine stop && podman machine set --memory {} && {MACHINE_START_COMMAND}",
-                        platform.spec.memory_mib
+                        "{} && {} && {}",
+                        machine_command("stop", Some(&machine.name)),
+                        machine_command(
+                            &format!("set --memory {}", platform.spec.memory_mib),
+                            Some(&machine.name)
+                        ),
+                        machine_command("start", Some(&machine.name)),
                     )),
                 ));
             }
@@ -661,6 +711,7 @@ mod tests {
             runtime: Some(parse_runtime_info(MAC_INFO.as_bytes()).unwrap()),
             machines,
             default_provider: Some("applehv".to_string()),
+            connection: ConnectionOverride::None,
         }
     }
 
@@ -777,6 +828,57 @@ mod tests {
             .any(|f| f.name == "Rootless" && f.level == Level::Fail));
     }
 
+    /// Every machine command doctor prints names the machine in use: a
+    /// machine with another name than the default, or the one
+    /// `CONTAINER_CONNECTION` names. Through `CONTAINER_HOST` there is no
+    /// machine to change.
+    #[test]
+    fn machine_commands_name_the_machine_in_use() {
+        let mut report = mac_report();
+        report.machines[0].name = "dev".to_string();
+        report.machines[0].memory_mib = Some(2048);
+        report.runtime.as_mut().unwrap().rootless = Some(false);
+        let list = findings(&report, &platform(true));
+        let fix = |name: &str| {
+            list.iter()
+                .find(|f| f.name == name)
+                .and_then(|f| f.fix.clone())
+                .unwrap()
+        };
+        assert_eq!(
+            fix("Rootless"),
+            "podman machine stop dev && podman machine set --rootful=false dev && podman \
+             machine start dev (this also affects other tools that use this machine)"
+        );
+        assert_eq!(
+            fix("Machine memory"),
+            "podman machine stop dev && podman machine set --memory 8192 dev && podman machine \
+             start dev"
+        );
+
+        report.machines.push(MachineInfo {
+            name: "axocoatl".to_string(),
+            ..MachineInfo::default()
+        });
+        report.connection = ConnectionOverride::Connection("axocoatl".to_string());
+        assert_eq!(report.machine().unwrap().name, "axocoatl");
+        assert_eq!(report.machine_in_use().unwrap().name, "axocoatl");
+        report.connection = ConnectionOverride::Connection("remote".to_string());
+        assert!(report.machine_in_use().is_none());
+        report.connection = ConnectionOverride::Host("unix:///tmp/podman.sock".to_string());
+        assert!(report.machine_in_use().is_none());
+        let list = findings(&report, &platform(true));
+        let rootless = list.iter().find(|f| f.name == "Rootless").unwrap();
+        assert!(
+            rootless
+                .fix
+                .as_deref()
+                .unwrap()
+                .starts_with("Podman is reached through CONTAINER_HOST=unix:///tmp/podman.sock"),
+            "{rootless:?}"
+        );
+    }
+
     #[test]
     fn a_small_machine_an_untested_provider_and_version_warn() {
         let mut report = mac_report();
@@ -819,6 +921,7 @@ mod tests {
             ),
             machines: Vec::new(),
             default_provider: None,
+            connection: ConnectionOverride::None,
         };
         let mut linux = platform(false);
         linux.too_old_note =

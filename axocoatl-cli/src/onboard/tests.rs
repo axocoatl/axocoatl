@@ -82,13 +82,7 @@ async fn podman_report(shims: &Shims) -> PodmanReport {
 }
 
 fn no_podman() -> PodmanReport {
-    PodmanReport {
-        readiness: PodmanReadiness::NotInstalled,
-        client_version: None,
-        runtime: None,
-        machines: Vec::new(),
-        default_provider: None,
-    }
+    PodmanReport::not_installed()
 }
 
 /// A fake Ollama 0.40.6 (or `version`): its cloud mode is off once the

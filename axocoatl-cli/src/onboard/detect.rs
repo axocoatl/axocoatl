@@ -483,13 +483,7 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str) -> Facts {
     let podman_path = host.find("podman");
     let podman = match &podman_path {
         Some(path) => podman_report::inspect_with(&path.to_string_lossy()).await,
-        None => PodmanReport {
-            readiness: axocoatl_isolation::podman::PodmanReadiness::NotInstalled,
-            client_version: None,
-            runtime: None,
-            machines: Vec::new(),
-            default_provider: None,
-        },
+        None => PodmanReport::not_installed(),
     };
     let ollama_cli = match host.find("ollama") {
         Some(path) => {

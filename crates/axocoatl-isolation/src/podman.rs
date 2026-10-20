@@ -148,10 +148,6 @@ fn validate_runtime_info(stdout: &[u8]) -> Result<(), IsolationError> {
 
 /// Prove that the Podman service can answer a bounded runtime request. A
 /// working client binary or a running machine entry alone is not enough.
-async fn runtime_available() -> Result<(), IsolationError> {
-    runtime_available_with(PODMAN).await
-}
-
 async fn runtime_available_with(program: &str) -> Result<(), IsolationError> {
     let output = bounded_output(
         program,
@@ -206,6 +202,50 @@ fn machine_state_from_output(
     Ok((!machines.is_empty(), running))
 }
 
+/// Which Podman connection this process's environment selects.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ConnectionOverride {
+    /// Neither variable is set: Podman uses its default connection (on
+    /// macOS, the default machine).
+    #[default]
+    None,
+    /// `CONTAINER_HOST=…`: a Podman service reached by URL, never a machine
+    /// Axocoatl manages.
+    Host(String),
+    /// `CONTAINER_CONNECTION=NAME`: a named connection, which is a machine
+    /// of that name when `podman machine list` lists one.
+    Connection(String),
+}
+
+impl ConnectionOverride {
+    /// What `CONTAINER_HOST` and `CONTAINER_CONNECTION` say (`CONTAINER_HOST`
+    /// first, as Podman reads it).
+    pub fn from_env() -> Self {
+        let read = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        };
+        if let Some(host) = read("CONTAINER_HOST") {
+            ConnectionOverride::Host(host)
+        } else if let Some(name) = read("CONTAINER_CONNECTION") {
+            ConnectionOverride::Connection(name)
+        } else {
+            ConnectionOverride::None
+        }
+    }
+
+    /// `CONTAINER_HOST=…` or `CONTAINER_CONNECTION=…`, for messages.
+    pub fn describe(&self) -> Option<String> {
+        match self {
+            ConnectionOverride::None => None,
+            ConnectionOverride::Host(host) => Some(format!("CONTAINER_HOST={host}")),
+            ConnectionOverride::Connection(name) => Some(format!("CONTAINER_CONNECTION={name}")),
+        }
+    }
+}
+
 /// Ask the runtime first: when `podman info` answers, Podman is ready,
 /// however it is reached (a local machine, `CONTAINER_HOST` or
 /// `CONTAINER_CONNECTION`). Only when it does not does [`detect`] say why
@@ -216,40 +256,88 @@ pub async fn preflight() -> PodmanReadiness {
 
 /// [`preflight`] with the Podman client at `program`.
 pub async fn preflight_with(program: &str) -> PodmanReadiness {
-    preflight_through(program, configured_connection()).await
+    preflight_through(program, &ConnectionOverride::from_env()).await
 }
 
-/// `CONTAINER_HOST=…` or `CONTAINER_CONNECTION=…` when this process names
-/// the Podman connection to use.
-fn configured_connection() -> Option<String> {
-    ["CONTAINER_HOST", "CONTAINER_CONNECTION"]
-        .iter()
-        .find_map(|name| {
-            std::env::var(name)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| format!("{name}={value}"))
-        })
-}
-
-/// [`preflight_with`] given the connection the environment names. When
-/// one is named and Podman does not answer through it, Podman is
-/// unavailable: the default machine's state says nothing about that
-/// connection, so a missing or stopped default machine is never reported
-/// (and onboarding never offers to create one) for it.
-async fn preflight_through(program: &str, connection: Option<String>) -> PodmanReadiness {
+/// [`preflight_with`] given the connection the environment selects. When
+/// one is selected and Podman does not answer through it, the default
+/// machine's state says nothing about that connection, so a missing or
+/// stopped default machine is never reported (and onboarding never offers
+/// to create one) for it. The one exception is `CONTAINER_CONNECTION`
+/// naming a machine that is stopped: that machine starts on first use like
+/// the default one.
+pub async fn preflight_through(program: &str, connection: &ConnectionOverride) -> PodmanReadiness {
     if !command_exists(program) {
         return PodmanReadiness::NotInstalled;
     }
-    match runtime_available_with(program).await {
-        Ok(()) => PodmanReadiness::Ready,
-        Err(error) => match connection {
-            Some(connection) => PodmanReadiness::Unavailable(format!(
-                "{connection} is set, and Podman does not answer through it: {error}"
-            )),
-            None => detect_with(program).await,
-        },
+    let error = match runtime_available_with(program).await {
+        Ok(()) => return PodmanReadiness::Ready,
+        Err(error) => error,
+    };
+    let unavailable = |described: String| {
+        PodmanReadiness::Unavailable(format!(
+            "{described} is set, and Podman does not answer through it: {error}"
+        ))
+    };
+    match connection {
+        ConnectionOverride::None => detect_with(program).await,
+        ConnectionOverride::Host(_) => unavailable(connection.describe().unwrap_or_default()),
+        ConnectionOverride::Connection(name) => {
+            let stopped_machine = needs_machine()
+                && machine_list_with(program).await.is_ok_and(|machines| {
+                    machines
+                        .iter()
+                        .any(|machine| machine.name == *name && !machine.running)
+                });
+            if stopped_machine {
+                PodmanReadiness::MachineStopped
+            } else {
+                unavailable(connection.describe().unwrap_or_default())
+            }
+        }
     }
+}
+
+/// `podman machine list --format json`, read.
+async fn machine_list_with(
+    program: &str,
+) -> Result<Vec<crate::podman_report::MachineInfo>, IsolationError> {
+    let output = bounded_output(
+        program,
+        &["machine", "list", "--format", "json"],
+        READINESS_COMMAND_TIMEOUT,
+    )
+    .await?;
+    if output.timed_out {
+        return Err(IsolationError::Timeout(READINESS_COMMAND_TIMEOUT));
+    }
+    if !output.status.success() {
+        return Err(IsolationError::OciSetupFailed(format!(
+            "podman machine list failed: {}",
+            command_error_detail(&output)
+        )));
+    }
+    crate::podman_report::parse_machine_list(&output.stdout).map_err(IsolationError::OciSetupFailed)
+}
+
+/// The stopped machine to start: the one `CONTAINER_CONNECTION` names,
+/// else the default machine, else the only machine. `None` when Podman
+/// lists no such machine (then `podman machine start` starts the default).
+pub fn machine_to_start(
+    machines: &[crate::podman_report::MachineInfo],
+    connection: &ConnectionOverride,
+) -> Option<String> {
+    if let ConnectionOverride::Connection(name) = connection {
+        return machines
+            .iter()
+            .any(|machine| machine.name == *name)
+            .then(|| name.clone());
+    }
+    machines
+        .iter()
+        .find(|machine| machine.default)
+        .or_else(|| (machines.len() == 1).then(|| &machines[0]))
+        .map(|machine| machine.name.clone())
 }
 
 const PODMAN: &str = "podman";
@@ -346,15 +434,34 @@ pub async fn ensure_ready() -> Result<(), IsolationError> {
     let _readiness = readiness_lock.lock().await;
     match ready_action(preflight().await) {
         ReadyAction::Ready => Ok(()),
-        ReadyAction::StartExistingMachine => machine_start().await,
+        ReadyAction::StartExistingMachine => {
+            machine_start(PODMAN, &ConnectionOverride::from_env()).await
+        }
         ReadyAction::Fail(message) => Err(IsolationError::OciSetupFailed(message)),
     }
 }
 
-/// Start an existing (stopped) `podman machine`.
-async fn machine_start() -> Result<(), IsolationError> {
-    tracing::info!("starting the podman machine");
-    let output = bounded_output(PODMAN, &["machine", "start"], MACHINE_START_TIMEOUT)
+/// Start an existing (stopped) `podman machine`: the one in use, by name
+/// ([`machine_to_start`]), so a machine with another name than
+/// `podman-machine-default` starts too.
+async fn machine_start(
+    program: &str,
+    connection: &ConnectionOverride,
+) -> Result<(), IsolationError> {
+    // Podman starts `podman-machine-default` when no name is given.
+    let name = match machine_list_with(program).await {
+        Ok(machines) => {
+            machine_to_start(&machines, connection).filter(|name| name != "podman-machine-default")
+        }
+        Err(_) => None,
+    };
+    tracing::info!(
+        machine = name.as_deref().unwrap_or("default"),
+        "starting the podman machine"
+    );
+    let mut args = vec!["machine", "start"];
+    args.extend(name.as_deref());
+    let output = bounded_output(program, &args, MACHINE_START_TIMEOUT)
         .await
         .map_err(|error| {
             IsolationError::OciSetupFailed(format!("podman machine start: {error}"))
@@ -364,7 +471,7 @@ async fn machine_start() -> Result<(), IsolationError> {
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     if output.status.success() || stderr.contains("already running") {
-        runtime_available().await.map_err(|error| {
+        runtime_available_with(program).await.map_err(|error| {
             IsolationError::OciSetupFailed(format!(
                 "podman machine started but its runtime is not ready: {error}"
             ))
@@ -668,8 +775,11 @@ esac"#,
   *) echo "Cannot connect to Podman" >&2; exit 125 ;;
 esac"#,
         );
-        let readiness =
-            preflight_through(&podman, Some("CONTAINER_HOST=unix:///tmp/x.sock".into())).await;
+        let readiness = preflight_through(
+            &podman,
+            &ConnectionOverride::Host("unix:///tmp/x.sock".into()),
+        )
+        .await;
         let PodmanReadiness::Unavailable(error) = readiness else {
             panic!("{readiness:?}");
         };
@@ -683,10 +793,90 @@ esac"#,
             .any(|call| call.starts_with("machine")));
         if needs_machine() {
             assert_eq!(
-                preflight_through(&podman, None).await,
+                preflight_through(&podman, &ConnectionOverride::None).await,
                 PodmanReadiness::MachineMissing
             );
         }
+    }
+
+    /// `CONTAINER_CONNECTION` naming a stopped machine is that machine,
+    /// stopped (it starts on first use, by name); naming anything else that
+    /// does not answer is unavailable.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn container_connection_naming_a_stopped_machine_starts_it_by_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let podman = shim(
+            directory.path(),
+            r#"case "$*" in
+  "--version") echo "podman version 5.8.2" ;;
+  "machine list --format json") echo '[{"Name":"podman-machine-default","Default":true,"Running":false},{"Name":"axocoatl","Default":false,"Running":false}]' ;;
+  "machine start axocoatl") touch "$(dirname "$0")/running" ;;
+  "info --format json") if [ -f "$(dirname "$0")/running" ]; then echo '{"host":{}}'; else echo "Cannot connect to Podman" >&2; exit 125; fi ;;
+  *) echo "unexpected: $*" >&2; exit 125 ;;
+esac"#,
+        );
+        let named = ConnectionOverride::Connection("axocoatl".into());
+        let other = ConnectionOverride::Connection("remote-box".into());
+        if needs_machine() {
+            assert_eq!(
+                preflight_through(&podman, &named).await,
+                PodmanReadiness::MachineStopped
+            );
+        }
+        let PodmanReadiness::Unavailable(error) = preflight_through(&podman, &other).await else {
+            panic!("a connection that is not a machine is unavailable");
+        };
+        assert!(
+            error.starts_with("CONTAINER_CONNECTION=remote-box is set"),
+            "{error}"
+        );
+        machine_start(&podman, &named).await.unwrap();
+        assert!(calls(directory.path())
+            .iter()
+            .any(|call| call == "machine start axocoatl"));
+        assert!(!calls(directory.path())
+            .iter()
+            .any(|call| call == "machine start"));
+    }
+
+    /// The machine `ensure_ready` starts is named: the one
+    /// `CONTAINER_CONNECTION` names, else the default, else the only one.
+    #[test]
+    fn the_machine_to_start_is_named() {
+        let machine = |name: &str, default: bool| crate::podman_report::MachineInfo {
+            name: name.to_string(),
+            default,
+            ..Default::default()
+        };
+        let none = ConnectionOverride::None;
+        assert_eq!(
+            machine_to_start(&[machine("dev", false)], &none).as_deref(),
+            Some("dev")
+        );
+        assert_eq!(
+            machine_to_start(&[machine("a", false), machine("b", true)], &none).as_deref(),
+            Some("b")
+        );
+        assert_eq!(
+            machine_to_start(&[machine("a", false), machine("b", false)], &none),
+            None
+        );
+        assert_eq!(
+            machine_to_start(
+                &[machine("a", true), machine("axocoatl", false)],
+                &ConnectionOverride::Connection("axocoatl".into())
+            )
+            .as_deref(),
+            Some("axocoatl")
+        );
+        assert_eq!(
+            machine_to_start(
+                &[machine("a", true)],
+                &ConnectionOverride::Connection("remote".into())
+            ),
+            None
+        );
     }
 
     #[test]

@@ -54,13 +54,7 @@ async fn reinspect(o: &mut Onboarding) {
     o.facts.podman_path = o.host.find("podman");
     o.facts.podman = match program {
         Some(program) => podman_report::inspect_with(&program).await,
-        None => PodmanReport {
-            readiness: PodmanReadiness::NotInstalled,
-            client_version: None,
-            runtime: None,
-            machines: Vec::new(),
-            default_provider: None,
-        },
+        None => PodmanReport::not_installed(),
     };
 }
 

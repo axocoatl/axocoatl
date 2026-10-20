@@ -52,6 +52,13 @@ pub fn memory_gb(bytes: u64) -> u64 {
     (bytes + (1 << 29)) >> 30
 }
 
+/// A computer with `bytes` of memory is one sold with at least `gb` GB.
+/// Linux's `MemTotal` leaves out what the kernel and firmware reserve (a
+/// 48 GB computer reports about 47 GiB), so up to 6% less counts.
+pub fn at_least_gb(bytes: u64, gb: u64) -> bool {
+    bytes as f64 >= (gb << 30) as f64 * 0.94
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +75,19 @@ mod tests {
         assert_eq!(memory_gb(51_539_607_552), 48);
         assert_eq!(memory_gb(8_094_140 * 1024), 8);
         assert_eq!(memory_gb(17_179_869_184), 16);
+    }
+
+    /// A 48 GiB Linux computer's MemTotal (about 49.2 million kB) is in the
+    /// 48 GB tier; a 32 GB one is not.
+    #[test]
+    fn memory_tiers_allow_what_linux_reserves() {
+        let linux_48 = 49_200_000 * 1024;
+        assert_eq!(memory_gb(linux_48), 47);
+        assert!(at_least_gb(linux_48, 48));
+        assert!(at_least_gb(48 << 30, 48));
+        assert!(!at_least_gb(32 << 30, 48));
+        assert!(at_least_gb(98_400_000 * 1024, 96));
+        assert!(!at_least_gb(64 << 30, 96));
     }
 
     #[test]
