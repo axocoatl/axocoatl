@@ -400,7 +400,57 @@ impl Drop for MountpointLease {
         };
         registry().finish_start(&path);
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(release_unused());
+            #[cfg(test)]
+            let ticket = lease_releases::spawned();
+            runtime.spawn(async move {
+                release_unused().await;
+                #[cfg(test)]
+                lease_releases::finished(ticket);
+            });
+        }
+    }
+}
+
+/// Which [`release_unused`] runs that a dropped [`MountpointLease`] spawned
+/// have finished, so a live test can look at the mount point after the one
+/// that runs once its container exists.
+#[cfg(test)]
+pub(crate) mod lease_releases {
+    use std::collections::BTreeSet;
+    use std::sync::{Mutex, MutexGuard};
+    use std::time::Duration;
+
+    /// The last ticket handed out, and those whose release has not finished.
+    static RELEASES: Mutex<(u64, BTreeSet<u64>)> = Mutex::new((0, BTreeSet::new()));
+
+    fn releases() -> MutexGuard<'static, (u64, BTreeSet<u64>)> {
+        RELEASES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(super) fn spawned() -> u64 {
+        let mut releases = releases();
+        releases.0 += 1;
+        let ticket = releases.0;
+        releases.1.insert(ticket);
+        ticket
+    }
+
+    pub(super) fn finished(ticket: u64) {
+        releases().1.remove(&ticket);
+    }
+
+    /// Wait until every release a lease spawned before this call finished.
+    pub(crate) async fn settled() {
+        let last = releases().0;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        while releases().1.range(..=last).next().is_some() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "a dropped lease's release did not finish within 60 s"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 }

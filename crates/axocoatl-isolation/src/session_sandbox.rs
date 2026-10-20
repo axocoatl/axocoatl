@@ -8924,13 +8924,74 @@ mod tests {
         .is_empty());
     }
 
+    /// While `sandbox`'s container runs, after the release its start's lease
+    /// spawned once the container existed has finished: the mount point is
+    /// there, empty and the person's (not the OCI runtime's 01755 directory
+    /// of a subordinate uid), the person can write into it on the host, and
+    /// the container still has its dependency volume mounted on it (a
+    /// removal would have detached it).
+    #[cfg(unix)]
+    async fn assert_kept_while_mounted(sandbox: &SessionSandbox, mountpoint: &Path) {
+        use std::os::unix::fs::MetadataExt;
+        crate::dependency_mountpoint::lease_releases::settled().await;
+        let metadata = std::fs::symlink_metadata(mountpoint)
+            .expect("the mount point stays while its container runs");
+        assert!(metadata.is_dir());
+        assert_eq!(
+            metadata.uid(),
+            rustix::process::getuid().as_raw(),
+            "the person's, never a container's"
+        );
+        assert_eq!(
+            metadata.mode() & 0o1000,
+            0,
+            "not the OCI runtime's 01755 mount point"
+        );
+        assert_eq!(std::fs::read_dir(mountpoint).unwrap().count(), 0);
+        let probe = mountpoint.join("person-probe");
+        std::fs::create_dir(&probe).expect("the person can write into it");
+        std::fs::remove_dir(&probe).unwrap();
+        // One more release while the container runs keeps it as well.
+        crate::dependency_mountpoint::release_unused().await;
+        assert!(mountpoint.is_dir());
+        let inside = sandbox
+            .exec(
+                &[
+                    "sh",
+                    "-c",
+                    "awk -v d=\"$PWD/node_modules\" '$5 == d { found = 1 } END { exit !found }' \
+                     /proc/self/mountinfo || { echo 'node_modules is not mounted' >&2; exit 1; }; \
+                     printf container-only > node_modules/container-marker && \
+                     cat node_modules/container-marker",
+                ],
+                Duration::from_secs(20),
+            )
+            .await
+            .unwrap();
+        assert!(
+            inside.ok() && inside.stdout.contains("container-only"),
+            "the container still has its volume on node_modules: {inside:?}"
+        );
+        assert_eq!(
+            std::fs::read_dir(mountpoint).unwrap().count(),
+            0,
+            "what the container writes stays in its volume"
+        );
+    }
+
     /// End-to-end: needs Podman. A repository without `node_modules` keeps
     /// none: the mount point is the person's while a container mounts it,
-    /// and is gone once no container does.
+    /// and is gone once no container does. Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   session_sandbox::tests::a_repository_without_node_modules_has_none_left_behind \
+    ///   -- --ignored --exact --test-threads=1
+    /// ```
+    #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires podman; run this test explicitly"]
     async fn a_repository_without_node_modules_has_none_left_behind() {
-        use std::os::unix::fs::MetadataExt;
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         let mountpoint = std::fs::canonicalize(directory.path())
@@ -8949,27 +9010,7 @@ mod tests {
 
         let first = start(first_id.clone()).await;
         assert!(first.uses_node_dependency_volume());
-        let metadata = std::fs::symlink_metadata(&mountpoint).unwrap();
-        assert!(metadata.is_dir());
-        assert_eq!(metadata.uid(), rustix::process::getuid().as_raw());
-        assert_eq!(
-            metadata.mode() & 0o1000,
-            0,
-            "not the OCI runtime's 01755 mount point"
-        );
-        assert!(first
-            .exec(
-                &[
-                    "sh",
-                    "-c",
-                    "printf container-only > node_modules/container-marker"
-                ],
-                Duration::from_secs(20),
-            )
-            .await
-            .unwrap()
-            .ok());
-        assert_eq!(std::fs::read_dir(&mountpoint).unwrap().count(), 0);
+        assert_kept_while_mounted(&first, &mountpoint).await;
 
         // A second Session on the same repository shares the mount point:
         // removing the first container keeps it.
@@ -8995,6 +9036,60 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    /// End-to-end: needs rootless Podman. The configuration the mount point
+    /// was wrong in: the hardened workload of loadout runs (PID 1 as root,
+    /// `--userns=keep-id` mapping the person to the writer), under which the
+    /// OCI runtime made `node_modules` as the container's root, a
+    /// subordinate uid of the person with mode 01755. Loadout runs add
+    /// `network: egress` and the supervisor, which change nothing about
+    /// this mount. Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   session_sandbox::tests::under_the_hardened_workload_the_mount_point_is_the_persons_until_removal \
+    ///   -- --ignored --exact --test-threads=1
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires rootless podman; run this test explicitly"]
+    async fn under_the_hardened_workload_the_mount_point_is_the_persons_until_removal() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("package.json"), "{}").unwrap();
+        let mountpoint = std::fs::canonicalize(directory.path())
+            .unwrap()
+            .join("node_modules");
+        let id = format!("node-mountpoint-hardened-{}", uuid::Uuid::new_v4());
+        let users = WorkloadUsers {
+            writer: (1000, 1000),
+            helper: (1001, 1001),
+        };
+        let policy = SandboxPolicy {
+            workload: Some(users),
+            ..SandboxPolicy::default()
+        };
+        let sandbox = SessionSandbox::start(&id, directory.path(), None, &[], &[], &policy)
+            .await
+            .expect("hardened Node sandbox should start");
+        assert!(sandbox.uses_node_dependency_volume());
+        assert_eq!(sandbox.workload_users(), Some(users));
+        let whoami = sandbox
+            .exec(&["id", "-u"], Duration::from_secs(20))
+            .await
+            .unwrap();
+        assert_eq!(whoami.stdout.trim(), "1000", "commands run as the writer");
+
+        assert_kept_while_mounted(&sandbox, &mountpoint).await;
+
+        sandbox.stop_checked().await.unwrap();
+        assert!(
+            !mountpoint.exists(),
+            "no container mounts it and it is empty: removed"
+        );
+        SessionSandbox::remove_named_with_dependencies(&id)
+            .await
+            .unwrap();
     }
 
     /// End-to-end cancellation: needs Podman and package-network access.
