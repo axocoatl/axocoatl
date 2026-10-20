@@ -401,6 +401,7 @@ environment: { recipes: [claude-code] }
         keep: Default::default(),
         check_command: Some("true".into()),
         setup_command: None,
+        environment: Default::default(),
         request_id: "rootful".into(),
     };
     let refused = daemon.admit_loadout_run(request.clone()).await.unwrap_err();
@@ -479,6 +480,7 @@ async fn e2b_child_body() {
         keep: Default::default(),
         check_command: Some("true".into()),
         setup_command: None,
+        environment: Default::default(),
         request_id: "e2b".into(),
     };
     let refused = daemon.admit_loadout_run(request).await.unwrap_err();
@@ -592,6 +594,7 @@ async fn admission_child_body() {
         keep: Default::default(),
         check_command: None,
         setup_command: None,
+        environment: Default::default(),
         request_id: id.into(),
     };
     let admit = |request: RunRequest| {
@@ -657,6 +660,7 @@ async fn admission_child_body() {
             keep: Default::default(),
             check_command: None,
             setup_command: None,
+            environment: Default::default(),
             request_id: "tight".into(),
         })
         .await,
@@ -699,6 +703,7 @@ async fn admission_child_body() {
         keep: Default::default(),
         check_command: None,
         setup_command: None,
+        environment: Default::default(),
         request_id: id.into(),
     };
     let message = usage(
@@ -850,6 +855,7 @@ async fn external_fix_admission_child_body() {
         keep: Default::default(),
         check_command: Some("true".into()),
         setup_command: None,
+        environment: Default::default(),
         request_id: id.into(),
     };
     let admit = |request: RunRequest| {
@@ -935,15 +941,24 @@ async fn external_fix_admission_child_body() {
     );
 
     // Only the ChatGPT sign-in is stored (a test value, never a real one):
-    // auto takes it. Without the codex recipe image the run is refused,
-    // naming the build.
+    // auto takes it. Without the codex recipe image a run that may not
+    // build it is refused, naming the build; one that may builds it first
+    // (this fake Podman refuses the build, and the error names the command).
     crate::secret_store::set_secret(&data, "codex-chatgpt", b"test-sign-in").unwrap();
-    match admit(request("fix-codex", &[], "codex-no-image")).await {
+    let mut no_build = request("fix-codex", &[], "codex-no-image");
+    no_build.environment.build_images = false;
+    let message = usage(admit(no_build).await);
+    assert!(
+        message.contains("Build it with `axocoatl recipe build codex`"),
+        "{message}"
+    );
+    match admit(request("fix-codex", &[], "codex-build-fails")).await {
         Err(DaemonError::Session(message)) => assert!(
-            message.contains("run `axocoatl recipe build codex`"),
+            message.contains("building the run's image")
+                && message.contains("`axocoatl recipe build codex`"),
             "{message}"
         ),
-        Err(other) => panic!("expected the missing image, got {other}"),
+        Err(other) => panic!("expected the failed build, got {other}"),
         Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
     }
     for recipe in ["codex", "claude-code"] {
@@ -1091,7 +1106,20 @@ async fn external_fix_admission_child_body() {
     let status = daemon.loadout_run(&accepted.run_id).await.unwrap();
     let outcome = status.outcome.expect("the run ended at admission");
     assert_eq!(outcome.exit_code, exit_code::INFRASTRUCTURE, "{outcome:?}");
-    assert_eq!(outcome.notes, [note], "{outcome:?}");
+    // Then the environment admission chose: this repository has no
+    // toolchain's files, so the codex image runs as it is.
+    assert_eq!(outcome.notes.len(), 2, "{outcome:?}");
+    assert_eq!(outcome.notes[0], note, "{outcome:?}");
+    assert!(
+        outcome.notes[1].starts_with("image localhost/axocoatl-recipe-codex:")
+            && outcome.notes[1].contains("· no toolchain (the repository root has no")
+            && outcome.notes[1].contains("· check true (--check) · setup none"),
+        "{outcome:?}"
+    );
+    let environment = &manifest.options["environment"];
+    assert_eq!(environment["recipes"], serde_json::json!(["codex"]));
+    assert!(environment.get("toolchain").is_none(), "{environment}");
+    assert_eq!(environment["check"], "true");
     let junit = daemon.loadout_run_junit(&accepted.run_id).await.unwrap();
     assert!(
         junit.contains(&format!("note: {}", note.replace('\'', "&apos;"))),
@@ -1615,6 +1643,179 @@ async fn the_external_fix_builtins_resolve_their_writer_recipe_routes_and_creden
     }
     run_child(
         "bootstrap::loadout_runs::daemon_tests::the_external_fix_builtins_resolve_their_writer_recipe_routes_and_credential",
+        true,
+    )
+    .await;
+}
+
+/// A repository's toolchain at admission (workstream toolchain): several
+/// toolchains whose check does not say which are refused before anything is
+/// created; a missing toolchain image with building turned off is refused
+/// naming the build; with the image recorded, the run's Session starts from
+/// it with the Workspace's toolchain cache, and its notes and manifest say
+/// what was chosen and why; `--toolchain none` runs the image as before.
+async fn toolchain_admission_child_body() {
+    let server = model_server().await;
+    let daemon = AxocoatlDaemon::bootstrap_headless(config(&server.uri(), "podman"))
+        .await
+        .unwrap();
+    let repo = |files: &[(&str, &str)]| {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, contents) in files {
+            let path = dir.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+        dir
+    };
+    let request = |repo: &std::path::Path, id: &str, check: Option<&str>| RunRequest {
+        loadout: "fix".into(),
+        task: "Paging skips the last item".into(),
+        repo: repo.display().to_string(),
+        params: [
+            ("writer_model".to_string(), format!("ollama:{MODEL}")),
+            ("reviewer_model".to_string(), format!("ollama:{OTHER}")),
+        ]
+        .into_iter()
+        .collect(),
+        keep: Default::default(),
+        check_command: check.map(str::to_string),
+        setup_command: None,
+        environment: Default::default(),
+        request_id: id.into(),
+    };
+    let usage = |result: Result<(RunAccepted, RunContext), DaemonError>| match result {
+        Err(DaemonError::InvalidRequest(message)) => message,
+        Err(other) => panic!("expected a usage error, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    };
+
+    let several = repo(&[
+        ("package.json", r#"{"devDependencies":{"mocha":"10.7.3"}}"#),
+        ("go.mod", "module x\n"),
+    ]);
+    let message = usage(
+        daemon
+            .admit_loadout_run(request(several.path(), "several", Some("make test")))
+            .await,
+    );
+    assert!(message.contains("--toolchain node|go"), "{message}");
+    assert!(daemon.list_loadout_runs().await.unwrap().is_empty());
+
+    // A Rust repository is refused before any image, Session or model call.
+    let rust = repo(&[
+        (
+            "Cargo.toml",
+            "[package]\nname = 'x'\n[dev-dependencies]\nitoa = '1'\n",
+        ),
+        ("src/lib.rs", ""),
+    ]);
+    let message = usage(
+        daemon
+            .admit_loadout_run(request(rust.path(), "rust", None))
+            .await,
+    );
+    assert!(message.contains("Invalid cross-device link"), "{message}");
+    assert!(daemon.list_loadout_runs().await.unwrap().is_empty());
+
+    let python = repo(&[
+        ("pyproject.toml", "[project]\nname = 'pages'\n"),
+        ("tests/conftest.py", ""),
+        ("pages.py", ""),
+    ]);
+    let mut no_build = request(python.path(), "python-no-build", None);
+    no_build.environment.build_images = false;
+    let message = usage(daemon.admit_loadout_run(no_build).await);
+    assert!(
+        message.contains("Build it with `axocoatl recipe build python`"),
+        "{message}"
+    );
+
+    // With the image recorded (a test id; the fake Podman cannot start it,
+    // so the run ends at its environment with exit code 5).
+    let record = crate::external_agent::recipe_images::record_for(
+        &["python".to_string()],
+        &format!("{:0>64}", "5e7"),
+        1,
+    )
+    .unwrap();
+    crate::external_agent::recipe_images::record_image(&daemon.data_root, record.clone()).unwrap();
+    let (accepted, _) = daemon
+        .admit_loadout_run(request(python.path(), "python", None))
+        .await
+        .unwrap();
+    let session = daemon.get_session(&accepted.session_id).await.unwrap();
+    assert_eq!(session.image.as_deref(), Some(record.image_id.as_str()));
+    assert!(daemon.session_mounts_toolchain_cache(&session));
+    let manifest = daemon
+        .loadout_runs
+        .store()
+        .unwrap()
+        .manifest(&accepted.run_id)
+        .unwrap();
+    let environment: axocoatl_session::receipt::EnvironmentFacts =
+        serde_json::from_value(manifest.options["environment"].clone()).unwrap();
+    assert_eq!(environment.toolchain.as_deref(), Some("python"));
+    assert_eq!(environment.reason, "pyproject.toml at the repository root");
+    assert_eq!(
+        environment.image_id.as_deref(),
+        Some(record.image_id.as_str())
+    );
+    assert_eq!(environment.check.as_deref(), Some("python3 -m pytest"));
+    assert!(environment
+        .cache_volume
+        .as_deref()
+        .is_some_and(|volume| volume.starts_with("axo-tc-")));
+    // The environment never became ready: no setup ran, no probe.
+    assert_eq!(environment.setup, None);
+    assert_eq!(environment.probe, None);
+    let outcome = daemon
+        .loadout_run(&accepted.run_id)
+        .await
+        .unwrap()
+        .outcome
+        .unwrap();
+    assert_eq!(outcome.exit_code, exit_code::INFRASTRUCTURE, "{outcome:?}");
+    assert!(
+        outcome.notes.iter().any(|note| note.contains(
+            "· toolchain python (pyproject.toml at the repository root) · check python3 -m \
+             pytest (detected from the repository) · setup pip install -e . pytest (detected; \
+             registries pypi.org, files.pythonhosted.org open for it alone)"
+        )),
+        "{:?}",
+        outcome.notes
+    );
+
+    // --toolchain none: the loadout's image as it is, nothing detected.
+    let mut none = request(python.path(), "python-none", Some("python3 -m pytest"));
+    none.environment.toolchain = Some("none".into());
+    let (accepted, _) = daemon.admit_loadout_run(none).await.unwrap();
+    let session = daemon.get_session(&accepted.session_id).await.unwrap();
+    assert_eq!(session.image, None);
+    assert!(!daemon.session_mounts_toolchain_cache(&session));
+    let outcome = daemon
+        .loadout_run(&accepted.run_id)
+        .await
+        .unwrap()
+        .outcome
+        .unwrap();
+    assert!(
+        outcome.notes.iter().any(|note| note
+            .starts_with("image docker.io/library/alpine:3.20 · no toolchain (--toolchain none)")),
+        "{:?}",
+        outcome.notes
+    );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_repository_toolchain_is_chosen_at_admission() {
+    if std::env::var_os(CHILD).is_some() {
+        toolchain_admission_child_body().await;
+        return;
+    }
+    run_child(
+        "bootstrap::loadout_runs::daemon_tests::the_repository_toolchain_is_chosen_at_admission",
         true,
     )
     .await;
@@ -2234,6 +2435,7 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
             keep: Default::default(),
             check_command: None,
             setup_command: None,
+            environment: Default::default(),
             request_id: "podman-run".into(),
         })
         .await
@@ -2441,6 +2643,7 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
                 keep: Default::default(),
                 check_command: None,
                 setup_command: None,
+                environment: Default::default(),
                 request_id: "podman-stop".into(),
             })
             .await?;

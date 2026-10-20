@@ -110,6 +110,14 @@ pub struct RunRequest {
     pub check_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_command: Option<String>,
+    /// The run's toolchain, image and setup choices (`axocoatl run
+    /// --toolchain --image --no-setup --no-build`); see
+    /// [`crate::loadout::toolchain`].
+    #[serde(
+        default,
+        skip_serializing_if = "crate::loadout::toolchain::EnvironmentRequest::is_default"
+    )]
+    pub environment: crate::loadout::toolchain::EnvironmentRequest,
     /// Idempotency key: a repeat with the same key returns the same run.
     pub request_id: String,
 }
@@ -149,6 +157,13 @@ pub struct RunPreflightRequest {
     pub check_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_command: Option<String>,
+    /// The run's toolchain, image and setup choices, as [`RunRequest`]
+    /// takes them.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::loadout::toolchain::EnvironmentRequest::is_default"
+    )]
+    pub environment: crate::loadout::toolchain::EnvironmentRequest,
     /// Accepted so a [`RunRequest`] body can be checked as it is; unused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
@@ -171,6 +186,7 @@ impl From<RunRequest> for RunPreflightRequest {
             keep: request.keep,
             check_command: request.check_command,
             setup_command: request.setup_command,
+            environment: request.environment,
             request_id: Some(request.request_id),
             load_models: None,
         }

@@ -37,6 +37,33 @@ axocoatl run <LOADOUT> (--task <TEXT> | --task-file <FILE|->)
 | `--url <URL>` | The daemon's address. |
 | `-c, --config <CONFIG>` | The configuration file used to find the daemon's address and data root; default the user configuration. |
 
+### Toolchain flags
+
+```text
+axocoatl run <LOADOUT> ... [--toolchain detected|node|python|rust|go|none]
+             [--image <REF>] [--no-setup] [--no-build] [--no-probe]
+```
+
+A loadout that runs the repository's check (`fix`, `fix-claude-code`, `fix-codex`) runs
+in Axocoatl's image of the repository's language. The run installs the repository's
+dependencies with only that language's registries open, and checks that the check can
+start before any model call. [Repository toolchains](/configure/toolchains/) describes
+each step.
+
+| Flag | Meaning |
+| --- | --- |
+| `--toolchain <NAME>` | `detected` (the default for such a loadout), `node`, `python` or `go`, or `none` for the image as the loadout names it, with no detected install. Several toolchains whose check does not say which is a usage error that lists them. `rust`, named or detected, is refused (exit code 3): Rust checks cannot run in a loadout run's hardened Session yet. |
+| `--image <REF>` | Run this curated or trusted image as it is, without a toolchain. Give its installs with `--setup`. You cannot combine it with `--toolchain <language>`. |
+| `--no-setup` | Run no setup, not even the detected install. |
+| `--no-build` | Refuse the run when its toolchain image is not built, naming the `axocoatl recipe build` command. Without this flag, `axocoatl run` builds the image first and prints what it builds, its size and Podman's progress on standard error. |
+| `--no-probe` | Skip the probe that refuses a run whose check cannot work in its image, for a check the probe is wrong about. |
+
+With a toolchain, `--setup` replaces the detected install and gets the same registries,
+and `--check` also chooses among several toolchains by its program. A check whose
+program cannot start in the image, or that runs none of the repository's tests, is
+refused with exit code 3, and a setup that fails ends the run with exit code 5. Both
+happen before any writer or reviewer turn.
+
 ## Models from your setup
 
 `axocoatl onboard` writes the writer and reviewer it set up as
@@ -72,7 +99,11 @@ with every problem it found, in one message:
 2. The parameters, with the defaults above. Every missing parameter is named at once, with
    the `--model ROLE=provider:model` (or `--param`) that sets it and the `run.models` key
    that can.
-3. A `detected` check needs the repository's check command or `--check`.
+3. The run's environment: its toolchain, image and setup, from the
+   [toolchain flags](#toolchain-flags), the loadout and the repository's files (a Rust
+   repository, or `--toolchain` with `--image`, is refused). A `detected` check needs a
+   check command: `--check`, a `Check command:` line of `AXOCOATL.md`, or one detected in
+   the repository.
 4. Each external writer's stored credential: the one it names, or for `credential: auto`
    the first of its runtime's that is stored. A credential that is not stored is refused
    with the `axocoatl connect` command that stores it.
@@ -96,13 +127,16 @@ with every problem it found, in one message:
    onboard` sets it for the Homebrew and systemd services after asking. A busy server
    (HTTP 503) is asked once more; one that is still busy, or fails to load a model (HTTP
    500), is an infrastructure problem (exit code 5), not a usage one.
-7. The budgets, the network routes, the recipe image, and for `qa` and e2e checks their
-   own settings.
+7. The budgets, the network routes, the recipe image (with `--no-build`, one that is not
+   built is refused, naming the `axocoatl recipe build` command), and for `qa` and e2e
+   checks their own settings.
 8. Podman, last: it must answer and run rootless. A stopped Podman machine (after a
    reboot, say) is started, as it is for a Session, but only when no other problem was
    found. A run installs nothing and creates no machine; that is left to you or to
    [`axocoatl onboard`](/start/onboard/). A machine switched from rootful to rootless is
    seen at the next run, without restarting the daemon.
+9. A toolchain or recipe image that is not built is built now, once nothing else stops the
+   run and Podman answered; a build that fails is an infrastructure problem (exit code 5).
 
 Usage problems (exit code 3) come before infrastructure ones (5). A run with a usage
 problem never asks Podman, and a run with any other problem only asks it, so a run that
@@ -111,10 +145,9 @@ Workspace, Session, container, volume, run record or receipt. One problem is pri
 itself; several as a numbered list:
 
 ```text
-axocoatl run: 3 problems stop this run, and nothing was started:
+axocoatl run: 2 problems stop this run, and nothing was started:
   1. Agent writer (claude-code) needs the credential claude-code-oauth (Claude Code's OAuth token, sent to api.anthropic.com), and it is not stored yet: run `axocoatl connect claude-code` (…), then run again
   2. the reviewer runs anthropic:opus, on the provider anthropic, and a native Agent or reviewer runs only on Ollama or OpenRouter (Claude Code and Codex can write, in fix-claude-code and fix-codex, but cannot review): pass --model reviewer=ollama:<model> or --model reviewer=openrouter:<vendor>/<model>
-  3. recipe images: no image is built from the recipes claude-code; run `axocoatl recipe build claude-code`
 ```
 
 ## The dry run
@@ -122,7 +155,8 @@ axocoatl run: 3 problems stop this run, and nothing was started:
 `axocoatl run <LOADOUT> --dry-run` (or `--preflight`) runs the same checks and starts
 nothing: no Workspace, Session or run record is created, and Podman is asked
 (`podman info`, `podman machine list`) but never started, so a stopped machine is reported
-as "a run starts it first" rather than as a problem. It is not free for Ollama: as a run's
+as "a run starts it first" rather than as a problem, and an image that is not built is
+noted as one a run builds first. It is not free for Ollama: as a run's
 admission does, it loads each Ollama model once, without a prompt, and runs the two
 one-token contract probes, so the model then holds its memory until Ollama unloads it.
 `--task` is optional (without one the task is not checked, and none is sent); `--junit`,

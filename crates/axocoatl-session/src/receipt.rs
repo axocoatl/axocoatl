@@ -215,6 +215,92 @@ pub struct SandboxFacts {
     pub workload: String,
     /// The last network policy the Session's record holds for each scope.
     pub policies: Vec<PolicyFacts>,
+    /// The image, toolchain, setup and check the run's admission chose and
+    /// what its setup did (receipts since 1.5). Absent from older receipts;
+    /// a verifier that does not know the field ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<EnvironmentFacts>,
+}
+
+/// What a loadout run's admission chose for its Session's environment, and
+/// what its setup and check probe did (workstream `toolchain`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvironmentFacts {
+    /// `node`, `python`, `rust` or `go`; absent for a run without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolchain: Option<String>,
+    /// Why: the files that named it, `--toolchain`, or the loadout.
+    pub reason: String,
+    /// The image reference the Session started from: a recipe image name,
+    /// the loadout's or `--image`'s reference, or the default image.
+    pub image: String,
+    /// The exact image id, for a recipe image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_id: Option<String>,
+    /// The recipes the image was built from.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recipes: Vec<String>,
+    /// The command the `detected` checks ran, and where it came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_source: Option<String>,
+    /// The toolchain's dependency install, when the run had one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<SetupFacts>,
+    /// The Workspace's toolchain cache volume the Session mounted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_volume: Option<String>,
+    /// The check probe before the first model call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<ProbeFacts>,
+}
+
+/// One toolchain setup: the command, how it ended, and the network it had.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupFacts {
+    /// The command as approved (`npm ci ...`, `pip install ...`, `--setup`).
+    pub command: String,
+    /// `detected`, `--setup` or `loadout`.
+    pub source: String,
+    /// SHA-256 of the exact shell script that ran (it wraps the command
+    /// with the toolchain's preparation, such as Python's virtual
+    /// environment).
+    pub script_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub duration_ms: u64,
+    /// Whether the Workspace's cache already held this exact setup, so
+    /// nothing was installed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unchanged: bool,
+    /// The package registry hosts the setup alone could reach, opened
+    /// before it ran and closed before the first model call.
+    pub registry_hosts: Vec<String>,
+    /// Connections the setup's own processes opened, by the network record.
+    pub allowed_connections: u64,
+    pub refused_connections: u64,
+    /// Why the setup did not finish, when it did not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// The probe of the check before the first model call: whether its program
+/// is in the image, and what the check did on the untouched tree.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeFacts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
+    pub program_found: bool,
+    /// The check's exit code on the untouched tree (a failing check is what
+    /// a fix run is for).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_exit: Option<i32>,
+    pub duration_ms: u64,
+    /// The check outlasted the probe's time and was stopped (with every
+    /// process it started); it could run, so the run went on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub timed_out: bool,
 }
 
 /// One scope's network policy as the Session's network record holds it.
@@ -1205,6 +1291,7 @@ mod tests {
                         rules: vec!["ollama.host.axocoatl.internal:443 (host_ollama to 127.0.0.1:11434: access full, for agent)".into()],
                         routes: Vec::new(),
                     }],
+                    environment: None,
                 },
                 network: NetworkSummary::default(),
                 checks: vec![CheckFacts {
@@ -1344,6 +1431,66 @@ mod tests {
     /// bytes: OpenSSL 3.6's `openssl pkeyutl -sign -rawin` with the same
     /// seed over the same PAE.
     const FIXED_SIGNATURE: &str = "61b99fe7e00f01ff848c7afb1e1525654a6ffb6848df2793bfff712b79c3323720e0170343091638bb3321b46b108e86ea735837e274c8fc7b9ef2d86da2ad0d";
+
+    /// Environment facts (1.5) are an optional field of the sandbox facts:
+    /// absent, a statement is byte for byte what 1.4 signed; present, a
+    /// reader that knows only 1.4's fields still reads the statement, and
+    /// the signature covers them.
+    #[test]
+    fn environment_facts_are_optional_and_ignored_by_older_readers() {
+        #[derive(Deserialize)]
+        struct SandboxFacts14 {
+            backend: String,
+            policies: Vec<PolicyFacts>,
+        }
+        let key_pair = key(RFC8032_SEED);
+        let mut statement = statement(public_key_of(&key_pair).signer());
+        let plain = serde_json::to_string(&statement.predicate.sandbox).unwrap();
+        assert!(!plain.contains("environment"), "{plain}");
+        statement.predicate.sandbox.environment = Some(EnvironmentFacts {
+            toolchain: Some("python".into()),
+            reason: "pyproject.toml at the repository root".into(),
+            image: "localhost/axocoatl-recipe-python:eb24246cd089".into(),
+            image_id: Some("8".repeat(64)),
+            recipes: vec!["python".into()],
+            check: Some("pytest".into()),
+            check_source: Some("detected from the repository".into()),
+            setup: Some(SetupFacts {
+                command: "pip install -e . pytest".into(),
+                source: "detected".into(),
+                script_sha256: "9".repeat(64),
+                exit_code: Some(0),
+                duration_ms: 4200,
+                unchanged: false,
+                registry_hosts: vec!["pypi.org".into(), "files.pythonhosted.org".into()],
+                allowed_connections: 12,
+                refused_connections: 0,
+                error: None,
+            }),
+            cache_volume: Some("axo-tc-0123456789abcdef01234567".into()),
+            probe: Some(ProbeFacts {
+                program: Some("pytest".into()),
+                program_found: true,
+                baseline_exit: Some(1),
+                duration_ms: 900,
+                timed_out: false,
+            }),
+        });
+        let text = serde_json::to_string(&statement.predicate.sandbox).unwrap();
+        let older: SandboxFacts14 = serde_json::from_str(&text).unwrap();
+        assert_eq!(older.backend, "podman");
+        assert_eq!(older.policies.len(), 1);
+        let (envelope, _) = sign_statement(&key_pair, &statement).unwrap();
+        let opened = opened(&envelope).unwrap();
+        assert_eq!(
+            opened.statement.predicate.sandbox.environment,
+            statement.predicate.sandbox.environment
+        );
+        assert!(matches!(
+            check_signature(&opened, &[public_key_of(&key_pair)]),
+            SignatureCheck::Trusted { .. }
+        ));
+    }
 
     #[test]
     fn one_changed_byte_of_payload_signature_or_type_fails() {

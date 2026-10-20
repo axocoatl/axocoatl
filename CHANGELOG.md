@@ -230,6 +230,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alone, and the docs gate refuses a page without it.
 
 ### Added
+- **Runs get the repository's toolchain and dependencies, and a run whose check cannot
+  work is refused before any model call.** A loadout with a `detected` check (`fix`,
+  `fix-claude-code`, `fix-codex`) now detects the repository's language from its root
+  files (`package.json`, `pyproject.toml`/`setup.py`/`setup.cfg`/`requirements*.txt`,
+  `go.mod`; with several, the check command's program chooses, else the run is refused
+  naming `--toolchain`) and runs an image of it built from the new toolchain recipes
+  `node` (Node 24.21.0), `python` (Python 3.13.16) and `go` (Go 1.27.2), each an official
+  Debian-based image pinned by its multi-architecture index digest plus git and make.
+  `axocoatl run` builds a missing image first and prints what it builds and its size,
+  an agent's included (`--no-build` refuses, naming `axocoatl recipe build`); an external
+  writer's recipe composes with the toolchain into one image (`claude-code python`).
+  Before the first model call a setup installs the declared dependencies (`npm ci`,
+  `pnpm` and Yarn 1 or Yarn 2+ through corepack, `pip install -e '.[test]'` into a
+  virtual environment with the test extra or group, Poetry, uv, PDM and Hatch test lists
+  given as requirements, and `pytest` whenever the check runs it and nothing installed
+  brings it, `go mod download`) as the writer, with only that ecosystem's registries
+  open (a per-Session allow recorded with the run as actor, revoked before the writer
+  starts; a setup refused 30 connections is stopped). The installed packages persist in
+  a per-Workspace cache volume, so a second run installs offline; only the setup writes
+  it, and root takes it back read-only before the first model call, so a writer cannot
+  change what its own or a later run's checks run. A failed setup ends the run with exit
+  code 5 and the installer's last lines. Then a probe runs the check once on the
+  untouched tree through the same supervisor as the run's checks: a missing check
+  program or test runner, a missing Python module that `python -m` runs or the project
+  declares, or a check that runs none of the repository's test files refuses the run
+  with exit code 3, naming the image, the check, what is missing and the fixes
+  (`--no-probe` skips it). The check is `--check`, else a `Check command:` line of
+  `AXOCOATL.md`, else detected; Python repositories get `python3 -m pytest` when they use
+  pytest (including plain `def test_` files), else `python3 -m unittest discover`. New
+  flags `--toolchain detected|node|python|go|none`, `--image`, `--no-setup`, `--no-build`,
+  `--no-probe` and the loadout field `environment.toolchain`; `none` keeps the earlier
+  behavior. The run's notes, manifest and receipt (`predicate.sandbox.environment`,
+  ignored by 1.4 verifiers) record the toolchain and why, the image, the check, the setup
+  command, exit code, duration, registries and its connections, and the probe. Rust
+  repositories are refused with exit code 3 before any download or model call: the
+  hardened Session's Landlock domain refuses the cross-directory renames cargo and rustc
+  make, so no Rust check can pass yet (the `rust` recipe still builds).
 - **`axocoatl connect openrouter`: OpenRouter through a browser sign-in, with no key to
   paste.** It runs OpenRouter's OAuth PKCE flow: a loopback server on `127.0.0.1` (a
   port the system picks), OpenRouter's sign-in page opened in the browser and printed
@@ -305,6 +342,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Fixed
+- A run that ended at admission (a failed environment or setup) reported "0 recorded
+  events" in its network summary; it now counts what the Session's record holds.
+- The `sandbox.egress` warning under `sandbox.network: bridge` said `allow` was
+  ignored; loadout runs under `network: egress`, as every built-in loadout is, use it,
+  and the warning now says so.
+- Root's commands in a Session container (its readiness checks and user setup) ran
+  programs found on the image's `PATH`, which can name a directory the workload users
+  write; they now run with a `PATH` of system directories only.
 - **A copied or moved data directory starts again.** The data root's format ownership
   record, `.axocoatl-daemon.lock/format.json`, names the directory it was written in: the
   SHA-256 of its path, the device and inode of the directory, and those of the retained

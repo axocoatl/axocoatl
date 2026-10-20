@@ -388,7 +388,11 @@ In a hardened container:
   command; root already reads everything through `CAP_DAC_OVERRIDE`.
 - The Workspace is mapped so that the writer owns it (`--userns=keep-id`), and files
   the writer creates belong to you on your computer. A Node project's root
-  `node_modules` volume is handed to the writer when the Session starts.
+  `node_modules` volume is handed to the writer when the Session starts. A loadout run's
+  [toolchain cache volume](/configure/toolchains/#caches-the-second-run-is-offline)
+  stays root's and read-only to the workload users, except for its setup; root's own
+  commands in the container never run a program from a directory the workload users
+  can write.
 - Axocoatl adds `passwd` and `group` entries named `axocoatl` and `axocoatl-helper`
   for the two ids when the image has none, so tools that look up their own user work.
   An image user with the same id keeps its name.

@@ -1228,6 +1228,10 @@ struct CheckedRun {
     credentials: BTreeMap<String, String>,
     agent_contexts: BTreeMap<String, u64>,
     overlay: crate::loadout::egress::LoadoutEgressOverlay,
+    /// The run's toolchain, image, setup and check (`loadout::toolchain`).
+    plan: crate::loadout::toolchain::EnvironmentPlan,
+    /// The recorded id of the run's recipe image, when it runs one.
+    image_id: Option<String>,
     image: Option<String>,
     setup: Option<String>,
     exposed_ports: Vec<u16>,
@@ -1613,9 +1617,48 @@ impl AxocoatlDaemon {
             problems.usage("parameters", problem);
         }
 
-        // The repository's own check, for a `detected` check.
+        // The run's toolchain, image, setup and check, read from the
+        // repository's files and the run's flags (`loadout::toolchain`). A
+        // plan the run's flags or the repository refuse is a usage problem.
+        let environment = loadout.file.environment.clone().unwrap_or_default();
+        let plan = match &repo {
+            Some(repo) => {
+                let setup_params = resolved
+                    .as_ref()
+                    .map(|resolved| &resolved.params)
+                    .unwrap_or(&params);
+                let loadout_setup = match &environment.setup {
+                    Some(ParamOr::Value(command)) => Some(command.clone()),
+                    Some(ParamOr::Param { param }) => setup_params.get(param).cloned(),
+                    None => None,
+                };
+                match crate::loadout::toolchain::plan(
+                    repo,
+                    crate::loadout::toolchain::PlanInput {
+                        file: &loadout.file,
+                        request: &request.environment,
+                        check_flag: request.check_command.as_deref(),
+                        setup_flag: request.setup_command.as_deref(),
+                        loadout_setup: loadout_setup.as_deref(),
+                    },
+                ) {
+                    Ok(plan) => Some(plan),
+                    Err(message) => {
+                        problems.usage("environment", message);
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+
+        // The repository's own check, for a `detected` check: the plan's,
+        // or without a plan the one the repository's files name.
         if let Some(repo) = &repo {
-            let detected = axocoatl_session::detect_check_command(repo);
+            let detected = match &plan {
+                Some(plan) => plan.check.as_ref().map(|(check, _)| check.clone()),
+                None => axocoatl_session::detect_check_command(repo),
+            };
             match &mut resolved {
                 Some(resolved) => {
                     if let Err(error) = crate::loadout::team_plan::fill_detected_checks(
@@ -1637,7 +1680,6 @@ impl AxocoatlDaemon {
                 }
             }
         }
-
         // The credential each external writer's route sends: the one the
         // loadout names, or for `auto` the first of its runtime's that is
         // stored. Either must be stored now (refused, saying how to
@@ -1810,32 +1852,35 @@ impl AxocoatlDaemon {
             }
             _ => None,
         };
-        let environment = loadout.file.environment.clone().unwrap_or_default();
-        let image = match (&environment.image, environment.recipes.is_empty()) {
-            (Some(image), _) => Some(image.clone()),
-            // A recipe image runs by the exact id `axocoatl recipe build`
-            // recorded, which is also what makes it trusted for Sessions.
-            (None, false) => match self.recipe_image(&environment.recipes) {
-                Ok(record) => Some(record.image_id),
-                Err(error) => {
-                    problems.daemon_error("recipe_image", error);
-                    None
-                }
-            },
-            (None, true) => None,
-        };
+        // A recipe image runs by the exact id `axocoatl recipe build`
+        // recorded, which is also what makes it trusted for Sessions. A
+        // missing one is built once nothing else stops the run (building
+        // needs Podman, so after Podman answered, below), unless the request
+        // turned that off.
+        let mut image_id = None;
+        let mut build_image = false;
+        if let Some(plan) = plan
+            .as_ref()
+            .filter(|plan| plan.image.is_none() && !plan.recipes.is_empty())
+        {
+            match self.ensure_recipe_image(plan, false).await {
+                Ok(record) => image_id = Some(record.image_id),
+                Err(_) if request.environment.build_images => build_image = true,
+                Err(error) => problems.daemon_error("recipe_image", error),
+            }
+        }
         let resolved_params = resolved
             .as_ref()
             .map(|resolved| resolved.params.clone())
             .unwrap_or_else(|| params.clone());
-        let setup = match (&request.setup_command, &environment.setup) {
-            (Some(command), _) => Some(command.clone()),
-            (None, Some(ParamOr::Value(command))) => Some(command.clone()),
-            (None, Some(ParamOr::Param { param })) => resolved_params.get(param).cloned(),
-            (None, None) => None,
-        }
-        .map(|command| command.trim().to_string())
-        .filter(|command| !command.is_empty());
+        // Without a toolchain the setup is the Session's approved setup, as
+        // before; with one it runs after the Session is ready, with its
+        // registries open for it alone.
+        let setup = plan
+            .as_ref()
+            .and_then(|plan| plan.plain_setup.as_ref())
+            .map(|command| command.trim().to_string())
+            .filter(|command| !command.is_empty());
         if let Err(error) = refuse_hosts_under_network_none(&loadout.file) {
             problems.daemon_error("network", error);
         }
@@ -1918,6 +1963,32 @@ impl AxocoatlDaemon {
                 Err(problem) => problems.infrastructure("podman", problem),
             }
         }
+        // The missing recipe image, built now that nothing else stops the
+        // run and Podman answered; a dry run only says a run builds it.
+        if let (true, Some(plan)) = (build_image, &plan) {
+            if mode == AdmissionMode::Run && problems.is_empty() {
+                match self.ensure_recipe_image(plan, true).await {
+                    Ok(record) => image_id = Some(record.image_id),
+                    Err(error) => problems.daemon_error("recipe_image", error),
+                }
+            } else if mode.dry() {
+                let note = format!(
+                    "the run's image {} is not built on this computer; a run builds it first{}",
+                    plan.image_text(),
+                    plan.build_command()
+                        .map(|command| format!(", the same as `{command}`"))
+                        .unwrap_or_default()
+                );
+                match &mut resolved {
+                    Some(resolved) => resolved.notes.push(note),
+                    None => notes.push(note),
+                }
+            }
+        }
+        let image = plan
+            .as_ref()
+            .and_then(|plan| plan.image.clone())
+            .or_else(|| image_id.clone());
 
         report.params = resolved_params;
         report.defaults = defaults;
@@ -1929,8 +2000,8 @@ impl AxocoatlDaemon {
             None => report.notes = notes,
         }
         if problems.is_empty() {
-            match (resolved, repo, overlay) {
-                (Some(resolved), Some(repo), Some(overlay)) => {
+            match (resolved, repo, overlay, plan) {
+                (Some(resolved), Some(repo), Some(overlay), Some(plan)) => {
                     report.checked = Some(CheckedRun {
                         loadout,
                         repo,
@@ -1939,6 +2010,8 @@ impl AxocoatlDaemon {
                         credentials,
                         agent_contexts,
                         overlay,
+                        plan,
+                        image_id,
                         image,
                         setup,
                         exposed_ports,
@@ -1975,6 +2048,7 @@ impl AxocoatlDaemon {
             keep: request.keep,
             check_command: request.check_command,
             setup_command: request.setup_command,
+            environment: request.environment,
             request_id: request.request_id.unwrap_or_default(),
         };
         let report = self.check_loadout_run(&request, mode).await;
@@ -2034,10 +2108,12 @@ impl AxocoatlDaemon {
             loadout,
             repo,
             repo_text,
-            resolved,
+            mut resolved,
             credentials,
             agent_contexts,
             overlay,
+            plan,
+            image_id,
             image,
             setup,
             exposed_ports,
@@ -2085,6 +2161,93 @@ impl AxocoatlDaemon {
                 overlay,
             )
             .await?;
+        let mut environment_facts =
+            self.environment_facts(&plan, image_id.as_deref(), &workspace.canonical_path);
+        resolved.notes.push(plan.summary());
+        let mut toolchain_failure = None;
+        if session.environment.state == SessionEnvironmentState::Ready {
+            if let (Some(setup), Some(toolchain)) = (&plan.setup, plan.toolchain) {
+                let setup_run = self
+                    .run_toolchain_setup(
+                        &session.id,
+                        &run_id,
+                        toolchain,
+                        &loadout.file.sandbox.network,
+                        setup,
+                    )
+                    .await;
+                resolved
+                    .notes
+                    .push(loadout_toolchain::setup_note(&setup_run));
+                toolchain_failure = setup_run.failure;
+                environment_facts.setup = Some(setup_run.facts);
+            }
+            if request.environment.no_probe && plan.check.is_some() {
+                resolved.notes.push(
+                    "the check was not probed before the first model call (--no-probe)".into(),
+                );
+            }
+            let probe_check = plan
+                .check
+                .as_ref()
+                .filter(|_| toolchain_failure.is_none() && !request.environment.no_probe);
+            if let Some((check, _)) = probe_check {
+                let timeout = resolved
+                    .checks
+                    .iter()
+                    .filter(|check| check.argv.is_some())
+                    .map(|check| check.timeout_secs)
+                    .max()
+                    .unwrap_or(180);
+                let setup_note = environment_facts.setup.as_ref().map(|facts| {
+                    format!(
+                        "`{}`: {}",
+                        facts.command,
+                        loadout_toolchain::setup_outcome(facts)
+                    )
+                });
+                match self
+                    .probe_loadout_check(
+                        &session.id,
+                        &run_id,
+                        &plan,
+                        check,
+                        timeout,
+                        &request.task,
+                        setup_note.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(loadout_toolchain::ProbeRun::Runs(probe)) => {
+                        environment_facts.probe = Some(probe)
+                    }
+                    // A probe that could not run decides nothing: the run's
+                    // own check still runs and says what happened.
+                    Err(error) => {
+                        tracing::warn!(session = %session.id, %error, "the check probe could not run")
+                    }
+                    Ok(loadout_toolchain::ProbeRun::Refused {
+                        message,
+                        environment,
+                    }) => {
+                        // Not admitted: the run's Session goes with it.
+                        if let Err(error) = self.close_session(&session.id).await {
+                            tracing::warn!(session = %session.id, %error, "closing the refused run's Session failed");
+                        }
+                        self.loadout_runs
+                            .e2e_runs
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .remove(&run_id);
+                        return Err(if environment {
+                            DaemonError::Session(message)
+                        } else {
+                            DaemonError::InvalidRequest(message)
+                        });
+                    }
+                }
+            }
+        }
         let (repo_head, dirty_paths) = repository_state(&repo).await;
         let options = RunOptions {
             task: request.task.clone(),
@@ -2114,6 +2277,7 @@ impl AxocoatlDaemon {
                 "check_command": request.check_command,
                 "setup_command": request.setup_command,
                 "axocoatl_version": env!("CARGO_PKG_VERSION"),
+                "environment": environment_facts,
             }),
         };
         let store = self.loadout_runs.store()?;
@@ -2172,19 +2336,20 @@ impl AxocoatlDaemon {
             .map_err(record_error)?;
         // A read-only Agent that cannot read the repository would only
         // report that it examined nothing, so such a run does not start.
-        let unreadable = if ready {
+        let unreadable = if ready && toolchain_failure.is_none() {
             self.loadout_helper_refusal(&session.id, &loadout.file, &repo)
                 .await
         } else {
             None
         };
-        if !ready || unreadable.is_some() {
+        if !ready || unreadable.is_some() || toolchain_failure.is_some() {
             // The environment failed (or still needs a person), or the
             // run's read-only Agents cannot read the repository: the run
             // ends here with what the setup printed, or why.
-            let detail = match unreadable {
-                Some(refusal) => refusal,
-                None => {
+            let detail = match (unreadable, toolchain_failure) {
+                (Some(refusal), _) => refusal,
+                (None, Some(failure)) => failure,
+                (None, None) => {
                     let mut detail = session
                         .environment
                         .error
@@ -2201,6 +2366,8 @@ impl AxocoatlDaemon {
             };
             let mut outcome = ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
             outcome.notes = resolved.notes.clone();
+            // What the Session's record holds so far, setup included.
+            outcome.network = self.loadout_network_summary(&session.id).await;
             if let Some(warning) = self.seal_or_warn(&run_id, &outcome).await {
                 let _ = store.append(
                     &run_id,

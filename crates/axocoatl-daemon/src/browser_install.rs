@@ -134,9 +134,34 @@ pub async fn install(image: &str) -> Result<String, String> {
 }
 
 async fn run_build(args: Vec<String>) -> Result<(), String> {
-    let status = Command::new("podman")
-        .args(args)
-        .stdin(Stdio::null())
+    run_build_to(args, Output::Inherit).await
+}
+
+/// Where `podman build` prints its progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Output {
+    /// This process's own standard output and error.
+    Inherit,
+    /// Both on this process's standard error, so standard output stays the
+    /// command's own (`axocoatl run --json`).
+    Stderr,
+}
+
+async fn run_build_to(args: Vec<String>, output: Output) -> Result<(), String> {
+    let mut command = Command::new("podman");
+    command.args(args).stdin(Stdio::null());
+    if output == Output::Stderr {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsFd;
+            let stderr = std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .map_err(|error| format!("running podman build: {error}"))?;
+            command.stdout(Stdio::from(stderr));
+        }
+    }
+    let status = command
         .status()
         .await
         .map_err(|error| format!("running podman build: {error}"))?;
@@ -188,12 +213,27 @@ pub fn recipe_build_args(names: &[String], context: &Path) -> Result<Vec<String>
 pub async fn build_recipe_image(
     names: &[String],
 ) -> Result<crate::external_agent::recipe_images::RecipeImageRecord, String> {
+    build_recipe_image_to(names, Output::Inherit).await
+}
+
+/// [`build_recipe_image`] with Podman's progress on standard error only
+/// (`axocoatl run` builds a missing toolchain image this way).
+pub async fn build_recipe_image_on_stderr(
+    names: &[String],
+) -> Result<crate::external_agent::recipe_images::RecipeImageRecord, String> {
+    build_recipe_image_to(names, Output::Stderr).await
+}
+
+async fn build_recipe_image_to(
+    names: &[String],
+    output: Output,
+) -> Result<crate::external_agent::recipe_images::RecipeImageRecord, String> {
     let containerfile = recipes::compose(names).map_err(|error| error.to_string())?;
     let image = recipes::image_name(names).map_err(|error| error.to_string())?;
     let digest = recipes::digest(names).map_err(|error| error.to_string())?;
     let context = write_context_files("recipe", &[("Containerfile", containerfile.as_str())])
         .map_err(|error| format!("writing the build context: {error}"))?;
-    run_build(recipe_build_args(names, &context.0)?).await?;
+    run_build_to(recipe_build_args(names, &context.0)?, output).await?;
     let labeled = image_field(
         &image,
         &format!("{{{{ index .Labels {:?} }}}}", recipes::RECIPE_DIGEST_LABEL),

@@ -4,13 +4,26 @@
 //! way the browser image is, without `allow_untrusted_images`.
 //!
 //! Owner: workstream `agents` (registry, composition, build, trust). The
-//! `e2e` fragment belongs to workstream `e2e`.
+//! `e2e` fragment belongs to workstream `e2e`; the language toolchains
+//! (`node`, `python`, `rust`, `go`) to workstream `toolchain`.
 //!
 //! A recipe image is named for what it holds and what it was built from:
 //! `localhost/axocoatl-recipe-<names, sorted, joined by '-'>:<first 12 hex of
 //! the SHA-256 of the composed Containerfile>`. A changed fragment or base
 //! therefore names a new image; an old image of the same recipes is never
 //! taken for the new one.
+//!
+//! A language toolchain recipe gives the image the repository's language: an
+//! official Debian-based image of it, pinned by its multi-architecture image
+//! index digest ([`TOOLCHAIN_IMAGES`]). An image holds at most one. Without
+//! one, every image starts from [`RECIPE_BASE`] (Node 24 on Debian 12 slim),
+//! exactly as before toolchains existed, so the images of `claude-code`,
+//! `codex` and `e2e` keep their names. With `node`, the image starts from
+//! that base too; with `python`, `rust` or `go` it starts from that
+//! language's image, and when the image also holds an agent or e2e recipe
+//! (whose installs need Node) Node is copied in from the recipe base's own
+//! pinned image ([`NODE_GRAFT`]). The toolchain's fragment always comes
+//! before the other recipes' fragments.
 
 use sha2::{Digest, Sha256};
 
@@ -26,7 +39,7 @@ pub struct Recipe {
 /// The base every recipe image starts from.
 pub const RECIPE_BASE: &str = include_str!("../assets/recipes/base.Containerfile");
 
-/// Every recipe, in composition order.
+/// Every agent and check recipe, in composition order.
 pub const RECIPES: [Recipe; 3] = [
     Recipe {
         name: "claude-code",
@@ -44,6 +57,177 @@ pub const RECIPES: [Recipe; 3] = [
         fragment: include_str!("../assets/recipes/e2e.Containerfile"),
     },
 ];
+
+/// The language toolchain recipes. An image holds at most one.
+pub const TOOLCHAIN_RECIPES: [Recipe; 4] = [
+    Recipe {
+        name: "node",
+        description: "Node.js 24 with npm, and pnpm and yarn through corepack",
+        fragment: include_str!("../assets/recipes/toolchains/node.Containerfile"),
+    },
+    Recipe {
+        name: "python",
+        description: "Python 3.13 with pip and venv",
+        fragment: include_str!("../assets/recipes/toolchains/python.Containerfile"),
+    },
+    Recipe {
+        name: "rust",
+        description: "Rust 1.99 with cargo, rustc and gcc (loadout runs refuse it for now: \
+                      cargo's renames are blocked in hardened Sessions)",
+        fragment: include_str!("../assets/recipes/toolchains/rust.Containerfile"),
+    },
+    Recipe {
+        name: "go",
+        description: "Go 1.27 with git and gcc",
+        fragment: include_str!("../assets/recipes/toolchains/go.Containerfile"),
+    },
+];
+
+/// Where every toolchain image keeps its package caches, and where a
+/// loadout run mounts the Workspace's toolchain cache volume.
+pub const TOOLCHAIN_CACHE_DIR: &str = "/opt/axocoatl-cache";
+
+/// The official image a language toolchain starts from, and what a build of
+/// it costs: the compressed layers of the pinned image plus the Debian
+/// packages a build adds, and the built image on disk (measured on
+/// linux/arm64 with Podman 5.8 on 2026-10-19; the amd64 layers of rust are
+/// about 40 MB larger, the others within a few MB).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolchainImage {
+    /// The toolchain recipe's name.
+    pub toolchain: &'static str,
+    /// The official image and tag the base starts from.
+    pub image: &'static str,
+    /// The multi-architecture image index digest the base pins.
+    pub index_digest: &'static str,
+    /// The base Containerfile; `None` for the recipe base itself.
+    pub base: Option<&'static str>,
+    /// About how many megabytes a first build downloads.
+    pub download_mb: u32,
+    /// About how many megabytes the built image takes on disk.
+    pub image_mb: u32,
+}
+
+/// One row per language toolchain: the pinned official image (tag and image
+/// index digest) and its approximate size.
+pub const TOOLCHAIN_IMAGES: [ToolchainImage; 4] = [
+    ToolchainImage {
+        toolchain: "node",
+        image: "docker.io/library/node:24.21.0-bookworm-slim",
+        index_digest: "sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20",
+        base: None,
+        download_mb: 100,
+        image_mb: 365,
+    },
+    ToolchainImage {
+        toolchain: "python",
+        image: "docker.io/library/python:3.13.16-slim-bookworm",
+        index_digest: "sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641",
+        base: Some(include_str!(
+            "../assets/recipes/toolchains/python-base.Containerfile"
+        )),
+        download_mb: 65,
+        image_mb: 250,
+    },
+    ToolchainImage {
+        toolchain: "rust",
+        image: "docker.io/library/rust:1.99.1-slim-bookworm",
+        index_digest: "sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c",
+        base: Some(include_str!(
+            "../assets/recipes/toolchains/rust-base.Containerfile"
+        )),
+        download_mb: 330,
+        image_mb: 920,
+    },
+    ToolchainImage {
+        toolchain: "go",
+        image: "docker.io/library/golang:1.27.2-bookworm",
+        index_digest: "sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61",
+        base: Some(include_str!(
+            "../assets/recipes/toolchains/go-base.Containerfile"
+        )),
+        download_mb: 300,
+        image_mb: 880,
+    },
+];
+
+/// Node, npm and corepack for a `python`, `rust` or `go` image that also
+/// holds an agent or e2e recipe, copied from the recipe base's pinned image.
+pub const NODE_GRAFT: &str = include_str!("../assets/recipes/toolchains/node-graft.Containerfile");
+
+/// About how many megabytes an agent or check recipe, or the Node graft
+/// (`"node-graft"`), adds to an image on disk (its layers, measured on
+/// linux/arm64 with Podman 5.8 on 2026-10-19). `None` when not measured.
+pub fn recipe_disk_mb(name: &str) -> Option<u32> {
+    match name {
+        "claude-code" => Some(255),
+        "codex" => Some(405),
+        "node-graft" => Some(140),
+        _ => None,
+    }
+}
+
+/// What a first build of the image of `names` costs, about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageSize {
+    /// The toolchain's (or the recipe base's) official image to download.
+    pub base_image: &'static str,
+    /// About how many megabytes that image's download is.
+    pub base_download_mb: u32,
+    /// About how many megabytes the built image takes on disk, the
+    /// measured recipes summed.
+    pub disk_mb: u32,
+    /// Recipes whose own downloads (an agent's package, a browser) come on
+    /// top, and those whose size was not measured.
+    pub also_downloads: Vec<&'static str>,
+    pub unmeasured: Vec<&'static str>,
+}
+
+/// The approximate size of a first build of the image of `names`.
+pub fn image_size(names: &[String]) -> Result<ImageSize, RecipeError> {
+    let recipes = resolve(names)?;
+    let toolchain = recipes
+        .iter()
+        .find_map(|recipe| toolchain_image(recipe.name))
+        .or_else(|| toolchain_image("node"))
+        .expect("the node toolchain row exists");
+    let others: Vec<&Recipe> = recipes
+        .iter()
+        .copied()
+        .filter(|recipe| !is_toolchain(recipe.name))
+        .collect();
+    let mut size = ImageSize {
+        base_image: toolchain.image,
+        base_download_mb: toolchain.download_mb,
+        disk_mb: toolchain.image_mb,
+        also_downloads: Vec::new(),
+        unmeasured: Vec::new(),
+    };
+    if toolchain.base.is_some() && !others.is_empty() {
+        size.disk_mb += recipe_disk_mb("node-graft").unwrap_or_default();
+        size.also_downloads.push("Node.js");
+    }
+    for recipe in others {
+        size.also_downloads.push(recipe.name);
+        match recipe_disk_mb(recipe.name) {
+            Some(mb) => size.disk_mb += mb,
+            None => size.unmeasured.push(recipe.name),
+        }
+    }
+    Ok(size)
+}
+
+/// The toolchain recipe named `name`.
+pub fn toolchain_image(name: &str) -> Option<&'static ToolchainImage> {
+    TOOLCHAIN_IMAGES
+        .iter()
+        .find(|image| image.toolchain == name)
+}
+
+/// Whether `name` is a language toolchain recipe.
+pub fn is_toolchain(name: &str) -> bool {
+    toolchain_image(name).is_some()
+}
 
 /// Image name prefix of recipe images: `localhost/axocoatl-recipe-<names>`.
 pub const RECIPE_IMAGE_PREFIX: &str = "localhost/axocoatl-recipe-";
@@ -66,7 +250,10 @@ pub enum RecipeError {
 
 /// The recipe named `name`.
 pub fn recipe(name: &str) -> Option<&'static Recipe> {
-    RECIPES.iter().find(|recipe| recipe.name == name)
+    RECIPES
+        .iter()
+        .chain(TOOLCHAIN_RECIPES.iter())
+        .find(|recipe| recipe.name == name)
 }
 
 /// The recipes named by `names`, each once, in registry order. Refuses an
@@ -84,8 +271,20 @@ pub fn resolve(names: &[String]) -> Result<Vec<&'static Recipe>, RecipeError> {
             known_names()
         )));
     }
+    let toolchains: Vec<&str> = TOOLCHAIN_RECIPES
+        .iter()
+        .map(|recipe| recipe.name)
+        .filter(|toolchain| names.iter().any(|name| name == toolchain))
+        .collect();
+    if toolchains.len() > 1 {
+        return Err(RecipeError::Invalid(format!(
+            "an image holds one language toolchain, and {} were named",
+            toolchains.join(" and ")
+        )));
+    }
     Ok(RECIPES
         .iter()
+        .chain(TOOLCHAIN_RECIPES.iter())
         .filter(|recipe| names.iter().any(|name| name == recipe.name))
         .collect())
 }
@@ -93,27 +292,63 @@ pub fn resolve(names: &[String]) -> Result<Vec<&'static Recipe>, RecipeError> {
 fn known_names() -> String {
     RECIPES
         .iter()
+        .chain(TOOLCHAIN_RECIPES.iter())
         .map(|recipe| recipe.name)
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-/// The full Containerfile for `names` (deduplicated, in registry order): the
-/// base followed by each fragment.
+/// The language toolchain among `names`, if any (they must resolve).
+pub fn toolchain_of(names: &[String]) -> Result<Option<&'static str>, RecipeError> {
+    Ok(resolve(names)?
+        .into_iter()
+        .map(|recipe| recipe.name)
+        .find(|name| is_toolchain(name)))
+}
+
+/// The full Containerfile for `names` (deduplicated): the base, then the
+/// language toolchain's fragment when there is one, then each other
+/// fragment in registry order. Without a toolchain the base is
+/// [`RECIPE_BASE`] and the result is exactly what it was before toolchains
+/// existed. With `python`, `rust` or `go` the base is that language's
+/// pinned image, plus [`NODE_GRAFT`] when another recipe needs Node.
 pub fn compose(names: &[String]) -> Result<String, RecipeError> {
     let recipes = resolve(names)?;
-    let mut containerfile = String::from(RECIPE_BASE);
-    for recipe in recipes {
-        if !containerfile.ends_with('\n') {
-            containerfile.push('\n');
-        }
-        containerfile.push_str(&format!("\n# ---- recipe: {} ----\n", recipe.name));
-        containerfile.push_str(recipe.fragment);
+    let toolchain = recipes
+        .iter()
+        .copied()
+        .find(|recipe| is_toolchain(recipe.name));
+    let others: Vec<&Recipe> = recipes
+        .iter()
+        .copied()
+        .filter(|recipe| !is_toolchain(recipe.name))
+        .collect();
+    let base = toolchain
+        .and_then(|recipe| toolchain_image(recipe.name))
+        .and_then(|image| image.base);
+    let mut containerfile = String::from(base.unwrap_or(RECIPE_BASE));
+    if base.is_some() && !others.is_empty() {
+        push_section(&mut containerfile, "node for the other recipes", NODE_GRAFT);
+    }
+    for recipe in toolchain.into_iter().chain(others) {
+        push_section(
+            &mut containerfile,
+            &format!("recipe: {}", recipe.name),
+            recipe.fragment,
+        );
     }
     if !containerfile.ends_with('\n') {
         containerfile.push('\n');
     }
     Ok(containerfile)
+}
+
+fn push_section(containerfile: &mut String, header: &str, fragment: &str) {
+    if !containerfile.ends_with('\n') {
+        containerfile.push('\n');
+    }
+    containerfile.push_str(&format!("\n# ---- {header} ----\n"));
+    containerfile.push_str(fragment);
 }
 
 /// SHA-256 (hex) of the composed Containerfile for `names`.
@@ -230,6 +465,135 @@ mod tests {
         let labels = labels(&names(&["codex", "claude-code"])).unwrap();
         assert!(labels.contains(&(RECIPES_LABEL.into(), "claude-code,codex".into())));
         assert!(labels.contains(&(RECIPE_DIGEST_LABEL.into(), digest)));
+    }
+
+    #[test]
+    fn images_without_a_toolchain_keep_their_names() {
+        // The composition of the agent and check recipes is exactly what it
+        // was before toolchains existed, so images built by 1.4 keep their
+        // records and are not rebuilt.
+        assert_eq!(
+            image_name(&names(&["claude-code"])).unwrap(),
+            "localhost/axocoatl-recipe-claude-code:37856fb2badf"
+        );
+        assert_eq!(
+            image_name(&names(&["codex"])).unwrap(),
+            "localhost/axocoatl-recipe-codex:f44abab2bdbd"
+        );
+        assert_eq!(toolchain_of(&names(&["claude-code", "e2e"])).unwrap(), None);
+    }
+
+    #[test]
+    fn a_toolchain_image_starts_from_its_pinned_language_image() {
+        for image in TOOLCHAIN_IMAGES {
+            assert!(recipe(image.toolchain).is_some(), "{}", image.toolchain);
+            assert!(is_toolchain(image.toolchain));
+            assert!(image.index_digest.starts_with("sha256:"));
+            assert_eq!(image.index_digest.len(), 71, "{}", image.toolchain);
+            let composed = compose(&names(&[image.toolchain])).unwrap();
+            let from = composed
+                .lines()
+                .filter(|line| line.starts_with("FROM "))
+                .collect::<Vec<_>>();
+            assert_eq!(from.len(), 1, "{composed}");
+            match image.base {
+                // node starts from the recipe base, which pins the same tag.
+                None => {
+                    assert!(composed.starts_with(RECIPE_BASE));
+                    assert!(RECIPE_BASE.contains(image.index_digest));
+                }
+                Some(base) => {
+                    assert!(composed.starts_with(base));
+                    let (repository, _tag) = image.image.rsplit_once(':').unwrap();
+                    assert!(
+                        from[0].starts_with(&format!("FROM {repository}:")),
+                        "{}",
+                        from[0]
+                    );
+                    assert!(from[0].ends_with(&format!("@{}", image.index_digest)));
+                    assert!(from[0].contains(image.image.rsplit_once(':').unwrap().1));
+                    // No other recipe: no Node copied in.
+                    assert!(!composed.contains("COPY --from="), "{}", image.toolchain);
+                }
+            }
+            assert!(composed.contains(&format!("# ---- recipe: {} ----", image.toolchain)));
+            assert!(composed.contains(&format!("AXOCOATL_CACHE={TOOLCHAIN_CACHE_DIR}")));
+            assert!(composed.contains(&format!("io.axocoatl.toolchain={}", image.toolchain)));
+            assert!(!composed.contains("@latest"));
+            let name = image_name(&names(&[image.toolchain])).unwrap();
+            assert!(name.starts_with(&format!("{RECIPE_IMAGE_PREFIX}{}:", image.toolchain)));
+            assert!(is_recipe_image_name(&name));
+        }
+    }
+
+    #[test]
+    fn an_agent_on_a_language_image_gets_node_from_the_recipe_base_image() {
+        let composed = compose(&names(&["python", "claude-code"])).unwrap();
+        let python = toolchain_image("python").unwrap();
+        assert!(composed.starts_with(python.base.unwrap()));
+        let graft = composed
+            .find("# ---- node for the other recipes ----")
+            .unwrap();
+        let toolchain = composed.find("# ---- recipe: python ----").unwrap();
+        let agent = composed.find("# ---- recipe: claude-code ----").unwrap();
+        assert!(graft < toolchain && toolchain < agent, "{composed}");
+        // Node comes from the exact image index the recipe base pins.
+        let node = toolchain_image("node").unwrap();
+        assert!(NODE_GRAFT.contains(node.index_digest));
+        assert!(RECIPE_BASE.contains(node.index_digest));
+        assert!(composed.contains("axocoatl-verify-integrity"));
+        assert_eq!(
+            image_name(&names(&["claude-code", "python"])).unwrap(),
+            image_name(&names(&["python", "claude-code"])).unwrap()
+        );
+        assert!(image_name(&names(&["claude-code", "python"]))
+            .unwrap()
+            .starts_with("localhost/axocoatl-recipe-claude-code-python:"));
+        // The node toolchain needs no graft: the base is Node already.
+        let node = compose(&names(&["codex", "node"])).unwrap();
+        assert!(node.starts_with(RECIPE_BASE));
+        assert!(!node.contains("COPY --from="));
+        assert!(
+            node.find("# ---- recipe: node ----").unwrap()
+                < node.find("# ---- recipe: codex ----").unwrap()
+        );
+        assert_eq!(
+            toolchain_of(&names(&["codex", "node"])).unwrap(),
+            Some("node")
+        );
+    }
+
+    /// TC-NU-6: a composed image's size adds its recipes' own.
+    #[test]
+    fn composed_images_add_their_recipes_sizes() {
+        let python = toolchain_image("python").unwrap();
+        let alone = image_size(&names(&["python"])).unwrap();
+        assert_eq!(alone.disk_mb, python.image_mb);
+        assert_eq!(alone.base_download_mb, python.download_mb);
+        assert!(alone.also_downloads.is_empty() && alone.unmeasured.is_empty());
+        let composed = image_size(&names(&["claude-code", "python"])).unwrap();
+        assert_eq!(composed.base_image, python.image);
+        assert_eq!(composed.disk_mb, python.image_mb + 140 + 255);
+        assert_eq!(composed.also_downloads, ["Node.js", "claude-code"]);
+        // On the node toolchain (the recipe base) there is no graft.
+        let node = image_size(&names(&["codex", "node"])).unwrap();
+        assert_eq!(
+            node.disk_mb,
+            toolchain_image("node").unwrap().image_mb + 405
+        );
+        assert_eq!(node.also_downloads, ["codex"]);
+        let e2e = image_size(&names(&["e2e", "go"])).unwrap();
+        assert_eq!(e2e.unmeasured, ["e2e"]);
+    }
+
+    #[test]
+    fn an_image_holds_one_toolchain() {
+        let error = compose(&names(&["python", "rust"])).unwrap_err();
+        assert!(
+            error.to_string().contains("one language toolchain"),
+            "{error}"
+        );
+        assert!(image_name(&names(&["go", "node", "codex"])).is_err());
     }
 
     #[test]

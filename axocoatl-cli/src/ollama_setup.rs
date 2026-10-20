@@ -424,6 +424,7 @@ pub fn is_installed(name: &str, models: &[InstalledModel]) -> bool {
 /// exact name: pull it, or, when another tag of the same model is installed
 /// (`qwen3-coder:30b` for `qwen3-coder`, which Ollama reads as
 /// `qwen3-coder:latest`), name that tag exactly.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn not_pulled_hint(name: &str, models: &[InstalledModel]) -> String {
     let base = name.split_once(':').map_or(name, |(base, _)| base);
     let tags: Vec<&str> = models

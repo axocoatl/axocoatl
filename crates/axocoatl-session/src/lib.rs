@@ -38,6 +38,7 @@ pub mod segment_log;
 pub mod session_attachment;
 pub mod session_history;
 pub mod session_team;
+pub mod toolchain;
 pub mod turn_checks;
 pub mod turn_contract;
 pub mod turn_ledger;
@@ -491,7 +492,8 @@ fn detect_setup_command_in(dir: &SecureDir) -> std::io::Result<Option<String>> {
 
 /// Guess the project's check command from what it actually contains.
 ///
-/// Ordered so the most specific signal wins: a script the project defined for
+/// A `Check command:` line in the root `AXOCOATL.md` wins. After it, ordered
+/// so the most specific signal wins: a script the project defined for
 /// itself beats a language-wide convention, because someone who wrote
 /// `"check"` in their package.json has already answered this question. Returns
 /// `None` rather than a guess when nothing matches — an arbitrary default here
@@ -505,6 +507,10 @@ pub fn detect_check_command(dir: &std::path::Path) -> Option<String> {
 const MAX_PACKAGE_JSON_BYTES: usize = 1024 * 1024;
 
 fn detect_check_command_in(dir: &SecureDir) -> std::io::Result<Option<String>> {
+    // The project's own words win: `Check command: ...` in AXOCOATL.md.
+    if let Some(command) = toolchain::axocoatl_md_check(dir) {
+        return Ok(Some(command));
+    }
     if dir.is_file("package.json")? {
         let bytes = dir.read_limited("package.json", MAX_PACKAGE_JSON_BYTES)?;
         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
@@ -524,8 +530,15 @@ fn detect_check_command_in(dir: &SecureDir) -> std::io::Result<Option<String>> {
     if dir.is_file("go.mod")? {
         return Ok(Some("go test ./...".to_string()));
     }
-    if dir.is_file("pyproject.toml")? || dir.is_file("setup.py")? || dir.is_file("pytest.ini")? {
-        return Ok(Some("pytest".to_string()));
+    // A root too large to list is still a Python project by its manifests.
+    let root = toolchain::RootFiles::read(dir).unwrap_or_default();
+    if dir.is_file("pyproject.toml")?
+        || dir.is_file("setup.py")?
+        || dir.is_file("pytest.ini")?
+        || toolchain::has_python_files(&root)
+    {
+        // pytest only when the project uses it (G84).
+        return Ok(Some(toolchain::python_check(dir, &root)));
     }
     if dir.is_file("Makefile")? || dir.is_file("makefile")? {
         return Ok(Some("make test".to_string()));
@@ -1568,6 +1581,23 @@ mod tests {
         let d = tmp();
         std::fs::write(d.join("Cargo.toml"), "[package]\nname='x'").unwrap();
         assert_eq!(detect_check_command(&d).as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn detect_runs_pytest_only_for_a_project_that_uses_it() {
+        let d = tmp();
+        std::fs::write(d.join("pyproject.toml"), "[project]\nname='calc'\n").unwrap();
+        assert_eq!(
+            detect_check_command(&d).as_deref(),
+            Some("python3 -m unittest discover -v")
+        );
+        std::fs::write(d.join("conftest.py"), "").unwrap();
+        assert_eq!(
+            detect_check_command(&d).as_deref(),
+            Some("python3 -m pytest")
+        );
+        std::fs::write(d.join("AXOCOATL.md"), "Check command: `pytest -q tests`\n").unwrap();
+        assert_eq!(detect_check_command(&d).as_deref(), Some("pytest -q tests"));
     }
 
     #[test]

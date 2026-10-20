@@ -1,5 +1,6 @@
 //! `axocoatl recipe build|list`: build Session images from Axocoatl's
-//! pinned recipes (claude-code, codex, e2e) with Podman. Owner: workstream
+//! pinned recipes (claude-code, codex, e2e, and the language toolchains
+//! node, python, rust and go) with Podman. Owner: workstream
 //! `agents` (the e2e recipe file belongs to `e2e`).
 //!
 //! A build composes the base and the named fragments
@@ -23,7 +24,7 @@ const FAILURE: i32 = 5;
 pub enum RecipeCommands {
     /// Build one image from one or more recipes
     Build {
-        /// Recipe names, such as `e2e` or `claude-code e2e`
+        /// Recipe names, such as `e2e`, `python` or `claude-code python`
         #[arg(required = true)]
         recipes: Vec<String>,
         /// Path to config file (selects the data directory)
@@ -50,6 +51,19 @@ pub(crate) fn list_lines(images: &[recipe_images::RecipeImageRecord]) -> Vec<Str
     let mut lines = vec!["Recipes:".to_string()];
     for recipe in recipes::RECIPES {
         lines.push(format!("  {:<12} {}", recipe.name, recipe.description));
+    }
+    lines.push(
+        "Language toolchains (one per image; compose with a recipe, such as `claude-code python`):"
+            .into(),
+    );
+    for recipe in recipes::TOOLCHAIN_RECIPES {
+        let base = recipes::toolchain_image(recipe.name)
+            .map(|image| format!(" — {}, about {} MB", image.image, image.image_mb))
+            .unwrap_or_default();
+        lines.push(format!(
+            "  {:<12} {}{base}",
+            recipe.name, recipe.description
+        ));
     }
     if images.is_empty() {
         lines.push(
@@ -164,9 +178,20 @@ mod tests {
             if recipes == ["claude-code", "e2e"])
         );
         let lines = list_lines(&[]);
-        for recipe in recipes::RECIPES {
+        for recipe in recipes::RECIPES
+            .iter()
+            .chain(recipes::TOOLCHAIN_RECIPES.iter())
+        {
             assert!(lines.iter().any(|line| line.contains(recipe.name)));
         }
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("python:3.13.16-slim-bookworm")));
+        let parsed = Cli::try_parse_from(["x", "build", "claude-code", "python"]).unwrap();
+        assert!(
+            matches!(parsed.command, RecipeCommands::Build { recipes, .. }
+            if recipes == ["claude-code", "python"])
+        );
         let record =
             recipe_images::record_for(&["claude-code".to_string()], &"ab".repeat(32), 1).unwrap();
         let lines = list_lines(std::slice::from_ref(&record));

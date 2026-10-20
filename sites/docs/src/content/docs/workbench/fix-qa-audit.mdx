@@ -48,9 +48,13 @@ axocoatl run fix --task "…" \
 One turn with one writer, one required check and a required review:
 
 1. The **writer** (`writer_model`) makes the change with the repository tools.
-2. The required check `tests` runs the Session's detected check command, or the
-   `--check` command in its place, on the exact final files, with a 3-minute timeout. A
-   run with neither is a usage error.
+2. The required check `tests` runs the repository's check command on the exact final
+   files, with a 3-minute timeout: `--check`, else a `Check command:` line of
+   `AXOCOATL.md`, else the command detected from the repository's files. It runs in an
+   image of the repository's language, with its dependencies installed before the first
+   model call; a check that cannot start there refuses the run (see
+   [Repository toolchains](/configure/toolchains/)). A run with no check command is a
+   usage error.
 3. The **reviewer** (`reviewer_model`) reads the result in a fresh conversation with
    `read_file`, `list_dir`, `grep` and `glob` only, numbers each finding `F1`, `F2`, …
    and ends with `VERDICT: APPROVE` or `VERDICT: CHANGES`.

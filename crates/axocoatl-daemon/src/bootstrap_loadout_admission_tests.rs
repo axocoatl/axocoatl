@@ -153,6 +153,7 @@ fn request(loadout: &str, repo: &std::path::Path, params: &[(&str, &str)], id: &
         keep: Default::default(),
         check_command: Some("true".into()),
         setup_command: None,
+        environment: Default::default(),
         request_id: id.into(),
     }
 }

@@ -50,12 +50,11 @@ daemon also keeps the access token current on your computer.
 - **Podman**, which runs the program's Session container, and a **reviewer**: a
   different model that only reads, on Ollama or OpenRouter. Claude Code and Codex can
   write but cannot review.
-- **A check that runs with Node.js alone, for now.** Both programs run in a Node image
-  (`node:24-bookworm-slim` with the pinned CLI and `git`), and a run installs no project
-  dependencies, so the repository's check must run with Node.js alone, such as
-  `node --test`. A check that needs `npm ci` first (jest, mocha or vitest from
-  `devDependencies`), and Python, Rust and Go checks, do not work in these images yet.
-- The images download about 0.6 to 0.9 GB (Claude Code) and 0.8 to 1.2 GB (Codex).
+- **A Node, Python or Go repository.** The program runs in an image with your
+  repository's [toolchain](/configure/toolchains/), and the run installs the repository's
+  dependencies before the first model call. Rust checks do not run in a loadout run yet.
+- The program's images download about 0.6 to 0.9 GB (Claude Code) and 0.8 to 1.2 GB
+  (Codex) before the toolchain's; `axocoatl run` prints the size of an image it builds.
 </Aside>
 
 <Steps>
@@ -71,10 +70,13 @@ daemon also keeps the access token current on your computer.
 
    The next steps do the same by hand.
 
-2. Build the program's Session image, once per upgrade (see [Build the image](#build-the-image)):
+2. Optionally, build the program's Session image ahead of time, once per upgrade (see
+   [Build the image](#build-the-image)). A run builds the one it needs when it is
+   missing: the program's recipe with your repository's
+   [toolchain](/configure/toolchains/), such as `claude-code python`:
 
    ```sh
-   axocoatl recipe build claude-code     # or: axocoatl recipe build codex
+   axocoatl recipe build claude-code python   # or: axocoatl recipe build codex node
    ```
 
 3. Connect its account, once, by signing in in your browser (see
@@ -115,13 +117,21 @@ Axocoatl detects no check command in the repository, `--junit` and `--record`,
 `--keep branch|pr`, and `--dry-run` to list what would stop the run without starting it
 (it loads the reviewer's Ollama model once, as a run would).
 Before anything starts, the run is refused with every problem at once: a credential that
-is not stored (exit code 3, saying how to connect), a reviewer that cannot run, and a
-recipe image that was not built (exit code 5, naming the `axocoatl recipe build` command).
+is not stored (exit code 3, saying how to connect), a reviewer that cannot run, and with
+`--no-build` an image that is not built (exit code 3, naming the `axocoatl recipe build`
+command).
 Once `axocoatl connect` has stored a sign-in, it prints the run command for this computer:
 the image build when none is recorded, and the reviewer from your setup. With no reviewer
 set up yet, it says to choose one first (`axocoatl onboard` saves it as
 `run.models.reviewer`) and prints the command that then runs as written, or the `--model
 reviewer=…` to add instead.
+
+The writer runs in an image that combines its recipe with the repository's language
+toolchain, such as `claude-code` and `python` for a Python repository (see
+[Repository toolchains](/configure/toolchains/)). Before the first model call, the run
+installs the repository's dependencies and checks that the check can start. When the
+image is missing, `axocoatl run` builds it first, or with `--no-build` refuses and names
+the `axocoatl recipe build` command.
 
 ## What the built-in loadouts run
 
@@ -130,7 +140,7 @@ reviewer=…` to add instead.
 | Writer | Claude Code 2.1.292 (`runtime: claude-code`) from the `claude-code` recipe image | Codex 0.160.1 (`runtime: codex`) from the `codex` recipe image |
 | Writer's model | `writer_model`, default `anthropic:sonnet` | `writer_model`, default `openai:gpt-6.1-sol` |
 | Credential | `claude-code-oauth` | `credential`, default `auto`: `codex-openai` when it is stored, else `codex-chatgpt` |
-| Required check | `tests`: the repository's detected check command, or `--check`; 3 minutes | the same |
+| Required check | `tests`: the repository's check command (`--check`, `AXOCOATL.md`, or detected), in the repository's [toolchain](/configure/toolchains/); 3 minutes | the same |
 | Required review | `reviewer_model` (required; `run.models.reviewer` when configured), read-only tools, up to 3 rounds, every finding adjudicated | the same |
 | Writer's budget | 4 activations, 400 invocations, 20,000,000 tokens, $10 | 4 activations, 200 invocations, 20,000,000 tokens, $10 |
 | Reviewer's budget | 3 activations, 120 invocations, 1,500,000 tokens, $3 | the same |
@@ -229,8 +239,10 @@ recipe's pinned versions, prints it, and records its image id in the data root. 
 trust a recipe image by that id, as they do the browser image, without
 `allow_untrusted_images`. Run it with the daemon's `--config` (or `AXOCOATL_DATA_DIR`),
 so the id lands in the data root the daemon reads. Recipes can be combined, as in
-`axocoatl recipe build claude-code e2e`. `axocoatl recipe list` shows the recipes and the
-images built from them. The image's tag carries a digest of its recipes, so after an
+`axocoatl recipe build claude-code e2e`, and with a language toolchain, as in
+`axocoatl recipe build claude-code python`, which is the image a `fix-claude-code` run
+in a Python repository uses. `axocoatl recipe list` shows the recipes, the toolchains and
+the images built from them. The image's tag carries a digest of its recipes, so after an
 upgrade that changes a recipe, a run asks you to build again. The build downloads the
 base image and the programs; that is network access you start, on your computer.
 
