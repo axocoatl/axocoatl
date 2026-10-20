@@ -25,7 +25,7 @@ const STAGED = {
   files: [{ path: 'calc.py', state: 'modified', staged: true, unstaged: false, last_turn: true, added: 1, removed: 1 }],
 };
 
-async function fixture(engine, { identity, status = STAGED, commit = null, init = null }) {
+async function fixture(engine, { identity, status = STAGED, commit = null, init = null, scope = null }) {
   const browser = await engine.launch();
   const context = await newAuthorizedContext(browser, { viewport: { width: 420, height: 720 } });
   const page = await context.newPage();
@@ -41,6 +41,7 @@ async function fixture(engine, { identity, status = STAGED, commit = null, init 
 import '/ui/source-control.js';
 const element = document.createElement('ax-source-control');
 element.addEventListener('notify', (event) => window.notices.push(event.detail));
+${scope ? `element.setAttribute('scope', ${JSON.stringify(scope)});` : ''}
 element.setAttribute('session', 'fixture-session');
 document.body.append(element);
 </script></body></html>`,
@@ -149,6 +150,26 @@ for (const engine of engines) {
       await page.waitForFunction(() => window.notices.some((notice) => notice.title === 'Git initialized'));
       await element.locator('.file[data-path="calc.py"]').first().waitFor();
       assert.equal(calls.filter((call) => call.suffix === 'init' && call.method === 'POST').length, 1);
+      assert.deepEqual(errors, []);
+    } finally { await close(); }
+  });
+
+  test(`${engine.name}: Last turn says when the last turn's files are not known`, async () => {
+    const reason = 'Axocoatl cannot tell which files part of the last turn changed: lead (generation 1) in turn t: it has no After capture. Review All changes.';
+    const { page, element, errors, close } = await fixture(engine, {
+      identity: { name: 'Ada Lovelace', email: 'ada@example.com', signing: false, problem: null },
+      scope: 'last-turn',
+      status: {
+        branch: 'main', clean: false, last_turn_unattributed: reason,
+        files: [{ path: 'calc.py', state: 'modified', staged: false, unstaged: true, last_turn: false, added: 1, removed: 1 }],
+      },
+    });
+    try {
+      await page.waitForFunction(() => document.querySelector('ax-source-control')
+        ?.shadowRoot?.querySelector('.files .empty'));
+      const text = await element.locator('.files .empty').textContent();
+      assert.match(text, /cannot tell which files part of the last turn changed/);
+      assert.doesNotMatch(text, /No current changes remain/);
       assert.deepEqual(errors, []);
     } finally { await close(); }
   });

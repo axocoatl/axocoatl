@@ -276,3 +276,63 @@ fn a_large_repository_takes_digests_from_the_changed_lines_of_the_judged_tree() 
     assert_eq!(files.facts.source, source::WORKSPACE_AT_FINISH);
     assert!(files.facts.read_at_finish.is_empty());
 }
+
+/// Source Control's Last turn for a native turn: the paths its activations'
+/// captures show they changed, sorted, and a reason instead of an empty
+/// list when an activation's changes cannot be known.
+#[test]
+fn last_turn_names_the_changed_paths_or_why_they_are_unknown() {
+    let before = format!(
+        "{}{}",
+        line("calc.py", "file", &"1".repeat(64)),
+        line("README.md", "file", &"4".repeat(64))
+    );
+    let after = format!(
+        "{}{}{}",
+        line("calc.py", "file", &"2".repeat(64)),
+        line("README.md", "file", &"4".repeat(64)),
+        line("tests/test_calc.py", "file", &"5".repeat(64))
+    );
+    let mut attribution = RunAttribution::default();
+    attribution.add_activation(
+        "lead (generation 1) in turn t",
+        &[
+            capture(CapturePhase::Before, Some(&before)),
+            capture(CapturePhase::After, Some(&after)),
+        ],
+    );
+    assert_eq!(
+        attribution.clone().last_turn(),
+        (
+            vec!["calc.py".to_string(), "tests/test_calc.py".to_string()],
+            None
+        )
+    );
+
+    // A helper whose After capture is missing: its changes are unknown, and
+    // Last turn says so rather than read as complete.
+    attribution.add_activation(
+        "scout (generation 1) in turn t",
+        &[capture(CapturePhase::Before, Some(&after))],
+    );
+    let (paths, unattributed) = attribution.last_turn();
+    assert_eq!(
+        paths,
+        vec!["calc.py".to_string(), "tests/test_calc.py".to_string()]
+    );
+    let unattributed = unattributed.unwrap();
+    assert!(
+        unattributed.contains("scout (generation 1) in turn t: it has no After capture"),
+        "{unattributed}"
+    );
+    assert!(
+        unattributed.ends_with("Review All changes."),
+        "{unattributed}"
+    );
+
+    // A turn none of whose activations could capture changes nothing it
+    // can name, and nothing is reported unknown.
+    let mut uncaptured = RunAttribution::default();
+    uncaptured.add_activation("reader", &[]);
+    assert_eq!(uncaptured.last_turn(), (Vec::new(), None));
+}

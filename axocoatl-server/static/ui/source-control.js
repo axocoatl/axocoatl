@@ -957,7 +957,10 @@ export class AxSourceControl extends HTMLElement {
         showAll.textContent = 'View all changes';
         showAll.dataset.focusKey = 'state:view-all';
         showAll.onclick = () => this.#setScope('all', true);
-        const state = this.#state('No current changes remain on paths attributed to the last turn.', 'empty');
+        // Say when the last turn's files are not known, rather than imply
+        // it changed nothing.
+        const state = this.#state(this.#status?.last_turn_unattributed
+          || 'No current changes remain on paths attributed to the last turn.', 'empty');
         state.append(showAll);
         host.append(state);
       } else {

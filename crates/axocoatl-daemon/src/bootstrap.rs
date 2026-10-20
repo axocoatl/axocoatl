@@ -93,7 +93,9 @@ use axocoatl_memory::legacy_conversation::{
     checkpoint_turn_minimum_bytes, SESSION_CHECKPOINT_MESSAGE_CAP,
 };
 use axocoatl_memory::{CheckpointPolicy, CheckpointStore, CheckpointTransactionResolution};
-use axocoatl_session::session_history::{HistoryVisibility, SessionHistory, SessionHistoryCatalog};
+use axocoatl_session::session_history::{
+    HistoryVisibility, SessionHistory, SessionHistoryCatalog, SessionHistoryEntry,
+};
 use axocoatl_session::{
     migrate_sessions_to_workspaces, BeginSessionTurn, CreateSessionAttachmentRef,
     RecordTurnExecution, Session, SessionAttachmentRef, SessionAttachmentStore,
@@ -1937,6 +1939,30 @@ fn rehydrated_turn_touched_paths(session: &Session, turn: &SessionTurn) -> Vec<S
         .unwrap_or_else(|| persisted_successful_write_paths(session, turn))
 }
 
+/// The paths Source Control's Last turn marks, and why they are not all
+/// known when they are not.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct LastTurnFiles {
+    pub(crate) paths: Vec<String>,
+    pub(crate) unattributed: Option<String>,
+}
+
+/// What a native turn changed, from the repository captures recorded
+/// around each of its activations: the same attribution receipts and Keep as
+/// PR use. An activation whose captures cannot establish its changes is
+/// named rather than read as having changed nothing.
+pub(crate) fn native_turn_last_turn_files(
+    turn: &axocoatl_session::execution_content::ExecutionTurnView,
+) -> LastTurnFiles {
+    let mut attribution = crate::run_attribution::RunAttribution::default();
+    attribution.add_execution_turn(turn);
+    let (paths, unattributed) = attribution.last_turn();
+    LastTurnFiles {
+        paths,
+        unattributed,
+    }
+}
+
 fn session_write_paths(session: &Session, steps: &[crate::trajectory::Action]) -> Vec<String> {
     let mut touched = steps
         .iter()
@@ -3778,7 +3804,7 @@ pub struct AxocoatlDaemon {
     /// frames: "what did the agent just change" has to survive a reload, and a
     /// fact that only exists while a tab is open is not one a reviewer can rely
     /// on. Replaced wholesale each turn — it answers *last*, not *ever*.
-    session_last_turn: Arc<StdMutex<HashMap<String, Vec<String>>>>,
+    session_last_turn: Arc<StdMutex<HashMap<String, LastTurnFiles>>>,
     /// Ring buffer of the most recent event-feed events (capped at 200).
     pub event_log: Arc<StdMutex<VecDeque<FeedEvent>>>,
     /// The observability stream bus — flattened events + live agent tokens.
@@ -12834,7 +12860,8 @@ trap - EXIT HUP INT TERM
             crate::git::apply_numstat(&mut status, &n.stdout);
         }
         let last_turn = self.session_last_turn_files_for_status(session_id).await;
-        crate::git::mark_last_turn(&mut status, &last_turn);
+        crate::git::mark_last_turn(&mut status, &last_turn.paths);
+        status.last_turn_unattributed = last_turn.unattributed;
         Ok(status)
     }
 
@@ -18701,6 +18728,7 @@ trap - 0 1 2 15
                 branch,
                 files: Vec::new(),
                 clean: false,
+                last_turn_unattributed: None,
             },
             review_error: Some(error.into()),
             model: lane.model.clone(),
@@ -19813,6 +19841,7 @@ trap - 0 1 2 15
             branch: "HEAD".to_string(),
             files,
             clean: false,
+            last_turn_unattributed: None,
         }
     }
 
@@ -22301,11 +22330,21 @@ trap - 0 1 2 15
         self.remember_session_last_turn_files(&session.id, touched);
     }
 
-    fn remember_session_last_turn_files(&self, session_id: &str, mut touched: Vec<String>) {
-        touched.sort();
-        touched.dedup();
+    fn remember_session_last_turn_files(&self, session_id: &str, touched: Vec<String>) {
+        self.remember_session_last_turn(
+            session_id,
+            LastTurnFiles {
+                paths: touched,
+                unattributed: None,
+            },
+        );
+    }
+
+    pub(crate) fn remember_session_last_turn(&self, session_id: &str, mut files: LastTurnFiles) {
+        files.paths.sort();
+        files.paths.dedup();
         if let Ok(mut last_turn) = self.session_last_turn.lock() {
-            last_turn.insert(session_id.to_string(), touched);
+            last_turn.insert(session_id.to_string(), files);
         }
     }
 
@@ -22526,29 +22565,42 @@ trap - 0 1 2 15
         self.session_last_turn
             .lock()
             .ok()
-            .and_then(|s| s.get(session_id).cloned())
+            .and_then(|s| s.get(session_id).map(|files| files.paths.clone()))
             .unwrap_or_default()
     }
 
-    async fn session_last_turn_files_for_status(&self, session_id: &str) -> Vec<String> {
+    async fn session_last_turn_files_for_status(&self, session_id: &str) -> LastTurnFiles {
         if let Ok(last_turn) = self.session_last_turn.lock() {
-            if let Some(paths) = last_turn.get(session_id) {
-                return paths.clone();
+            if let Some(files) = last_turn.get(session_id) {
+                return files.clone();
             }
         }
 
-        // Keep is a real Session turn, so its exact affected paths belong in
-        // the durable turn ledger. Rehydrate the process-local filter after a
-        // daemon restart instead of making Last turn mysteriously empty.
-        let session = self.get_session(session_id).await;
-        let turn = self.session_turn_store.lock().await.list(session_id).pop();
-        let touched = session
-            .as_ref()
-            .zip(turn.as_ref())
-            .map(|(session, turn)| rehydrated_turn_touched_paths(session, turn))
-            .unwrap_or_default();
-        self.remember_session_last_turn_files(session_id, touched.clone());
-        touched
+        // The latest visible turn of the Session's history says what it
+        // changed: a native turn by its repository captures, a legacy one
+        // (Keep included) by its recorded paths. Rehydrate the process-local
+        // filter after a daemon restart instead of making Last turn
+        // mysteriously empty.
+        let files = match self.versioned_session_history_snapshot(session_id).await {
+            Ok(history) => match history.entries(HistoryVisibility::Visible).last() {
+                Some(SessionHistoryEntry::ExecutionV2(turn)) => native_turn_last_turn_files(turn),
+                Some(SessionHistoryEntry::LegacyV1(turn)) => LastTurnFiles {
+                    paths: self
+                        .get_session(session_id)
+                        .await
+                        .map(|session| rehydrated_turn_touched_paths(&session, turn))
+                        .unwrap_or_default(),
+                    unattributed: None,
+                },
+                None => LastTurnFiles::default(),
+            },
+            Err(error) => LastTurnFiles {
+                paths: Vec::new(),
+                unattributed: Some(format!("the Session's history could not be read ({error})")),
+            },
+        };
+        self.remember_session_last_turn(session_id, files.clone());
+        files
     }
 
     /// Drive one agent run, forwarding its stream chunks to the bus as frames

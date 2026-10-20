@@ -143,6 +143,12 @@ impl AxocoatlDaemon {
                     }
                 }
                 publish_native_disposition(&self.stream_bus, turn, &usage);
+                // Source Control's Last turn: the files this turn's
+                // activations changed, from their repository captures.
+                self.remember_session_last_turn(
+                    &source.session_id,
+                    super::native_turn_last_turn_files(turn),
+                );
                 // Completion can race an explicit Close. Updating recency may
                 // not reopen the Session after Close has persisted its state.
                 let workspace = {

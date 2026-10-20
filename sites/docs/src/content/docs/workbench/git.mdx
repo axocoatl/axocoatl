@@ -19,8 +19,11 @@ Control** in the explorer column.
 | **Not staged** | Working-tree changes not in the index |
 
 Last turn filters the repository's current Git status and diff by the path names
-attributed to the latest durable turn. It is useful for narrowing review, but it
-is not a frozen per-turn diff. A later edit to an attributed path can appear in
+attributed to the latest durable turn. For a native turn those paths come from the
+repository captures recorded before and after each Agent activation, the same
+attribution receipts and **Keep as PR** use, and they are read again from the
+Session's history after the daemon restarts. It is useful for narrowing review,
+but it is not a frozen per-turn diff. A later edit to an attributed path can appear in
 the view, and a reverted change no longer appears. If several actors edit the
 same path, Last turn cannot separate their hunks by author.
 
@@ -104,8 +107,10 @@ not commit automatically.
 
 ## When Last turn is empty
 
-An empty Last turn can be correct when the last turn made no file changes. If
-you expected edits:
+An empty Last turn can be correct when the last turn made no file changes. When
+Axocoatl cannot tell what part of the last turn changed (an activation's capture
+is missing or too large to compare), Last turn says so instead of reporting no
+changes; review **All**. If you expected edits:
 
 - confirm the turn reached a durable terminal state;
 - switch to **All** to check for older or unattributed working changes;
