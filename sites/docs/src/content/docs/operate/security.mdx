@@ -116,7 +116,10 @@ described after this list.
   this at most once; the next workbench load sets it again. Chromium already
   sends the token cookie on these navigations, so no browser is signed in on
   one that Chromium would refuse. A link or form on another site still gets
-  the sign-in page.
+  the sign-in page. Code on a Preview origin cannot set this cookie through
+  the Preview proxy; in Safari on macOS it can set a `Domain=localhost`
+  cookie from the page, and the most a forged one does is send a navigation
+  you started to that page once.
 - Scripts send the token as `Authorization: Bearer <token>` or
   `x-api-key: <token>`. Comparisons are constant time.
 - The cookie counts only on same-origin requests, typed navigations, and

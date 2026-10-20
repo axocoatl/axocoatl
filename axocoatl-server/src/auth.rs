@@ -44,8 +44,12 @@ const LOCAL_TOKEN_COOKIE_MAX_AGE_SECS: u64 = 30 * 24 * 60 * 60;
 
 /// Suffix of the second cookie a sign-in sets, `axocoatl-token-<port>-signed-in`.
 /// It holds no secret and authorizes nothing (see [`local_dashboard`]); its
-/// name keeps the token prefix so the Preview proxies strip it and refuse to
-/// let Session code set it, exactly as they do for the token cookie.
+/// name keeps the token prefix so the Preview proxies strip it from forwarded
+/// requests and drop an upstream `Set-Cookie` that would set it, as they do
+/// for the token cookie. Safari on macOS lets a page on a Preview origin set
+/// a `Domain=localhost` cookie, so Session code can still set this one there;
+/// the most that does is send a navigation the person started to the
+/// same-origin retry page once.
 const SIGNED_IN_COOKIE_SUFFIX: &str = "-signed-in";
 
 /// The per-daemon local API secret and the cookie name a browser stores it
