@@ -160,6 +160,55 @@ fn whole_call_capacity(config: &AgentConfig, limits: &GrantLimits) -> u64 {
     capacity
 }
 
+/// Ollama may repair JSON with a second inference pass. OpenRouter sends
+/// one request with a native response format and reserves one whole call.
+fn native_passes(config: &AgentConfig) -> u64 {
+    if config.provider == "ollama" && config.sampling.response_format == Some(ResponseFormat::Json)
+    {
+        2
+    } else {
+        1
+    }
+}
+
+/// `1457714` as `1,457,714`.
+fn grouped(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
+/// Why a token limit cannot pay for one call that reserves `context` plus
+/// `output` tokens `passes` times, with the numbers.
+fn one_call_refusal(config: &AgentConfig, context: u64, output: u64, passes: u64) -> String {
+    let name = if config.name.trim().is_empty() {
+        config.id.0.as_str()
+    } else {
+        config.name.as_str()
+    };
+    let per_call = context.saturating_add(output).saturating_mul(passes);
+    format!(
+        "{name} reserves {} tokens per model call ({} context + {} output{}), more than its token \
+         limit allows; a turn with tools needs at least {}. Raise its token limit, or lower its \
+         maximum output tokens per request.",
+        grouped(per_call),
+        grouped(context),
+        grouped(output),
+        if passes > 1 {
+            ", twice: Ollama may repair JSON in a second pass"
+        } else {
+            ""
+        },
+        grouped(per_call.saturating_mul(2))
+    )
+}
+
 fn native_output_limit(
     config: &AgentConfig,
     context: usize,
@@ -171,29 +220,109 @@ fn native_output_limit(
             "observed context is outside the audited native profile",
         ));
     }
-    // Ollama may repair JSON with a second inference pass. OpenRouter sends
-    // one request with a native response format and reserves one whole call.
-    let passes = if config.provider == "ollama"
-        && config.sampling.response_format == Some(ResponseFormat::Json)
-    {
-        2u64
-    } else {
-        1
-    };
+    let passes = native_passes(config);
     let native_maximum = context
         .checked_mul(10)
         .ok_or_else(|| error("native output capacity overflow"))?;
     let pass_capacity = whole_call_capacity(config, limits) / passes;
-    let allowed = pass_capacity.checked_sub(context as u64)
+    let wanted = config.sampling.max_tokens.unwrap_or(1) as u64;
+    let allowed = pass_capacity
+        .checked_sub(context as u64)
         .and_then(|output| usize::try_from(output).ok())
         .filter(|output| *output > 0)
-        .ok_or_else(|| error("native context and response passes leave no output capacity in the existing hard budget"))?;
+        .ok_or_else(|| error(one_call_refusal(config, context as u64, wanted, passes)))?;
     let selected = match config.sampling.max_tokens {
         Some(explicit) if explicit <= allowed && explicit <= native_maximum => explicit,
-        Some(_) => return Err(error("explicit sampling maximum does not fit the native whole-call budget; it was not clamped")),
+        Some(explicit) if explicit > native_maximum => {
+            return Err(error(format!(
+                "the maximum output tokens per request ({}) is more than ten times the model's \
+                 {}-token context; lower it",
+                grouped(explicit as u64),
+                grouped(context as u64)
+            )))
+        }
+        Some(explicit) => {
+            return Err(error(one_call_refusal(
+                config,
+                context as u64,
+                explicit as u64,
+                passes,
+            )))
+        }
         None => allowed.min(native_maximum),
     };
     Ok(selected)
+}
+
+/// What one model call of a retained native profile reserves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeCallReservation {
+    /// Tokens one call reserves from the grant before it runs.
+    pub(crate) tokens: u64,
+    /// The same as the person reads it, for example
+    /// `32,768 context + 4,096 output`.
+    pub(crate) words: String,
+}
+
+impl NativeCallReservation {
+    /// The refusal when `tokens_limit` cannot pay for a turn of the Agent
+    /// named `name`: one call, or with tools the call and the one after it
+    /// (the final answer a tool round needs).
+    pub(crate) fn refusal(&self, name: &str, tokens_limit: u64, tools: bool) -> Option<String> {
+        let need = if tools {
+            self.tokens.saturating_mul(2)
+        } else {
+            self.tokens
+        };
+        (tokens_limit < need).then(|| {
+            format!(
+                "{name}'s token limit of {} is too small: {name} reserves {} tokens per model \
+                 call ({}){}. Raise its token limit to at least {}.",
+                grouped(tokens_limit),
+                grouped(self.tokens),
+                self.words,
+                if tools {
+                    format!(
+                        ", and a turn with tools needs at least {}, for a call and the one after it",
+                        grouped(need)
+                    )
+                } else {
+                    String::new()
+                },
+                grouped(need)
+            )
+        })
+    }
+}
+
+/// What one model call reserves under the retained provider profile
+/// `configuration` of the definition `config`. `None` for a profile that is
+/// not a native one (an external program's).
+pub(crate) fn retained_call_reservation(
+    configuration: &str,
+    config: &AgentConfig,
+) -> Option<NativeCallReservation> {
+    match serde_json::from_str::<NativeRuntimeConfiguration>(configuration).ok()? {
+        NativeRuntimeConfiguration::Ollama(runtime) => {
+            let passes = native_passes(config);
+            let context = runtime.observation.context_tokens as u64;
+            let output = runtime.max_output_tokens as u64;
+            Some(NativeCallReservation {
+                tokens: context.saturating_add(output).saturating_mul(passes),
+                words: format!(
+                    "{} context + {} output{}",
+                    grouped(context),
+                    grouped(output),
+                    if passes > 1 {
+                        ", twice: Ollama may repair JSON in a second pass"
+                    } else {
+                        ""
+                    }
+                ),
+            })
+        }
+        NativeRuntimeConfiguration::OpenRouter(runtime) => runtime.call_reservation(config),
+    }
 }
 
 impl NativeDefinitionPreparation {

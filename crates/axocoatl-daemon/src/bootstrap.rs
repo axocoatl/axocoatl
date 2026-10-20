@@ -23568,6 +23568,10 @@ mod session_network_reload_tests;
 mod session_web_tests;
 
 #[cfg(all(test, unix))]
+#[path = "bootstrap_session_team_budget_tests.rs"]
+mod session_team_budget_tests;
+
+#[cfg(all(test, unix))]
 #[path = "bootstrap_copied_data_root_tests.rs"]
 mod copied_data_root_tests;
 

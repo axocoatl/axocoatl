@@ -54,12 +54,20 @@ metadata, but the repository remains the authority.
    defaults an exact devcontainer command to checked, that policy is visible;
    your checked or unchecked reviewed choice wins.
 8. Wait for the Session environment to report **Ready**.
-9. For a native Session, open **Team & budget**, switch to **Edit**, and select
-   the Agent. Enter its activation, invocation, token, cost, output, and expiry
-   limits. With the default team, Lead's panel also offers Scout and Reviewer as
-   read-only helpers. Lead works alone unless you select **Let this Agent delegate
-   to helpers** and enter their limits, which must fit within Lead's. Preview the
-   configuration, review it, and choose **Apply**.
+9. For a native Session, Send reads **Set budget** until the Session's team and
+   budget are applied; it opens **Team & budget**. Its limits come filled in from
+   the built-in `fix` loadout: 4 activations, 400 provider and tool invocations
+   and 4,000,000 tokens per Agent, $0 of cost for a local Ollama model (a hosted
+   model gets the loadout's $10 cap), and an expiry 24 hours from now. Switch to
+   **Edit** to review or change them, then **Preview** and **Apply**; nothing is
+   approved until you do. With the default team, Lead's panel also offers Scout and
+   Reviewer as read-only helpers. Lead works alone unless you select **Let this Agent
+   delegate to helpers**; their limits come filled in too (3 activations, 120
+   invocations, 1,500,000 tokens each), within Lead's. Preview refuses a token limit
+   a turn cannot use and names the minimum: each model call reserves the model's
+   whole context plus its output, and a turn with tools needs a call and the one
+   after it, for example 73,728 tokens for a 32,768-token context and 4,096 output
+   tokens. An expiry must be within a year.
 10. Send a bounded first request from Conversation.
 
 </Steps>

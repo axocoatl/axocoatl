@@ -245,6 +245,25 @@ impl NativeProviderCredentials {
     }
 }
 impl NativeOpenRouterRuntimeConfiguration {
+    /// What the smallest call of this profile reserves: its prompt allowance
+    /// and response allowance.
+    fn call_reservation(&self, config: &AgentConfig) -> Option<NativeCallReservation> {
+        let observation = &self.openrouter_observation;
+        let reasoning = observation
+            .reasoning_request(config.sampling.reasoning_effort)
+            .ok()?;
+        let bounds = observation
+            .minimum_call_bounds(self.max_output_tokens, reasoning, self.max_response_bytes)
+            .ok()?;
+        Some(NativeCallReservation {
+            tokens: bounds.token_limit,
+            words: format!(
+                "its prompt allowance + {} response tokens on OpenRouter",
+                grouped(observation.response_allowance(self.max_output_tokens, reasoning) as u64)
+            ),
+        })
+    }
+
     fn validate(&self, config: &AgentConfig) -> Result<()> {
         let observation = &self.openrouter_observation;
         let reasoning = observation

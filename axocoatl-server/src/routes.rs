@@ -805,6 +805,41 @@ pub async fn delete_session_ways_decision(
         .map(|_| StatusCode::NO_CONTENT)
         .map_err(attempt_err)
 }
+/// A Team and budget refusal as the person reads it: a native provider
+/// check's own message, without the layers it passed through
+/// ("Provider setup failed: Session dispatch: Invalid request for ollama: ").
+fn person_facing_team_message(message: &str) -> String {
+    let mut text = message
+        .strip_prefix("Provider setup failed: Session dispatch: ")
+        .unwrap_or(message);
+    if let Some(rest) = text.strip_prefix("Invalid request for ") {
+        if let Some((provider, reason)) = rest.split_once(": ") {
+            if !provider.is_empty()
+                && provider
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            {
+                text = reason;
+            }
+        }
+    }
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => message.to_string(),
+    }
+}
+
+fn team_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorResponse>) {
+    let (status, Json(ErrorResponse { error })) = attempt_err(error);
+    (
+        status,
+        Json(ErrorResponse {
+            error: person_facing_team_message(&error),
+        }),
+    )
+}
+
 pub async fn preview_session_team(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -816,7 +851,7 @@ pub async fn preview_session_team(
         .preview_session_team(&id, request)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(team_err)
 }
 pub async fn apply_session_team(
     State(state): State<AppState>,
@@ -829,7 +864,7 @@ pub async fn apply_session_team(
         .apply_session_team(&id, request)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(team_err)
 }
 pub async fn cancel_session_team(
     State(state): State<AppState>,
@@ -8218,6 +8253,32 @@ mod tests {
         let ready =
             session_with_environment_state(axocoatl_session::SessionEnvironmentState::Ready);
         assert!(session_environment_route_error(&ready.id, Some(&ready)).is_none());
+    }
+
+    #[test]
+    fn team_refusals_lose_their_internal_layers() {
+        assert_eq!(
+            person_facing_team_message(
+                "Provider setup failed: Session dispatch: Invalid request for ollama: Ollama 0.20.6 is no longer supported"
+            ),
+            "Ollama 0.20.6 is no longer supported"
+        );
+        assert_eq!(
+            person_facing_team_message(
+                "Provider setup failed: Session dispatch: Invalid request for openrouter: the smallest call costs more"
+            ),
+            "The smallest call costs more"
+        );
+        assert_eq!(
+            person_facing_team_message(
+                "Provider setup failed: Provider 'openrouter' not configured"
+            ),
+            "Provider setup failed: Provider 'openrouter' not configured"
+        );
+        assert_eq!(
+            person_facing_team_message("Lead's token limit of 10,000 is too small"),
+            "Lead's token limit of 10,000 is too small"
+        );
     }
 
     #[test]

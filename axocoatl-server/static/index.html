@@ -6231,6 +6231,13 @@ function syncSessionComposerState() {
     send.textContent = 'Send…';
     send.classList.remove('danger');
     send.title = 'This turn needs attention: continue it with your message, or finish it as it is and send your message as a new request';
+  } else if (sessionNeedsBudget()) {
+    // A native Session sends nothing until its team and budget are applied;
+    // the button opens Team and budget instead of failing after a send.
+    send.disabled = false;
+    send.textContent = 'Set budget';
+    send.classList.remove('danger');
+    send.title = 'Review and apply this Session\'s Team and budget before the first request';
   } else {
     send.disabled = false;
     send.textContent = 'Send';
@@ -6250,8 +6257,19 @@ function stopSessionTurn() {
   syncSessionComposerState();
 }
 
+// A native Session whose team and budget were never applied: nothing can be
+// sent until they are.
+function sessionNeedsBudget(session = S.session) {
+  const team = session?.currentTeam;
+  return team?.history_version === 'execution_v2' && team.approved === false;
+}
+
 async function activateSessionComposer() {
   const guidance = $('#session-guidance');
+  if (!S.session.activeTurnId && guidance?.mode !== 'needs_attention' && sessionNeedsBudget()) {
+    void $('#session-team')?.open?.();
+    return;
+  }
   if (S.session.activeTurnId && guidance?.mode === 'running') {
     const text = $('#session-text').value;
     const sessionId = S.session.id;

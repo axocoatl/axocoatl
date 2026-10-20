@@ -5,8 +5,18 @@ const limits=[['activations','Activation limit'],['invocations','Invocation limi
 const role=item=>String(item.role||'autonomous').toLowerCase();
 // Any Agent except a Worker may delegate. A Coordinator template must, and runs as such a lead.
 const canDelegate=slot=>role(slot)!=='worker';
-// A helper starts unapproved: the person enters its limits.
-const workerDraft=template=>({template_id:template.template_id,limits:{activations:null,invocations:null,tokens:null,cost_microunits:null},max_output_tokens:template.max_output_tokens??null,adhoc_allowed:false});
+// The daemon's suggested limits for an Agent ('agent') or a helper
+// ('helper'): no cost for a model of a free provider (local Ollama), and a
+// helper's never more than its lead's. `null` when the daemon suggests none.
+export function suggestedLimits(view,provider,kind,lead=null){
+ const budget=view?.suggested_budget;const base=budget?.[kind];if(!base)return null;
+ const result=structuredClone(base);if((budget.free_providers||[]).includes(provider))result.cost_microunits=0;
+ if(lead)for(const[key]of limits)if(Number.isSafeInteger(lead[key]))result[key]=Math.min(result[key],lead[key]);
+ return result;
+}
+// A helper starts unapproved, with the daemon's suggested limits filled in
+// for the person to review; without a suggestion, they enter them.
+const workerDraft=(template,view,lead)=>({template_id:template.template_id,limits:suggestedLimits(view,template.provider,'helper',lead?.limits)||{activations:null,invocations:null,tokens:null,cost_microunits:null},max_output_tokens:template.max_output_tokens??null,adhoc_allowed:false});
 // The daemon offers the read-only Worker templates as helpers to a new
 // Session's single Agent. The Agent works alone unless the person selects Let
 // this Agent delegate to helpers, which drafts the offered helpers with empty
@@ -16,7 +26,7 @@ export function offeredHelpers(view,slot){
  if(!offer||!slot||offer.slot_id!==slot.slot_id||!canDelegate(slot))return null;
  const helpers=offer.helpers.map(id=>view.templates.find(template=>template.template_id===id)).filter(Boolean);
  if(!helpers.length)return null;
- return{names:new Intl.ListFormat('en',{type:'conjunction'}).format(helpers.map(template=>template.name)),count:helpers.length,draft:()=>({workers:helpers.map(workerDraft),operations:[...offer.operations],max_nodes:offer.max_nodes,max_edges:offer.max_edges})};
+ return{names:new Intl.ListFormat('en',{type:'conjunction'}).format(helpers.map(template=>template.name)),count:helpers.length,draft:()=>({workers:helpers.map(template=>workerDraft(template,view,slot)),operations:[...offer.operations],max_nodes:offer.max_nodes,max_edges:offer.max_edges})};
 }
 export function renderDelegationApproval(host,panel,slot,update){
  if(!canDelegate(slot))return;
@@ -35,7 +45,7 @@ export function renderDelegationApproval(host,panel,slot,update){
  for(const worker of slot.delegation.workers)if(!templates.some(template=>template.template_id===worker.template_id))templates.push({template_id:worker.template_id,name:worker.template_id,model:'Previously approved definition'});
  if(!templates.length)panel.append(node('p','Add a Worker in Settings → Agents, then refresh this Session team.'));
  for(const template of templates){const selected=slot.delegation.workers.find(worker=>worker.template_id===template.template_id);
-  check(panel,`Use helper: ${template.name}`,!!selected,checked=>{save(value=>{value.workers=value.workers.filter(worker=>worker.template_id!==template.template_id);if(checked)value.workers.push(workerDraft(template));});host.renderPanel();});
+  check(panel,`Use helper: ${template.name}`,!!selected,checked=>{save(value=>{value.workers=value.workers.filter(worker=>worker.template_id!==template.template_id);if(checked)value.workers.push(workerDraft(template,host.view,host.draft.slots.find(item=>item.slot_id===slot.slot_id)));});host.renderPanel();});
   if(!selected)continue;
   const group=node('fieldset'),legend=node('legend',`${template.name} · ${template.model}`);group.append(legend);panel.append(group);
   const workerChange=change=>save(value=>change(value.workers.find(worker=>worker.template_id===template.template_id)));
