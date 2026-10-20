@@ -3,11 +3,11 @@ use std::pin::Pin;
 mod native;
 pub use native::{
     check_native_ollama_server, check_shown_model, observe_native_ollama_context,
-    ollama_version_accepted, ollama_version_refusal, show_native_ollama_model,
-    validate_native_ollama_endpoint, NativeOllamaConfig, NativeOllamaContextObservation,
-    NativeOllamaProvider, NativeOllamaServerCheck, OllamaCloudMode, OllamaServedVersions,
-    ShownModel, AUDITED_OLLAMA_VERSION, CONTRACT_STOP_PROBE_PROMPT, DENIED_OLLAMA_VERSIONS,
-    OBSERVATION_SCHEMA_VERSION,
+    ollama_version_accepted, ollama_version_note, ollama_version_refusal, ollama_version_unaudited,
+    show_native_ollama_model, validate_native_ollama_endpoint, NativeOllamaConfig,
+    NativeOllamaContextObservation, NativeOllamaProvider, NativeOllamaServerCheck, OllamaCloudMode,
+    OllamaServedVersions, ShownModel, AUDITED_OLLAMA_VERSION, CONTRACT_STOP_PROBE_PROMPT,
+    DENIED_OLLAMA_VERSIONS, OBSERVATION_SCHEMA_VERSION,
 };
 
 use reqwest::header::CONTENT_TYPE;

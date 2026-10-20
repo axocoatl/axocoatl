@@ -263,7 +263,7 @@ async fn cloud_remote_unknown_version_and_non_gguf_are_refused_before_load() {
         (AUDITED_OLLAMA_VERSION, false, shown()),
         ("0.20.6", true, shown()),
         ("0.20.7", true, shown()),
-        ("0.41.0", true, shown()),
+        ("1.0.0", true, shown()),
         ("0.40.7-rc0", true, shown()),
         (AUDITED_OLLAMA_VERSION, true, remote),
         (AUDITED_OLLAMA_VERSION, true, non_gguf),
@@ -762,4 +762,70 @@ async fn an_upgrade_between_inferences_is_probed_before_the_next_one() {
     let (probe_bodies, inferences) = chats(&server).await;
     assert_eq!((probe_bodies.len(), inferences), (2, 0));
     assert!(served.versions().is_empty());
+}
+
+/// Ollama 0.41 and later 0.x minors are accepted only through the contract
+/// probes: a model on a newer minor becomes an observation, recording that
+/// version, when both probes pass, and is refused, naming the guarantee,
+/// when one fails. Nothing else is generated either way.
+#[tokio::test]
+async fn a_newer_minor_is_accepted_only_when_the_contract_probes_pass() {
+    let server = MockServer::start().await;
+    standard_with(&server, "0.41.0", &unique_digest(9), Probes::Pass).await;
+    let observation = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
+    assert_eq!(observation.server_version, "0.41.0");
+    let (probe_bodies, other) = chats(&server).await;
+    assert_eq!((probe_bodies.len(), other), (2, 0));
+
+    for (seed, behavior, guarantee) in [
+        (
+            10,
+            Probes::AcceptOverLong,
+            "over-long prompt refusal (truncate:false)",
+        ),
+        (11, Probes::IgnoreNumPredict, "output limit (num_predict)"),
+    ] {
+        let server = MockServer::start().await;
+        standard_with(&server, "0.42.1", &unique_digest(seed), behavior).await;
+        let refusal = observe_native_ollama_context(&server.uri(), "test-model")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("Ollama 0.42.1"), "{refusal}");
+        assert!(refusal.contains(guarantee), "{refusal}");
+        assert_eq!(chats(&server).await.1, 0);
+    }
+}
+
+/// A profile observed on the audited release, served after Ollama moved to
+/// a newer minor, is probed on that minor before it serves, like any other
+/// upgrade; one that fails the probes there is refused.
+#[tokio::test]
+async fn an_upgrade_to_a_newer_minor_is_probed_before_a_retained_profile_serves() {
+    let server = MockServer::start().await;
+    let digest = unique_digest(12);
+    standard_with(&server, AUDITED_OLLAMA_VERSION, &digest, Probes::Pass).await;
+    let observation = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
+    server.reset().await;
+    standard_with(&server, "0.41.0", &digest, Probes::Pass).await;
+    let served = Arc::new(OllamaServedVersions::default());
+    let _provider = NativeOllamaProvider::connect_observed(observation.clone(), 32, 64 * 1024)
+        .await
+        .unwrap()
+        .with_served_versions(served);
+    assert_eq!(chats(&server).await.0.len(), 2, "probed on 0.41.0");
+
+    server.reset().await;
+    standard_with(&server, "0.43.0", &digest, Probes::AcceptOverLong).await;
+    let refusal = NativeOllamaProvider::connect_observed(observation, 32, 64 * 1024)
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(refusal.contains("Ollama 0.43.0"), "{refusal}");
+    assert!(refusal.contains("over-long prompt refusal"), "{refusal}");
 }

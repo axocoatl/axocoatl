@@ -55,7 +55,8 @@ pub use server_check::{
     NativeOllamaServerCheck, OllamaCloudMode,
 };
 pub use version_policy::{
-    ollama_version_accepted, ollama_version_refusal, AUDITED_OLLAMA_VERSION, DENIED_OLLAMA_VERSIONS,
+    ollama_version_accepted, ollama_version_note, ollama_version_refusal, ollama_version_unaudited,
+    AUDITED_OLLAMA_VERSION, DENIED_OLLAMA_VERSIONS,
 };
 
 const PROVIDER: &str = "ollama";

@@ -253,7 +253,7 @@ async fn profile_refuses_unknown_version_missing_status_cloud_and_unsupported_mo
     for (version, reason) in [
         ("0.20.6", "no longer supported"),
         ("0.40.5", "older than native Sessions support"),
-        ("0.41.0", "newer than this Axocoatl supports"),
+        ("1.0.0", "new major release"),
         ("0.40.7-rc0", "pre-release"),
         ("0.0.0", "development build"),
     ] {
