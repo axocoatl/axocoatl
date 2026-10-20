@@ -260,7 +260,7 @@ with rootless Podman 4.9.3 (arm64, in a VM, with the models served from the Mac'
 Ollama). CI also runs on Ubuntu 24.04 on x86_64 against a stub model server. On macOS,
 `axocoatl run fix` with local models, `fix-claude-code` and `fix-codex` each passed on
 Node.js (with `npm ci`), Python (pytest), Go and Rust repositories, every receipt
-verified; on Ubuntu, `fix` passed on Node.js, Python and Go. Not yet verified: Intel
+verified; on Ubuntu, `fix` passed on Node.js, Python, Go and Rust. Not yet verified: Intel
 Macs, Macs with less than 48 GB for local models, Ubuntu 22.04, Debian 12, Fedora with
 SELinux, and WSL2 on Windows. Docker is not supported; Podman can run alongside it. The first daemon start downloads an 87 MB embedding model from
 huggingface.co. To remove Axocoatl, see

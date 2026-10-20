@@ -470,7 +470,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `connect openrouter` signed in through the browser, and `fix-claude-code` with an
   OpenRouter `openai/gpt-oss-120b` reviewer passed on Python. On Ubuntu 24.04 (arm64 VM,
   a fresh user, rootless Podman 4.9.3, Landlock ABI 4, the models served from the Mac's
-  Ollama), `fix` passed on Node.js, Python and Go.
+  Ollama), `fix` passed on Node.js, Python, Go and Rust.
 
 ## [1.4.0] - 2026-10-14
 
