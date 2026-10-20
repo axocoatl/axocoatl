@@ -2215,10 +2215,33 @@ mod landlock {
 
     /// The ruleset of a hardened command without a write restriction
     /// ([`DOMAIN_ONLY`]). Fails without Landlock, so such a command is
-    /// never launched outside a domain.
+    /// never launched outside a domain. From ABI 2, Landlock refuses every
+    /// rename or link into another directory in a domain that does not handle
+    /// `REFER` and allow it, and build tools such as cargo and rustc rename
+    /// across directories; so the domain also handles `REFER` and allows it
+    /// beneath `/`, which keeps renames as they are outside the domain.
     pub(super) fn prepare_domain() -> Result<Ruleset, String> {
-        abi()?;
-        create(DOMAIN_ONLY)
+        let handled = domain_access(abi()?);
+        let ruleset = create(handled)?;
+        if handled.fs & REFER != 0 {
+            allow_path(&ruleset, "/", REFER, 0)?;
+        }
+        Ok(ruleset)
+    }
+
+    /// What a hardened command's own domain handles on a kernel offering
+    /// Landlock ABI `abi`: [`DOMAIN_ONLY`], plus `REFER` from ABI 2 so that
+    /// it can be allowed everywhere. ABI 1 cannot handle `REFER`, and its
+    /// domains refuse renames into another directory regardless.
+    pub(super) fn domain_access(abi: i64) -> Handled {
+        Handled {
+            fs: if abi >= 2 {
+                DOMAIN_ONLY.fs | REFER
+            } else {
+                DOMAIN_ONLY.fs
+            },
+            net: DOMAIN_ONLY.net,
+        }
     }
 
     /// Create the ruleset in the supervisor, with the command's own scratch
@@ -2401,6 +2424,19 @@ mod landlock {
         fn a_hardened_domain_handles_only_block_devices() {
             assert_eq!(DOMAIN_ONLY.fs, MAKE_BLOCK);
             assert_eq!(DOMAIN_ONLY.net, 0);
+        }
+
+        /// From ABI 2 the domain also handles `REFER`, which it then allows
+        /// beneath `/`, so cross-directory renames work as outside it; ABI 1
+        /// cannot handle it.
+        #[test]
+        fn a_hardened_domain_handles_refer_from_abi_2() {
+            assert_eq!(domain_access(1).fs, MAKE_BLOCK);
+            for abi in [2, 3, 4, 6, 10] {
+                let handled = domain_access(abi);
+                assert_eq!(handled.fs, MAKE_BLOCK | REFER);
+                assert_eq!(handled.net, 0);
+            }
         }
 
         /// A read-only shell's restriction denies the network. A kernel that
