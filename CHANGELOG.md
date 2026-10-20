@@ -499,6 +499,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.1.4; it opens `.npz` and `.pth` archives entry by entry and never calls `extract()`,
   and Axocoatl loads its embedding model from safetensors, so `.cargo/audit.toml` records
   those three IDs as not reachable until candle-core moves to zip 9.
+- rustls-webpki moves to 0.103.16 for RUSTSEC-2026-0382 (certificate verification could
+  accept distrusted intermediates), and webpki-roots and webpki-root-certs to 1.0.10 for
+  RUSTSEC-2026-0381 and -0383 (bundled roots trusted distrusted emSign intermediates).
+- The workbench's vendored markdown-it moves to 14.3.3 for GHSA-vfgh-jcmw-g37q and
+  GHSA-gfr2-rv44-r23c, two quadratic-time paths when rendering Agent output.
 
 ### Verified
 - **The release candidate was verified live on clean machines.** On macOS 26.6 on an
