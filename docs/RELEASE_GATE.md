@@ -332,6 +332,7 @@ machine, so this checks the plumbing a new Mac user meets:
    | Podman state | doctor |
    |---|---|
    | not installed | FAIL, fix `brew install podman` (the Intel build: the Podman 6 / Intel package text) |
+   | not installed, no Homebrew (aarch64) | FAIL, fix names the podman.io installer, not onboarding installing Podman |
    | no machine | FAIL, fix runs `podman machine init` |
    | machine stopped | OK: it starts on first use; no FAIL |
    | running, rootless | OK: ready; no FAIL |
@@ -342,6 +343,13 @@ machine, so this checks the plumbing a new Mac user meets:
    ask for: `brew install podman`, the podman.io installer when there is no
    Homebrew, `podman machine init`, or `podman machine start`. It must write
    no config.
+
+   Doctor and onboarding also look for Podman and Homebrew where their
+   installers put them (`/opt/homebrew/bin`, `/usr/local/bin`,
+   `/opt/podman/bin`), whatever `PATH` says, and the runners have Homebrew
+   there. The states without Podman or Homebrew therefore run under
+   `sandbox-exec` with a profile that denies reading those programs in those
+   directories, as on a Mac that never installed them.
 5. Neither command may run a podman command that creates or changes a
    machine.
 

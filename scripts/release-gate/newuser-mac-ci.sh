@@ -6,11 +6,14 @@
 # with /usr/local/bin unwritable (the installer's copy names a locked
 # temporary directory instead), then `axocoatl doctor --json` and
 # `axocoatl onboard --plan` against a Podman stand-in (podman-shim.sh) in each
-# state a new Mac user meets: no Podman, no machine, a stopped machine, a
-# running one, a rootful one, and Podman 6. The x86_64 build on an Intel
-# runner gets the Intel answers. Nothing is installed or created. Evidence
-# goes to <evidence-root>/<version>/<commit>/<label>.json; Tier B is not a
-# required path.
+# state a new Mac user meets: no Podman (and, on Apple silicon, no Homebrew
+# either), no machine, a stopped machine, a running one, a rootful one, and
+# Podman 6. A state without Podman or Homebrew runs under sandbox-exec, so
+# the programs the runner has where their installers put them stay unseen.
+# The x86_64 build on an Intel runner gets the Intel answers. Nothing is
+# installed or created. Evidence goes to
+# <evidence-root>/<version>/<commit>/<label>.json; Tier B is not a required
+# path.
 #
 # Usage:
 #   newuser-mac-ci.sh --tarball DIST/axocoatl-vX.Y.Z-<mac target>.tar.gz [options]
@@ -54,7 +57,7 @@ done
 [ "$(id -u)" != 0 ] || gate_die "run the gate as a normal user"
 [ -n "$tarball" ] && [ -f "$tarball" ] || gate_die "--tarball must be the candidate's macOS release archive"
 tarball=$(CDPATH='' cd -- "$(dirname -- "$tarball")" && pwd)/${tarball##*/}
-for tool in node git curl tar; do
+for tool in node git curl tar sandbox-exec; do
   command -v "$tool" >/dev/null 2>&1 || gate_die "$tool is required"
 done
 [ -n "$commit" ] || commit=$(git -C "$gate_repo" rev-parse HEAD)
@@ -154,7 +157,36 @@ while (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; do port=$((port + 1)); d
 # PATH as the installer left it (axocoatl on it, as the user was told).
 user_path=$PATH
 path_for() { # path_for STATE: that PATH with the stand-in, or without any Podman
-  if [ "$1" = none ]; then printf '%s\n' "$user_path"; else printf '%s\n' "$shim:$user_path"; fi
+  case "$1" in
+    none) printf '%s\n' "$user_path" ;;
+    none-no-brew) PATH="$user_path" gate_path_without brew "$work/hide-brew" ;;
+    *) printf '%s\n' "$shim:$user_path" ;;
+  esac
+}
+# hidden_for STATE: the programs a Mac in STATE does not have.
+hidden_for() {
+  case "$1" in
+    none) echo podman ;;
+    none-no-brew) echo podman brew ;;
+  esac
+}
+# without "PROGRAMS" COMMAND...: COMMAND, unable to see PROGRAMS where
+# installers put them. Doctor and onboarding look for Homebrew and Podman
+# there (Homebrew's /opt/homebrew/bin and /usr/local/bin, the podman.io
+# package's /opt/podman/bin) whatever PATH says, and GitHub's macOS runners
+# have Homebrew there, so a PATH without them cannot play a Mac that lacks
+# them. sandbox-exec denies reading those files, as on a Mac that never
+# installed them.
+without() {
+  local programs=$1 profile='(version 1)(allow default)(deny file-read*' program dir
+  shift
+  [ -n "$programs" ] || { "$@"; return; }
+  for program in $programs; do
+    for dir in /opt/homebrew/bin /usr/local/bin /opt/podman/bin; do
+      profile="$profile (literal \"$dir/$program\")"
+    done
+  done
+  sandbox-exec -p "$profile)" "$@"
 }
 
 # 4. doctor --json in each state: what its sandbox section must say.
@@ -163,15 +195,17 @@ if [ "$intel" = 1 ]; then
 else
   none_fix='brew install podman'
 fi
-for state in none no-machine stopped running rootful podman6; do
+doctor_states=(none no-machine stopped running rootful podman6)
+[ "$intel" = 0 ] && doctor_states+=(none-no-brew)
+for state in "${doctor_states[@]}"; do
   home="$work/doctor-$state"
   mkdir -p "$home"
   config=$(HOME="$home" gate_config_path)
   mkdir -p "$(dirname -- "$config")"
   printf 'server:\n  port: %s\n  host: "127.0.0.1"\nproviders:\n  ollama:\n    base_url: "%s"\n' "$port" "$stub_url" >"$config"
-  [ "$state" = none ] || printf '%s\n' "$state" >"$PODMAN_SHIM_STATE"
+  case "$state" in none | none-no-brew) ;; *) printf '%s\n' "$state" >"$PODMAN_SHIM_STATE" ;; esac
   printf '== %s\n' "$state" >>"$PODMAN_SHIM_LOG"
-  env HOME="$home" PATH="$(path_for "$state")" axocoatl doctor --json \
+  without "$(hidden_for "$state")" env HOME="$home" PATH="$(path_for "$state")" axocoatl doctor --json \
     >"$GATE_ATTACH/doctor-$state.json" 2>"$GATE_ATTACH/logs/doctor-$state.log" </dev/null
   status=$?
   if detail=$(node -e '
@@ -185,6 +219,7 @@ for state in none no-machine stopped running rootful podman6; do
       const fails = sandbox.filter((item) => item.status === "fail");
       const expect = {
         "none": [() => has("fail", noneFix), `a FAIL whose fix names: ${noneFix}`],
+        "none-no-brew": [() => has("fail", "https://podman.io") && !has("fail", "it installs Podman"), "a FAIL whose fix names the podman.io installer, not onboarding installing Podman"],
         "no-machine": [() => has("fail", "podman machine init"), "a FAIL whose fix runs podman machine init"],
         "stopped": [() => fails.length === 0 && has("ok", "stopped"), "OK: the stopped machine starts on first use; no FAIL"],
         "running": [() => fails.length === 0 && has("ok", "ready"), "OK: ready; no FAIL"],
@@ -209,16 +244,11 @@ if [ "$plan" = 1 ]; then
   for state in "${plan_states[@]}"; do
     home="$work/plan-$state"
     mkdir -p "$home"
-    path=$(path_for "${state%-no-brew}")
-    if [ "$state" = none-no-brew ]; then
-      path=$(PATH="$path" gate_path_without brew "$work/hide-brew")
-    else
-      [ "$state" = none ] || printf '%s\n' "$state" >"$PODMAN_SHIM_STATE"
-    fi
+    case "$state" in none | none-no-brew) ;; *) printf '%s\n' "$state" >"$PODMAN_SHIM_STATE" ;; esac
     printf '== plan %s\n' "$state" >>"$PODMAN_SHIM_LOG"
     log="$GATE_ATTACH/logs/onboard-plan-$state.log"
-    env HOME="$home" PATH="$path" axocoatl onboard --plan --writer ollama --ollama-url "$stub_url" \
-      --no-pull --port "$port" </dev/null >"$log" 2>&1
+    without "$(hidden_for "$state")" env HOME="$home" PATH="$(path_for "$state")" axocoatl onboard --plan \
+      --writer ollama --ollama-url "$stub_url" --no-pull --port "$port" </dev/null >"$log" 2>&1
     status=$?
     case "$state" in
       none) if [ "$intel" = 1 ]; then words='Podman 6 no longer supports Intel Macs'; else words='Install Podman now with `brew install podman`'; fi ;;
