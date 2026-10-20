@@ -579,19 +579,35 @@ test('workspace selector exposes every named Workspace while the rail lists only
     ]);
     assert.equal((await railSessionLabels(page)).includes('Beta Only Session'), false);
 
+    // A picker renders again as each of its reads arrives, and so does the
+    // New Session picker when the shell's configuration reads finish; a
+    // render replaces its controls, so a click whose mousedown and mouseup
+    // straddle one is lost (seen in WebKit when readiness arrived
+    // mid-click). Click the labels once those reads are in. The shell's own
+    // reads finish first, so the next ones of each path are the picker's.
+    await page.waitForFunction(() => (document.querySelector('ax-session-home')?.agents?.length || 0) > 0
+      && document.querySelector('#readiness')?.report);
+    const pickerReads = (pathnames) => Promise.all(pathnames.map((pathname) =>
+      page.waitForResponse((response) => new URL(response.url()).pathname === pathname)));
+    const folderRead = pickerReads(['/api/fs/list']);
     await page.locator('ax-rail #open-workspace').click();
     const workspaceName = page.getByLabel('Workspace name');
     await workspaceName.waitFor({ state: 'visible' });
     assert.equal(await workspaceName.getAttribute('id'), 'workspace-name-input');
+    await folderRead;
+    await waitForTwoFrames(page);
     await page.locator('ax-session-home label[for="workspace-name-input"]').click();
     assert.equal(await workspaceName.evaluate((input) => input.getRootNode().activeElement === input), true);
     await page.locator('ax-session-home [data-action="picker-cancel"]').click();
 
+    const newSessionReads = pickerReads(['/api/skills', '/api/readiness', '/api/fs/project']);
     await page.evaluate((workspaceId) =>
       document.querySelector('ax-session-home')?.newSession(workspaceId), alpha.workspace.id);
     const sessionName = page.getByLabel('Session name');
     await sessionName.waitFor({ state: 'visible' });
     assert.equal(await sessionName.getAttribute('id'), 'session-name-input');
+    await newSessionReads;
+    await waitForTwoFrames(page);
     await page.locator('ax-session-home label[for="session-name-input"]').click();
     assert.equal(await sessionName.evaluate((input) => input.getRootNode().activeElement === input), true);
     await page.locator('ax-session-home [data-action="picker-cancel"]').click();
