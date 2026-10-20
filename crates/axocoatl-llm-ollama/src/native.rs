@@ -49,7 +49,8 @@ mod observed_context;
 mod server_check;
 mod version_policy;
 pub use observed_context::{
-    observe_native_ollama_context, NativeOllamaContextObservation, OBSERVATION_SCHEMA_VERSION,
+    inspect_native_ollama_model, observe_native_ollama_context, NativeOllamaContextObservation,
+    OBSERVATION_SCHEMA_VERSION,
 };
 use server_check::reports_cloud_disabled;
 pub use server_check::{

@@ -3,11 +3,11 @@ use std::pin::Pin;
 mod native;
 pub use native::{
     check_native_ollama_server, check_shown_model, describe_native_ollama_error,
-    native_ollama_error_hint, observe_native_ollama_context, ollama_version_accepted,
-    ollama_version_refusal, show_native_ollama_model, validate_native_ollama_endpoint,
-    NativeOllamaConfig, NativeOllamaContextObservation, NativeOllamaProvider,
-    NativeOllamaServerCheck, OllamaCloudMode, OllamaServedVersions, ShownModel,
-    AUDITED_OLLAMA_VERSION, CONTRACT_STOP_PROBE_PROMPT, DENIED_OLLAMA_VERSIONS,
+    inspect_native_ollama_model, native_ollama_error_hint, observe_native_ollama_context,
+    ollama_version_accepted, ollama_version_refusal, show_native_ollama_model,
+    validate_native_ollama_endpoint, NativeOllamaConfig, NativeOllamaContextObservation,
+    NativeOllamaProvider, NativeOllamaServerCheck, OllamaCloudMode, OllamaServedVersions,
+    ShownModel, AUDITED_OLLAMA_VERSION, CONTRACT_STOP_PROBE_PROMPT, DENIED_OLLAMA_VERSIONS,
     OBSERVATION_SCHEMA_VERSION,
 };
 
