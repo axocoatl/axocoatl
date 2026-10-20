@@ -213,6 +213,9 @@ pub async fn vendor_asset(Path(file): Path<String>) -> Response {
 pub struct HealthResponse {
     pub status: String,
     pub agents: usize,
+    /// The Axocoatl version this daemon runs, so `axocoatl doctor` can say
+    /// when it differs from the CLI's (an upgrade that was not restarted).
+    pub version: &'static str,
 }
 
 pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
@@ -220,6 +223,7 @@ pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy".to_string(),
         agents: daemon.agent_count().await,
+        version: env!("CARGO_PKG_VERSION"),
     })
 }
 
