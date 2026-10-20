@@ -9,39 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Runs get the repository's toolchain and dependencies, and a run whose check cannot
-  start is refused before any model call.** A loadout with a `detected` check (`fix`,
+  work is refused before any model call.** A loadout with a `detected` check (`fix`,
   `fix-claude-code`, `fix-codex`) now detects the repository's language from its root
   files (`package.json`, `pyproject.toml`/`setup.py`/`setup.cfg`/`requirements*.txt`,
-  `Cargo.toml`, `go.mod`; with several, the check command's program chooses, else the run
-  is refused naming `--toolchain`) and runs an image of it built from the new toolchain
-  recipes `node` (Node 24.21.0), `python` (Python 3.13.16), `rust` (Rust 1.99.1) and `go`
-  (Go 1.27.2), each an official Debian-based image pinned by its multi-architecture index
-  digest plus git. `axocoatl run` builds a missing image first and prints what it builds
-  and its size (`--no-build` refuses, naming `axocoatl recipe build`); an external
+  `go.mod`; with several, the check command's program chooses, else the run is refused
+  naming `--toolchain`) and runs an image of it built from the new toolchain recipes
+  `node` (Node 24.21.0), `python` (Python 3.13.16) and `go` (Go 1.27.2), each an official
+  Debian-based image pinned by its multi-architecture index digest plus git and make.
+  `axocoatl run` builds a missing image first and prints what it builds and its size,
+  an agent's included (`--no-build` refuses, naming `axocoatl recipe build`); an external
   writer's recipe composes with the toolchain into one image (`claude-code python`).
   Before the first model call a setup installs the declared dependencies (`npm ci`,
-  `pnpm`/`yarn` through corepack, `pip install -e '.[test]'` into a virtual environment,
-  `cargo fetch`, `go mod download`) as the writer, with only that ecosystem's registries
+  `pnpm` and Yarn 1 or Yarn 2+ through corepack, `pip install -e '.[test]'` into a
+  virtual environment with the test extra or group, Poetry, uv, PDM and Hatch test lists
+  given as requirements, and `pytest` whenever the check runs it and nothing installed
+  brings it, `go mod download`) as the writer, with only that ecosystem's registries
   open (a per-Session allow recorded with the run as actor, revoked before the writer
-  starts; a setup refused 30 connections is stopped), and caches persist in a
-  per-Workspace volume so a second run installs offline. A failed setup ends the run with
-  exit code 5 and the installer's last lines. Then a probe checks the check's program is on
-  the writer's PATH and runs the check once on the untouched tree: a missing program
-  (`not found`, exit 127) or Python module refuses the run with exit code 3, naming the
-  image, the check, the program and the fixes. The check is `--check`, else a `Check
-  command:` line of `AXOCOATL.md`, else detected; Python repositories get `pytest` only
-  when they use it, else `python3 -m unittest discover`. New flags `--toolchain
-  detected|node|python|rust|go|none`, `--image`, `--no-setup`, `--no-build` and the
-  loadout field `environment.toolchain`; `none` keeps the earlier behavior. The run's
-  notes, manifest and receipt (`predicate.sandbox.environment`, ignored by 1.4 verifiers)
-  record the toolchain and why, the image, the check, the setup command, exit code,
-  duration, registries and its connections, and the probe.
+  starts; a setup refused 30 connections is stopped). The installed packages persist in
+  a per-Workspace cache volume, so a second run installs offline; only the setup writes
+  it, and root takes it back read-only before the first model call, so a writer cannot
+  change what its own or a later run's checks run. A failed setup ends the run with exit
+  code 5 and the installer's last lines. Then a probe runs the check once on the
+  untouched tree through the same supervisor as the run's checks: a missing check
+  program or test runner, a missing Python module that `python -m` runs or the project
+  declares, or a check that runs none of the repository's test files refuses the run
+  with exit code 3, naming the image, the check, what is missing and the fixes
+  (`--no-probe` skips it). The check is `--check`, else a `Check command:` line of
+  `AXOCOATL.md`, else detected; Python repositories get `python3 -m pytest` when they use
+  pytest (including plain `def test_` files), else `python3 -m unittest discover`. New
+  flags `--toolchain detected|node|python|go|none`, `--image`, `--no-setup`, `--no-build`,
+  `--no-probe` and the loadout field `environment.toolchain`; `none` keeps the earlier
+  behavior. The run's notes, manifest and receipt (`predicate.sandbox.environment`,
+  ignored by 1.4 verifiers) record the toolchain and why, the image, the check, the setup
+  command, exit code, duration, registries and its connections, and the probe. Rust
+  repositories are refused with exit code 3 before any download or model call: the
+  hardened Session's Landlock domain refuses the cross-directory renames cargo and rustc
+  make, so no Rust check can pass yet (the `rust` recipe still builds).
 
 ### Fixed
 - A run that ended at admission (a failed environment or setup) reported "0 recorded
   events" in its network summary; it now counts what the Session's record holds.
 - The `sandbox.egress` warning under `sandbox.network: bridge` said `allow` was
-  ignored; loadout runs always use it, and the warning now says so.
+  ignored; loadout runs under `network: egress`, as every built-in loadout is, use it,
+  and the warning now says so.
+- Root's commands in a Session container (its readiness checks and user setup) ran
+  programs found on the image's `PATH`, which can name a directory the workload users
+  write; they now run with a `PATH` of system directories only.
 
 ### Changed
 - **Native Sessions run on Ollama 0.40.6 and later 0.40 releases; Ollama 0.20.6 is

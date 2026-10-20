@@ -124,11 +124,11 @@ when they cannot (a repository another user owns, or a container or kernel that 
 give the view), the run ends with exit code 5 before its first turn and says why.
 
 A loadout with a `detected` check runs in Axocoatl's image of the repository's language
-(Node.js, Python, Rust or Go), detected from its files. Before the first model call the
-run installs the repository's dependencies, such as `npm ci` or `pip install -e
-'.[test]'`, with only that language's package registries open, and checks that the check
-command can start. A check whose program is missing ends the run with exit code 3. See
-[Repository toolchains](/configure/toolchains/). `--setup`, or else the loadout's
+(Node.js, Python or Go; Rust repositories are refused for now), detected from its files.
+Before the first model call the run installs the repository's dependencies, such as
+`npm ci` or `pip install -e '.[test]'`, with only that language's package registries
+open, and probes the check command. A check whose program is missing ends the run with
+exit code 3. See [Repository toolchains](/configure/toolchains/). `--setup`, or else the loadout's
 `environment.setup`, replaces the detected install. Without a toolchain (`--toolchain
 none`, or a loadout that names its `image`), a run approves only `--setup` or
 `environment.setup` and nothing detected.
