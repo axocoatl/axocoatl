@@ -34,9 +34,12 @@ musl-based distributions such as Alpine; use the Cargo or source path there.
     newer, or when macOS is older than version 11. It installs to
     `/usr/local/bin` when writable and otherwise to `~/.local/bin`. When that
     directory is not on your `PATH`, it asks, on the terminal, before adding one line
-    to your shell's profile, and prints that line when it cannot ask or you answer with
-    end of input (Ctrl-D). In a GitHub Actions step it adds the directory to
-    `$GITHUB_PATH` instead, for the job's later steps.
+    to the startup files your shell reads in a new terminal and a new login, and prints
+    that line when it cannot ask or you answer with end of input (Ctrl-D). The line adds
+    the directory only when `PATH` does not have it, and a file that already adds it,
+    such as Ubuntu's `~/.profile`, gets none. In a GitHub
+    Actions step it adds the directory to `$GITHUB_PATH` instead, for the job's later
+    steps.
   </TabItem>
   <TabItem label="Cargo">
     ```sh
@@ -73,8 +76,10 @@ axocoatl --help
 
 If `axocoatl` is not found, the installer used `~/.local/bin` and did not add it to
 your `PATH`. Open a new terminal if you let it add the line; otherwise add the line it
-printed to your shell's profile (`~/.zprofile` for zsh on macOS, `~/.bashrc` for bash on
-Linux), or set it for this shell only:
+printed to the startup files it named (`~/.zprofile` for zsh on macOS; for bash on Linux
+`~/.bashrc` and `~/.profile`, or `~/.bash_profile` when you have one, and `~/.bashrc`
+alone when `~/.profile` adds `~/.local/bin` already, as Ubuntu's does), or set it for this
+shell only:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"

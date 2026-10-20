@@ -175,13 +175,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/usr/local/bin` is not writable, the installer used `~/.local/bin`, which macOS does not
   put on PATH, and the `axocoatl onboard` it printed next failed with "command not
   found". When the install directory is not on PATH, the installer now asks on the
-  terminal before adding one marked line to the profile your shell reads (`~/.zprofile`
-  for zsh on macOS, `~/.zshrc` on Linux; for bash the login file that exists on macOS,
-  `~/.bashrc` on Linux; `fish_add_path` in fish's `config.fish`; `~/.profile` otherwise),
-  and prints that line when it cannot ask. `AXOCOATL_MODIFY_PATH=yes` adds it without
-  asking and `=no` never asks; end of input at the question (Ctrl-D) counts as no. In a
-  GitHub Actions step it adds the directory to `$GITHUB_PATH` instead. The next commands
-  are printed with the binary's full path unless the shell already finds it, and an
+  terminal before adding one marked line to the startup files your shell reads in a new
+  terminal and a new login (`~/.zprofile` for zsh on macOS, `~/.zshrc` and `~/.zprofile`
+  on Linux; for bash the login file that exists, else `~/.bash_profile` on macOS and
+  `~/.profile` on Linux, and on Linux `~/.bashrc` too; `fish_add_path` in fish's
+  `config.fish`, under `$XDG_CONFIG_HOME` when that is set; `~/.profile` otherwise), and
+  prints that line and those files when it cannot ask. The line adds the directory only
+  when PATH does not have it, and a file that already adds it gets none: next to Ubuntu's
+  and Debian's `~/.profile`, which reads `~/.bashrc` and then adds `~/.local/bin` itself,
+  only `~/.bashrc` gets a line, one that skips login shells, so a new login and a new
+  terminal each list `~/.local/bin` once. `AXOCOATL_MODIFY_PATH=yes` adds it
+  without asking and `=no` never asks; end of input at the question (Ctrl-D) counts as
+  no. In a GitHub Actions step it adds the directory to `$GITHUB_PATH` instead. The next
+  commands are printed with the binary's full path unless the shell already finds it, and an
   earlier `axocoatl` on PATH is named. Without Podman, the installer says that onboarding
   sets it up, on every platform, instead of an `apt-get` line on WSL alone.
 - **The installer can install a given release from a given place.**
