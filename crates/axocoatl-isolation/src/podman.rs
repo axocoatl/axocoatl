@@ -216,10 +216,40 @@ pub async fn preflight() -> PodmanReadiness {
 
 /// [`preflight`] with the Podman client at `program`.
 pub async fn preflight_with(program: &str) -> PodmanReadiness {
-    if command_exists(program) && runtime_available_with(program).await.is_ok() {
-        return PodmanReadiness::Ready;
+    preflight_through(program, configured_connection()).await
+}
+
+/// `CONTAINER_HOST=…` or `CONTAINER_CONNECTION=…` when this process names
+/// the Podman connection to use.
+fn configured_connection() -> Option<String> {
+    ["CONTAINER_HOST", "CONTAINER_CONNECTION"]
+        .iter()
+        .find_map(|name| {
+            std::env::var(name)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!("{name}={value}"))
+        })
+}
+
+/// [`preflight_with`] given the connection the environment names. When
+/// one is named and Podman does not answer through it, Podman is
+/// unavailable: the default machine's state says nothing about that
+/// connection, so a missing or stopped default machine is never reported
+/// (and onboarding never offers to create one) for it.
+async fn preflight_through(program: &str, connection: Option<String>) -> PodmanReadiness {
+    if !command_exists(program) {
+        return PodmanReadiness::NotInstalled;
     }
-    detect_with(program).await
+    match runtime_available_with(program).await {
+        Ok(()) => PodmanReadiness::Ready,
+        Err(error) => match connection {
+            Some(connection) => PodmanReadiness::Unavailable(format!(
+                "{connection} is set, and Podman does not answer through it: {error}"
+            )),
+            None => detect_with(program).await,
+        },
+    }
 }
 
 const PODMAN: &str = "podman";
@@ -620,6 +650,43 @@ esac"#,
             preflight_with(&missing).await,
             PodmanReadiness::NotInstalled
         );
+    }
+
+    /// With CONTAINER_HOST or CONTAINER_CONNECTION set, a Podman that does
+    /// not answer through it is unavailable, never "no machine": the
+    /// default machine is not the one in use, so nothing offers to create
+    /// it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_named_connection_that_does_not_answer_is_unavailable() {
+        let directory = tempfile::tempdir().unwrap();
+        let podman = shim(
+            directory.path(),
+            r#"case "$*" in
+  "--version") echo "podman version 5.8.2" ;;
+  "machine list --format json") echo '[]' ;;
+  *) echo "Cannot connect to Podman" >&2; exit 125 ;;
+esac"#,
+        );
+        let readiness =
+            preflight_through(&podman, Some("CONTAINER_HOST=unix:///tmp/x.sock".into())).await;
+        let PodmanReadiness::Unavailable(error) = readiness else {
+            panic!("{readiness:?}");
+        };
+        assert!(
+            error.starts_with("CONTAINER_HOST=unix:///tmp/x.sock is set"),
+            "{error}"
+        );
+        assert!(error.contains("Cannot connect to Podman"), "{error}");
+        assert!(!calls(directory.path())
+            .iter()
+            .any(|call| call.starts_with("machine")));
+        if needs_machine() {
+            assert_eq!(
+                preflight_through(&podman, None).await,
+                PodmanReadiness::MachineMissing
+            );
+        }
     }
 
     #[test]

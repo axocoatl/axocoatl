@@ -52,6 +52,8 @@ case "$*" in
     rf=false; [ -f "$D/rootful" ] && rf=true
     echo "[{{\"Name\":\"podman-machine-default\",\"Rootful\":$rf,\"Resources\":{{\"CPUs\":6,\"Memory\":8192}}}}]" ;;
   "machine info --format json") echo '{{"Host":{{"VMType":"applehv"}}}}' ;;
+  "system connection list --format json")
+    if [ -f "$D/machine" ] || [ -f "$D/connection" ]; then echo '[{{"Name":"podman-machine-default"}}]'; else echo '[]'; fi ;;
   machine\ init*) touch "$D/machine" ;;
   "machine start") touch "$D/running" ;;
   "machine stop") rm -f "$D/running" ;;
@@ -1300,4 +1302,60 @@ async fn an_existing_configuration_can_be_left_unchanged() {
     assert_eq!(config_text(&o), "agents: []\n");
     assert!(o.ui.output().contains("Configuration left unchanged"));
     assert!(shims.calls().is_empty());
+}
+
+/// A connection that exists but does not answer is never replaced by a new
+/// machine: onboarding stops with what to check.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_existing_connection_is_never_replaced_by_a_new_machine() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["connection"]);
+    let report = podman_report(&shims).await;
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    assert_eq!(report.readiness, PodmanReadiness::MachineMissing);
+    let facts = facts(
+        mac("26.6"),
+        48,
+        report,
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Manual,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs::default(),
+    );
+    assert!(!sandbox::run(&mut o).await);
+    assert!(
+        !shims
+            .calls()
+            .iter()
+            .any(|call| call.contains("machine init")),
+        "{:?}",
+        shims.calls()
+    );
+    assert!(
+        o.steps[0].contains("Podman has connections (podman-machine-default)"),
+        "{:?}",
+        o.steps
+    );
+}
+
+#[test]
+fn connection_names_are_read_from_podman() {
+    assert_eq!(
+        sandbox::connection_names(
+            r#"[{"Name":"podman-machine-default","URI":"ssh://x"},{"Name":"remote"}]"#
+        ),
+        ["podman-machine-default", "remote"]
+    );
+    assert!(sandbox::connection_names("[]").is_empty());
+    assert!(sandbox::connection_names("not json").is_empty());
 }

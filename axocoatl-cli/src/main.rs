@@ -527,12 +527,17 @@ async fn main() {
 
     // Initialize tracing. Logs go to stderr so they never collide with a
     // command's stdout output — in particular `mcp serve`, whose stdout is the
-    // MCP JSON-RPC channel.
+    // MCP JSON-RPC channel. `onboard` and `doctor` say everything they do
+    // themselves, so they show only warnings unless RUST_LOG asks for more.
+    let default_filter = match cli.command {
+        Commands::Onboard(_) | Commands::Doctor { .. } => "warn",
+        _ => "info",
+    };
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter)),
         )
         .init();
 

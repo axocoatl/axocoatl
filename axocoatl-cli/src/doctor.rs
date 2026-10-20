@@ -35,6 +35,17 @@ pub(crate) struct Item {
 }
 
 impl Item {
+    /// The item as one line: its detail, after its name when the detail
+    /// does not already say what it is about.
+    pub(crate) fn line(&self) -> String {
+        let key = self.name.trim_start_matches("Model ").to_ascii_lowercase();
+        if self.detail.to_ascii_lowercase().contains(&key) {
+            self.detail.clone()
+        } else {
+            format!("{}: {}", self.name, self.detail)
+        }
+    }
+
     fn ok(name: &str, detail: impl Into<String>) -> Self {
         Self {
             name: name.to_string(),
@@ -852,8 +863,8 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         .all()
         .filter(|item| item.status == Status::Fail)
         .map(|item| match &item.fix {
-            Some(fix) => format!("{}: {}", item.detail, fix),
-            None => item.detail.clone(),
+            Some(fix) => format!("{}: {}", item.line(), fix),
+            None => item.line(),
         })
         .collect();
     Report {
@@ -1163,7 +1174,7 @@ pub(crate) fn text(report: &Report) -> String {
                 Status::Warn => "[WARN]",
                 Status::Fail => "[FAIL]",
             };
-            out.push_str(&format!("  {tag} {}\n", item.detail));
+            out.push_str(&format!("  {tag} {}\n", item.line()));
             if let Some(fix) = &item.fix {
                 if item.status != Status::Ok {
                     out.push_str(&format!("         → {fix}\n"));

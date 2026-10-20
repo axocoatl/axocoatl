@@ -444,12 +444,12 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str) -> Facts {
         .filter(|path| path.is_absolute());
     let os = if host.macos {
         let version = host
-            .probe("sw_vers", &["-productVersion"])
+            .probe("/usr/bin/sw_vers", &["-productVersion"])
             .await
             .filter(|probe| probe.success)
             .map(|probe| probe.stdout.trim().to_string());
         let chip = host
-            .probe("sysctl", &["-n", "machdep.cpu.brand_string"])
+            .probe("/usr/sbin/sysctl", &["-n", "machdep.cpu.brand_string"])
             .await
             .filter(|probe| probe.success)
             .map(|probe| probe.stdout.trim().to_string())

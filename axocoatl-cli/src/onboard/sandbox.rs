@@ -255,7 +255,42 @@ fn containers_conf(o: &Onboarding) -> std::path::PathBuf {
         .join("containers.conf")
 }
 
+/// The Podman connections already defined (`podman system connection
+/// list`), by name.
+pub(crate) fn connection_names(json: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|connection| connection.get("Name").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
 async fn create_machine(o: &mut Onboarding) -> bool {
+    // A machine is created only where Podman has nothing defined: a
+    // connection that exists but does not answer is a setup to fix, not to
+    // replace.
+    if !o.ui.plan() {
+        let existing = o
+            .host
+            .probe(
+                "podman",
+                &["system", "connection", "list", "--format", "json"],
+            )
+            .await
+            .filter(|probe| probe.success)
+            .map(|probe| connection_names(&probe.stdout))
+            .unwrap_or_default();
+        if !existing.is_empty() {
+            o.step_left(format!(
+                "Podman has connections ({}) but no machine answers: check `podman system                  connection list` and `podman machine list`, then run `axocoatl onboard` again",
+                existing.join(", ")
+            ));
+            return false;
+        }
+    }
     let spec = spec(o);
     // The podman.io package defaults to libkrun; Axocoatl is tested with
     // applehv, which Homebrew's Podman uses.

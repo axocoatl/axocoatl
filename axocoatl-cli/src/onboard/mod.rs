@@ -871,8 +871,8 @@ async fn check(o: &mut Onboarding) -> bool {
     {
         match item.status {
             crate::doctor::Status::Ok => {}
-            crate::doctor::Status::Warn => o.ui.warn(&item.detail),
-            crate::doctor::Status::Fail => o.ui.fail(&item.detail),
+            crate::doctor::Status::Warn => o.ui.warn(item.line()),
+            crate::doctor::Status::Fail => o.ui.fail(item.line()),
         }
     }
     for step in &report.steps_left {
