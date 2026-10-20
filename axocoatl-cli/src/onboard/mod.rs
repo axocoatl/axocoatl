@@ -348,11 +348,15 @@ impl Onboarding {
         self.facts.memory_gb()
     }
 
-    /// The data directory this configuration uses.
+    /// The data directory this configuration uses: the one `recipe build`
+    /// and `connect` record into (`AXOCOATL_DATA_DIR` when it is set).
     pub(crate) fn data_dir(&self) -> PathBuf {
-        self.data_dir_override
-            .clone()
-            .unwrap_or_else(|| self.paths.data_dir.clone())
+        self.data_dir_override.clone().unwrap_or_else(|| {
+            std::env::var_os("AXOCOATL_DATA_DIR")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| self.paths.data_dir.clone())
+        })
     }
 
     /// What Step 5's check (the code `doctor` runs) needs about this
