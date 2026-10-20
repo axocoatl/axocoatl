@@ -82,12 +82,16 @@ warned about (`same_model_reviewer`), and one from your setup is refused (see
 
 Every other flag of [`axocoatl run`](/reference/run/) applies: `--check "<command>"` when
 Axocoatl detects no check command in the repository, `--junit` and `--record`,
-`--keep branch|pr`, and `--dry-run` to list what would stop the run without starting it.
+`--keep branch|pr`, and `--dry-run` to list what would stop the run without starting it
+(it loads the reviewer's Ollama model once, as a run would).
 Before anything starts, the run is refused with every problem at once: a credential that
 is not stored (exit code 3, saying how to connect), a reviewer that cannot run, and a
 recipe image that was not built (exit code 5, naming the `axocoatl recipe build` command).
 Once `axocoatl connect` has stored a sign-in, it prints the run command for this computer:
-the image build when none is recorded, and the reviewer from your setup.
+the image build when none is recorded, and the reviewer from your setup. With no reviewer
+set up yet, it says to choose one first (`axocoatl onboard` saves it as
+`run.models.reviewer`) and prints the command that then runs as written, or the `--model
+reviewer=…` to add instead.
 
 ## What the built-in loadouts run
 

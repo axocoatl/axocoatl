@@ -769,7 +769,9 @@ A default applies to a run only where its provider fits what the parameter feeds
 its own `anthropic:sonnet`, and an `anthropic:` writer is not used for `fix`'s native writer.
 The run says which defaults it used and which it left out, and why, in its notes; see
 [Models from your setup](/reference/run/#models-from-your-setup). The daemon reads `run:`
-when it starts; restart it after a change.
+when it starts; restart it after a change. Until then, a run that misses a parameter the
+file now sets is refused with a note that the file changed since the daemon started and
+that it needs a restart.
 
 ## Validation boundary
 
