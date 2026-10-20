@@ -26,7 +26,8 @@
 #     --commit SHA        commit the candidate was built from (default HEAD)
 #     --evidence-root DIR default <repo>/release-evidence
 #     --pr-repo OWNER/axocoatl-gate-NAME  throwaway repository for --keep pr
-#     --real-repo DIR --real-task TEXT    the timed real-repository run
+#     --real-repo DIR --real-task TEXT    the real-repo path on this repository
+#                         instead of the pinned ones in real-repos.json
 #     --yes               answer onboarding with flags instead of prompts
 #                         (allowed for later commits of a release whose
 #                         interactive run is already recorded)
@@ -438,21 +439,55 @@ path_recovery() {
   path_end
 }
 
+real_repo_run() {
+  # real_repo_run NAME CLONE TASK: the timed run, its verdict and receipt.
+  local name=$1 clone=$2 task_text=$3
+  gate_step "run fix on $name (verdict 0, 1 or 2, not infrastructure)" --expect 0 -- /bin/bash -c \
+    'cd "$1" && axocoatl run fix --task "$2" --junit junit.xml --record run.axorecord.jsonl --receipt receipt.json; s=$?; echo "exit $s"; [ $s -le 2 ]' \
+    gate-run "$clone" "$task_text"
+  mkdir -p "$GATE_ATTACH/$name"
+  for file in receipt.json run.axorecord.jsonl junit.xml; do
+    [ -f "$clone/$file" ] && cp "$clone/$file" "$GATE_ATTACH/$name/"
+  done
+  if [ -f "$clone/receipt.json" ]; then
+    gate_step "receipt verify on $name (documented command)" -- /bin/bash -c \
+      'cd "$1" && axocoatl receipt verify receipt.json --key "$(axocoatl receipt key)" --repo .' gate-verify "$clone"
+  fi
+}
+
 path_real_repo() {
   path_begin real-repo
-  if [ -z "$real_repo" ] || [ -z "$real_task" ]; then
-    gate_skip "a timed run on a real repository" "pass --real-repo DIR and --real-task TEXT"
+  install_once || { path_end; return; }
+  ensure_daemon
+  if [ -n "$real_repo" ] || [ -n "$real_task" ]; then
+    if [ -z "$real_repo" ] || [ -z "$real_task" ]; then
+      gate_record "a timed run on --real-repo" fail '' '' '' "pass both --real-repo DIR and --real-task TEXT"
+    else
+      local clone="$work/repos/real-repo"
+      rm -rf "$clone"
+      gate_step "clone the real repository" -- git clone -q --no-hardlinks "$real_repo" "$clone" \
+        && real_repo_run real-repo "$clone" "$real_task"
+    fi
     path_end
     return
   fi
-  install_once || { path_end; return; }
-  ensure_daemon
-  local clone="$work/repos/real-repo"
-  rm -rf "$clone"
-  gate_step "clone the real repository" -- git clone -q --no-hardlinks "$real_repo" "$clone"
-  gate_step "run fix on the real repository (verdict 0, 1 or 2, not infrastructure)" --expect 0 -- /bin/bash -c \
-    'cd "$1" && axocoatl run fix --task "$2" --junit junit.xml --record run.axorecord.jsonl --receipt receipt.json; s=$?; echo "exit $s"; [ $s -le 2 ]' \
-    gate-run "$clone" "$real_task"
+  # The pinned repositories of real-repos.json, each at its commit.
+  local name url ref pinned task_text clone
+  while IFS=$'\t' read -r name url ref pinned task_text; do
+    clone="$work/repos/real-$name"
+    rm -rf "$clone"
+    if [ "$url" = self ]; then
+      gate_step "clone $name at the candidate commit" -- /bin/bash -c \
+        'git clone -q --no-hardlinks "$1" "$2" && git -C "$2" checkout -q "$3"' gate-clone "$gate_repo" "$clone" "$commit" || continue
+    else
+      gate_step "clone $name at $ref" -- git clone -q --depth 1 --branch "$ref" "$url" "$clone" || continue
+      gate_check "$name is at the pinned commit ${pinned:0:12}" "it is at $(git -C "$clone" rev-parse HEAD 2>/dev/null)" -- \
+        test "$(git -C "$clone" rev-parse HEAD 2>/dev/null)" = "$pinned" || continue
+    fi
+    real_repo_run "$name" "$clone" "$task_text"
+  done < <(node -e '
+    for (const r of require(process.argv[1]).repos) console.log([r.name, r.url, r.ref ?? "", r.commit ?? "", r.task].join("\t"));
+  ' "$script_dir/real-repos.json")
   path_end
 }
 
