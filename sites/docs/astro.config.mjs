@@ -124,6 +124,7 @@ export default defineConfig({
             { label: 'Run as a service', slug: 'operate/service' },
             { label: 'Data and backup', slug: 'operate/data-backup' },
             { label: 'Upgrade', slug: 'operate/upgrade' },
+            { label: 'Uninstall', slug: 'operate/uninstall' },
             { label: 'Security', slug: 'operate/security' },
             { label: 'Resource sizing', slug: 'operate/resources' },
             { label: 'Troubleshooting', slug: 'operate/troubleshooting' },

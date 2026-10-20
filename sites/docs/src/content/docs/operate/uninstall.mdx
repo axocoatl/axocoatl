@@ -1,0 +1,120 @@
+---
+title: Uninstall
+description: Remove Axocoatl from this computer. Stop it, remove what it made in Podman, its configuration, data and logs, the binary and the PATH line the installer added, and, if nothing else uses them, Podman's machine and the Ollama models.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Axocoatl keeps its state in the places below and nowhere else. Removing them deletes
+every Session with its history and record, the credentials `axocoatl connect` and
+`axocoatl secret set` stored, and the private key that signs this computer's receipts.
+
+<Aside type="caution" title="Before you remove the data">
+Receipts this computer already signed keep verifying with the public key line
+`axocoatl receipt key` prints. Keep that line wherever others check them, such as
+`.axocoatl/receipt-keys` in a repository. To keep your Sessions, make a cold backup
+first ([Data and backup](/operate/data-backup/)).
+</Aside>
+
+## 1. Stop Axocoatl
+
+Stop `axocoatl dev` with Ctrl+C. If you installed the always-on service, remove it; this
+stops the daemon and deletes the service definition
+(`~/Library/LaunchAgents/ai.axocoatl.daemon.plist` on macOS,
+`~/.config/systemd/user/axocoatl.service` on Linux):
+
+```sh
+axocoatl service uninstall
+```
+
+## 2. Remove what it made in Podman
+
+Sessions and runs use Podman containers and volumes whose names start with `axo-`, and
+images named `localhost/axocoatl-…` (the egress proxy, the browser and the Claude Code and
+Codex images). With the daemon stopped:
+
+```sh
+podman ps -aq --filter name='^axo-' | xargs -r podman rm -f
+podman volume ls -q --filter name='^axo-' | xargs -r podman volume rm -f
+podman images --format '{{.Repository}}:{{.Tag}}' | grep '^localhost/axocoatl' | xargs -r podman rmi -f
+```
+
+The base images a Session pulled, such as `docker.io/library/alpine` and
+`docker.io/library/node`, may be shared with other tools; remove them with `podman rmi`
+if nothing else uses them.
+
+## 3. Remove its configuration, data and logs
+
+<Tabs syncKey="platform">
+  <TabItem label="macOS">
+    ```sh
+    rm -rf ~/Library/Application\ Support/Axocoatl ~/Library/Logs/Axocoatl ~/.axocoatl
+    ```
+
+    The first holds the configuration, your loadouts and the data directory; the second
+    Axocoatl's logs; the third the daemon's local socket.
+  </TabItem>
+  <TabItem label="Linux and WSL2">
+    ```sh
+    rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/axocoatl" \
+      "${XDG_DATA_HOME:-$HOME/.local/share}/axocoatl" \
+      "${XDG_STATE_HOME:-$HOME/.local/state}/axocoatl" \
+      ~/.axocoatl
+    ```
+
+    The configuration and your loadouts, the data directory, Axocoatl's logs, and the
+    daemon's local socket. With `XDG_RUNTIME_DIR` set, the socket is in
+    `$XDG_RUNTIME_DIR/axocoatl`, which goes away when you log out.
+  </TabItem>
+</Tabs>
+
+A configuration or data directory you chose yourself, with `--config` or
+`AXOCOATL_DATA_DIR`, is wherever you put it. Axocoatl writes nothing into your
+repositories unless you ask it to: the files you named with `--junit`, `--record` or
+`--receipt`, the branches Keep as PR made (named `axocoatl/…`), an `axocoatl-qa/`
+directory a `qa` run created, and a `.axocoatl/receipt-keys` file you committed.
+
+## 4. Remove the binary
+
+Remove the executable the installer put in `/usr/local/bin` or `~/.local/bin`, or the
+one Cargo installed:
+
+```sh
+rm -f /usr/local/bin/axocoatl ~/.local/bin/axocoatl
+```
+
+```sh
+cargo uninstall axocoatl-cli
+```
+
+When the installer added `~/.local/bin` to your `PATH`, it wrote a line after the comment
+`# Added by the Axocoatl installer` in your shell's profile (`~/.zprofile` or `~/.zshrc`
+for zsh, `~/.bash_profile`, `~/.profile` or `~/.bashrc` for bash,
+`~/.config/fish/config.fish` for fish). Delete those two lines if nothing else of yours
+lives in `~/.local/bin`.
+
+## 5. Optional: Podman, Ollama and your sign-ins
+
+These may serve other tools; remove them only if you set them up for Axocoatl.
+
+- **The Podman machine** (macOS), with every container and image in it:
+  `podman machine rm`. Podman itself: `brew uninstall podman`, or the uninstaller of the
+  podman.io package.
+- **Ollama models**: `ollama rm qwen3-coder:30b gpt-oss:20b`, or the models you pulled.
+  Ollama itself: `brew uninstall ollama`, or quit and delete the Ollama app. Onboarding
+  may have turned Ollama's cloud features off in `~/.ollama/server.json`
+  (`"disable_ollama_cloud": true`); remove that line to turn them back on.
+- **Sign-ins.** Deleting the data directory deletes the Claude Code token and the
+  ChatGPT sign-in Axocoatl stored. To revoke them at the provider as well, sign out of
+  the sessions or tokens in your Anthropic or OpenAI account settings.
+
+## Check that nothing is left
+
+```sh
+command -v axocoatl
+podman ps -a --filter name='^axo-' --format '{{.Names}}'
+podman volume ls -q --filter name='^axo-'
+podman images --format '{{.Repository}}' | grep '^localhost/axocoatl'
+```
+
+Each prints nothing once Axocoatl is gone.
