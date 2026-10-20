@@ -76,8 +76,8 @@ function requestPathname(request) {
 }
 
 // How a request the page aborted fails: `net::ERR_ABORTED` in Chromium,
-// `cancelled` in WebKit.
-const ABORTED_REQUEST_ERRORS = ['net::ERR_ABORTED', 'cancelled'];
+// `cancelled` in WebKit on macOS, `Load request cancelled` in WebKit on Linux.
+const ABORTED_REQUEST_ERRORS = ['net::ERR_ABORTED', 'cancelled', 'Load request cancelled'];
 
 function isAbortedGet(request, pathname) {
   return request.method === 'GET'
