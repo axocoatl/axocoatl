@@ -1745,9 +1745,10 @@ impl AxocoatlDaemon {
             let too_small = self.session_dispatch_lifecycles.with_session_team_stores(
                 &token,
                 |canonical, content, _| {
-                    let Some((_, profile)) = content
-                        .resolve_provider_profile(canonical, &definition.snapshot)
-                        .map_err(team_error)?
+                    // A definition with no native profile (an external
+                    // program's) has no call floor to check here.
+                    let Ok(Some((_, profile))) =
+                        content.resolve_provider_profile(canonical, &definition.snapshot)
                     else {
                         return Ok(None);
                     };

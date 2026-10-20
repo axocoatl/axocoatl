@@ -134,3 +134,56 @@ for (const engine of engines) {
     } finally { await close(); }
   });
 }
+
+test('until a native Session team is applied, Send reads Set budget and opens Team and budget', async (t) => {
+  if (!runtime.fixtures) { t.skip('needs a fixture daemon'); return; }
+  const [engine] = engines;
+  const browser = await engine.launch();
+  const context = await newAuthorizedContext(browser, { viewport: { width: 1280, height: 820 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  session.status = 'active';
+  session.environment = { ...session.environment, state: 'ready', error: null, setup_results: [] };
+  let view = { ...teamView(), slots: teamView().slots.map((slot) => ({ ...slot, slot_id: 'slot-lead' })) };
+  let sends = 0;
+  try {
+    for (const url of ['**/api/sessions', `**/api/workspaces/${session.workspace_id}/sessions`]) {
+      await page.route(url, (route) => route.request().method() === 'GET' ? route.fulfill({ json: [session] }) : route.fallback());
+    }
+    await page.route(`**/api/sessions/${session.id}/turns*`, (route) => route.fulfill({ json: [] }));
+    await page.route(`**/api/sessions/${session.id}/messages*`, (route) => route.fulfill({ json: [] }));
+    await page.route(`**/api/sessions/${session.id}/active-turn`, (route) => route.fulfill({ json: { run: null } }));
+    await page.route(`**/api/sessions/${session.id}/tasks`, (route) => route.fulfill({
+      json: route.request().method() === 'GET' ? [{ id: 'shell', kind: 'terminal', command: 'sh', status: 'running' }] : { id: 'shell' },
+    }));
+    await page.route(`**/api/sessions/${session.id}/git/**`, (route) => route.fulfill({ json: { branch: 'main', files: [], clean: true } }));
+    await page.route(`**/api/sessions/${session.id}/execute`, (route) => { sends += 1; return route.fulfill({ status: 409, json: { error: 'unexpected send' } }); });
+    await page.route(`**/api/sessions/${session.id}/team**`, (route) => {
+      const suffix = new URL(route.request().url()).pathname.split('/team')[1];
+      if (!suffix) return route.fulfill({ json: view });
+      return route.fulfill({ status: 404, json: { error: 'not in this journey' } });
+    });
+    await page.goto(`${runtime.baseUrl}/?session=${encodeURIComponent(session.id)}`, { waitUntil: 'domcontentloaded' });
+    const send = page.locator('#session-send');
+    await page.waitForFunction(() => document.querySelector('#session-send')?.textContent === 'Set budget');
+    assert.equal(await send.isDisabled(), false);
+    assert.match(await send.getAttribute('title'), /Team and budget before the first request/);
+    await page.locator('#session-text').fill('Fix add in calc.py');
+    await send.click();
+    await page.locator('ax-session-team dialog').waitFor({ state: 'visible' });
+    await page.getByText('Suggested limits are filled in', { exact: false }).waitFor();
+    assert.equal(sends, 0, 'nothing is sent before a team is applied');
+    assert.equal(await page.locator('#session-text').inputValue(), 'Fix add in calc.py', 'the draft is kept');
+
+    // Once the team is applied, Send is Send again.
+    view = teamView({ approved: true });
+    await page.evaluate((id) => document.dispatchEvent(new CustomEvent('session-team-applied', { detail: { session_id: id } })), session.id);
+    await page.waitForFunction(() => document.querySelector('#session-send')?.textContent === 'Send');
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});
