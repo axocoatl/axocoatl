@@ -35,6 +35,7 @@ mod browser;
 mod codex;
 mod codex_container;
 mod codex_sign_in;
+mod next_step;
 mod redact;
 mod relay;
 mod screen;
@@ -377,17 +378,15 @@ pub(crate) fn find_program(
     Err(missing.to_string())
 }
 
-/// The line printed once the token is stored, with the next step.
+/// The line printed once the token is stored. The next step follows it
+/// ([`next_step::next_step`]).
 fn connected_message(secret: &str) -> String {
-    let mut message = format!(
-        "Connected Claude Code: stored secret {secret} (the token was never shown)\n  Next: \
-         build the Session image with `axocoatl recipe build claude-code`, then run a loadout \
-         whose writer has `runtime: claude-code`, for example `axocoatl run <loadout> --task \
-         \"…\" --model writer=anthropic:<model>`."
-    );
+    let mut message =
+        format!("Connected Claude Code: stored secret {secret} (the token was never shown).");
     if secret == CLAUDE_CODE_SECRET {
         message.push_str(&format!(
-            " Claude Code's route to api.anthropic.com sends {secret}."
+            " Claude Code's route to api.anthropic.com sends {secret}, for fix-claude-code and \
+             any loadout writer with `runtime: claude-code`."
         ));
     } else {
         message.push_str(&format!(
@@ -725,6 +724,9 @@ pub async fn cmd_connect(command: ConnectCommands) -> i32 {
     let mut listeners = interrupt.listen();
     let resized = Resized::default();
     listeners.extend(resized.listen());
+    // fix-claude-code sends the default secret; another one is for a route
+    // of the person's own.
+    let next = (secret == CLAUDE_CODE_SECRET).then(|| data_dir.clone());
     let result = connect(
         Connect {
             claude,
@@ -744,6 +746,17 @@ pub async fn cmd_connect(command: ConnectCommands) -> i32 {
     match result {
         Ok(message) => {
             println!("\n✓ {message}");
+            if let Some(data_dir) = next {
+                println!(
+                    "  {}",
+                    next_step::next_step(
+                        "fix-claude-code",
+                        "claude-code",
+                        next_step::image_recorded(&data_dir, "claude-code"),
+                        &next_step::configured_run_models(&config),
+                    )
+                );
+            }
             exit::CONNECTED
         }
         Err(Failure { code, message }) => {
@@ -873,6 +886,7 @@ async fn cmd_connect_codex(
     let mut listeners = interrupt.listen();
     let resized = Resized::default();
     listeners.extend(resized.listen());
+    let next_data_dir = data_dir.clone();
     let result = codex::connect(
         codex::ConnectCodex {
             runner,
@@ -893,6 +907,15 @@ async fn cmd_connect_codex(
     match result {
         Ok(message) => {
             println!("{before}✓ {message}");
+            println!(
+                "  {}",
+                next_step::next_step(
+                    "fix-codex",
+                    codex_container::RECIPE,
+                    next_step::image_recorded(&next_data_dir, codex_container::RECIPE),
+                    &next_step::configured_run_models(&config),
+                )
+            );
             exit::CONNECTED
         }
         Err(Failure { code, message }) => {

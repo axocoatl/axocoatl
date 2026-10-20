@@ -114,6 +114,51 @@ pub struct RunRequest {
     pub request_id: String,
 }
 
+/// One reason admission refuses a run. Admission checks everything it can
+/// before it creates anything and reports every problem it found at once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunProblem {
+    /// What kind of problem, such as `parameters`, `model_provider`,
+    /// `ollama`, `context`, `credential`, `recipe_image` or `podman`.
+    pub code: String,
+    /// The exit code `axocoatl run` gives it: 3 (usage: something in the
+    /// request or the setup to change) or 5 (infrastructure).
+    pub exit_code: i32,
+    /// What is wrong and how to fix it, in words.
+    pub message: String,
+}
+
+/// `POST /api/runs?dry_run=1` (`axocoatl run --dry-run`): what admission
+/// finds for the request, with nothing created, started or recorded. Podman
+/// is only asked, never started.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunPreflight {
+    pub loadout: String,
+    /// No problem was found: the same request without `dry_run` would be
+    /// admitted while nothing changes (and no other run or Session holds the
+    /// repository's Workspace).
+    pub ready: bool,
+    /// 0 when ready, else the exit code of the first problem: usage
+    /// problems (3) come before infrastructure ones (5).
+    pub exit_code: i32,
+    pub problems: Vec<RunProblem>,
+    /// The parameters the run would use, its defaults included.
+    pub params: std::collections::BTreeMap<String, String>,
+    /// Each `run.models` default admission considered: used, or why not.
+    #[serde(default)]
+    pub defaults: Vec<axocoatl_config::run_defaults::RunModelDefault>,
+    #[serde(default)]
+    pub warnings: Vec<axocoatl_session::run_outcome::RunWarning>,
+    /// What the run would note as it starts, such as the defaults it uses
+    /// and the stored credential an external writer's route sends.
+    #[serde(default)]
+    pub notes: Vec<String>,
+    /// What Podman said, when it was asked: rootless, or a stopped machine
+    /// that a run starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<String>,
+}
+
 /// `202 Accepted` body of `POST /api/runs`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunAccepted {

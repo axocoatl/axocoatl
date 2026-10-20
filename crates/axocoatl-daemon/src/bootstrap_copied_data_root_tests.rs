@@ -41,12 +41,13 @@ prompt: "{task}"
 /// The audited local Ollama the native provider admits.
 async fn model_server() -> MockServer {
     let server = MockServer::start().await;
+    crate::ollama_contract_test_support::mount_contract_probes(&server).await;
     let digest = "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
     for (verb, route, body) in [
         (
             "GET",
             "/api/version",
-            serde_json::json!({"version": "0.20.6"}),
+            serde_json::json!({"version": axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION}),
         ),
         (
             "GET",
@@ -67,7 +68,7 @@ async fn model_server() -> MockServer {
             "GET",
             "/api/ps",
             serde_json::json!({"models": [{"name": MODEL, "model": MODEL, "digest": digest,
-                "details": {"format": "gguf"}, "context_length": 32768}]}),
+                "details": {"format": "gguf"}, "context_length": 32768, "runner": "llamacpp"}]}),
         ),
     ] {
         Mock::given(method(verb))
@@ -76,6 +77,18 @@ async fn model_server() -> MockServer {
             .mount(&server)
             .await;
     }
+    // A load acknowledges the model it was asked for.
+    Mock::given(method("POST"))
+        .and(path("/api/generate"))
+        .respond_with(|request: &wiremock::Request| {
+            let body: serde_json::Value = request.body_json().unwrap_or_default();
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model": body["model"], "created_at": "2026-10-19T00:00:00Z",
+                "response": "", "done": true, "done_reason": "load"
+            }))
+        })
+        .mount(&server)
+        .await;
     server
 }
 

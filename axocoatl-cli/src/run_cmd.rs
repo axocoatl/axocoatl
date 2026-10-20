@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use axocoatl_daemon::loadout::api::{
-    LoadoutSummary, LoadoutView, RunAccepted, RunEventsPage, RunStatusView,
+    LoadoutSummary, LoadoutView, RunAccepted, RunEventsPage, RunPreflight, RunStatusView,
 };
 use axocoatl_session::run_outcome::{
     exit_code, AdjudicationDecision, CheckState, ReproClassification, RunOutcome, RunWarning,
@@ -28,7 +28,8 @@ use clap::{Args, Subcommand};
 /// `axocoatl run <loadout> --task "..."`.
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Loadout id (`fix`, `qa`, `audit`, or a user loadout)
+    /// Loadout id: `fix`, `fix-claude-code`, `fix-codex`, `qa`, `audit`
+    /// (opt-in), or one of yours (`axocoatl loadouts list`)
     pub loadout: String,
     /// The task, as the person would type it
     #[arg(long, conflicts_with = "task_file")]
@@ -67,6 +68,15 @@ pub struct RunArgs {
     /// Print the Outcome as JSON on stdout instead of the summary
     #[arg(long)]
     pub json: bool,
+    /// Only check the run as admission would and list every problem, with
+    /// nothing created or started (Podman is asked, never started); exits 0
+    /// when the run would start, else 3 or 5. `--task` is optional here
+    #[arg(
+        long,
+        visible_alias = "preflight",
+        conflicts_with_all = ["junit", "record", "receipt"]
+    )]
+    pub dry_run: bool,
     /// Daemon URL (default: AXOCOATL_URL, then the configured server address)
     #[arg(long)]
     pub url: Option<String>,
@@ -140,6 +150,9 @@ pub enum Keep {
     Pr,
 }
 
+/// The task a dry run without `--task` checks the run with.
+const DRY_RUN_TASK: &str = "(a dry run: no task given)";
+
 /// `RunArgs` checked and turned into a request.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunPlan {
@@ -169,6 +182,7 @@ pub fn plan(args: &RunArgs, task_from_file: Option<String>) -> Result<RunPlan, F
     let task = match (&args.task, task_from_file) {
         (Some(task), None) => task.clone(),
         (None, Some(task)) => task,
+        (None, None) if args.dry_run => DRY_RUN_TASK.to_string(),
         (None, None) => {
             return Err(Failure::usage(
                 "say what to do: --task \"...\" or --task-file <file|->",
@@ -354,7 +368,8 @@ impl Daemon {
     async fn send(&self, builder: reqwest::RequestBuilder) -> Result<reqwest::Response, Failure> {
         let response = builder.send().await.map_err(|error| {
             Failure::unreachable(format!(
-                "the daemon at {} cannot be reached: {error}. Start it with `axocoatl serve`",
+                "the daemon at {} cannot be reached: {error}. Start it with `axocoatl dev` (or \
+                 `axocoatl service start` for the service)",
                 self.base
             ))
         })?;
@@ -743,6 +758,15 @@ pub async fn cmd_run(args: RunArgs) -> i32 {
 
 /// `axocoatl run` writing to `console`; returns the process exit code.
 async fn run_on(args: RunArgs, console: &mut Console, note_after: Duration) -> i32 {
+    if args.dry_run {
+        return match dry_run(&args, console).await {
+            Ok(code) => code,
+            Err(failure) => {
+                console.note(&format!("axocoatl run: {}", failure.message));
+                failure.code
+            }
+        };
+    }
     let mut admitted = false;
     match run(&args, console, note_after, &mut admitted).await {
         Ok(code) => code,
@@ -993,13 +1017,111 @@ async fn admit(
     let admission = daemon.post_json::<RunAccepted>("/api/runs", request);
     tokio::pin!(admission);
     tokio::select! {
-        accepted = &mut admission => return accepted,
+        accepted = &mut admission => return accepted.map_err(plain_refusal),
         () = tokio::time::sleep(note_after) => {}
     }
     console.note(
         "· waiting for the daemon to admit the run (it prepares the Session's environment first)",
     );
-    admission.await
+    admission.await.map_err(plain_refusal)
+}
+
+/// An admission refusal in the daemon's own words: an infrastructure
+/// refusal (exit code 5), such as Podman that is not ready, without the
+/// HTTP status and error class in front of it.
+fn plain_refusal(mut failure: Failure) -> Failure {
+    if failure.code == exit_code::INFRASTRUCTURE {
+        if let Some(rest) = failure.message.strip_prefix("400 Bad Request: ") {
+            failure.message = rest
+                .strip_prefix("Session error: ")
+                .unwrap_or(rest)
+                .to_string();
+        }
+    }
+    failure
+}
+
+/// `axocoatl run --dry-run`: `POST /api/runs?dry_run=1`, then what
+/// admission found, as a summary (or the [`RunPreflight`] as JSON with
+/// `--json`). Returns 0 when the run would start, else the exit code of its
+/// first problem (3 usage, 5 infrastructure).
+async fn dry_run(args: &RunArgs, console: &mut Console) -> Result<i32, Failure> {
+    let task_from_file = match &args.task_file {
+        Some(path) => Some(read_task_file(path)?),
+        None => None,
+    };
+    let plan = plan(args, task_from_file)?;
+    let daemon = Daemon::locate(args.url.as_deref(), &args.config).await?;
+    let request = serde_json::json!({
+        "loadout": plan.loadout,
+        "task": plan.task,
+        "repo": plan.repo.display().to_string(),
+        "params": plan.params,
+        "keep": match plan.keep { Keep::None => "none", Keep::Branch => "branch", Keep::Pr => "pr" },
+        "check_command": plan.check_command,
+        "setup_command": plan.setup_command,
+        "request_id": format!("cli-dry-run-{}", uuid::Uuid::new_v4()),
+    });
+    let preflight: RunPreflight = daemon.post_json("/api/runs?dry_run=1", &request).await?;
+    if args.json {
+        console.say(&serde_json::to_string_pretty(&preflight).unwrap_or_default());
+    } else {
+        console.print(&preflight_summary(&preflight, &plan.repo));
+    }
+    Ok(preflight.exit_code)
+}
+
+/// The summary `axocoatl run --dry-run` prints.
+pub fn preflight_summary(preflight: &RunPreflight, repo: &Path) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Dry run of loadout {} in {}: nothing was created or started.",
+        preflight.loadout,
+        repo.display()
+    );
+    if !preflight.params.is_empty() {
+        let _ = writeln!(out, "Parameters:");
+        for (name, value) in &preflight.params {
+            let _ = writeln!(out, "  {name} = {value}");
+        }
+    }
+    if !preflight.notes.is_empty() {
+        let _ = writeln!(out, "Notes:");
+        for note in &preflight.notes {
+            let _ = writeln!(out, "  {note}");
+        }
+    }
+    if !preflight.warnings.is_empty() {
+        let _ = writeln!(out, "Warnings:");
+        for warning in &preflight.warnings {
+            let _ = writeln!(out, "  {}: {}", warning.code, warning.message);
+        }
+    }
+    if let Some(sandbox) = &preflight.sandbox {
+        let _ = writeln!(out, "Sandbox: {sandbox}");
+    }
+    if preflight.ready {
+        let _ = writeln!(out, "Ready: yes, this run would start.");
+        return out;
+    }
+    let count = preflight.problems.len();
+    let _ = writeln!(
+        out,
+        "Ready: no, {count} problem{} (exit {}):",
+        if count == 1 { "" } else { "s" },
+        preflight.exit_code
+    );
+    for (index, problem) in preflight.problems.iter().enumerate() {
+        let class = if problem.exit_code == exit_code::USAGE {
+            "usage"
+        } else {
+            "infrastructure"
+        };
+        let _ = writeln!(out, "  {}. [{class}] {}", index + 1, problem.message);
+    }
+    out
 }
 
 /// Keep a passing run's changes (`POST /api/sessions/{id}/keep-pr`) and
@@ -2442,5 +2564,122 @@ mod tests {
         ] {
             assert!(text.contains(line), "{line:?} in\n{text}");
         }
+    }
+
+    /// `--dry-run` asks `POST /api/runs?dry_run=1`, needs no task, prints
+    /// every problem with its class and exits with the first one's code;
+    /// nothing is admitted, so no file is written.
+    #[tokio::test]
+    async fn a_dry_run_lists_every_problem_and_exits_with_the_first_ones_code() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/runs"))
+            .and(query_param("dry_run", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "loadout": "fix-claude-code",
+                "ready": false,
+                "exit_code": 3,
+                "problems": [
+                    {"code": "credential", "exit_code": 3,
+                     "message": "claude-code-oauth is not stored: run `axocoatl connect claude-code`"},
+                    {"code": "recipe_image", "exit_code": 5,
+                     "message": "no image is built from the recipes claude-code"}
+                ],
+                "params": {"reviewer_model": "ollama:gpt-oss:20b", "writer_model": "anthropic:sonnet"},
+                "defaults": [{"param": "reviewer_model", "value": "ollama:gpt-oss:20b",
+                              "source": "run.models.reviewer"}],
+                "notes": ["reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)"],
+                "sandbox": "the Podman machine is stopped; a run starts it first"
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut argv = run_args(&server.uri(), dir.path(), &["--dry-run"]);
+        argv.task = None;
+        argv.loadout = "fix-claude-code".into();
+        let (mut console, out, err) = captured_console();
+        let code = run_on(argv, &mut console, ADMISSION_NOTE_AFTER).await;
+        assert_eq!(code, exit_code::USAGE, "{}", err.text());
+        let repo = std::fs::canonicalize(dir.path().join("repo")).unwrap();
+        assert_eq!(
+            out.text(),
+            format!(
+                "Dry run of loadout fix-claude-code in {}: nothing was created or started.\n\
+                 Parameters:\n  reviewer_model = ollama:gpt-oss:20b\n  writer_model = \
+                 anthropic:sonnet\nNotes:\n  reviewer_model = ollama:gpt-oss:20b (from your \
+                 setup: run.models.reviewer in the configuration)\nSandbox: the Podman machine \
+                 is stopped; a run starts it first\nReady: no, 2 problems (exit 3):\n  1. \
+                 [usage] claude-code-oauth is not stored: run `axocoatl connect claude-code`\n  \
+                 2. [infrastructure] no image is built from the recipes claude-code\n",
+                repo.display()
+            )
+        );
+        assert_eq!(err.text(), "");
+        // With --json, standard output is the preflight document.
+        let (mut console, out, _) = captured_console();
+        let code = run_on(
+            run_args(&server.uri(), dir.path(), &["--preflight", "--json"]),
+            &mut console,
+            ADMISSION_NOTE_AFTER,
+        )
+        .await;
+        assert_eq!(code, exit_code::USAGE);
+        let preflight: RunPreflight = serde_json::from_str(&out.text()).unwrap();
+        assert_eq!(preflight.problems.len(), 2);
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = requests[0].body_json().unwrap();
+        assert_eq!(body["task"], DRY_RUN_TASK);
+        assert_eq!(body["loadout"], "fix-claude-code");
+        // The run's files have nothing to hold.
+        let parsed = Cli::try_parse_from(["axocoatl", "fix", "--dry-run", "--junit", "x.xml"]);
+        assert!(parsed.is_err());
+    }
+
+    /// An admission refusal the daemon classes as infrastructure (exit code
+    /// 5) prints in its own words, without the HTTP status and error class.
+    #[tokio::test]
+    async fn an_infrastructure_refusal_prints_without_the_http_status() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/runs"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "Session error: a loadout Session needs rootless Podman, and Podman is \
+                          not ready: podman not installed"
+            })))
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut console, _, err) = captured_console();
+        let code = run_on(
+            run_args(&server.uri(), dir.path(), &[]),
+            &mut console,
+            ADMISSION_NOTE_AFTER,
+        )
+        .await;
+        assert_eq!(code, exit_code::INFRASTRUCTURE);
+        assert_eq!(
+            err.text(),
+            "axocoatl run: a loadout Session needs rootless Podman, and Podman is not ready: \
+             podman not installed\n"
+        );
+    }
+
+    /// `axocoatl run --help` names every built-in loadout.
+    #[test]
+    fn the_help_names_every_builtin_loadout() {
+        use clap::CommandFactory;
+        let help = Cli::command().render_long_help().to_string();
+        for id in axocoatl_config::loadout::builtin_loadouts()
+            .into_iter()
+            .map(|loadout| loadout.unwrap().file.id)
+        {
+            assert!(help.contains(&format!("`{id}`")), "{id} in\n{help}");
+        }
+        assert!(help.contains("--dry-run"), "{help}");
     }
 }

@@ -232,7 +232,7 @@ impl AxocoatlDaemon {
         })
     }
 
-    fn configured_native_provider_credentials(&self) -> NativeProviderCredentials {
+    pub(crate) fn configured_native_provider_credentials(&self) -> NativeProviderCredentials {
         let invalid_openrouter = self.config.providers.openrouter.as_ref().is_some_and(|p| {
             p.fallback.is_some()
                 || p.base_url.as_deref().is_some_and(|base| {

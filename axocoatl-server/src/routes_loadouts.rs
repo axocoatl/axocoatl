@@ -8,7 +8,7 @@
 use super::*;
 use axocoatl_daemon::bootstrap::loadout_runs::BundleCursor;
 use axocoatl_daemon::loadout::api::{
-    LoadoutSummary, LoadoutView, RunAccepted, RunEventsPage, RunRequest, RunStatusView,
+    LoadoutSummary, LoadoutView, RunEventsPage, RunPreflight, RunRequest, RunStatusView,
     ValidateLoadoutRequest, ValidateLoadoutResponse,
 };
 use axocoatl_daemon::loadout::host::{CheckLabel, ReproRequest};
@@ -116,13 +116,35 @@ pub fn spawn_run_driver(state: AppState, context: RunContext) {
     });
 }
 
+#[derive(Deserialize, Default)]
+pub struct StartRunQuery {
+    /// `1` or `true`: only check the run as admission would (a
+    /// [`RunPreflight`], `200`), creating, starting and recording nothing.
+    pub dry_run: Option<String>,
+}
+
+impl StartRunQuery {
+    fn dry_run(&self) -> bool {
+        matches!(self.dry_run.as_deref(), Some("1" | "true"))
+    }
+}
+
 /// `POST /api/runs`: admit the run, start its driver task, return 202. A
 /// Workspace that another run or Session holds is a `409` with the code
-/// `workspace_busy`, which `axocoatl run` exits 7 on.
+/// `workspace_busy`, which `axocoatl run` exits 7 on. A refused run names
+/// every problem admission found, usage problems (`422`) before
+/// infrastructure ones (`400`). With `?dry_run=1` it answers `200` with the
+/// [`RunPreflight`] and nothing is created.
 pub async fn start_loadout_run(
     State(state): State<AppState>,
+    Query(query): Query<StartRunQuery>,
     Json(request): Json<RunRequest>,
-) -> Result<(StatusCode, Json<RunAccepted>), CodedRouteError> {
+) -> Result<axum::response::Response, CodedRouteError> {
+    use axum::response::IntoResponse;
+    if query.dry_run() {
+        let preflight: RunPreflight = state.read().await.preflight_loadout_run(request).await;
+        return Ok((StatusCode::OK, Json(preflight)).into_response());
+    }
     let (accepted, context) = state
         .read()
         .await
@@ -130,7 +152,7 @@ pub async fn start_loadout_run(
         .await
         .map_err(coded_err)?;
     spawn_run_driver(state.clone(), context);
-    Ok((StatusCode::ACCEPTED, Json(accepted)))
+    Ok((StatusCode::ACCEPTED, Json(accepted)).into_response())
 }
 
 pub async fn list_loadout_runs(

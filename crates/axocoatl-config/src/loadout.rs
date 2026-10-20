@@ -69,7 +69,7 @@ pub const MIN_CALL_CONTEXT_TOKENS: u64 = 2048;
 /// the conversation grows from there: below this, admission refuses the
 /// run before any model call instead of letting it fail on its first one.
 /// Ollama loads models with 4,096 tokens on a computer with less than about
-/// 24 GB of GPU memory unless `OLLAMA_CONTEXT_LENGTH` says otherwise.
+/// 23 GiB of GPU memory unless `OLLAMA_CONTEXT_LENGTH` says otherwise.
 pub const MIN_RUN_CONTEXT_TOKENS: u64 = 16_384;
 
 const FIX_YAML: &str = include_str!("../loadouts/fix.yaml");

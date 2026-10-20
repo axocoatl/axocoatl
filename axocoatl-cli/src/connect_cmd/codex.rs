@@ -306,8 +306,9 @@ pub(crate) fn login_args(device_auth: bool) -> Vec<&'static str> {
     args
 }
 
-/// The line printed once what `keep` asks for is stored, with the next
-/// step. `container`: Codex ran in a login container, not on this computer.
+/// The line printed once what `keep` asks for is stored. The next step
+/// follows it (`next_step::next_step`). `container`: Codex ran in a login
+/// container, not on this computer.
 pub(crate) fn connected_message(keep: Keep, container: bool) -> String {
     let removed = if container {
         "the login container was removed"
@@ -319,28 +320,23 @@ pub(crate) fn connected_message(keep: Keep, container: bool) -> String {
     match keep {
         Keep::SignIn => format!(
             "Connected Codex: stored your ChatGPT sign-in as secret {CODEX_CHATGPT_SECRET} (no \
-             token was shown, and {removed})\n  Next: build the Session image \
-             with `axocoatl recipe build codex`, then run a loadout whose writer has `runtime: \
-             codex` and `credential: {CODEX_CHATGPT_SECRET}`, for example `axocoatl run \
-             <loadout> --task \"…\" --model writer=openai:<model>`. The daemon refreshes the \
-             access token on this computer; it never enters the Session container."
+             token was shown, and {removed}). A loadout writer with `runtime: codex` sends it \
+             with `credential: {CODEX_CHATGPT_SECRET}`, and fix-codex's `credential: auto` \
+             chooses it while no API key is stored. The daemon refreshes the access token on \
+             this computer; it never enters the Session container."
         ),
         Keep::ApiKeyAndSignIn => format!(
             "Connected Codex: stored the OpenAI API key OpenAI issued with your sign-in as \
              secret {CODEX_SECRET} and your ChatGPT sign-in as secret {CODEX_CHATGPT_SECRET} \
-             (no key or token was shown, and {removed})\n  Next: build the Session image with \
-             `axocoatl recipe build codex`, then run a loadout whose writer has `runtime: \
-             codex`, for example `axocoatl run <loadout> --task \"…\" --model \
-             writer=openai:<model>`: its credential is {CODEX_SECRET} unless it names \
-             `credential: {CODEX_CHATGPT_SECRET}`. {billed}"
+             (no key or token was shown, and {removed}). A loadout writer with `runtime: \
+             codex` sends {CODEX_SECRET} unless it names `credential: {CODEX_CHATGPT_SECRET}` \
+             (for fix-codex, `--param credential={CODEX_CHATGPT_SECRET}`). {billed}"
         ),
         Keep::ApiKeyOnly => format!(
             "Connected Codex: stored the OpenAI API key OpenAI issued with your sign-in as \
              secret {CODEX_SECRET} (no key or token was shown, your ChatGPT sign-in was not \
-             kept, and {removed})\n  Next: build the Session image with `axocoatl recipe \
-             build codex`, then run a loadout whose writer has `runtime: codex` \
-             ({CODEX_SECRET} is its credential by default), for example `axocoatl run \
-             <loadout> --task \"…\" --model writer=openai:<model>`. {billed}"
+             kept, and {removed}). A loadout writer with `runtime: codex` sends \
+             {CODEX_SECRET} by default. {billed}"
         ),
     }
 }
