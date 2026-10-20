@@ -61,7 +61,9 @@ not equivalent: they inspect credential presence—including OpenRouter when
 configured—but do not make a live model request. Doctor reports Podman ready only
 after a bounded `podman info --format json` probe returns a JSON object, and fails
 when Podman is missing, has no machine, runs rootful, is older than 4.3, or, rootless,
-has no range of subordinate ids.
+has no range of subordinate ids. On Linux it reads the range from `/etc/subuid` and
+`/etc/subgid`, which new containers are mapped from, not only from `podman info`, which
+shows the range Podman's pause process started with.
 
 ## Start the embedded app
 

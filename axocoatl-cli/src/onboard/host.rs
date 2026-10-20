@@ -605,11 +605,30 @@ pub(crate) mod testing {
     }
 
     impl Shims {
+        /// Shims whose root gives the tests' user, alex, the usual range
+        /// of subordinate ids in `etc/subuid` and `etc/subgid`.
         pub(crate) fn new() -> Self {
-            Self {
+            let shims = Self {
                 dir: tempfile::tempdir().unwrap(),
                 home: tempfile::tempdir().unwrap(),
                 root: tempfile::tempdir().unwrap(),
+            };
+            shims.subordinate_ids(Some("alex:100000:65536\n"));
+            shims
+        }
+
+        /// Write `etc/subuid` and `etc/subgid` under the root with `lines`,
+        /// or remove both.
+        pub(crate) fn subordinate_ids(&self, lines: Option<&str>) {
+            let etc = self.root.path().join("etc");
+            std::fs::create_dir_all(&etc).unwrap();
+            for name in ["subuid", "subgid"] {
+                match lines {
+                    Some(lines) => std::fs::write(etc.join(name), lines).unwrap(),
+                    None => {
+                        let _ = std::fs::remove_file(etc.join(name));
+                    }
+                }
             }
         }
 

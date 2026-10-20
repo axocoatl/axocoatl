@@ -10,7 +10,16 @@
 //! ranges are failures; a stopped machine is not (Sessions and runs start
 //! it); an untested Podman version, machine provider or a small machine are
 //! warnings.
+//!
+//! On Linux the id ranges are read from `/etc/subuid` and `/etc/subgid`
+//! ([`read_subordinate_ids`]), not only from `podman info`: `podman info`
+//! reports the user namespace Podman's pause process already holds, which
+//! keeps the ranges it was started with after a range is removed, while
+//! every new `keep-id` container is mapped from the files. Without a range
+//! there, crun fails with `write to /proc/sys/net/ipv4/ping_group_range:
+//! Invalid argument` (the container has no group 0).
 
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -113,6 +122,10 @@ pub struct PodmanReport {
     pub default_provider: Option<String>,
     /// The connection `CONTAINER_HOST` or `CONTAINER_CONNECTION` selects.
     pub connection: ConnectionOverride,
+    /// Linux: the user's ranges in `/etc/subuid` and `/etc/subgid`, which
+    /// the caller reads with [`read_subordinate_ids`] (`None`: not read, as
+    /// on macOS, or not knowable from the files).
+    pub subordinate_ids: Option<SubordinateIds>,
 }
 
 impl PodmanReport {
@@ -125,7 +138,17 @@ impl PodmanReport {
             machines: Vec::new(),
             default_provider: None,
             connection: ConnectionOverride::default(),
+            subordinate_ids: None,
         }
+    }
+
+    /// The range the `usermod` fix adds: one no line of `/etc/subuid` or
+    /// `/etc/subgid` uses, else [`DEFAULT_SUBORDINATE_RANGE`].
+    pub fn free_subordinate_range(&self) -> (u64, u64) {
+        self.subordinate_ids
+            .as_ref()
+            .map(|ids| ids.free)
+            .unwrap_or(DEFAULT_SUBORDINATE_RANGE)
     }
 
     /// The machine Podman uses: the one `CONTAINER_CONNECTION` names, else
@@ -382,6 +405,205 @@ pub fn parse_default_provider(stdout: &[u8]) -> Option<String> {
         .map(str::to_string)
 }
 
+/// How many subordinate user ids, and as many group ids, a rootless user
+/// needs: what `useradd` gives (`SUB_UID_COUNT`), and what images need for
+/// `nobody` (65534) and Sessions' workload users.
+pub const MIN_SUBORDINATE_IDS: u64 = 65_536;
+
+/// The range the `usermod` fix adds when the files were not read: shadow's
+/// first default range.
+pub const DEFAULT_SUBORDINATE_RANGE: (u64, u64) = (100_000, 165_535);
+
+/// What `/etc/subuid` and `/etc/subgid` give the user Podman runs as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubordinateIds {
+    /// Subordinate user ids in the user's lines of `/etc/subuid`.
+    pub uids: u64,
+    /// Subordinate group ids in the user's lines of `/etc/subgid`.
+    pub gids: u64,
+    /// `(first, last)`: [`MIN_SUBORDINATE_IDS`] ids that no line of either
+    /// file uses, for the `usermod` fix.
+    pub free: (u64, u64),
+}
+
+impl SubordinateIds {
+    /// Enough of both for rootless Podman and Sessions.
+    pub fn enough(&self) -> bool {
+        self.uids >= MIN_SUBORDINATE_IDS && self.gids >= MIN_SUBORDINATE_IDS
+    }
+
+    /// `no range of subordinate user and group IDs`, or how many there are.
+    fn describe(&self, user: &str) -> String {
+        if self.uids == 0 && self.gids == 0 {
+            format!("{user} has no range of subordinate user and group IDs in /etc/subuid and /etc/subgid")
+        } else {
+            format!(
+                "{user} has {} subordinate user IDs in /etc/subuid and {} group IDs in \
+                 /etc/subgid, fewer than {MIN_SUBORDINATE_IDS} of each",
+                self.uids, self.gids
+            )
+        }
+    }
+}
+
+/// The `owner:first:count` lines of an `/etc/subuid` or `/etc/subgid`.
+fn subordinate_lines(text: &str) -> impl Iterator<Item = (&str, u64, u64)> {
+    text.lines().filter_map(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let mut fields = line.split(':');
+        let owner = fields.next()?.trim();
+        let first = fields.next()?.trim().parse().ok()?;
+        let count = fields.next()?.trim().parse().ok()?;
+        Some((owner, first, count))
+    })
+}
+
+/// The first [`MIN_SUBORDINATE_IDS`] ids from 100000 on that overlap none
+/// of `used` (`[first, end)` each), as `(first, last)`.
+fn free_subordinate_range(used: &[(u64, u64)]) -> (u64, u64) {
+    let mut first = DEFAULT_SUBORDINATE_RANGE.0;
+    loop {
+        let end = first.saturating_add(MIN_SUBORDINATE_IDS);
+        match used
+            .iter()
+            .filter(|(start, stop)| *start < end && *stop > first)
+            .map(|(_, stop)| *stop)
+            .max()
+        {
+            Some(stop) => first = stop,
+            None => break,
+        }
+    }
+    // Ids are 32-bit, and 4294967295 is no id.
+    let last = first.saturating_add(MIN_SUBORDINATE_IDS - 1);
+    if last >= u64::from(u32::MAX) {
+        DEFAULT_SUBORDINATE_RANGE
+    } else {
+        (first, last)
+    }
+}
+
+/// What the text of `/etc/subuid` and `/etc/subgid` gives `user` (whose
+/// lines name it or its `uid`, as shadow and Podman match them).
+pub fn parse_subordinate_ids(
+    subuid: &str,
+    subgid: &str,
+    user: &str,
+    uid: Option<u32>,
+) -> SubordinateIds {
+    let uid = uid.map(|uid| uid.to_string());
+    let owns = |owner: &str| owner == user || uid.as_deref() == Some(owner);
+    let total = |text: &str| {
+        subordinate_lines(text)
+            .filter(|(owner, _, _)| owns(owner))
+            .fold(0u64, |sum, (_, _, count)| sum.saturating_add(count))
+    };
+    let used: Vec<(u64, u64)> = subordinate_lines(subuid)
+        .chain(subordinate_lines(subgid))
+        .map(|(_, first, count)| (first, first.saturating_add(count)))
+        .collect();
+    SubordinateIds {
+        uids: total(subuid),
+        gids: total(subgid),
+        free: free_subordinate_range(&used),
+    }
+}
+
+/// Read `etc/subuid` and `etc/subgid` under `root` (`/`, or a test's
+/// directory) for `user` with `uid`. A missing file holds no range, as
+/// Podman reads it. `None` when the files cannot tell: for root (rootful
+/// Podman needs no range), an unknown user, an unreadable file, or ranges
+/// that `etc/nsswitch.conf` takes from another source than the files
+/// (`subid: sss`).
+pub fn read_subordinate_ids(root: &Path, user: &str, uid: Option<u32>) -> Option<SubordinateIds> {
+    if uid == Some(0) || user.is_empty() || user == "root" || user.starts_with('$') {
+        return None;
+    }
+    let nsswitch = std::fs::read_to_string(root.join("etc/nsswitch.conf")).unwrap_or_default();
+    let other_source = nsswitch.lines().any(|line| {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        line.strip_prefix("subid:")
+            .is_some_and(|sources| sources.trim() != "files")
+    });
+    if other_source {
+        return None;
+    }
+    let read = |name: &str| match std::fs::read_to_string(root.join(name)) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
+        Err(_) => None,
+    };
+    let subuid = read("etc/subuid")?;
+    let subgid = read("etc/subgid")?;
+    Some(parse_subordinate_ids(&subuid, &subgid, user, uid))
+}
+
+/// What is wrong with the user's subordinate ids for rootless Podman.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdRangeProblem {
+    /// `/etc/subuid` or `/etc/subgid` gives the user no range or too small
+    /// a one (or, when the files were not read, `podman info` maps only
+    /// the user's own id): `usermod` adds one.
+    Missing,
+    /// The files give the user a range, but the user namespace Podman's
+    /// pause process holds maps only the user's own id (it started before
+    /// the range was added): `podman system migrate` restarts it.
+    NotApplied,
+}
+
+/// The problem with the user's subordinate ids in `report`, if any. Rootful
+/// Podman needs no range.
+pub fn id_range_problem(report: &PodmanReport) -> Option<IdRangeProblem> {
+    if report.readiness == PodmanReadiness::NotInstalled || report.rootless() == Some(false) {
+        return None;
+    }
+    let single_mapping = report.runtime.as_ref().is_some_and(|runtime| {
+        runtime.rootless == Some(true)
+            && [runtime.uid_ranges, runtime.gid_ranges]
+                .iter()
+                .any(|ranges| matches!(ranges, Some(0 | 1)))
+    });
+    match &report.subordinate_ids {
+        Some(ids) if !ids.enough() => Some(IdRangeProblem::Missing),
+        Some(_) if single_mapping => Some(IdRangeProblem::NotApplied),
+        Some(_) => None,
+        None if single_mapping => Some(IdRangeProblem::Missing),
+        None => None,
+    }
+}
+
+/// The failing finding for `problem` in `report`, for `user`.
+pub fn id_range_finding(report: &PodmanReport, user: &str, problem: &IdRangeProblem) -> Finding {
+    const EFFECT: &str = "so rootless Podman cannot unpack images or start Sessions";
+    let (detail, fix) = match (problem, &report.subordinate_ids) {
+        (IdRangeProblem::Missing, Some(ids)) => (
+            format!("{}, {EFFECT}", ids.describe(user)),
+            subordinate_ids_command(user, report.free_subordinate_range()),
+        ),
+        (IdRangeProblem::Missing, None) => (
+            format!(
+                "Rootless Podman has no range of subordinate user and group IDs for {user}, \
+                 {EFFECT}"
+            ),
+            subordinate_ids_command(user, report.free_subordinate_range()),
+        ),
+        (IdRangeProblem::NotApplied, _) => (
+            format!(
+                "/etc/subuid and /etc/subgid give {user} a range, but rootless Podman still runs \
+                 without it (it started before the range was added), {EFFECT}"
+            ),
+            MIGRATE_FIX.to_string(),
+        ),
+    };
+    Finding::new(Level::Fail, "User ID ranges", detail, Some(fix))
+}
+
+/// The fix for ranges Podman has not picked up yet.
+pub const MIGRATE_FIX: &str = "podman system migrate (it stops your running containers)";
+
 /// How bad a finding is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
@@ -445,10 +667,11 @@ pub fn rootless_switch_command(name: &str) -> String {
     )
 }
 
-/// The command that adds a range of subordinate ids for `user`.
-pub fn subordinate_ids_command(user: &str) -> String {
+/// The command that adds the subordinate ids `(first, last)` for `user`
+/// and restarts rootless Podman so it maps them.
+pub fn subordinate_ids_command(user: &str, (first, last): (u64, u64)) -> String {
     format!(
-        "sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 {user} && podman \
+        "sudo usermod --add-subuids {first}-{last} --add-subgids {first}-{last} {user} && podman \
          system migrate"
     )
 }
@@ -610,20 +833,10 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
         ));
     }
 
+    if let Some(problem) = id_range_problem(report) {
+        list.push(id_range_finding(report, &platform.user, &problem));
+    }
     if let Some(runtime) = &report.runtime {
-        let ranges = [runtime.uid_ranges, runtime.gid_ranges];
-        if runtime.rootless == Some(true) && ranges.iter().any(|r| matches!(r, Some(0 | 1))) {
-            list.push(Finding::new(
-                Level::Fail,
-                "User ID ranges",
-                format!(
-                    "Rootless Podman has no range of subordinate user and group IDs for {}, so it \
-                     cannot unpack images or start Sessions",
-                    platform.user
-                ),
-                Some(subordinate_ids_command(&platform.user)),
-            ));
-        }
         if !platform.machine && runtime.selinux == Some(true) {
             list.push(Finding::new(
                 Level::Warn,
@@ -722,6 +935,7 @@ mod tests {
             machines,
             default_provider: Some("applehv".to_string()),
             connection: ConnectionOverride::None,
+            subordinate_ids: None,
         }
     }
 
@@ -943,6 +1157,7 @@ mod tests {
             machines: Vec::new(),
             default_provider: None,
             connection: ConnectionOverride::None,
+            subordinate_ids: None,
         };
         let mut linux = platform(false);
         linux.too_old_note =
@@ -978,6 +1193,155 @@ mod tests {
         assert!(findings(&report, &linux)
             .iter()
             .any(|f| f.name == "Podman version" && f.level == Level::Warn));
+    }
+
+    /// `podman info` of Podman 4.9.3 on Ubuntu 24.04 whose pause process
+    /// maps the user's own id and a range of 65536.
+    const LINUX_INFO: &str = r#"{"host":{"security":{"rootless":true,"selinuxEnabled":false},
+        "kernel":"6.8.0","idMappings":{
+        "uidmap":[{"container_id":0,"host_id":1001,"size":1},{"container_id":1,"host_id":100000,"size":65536}],
+        "gidmap":[{"container_id":0,"host_id":1001,"size":1},{"container_id":1,"host_id":100000,"size":65536}]}},
+        "version":{"Version":"4.9.3"}}"#;
+
+    fn linux_report(info: &str, ids: Option<SubordinateIds>) -> PodmanReport {
+        PodmanReport {
+            readiness: PodmanReadiness::Ready,
+            client_version: Some("4.9.3".to_string()),
+            runtime: Some(parse_runtime_info(info.as_bytes()).unwrap()),
+            machines: Vec::new(),
+            default_provider: None,
+            connection: ConnectionOverride::None,
+            subordinate_ids: ids,
+        }
+    }
+
+    #[test]
+    fn subordinate_ids_are_read_by_name_or_uid_and_summed() {
+        let subuid = "# comment\nnewuser:100000:65536\nalex:165536:1000\n1001:200000:64536\n\
+                      bad line\nother:265536:65536\n";
+        let subgid = "newuser:100000:65536\nalex:165536:65536\n";
+        let ids = parse_subordinate_ids(subuid, subgid, "alex", Some(1001));
+        assert_eq!(ids.uids, 65_536);
+        assert_eq!(ids.gids, 65_536);
+        assert!(ids.enough());
+        // The free range skips every line of both files.
+        assert_eq!(ids.free, (331_072, 396_607));
+        let ids = parse_subordinate_ids(subuid, subgid, "alex", None);
+        assert_eq!((ids.uids, ids.gids), (1000, 65_536));
+        assert!(!ids.enough());
+        // Nothing in the files: the standard first range is free.
+        let none = parse_subordinate_ids("", "", "alex", Some(1001));
+        assert_eq!(
+            (none.uids, none.gids, none.free),
+            (0, 0, (100_000, 165_535))
+        );
+        // A range ending inside the default one moves the free range past it.
+        let shifted = parse_subordinate_ids("x:50000:60000\n", "", "alex", None);
+        assert_eq!(shifted.free, (110_000, 175_535));
+        // A line reaching past the last id leaves no free range to name:
+        // the default is printed, and nothing overflows.
+        let full = parse_subordinate_ids(
+            "x:100000:18446744073709551615\n",
+            "alex:1:18446744073709551615\n",
+            "alex",
+            None,
+        );
+        assert_eq!(full.gids, u64::MAX);
+        assert_eq!(full.free, DEFAULT_SUBORDINATE_RANGE);
+    }
+
+    #[test]
+    fn subordinate_id_files_are_read_under_a_root() {
+        let root = tempfile::tempdir().unwrap();
+        let etc = root.path().join("etc");
+        std::fs::create_dir_all(&etc).unwrap();
+        // No files: no range, as Podman reads it.
+        let ids = read_subordinate_ids(root.path(), "alex", Some(1001)).unwrap();
+        assert_eq!((ids.uids, ids.gids), (0, 0));
+        std::fs::write(etc.join("subuid"), "alex:100000:65536\n").unwrap();
+        std::fs::write(etc.join("subgid"), "alex:100000:65536\n").unwrap();
+        assert!(read_subordinate_ids(root.path(), "alex", Some(1001))
+            .unwrap()
+            .enough());
+        // Root, and an unknown user, are not judged from the files.
+        assert!(read_subordinate_ids(root.path(), "root", Some(0)).is_none());
+        assert!(read_subordinate_ids(root.path(), "$USER", None).is_none());
+        // Ranges from SSSD or LDAP are not in the files.
+        std::fs::write(etc.join("nsswitch.conf"), "passwd: files\nsubid: sss\n").unwrap();
+        assert!(read_subordinate_ids(root.path(), "alex", Some(1001)).is_none());
+        std::fs::write(etc.join("nsswitch.conf"), "subid: files # local\n").unwrap();
+        assert!(read_subordinate_ids(root.path(), "alex", Some(1001)).is_some());
+    }
+
+    /// The CI case: the user's lines are removed from /etc/subuid and
+    /// /etc/subgid while Podman's pause process still holds the old range,
+    /// so `podman info` still reports it. Every new keep-id container is
+    /// mapped from the files and fails in crun (ping_group_range), so the
+    /// files decide: FAIL with usermod (a free range) and migrate.
+    #[test]
+    fn ranges_removed_from_the_files_fail_although_podman_info_shows_them() {
+        let ids = parse_subordinate_ids(
+            "newuser:100000:65536\n",
+            "newuser:100000:65536\n",
+            "alex",
+            Some(1001),
+        );
+        let report = linux_report(LINUX_INFO, Some(ids));
+        assert_eq!(id_range_problem(&report), Some(IdRangeProblem::Missing));
+        let list = findings(&report, &platform(false));
+        let ranges = list.iter().find(|f| f.name == "User ID ranges").unwrap();
+        assert_eq!(ranges.level, Level::Fail);
+        assert_eq!(
+            ranges.detail,
+            "alex has no range of subordinate user and group IDs in /etc/subuid and /etc/subgid, \
+             so rootless Podman cannot unpack images or start Sessions"
+        );
+        assert_eq!(
+            ranges.fix.as_deref(),
+            Some(
+                "sudo usermod --add-subuids 165536-231071 --add-subgids 165536-231071 alex && \
+                 podman system migrate"
+            )
+        );
+    }
+
+    #[test]
+    fn a_small_range_fails_and_a_range_podman_has_not_applied_needs_migrate() {
+        let small = parse_subordinate_ids("alex:100000:1000\n", "alex:100000:1000\n", "alex", None);
+        let report = linux_report(LINUX_INFO, Some(small));
+        let list = findings(&report, &platform(false));
+        let ranges = list.iter().find(|f| f.name == "User ID ranges").unwrap();
+        assert_eq!(
+            ranges.detail,
+            "alex has 1000 subordinate user IDs in /etc/subuid and 1000 group IDs in \
+             /etc/subgid, fewer than 65536 of each, so rootless Podman cannot unpack images or \
+             start Sessions"
+        );
+        assert!(ranges.fix.as_deref().unwrap().starts_with(
+            "sudo usermod --add-subuids 101000-166535 --add-subgids 101000-166535 alex"
+        ));
+
+        // The files are right; the pause process maps only the user's id.
+        let single = r#"{"host":{"security":{"rootless":true},"idMappings":{
+            "uidmap":[{"container_id":0,"host_id":1001,"size":1}],
+            "gidmap":[{"container_id":0,"host_id":1001,"size":1}]}}}"#;
+        let ok = parse_subordinate_ids("alex:100000:65536\n", "alex:100000:65536\n", "alex", None);
+        let report = linux_report(single, Some(ok.clone()));
+        assert_eq!(id_range_problem(&report), Some(IdRangeProblem::NotApplied));
+        let list = findings(&report, &platform(false));
+        let ranges = list.iter().find(|f| f.name == "User ID ranges").unwrap();
+        assert_eq!(ranges.level, Level::Fail);
+        assert_eq!(ranges.fix.as_deref(), Some(MIGRATE_FIX));
+
+        // Both right: no finding. Rootful Podman needs no range.
+        let report = linux_report(LINUX_INFO, Some(ok));
+        assert_eq!(id_range_problem(&report), None);
+        assert!(!findings(&report, &platform(false))
+            .iter()
+            .any(|f| f.name == "User ID ranges"));
+        let mut rootful = linux_report(single, None);
+        rootful.runtime.as_mut().unwrap().rootless = Some(false);
+        assert_eq!(id_range_problem(&rootful), None);
     }
 
     /// With a shim Podman: a machine that is stopped, the read-only commands

@@ -13,8 +13,8 @@ use axocoatl_isolation::podman::{
     MIN_MACHINE_MEMORY_MIB, TESTED_MACHINE_MEMORY_MIB,
 };
 use axocoatl_isolation::podman_report::{
-    self, rootless_switch_command, subordinate_ids_command, PodmanReport, MIN_PODMAN_VERSION,
-    TESTED_LINUX_PODMAN,
+    self, rootless_switch_command, subordinate_ids_command, IdRangeProblem, PodmanReport,
+    MIN_PODMAN_VERSION, TESTED_LINUX_PODMAN,
 };
 
 use super::detect::Os;
@@ -56,6 +56,8 @@ async fn reinspect(o: &mut Onboarding) {
         Some(program) => podman_report::inspect_with(&program).await,
         None => PodmanReport::not_installed(),
     };
+    o.facts.podman.subordinate_ids =
+        crate::doctor::subordinate_ids(&o.host, &o.facts.os, &o.facts.user);
 }
 
 /// Step 2; returns whether the sandbox is ready.
@@ -613,51 +615,70 @@ fn version(o: &mut Onboarding) -> bool {
     true
 }
 
+/// Linux: a range of subordinate user and group ids in `/etc/subuid` and
+/// `/etc/subgid` that rootless Podman maps. Adding one runs `sudo usermod`
+/// (only with consent, and under `--yes` only with `--allow-sudo`); a range
+/// Podman has not picked up yet needs only `podman system migrate`.
 async fn subordinate_ids(o: &mut Onboarding) -> bool {
-    let Some(runtime) = o.facts.podman.runtime.clone() else {
+    let Some(problem) = podman_report::id_range_problem(&o.facts.podman) else {
         return true;
     };
-    let missing = runtime.rootless == Some(true)
-        && [runtime.uid_ranges, runtime.gid_ranges]
-            .iter()
-            .any(|ranges| matches!(ranges, Some(0 | 1)));
-    if !missing {
-        return true;
-    }
     let user = o.facts.user.clone();
-    let commands = vec![
-        Cmd::sudo(
-            "usermod",
-            &[
-                "--add-subuids",
-                "100000-165535",
-                "--add-subgids",
-                "100000-165535",
-                &user,
-            ],
+    let finding = podman_report::id_range_finding(&o.facts.podman, &user, &problem);
+    let fix = finding.fix.clone().unwrap_or_default();
+    let migrate = Cmd::new("podman", &["system", "migrate"]);
+    let (question, commands, sudo) = match problem {
+        IdRangeProblem::Missing => {
+            let (first, last) = o.facts.podman.free_subordinate_range();
+            let range = format!("{first}-{last}");
+            let usermod = Cmd::sudo(
+                "usermod",
+                &["--add-subuids", &range, "--add-subgids", &range, &user],
+            );
+            (
+                format!(
+                    "{}. Add a range with `{fix}`? `podman system migrate` stops your running \
+                     containers.",
+                    finding.detail
+                ),
+                vec![usermod, migrate],
+                true,
+            )
+        }
+        IdRangeProblem::NotApplied => (
+            format!(
+                "{}. Restart rootless Podman with `podman system migrate`? It stops your running \
+                 containers.",
+                finding.detail
+            ),
+            vec![migrate],
+            false,
         ),
-        Cmd::new("podman", &["system", "migrate"]),
-    ];
-    if !o.ui.consent(
-        &format!(
-            "Rootless Podman needs a range of user IDs for {user}. Add one with `{}`?",
-            subordinate_ids_command(&user)
-        ),
-        true,
-        true,
-    ) {
-        o.step_left(format!(
-            "Add a range of user IDs for {user}: {}",
-            subordinate_ids_command(&user)
-        ));
+    };
+    if !o.ui.consent(&question, true, sudo) {
+        o.step_left(format!("{}: {fix}", finding.detail));
         return false;
     }
     if let Err(error) = o.ui.execute_all(&o.host, &commands).await {
-        o.step_left(format!("{error}; run {}", subordinate_ids_command(&user)));
+        o.step_left(format!("{error}; run {fix}"));
         return false;
     }
     reinspect(o).await;
-    true
+    if o.ui.plan() {
+        return true;
+    }
+    match podman_report::id_range_problem(&o.facts.podman) {
+        None => true,
+        Some(problem) => {
+            let finding = podman_report::id_range_finding(&o.facts.podman, &user, &problem);
+            o.step_left(format!(
+                "{}: {}",
+                finding.detail,
+                finding.fix.unwrap_or_default()
+            ));
+            false
+        }
+    }
 }
 
 fn landlock(o: &mut Onboarding) -> bool {
@@ -763,8 +784,21 @@ async fn proof(o: &mut Onboarding) -> bool {
                 .unwrap_or("it printed nothing")
                 .trim()
                 .to_string();
-            let fix = if reason.contains("subuid") || reason.contains("insufficient UIDs") {
-                subordinate_ids_command(&o.facts.user)
+            // Without a range of subordinate ids, keep-id maps only the
+            // user's own id: crun cannot set the container's
+            // ping_group_range (it has no group 0), and images with other
+            // owners do not unpack.
+            let ids = ["subuid", "insufficient UIDs", "ping_group_range"]
+                .iter()
+                .any(|sign| reason.contains(sign));
+            let fix = if ids {
+                match &o.facts.podman.subordinate_ids {
+                    Some(found) if found.enough() => podman_report::MIGRATE_FIX.to_string(),
+                    _ => subordinate_ids_command(
+                        &o.facts.user,
+                        o.facts.podman.free_subordinate_range(),
+                    ),
+                }
             } else if reason.contains("keep-id") {
                 "upgrade Podman to 4.9 or later".to_string()
             } else {

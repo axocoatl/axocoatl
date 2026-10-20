@@ -530,10 +530,12 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str, check_port_8080: bool)
         _ => None,
     };
     let podman_path = host.find("podman");
-    let podman = match &podman_path {
+    let user = current_user();
+    let mut podman = match &podman_path {
         Some(path) => podman_report::inspect_with(&path.to_string_lossy()).await,
         None => PodmanReport::not_installed(),
     };
+    podman.subordinate_ids = crate::doctor::subordinate_ids(host, &os, &user);
     let ollama_cli = match host.find("ollama") {
         Some(path) => {
             let host_value = ollama_url.to_string();
@@ -583,7 +585,7 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str, check_port_8080: bool)
             .then(|| free_bytes(&containers))
             .flatten(),
         root_user: is_root(),
-        user: current_user(),
+        user,
         port_8080_free: !check_port_8080 || port_free(8080),
         git,
         brew,

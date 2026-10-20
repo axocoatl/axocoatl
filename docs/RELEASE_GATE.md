@@ -236,8 +236,10 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
      model call.
    - Onboarding without Podman on `PATH` prints the install command, exits 1
      and runs no `sudo`.
-   - With `--system-changes`, an `/etc/subuid` without the user's range makes
-     doctor FAIL with the `usermod --add-subuids` fix. `--system-changes` is
+   - With `--system-changes`, an `/etc/subuid` without the user's range (while
+     Podman's pause process may still map the old one) makes onboarding name
+     the `usermod --add-subuids` fix without running sudo, and doctor FAIL
+     with it. `--system-changes` is
      refused unless `GITHUB_ACTIONS=true`. The case runs only after both
      files are backed up and the copies match. If restoring them fails, the
      backup and the work directory are kept and the gate says where they are.
