@@ -108,7 +108,7 @@ use axocoatl_tools::ToolExecutor;
 use ractor::Actor;
 
 use crate::error::{
-    DaemonError, WORKSPACE_HAS_OPEN_SESSIONS_CODE, WORKSPACE_PROTECTED_CODE,
+    DaemonError, NOT_A_REPOSITORY_CODE, WORKSPACE_HAS_OPEN_SESSIONS_CODE, WORKSPACE_PROTECTED_CODE,
     WORKSPACE_TOO_BROAD_CODE,
 };
 use crate::scheduler::ScheduleTable;
@@ -616,18 +616,54 @@ fn append_hardened_git_command(argv: &mut Vec<String>) {
 }
 
 fn session_git_arguments(cwd: &str, args: &[&str]) -> Vec<String> {
+    session_git_arguments_as(cwd, None, args)
+}
+
+/// Session Git argv. With `person`, a commit it makes is the person's (see
+/// [`crate::git_person`]); without, Axocoatl's own identity applies, as it
+/// does to every internal commit.
+fn session_git_arguments_as(
+    cwd: &str,
+    person: Option<&crate::git_person::GitPerson>,
+    args: &[&str],
+) -> Vec<String> {
     let mut argv = hardened_git_environment(true);
+    if let Some(person) = person {
+        argv.extend(crate::git_person::person_environment(person));
+    }
     append_hardened_git_command(&mut argv);
-    argv.extend([
-        "-c".to_string(),
-        "user.email=agent@axocoatl.local".to_string(),
-        "-c".to_string(),
-        "user.name=Axocoatl".to_string(),
-        "-C".to_string(),
-        cwd.to_string(),
-    ]);
+    if person.is_none() {
+        argv.extend([
+            "-c".to_string(),
+            "user.email=agent@axocoatl.local".to_string(),
+            "-c".to_string(),
+            "user.name=Axocoatl".to_string(),
+        ]);
+    }
+    argv.extend(["-C".to_string(), cwd.to_string()]);
     argv.extend(args.iter().map(|arg| (*arg).to_string()));
     argv
+}
+
+/// Whether a `git rev-parse --is-inside-work-tree` result names a work tree;
+/// otherwise the refusal with the code [`NOT_A_REPOSITORY_CODE`].
+fn session_git_repository(probe: &ExecResult) -> Result<(), DaemonError> {
+    if probe.ok() && probe.stdout.trim() == "true" {
+        return Ok(());
+    }
+    let stderr = probe.stderr.trim();
+    if probe.ok() || stderr.contains("not a git repository") {
+        return Err(DaemonError::WorkspaceRefused {
+            code: NOT_A_REPOSITORY_CODE,
+            message: "This Session's folder is not a Git repository. Choose Initialize Git here \
+                      in Source Control, or run `git init` in the folder yourself."
+                .to_string(),
+        });
+    }
+    Err(DaemonError::Session(format!(
+        "cannot read Git in the Session's folder: {}",
+        stderr.lines().next().unwrap_or("git rev-parse failed")
+    )))
 }
 
 fn passive_primary_git_config_key_allowed(key: &str) -> bool {
@@ -12696,18 +12732,57 @@ trap - EXIT HUP INT TERM
             .map_err(|e| DaemonError::Session(e.to_string()))
     }
 
-    /// Ensure the session directory is a git repo — initialize it with a
-    /// baseline commit if it isn't. Idempotent; a no-op for existing repos.
+    /// Refuse when the Session's folder is not a Git repository, with the
+    /// code [`NOT_A_REPOSITORY_CODE`]. Reading Git, and the person's own Git
+    /// actions, never make a folder a repository: only [`Self::git_init`]
+    /// does, at the person's request.
     pub async fn ensure_session_git(&self, session_id: &str) -> Result<(), DaemonError> {
         let probe = self
             .session_git(session_id, &["rev-parse", "--is-inside-work-tree"])
             .await?;
-        if probe.ok() && probe.stdout.trim() == "true" {
-            return Ok(());
-        }
+        session_git_repository(&probe)
+    }
+
+    /// Make the Session's folder a Git repository, at the person's request
+    /// (Initialize Git here). Only `git init`: no identity is written into
+    /// the repository and nothing is staged or committed. A folder that is
+    /// already a repository is left as it is.
+    pub async fn git_init(&self, session_id: &str) -> Result<crate::git::GitStatus, DaemonError> {
         let writer = self.session_writer(session_id).await?;
-        self.ensure_session_git_with_writer(session_id, &writer)
+        let probe = self
+            .session_git_with_writer(&writer, session_id, &["rev-parse", "--is-inside-work-tree"])
+            .await?;
+        if session_git_repository(&probe).is_err() {
+            let init = self
+                .session_git_with_writer(&writer, session_id, &["init", "-q"])
+                .await?;
+            if !init.ok() {
+                return Err(DaemonError::Session(format!(
+                    "initializing Git in the Session's folder failed: {}",
+                    init.stderr.trim()
+                )));
+            }
+        }
+        drop(writer);
+        self.git_status(session_id).await
+    }
+
+    /// Who a commit from Source Control would be by, as host Git reads it
+    /// for this Session's folder, and why one would be refused.
+    pub async fn git_commit_identity(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::git_person::CommitIdentity, DaemonError> {
+        let session = self
+            .get_session(session_id)
             .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        crate::git_person::CommitIdentity::read(
+            &crate::git_host::HostTools::default(),
+            &session.working_dir,
+        )
+        .await
+        .map_err(DaemonError::Session)
     }
 
     /// Working-tree status (current branch + changed files).
@@ -13145,8 +13220,14 @@ trap - EXIT HUP INT TERM
         Ok(crate::git::parse_branches(&cur.stdout, &list.stdout))
     }
 
-    /// Commit. Returns the fresh status. A no-op commit (nothing staged) is not
-    /// an error — the status just comes back unchanged.
+    /// Commit, as the person: the author and committer are the identity
+    /// host Git reads for the Session's folder (see [`crate::git_person`]),
+    /// dated in the host's time zone. Without that identity, or in a
+    /// repository that signs its commits, nothing is committed and the
+    /// refusal says what to do. Returns the fresh status.
+    ///
+    /// Nothing to commit is refused as such (no commit was made), and any
+    /// other failure carries Git's own message; neither reads as success.
     ///
     /// `stage_all` decides which of two different acts this is. `false` commits
     /// the index exactly as the user built it, which is the whole point of
@@ -13160,22 +13241,58 @@ trap - EXIT HUP INT TERM
         message: &str,
         stage_all: bool,
     ) -> Result<crate::git::GitStatus, DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let tools = crate::git_host::HostTools::default();
+        let identity = crate::git_person::CommitIdentity::read(&tools, &session.working_dir)
+            .await
+            .map_err(DaemonError::Session)?;
+        let date = crate::git_person::host_commit_date(&tools, &session.working_dir).await;
+        let person = identity.person(date).map_err(DaemonError::InvalidRequest)?;
         let writer = self.session_writer(session_id).await?;
         self.ensure_session_git_with_writer(session_id, &writer)
             .await?;
         if stage_all {
-            self.session_git_with_writer(&writer, session_id, &["add", "-A"])
+            let staged = self
+                .session_git_with_writer(&writer, session_id, &["add", "-A"])
                 .await?;
+            if !staged.ok() {
+                return Err(DaemonError::Session(format!(
+                    "staging every change failed: {}",
+                    staged.stderr.trim()
+                )));
+            }
         }
         let msg = if message.trim().is_empty() {
             "axocoatl: snapshot"
         } else {
             message
         };
-        let _ = self
-            .session_git_with_writer(&writer, session_id, &["commit", "-q", "-m", msg])
-            .await;
-        self.git_status(session_id).await
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let argv = session_git_arguments_as(
+            &sandbox.root().to_string_lossy(),
+            Some(&person),
+            &["commit", "-q", "-m", msg],
+        );
+        let result = writer
+            .exec(sandbox, argv, None, Duration::from_secs(60))
+            .await?;
+        drop(writer);
+        match crate::git_person::commit_outcome(result.exit_code, &result.stdout, &result.stderr)
+        {
+            crate::git_person::CommitOutcome::Committed => self.git_status(session_id).await,
+            crate::git_person::CommitOutcome::NothingToCommit => {
+                Err(DaemonError::InvalidRequest(
+                    "Nothing was committed: no change is staged. Stage a file or a hunk first, or use Stage all and commit."
+                        .to_string(),
+                ))
+            }
+            crate::git_person::CommitOutcome::Failed(message) => Err(DaemonError::Session(
+                format!("Nothing was committed: {message}"),
+            )),
+        }
     }
 
     /// Discard one hunk of a file's unstaged diff, in the working tree.
@@ -13532,16 +13649,11 @@ trap - EXIT HUP INT TERM
             )
             .await?;
             if !probe.ok() || probe.stdout.trim() != "true" {
+                // Axocoatl's identity comes with each command; none is
+                // written into the person's repository, whose later commits
+                // stay theirs.
                 for (args, action) in [
                     (vec!["init", "-q"], "initializing Git for Ways"),
-                    (
-                        vec!["config", "user.email", "agent@axocoatl.local"],
-                        "setting the Ways Git email",
-                    ),
-                    (
-                        vec!["config", "user.name", "Axocoatl"],
-                        "setting the Ways Git name",
-                    ),
                     (vec!["add", "-A"], "capturing the initial Git baseline"),
                     (
                         vec!["commit", "-q", "-m", "axocoatl: baseline", "--allow-empty"],
@@ -26181,6 +26293,131 @@ agents:
             "-d".to_string(),
             "refs/axo/attempts/set-a/base".to_string(),
         ]));
+    }
+
+    /// Run one Session Git argv on the host, as the sandbox would.
+    fn run_session_git_argv(argv: Vec<String>) -> ExecResult {
+        let output = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .output()
+            .unwrap();
+        ExecResult {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            exit_code: output.status.code().unwrap_or(-1),
+        }
+    }
+
+    #[test]
+    fn a_commit_the_person_makes_is_theirs_and_internal_commits_stay_axocoatl() {
+        let repo = tempfile::tempdir().unwrap();
+        let dir = repo.path().to_string_lossy().to_string();
+        let git = |args: &[&str]| run_session_git_argv(session_git_arguments(&dir, args));
+        assert!(git(&["init", "-q"]).ok());
+        std::fs::write(repo.path().join("a.txt"), "a\n").unwrap();
+        assert!(git(&["add", "a.txt"]).ok());
+        let person = crate::git_person::GitPerson {
+            name: "Ada Lovelace".into(),
+            email: "ada@example.com".into(),
+            date: Some("1700000000 +0530".into()),
+        };
+        let committed = run_session_git_argv(session_git_arguments_as(
+            &dir,
+            Some(&person),
+            &["commit", "-q", "-m", "first"],
+        ));
+        assert_eq!(
+            crate::git_person::commit_outcome(
+                committed.exit_code,
+                &committed.stdout,
+                &committed.stderr
+            ),
+            crate::git_person::CommitOutcome::Committed,
+            "{committed:?}"
+        );
+        let log = git(&[
+            "log",
+            "-1",
+            "--date=raw",
+            "--format=%an <%ae>|%cn <%ce>|%ad|%cd",
+        ]);
+        assert_eq!(
+            log.stdout.trim(),
+            "Ada Lovelace <ada@example.com>|Ada Lovelace <ada@example.com>|1700000000 +0530|1700000000 +0530"
+        );
+        // Nothing about Axocoatl, or the person, was written into the
+        // repository's own configuration.
+        let config = std::fs::read_to_string(repo.path().join(".git/config")).unwrap();
+        assert!(!config.contains("[user]"), "{config}");
+
+        // An internal commit is Axocoatl's.
+        std::fs::write(repo.path().join("b.txt"), "b\n").unwrap();
+        assert!(git(&["add", "b.txt"]).ok());
+        assert!(git(&["commit", "-q", "-m", "internal"]).ok());
+        let log = git(&["log", "-1", "--format=%an <%ae>"]);
+        assert_eq!(log.stdout.trim(), "Axocoatl <agent@axocoatl.local>");
+
+        // Nothing staged is no commit, and says so.
+        let empty = run_session_git_argv(session_git_arguments_as(
+            &dir,
+            Some(&person),
+            &["commit", "-q", "-m", "empty"],
+        ));
+        assert_eq!(
+            crate::git_person::commit_outcome(empty.exit_code, &empty.stdout, &empty.stderr),
+            crate::git_person::CommitOutcome::NothingToCommit
+        );
+
+        // A held index lock is a failure carrying Git's own message.
+        std::fs::write(repo.path().join("c.txt"), "c\n").unwrap();
+        assert!(git(&["add", "c.txt"]).ok());
+        std::fs::write(repo.path().join(".git/index.lock"), "").unwrap();
+        let locked = run_session_git_argv(session_git_arguments_as(
+            &dir,
+            Some(&person),
+            &["commit", "-q", "-m", "locked"],
+        ));
+        match crate::git_person::commit_outcome(locked.exit_code, &locked.stdout, &locked.stderr) {
+            crate::git_person::CommitOutcome::Failed(message) => {
+                assert!(message.contains("index.lock"), "{message}")
+            }
+            other => panic!("a held index lock must fail the commit: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_folder_that_is_not_a_repository_is_refused_and_left_alone() {
+        let folder = tempfile::tempdir().unwrap();
+        let dir = folder.path().to_string_lossy().to_string();
+        let probe = run_session_git_argv(session_git_arguments(
+            &dir,
+            &["rev-parse", "--is-inside-work-tree"],
+        ));
+        match session_git_repository(&probe) {
+            Err(DaemonError::WorkspaceRefused { code, message }) => {
+                assert_eq!(code, NOT_A_REPOSITORY_CODE);
+                assert!(message.contains("Initialize Git here"), "{message}");
+            }
+            other => panic!("a plain folder must be refused: {other:?}"),
+        }
+        assert!(!folder.path().join(".git").exists());
+
+        assert!(run_session_git_argv(session_git_arguments(&dir, &["init", "-q"])).ok());
+        let probe = run_session_git_argv(session_git_arguments(
+            &dir,
+            &["rev-parse", "--is-inside-work-tree"],
+        ));
+        assert!(session_git_repository(&probe).is_ok());
+        // An unreadable Git is reported as such, not as "not a repository".
+        let broken = ExecResult {
+            stdout: String::new(),
+            stderr: "fatal: detected dubious ownership in repository".into(),
+            exit_code: 128,
+        };
+        assert!(matches!(
+            session_git_repository(&broken),
+            Err(DaemonError::Session(message)) if message.contains("dubious ownership")
+        ));
     }
 
     #[test]

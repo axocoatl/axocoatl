@@ -2942,14 +2942,15 @@ async fn require_ready_session(state: &AppState, id: &str) -> Result<(), RouteEr
     }
 }
 
-/// GET /api/sessions/{id}/git/status
+/// GET /api/sessions/{id}/git/status. A folder that is not a Git repository
+/// is a 409 with the code `not_a_repository`; reading never initializes one.
 pub async fn git_status(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
-    daemon.git_status(&id).await.map(Json).map_err(attempt_err)
+    daemon.git_status(&id).await.map(Json).map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -2962,14 +2963,14 @@ pub async fn git_diff(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(q): Query<GitPathQuery>,
-) -> Result<Json<axocoatl_daemon::git::GitDiff>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitDiff>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_diff(&id, &q.path)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -3002,14 +3003,10 @@ pub async fn session_variant_diff(
 pub async fn git_branches(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<axocoatl_daemon::git::GitBranches>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitBranches>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
-    daemon
-        .git_branches(&id)
-        .await
-        .map(Json)
-        .map_err(attempt_err)
+    daemon.git_branches(&id).await.map(Json).map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -3021,19 +3018,45 @@ pub struct GitCommitBody {
     pub stage_all: bool,
 }
 
+/// GET /api/sessions/{id}/git/identity: who a commit from Source Control is
+/// by (`name`, `email`), whether the repository signs its commits, and the
+/// `problem` that refuses a commit, when one does.
+pub async fn git_commit_identity(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<axocoatl_daemon::git_person::CommitIdentity>, CodedRouteError> {
+    let daemon = state.read().await;
+    daemon
+        .git_commit_identity(&id)
+        .await
+        .map(Json)
+        .map_err(coded_err)
+}
+
+/// POST /api/sessions/{id}/git/init: make the Session's folder a Git
+/// repository at the person's request (only `git init`).
+pub async fn git_init(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
+    let daemon = state.read().await;
+    daemon.git_init(&id).await.map(Json).map_err(coded_err)
+}
+
 /// POST /api/sessions/{id}/git/commit
 pub async fn git_commit(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<GitCommitBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_commit(&id, body.message.as_deref().unwrap_or(""), body.stage_all)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -3061,14 +3084,14 @@ pub async fn git_hunks(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(q): Query<HunksQuery>,
-) -> Result<Json<Vec<axocoatl_daemon::git::Hunk>>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<Vec<axocoatl_daemon::git::Hunk>>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_hunks(&id, &q.path, q.staged)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -3089,14 +3112,14 @@ pub async fn git_apply_hunk(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<HunkBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_apply_hunk(&id, &body.path, body.index, body.stage)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 /// POST /api/sessions/{id}/git/stage
@@ -3104,14 +3127,14 @@ pub async fn git_stage(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<StageBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_stage(&id, &body.paths)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 /// POST /api/sessions/{id}/git/unstage
@@ -3119,14 +3142,14 @@ pub async fn git_unstage(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<StageBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_unstage(&id, &body.paths)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 /// POST /api/sessions/{id}/git/discard
@@ -3134,14 +3157,14 @@ pub async fn git_discard(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<GitDiscardBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_discard(&id, body.path.as_deref())
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -3161,14 +3184,14 @@ pub async fn git_revert_hunk(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<GitHunkDiscardBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_revert_hunk(&id, &body.path, body.index)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 /// POST /api/sessions/{id}/git/checkout
@@ -3176,14 +3199,14 @@ pub async fn git_checkout(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<GitCheckoutBody>,
-) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
-    require_ready_session(&state, &id).await?;
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, CodedRouteError> {
+    require_ready_session(&state, &id).await.map_err(uncoded)?;
     let daemon = state.read().await;
     daemon
         .git_checkout(&id, &body.reference)
         .await
         .map(Json)
-        .map_err(attempt_err)
+        .map_err(coded_err)
 }
 
 // ── Variants — parallel branch exploration ──────────────────────────────
@@ -8214,6 +8237,7 @@ mod tests {
             "git_diff",
             "git_branches",
             "git_commit",
+            "git_init",
             "git_hunks",
             "git_apply_hunk",
             "git_stage",

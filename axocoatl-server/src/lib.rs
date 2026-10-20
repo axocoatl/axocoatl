@@ -303,6 +303,11 @@ pub fn build_router(
         .route("/api/sessions/{id}/git/branches", get(routes::git_branches))
         .route("/api/sessions/{id}/git/commit", post(routes::git_commit))
         .route(
+            "/api/sessions/{id}/git/identity",
+            get(routes::git_commit_identity),
+        )
+        .route("/api/sessions/{id}/git/init", post(routes::git_init))
+        .route(
             "/api/sessions/{id}/check",
             axum::routing::put(routes::set_session_check),
         )

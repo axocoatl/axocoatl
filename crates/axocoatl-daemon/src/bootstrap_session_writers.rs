@@ -113,37 +113,18 @@ impl AxocoatlDaemon {
             .await
     }
 
-    /// Initializing a repository is a write even when requested by Status.
-    /// The ordinary read probe remains available without owning the writer gate.
+    /// The person's Git actions run only in a Git repository: a folder that
+    /// is not one is refused with the code `not_a_repository`, never made one
+    /// on the way (see [`AxocoatlDaemon::git_init`]).
     pub(super) async fn ensure_session_git_with_writer(
         &self,
         session_id: &str,
         writer: &SessionWriterLease,
     ) -> Result<()> {
         let probe = self
-            .session_git(session_id, &["rev-parse", "--is-inside-work-tree"])
+            .session_git_with_writer(writer, session_id, &["rev-parse", "--is-inside-work-tree"])
             .await?;
-        if probe.ok() && probe.stdout.trim() == "true" {
-            return Ok(());
-        }
-        for args in [
-            vec!["init", "-q"],
-            vec!["config", "user.email", "agent@axocoatl.local"],
-            vec!["config", "user.name", "Axocoatl"],
-            vec!["add", "-A"],
-            vec!["commit", "-q", "-m", "axocoatl: baseline", "--allow-empty"],
-        ] {
-            let result = self
-                .session_git_with_writer(writer, session_id, &args)
-                .await?;
-            if !result.ok() {
-                return Err(DaemonError::Session(format!(
-                    "initializing Session Git repository: {}",
-                    result.stderr.trim()
-                )));
-            }
-        }
-        Ok(())
+        super::session_git_repository(&probe)
     }
 }
 

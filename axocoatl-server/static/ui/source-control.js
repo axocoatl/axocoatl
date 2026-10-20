@@ -313,6 +313,13 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   text-align: center;
 }
 .state.error { color: var(--err); }
+.commit-identity {
+  color: var(--muted-2);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.commit-identity.problem { color: var(--warn); }
 .empty button, .state button {
   padding: 4px var(--sp-2);
   border: 1px solid var(--border);
@@ -469,6 +476,7 @@ export class AxSourceControl extends HTMLElement {
   #expandedHunks = new Set();
   #hunkCache = new Map();
   #menuOpen = false;
+  #identity = null;
   #documentPointerDown;
 
   constructor() {
@@ -527,6 +535,7 @@ export class AxSourceControl extends HTMLElement {
     this.#setMutation(null);
     this.#status = null;
     this.#branches = [];
+    this.#identity = null;
     this.#phase = after ? 'loading' : 'idle';
     this.#error = '';
     this.#message = '';
@@ -576,10 +585,13 @@ export class AxSourceControl extends HTMLElement {
       this.#pruneSelection();
       this.#render();
       this.#emitStatus();
+      if (branches || !this.#identity) void this.#loadIdentity(session, generation, controller.signal);
     } catch (error) {
       if (controller.signal.aborted || error?.name === 'AbortError') return;
       if (!this.#isCurrent(session, generation)) return;
-      this.#phase = 'error';
+      // Reading Git never makes a folder a repository; the person can.
+      this.#phase = error?.code === 'not_a_repository' ? 'no-repo' : 'error';
+      this.#status = this.#phase === 'no-repo' ? null : this.#status;
       this.#error = String(error?.message || error);
       this.#render();
     } finally {
@@ -587,7 +599,7 @@ export class AxSourceControl extends HTMLElement {
     }
   }
 
-  async #mutate(path, body, { changed = [], success = null, session = this.session } = {}) {
+  async #mutate(path, body, { changed = [], success = null, failure = null, session = this.session } = {}) {
     if (!session || !this.isConnected || this.#mutation) return null;
     const bindingGeneration = this.#bindingGeneration;
     const mutation = { session, bindingGeneration };
@@ -620,7 +632,8 @@ export class AxSourceControl extends HTMLElement {
       return status;
     } catch (error) {
       if (this.#mutation === mutation && this.#ownsBinding(session, bindingGeneration)) {
-        this.#notify('Git operation failed', `${String(error?.message || error)} Refreshing status because the operation may have reached Git.`, 'err');
+        if (failure) this.#notify(failure.title, String(error?.message || error), failure.kind || 'err');
+        else this.#notify('Git operation failed', `${String(error?.message || error)} Refreshing status because the operation may have reached Git.`, 'err');
       }
       return null;
     } finally {
@@ -638,7 +651,12 @@ export class AxSourceControl extends HTMLElement {
     if (!session) throw new Error('No session is selected.');
     const response = await fetch(`/api/sessions/${encodeURIComponent(session)}${suffix}`, options);
     const body = await response.json().catch(() => ({}));
-    if (!response.ok || body?.error) throw new Error(body?.error || `HTTP ${response.status}`);
+    if (!response.ok || body?.error) {
+      const error = new Error(body?.error || `HTTP ${response.status}`);
+      error.status = response.status;
+      if (typeof body?.code === 'string') error.code = body.code;
+      throw error;
+    }
     return body;
   }
 
@@ -728,6 +746,7 @@ export class AxSourceControl extends HTMLElement {
             <button class="menu-item danger" role="menuitem" data-action="discard-all" data-focus-key="menu:discard-all">Discard all unstaged…</button>
           </div>
         </div>
+        <div class="commit-identity" aria-live="polite"></div>
       </div>
     </div>`;
 
@@ -746,6 +765,7 @@ export class AxSourceControl extends HTMLElement {
       menu: this.#root.querySelector('.overflow-menu'),
       commitAll: this.#root.querySelector('[data-action="commit-all"]'),
       discardAll: this.#root.querySelector('[data-action="discard-all"]'),
+      identity: this.#root.querySelector('.commit-identity'),
     };
 
     this.#els.message.addEventListener('input', () => {
@@ -818,10 +838,12 @@ export class AxSourceControl extends HTMLElement {
     if (this.#els.message.value !== this.#message) this.#els.message.value = this.#message;
     this.#els.commit.textContent = `Commit ${staged} staged`;
     this.#syncCommitActions();
-    this.#els.discardAll.disabled = unstaged === 0 || this.#phase === 'error';
+    const unavailable = this.#phase === 'error' || this.#phase === 'no-repo';
+    this.#els.discardAll.disabled = unstaged === 0 || unavailable;
     this.#els.message.disabled = false;
     this.#els.refresh.disabled = false;
-    this.#els.menuToggle.disabled = files.length === 0 || this.#phase === 'error';
+    this.#els.menuToggle.disabled = files.length === 0 || unavailable;
+    this.#syncIdentity();
     for (const button of this.#els.scopes) button.disabled = false;
     if (this.#els.menuToggle.disabled) this.#setMenuOpen(false);
     this.#syncBranches();
@@ -832,11 +854,41 @@ export class AxSourceControl extends HTMLElement {
     const files = this.#status?.files || [];
     const staged = files.filter((file) => file.staged).length;
     const hasMessage = Boolean(this.#message.trim());
-    const unavailable = this.#phase === 'error';
-    this.#els.commit.disabled = staged === 0 || !hasMessage || unavailable;
-    this.#els.commitAll.disabled = files.length === 0 || !hasMessage || unavailable;
-    this.#els.commit.title = hasMessage ? `Commit ${staged} staged file${staged === 1 ? '' : 's'}` : 'Enter a commit message';
-    this.#els.commitAll.title = hasMessage ? 'Stage every change and commit' : 'Enter a commit message';
+    const unavailable = this.#phase === 'error' || this.#phase === 'no-repo';
+    const refused = this.#identity?.problem || '';
+    this.#els.commit.disabled = staged === 0 || !hasMessage || unavailable || Boolean(refused);
+    this.#els.commitAll.disabled = files.length === 0 || !hasMessage || unavailable || Boolean(refused);
+    this.#els.commit.title = refused || (hasMessage ? `Commit ${staged} staged file${staged === 1 ? '' : 's'}` : 'Enter a commit message');
+    this.#els.commitAll.title = refused || (hasMessage ? 'Stage every change and commit' : 'Enter a commit message');
+  }
+
+  /** Say who a commit from here is by, and what it does not do. */
+  #syncIdentity() {
+    const host = this.#els.identity;
+    const identity = this.#identity;
+    host.classList.toggle('problem', Boolean(identity?.problem));
+    if (!identity || this.#phase === 'no-repo') { host.textContent = ''; host.title = ''; return; }
+    if (identity.problem) {
+      host.textContent = identity.problem;
+      host.title = identity.problem;
+      return;
+    }
+    const who = `${identity.name} <${identity.email}>`;
+    host.textContent = `Commits as ${who} · not signed · repository hooks don't run`;
+    host.title = 'Your Git name and email for this repository, as your terminal would use them. Commits from here are not signed, and the repository\'s hooks do not run.';
+  }
+
+  async #loadIdentity(session, generation, signal) {
+    try {
+      const identity = await this.#request('/git/identity', { signal }, session);
+      if (!this.#isCurrent(session, generation)) return;
+      this.#identity = identity && typeof identity === 'object' ? identity : null;
+    } catch (error) {
+      if (signal?.aborted || error?.name === 'AbortError' || !this.#isCurrent(session, generation)) return;
+      this.#identity = null;
+    }
+    this.#syncIdentity();
+    this.#syncCommitActions();
   }
 
   #syncBranches() {
@@ -854,7 +906,7 @@ export class AxSourceControl extends HTMLElement {
       this.#els.branch.dataset.signature = signature;
     }
     if (this.#els.branch.value !== branch) this.#els.branch.value = branch;
-    this.#els.branch.disabled = !names.length || this.#phase === 'error';
+    this.#els.branch.disabled = !names.length || this.#phase === 'error' || this.#phase === 'no-repo';
   }
 
   #renderFiles() {
@@ -864,6 +916,20 @@ export class AxSourceControl extends HTMLElement {
 
     if (this.#phase === 'loading' && !this.#status) {
       host.append(this.#state('Reading Git status…'));
+      this.#restoreView(view);
+      return;
+    }
+    if (this.#phase === 'no-repo') {
+      const init = document.createElement('button');
+      init.type = 'button';
+      init.textContent = 'Initialize Git here';
+      init.dataset.focusKey = 'state:git-init';
+      init.dataset.action = 'git-init';
+      init.title = 'Runs git init in this folder. Nothing is staged or committed, and no identity is written.';
+      init.onclick = () => void this.#initialize();
+      const state = this.#state(this.#error || 'This folder is not a Git repository.');
+      state.append(init);
+      host.append(state);
       this.#restoreView(view);
       return;
     }
@@ -1299,12 +1365,32 @@ export class AxSourceControl extends HTMLElement {
     const bindingGeneration = this.#bindingGeneration;
     const status = await this.#mutate('/git/commit', { message, stage_all: stageAll }, {
       success: { title: 'Committed', body: message },
+      failure: { title: 'Not committed' },
       session,
     });
     if (status && this.#ownsBinding(session, bindingGeneration)) {
       this.#message = '';
       this.#branches = [];
       await this.refresh({ branches: true });
+    }
+  }
+
+  async #initialize() {
+    const session = this.session;
+    if (!session || this.#mutation) return;
+    const bindingGeneration = this.#bindingGeneration;
+    // The no-repo state has no status yet; leave it before the mutation so
+    // a refused init shows its own error, not the old prompt.
+    this.#phase = 'loading';
+    const status = await this.#mutate('/git/init', {}, {
+      success: { title: 'Git initialized', body: 'This folder is now a Git repository. Nothing was staged or committed.' },
+      failure: { title: 'Git was not initialized' },
+      session,
+    });
+    if (status && this.#ownsBinding(session, bindingGeneration)) {
+      this.dispatchEvent(new CustomEvent('files-changed', {
+        detail: { paths: [], all: true, status }, bubbles: true, composed: true,
+      }));
     }
   }
 

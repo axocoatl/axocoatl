@@ -16,6 +16,11 @@ pub const WORKSPACE_PROTECTED_CODE: &str = "workspace_protected";
 /// Sessions.
 pub const WORKSPACE_HAS_OPEN_SESSIONS_CODE: &str = "workspace_has_open_sessions";
 
+/// The `code` of an HTTP 409 for a Git request in a Session whose folder is
+/// not a Git repository. Reading Git never makes one; the person can choose
+/// Initialize Git here.
+pub const NOT_A_REPOSITORY_CODE: &str = "not_a_repository";
+
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error("Configuration error: {0}")]

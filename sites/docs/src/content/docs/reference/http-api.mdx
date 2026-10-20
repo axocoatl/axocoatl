@@ -266,13 +266,14 @@ below.
 | --- | --- | --- |
 | GET | `/api/session-teams` | Config-owned Lattice teams available to Session creation; separate from mutable Automations |
 | GET | `/api/workspaces` | Every persisted named Workspace, including one with no Sessions |
-| POST | `/api/workspaces` | Register `{path, name?}`; canonical path is unique and an omitted name preserves an existing custom label |
+| POST | `/api/workspaces` | Register `{path, name?, confirm_broad?}`; canonical path is unique and an omitted name preserves an existing custom label. The file system root, the home folder, the folders above it and a folder that contains one of Axocoatl's own directories are a `409` with `"code": "workspace_too_broad"` unless `confirm_broad` is `true`; a folder at or below Axocoatl's data, lease, control-socket or per-user configuration directory is a `409` with `"code": "workspace_protected"` always |
 | GET | `/api/workspaces/{id}` | One Workspace |
 | PATCH | `/api/workspaces/{id}` | Rename with `{name}`; the filesystem path does not change |
+| DELETE | `/api/workspaces/{id}` | Remove the Workspace from the list and return it; its folder is never touched. A Workspace with a Session that is not closed is a `409` with `"code": "workspace_has_open_sessions"`. Its closed Sessions stay listed |
 | GET | `/api/workspaces/{id}/sessions` | Every Session owned by the Workspace, including closed records |
 | POST | `/api/workspaces/{id}/sessions` | Create from `{name, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}` under the Workspace's fixed path. While a Session's turn holds the Workspace, answers `409` at once with `"code": "workspace_busy"`, naming that Session, its run and its turn, and creates nothing (see [A busy Workspace](#a-busy-workspace)) |
 | GET | `/api/sessions` | Every persisted Session, including closed records |
-| POST | `/api/sessions` | Compatibility create from `{name, working_dir, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}`; finds or creates the matching Workspace. A busy Workspace is a `409` with `"code": "workspace_busy"` at once, as above; any other refusal is a `400` |
+| POST | `/api/sessions` | Compatibility create from `{name, working_dir, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}`; finds or creates the matching Workspace. A busy Workspace is a `409` with `"code": "workspace_busy"` at once, as above; a folder never opened as a Workspace that `POST /api/workspaces` would refuse is the same `409` with `workspace_too_broad` or `workspace_protected`; any other refusal is a `400` |
 | GET | `/api/sessions/{id}` | One persisted Session, or `404`; a Session a [loadout run](#loadouts-and-runs) created carries `loadout` |
 | PATCH | `/api/sessions/{id}` | Rename with `{name}` |
 | DELETE | `/api/sessions/{id}?force=false` | Close: stops the Session's containers and removes the Podman volumes its runtime fills again on start (`axo-egr-`, `axo-egi-`, `axo-svc-`, `axo-ca-`); the Node dependency volume stays for Reopen. `force=true` deletes the Session record and that volume too. While another Session's turn or any other operation holds the Workspace (another Session's file or Git change, Ways, creation or run admission), both answer `409` at once with `{"error": "…", "code": "workspace_busy"}`, naming that Session and turn or that operation, and change nothing. They wait only for this Session's own work, which they stop: its turn, until its command reaches a safe point (at most 30 seconds), and its running Ways or checks, which they interrupt (at most 15 seconds). A second Close or Delete of the Session while one is in progress is the same `409` at once. Another conflict is a `409` without `code` |
@@ -860,7 +861,9 @@ cookie; use it with a header credential.
 
 | Method | Path | Request / behavior |
 | --- | --- | --- |
-| GET | `/api/sessions/{id}/git/status` | Branch and staged/unstaged file state, including Last turn flags |
+| GET | `/api/sessions/{id}/git/status` | Branch and staged/unstaged file state, including Last turn flags. In a folder that is not a Git repository, this and every other Git route is a `409` with `"code": "not_a_repository"`; none of them initializes one |
+| POST | `/api/sessions/{id}/git/init` | Run `git init` in the Session's folder at the person's request; nothing is staged, committed or configured. Returns the status |
+| GET | `/api/sessions/{id}/git/identity` | `{name, email, signing, problem}`: who a commit from Source Control is by, as host Git reads it for the folder, and why a commit would be refused |
 | GET | `/api/sessions/{id}/git/diff?path=…` | One path's working diff |
 | GET | `/api/sessions/{id}/git/branches` | Current and available branches |
 | GET | `/api/sessions/{id}/git/hunks?path=…&staged=false` | Parsed staged or unstaged hunks |
@@ -870,7 +873,7 @@ cookie; use it with a header credential.
 | POST | `/api/sessions/{id}/git/hunk/discard` | `{path, index}`; destructive unstaged hunk discard |
 | POST | `/api/sessions/{id}/git/discard` | `{path?}`; omitted path discards all unstaged changes |
 | POST | `/api/sessions/{id}/git/checkout` | `{"ref":"branch-or-ref"}` |
-| POST | `/api/sessions/{id}/git/commit` | `{message?, stage_all?}`; default commits existing index |
+| POST | `/api/sessions/{id}/git/commit` | `{message?, stage_all?}`; default commits existing index. The commit is by the person's host Git identity; with none set, or in a repository that signs its commits, it is a `422` and nothing is committed. Nothing staged is a `422`; a Git failure is a `400` with Git's message |
 | PUT | `/api/sessions/{id}/check` | `{check_command}`; null/empty clears it |
 
 Discard and checkout can destroy or obscure working changes. API clients must
@@ -981,7 +984,7 @@ Workspace tree.
 
 | Method | Path | Request / behavior |
 | --- | --- | --- |
-| GET | `/api/fs/list?path=…&hidden=false` | List child directories for the Session folder picker |
+| GET | `/api/fs/list?path=…&hidden=false` | List child directories for the Workspace folder picker: `{path, parent, git, dirs: [{name, path, git}], workspace_scope?}`; `git` marks a Git repository and `workspace_scope` (`{code, message}`) says why `POST /api/workspaces` would refuse the listed folder |
 | GET | `/api/fs/project?path=…` | Probe devcontainer metadata and ancestor `AXOCOATL.md` files |
 | GET | `/.well-known/agent.json` | A2A discovery card |
 | POST | `/a2a/tasks` | Inbound A2A task dispatch to local `receiver_id` |

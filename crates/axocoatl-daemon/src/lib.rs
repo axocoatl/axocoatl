@@ -11,6 +11,7 @@ pub mod error;
 pub mod external_agent;
 pub mod git;
 pub mod git_host;
+pub mod git_person;
 pub mod interrupt;
 pub mod ipc;
 pub mod keep_pr;
