@@ -43,11 +43,14 @@ mod contract_probe;
 /// answer the contract probes. The over-long probe's message is `"x "`
 /// repeated.
 pub use contract_probe::STOP_PROBE_PROMPT as CONTRACT_STOP_PROBE_PROMPT;
+mod http_error;
+pub use http_error::{describe_native_ollama_error, native_ollama_error_hint};
 mod observed_context;
 mod server_check;
 mod version_policy;
 pub use observed_context::{
-    observe_native_ollama_context, NativeOllamaContextObservation, OBSERVATION_SCHEMA_VERSION,
+    inspect_native_ollama_model, observe_native_ollama_context, NativeOllamaContextObservation,
+    OBSERVATION_SCHEMA_VERSION,
 };
 use server_check::reports_cloud_disabled;
 pub use server_check::{
@@ -399,6 +402,12 @@ async fn metadata_request(
     body: Option<Value>,
 ) -> Result<Value, ProviderError> {
     let url = validated_endpoint(base_url, path, PROVIDER)?;
+    // The model the request names, for a 404 about it.
+    let model = body
+        .as_ref()
+        .and_then(|body| body.get("model"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let builder = match body {
         Some(body) => client.post(url).json(&body),
         None => client.get(url),
@@ -408,8 +417,16 @@ async fn metadata_request(
         .send()
         .await
         .map_err(|error| network_error(&error, &[]))?;
-    if !response.status().is_success() {
-        return Err(invalid("local profile metadata request failed"));
+    let status = response.status();
+    if !status.is_success() {
+        // Ollama's status and its own message, bounded: a model it does not
+        // have, a busy server, a model it could not load.
+        let retry_after = retry_after_secs(response.headers());
+        let text = axocoatl_llm::transport::read_error_text(response, &[]).await;
+        return Err(with_retry_after(
+            http_error::status_error(status.as_u16(), model.as_deref(), &text),
+            retry_after,
+        ));
     }
     if response
         .content_length()

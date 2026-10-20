@@ -763,3 +763,36 @@ async fn an_upgrade_between_inferences_is_probed_before_the_next_one() {
     assert_eq!((probe_bodies.len(), inferences), (2, 0));
     assert!(served.versions().is_empty());
 }
+
+/// The inspection a dry run may ask for reads metadata only: a loaded
+/// model's context, `None` for a model that is not loaded, and the same
+/// refusals as an observation (a model that is not listed, a cloud server),
+/// but never a load, a prompt or a contract probe.
+#[tokio::test]
+async fn inspection_reads_a_loaded_context_and_never_loads_or_probes() {
+    for (disabled, tags, running, expected) in [
+        (
+            true,
+            listed(DIGEST),
+            loaded(json!(8192), DIGEST),
+            Ok(Some(8192)),
+        ),
+        (true, listed(DIGEST), json!({"models": []}), Ok(None)),
+        (true, json!({"models": []}), json!({"models": []}), Err(())),
+        (false, listed(DIGEST), loaded(json!(8192), DIGEST), Err(())),
+    ] {
+        let server = MockServer::start().await;
+        profile(&server, AUDITED_OLLAMA_VERSION, disabled, shown()).await;
+        fixed(&server, "GET", "/api/tags", tags).await;
+        fixed(&server, "GET", "/api/ps", running).await;
+        fixed(&server, "POST", "/api/generate", acknowledgement()).await;
+        probes(&server, Probes::Pass).await;
+        let inspected = inspect_native_ollama_model(&server.uri(), "test-model")
+            .await
+            .map_err(|_| ());
+        assert_eq!(inspected, expected);
+        for endpoint in ["/api/generate", "/api/chat", "/api/pull"] {
+            assert_eq!(count(&server, endpoint).await, 0, "{endpoint}");
+        }
+    }
+}

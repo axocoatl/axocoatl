@@ -136,6 +136,7 @@ and have no YAML override. See [Data and backup](/operate/data-backup/) and
 | `webhooks` | list | Outbound typed-event delivery |
 | `pricing` | map | Per-model input/output rates for Attempt cost reporting; reasoning uses the output rate |
 | `credentials` | map | Where the daemon reads each credential that `sandbox.egress.routes` add to requests |
+| `run` | object | The writer and reviewer models `axocoatl run` uses when a run names none ([Run defaults](#run-defaults)) |
 
 Omitted collections default empty. The live daemon does not watch this file;
 restart it to load durable changes.
@@ -746,6 +747,40 @@ applies to every input token, cached or not. Ollama Ways have a known-zero model
 `providers.ollama.base_url` uses `localhost`, a `.localhost` host, or a loopback
 IP address. A non-loopback Ollama endpoint uses its configured model price or
 remains unknown.
+
+## Run defaults
+
+```yaml
+run:
+  models:
+    writer: "ollama:qwen3-coder:30b"   # default of a loadout's writer_model
+    reviewer: "ollama:gpt-oss:20b"     # default of a loadout's reviewer_model
+```
+
+`axocoatl onboard` writes the models it set up here, so `axocoatl run fix --task "…"`
+needs no `--model`. Each value is `provider:model`. `run.models.writer` is the default of
+a loadout's `writer_model` parameter and `run.models.reviewer` of its `reviewer_model`,
+for `axocoatl run` and `POST /api/runs` alike; `--model` (or the request's `params`)
+wins. Both keys are optional, and `run:` without them is the same as no `run:`.
+
+Validation refuses:
+
+- a value that is not `provider:model`;
+- a reviewer on a provider other than `ollama` or `openrouter`: the reviewer is a native
+  Agent, and Claude Code and Codex can write but not review;
+- a writer on a provider other than `ollama`, `openrouter`, `anthropic` (Claude Code's
+  models, for `fix-claude-code`) or `openai` (Codex's, for `fix-codex`);
+- the same model as writer and reviewer;
+- any other key under `run:` or `run.models:`.
+
+A default applies to a run only where its provider fits what the parameter feeds: an
+`ollama:` writer is not used for `fix-claude-code`, whose writer runs Claude Code and keeps
+its own `anthropic:sonnet`, and an `anthropic:` writer is not used for `fix`'s native writer.
+The run says which defaults it used and which it left out, and why, in its notes; see
+[Models from your setup](/reference/run/#models-from-your-setup). The daemon reads `run:`
+when it starts; restart it after a change. Until then, a run that misses a parameter the
+file now sets is refused with a note that the file changed since the daemon started and
+that it needs a restart.
 
 ## Validation boundary
 

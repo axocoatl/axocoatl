@@ -96,22 +96,32 @@ daemon also keeps the access token current on your computer.
 
 </Steps>
 
-The reviewer is one of Axocoatl's own Agents, on a provider your configuration defines
-and native Sessions accept, Ollama or OpenRouter (see [Providers](/configure/providers/)).
-A run uses the reviewer onboarding set up; `--model reviewer=…`, such as
-`--model reviewer=ollama:gpt-oss:20b`, names another for one run. For a reviewer on
-OpenRouter, connect it once by signing in in the browser:
+The reviewer is one of Axocoatl's own Agents, on Ollama or OpenRouter as your
+configuration defines them (see [Providers](/configure/providers/)): Claude Code and Codex
+can write but not review, and a reviewer on any other provider, or on one that is not
+configured, is refused before anything starts (exit code 3). When your configuration has
+[`run.models.reviewer`](/reference/config/#run-defaults), which `axocoatl onboard` writes,
+the run uses it and `--model reviewer=…` is needed only to choose another. For a reviewer
+on OpenRouter, connect it once by signing in in the browser:
 `axocoatl connect openrouter --reviewer <vendor/model>` checks the model, stores the key
 OpenRouter issues without showing it and adds OpenRouter to your configuration (see
 [Configure OpenRouter](/configure/providers/#configure-openrouter)). Choose a model other
-than the writer's: a reviewer on the writer's model, through any provider, is warned
-about (`same_model_reviewer`), not refused (see [Choose the models](#choose-the-models)).
+than the writer's: one you name on the writer's model, through any provider, is warned
+about (`same_model_reviewer`), and one from your setup is refused (see
+[Choose the models](#choose-the-models)).
 
 Every other flag of [`axocoatl run`](/reference/run/) applies: `--check "<command>"` when
-Axocoatl detects no check command in the repository, `--junit` and `--record`, and
-`--keep branch|pr`. A run whose credential is not stored is refused before anything
-starts (exit code 3), saying how to connect, and a run whose recipe image was not built
-fails with exit code 5, naming the `axocoatl recipe build` command.
+Axocoatl detects no check command in the repository, `--junit` and `--record`,
+`--keep branch|pr`, and `--dry-run` to list what would stop the run without starting it
+(it loads the reviewer's Ollama model once, as a run would).
+Before anything starts, the run is refused with every problem at once: a credential that
+is not stored (exit code 3, saying how to connect), a reviewer that cannot run, and a
+recipe image that was not built (exit code 5, naming the `axocoatl recipe build` command).
+Once `axocoatl connect` has stored a sign-in, it prints the run command for this computer:
+the image build when none is recorded, and the reviewer from your setup. With no reviewer
+set up yet, it says to choose one first (`axocoatl onboard` saves it as
+`run.models.reviewer`) and prints the command that then runs as written, or the `--model
+reviewer=…` to add instead.
 
 ## What the built-in loadouts run
 
@@ -121,7 +131,7 @@ fails with exit code 5, naming the `axocoatl recipe build` command.
 | Writer's model | `writer_model`, default `anthropic:sonnet` | `writer_model`, default `openai:gpt-6.1-sol` |
 | Credential | `claude-code-oauth` | `credential`, default `auto`: `codex-openai` when it is stored, else `codex-chatgpt` |
 | Required check | `tests`: the repository's detected check command, or `--check`; 3 minutes | the same |
-| Required review | `reviewer_model` (required), read-only tools, up to 3 rounds, every finding adjudicated | the same |
+| Required review | `reviewer_model` (required; `run.models.reviewer` when configured), read-only tools, up to 3 rounds, every finding adjudicated | the same |
 | Writer's budget | 4 activations, 400 invocations, 20,000,000 tokens, $10 | 4 activations, 200 invocations, 20,000,000 tokens, $10 |
 | Reviewer's budget | 3 activations, 120 invocations, 1,500,000 tokens, $3 | the same |
 | Wall clock | 60 minutes | the same |

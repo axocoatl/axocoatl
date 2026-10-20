@@ -517,9 +517,20 @@ async fn the_colored_token_is_captured_checked_and_stored_and_never_shown() {
     assert!(message.starts_with(
         "Connected Claude Code: stored secret claude-code-oauth (the token was never shown)"
     ));
+    assert!(message.contains("fix-claude-code"), "{message}");
+    // The next step printed after it builds the image this data root has
+    // not recorded, then runs fix-claude-code.
+    let next = super::next_step::next_step(
+        "fix-claude-code",
+        "claude-code",
+        super::next_step::image_recorded(&fixture.data(), "claude-code"),
+        &Default::default(),
+    );
     assert!(
-        message.contains("axocoatl recipe build claude-code"),
-        "{message}"
+        next.contains("`axocoatl recipe build claude-code`")
+            && next.contains("`axocoatl run fix-claude-code --task \"Describe the bug\"`")
+            && next.contains("`axocoatl onboard`"),
+        "{next}"
     );
     assert_eq!(fixture.stored().unwrap(), fixture.token.as_bytes());
     let path = secret_store::secret_path(&fixture.data(), CLAUDE_CODE_SECRET);
@@ -1030,6 +1041,8 @@ fn the_confirmation_names_the_secret_and_the_next_step() {
         "Connected Claude Code: stored secret claude-code-oauth (the token was never shown)"
     ));
     assert!(message.contains("runtime: claude-code"));
+    // The next step is printed after it, generated for fix-claude-code.
+    assert!(!message.contains("Next:"), "{message}");
     let message = connected_message("work-claude");
     assert!(message.contains("name work-claude as a route's `credential`"));
     assert!(needs_terminal().contains("--from-env"));

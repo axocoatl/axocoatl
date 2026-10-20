@@ -332,16 +332,37 @@ pub fn fill_detected_checks(
             .or(session_check)
             .map(str::trim)
             .filter(|command| !command.is_empty())
-            .ok_or_else(|| {
-                RunError::Usage(format!(
-                    "the check {} runs the repository's own check command, and none was \
-                     detected: pass --check \"<command>\"",
-                    check.name
-                ))
-            })?;
+            .ok_or_else(|| RunError::Usage(no_detected_check(&check.name)))?;
         check.argv = Some(vec!["sh".into(), "-c".into(), command.to_string()]);
     }
     Ok(())
+}
+
+fn no_detected_check(name: &str) -> String {
+    format!(
+        "the check {name} runs the repository's own check command, and none was detected: \
+         pass --check \"<command>\""
+    )
+}
+
+/// The refusal [`fill_detected_checks`] would give a run of `file` with no
+/// command for a `detected` check, without resolving its parameters:
+/// admission reports it together with a parameter that does not resolve.
+pub fn missing_detected_check(
+    file: &axocoatl_config::loadout::LoadoutFile,
+    check_command: Option<&str>,
+    session_check: Option<&str>,
+) -> Option<RunError> {
+    let has_command = check_command
+        .or(session_check)
+        .is_some_and(|command| !command.trim().is_empty());
+    if has_command {
+        return None;
+    }
+    file.checks
+        .iter()
+        .find(|check| check.run.detected)
+        .map(|check| RunError::Usage(no_detected_check(&check.name)))
 }
 
 /// The required checks as argv and their options, aligned by index.

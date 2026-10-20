@@ -74,6 +74,18 @@ async fn model_server() -> MockServer {
             .mount(&server)
             .await;
     }
+    // A load acknowledges the model it was asked for.
+    Mock::given(method("POST"))
+        .and(path("/api/generate"))
+        .respond_with(|request: &wiremock::Request| {
+            let body: serde_json::Value = request.body_json().unwrap_or_default();
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model": body["model"], "created_at": "2026-10-19T00:00:00Z",
+                "response": "", "done": true, "done_reason": "load"
+            }))
+        })
+        .mount(&server)
+        .await;
     server
 }
 

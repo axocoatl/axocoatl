@@ -9,11 +9,15 @@ impl NativeDefinitionPreparation {
                     .ollama_base_url
                     .as_deref()
                     .ok_or_else(|| error("Ollama provider is not configured"))?;
+                // Ollama's status and message, with what to do when known
+                // (`ollama pull` for a model it does not have).
                 let observation = with_provider_retry(|| {
                     axocoatl_llm_ollama::observe_native_ollama_context(base, self.model())
                 })
                 .await
-                .map_err(error)?;
+                .map_err(|failure| {
+                    error(axocoatl_llm_ollama::describe_native_ollama_error(&failure))
+                })?;
                 self.observed(observation)
             }
             "openrouter" => {
@@ -81,7 +85,7 @@ impl NativeDefinitionPreparation {
 /// [`crate::provider_retry`]: a 429, a 5xx, a timeout or a reset connection
 /// is tried once more after the provider's `Retry-After` (at most 30 s) or
 /// 2 s; anything else, or a second failure, stands.
-async fn with_provider_retry<T, F, Fut>(mut call: F) -> std::result::Result<T, axocoatl_llm::ProviderError>
+pub(crate) async fn with_provider_retry<T, F, Fut>(mut call: F) -> std::result::Result<T, axocoatl_llm::ProviderError>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = std::result::Result<T, axocoatl_llm::ProviderError>>,
@@ -231,7 +235,7 @@ fn openrouter_output_limit(
     Ok(low)
 }
 impl NativeProviderCredentials {
-    fn openrouter_key(&self) -> Result<&str> {
+    pub(crate) fn openrouter_key(&self) -> Result<&str> {
         if let Some(reason) = &self.openrouter_configuration_error {
             return Err(error(reason));
         }

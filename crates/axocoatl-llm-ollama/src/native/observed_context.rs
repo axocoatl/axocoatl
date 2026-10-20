@@ -350,6 +350,32 @@ pub async fn observe_native_ollama_context(
     })
 }
 
+/// What metadata alone says of `model`, without loading it: the server runs
+/// an accepted version with its cloud models off, the model is a local GGUF
+/// completion model listed exactly once, and, only when Ollama already has
+/// it loaded, the context it was loaded with (`None` when it is not
+/// loaded). It reads `/api/version`, `/api/status`, `/api/show`,
+/// `/api/tags` and `/api/ps`; it never loads a model, sends a prompt or
+/// runs the contract probes, so a model that loads is not proven to load
+/// and its context is unknown until something loads it.
+pub async fn inspect_native_ollama_model(
+    base_url: &str,
+    model: &str,
+) -> Result<Option<usize>, ProviderError> {
+    model_key(model)?;
+    let client = local_client(base_url)?;
+    profile(&client, base_url, model).await?;
+    let listed = identity(
+        &metadata_request(&client, base_url, "api/tags", None).await?,
+        model,
+    )?;
+    let running = metadata_request(&client, base_url, "api/ps", None).await?;
+    match identity(&running, &listed.name) {
+        Ok(_) => loaded_context(&running, &listed).map(Some),
+        Err(_) => Ok(None),
+    }
+}
+
 pub(super) async fn verify_identity(
     provider: &NativeOllamaProvider,
     observation: &NativeOllamaContextObservation,

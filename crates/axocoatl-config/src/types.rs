@@ -55,6 +55,53 @@ pub struct AxocoatlConfig {
     /// never holds a credential value.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub credentials: std::collections::BTreeMap<String, CredentialSourceYaml>,
+    /// What `axocoatl run` uses when its command line does not say: the
+    /// models `axocoatl onboard` chose for the writer and the reviewer.
+    #[serde(default, skip_serializing_if = "RunConfigYaml::is_empty")]
+    pub run: RunConfigYaml,
+}
+
+/// `run:`, the defaults of `axocoatl run` and `POST /api/runs`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunConfigYaml {
+    #[serde(default, skip_serializing_if = "RunModelsYaml::is_empty")]
+    pub models: RunModelsYaml,
+}
+
+impl RunConfigYaml {
+    pub fn is_empty(&self) -> bool {
+        self.models.is_empty()
+    }
+}
+
+/// `run.models`: each a `provider:model`. `writer` is the default of a
+/// loadout's `writer_model` parameter and `reviewer` of its `reviewer_model`;
+/// `--model ROLE=…` on the command line (or the request's `params`) wins. A
+/// default applies only where its provider fits the loadout: a writer on
+/// Ollama or OpenRouter for `fix`, `anthropic:` for `fix-claude-code`'s
+/// Claude Code, `openai:` for `fix-codex`'s Codex.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunModelsYaml {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer: Option<String>,
+}
+
+impl RunModelsYaml {
+    pub fn is_empty(&self) -> bool {
+        self.writer.is_none() && self.reviewer.is_none()
+    }
+
+    /// Each configured default as `(role, provider:model)`, writer first.
+    pub fn roles(&self) -> Vec<(&'static str, &str)> {
+        [("writer", &self.writer), ("reviewer", &self.reviewer)]
+            .into_iter()
+            .filter_map(|(role, value)| value.as_deref().map(|value| (role, value)))
+            .collect()
+    }
 }
 
 /// Price of one model, in dollars per million tokens.

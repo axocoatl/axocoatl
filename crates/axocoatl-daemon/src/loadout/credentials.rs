@@ -8,8 +8,9 @@
 //! `--param credential=…` chooses one. `auto` is the first of its runtime's
 //! credentials ([`AgentRuntime::credentials`]) that is stored: for Codex
 //! `codex-openai` when it is stored, else `codex-chatgpt`. When none is,
-//! the run is refused before anything is created (exit code 3), saying how
-//! to connect.
+//! or a named credential is not stored, the run is refused before anything
+//! is created and before Podman is asked (exit code 3), saying how to
+//! connect.
 //!
 //! The choice is recorded so it is never ambiguous which credential ran:
 //! the run's manifest keeps it (`RunManifest::credentials`; a restart
@@ -54,12 +55,12 @@ fn how_to_connect(runtime: AgentRuntime) -> String {
 /// sends in `resolved.agent_credentials`, and a note in `resolved.notes`
 /// says which, and why when `auto` chose it. Returns the credentials by
 /// Agent id, as the run's manifest records them. A writer whose `auto`
-/// finds nothing stored is a usage error naming how to connect.
+/// finds nothing stored, or whose named credential is not stored, is a
+/// usage error naming how to connect.
 pub fn choose(
     resolved: &mut ResolvedLoadout,
     stored: impl Fn(&str) -> bool,
 ) -> Result<BTreeMap<String, String>, RunError> {
-    let mut chosen = BTreeMap::new();
     let agents: Vec<(String, AgentRuntime)> = resolved
         .loadout
         .file
@@ -67,8 +68,28 @@ pub fn choose(
         .iter()
         .map(|agent| (agent.id.clone(), agent.runtime))
         .collect();
-    for (id, runtime) in agents {
-        let Some(asked) = resolved.agent_credentials.get(&id).cloned() else {
+    choose_for(
+        &agents,
+        &mut resolved.agent_credentials,
+        &mut resolved.notes,
+        stored,
+    )
+}
+
+/// [`choose`] for `agents` (id and runtime) whose credentials, by Agent id,
+/// are `agent_credentials` (as
+/// [`axocoatl_config::loadout::resolve_credentials`] gives them), noting each
+/// choice in `notes`: admission checks the credentials this way when another
+/// parameter of the run does not resolve.
+pub fn choose_for(
+    agents: &[(String, AgentRuntime)],
+    agent_credentials: &mut BTreeMap<String, String>,
+    notes: &mut Vec<String>,
+    stored: impl Fn(&str) -> bool,
+) -> Result<BTreeMap<String, String>, RunError> {
+    let mut chosen = BTreeMap::new();
+    for (id, runtime) in agents.iter().cloned() {
+        let Some(asked) = agent_credentials.get(&id).cloned() else {
             continue;
         };
         let names = runtime.credentials();
@@ -89,9 +110,7 @@ pub fn choose(
                 [_] => format!("the only credential a {} writer sends", runtime.id()),
                 _ => format!("the first of {} that is stored", names.join(" and ")),
             };
-            resolved
-                .agent_credentials
-                .insert(id.clone(), name.to_string());
+            agent_credentials.insert(id.clone(), name.to_string());
             format!(
                 "Agent {id} ({}) sends the stored credential {name} ({}); credential \
                  {AUTO_CREDENTIAL} chose it, {why}.",
@@ -99,14 +118,25 @@ pub fn choose(
                 credential_words(name)
             )
         } else {
+            // A named credential must be stored now, not found missing
+            // after the run's Session and sandbox were set up.
+            if !stored(&asked) {
+                return Err(RunError::Usage(format!(
+                    "Agent {id} ({}) needs the credential {asked} ({}), and it is not stored \
+                     yet: {}, then run again",
+                    runtime.id(),
+                    credential_words(&asked),
+                    crate::secret_store::how_to_store(&asked)
+                )));
+            }
             format!(
                 "Agent {id} ({}) sends the stored credential {asked} ({}).",
                 runtime.id(),
                 credential_words(&asked)
             )
         };
-        resolved.notes.push(note);
-        if let Some(name) = resolved.agent_credentials.get(&id) {
+        notes.push(note);
+        if let Some(name) = agent_credentials.get(&id) {
             chosen.insert(id, name.clone());
         }
     }
@@ -189,13 +219,24 @@ mod tests {
         }
     }
 
-    /// A credential the run names is kept as named, whatever is stored (the
-    /// route's own check refuses one that is not), and noted.
+    /// A credential the run names is kept as named and noted when it is
+    /// stored, and refused, saying how to store it, when it is not: before
+    /// the run's Session or sandbox exists.
     #[test]
     fn a_named_credential_is_kept_and_noted() {
         for name in ["codex-openai", "codex-chatgpt"] {
             let mut run = resolved("fix-codex", &[("credential", name)]);
-            let chosen = choose(&mut run, |_| false).unwrap();
+            let error = choose(&mut run.clone(), |_| false).unwrap_err();
+            assert!(matches!(error, RunError::Usage(_)), "{error}");
+            assert!(
+                error.to_string().starts_with(&format!(
+                    "Agent writer (codex) needs the credential {name} ({}), and it is not \
+                     stored yet: run `axocoatl connect codex",
+                    credential_words(name)
+                )),
+                "{error}"
+            );
+            let chosen = choose(&mut run, |stored| stored == name).unwrap();
             assert_eq!(chosen["writer"], name);
             assert_eq!(
                 run.notes,
@@ -206,7 +247,16 @@ mod tests {
             );
         }
         let mut run = resolved("fix-claude-code", &[]);
-        let chosen = choose(&mut run, |_| false).unwrap();
+        let error = choose(&mut run.clone(), |_| false).unwrap_err().to_string();
+        assert!(
+            error.starts_with(
+                "Agent writer (claude-code) needs the credential claude-code-oauth (Claude \
+                 Code's OAuth token, sent to api.anthropic.com), and it is not stored yet: run \
+                 `axocoatl connect claude-code`"
+            ),
+            "{error}"
+        );
+        let chosen = choose(&mut run, |_| true).unwrap();
         assert_eq!(chosen["writer"], "claude-code-oauth");
         assert_eq!(
             run.notes,

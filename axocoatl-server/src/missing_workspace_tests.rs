@@ -95,14 +95,84 @@ async fn call(
     (status, value)
 }
 
+const MODEL: &str = "folder-model:latest";
+
+/// A stand-in for the audited local Ollama, enough for admission to observe
+/// [`MODEL`] (version, cloud mode, model, a generation-free load, its
+/// loaded context, and the two contract probes). No turn ever runs: every
+/// run's environment fails under the fake Podman. Returns its base URL.
+async fn ollama() -> String {
+    use axum::routing::{get, post};
+    use axum::Json;
+    use serde_json::{json, Value};
+    let digest = "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
+    let listed = json!({"models": [{"name": MODEL, "model": MODEL, "digest": digest}]});
+    let loaded = json!({"models": [{"name": MODEL, "model": MODEL, "digest": digest,
+        "details": {"format": "gguf"}, "context_length": 32768, "runner": "llamacpp"}]});
+    let app = axum::Router::new()
+        .route(
+            "/api/version",
+            // The release native execution's guarantees were audited against.
+            get(|| async { Json(json!({"version": "0.40.6"})) }),
+        )
+        .route(
+            "/api/status",
+            get(|| async { Json(json!({"cloud": {"disabled": true}})) }),
+        )
+        .route(
+            "/api/show",
+            post(|| async {
+                Json(
+                    json!({"details": {"format": "gguf"}, "capabilities": ["completion", "tools"]}),
+                )
+            }),
+        )
+        .route("/api/tags", get(move || async move { Json(listed) }))
+        .route("/api/ps", get(move || async move { Json(loaded) }))
+        .route(
+            "/api/generate",
+            post(|Json(body): Json<Value>| async move {
+                Json(
+                    json!({"model": body["model"], "created_at": "2026-10-19T00:00:00Z",
+                    "response": "", "done": true, "done_reason": "load"}),
+                )
+            }),
+        )
+        // The contract probes: the over-long prompt is refused, the
+        // one-token request stops after one token.
+        .route(
+            "/api/chat",
+            post(|Json(body): Json<Value>| async move {
+                let over_long = body
+                    .pointer("/messages/0/content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.starts_with("x x "));
+                if over_long {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        json!({"error": "request exceeds the available context size"}).to_string(),
+                    );
+                }
+                let record = json!({"model": body["model"], "created_at": "2026-10-19T00:00:00Z",
+                    "message": {"role": "assistant", "content": "ready"}, "done": true,
+                    "done_reason": "length", "prompt_eval_count": 14, "eval_count": 1});
+                (StatusCode::OK, format!("{record}\n"))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{address}")
+}
+
 fn run(repo: &Path, id: &str) -> serde_json::Value {
     serde_json::json!({
         "loadout": "folder",
         "task": "Say done.",
         "repo": repo.display().to_string(),
-        // Nothing listens there: admission observes no model context, and
-        // no turn ever runs.
-        "params": {"writer_model": "ollama:folder-model:latest"},
+        "params": {"writer_model": format!("ollama:{MODEL}")},
         "request_id": id,
     })
 }
@@ -121,9 +191,12 @@ async fn session_ids(router: &Router) -> Vec<String> {
 async fn moved_workspace_routes_body() {
     let config_dir = tempfile::tempdir().unwrap();
     let config_path = config_dir.path().join("axocoatl.yaml");
+    let ollama = ollama().await;
     std::fs::write(
         &config_path,
-        "agents: []\nproviders:\n  ollama:\n    base_url: http://127.0.0.1:9\nsandbox:\n  backend: podman\n  network: bridge\nconsolidation:\n  enabled: false\n",
+        format!(
+            "agents: []\nproviders:\n  ollama:\n    base_url: {ollama}\nsandbox:\n  backend: podman\n  network: bridge\nconsolidation:\n  enabled: false\n"
+        ),
     )
     .unwrap();
     std::fs::create_dir(config_dir.path().join("loadouts")).unwrap();
@@ -147,6 +220,43 @@ async fn moved_workspace_routes_body() {
     let (a, b) = (outside.join("a"), outside.join("b"));
     std::fs::create_dir(&a).unwrap();
     std::fs::write(a.join("README.md"), "# a\n").unwrap();
+
+    // The dry run is its own route: 200 with what admission found, the
+    // task optional, and nothing created.
+    let mut dry = run(&a, "dry");
+    dry.as_object_mut().unwrap().remove("task");
+    dry.as_object_mut().unwrap().remove("request_id");
+    let (status, preflight) = call(&router, Method::POST, "/api/runs/preflight", Some(dry)).await;
+    assert_eq!(status, StatusCode::OK, "{preflight}");
+    assert_eq!(preflight["ready"], true, "{preflight}");
+    assert_eq!(preflight["ollama_models"][0]["loaded"], true, "{preflight}");
+    assert_eq!(
+        preflight["ollama_models"][0]["context_tokens"], 32768,
+        "{preflight}"
+    );
+    // POST /api/runs never takes a dry run: any dry_run query is refused
+    // with nothing started, never run for real.
+    for query in ["?dry_run=1", "?dry_run", "?dry_run=yes", "?dry_run=0"] {
+        let (status, refused) = call(
+            &router,
+            Method::POST,
+            &format!("/api/runs{query}"),
+            Some(run(&a, "never")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap()
+                .contains("POST /api/runs/preflight"),
+            "{refused}"
+        );
+    }
+    assert!(session_ids(&router).await.is_empty());
+    let (status, runs) = call(&router, Method::GET, "/api/runs", None).await;
+    assert_eq!(status, StatusCode::OK, "{runs}");
+    assert_eq!(runs, serde_json::json!([]));
     let (status, run_a) = call(&router, Method::POST, "/api/runs", Some(run(&a, "run-a"))).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{run_a}");
     let stale = run_a["session_id"].as_str().unwrap().to_string();

@@ -925,3 +925,115 @@ fn retry_after_reads_seconds_and_http_dates() {
         ProviderError::Network(message) if message == "x"
     ));
 }
+
+/// A metadata request Ollama refuses keeps the status and Ollama's own
+/// message: a model it does not have is `ModelNotFound` with the `ollama
+/// pull` that fixes it, a model it could not load is a 500 with Ollama's
+/// reason, and a busy server is a 503 with its `Retry-After`, which a
+/// Session's retry policy honors. Nothing becomes one generic sentence.
+#[tokio::test]
+async fn refused_metadata_requests_keep_the_status_and_ollamas_message() {
+    // Not pulled: `POST /api/show` answers 404.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/version"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"version":AUDITED_OLLAMA_VERSION})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"cloud":{"disabled":true}})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/show"))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .set_body_json(json!({"error":"model 'test-model' not found"})),
+        )
+        .mount(&server)
+        .await;
+    let error = NativeOllamaProvider::connect(config(&server))
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(&error, ProviderError::ModelNotFound { model, .. } if model == "test-model"),
+        "{error}"
+    );
+    assert_eq!(
+        describe_native_ollama_error(&error),
+        "Model not found: test-model on ollama. Ollama does not have test-model: run `ollama \
+         pull test-model`"
+    );
+    let shown = show_native_ollama_model(&server.uri(), "test-model")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(shown, ProviderError::ModelNotFound { .. }),
+        "{shown}"
+    );
+
+    // Pulled, but too large to load: the load answers 500 with Ollama's
+    // reason.
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/api/tags"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models":[{
+            "name":"test-model:latest","model":"test-model:latest","digest":"a".repeat(64)}]})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/generate"))
+        .respond_with(
+            ResponseTemplate::new(500)
+                .set_body_json(json!({"error":"unable to load full model on GPU"})),
+        )
+        .mount(&server)
+        .await;
+    let error = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, ProviderError::ApiError { status: 500, message, .. }
+            if message == "unable to load full model on GPU"),
+        "{error}"
+    );
+    assert!(native_ollama_error_hint(&error)
+        .unwrap()
+        .contains("more memory"));
+
+    // Busy: a 503 keeps its status, Ollama's text and its Retry-After.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/version"))
+        .respond_with(
+            ResponseTemplate::new(503)
+                .insert_header("Retry-After", "2")
+                .set_body_json(json!({"error":"server busy, please try again.  maximum pending requests exceeded"})),
+        )
+        .mount(&server)
+        .await;
+    let error = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap_err();
+    match error {
+        ProviderError::ApiError {
+            status: 503,
+            message,
+            ..
+        } => assert_eq!(
+            message,
+            "server busy, please try again. maximum pending requests exceeded (Retry-After: 2 s)"
+        ),
+        other => panic!("expected a 503, got {other}"),
+    }
+    // The server check still reads a refused version request as not
+    // reported, not as an unreachable server.
+    let check = check_native_ollama_server(&server.uri()).await.unwrap();
+    assert_eq!(check.version, None);
+    assert_eq!(check.cloud, OllamaCloudMode::Unreported);
+}

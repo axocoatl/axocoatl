@@ -7,6 +7,7 @@ pub mod egress_presets;
 pub mod egress_routes;
 pub mod error;
 pub mod loadout;
+pub mod run_defaults;
 pub mod secret;
 pub mod types;
 pub mod web;
@@ -622,6 +623,7 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
     validate_web(config)?;
     validate_browser(config)?;
     validate_provider_key_secrets(&config.providers)?;
+    run_defaults::validate_run_defaults(&config.run)?;
 
     for webhook in &config.webhooks {
         if webhook.name.trim().is_empty() {

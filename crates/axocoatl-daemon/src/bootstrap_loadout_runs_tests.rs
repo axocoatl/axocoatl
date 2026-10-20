@@ -472,10 +472,7 @@ async fn e2b_child_body() {
         repo: repo.path().display().to_string(),
         params: [
             ("writer_model".to_string(), format!("ollama:{MODEL}")),
-            (
-                "reviewer_model".to_string(),
-                "ollama:other:latest".to_string(),
-            ),
+            ("reviewer_model".to_string(), format!("ollama:{OTHER}")),
         ]
         .into_iter()
         .collect(),
@@ -501,7 +498,9 @@ async fn e2b_child_body() {
     daemon.shutdown().await.unwrap();
 }
 
-/// The configuration file of the admission test, with `browser.allow`.
+/// The configuration file of the admission test, with `browser.allow`, and
+/// native OpenRouter configured (a test key no request ever sends: the
+/// tests read OpenRouter's catalog from a mock).
 fn admission_yaml(base_url: &str, browser_allow: &str) -> String {
     format!(
         r#"
@@ -514,6 +513,9 @@ agents:
 providers:
   ollama:
     base_url: {base_url}
+  openrouter:
+    api_key: test-only-key
+  openrouter_billing: credits
 sandbox:
   backend: podman
   network: bridge
@@ -719,7 +721,11 @@ async fn admission_child_body() {
     );
     catalog.verify().await;
 
-    // A Codex writer's floor is one call of its pinned model.
+    // A Codex writer's floor is one call of its pinned model. (Its
+    // credential, codex-openai, is stored as a test value: a missing one
+    // would be reported too.)
+    crate::secret_store::set_secret(daemon.data_root.path(), "codex-openai", b"test-api-key")
+        .unwrap();
     let message = usage(admit(run("tight-codex", "openai:gpt-5.5", "tight-codex")).await);
     assert_eq!(
         message,
@@ -891,22 +897,26 @@ async fn external_fix_admission_child_body() {
     };
 
     // fix-codex with nothing stored: auto finds no credential and says how
-    // to connect, before anything is created.
+    // to connect, and the codex image is not built either: both at once,
+    // before anything is created.
     let message = usage(admit(request("fix-codex", &[], "codex-none")).await);
     assert_eq!(
         message,
-        "Agent writer (codex) has credential auto, and neither codex-openai nor codex-chatgpt \
-         is stored: run `axocoatl connect codex` to sign in with your ChatGPT plan (stored as \
-         codex-chatgpt), or `axocoatl connect codex --api-key` to also store the OpenAI API key \
-         OpenAI issues with that sign-in (as codex-openai), then run again"
+        "2 problems stop this run, and nothing was started:\n  1. Agent writer (codex) has \
+         credential auto, and neither codex-openai nor codex-chatgpt is stored: run `axocoatl \
+         connect codex` to sign in with your ChatGPT plan (stored as codex-chatgpt), or \
+         `axocoatl connect codex --api-key` to also store the OpenAI API key OpenAI issues \
+         with that sign-in (as codex-openai), then run again\n  2. recipe images: no image is \
+         built from the recipes codex; run `axocoatl recipe build codex`"
     );
-    // A credential that is none of Codex's is a parameter error.
+    // A credential that is none of Codex's is a parameter error, reported
+    // with the image that is not built.
     let message = usage(admit(request("fix-codex", &[("credential", "codex")], "bogus")).await);
     assert!(
-        message.starts_with(
-            "loadout parameter credential: a codex writer's route sends codex-openai or \
+        message.contains(
+            "\n  1. loadout parameter credential: a codex writer's route sends codex-openai or \
              codex-chatgpt, or auto"
-        ),
+        ) && message.contains("\n  2. recipe images: no image is built"),
         "{message}"
     );
     // Named but not stored: the route's own refusal, with how to store it.
@@ -919,7 +929,7 @@ async fn external_fix_admission_child_body() {
         .await,
     );
     assert!(
-        message.contains("credential \"codex-openai\"")
+        message.contains("needs the credential codex-openai (")
             && message.contains("axocoatl connect codex --api-key"),
         "{message}"
     );
@@ -1015,7 +1025,7 @@ async fn external_fix_admission_child_body() {
     // fix-claude-code: Claude Code's token must be stored.
     let message = usage(admit(request("fix-claude-code", &[], "claude-none")).await);
     assert!(
-        message.contains("credential \"claude-code-oauth\"")
+        message.contains("needs the credential claude-code-oauth (")
             && message.contains("axocoatl connect claude-code"),
         "{message}"
     );

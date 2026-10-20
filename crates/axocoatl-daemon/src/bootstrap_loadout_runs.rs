@@ -9,8 +9,8 @@
 use super::*;
 use crate::loadout::api::{
     LoadoutGraph, LoadoutGraphEdge, LoadoutGraphNode, LoadoutParamView, LoadoutSummary,
-    LoadoutView, RunAccepted, RunEventsPage, RunRequest, RunStatusView, ValidateLoadoutRequest,
-    ValidateLoadoutResponse,
+    LoadoutView, RunAccepted, RunEventsPage, RunPreflight, RunRequest, RunStatusView,
+    ValidateLoadoutRequest, ValidateLoadoutResponse,
 };
 use crate::loadout::host::CheckLabel;
 use crate::loadout::{RunContext, RunError, RunOptions};
@@ -30,6 +30,7 @@ use axocoatl_session::run_record::{
     RunEvent, RunManifest, RunRecordError, RunRecordStore, SessionLoadoutBinding,
     RUN_MANIFEST_SCHEMA,
 };
+use std::collections::BTreeMap;
 
 /// Longest task a run accepts, in bytes.
 pub const MAX_RUN_TASK_BYTES: usize = 64 * 1024;
@@ -1190,6 +1191,249 @@ fn find_in_registry(registry: Vec<RegistryEntry>, id: &str) -> Result<Loadout, D
     }
 }
 
+/// Whether admission is for a run, which may start a stopped Podman machine
+/// once nothing else stops it, or a dry run, which only asks Podman and,
+/// with `load_models` false, only reads each Ollama model's metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdmissionMode {
+    Run,
+    DryRun {
+        /// Load each Ollama model (no prompt) and run the contract probes,
+        /// as a run's admission does.
+        load_models: bool,
+        /// The request names a task (else the task is not checked).
+        task_given: bool,
+    },
+}
+
+impl AdmissionMode {
+    fn dry(self) -> bool {
+        matches!(self, Self::DryRun { .. })
+    }
+
+    fn loads_models(self) -> bool {
+        match self {
+            Self::Run => true,
+            Self::DryRun { load_models, .. } => load_models,
+        }
+    }
+}
+
+/// What admission checked of a run that can start.
+struct CheckedRun {
+    loadout: Loadout,
+    repo: std::path::PathBuf,
+    repo_text: String,
+    resolved: axocoatl_config::loadout::ResolvedLoadout,
+    credentials: BTreeMap<String, String>,
+    agent_contexts: BTreeMap<String, u64>,
+    overlay: crate::loadout::egress::LoadoutEgressOverlay,
+    image: Option<String>,
+    setup: Option<String>,
+    exposed_ports: Vec<u16>,
+}
+
+/// What admission found for one request: the run it can start, if any, and
+/// every problem, with the parameters, defaults, warnings and notes the run
+/// would have.
+struct AdmissionReport {
+    checked: Option<CheckedRun>,
+    problems: crate::loadout::admission::Problems,
+    params: axocoatl_config::loadout::ParamValues,
+    defaults: Vec<axocoatl_config::run_defaults::RunModelDefault>,
+    warnings: Vec<axocoatl_config::loadout::LoadoutWarning>,
+    notes: Vec<String>,
+    sandbox: Option<String>,
+    ollama_models: Vec<crate::loadout::api::PreflightOllamaModel>,
+}
+
+/// Why a run whose writer and reviewer are the same model is refused when
+/// one of the two came from the configured `run.models`: a default never
+/// makes a model review its own change (the person who names both on the
+/// command line gets the `same_model_reviewer` warning instead).
+fn same_model_from_defaults(
+    resolved: &axocoatl_config::loadout::ResolvedLoadout,
+    defaults: &[axocoatl_config::run_defaults::RunModelDefault],
+) -> Option<String> {
+    let applied: Vec<&str> = defaults
+        .iter()
+        .filter(|default| default.skipped.is_none())
+        .map(|default| default.source.as_str())
+        .collect();
+    if applied.is_empty() {
+        return None;
+    }
+    let reviewer = resolved.reviewer_model.as_ref()?;
+    let writer = resolved
+        .loadout
+        .file
+        .agents
+        .iter()
+        .filter(|agent| agent.role == LoadoutRole::Writer)
+        .filter_map(|agent| resolved.agent_models.get(&agent.id))
+        .find(|writer| writer.same_model(reviewer))?;
+    Some(format!(
+        "the reviewer {reviewer} is the writer's model ({writer}), with {} from your setup; a \
+         run's reviewer must be a different model: pass --model reviewer=provider:model (or \
+         --model writer=…) with another model",
+        axocoatl_config::loadout::and_list(&applied)
+    ))
+}
+
+/// One native Ollama model of a run: the callers that run it (`Agent
+/// writer`, `the reviewer`) and the roles whose `--model` sets it.
+struct OllamaModelCallers {
+    model: axocoatl_config::loadout::ModelSpec,
+    who: Vec<String>,
+    roles: Vec<String>,
+}
+
+/// What admission learns of each native Ollama model of a run at
+/// `base_url`, as its first call would: the server is reachable, runs an
+/// accepted version and has its cloud models off; then each model is
+/// pulled, GGUF, loads, passes the contract probes and is loaded with at
+/// least [`axocoatl_config::loadout::MIN_RUN_CONTEXT_TOKENS`] tokens of
+/// context (a load without a prompt, no inference). With `load` false (a
+/// dry run that asked not to load) only the metadata is read, and a model
+/// that is not already loaded has no known context. A transient failure (a
+/// busy server) is tried once more; Ollama's own reason is kept, and a
+/// server that is busy or failing is an infrastructure problem, a model or
+/// setup it refuses a usage one. A model whose observation does not finish
+/// within [`ADMISSION_CONTEXT_TIMEOUT`] is not refused: its context is
+/// unknown (`None`), and its first call reports Ollama's error.
+async fn loadout_ollama_contexts(
+    base_url: &str,
+    models: &[OllamaModelCallers],
+    load: bool,
+    problems: &mut crate::loadout::admission::Problems,
+) -> (
+    HashMap<axocoatl_config::loadout::ModelSpec, Option<u64>>,
+    Vec<crate::loadout::api::PreflightOllamaModel>,
+) {
+    use crate::loadout::admission;
+    let mut contexts = HashMap::new();
+    let mut seen = Vec::new();
+    match axocoatl_llm_ollama::check_native_ollama_server(base_url).await {
+        Err(error) => {
+            problems.usage("ollama", admission::ollama_unreachable(base_url, &error));
+            return (contexts, seen);
+        }
+        Ok(check) => {
+            let refused = admission::ollama_server_problems(base_url, &check);
+            if !refused.is_empty() {
+                for problem in refused {
+                    problems.usage("ollama", problem);
+                }
+                return (contexts, seen);
+            }
+        }
+    }
+    let mut small = Vec::new();
+    for caller in models {
+        let model = &caller.model;
+        let observed = tokio::time::timeout(
+            ADMISSION_CONTEXT_TIMEOUT,
+            crate::session_dispatch::with_provider_retry(|| async {
+                if load {
+                    axocoatl_llm_ollama::observe_native_ollama_context(base_url, &model.model)
+                        .await
+                        .map(|observation| Some(observation.context_tokens as u64))
+                } else {
+                    axocoatl_llm_ollama::inspect_native_ollama_model(base_url, &model.model)
+                        .await
+                        .map(|context| context.map(|tokens| tokens as u64))
+                }
+            }),
+        )
+        .await;
+        let (context, loaded) = match observed {
+            Ok(Ok(context)) => (context, load),
+            Ok(Err(error)) => {
+                let problem = admission::ollama_model_problem(&caller.who, model, base_url, &error);
+                if admission::ollama_error_is_infrastructure(&error) {
+                    problems.infrastructure("ollama", problem);
+                } else {
+                    problems.usage("ollama", problem);
+                }
+                (None, false)
+            }
+            Err(_) => {
+                tracing::debug!(model = %model, "admission did not observe the model's context in time");
+                (None, false)
+            }
+        };
+        if let Some(context) = context.filter(|context| admission::below_context_floor(*context)) {
+            small.push(admission::SmallContext {
+                who: caller.who.clone(),
+                roles: caller.roles.clone(),
+                model: model.clone(),
+                context,
+            });
+        }
+        seen.push(crate::loadout::api::PreflightOllamaModel {
+            model: model.to_string(),
+            loaded,
+            context_tokens: context,
+        });
+        contexts.insert(model.clone(), context);
+    }
+    if let Some(problem) = admission::context_floor_problem(
+        &small,
+        base_url,
+        admission::OllamaInstall::here(),
+        &admission::brew_services_env(),
+    ) {
+        problems.usage("context", problem);
+    }
+    (contexts, seen)
+}
+
+/// An [`axocoatl_isolation::IsolationError`] in Podman's own words.
+fn podman_text(error: &axocoatl_isolation::IsolationError) -> String {
+    match error {
+        axocoatl_isolation::IsolationError::OciSetupFailed(message) => message.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Whether Podman can run a loadout Session: it answers and runs rootless.
+/// It is asked first (`podman info`), which also works through
+/// CONTAINER_HOST or CONTAINER_CONNECTION. When it does not answer and
+/// `start` is true (a run that nothing else stops), it is made ready as a
+/// Session would make it ([`axocoatl_isolation::podman::ensure_ready`]: an
+/// existing, stopped machine is started; nothing is installed or created)
+/// and asked again. Otherwise (a dry run, or a run already refused for
+/// another problem) it only says what it found: a stopped machine is not a
+/// problem, since a run starts it. Returns what Podman said, or the
+/// problem.
+async fn loadout_podman(start: bool) -> Result<String, String> {
+    use crate::loadout::admission;
+    use axocoatl_isolation::podman::PodmanReadiness;
+    use axocoatl_isolation::session_sandbox::podman_rootless;
+    let first = match podman_rootless().await {
+        Ok(true) => return Ok("Podman answers and runs rootless".into()),
+        Ok(false) => return Err(admission::rootful_podman()),
+        Err(error) => podman_text(&error),
+    };
+    if start {
+        axocoatl_isolation::podman::ensure_ready()
+            .await
+            .map_err(|error| admission::podman_not_ready(&podman_text(&error)))?;
+        return match podman_rootless().await {
+            Ok(true) => Ok("Podman answers and runs rootless".into()),
+            Ok(false) => Err(admission::rootful_podman()),
+            Err(error) => Err(admission::podman_unanswered(&podman_text(&error))),
+        };
+    }
+    match axocoatl_isolation::podman::detect().await {
+        PodmanReadiness::MachineStopped => {
+            Ok("the Podman machine is stopped; a run starts it first".into())
+        }
+        PodmanReadiness::Ready => Err(admission::podman_unanswered(&first)),
+        other => Err(admission::podman_not_ready(&other.summary())),
+    }
+}
+
 impl AxocoatlDaemon {
     /// `GET /api/loadouts`: built-in loadouts, then user loadouts from
     /// `<config dir>/loadouts/` (invalid ones listed with their error). A
@@ -1235,110 +1479,379 @@ impl AxocoatlDaemon {
         Ok(validate_text(&request.text))
     }
 
-    /// Admission of one run. See [`Self::admit_loadout_run`].
-    async fn admit_loadout_run_inner(
+    /// Check one run as admission does, creating nothing: every problem it
+    /// finds is collected (see [`crate::loadout::admission`]), and the run
+    /// it can start comes back only when there is none. `mode` says whether
+    /// Podman is made ready (a run starts a stopped machine) or only asked
+    /// (a dry run). A run with a usage problem never asks Podman.
+    async fn check_loadout_run(
         &self,
         request: &RunRequest,
-    ) -> Result<(RunAccepted, RunContext), DaemonError> {
-        let loadout = self.find_loadout_to_run(&request.loadout)?;
-        if request.task.trim().is_empty() {
-            return Err(DaemonError::InvalidRequest("the task is empty".into()));
+        mode: AdmissionMode,
+    ) -> AdmissionReport {
+        use crate::loadout::admission;
+        use axocoatl_config::run_defaults::RunModelDefault;
+        let mut problems = admission::Problems::default();
+        let mut report = AdmissionReport {
+            checked: None,
+            problems: admission::Problems::default(),
+            params: request.params.clone(),
+            defaults: Vec::new(),
+            warnings: Vec::new(),
+            notes: Vec::new(),
+            sandbox: None,
+            ollama_models: Vec::new(),
+        };
+        let loadout = match self.find_loadout_to_run(&request.loadout) {
+            Ok(loadout) => loadout,
+            Err(error) => {
+                problems.daemon_error("loadout", error);
+                report.problems = problems;
+                return report;
+            }
+        };
+        let task_given = !matches!(
+            mode,
+            AdmissionMode::DryRun {
+                task_given: false,
+                ..
+            }
+        );
+        if !task_given {
+            report
+                .notes
+                .push("no task was given, so the task was not checked".into());
+        } else if request.task.trim().is_empty() {
+            problems.usage("task", "the task is empty");
+        } else if request.task.len() > MAX_RUN_TASK_BYTES {
+            problems.usage(
+                "task",
+                format!("the task is longer than {MAX_RUN_TASK_BYTES} bytes"),
+            );
         }
-        if request.task.len() > MAX_RUN_TASK_BYTES {
-            return Err(DaemonError::InvalidRequest(format!(
-                "the task is longer than {MAX_RUN_TASK_BYTES} bytes"
-            )));
+        let repo = match std::fs::canonicalize(&request.repo) {
+            Ok(repo) if repo.is_dir() => Some(repo),
+            Ok(repo) => {
+                problems.usage(
+                    "repository",
+                    format!("repository {} is not a directory", repo.display()),
+                );
+                None
+            }
+            Err(error) => {
+                problems.usage(
+                    "repository",
+                    format!("repository {}: {error}", request.repo),
+                );
+                None
+            }
+        };
+        let repo_text = repo
+            .as_ref()
+            .map(|repo| repo.display().to_string())
+            .unwrap_or_else(|| request.repo.clone());
+
+        // The parameters: the request's, then the configured `run.models`
+        // defaults where they fit, then the loadout's own defaults.
+        let mut params = request.params.clone();
+        let defaults = axocoatl_config::run_defaults::apply_run_model_defaults(
+            &loadout.file,
+            &self.config.run.models,
+            &mut params,
+        );
+        let mut notes: Vec<String> = report.notes.drain(..).collect();
+        notes.extend(defaults.iter().map(RunModelDefault::note));
+        // An empty task is already a problem; resolve anyway, so the
+        // parameters are checked too.
+        let task = if request.task.trim().is_empty() {
+            "(no task)"
+        } else {
+            request.task.as_str()
+        };
+        // `run.models` in the configuration file now, when it is not what
+        // this daemon read at its start: a daemon started before
+        // `axocoatl onboard` wrote them does not use them until it restarts.
+        let stale_run_models = self.run_models_on_disk().and_then(|on_disk| {
+            (on_disk != self.config.run.models).then(|| {
+                format!(
+                    "the configuration file {} now sets run.models differently from when this \
+                     daemon started, and the daemon uses run.models as it read them then: \
+                     restart it (`axocoatl dev`, or `axocoatl service stop` and `axocoatl \
+                     service start`) to use them",
+                    self.config_path_text()
+                )
+            })
+        });
+        let mut parameters_error = None;
+        let mut resolved = match resolve_loadout(&loadout, &params, task, &repo_text) {
+            Ok(mut resolved) => {
+                resolved.notes.append(&mut notes);
+                if let Some(stale) = &stale_run_models {
+                    resolved.notes.push(stale.clone());
+                }
+                Some(resolved)
+            }
+            Err(error) => {
+                let message = error.to_string();
+                parameters_error = Some(message.clone());
+                problems.usage(
+                    "parameters",
+                    match &stale_run_models {
+                        Some(stale) if message.contains("run.models") => {
+                            format!("{message}. Note: {stale}")
+                        }
+                        _ => message,
+                    },
+                );
+                None
+            }
+        };
+        if let Some(problem) = resolved
+            .as_ref()
+            .and_then(|resolved| same_model_from_defaults(resolved, &defaults))
+        {
+            problems.usage("parameters", problem);
         }
-        let repo = std::fs::canonicalize(&request.repo).map_err(|error| {
-            DaemonError::InvalidRequest(format!("repository {}: {error}", request.repo))
-        })?;
-        if !repo.is_dir() {
-            return Err(DaemonError::InvalidRequest(format!(
-                "repository {} is not a directory",
-                repo.display()
-            )));
+
+        // The repository's own check, for a `detected` check.
+        if let Some(repo) = &repo {
+            let detected = axocoatl_session::detect_check_command(repo);
+            match &mut resolved {
+                Some(resolved) => {
+                    if let Err(error) = crate::loadout::team_plan::fill_detected_checks(
+                        resolved,
+                        request.check_command.as_deref(),
+                        detected.as_deref(),
+                    ) {
+                        problems.run_error("check", error);
+                    }
+                }
+                None => {
+                    if let Some(error) = crate::loadout::team_plan::missing_detected_check(
+                        &loadout.file,
+                        request.check_command.as_deref(),
+                        detected.as_deref(),
+                    ) {
+                        problems.run_error("check", error);
+                    }
+                }
+            }
         }
-        let repo_text = repo.display().to_string();
-        let mut resolved = resolve_loadout(&loadout, &request.params, &request.task, &repo_text)
-            .map_err(|error| DaemonError::InvalidRequest(error.to_string()))?;
-        crate::loadout::team_plan::fill_detected_checks(
-            &mut resolved,
-            request.check_command.as_deref(),
-            axocoatl_session::detect_check_command(&repo).as_deref(),
-        )
-        .map_err(run_error)?;
+
         // The credential each external writer's route sends: the one the
         // loadout names, or for `auto` the first of its runtime's that is
-        // stored (refused, saying how to connect, when none is). The run's
-        // manifest, a note event and the Outcome's notes record it.
-        let credentials = {
+        // stored. Either must be stored now (refused, saying how to
+        // connect, when it is not). The run's manifest, a note event and
+        // the Outcome's notes record it.
+        let stored = {
             let base = self.network_policy.current();
-            crate::loadout::credentials::choose(&mut resolved, |name| {
-                crate::loadout::egress::credential_available(&base, self.data_root.path(), name)
-            })
-            .map_err(run_error)?
+            let data = self.data_root.path().to_path_buf();
+            move |name: &str| crate::loadout::egress::credential_available(&base, &data, name)
         };
-        // A loadout Session runs only where the host can isolate it:
-        // local rootless Podman, never a fallback.
-        if self.config.sandbox.backend == "e2b" {
-            return Err(DaemonError::Session(LOADOUT_NEEDS_LOCAL_PODMAN.into()));
+        let mut credentials_ok = true;
+        let credentials = match &mut resolved {
+            Some(resolved) => match crate::loadout::credentials::choose(resolved, &stored) {
+                Ok(credentials) => credentials,
+                Err(error) => {
+                    credentials_ok = false;
+                    problems.run_error("credential", error);
+                    BTreeMap::new()
+                }
+            },
+            None => {
+                match axocoatl_config::loadout::resolve_credentials(&loadout.file, &params) {
+                    Ok(mut chosen) => {
+                        let agents: Vec<(String, AgentRuntime)> = loadout
+                            .file
+                            .agents
+                            .iter()
+                            .map(|agent| (agent.id.clone(), agent.runtime))
+                            .collect();
+                        if let Err(error) = crate::loadout::credentials::choose_for(
+                            &agents,
+                            &mut chosen,
+                            &mut notes,
+                            &stored,
+                        ) {
+                            problems.run_error("credential", error);
+                        }
+                    }
+                    // A credential the loadout cannot send, unless it is
+                    // the very error resolution already reported.
+                    Err(error) => {
+                        let message = error.to_string();
+                        if parameters_error.as_deref() != Some(message.as_str()) {
+                            problems.usage("credential", message);
+                        }
+                    }
+                }
+                BTreeMap::new()
+            }
+        };
+
+        // Each native model's provider: Ollama or OpenRouter, configured,
+        // and on Ollama a server and model native runs accept, loaded with
+        // enough context.
+        let native = axocoatl_config::loadout::native_callers(&loadout.file, &params);
+        let mut ollama_models: Vec<OllamaModelCallers> = Vec::new();
+        let mut openrouter_callers = Vec::new();
+        for caller in &native {
+            match caller.model.provider.as_str() {
+                "ollama" => {
+                    let role = caller
+                        .param
+                        .as_deref()
+                        .and_then(|param| param.strip_suffix("_model"))
+                        .map(str::to_string);
+                    match ollama_models
+                        .iter_mut()
+                        .find(|known| known.model == caller.model)
+                    {
+                        Some(known) => {
+                            known.who.push(caller.who.clone());
+                            known.roles.extend(role);
+                        }
+                        None => ollama_models.push(OllamaModelCallers {
+                            model: caller.model.clone(),
+                            who: vec![caller.who.clone()],
+                            roles: role.into_iter().collect(),
+                        }),
+                    }
+                }
+                "openrouter" => openrouter_callers.push(caller.who.clone()),
+                _ => problems.usage(
+                    "model_provider",
+                    admission::unsupported_provider(
+                        &caller.who,
+                        caller.param.as_deref(),
+                        &caller.model,
+                    ),
+                ),
+            }
         }
-        let rootless = axocoatl_isolation::session_sandbox::podman_rootless()
-            .await
-            .map_err(|error| {
-                DaemonError::Session(format!(
-                    "a loadout Session needs rootless Podman, and Podman could not be asked: {error}"
-                ))
-            })?;
-        if !rootless {
-            return Err(DaemonError::Session(
-                "a loadout Session runs its commands as non-root workload users, which needs \
-                 rootless Podman; this Podman runs as root"
-                    .into(),
-            ));
+        if !openrouter_callers.is_empty() {
+            let reason =
+                admission::openrouter_unready_reason(&self.config.providers).or_else(|| {
+                    self.configured_native_provider_credentials()
+                        .openrouter_key()
+                        .err()
+                        .map(|reason| reason.to_string())
+                });
+            if let Some(reason) = reason {
+                problems.usage(
+                    "model_provider",
+                    admission::openrouter_not_ready(&openrouter_callers, &reason),
+                );
+            }
         }
-        // A tokens budget that cannot hold one model call is refused now,
-        // as a usage error naming the budget and the minimum, not after the
-        // run's Session started: each model's floor as its provider shows
-        // it before the run (`team_plan::call_floor`). OpenRouter's public
+        let mut ollama_contexts = HashMap::new();
+        if !ollama_models.is_empty() {
+            match self.config.providers.ollama.as_ref() {
+                None => {
+                    let who: Vec<String> = ollama_models
+                        .iter()
+                        .flat_map(|known| known.who.clone())
+                        .collect();
+                    problems.usage("model_provider", admission::ollama_not_configured(&who));
+                }
+                Some(ollama) => {
+                    let (contexts, seen) = loadout_ollama_contexts(
+                        &ollama.base_url,
+                        &ollama_models,
+                        mode.loads_models(),
+                        &mut problems,
+                    )
+                    .await;
+                    ollama_contexts = contexts;
+                    report.ollama_models = seen;
+                }
+            }
+        }
+
+        // A tokens budget that cannot hold one model call is refused now, as
+        // a usage error naming the budget and the minimum, not after the
+        // run's Session started: each model's floor as its provider shows it
+        // before the run (`team_plan::call_floor`). OpenRouter's public
         // catalog is read once, for this and for the e2e checks below.
         let catalog = crate::loadout::e2e::OnceCatalog::new(self.loadout_openrouter_catalog());
-        let observed = self
-            .loadout_admission_observations(&resolved, &catalog)
-            .await;
-        crate::loadout::team_plan::refuse_budgets_below_one_call(&resolved, &observed)
-            .map_err(run_error)?;
-        let agent_contexts = crate::loadout::team_plan::agent_contexts(&resolved, &observed);
-        // An external writer whose model the pinned table does not list is
-        // not checked, and its cost may not be known: the run says so.
-        let unpinned =
-            crate::external_agent::models::unpinned_warnings(&resolved, &self.config.pricing);
-        resolved.warnings.extend(unpinned);
-        let overlay = crate::loadout::egress::loadout_overlay(
-            &self.network_policy.current(),
-            &resolved,
-            self.data_root.path(),
-        )
-        .map_err(run_error)?;
+        let mut agent_contexts = BTreeMap::new();
+        if let Some(resolved) = &mut resolved {
+            let observed = crate::loadout::team_plan::AdmissionObservations {
+                ollama_contexts,
+                openrouter_catalog: self
+                    .loadout_openrouter_observation(resolved, &catalog)
+                    .await,
+            };
+            if let Err(error) =
+                crate::loadout::team_plan::refuse_budgets_below_one_call(resolved, &observed)
+            {
+                problems.run_error("budget", error);
+            }
+            agent_contexts = crate::loadout::team_plan::agent_contexts(resolved, &observed);
+            // An external writer whose model the pinned table does not list
+            // is not checked, and its cost may not be known: the run says so.
+            let unpinned =
+                crate::external_agent::models::unpinned_warnings(resolved, &self.config.pricing);
+            resolved.warnings.extend(unpinned);
+        }
+        let overlay = match &resolved {
+            Some(resolved) if credentials_ok => {
+                match crate::loadout::egress::loadout_overlay(
+                    &self.network_policy.current(),
+                    resolved,
+                    self.data_root.path(),
+                ) {
+                    Ok(overlay) => Some(overlay),
+                    Err(error) => {
+                        problems.run_error("network", error);
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
         let environment = loadout.file.environment.clone().unwrap_or_default();
         let image = match (&environment.image, environment.recipes.is_empty()) {
             (Some(image), _) => Some(image.clone()),
             // A recipe image runs by the exact id `axocoatl recipe build`
             // recorded, which is also what makes it trusted for Sessions.
-            (None, false) => Some(self.recipe_image(&environment.recipes)?.image_id),
+            (None, false) => match self.recipe_image(&environment.recipes) {
+                Ok(record) => Some(record.image_id),
+                Err(error) => {
+                    problems.daemon_error("recipe_image", error);
+                    None
+                }
+            },
             (None, true) => None,
         };
+        let resolved_params = resolved
+            .as_ref()
+            .map(|resolved| resolved.params.clone())
+            .unwrap_or_else(|| params.clone());
         let setup = match (&request.setup_command, &environment.setup) {
             (Some(command), _) => Some(command.clone()),
             (None, Some(ParamOr::Value(command))) => Some(command.clone()),
-            (None, Some(ParamOr::Param { param })) => resolved.params.get(param).cloned(),
+            (None, Some(ParamOr::Param { param })) => resolved_params.get(param).cloned(),
             (None, None) => None,
         }
         .map(|command| command.trim().to_string())
         .filter(|command| !command.is_empty());
-        refuse_hosts_under_network_none(&loadout.file)?;
-        let exposed_ports = qa_exposed_ports(&loadout.file, &resolved.params)?;
-        if loadout.file.kind == axocoatl_config::loadout::LoadoutKind::Qa {
+        if let Err(error) = refuse_hosts_under_network_none(&loadout.file) {
+            problems.daemon_error("network", error);
+        }
+        let exposed_ports = match &resolved {
+            Some(resolved) => match qa_exposed_ports(&loadout.file, &resolved.params) {
+                Ok(ports) => ports,
+                Err(error) => {
+                    problems.daemon_error("qa", error);
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        };
+        if let (Some(resolved), axocoatl_config::loadout::LoadoutKind::Qa) =
+            (&resolved, loadout.file.kind)
+        {
             // The lists in force now, so `axocoatl network reload` applies
             // to the next run (the browser: block itself needs a restart).
             let policy = self.network_policy.current();
@@ -1346,32 +1859,189 @@ impl AxocoatlDaemon {
                 .browser
                 .as_ref()
                 .map(|(allow, private)| (allow.as_slice(), private.as_slice()));
-            let settings =
-                crate::loadout::qa::validate_qa_admission(&resolved, &exposed_ports, browser)
-                    .map_err(run_error)?;
-            crate::loadout::qa::check_repro_dir(&repo, &settings).map_err(run_error)?;
+            match crate::loadout::qa::validate_qa_admission(resolved, &exposed_ports, browser) {
+                Ok(settings) => {
+                    if let Some(repo) = &repo {
+                        if let Err(error) = crate::loadout::qa::check_repro_dir(repo, &settings) {
+                            problems.run_error("qa", error);
+                        }
+                    }
+                }
+                Err(error) => problems.run_error("qa", error),
+            }
         }
         // An e2e check's agent needs tool calls and image input: refused
         // when OpenRouter's catalog says its model has neither, a warning
         // when the provider's catalog cannot say.
-        let e2e_warnings = crate::loadout::e2e::verify_e2e_models(&resolved, &catalog)
-            .await
-            .map_err(run_error)?;
-        for warning in e2e_warnings {
-            if !resolved
-                .warnings
-                .iter()
-                .any(|known| known.code == warning.code && known.message == warning.message)
-            {
-                resolved
-                    .warnings
-                    .push(axocoatl_config::loadout::LoadoutWarning {
-                        code: warning.code,
-                        field: "checks".into(),
-                        message: warning.message,
-                    });
+        if let Some(resolved) = &mut resolved {
+            match crate::loadout::e2e::verify_e2e_models(resolved, &catalog).await {
+                Ok(e2e_warnings) => {
+                    for warning in e2e_warnings {
+                        if !resolved.warnings.iter().any(|known| {
+                            known.code == warning.code && known.message == warning.message
+                        }) {
+                            resolved
+                                .warnings
+                                .push(axocoatl_config::loadout::LoadoutWarning {
+                                    code: warning.code,
+                                    field: "checks".into(),
+                                    message: warning.message,
+                                });
+                        }
+                    }
+                }
+                Err(error) => problems.run_error("e2e", error),
             }
         }
+
+        // A loadout Session runs only where the host can isolate it: local
+        // rootless Podman, never a fallback. Podman is asked last, and only
+        // when nothing in the request or setup must change first; a run
+        // starts a stopped machine only when no other problem was found, so
+        // a run that cannot start never starts a Podman machine.
+        // Loadout runs need native Session history: a data root still in the
+        // 1.0 format is refused now, not after Podman was asked.
+        let legacy_root = !matches!(
+            &self._data_dir_lease.ownership,
+            axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(_)
+        );
+        if legacy_root {
+            problems.infrastructure("data_root", LEGACY_ROOT_REFUSAL);
+        }
+        let e2b = self.config.sandbox.backend == "e2b";
+        if e2b {
+            problems.infrastructure("sandbox", LOADOUT_NEEDS_LOCAL_PODMAN);
+        } else if !legacy_root && (mode.dry() || !problems.has_usage()) {
+            let start = mode == AdmissionMode::Run && problems.is_empty();
+            match loadout_podman(start).await {
+                Ok(state) => report.sandbox = Some(state),
+                Err(problem) => problems.infrastructure("podman", problem),
+            }
+        }
+
+        report.params = resolved_params;
+        report.defaults = defaults;
+        match &resolved {
+            Some(resolved) => {
+                report.notes = resolved.notes.clone();
+                report.warnings = resolved.warnings.clone();
+            }
+            None => report.notes = notes,
+        }
+        if problems.is_empty() {
+            match (resolved, repo, overlay) {
+                (Some(resolved), Some(repo), Some(overlay)) => {
+                    report.checked = Some(CheckedRun {
+                        loadout,
+                        repo,
+                        repo_text,
+                        resolved,
+                        credentials,
+                        agent_contexts,
+                        overlay,
+                        image,
+                        setup,
+                        exposed_ports,
+                    })
+                }
+                _ => problems.infrastructure(
+                    "admission",
+                    "admission could not check this run completely; nothing was started",
+                ),
+            }
+        }
+        report.problems = problems;
+        report
+    }
+
+    /// `POST /api/runs/preflight`: admission's checks of `request`, with
+    /// nothing created, started or recorded, and Podman only asked
+    /// ([`RunPreflight`]). Each Ollama model is loaded and probed as a
+    /// run's admission does, unless the request says `load_models: false`.
+    pub async fn preflight_loadout_run(
+        &self,
+        request: impl Into<crate::loadout::api::RunPreflightRequest>,
+    ) -> RunPreflight {
+        let request = request.into();
+        let mode = AdmissionMode::DryRun {
+            load_models: request.load_models.unwrap_or(true),
+            task_given: request.task.is_some(),
+        };
+        let request = RunRequest {
+            loadout: request.loadout,
+            task: request.task.unwrap_or_default(),
+            repo: request.repo,
+            params: request.params,
+            keep: request.keep,
+            check_command: request.check_command,
+            setup_command: request.setup_command,
+            request_id: request.request_id.unwrap_or_default(),
+        };
+        let report = self.check_loadout_run(&request, mode).await;
+        RunPreflight {
+            loadout: request.loadout,
+            ready: report.problems.is_empty(),
+            exit_code: report.problems.exit_code(),
+            problems: report.problems.sorted(),
+            params: report.params,
+            defaults: report.defaults,
+            warnings: report
+                .warnings
+                .into_iter()
+                .map(|warning| RunWarning {
+                    code: warning.code,
+                    message: warning.message,
+                })
+                .collect(),
+            notes: report.notes,
+            sandbox: report.sandbox,
+            ollama_models: report.ollama_models,
+        }
+    }
+
+    /// `run.models` as the configuration file this daemon loaded says now;
+    /// `None` when the daemon has no file, or it cannot be read or parsed.
+    fn run_models_on_disk(&self) -> Option<axocoatl_config::RunModelsYaml> {
+        let path = self
+            .config_path
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()?;
+        let text = std::fs::read_to_string(&path).ok()?;
+        axocoatl_config::run_defaults::run_models_in(&text)
+    }
+
+    /// The configuration file this daemon loaded, as a refusal names it.
+    fn config_path_text(&self) -> String {
+        self.config_path
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "of this daemon".into())
+    }
+
+    /// Admission of one run. See [`Self::admit_loadout_run`].
+    async fn admit_loadout_run_inner(
+        &self,
+        request: &RunRequest,
+    ) -> Result<(RunAccepted, RunContext), DaemonError> {
+        let report = self.check_loadout_run(request, AdmissionMode::Run).await;
+        let Some(checked) = report.checked else {
+            return Err(report.problems.refusal());
+        };
+        let CheckedRun {
+            loadout,
+            repo,
+            repo_text,
+            resolved,
+            credentials,
+            agent_contexts,
+            overlay,
+            image,
+            setup,
+            exposed_ports,
+        } = checked;
         let workspace = self.create_workspace(&repo_text, None).await?;
         let run_id = format!("run-{}", uuid::Uuid::new_v4());
         let loadout_ref = LoadoutRef {
@@ -1653,18 +2323,16 @@ impl AxocoatlDaemon {
         crate::loadout::e2e::OpenRouterCatalog::default()
     }
 
-    /// What admission observes of the run's models
-    /// ([`crate::loadout::team_plan::AdmissionObservations`]): each native
-    /// Ollama model's loaded context ([`Self::loadout_model_contexts`]), and
-    /// OpenRouter's public catalog when a native caller runs an OpenRouter
-    /// model. A catalog that cannot be read leaves those callers the
-    /// smallest native context; Team & budget then checks their call
-    /// against the endpoint it selects.
-    async fn loadout_admission_observations(
+    /// OpenRouter's public catalog when a native caller of the run runs an
+    /// OpenRouter model ([`crate::loadout::team_plan::AdmissionObservations`]).
+    /// A catalog that cannot be read leaves those callers the smallest
+    /// native context; Team & budget then checks their call against the
+    /// endpoint it selects.
+    async fn loadout_openrouter_observation(
         &self,
         resolved: &axocoatl_config::loadout::ResolvedLoadout,
         catalog: &crate::loadout::e2e::OnceCatalog,
-    ) -> crate::loadout::team_plan::AdmissionObservations {
+    ) -> Option<serde_json::Value> {
         use crate::loadout::e2e::ModelCatalog;
         let openrouter = crate::loadout::team_plan::resolved_call_budgets(resolved)
             .iter()
@@ -1674,65 +2342,16 @@ impl AxocoatlDaemon {
                         .as_ref()
                         .is_some_and(|model| model.provider == "openrouter")
             });
-        let openrouter_catalog = if openrouter {
-            match catalog.openrouter_models().await {
-                Ok(catalog) => Some(catalog),
-                Err(error) => {
-                    tracing::debug!(%error, "admission could not read OpenRouter's model catalog");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        crate::loadout::team_plan::AdmissionObservations {
-            ollama_contexts: self.loadout_model_contexts(resolved).await,
-            openrouter_catalog,
+        if !openrouter {
+            return None;
         }
-    }
-
-    /// The context each native Ollama model of the run is loaded with,
-    /// observed as its first call observes it (a load without a prompt, no
-    /// inference), within [`ADMISSION_CONTEXT_TIMEOUT`]. A model that cannot
-    /// be observed now maps to `None`; its run reports the provider's own
-    /// error.
-    async fn loadout_model_contexts(
-        &self,
-        resolved: &axocoatl_config::loadout::ResolvedLoadout,
-    ) -> HashMap<axocoatl_config::loadout::ModelSpec, Option<u64>> {
-        let mut contexts = HashMap::new();
-        let Some(base_url) = self
-            .config
-            .providers
-            .ollama
-            .as_ref()
-            .map(|provider| provider.base_url.clone())
-        else {
-            return contexts;
-        };
-        for (_, model) in crate::loadout::team_plan::resolved_call_budgets(resolved) {
-            let Some(model) = model.filter(|model| model.provider == "ollama") else {
-                continue;
-            };
-            if contexts.contains_key(&model) {
-                continue;
+        match catalog.openrouter_models().await {
+            Ok(catalog) => Some(catalog),
+            Err(error) => {
+                tracing::debug!(%error, "admission could not read OpenRouter's model catalog");
+                None
             }
-            let observed = tokio::time::timeout(
-                ADMISSION_CONTEXT_TIMEOUT,
-                axocoatl_llm_ollama::observe_native_ollama_context(&base_url, &model.model),
-            )
-            .await;
-            let context = match observed {
-                Ok(Ok(observation)) => Some(observation.context_tokens as u64),
-                Ok(Err(error)) => {
-                    tracing::debug!(model = %model, %error, "admission could not observe the model's context");
-                    None
-                }
-                Err(_) => None,
-            };
-            contexts.insert(model, context);
         }
-        contexts
     }
 
     /// Create the native Session of a loadout run in `workspace_id`, bind it
@@ -3394,3 +4013,7 @@ mod daemon_tests;
 #[cfg(all(test, unix))]
 #[path = "bootstrap_loadout_audit_tests.rs"]
 mod audit_tests;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_loadout_admission_tests.rs"]
+mod admission_tests;
