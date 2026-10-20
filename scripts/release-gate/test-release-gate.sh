@@ -174,6 +174,8 @@ JOURNAL
     }
     if (!/apt-get install -y podman/.test(steps.find((s) => s.name === "sudo: by absolute path").detail)) process.exit(1);
   ' "$work/sudo-steps.jsonl" || exit 1
+  # This record is never finished; its temporary directory goes now.
+  rm -rf -- "$GATE_TMP"
 
   # The command each fixture runs: the README's, or onboarding's own for its
   # sample (fixtures.json "command": "fixture-readme").
