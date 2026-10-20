@@ -37,7 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both contract probes pass for that model (they run before a Team or run uses a model,
   and again whenever the server's version changes). `axocoatl doctor` and onboarding
   warn that it is newer than the audited 0.40.6, and a run's receipt names it as
-  `ollama 0.41.0 (unaudited, contract probes passed)`.
+  `ollama 0.41.0 (unaudited, contract probes passed)`. A scheduled workflow
+  (`ollama-watch`) runs the same probes against each new Ollama release and release
+  candidate as they are published.
 - **`axocoatl onboard` is the one setup command.** It detects what the computer has,
   asks who writes the code (Claude Code, Codex, a local Ollama model or OpenRouter), sets
   up the rootless Podman sandbox, the writer and a different reviewer, writes the user
@@ -121,7 +123,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **One Podman preflight and machine size everywhere.** `recipe build` and `connect
   codex` start a stopped machine (by its name, or the one `CONTAINER_CONNECTION` names)
   and name a missing Podman or machine with its fix,
-  instead of `os error 2` or `podman build failed (exit status: 125)`; every hint that
+  instead of `os error 2` or `podman build failed (exit status: 125)`, and a failed image
+  check says what Podman printed; every hint that
   says to create a machine prints the sized command instead of Podman's 2 GiB default.
 - **`axocoatl dev` and `serve` hold their port before they start.** A taken port fails at
   once with which port and how to choose another, instead of "Axocoatl is running"
