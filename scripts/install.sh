@@ -1,6 +1,14 @@
 #!/bin/sh
 # Axocoatl installer — downloads a prebuilt binary from GitHub Releases.
 # Usage: curl -fsSL https://axocoatl.ai/install.sh | sh
+#
+# It installs to /usr/local/bin when that directory is writable, else to
+# ~/.local/bin. When the directory is not on PATH it asks, on the terminal,
+# before adding one line to your shell's profile; without a terminal it only
+# prints that line. AXOCOATL_MODIFY_PATH=yes adds the line without asking;
+# AXOCOATL_MODIFY_PATH=no never changes a profile.
+# AXOCOATL_INSTALL_SYSTEM_DIR and AXOCOATL_INSTALL_TTY replace /usr/local/bin
+# and /dev/tty for scripts/test-install.sh.
 set -eu
 
 REPO="axocoatl/axocoatl"
@@ -8,6 +16,80 @@ BIN="axocoatl"
 
 err() { echo "axocoatl-install: $*" >&2; exit 1; }
 info() { echo "axocoatl-install: $*"; }
+
+modify_path="${AXOCOATL_MODIFY_PATH:-ask}"
+case "$modify_path" in
+  ask|yes|no) ;;
+  *) err "AXOCOATL_MODIFY_PATH must be ask, yes or no, not '$modify_path'" ;;
+esac
+system_dir="${AXOCOATL_INSTALL_SYSTEM_DIR:-/usr/local/bin}"
+tty_device="${AXOCOATL_INSTALL_TTY:-/dev/tty}"
+
+# A path as the user knows it: ~/... under the home directory.
+display_path() {
+  case "$1" in
+    "$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# A path quoted for a shell command line when it needs quoting.
+shell_word() {
+  case "$1" in
+    *[!A-Za-z0-9/._+:-]*) printf "'%s'" "$1" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# The profile file the user's login shell reads, and the line that puts
+# $1 on PATH in it. Sets profile and path_line.
+choose_profile() {
+  case "$1" in
+    "$HOME"/*) dir_expr="\$HOME/${1#"$HOME"/}" ;;
+    *) dir_expr="$1" ;;
+  esac
+  user_shell="${SHELL:-}"
+  user_shell="${user_shell##*/}"
+  path_line="export PATH=\"${dir_expr}:\$PATH\""
+  case "$user_shell" in
+    zsh)
+      # Terminal on macOS starts login shells (.zprofile); Linux terminals
+      # start interactive ones (.zshrc).
+      if [ "$os" = "Darwin" ]; then
+        profile="${ZDOTDIR:-$HOME}/.zprofile"
+      else
+        profile="${ZDOTDIR:-$HOME}/.zshrc"
+      fi
+      ;;
+    bash)
+      if [ "$os" = "Darwin" ]; then
+        # A login bash reads only the first of these that exists, so a new
+        # .bash_profile would hide an existing .profile.
+        profile="$HOME/.bash_profile"
+        for candidate in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+          if [ -f "$candidate" ]; then
+            profile="$candidate"
+            break
+          fi
+        done
+      else
+        profile="$HOME/.bashrc"
+      fi
+      ;;
+    fish)
+      profile="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
+      path_line="fish_add_path \"${dir_expr}\""
+      ;;
+    *)
+      profile="$HOME/.profile"
+      ;;
+  esac
+}
+
+# Whether a question can be asked: the terminal opens for reading and writing.
+can_ask() {
+  ( exec <"$tty_device" >>"$tty_device" ) 2>/dev/null
+}
 
 require_supported_glibc() {
   [ "$os" = "Linux" ] || return 0
@@ -126,8 +208,8 @@ info "checksum verified"
 tar -xzf "${tmp}/${tarball}" -C "$tmp"
 
 # --- Choose install dir ---
-if [ -w "/usr/local/bin" ]; then
-  dest="/usr/local/bin"
+if [ -w "$system_dir" ]; then
+  dest="$system_dir"
 else
   dest="${HOME}/.local/bin"
   mkdir -p "$dest"
@@ -138,10 +220,57 @@ install -m 0755 "${tmp}/${BIN}" "${dest}/${BIN}" 2>/dev/null \
 
 info "installed ${BIN} ${tag} -> ${dest}/${BIN}"
 
+# --- Keep it on PATH for new terminals ---
+# A stock macOS PATH (/etc/paths) has no ~/.local/bin, and an `export` typed
+# in this shell is gone in the next Terminal window.
 case ":${PATH}:" in
   *":${dest}:"*) ;;
-  *) info "add ${dest} to your PATH:  export PATH=\"${dest}:\$PATH\"" ;;
+  *)
+    choose_profile "$dest"
+    shown_dest="$(display_path "$dest")"
+    shown_profile="$(display_path "$profile")"
+    if [ -f "$profile" ] && grep -Fxq -- "$path_line" "$profile" 2>/dev/null; then
+      info "${shown_profile} already adds ${shown_dest} to PATH; new terminals find ${BIN}"
+    else
+      answer=no
+      if [ "$modify_path" = "yes" ]; then
+        answer=yes
+      elif [ "$modify_path" = "ask" ] && can_ask; then
+        printf 'axocoatl-install: %s is not on your PATH. Add it in %s? [Y/n] ' \
+          "$shown_dest" "$shown_profile" >>"$tty_device"
+        reply=""
+        read -r reply <"$tty_device" || true
+        case "$reply" in
+          ''|y|Y|yes|Yes|YES) answer=yes ;;
+          *) answer=no ;;
+        esac
+      fi
+      if [ "$answer" = "yes" ] \
+        && mkdir -p "${profile%/*}" 2>/dev/null \
+        && printf '\n# Added by the Axocoatl installer\n%s\n' "$path_line" 2>/dev/null >>"$profile"; then
+        info "added to ${shown_profile}:  ${path_line}"
+        info "new terminals find ${BIN}; in this one, run:  ${path_line}"
+      else
+        [ "$answer" = "no" ] || info "could not write ${shown_profile}"
+        info "${shown_dest} is not on your PATH. For new terminals to find ${BIN}, add this line to ${shown_profile}:"
+        echo
+        echo "    ${path_line}"
+      fi
+    fi
+    ;;
 esac
+
+# The next commands must run as printed: by name only when this shell
+# resolves the name to the binary just installed.
+found="$(command -v "$BIN" 2>/dev/null || true)"
+if [ "$found" = "${dest}/${BIN}" ]; then
+  run="$BIN"
+else
+  run="$(shell_word "${dest}/${BIN}")"
+  if [ -n "$found" ]; then
+    info "note: ${found} comes first on your PATH, so '${BIN}' runs that copy; the commands below name the one just installed"
+  fi
+fi
 
 # In WSL2 a fresh distro has no Podman, which sandboxed directory sessions need.
 if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && ! command -v podman >/dev/null 2>&1; then
@@ -149,6 +278,6 @@ if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && ! command -v podman >/
 fi
 
 echo
-echo "Next:  ${BIN} onboard      # configure Axocoatl for this user"
-echo "       ${BIN} doctor       # verify environment"
-echo "       ${BIN} dev          # open the workbench, then choose a Workspace"
+echo "Next:  ${run} onboard      # set up Podman, a writer and a reviewer for this user, asking first"
+echo "       ${run} doctor       # check the sandbox, the models and the daemon"
+echo "       ${run} dev          # start the daemon; leave it running"
