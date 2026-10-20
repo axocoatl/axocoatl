@@ -3492,11 +3492,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(line, "Data dir ownership: recorded for this directory");
+        // A cold backup restored at the same path. The restored copy is made
+        // while the original still exists, then put in its place: a
+        // filesystem that reuses a deleted directory's inodes at once (ext4)
+        // would otherwise give the copy the original's identity.
         let backup = parent.path().join("backup");
-        for (from, to) in [(&data, &backup), (&backup, &data)] {
-            if to == &data {
-                std::fs::remove_dir_all(&data).unwrap();
-            }
+        let restored = parent.path().join("data.restored");
+        for (from, to) in [(&data, &backup), (&backup, &restored)] {
             assert!(std::process::Command::new("cp")
                 .arg("-a")
                 .arg(from)
@@ -3505,6 +3507,8 @@ mod tests {
                 .unwrap()
                 .success());
         }
+        std::fs::remove_dir_all(&data).unwrap();
+        std::fs::rename(&restored, &data).unwrap();
         let manifest = data.join(".axocoatl-daemon.lock/format.json");
         let before = std::fs::read(&manifest).unwrap();
         let line = format_ownership_doctor_line(

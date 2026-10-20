@@ -582,6 +582,8 @@ async fn defaults_child_body() {
     daemon.shutdown().await.unwrap();
 }
 
+/// Only macOS has a Podman machine to start.
+#[cfg(target_os = "macos")]
 async fn stopped_machine_child_body() {
     let server = ollama().await;
     let (daemon, _dir) = daemon(&server.uri(), "").await;
@@ -955,7 +957,7 @@ async fn rootful_child_body() {
 /// How the fake Podman starts.
 #[derive(Clone, Copy)]
 enum Podman {
-    /// Not on PATH.
+    /// No Podman on PATH at all, not even one the host has installed.
     Absent,
     /// A rootless Podman whose machine is stopped until `machine start`.
     Stopped,
@@ -964,6 +966,20 @@ enum Podman {
     /// A running Podman that runs as root until the file `rootful` beside
     /// its log is removed.
     Rootful,
+}
+
+/// A Podman nothing has asked to run anything yet: on macOS its machine is
+/// stopped, and a run that gets past admission starts it. Linux has no
+/// machine: Podman runs containers itself, and an installed Podman that
+/// does not answer stops the daemon from starting at all (it cannot prove
+/// that no container exposes the data directory), so there it is a Podman
+/// that answers.
+fn idle_podman() -> Podman {
+    if cfg!(target_os = "macos") {
+        Podman::Stopped
+    } else {
+        Podman::Running
+    }
 }
 
 /// Run `name` in a child process with its own data root and `podman`.
@@ -1010,6 +1026,12 @@ esac
             std::fs::write(root.path().join("rootful"), "").unwrap();
         }
     }
+    let path = match podman {
+        Podman::Absent => {
+            crate::podman_absent_test_support::path_without_podman(&root.path().join("system"))
+        }
+        _ => format!("{}:/usr/bin:/bin", bin.display()),
+    };
     let result = tokio::time::timeout(
         Duration::from_secs(300),
         tokio::process::Command::new(std::env::current_exe().unwrap())
@@ -1018,7 +1040,7 @@ esac
             .env(PODMAN_LOG, &log)
             .env("AXOCOATL_DATA_DIR", root.path().join("data"))
             .env("AXOCOATL_SOCKET_PATH", root.path().join("ipc/daemon.sock"))
-            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("PATH", path)
             .env_remove("CONTAINER_HOST")
             .env_remove("CONTAINER_CONNECTION")
             .current_dir(root.path())
@@ -1049,7 +1071,7 @@ async fn usage_problems_are_reported_together_before_podman_and_create_nothing()
     }
     run_child(
         "bootstrap::loadout_runs::admission_tests::usage_problems_are_reported_together_before_podman_and_create_nothing",
-        Podman::Stopped,
+        idle_podman(),
     )
     .await;
 }
@@ -1131,7 +1153,7 @@ async fn refusals_classify_their_problems_and_never_start_the_machine() {
     }
     run_child(
         "bootstrap::loadout_runs::admission_tests::refusals_classify_their_problems_and_never_start_the_machine",
-        Podman::Stopped,
+        idle_podman(),
     )
     .await;
 }

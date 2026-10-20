@@ -21,6 +21,8 @@ mod lock_inheritance_tests;
 pub mod mcp_approval_hook;
 #[cfg(test)]
 pub(crate) mod ollama_contract_test_support;
+#[cfg(all(test, unix))]
+pub(crate) mod podman_absent_test_support;
 pub mod proactive;
 pub mod provider_retry;
 pub mod provider_secrets;

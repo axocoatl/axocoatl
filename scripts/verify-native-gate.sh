@@ -11,6 +11,15 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 cd "$repo_root"
 
+# The tests make their temporary data and config directories with the
+# caller's umask, and Axocoatl refuses a group- or world-writable directory
+# as an authority root (it makes its own 0700). Under 0002, Ubuntu's login
+# default, those directories are 0775 and hundreds of tests fail for that
+# alone; run the gate under 022 whatever the caller's umask is, and say so.
+echo "verify-native-gate: caller umask $(umask)"
+umask 022
+echo "verify-native-gate: umask $(umask)"
+
 if ! command -v cargo >/dev/null 2>&1; then
   cargo_bin=${CARGO_HOME:-${HOME:-}/.cargo}/bin
   [[ -x "$cargo_bin/cargo" ]] && export PATH="$cargo_bin:$PATH"

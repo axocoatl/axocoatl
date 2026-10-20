@@ -1,9 +1,13 @@
-//! A new Mac user's first clicks before a Podman machine exists: Create
+//! A new user's first clicks before Podman can run anything: Create
 //! session saves nothing, a Session that never started preparing is
 //! stopped and deleted without Podman, shutdown is clean, and a failed
 //! environment change leaves the Session as it was instead of "closing".
-//! Podman here is a fake that is installed but has no machine, and whose
-//! container commands fail as they do then.
+//! On macOS, Podman here is a fake that is installed but has no machine,
+//! and whose container commands fail as they do then. Linux has no machine,
+//! and an installed Podman that does not answer stops the daemon from
+//! starting at all (it cannot prove that no container exposes the data
+//! directory), so there a new user's case is Podman not installed: no
+//! `podman` on PATH, not even one the host has.
 use super::*;
 use axocoatl_session::execution_ownership::DataRootFormatOwnership;
 use std::os::unix::fs::PermissionsExt;
@@ -191,8 +195,7 @@ async fn without_a_podman_machine_create_saves_nothing_and_shutdown_is_clean() {
     let bin = root.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
     let podman = bin.join("podman");
-    // Installed, no machine; the Linux readiness probe (`info`) fails the
-    // same way, so the test means the same thing on both.
+    // Installed, no machine.
     std::fs::write(
         &podman,
         r#"#!/bin/sh
@@ -205,6 +208,11 @@ esac
     )
     .unwrap();
     std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = if cfg!(target_os = "macos") {
+        format!("{}:/usr/bin:/bin", bin.display())
+    } else {
+        crate::podman_absent_test_support::path_without_podman(&root.path().join("system"))
+    };
     let data = root.path().join("data");
     let result = tokio::time::timeout(
         Duration::from_secs(120),
@@ -217,7 +225,7 @@ esac
             .env(CHILD, "1")
             .env("AXOCOATL_DATA_DIR", &data)
             .env("AXOCOATL_SOCKET_PATH", root.path().join("ipc/daemon.sock"))
-            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("PATH", path)
             .current_dir(root.path())
             .kill_on_drop(true)
             .output(),

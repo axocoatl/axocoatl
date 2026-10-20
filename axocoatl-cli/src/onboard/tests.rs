@@ -249,7 +249,8 @@ esac"#,
 
 /// The brew service of Ollama, set up the way `brew services start ollama`
 /// leaves it, serving the fake server's port (Homebrew's service
-/// environment names it).
+/// environment names it). Only the macOS tests use it.
+#[cfg(target_os = "macos")]
 fn brew_service_on(shims: &Shims, url: &str) {
     let agents = shims.home.path().join("Library/LaunchAgents");
     std::fs::create_dir_all(&agents).unwrap();

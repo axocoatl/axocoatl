@@ -87,14 +87,23 @@ fn onboard_usage_errors_exit_3() {
 }
 
 /// Podman's own state under a HOME: asked for its version or state, Podman
-/// may create its settings and (on Linux) storage directories there.
+/// may create its settings and (on Linux) storage directories there, and
+/// Podman 4 (Ubuntu 24.04's 4.9.3) the lock file of its CNI network
+/// configuration, `.config/cni/net.d/cni.lock`.
 fn podmans_own(home: &Path, path: &Path) -> bool {
     let relative = path.strip_prefix(home).unwrap();
     relative.starts_with(".config/containers")
         || relative.starts_with(".local/share/containers")
-        || [".config", ".local", ".local/share"]
-            .iter()
-            .any(|parent| relative == Path::new(parent))
+        || [
+            ".config",
+            ".local",
+            ".local/share",
+            ".config/cni",
+            ".config/cni/net.d",
+            ".config/cni/net.d/cni.lock",
+        ]
+        .iter()
+        .any(|own| relative == Path::new(own))
 }
 
 /// The regular files under `directory` and their contents, leaving out
