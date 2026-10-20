@@ -249,10 +249,18 @@ that Keep as PR opened, whose branches are named `axocoatl/<loadout>-<run id pre
 default.
 </Aside>
 
-The strict variant runs the job only on those branches and leaves `require-receipt` at
-its default, so such a pull request without a valid receipt fails:
+The strict variant is the same workflow file with two changes: the job runs only on
+those branches, and `require-receipt` stays at its default, so such a pull request
+without a valid receipt fails:
 
 ```yaml
+name: Axocoatl receipt
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+permissions:
+  contents: read
+  pull-requests: read
 jobs:
   receipt:
     if: startsWith(github.head_ref, 'axocoatl/')

@@ -10,9 +10,10 @@
 // - a shell line that starts with a flag, a trailing `\` with nothing after it, an
 //   unbalanced quote, or `axocoatl <subcommand>` the CLI does not have;
 // - `--keys FILE` when no earlier command on the page creates FILE;
-// - YAML that does not parse, and an Axocoatl configuration snippet whose Agents lack
+// - YAML that does not parse, an Axocoatl configuration snippet whose Agents lack
 //   an `id` or `name` (with --axocoatl BIN, `BIN validate` / `BIN loadouts validate`
-//   must also accept it);
+//   must also accept it), and a GitHub workflow without `on:` or `jobs:`, which
+//   GitHub refuses as a workflow file;
 // - "stronger" within five lines of `gpt-oss:20b` outside a `measured:` block (only
 //   the measured gpt-oss 120B reviewer was stronger; the 48 GB default is smaller than
 //   its writer and unmeasured);
@@ -31,11 +32,11 @@
 //   problems as one JSON document, for a gate that runs the commands verbatim.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const defaultRoot = resolve(scriptDirectory, '..');
@@ -445,6 +446,14 @@ export function checkYaml(blocks, { yaml, binary }) {
         if (!(field in document)) problems.push(`${at}: a loadout without ${field}`);
       }
     }
+    if (kind === 'workflow' && !block.excerpt) {
+      // js-yaml reads `on` as a string key; a YAML 1.1 reader would make it true.
+      const missing = [['on', 'on' in document || true in document], ['jobs', 'jobs' in document]]
+        .filter(([, present]) => !present).map(([field]) => `${field}:`);
+      if (missing.length) {
+        problems.push(`${at}: a GitHub workflow without ${missing.join(' or ')}, which GitHub refuses as a workflow file; show the whole file or mark the block copy-paste: excerpt`);
+      }
+    }
     if (binary && !block.excerpt && (kind === 'config' || kind === 'loadout')) {
       const problem = validateWithBinary(binary, kind, block.text);
       if (problem) problems.push(`${at}: ${problem}`);
@@ -590,7 +599,18 @@ function parseArguments(argv) {
   return options;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
+// Run as a program, also when invoked through a symlinked path (on macOS /tmp
+// is a link to /private/tmp): import.meta.url is resolved through links and
+// process.argv[1] is not.
+function invokedAsProgram() {
+  try {
+    return Boolean(process.argv[1]) && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+
+if (invokedAsProgram()) {
   const options = parseArguments(process.argv.slice(2));
   const result = lintRepository(options.root, { binary: options.binary });
   if (options.json) {

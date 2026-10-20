@@ -1,8 +1,8 @@
 // Tests for scripts/check-copy-paste.mjs. Run: node --test scripts/check-copy-paste.test.mjs
-// The YAML tests need js-yaml, which `npm ci` in sites/docs installs.
+// The YAML tests need js-yaml, a devDependency of sites/docs that `npm ci` there installs.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -116,13 +116,29 @@ test('YAML must parse, and configuration Agents need an id and a name', () => {
     '',
     '```yaml', 'agents: [', '```',
     '',
-    '```yaml', 'jobs:', '  receipt:', '    runs-on: ubuntu-24.04', '```',
+    '```yaml', 'on: pull_request', 'jobs:', '  receipt:', '    runs-on: ubuntu-24.04', '```',
   ].join('\n'));
   const problems = checkYaml(blocks, { yaml, binary: null });
   assert.equal(problems.length, 2, problems.join('\n'));
   assert.match(problems[0], /page\.mdx:2: agents\[0\] has no name/);
   assert.match(problems[1], /page\.mdx:14: YAML does not parse/);
   assert.equal(blocks[1].excerpt, true);
+});
+
+test('a GitHub workflow snippet is a whole workflow file unless marked as an excerpt', () => {
+  const blocks = markdownBlocks('receipts.mdx', [
+    '```yaml', 'jobs:', '  receipt:', '    if: startsWith(github.head_ref, \'axocoatl/\')', '```',
+    '',
+    '```yaml', 'name: Receipt', 'on:', '  pull_request:', '```',
+    '',
+    '{/* copy-paste: excerpt */}', '```yaml', 'jobs:', '  receipt:', '    runs-on: ubuntu-24.04', '```',
+    '',
+    '```yaml', 'name: Receipt', 'on: pull_request', 'jobs:', '  receipt:', '    runs-on: ubuntu-24.04', '```',
+  ].join('\n'));
+  const problems = checkYaml(blocks, { yaml, binary: null });
+  assert.equal(problems.length, 2, problems.join('\n'));
+  assert.match(problems[0], /receipts\.mdx:2: a GitHub workflow without on:, which GitHub refuses/);
+  assert.match(problems[1], /receipts\.mdx:8: a GitHub workflow without jobs:/);
 });
 
 test('YAML snippets are classified by what they configure', () => {
@@ -215,6 +231,26 @@ test('the repository check finds each problem with its file and line, and passes
   } finally {
     rmSync(broken, { recursive: true, force: true });
     rmSync(fixed, { recursive: true, force: true });
+  }
+});
+
+test('run through a symlinked path, the program still checks and fails', () => {
+  const broken = fixtureRoot({
+    'README.md': '```sh\naxocoatl receipt verify r.json --keys nowhere-file\naxocoatl frobnicate\n```\n',
+  });
+  const links = mkdtempSync(join(tmpdir(), 'check-copy-paste-link-'));
+  try {
+    const linked = join(links, 'check-copy-paste.mjs');
+    symlinkSync(script, linked);
+    const failing = spawnSync(process.execPath, [linked, '--root', broken], { encoding: 'utf8' });
+    assert.equal(failing.status, 1, failing.stdout + failing.stderr);
+    assert.match(failing.stderr, /Copy-paste check failed \(2\)/);
+    const json = spawnSync(process.execPath, [linked, '--root', broken, '--json'], { encoding: 'utf8' });
+    assert.equal(json.status, 1);
+    assert.equal(JSON.parse(json.stdout).problems.length, 2);
+  } finally {
+    rmSync(broken, { recursive: true, force: true });
+    rmSync(links, { recursive: true, force: true });
   }
 });
 
