@@ -489,22 +489,26 @@ pub(crate) fn update(
         }
     }
 
-    // run: replaced as a whole with what this run chose.
+    // run: replaced as a whole, where it is, with what this run chose.
     let run = run_block(plan);
     if !run.is_empty() {
-        if let Some((start, end)) = top_block(&lines, "run") {
-            // Also drop the comment lines written just above it.
-            let mut first = start;
-            while first > 0 && lines[first - 1].starts_with("# ") {
-                first -= 1;
+        match top_block(&lines, "run") {
+            Some((start, end)) => {
+                // With the comment lines written just above it.
+                let mut first = start;
+                while first > 0 && lines[first - 1].starts_with("# ") {
+                    first -= 1;
+                }
+                lines.splice(first..end, to_lines(&run));
             }
-            lines.drain(first..end);
+            None => {
+                while lines.last().is_some_and(|line| line.trim().is_empty()) {
+                    lines.pop();
+                }
+                lines.push(String::new());
+                lines.extend(to_lines(&run));
+            }
         }
-        while lines.last().is_some_and(|line| line.trim().is_empty()) {
-            lines.pop();
-        }
-        lines.push(String::new());
-        lines.extend(to_lines(&run));
     }
 
     // server.port
@@ -769,6 +773,28 @@ mod tests {
         let again = update(&new, &plan, Path::new("config.yaml")).unwrap();
         assert_eq!(again.matches("\nrun:\n").count(), 1, "{again}");
         assert_eq!(again, new);
+    }
+
+    /// A configuration onboarding wrote is unchanged by the same setup, and
+    /// a changed reviewer replaces `run` where it is.
+    #[test]
+    fn updating_a_written_configuration_changes_nothing_or_run_in_place() {
+        let plan = local_plan();
+        let written = render(&plan);
+        assert_eq!(
+            update(&written, &plan, Path::new("c.yaml")).unwrap(),
+            written
+        );
+        let mut other = plan.clone();
+        other.run_reviewer = Some(ModelRef::new(Provider::Ollama, "gpt-oss:120b"));
+        let updated = update(&written, &other, Path::new("c.yaml")).unwrap();
+        assert_eq!(
+            diff(&written, &updated),
+            [
+                "-     reviewer: \"ollama:gpt-oss:20b\"",
+                "+     reviewer: \"ollama:gpt-oss:120b\""
+            ]
+        );
     }
 
     #[test]

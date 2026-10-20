@@ -22,7 +22,7 @@ pub(crate) mod host;
 mod ollama;
 mod openrouter;
 mod sandbox;
-mod smoke;
+pub(crate) mod smoke;
 pub(crate) mod ui;
 mod writers;
 
@@ -961,7 +961,7 @@ fn wants_smoke_test(o: &mut Onboarding, writer: WriterChoice) -> bool {
             o.ui.consent(
                 &format!(
                     "Run a first fix now on a small sample repository to prove the setup end to \
-                     end? About 1 to 2 minutes; it {cost}."
+                     end? It {cost}."
                 ),
                 true,
                 false,

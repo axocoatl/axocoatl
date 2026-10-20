@@ -897,7 +897,7 @@ fn is_loopback(host: &str) -> bool {
 
 /// What `GET /health` of the daemon on `host:port` says its version is.
 async fn daemon_version(host: &str, port: u16) -> Option<String> {
-    let url = format!("{}/health", crate::plain_server_url(host, port));
+    let url = crate::onboard::smoke::health_url(host, port);
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
         .build()

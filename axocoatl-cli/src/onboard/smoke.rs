@@ -94,6 +94,14 @@ pub(crate) fn run_args(
     args
 }
 
+/// `GET /health` of the daemon on `host:port` (public, no token).
+pub(crate) fn health_url(host: &str, port: u16) -> String {
+    format!(
+        "{}/health",
+        crate::plain_server_url(host, port).trim_end_matches('/')
+    )
+}
+
 async fn healthy(url: &str) -> bool {
     let Ok(client) = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
@@ -102,7 +110,7 @@ async fn healthy(url: &str) -> bool {
         return false;
     };
     client
-        .get(format!("{url}/health"))
+        .get(url)
         .send()
         .await
         .is_ok_and(|response| response.status().is_success())
@@ -160,9 +168,9 @@ pub(crate) async fn run(o: &mut Onboarding, writer: WriterChoice, choice: &Choic
         .and_then(|text| axocoatl_config::parse_config(&text, &config).ok())
         .map(|config| (config.server.host.clone(), config.server.port))
         .unwrap_or_else(|| ("127.0.0.1".to_string(), 8080));
-    let url = crate::plain_server_url(&host, port);
+    let url = health_url(&host, port);
     let _daemon = if healthy(&url).await {
-        o.ui.ok(format!("Using the daemon running at {url}"));
+        o.ui.ok(format!("Using the daemon running on port {port}"));
         None
     } else {
         o.ui.say(format!(
@@ -222,10 +230,20 @@ pub(crate) async fn run(o: &mut Onboarding, writer: WriterChoice, choice: &Choic
     let exe = o.host.exe.display().to_string();
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     o.ui.say(format!("  $ axocoatl {}", args.join(" ")));
-    let code = match o.host.status(&Cmd::new(&exe, &arg_refs)).await {
-        Ok(code) => code,
-        Err(error) => {
-            o.step_left(error);
+    // A SIGTERM or SIGHUP to onboarding stops the daemon it started, too
+    // (Ctrl+C reaches both through the terminal).
+    let run_cmd = Cmd::new(&exe, &arg_refs);
+    let run = o.host.status(&run_cmd);
+    let code = tokio::select! {
+        code = run => match code {
+            Ok(code) => code,
+            Err(error) => {
+                o.step_left(error);
+                return false;
+            }
+        },
+        signal = stop_signal() => {
+            o.step_left(format!("The first run was stopped ({signal})"));
             return false;
         }
     };
@@ -288,6 +306,21 @@ pub(crate) async fn run(o: &mut Onboarding, writer: WriterChoice, choice: &Choic
             o.step_left(error);
             false
         }
+    }
+}
+
+/// SIGTERM or SIGHUP, by name, when one arrives.
+async fn stop_signal() -> &'static str {
+    use tokio::signal::unix::{signal, SignalKind};
+    match (
+        signal(SignalKind::terminate()),
+        signal(SignalKind::hangup()),
+    ) {
+        (Ok(mut terminate), Ok(mut hangup)) => tokio::select! {
+            _ = terminate.recv() => "SIGTERM",
+            _ = hangup.recv() => "SIGHUP",
+        },
+        _ => std::future::pending().await,
     }
 }
 
@@ -369,6 +402,15 @@ mod tests {
                 "{printed}"
             );
         }
+    }
+
+    #[test]
+    fn the_health_url_has_one_slash() {
+        assert_eq!(
+            health_url("127.0.0.1", 8247),
+            "http://127.0.0.1:8247/health"
+        );
+        assert_eq!(health_url("::1", 8247), "http://[::1]:8247/health");
     }
 
     #[test]
