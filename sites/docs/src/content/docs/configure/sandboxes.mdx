@@ -48,7 +48,10 @@ Session checkbox can override it. Lockfile-detected `npm ci` always starts
 unchecked, and editing any command clears approval. Clearing the command is an
 explicit decision to continue without project setup. On local Podman, a root
 Node project's `node_modules` is a container-local volume rather than the host's
-native dependency tree. The workspace is still mounted read-write: an approved
+native dependency tree. When the repository has no `node_modules`, Axocoatl makes
+the empty directory that volume is mounted on, as you, and removes it again once
+no Session container mounts it; a `node_modules` you had is left as it is, and what
+you install into it on the host stays. The workspace is still mounted read-write: an approved
 command may change tracked or untracked project files, and nested package
 directories are not given an additional dependency-volume boundary.
 

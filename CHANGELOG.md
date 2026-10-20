@@ -416,6 +416,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or a failure whose cause is not recorded ends the review as before. The run record
   lists the retry as a provider retry of the reviewer with its HTTP status, and the
   Outcome counts it.
+- **A run leaves no `node_modules` in a repository that had none.** A Node project's
+  Session container mounts its own dependency volume over the repository's
+  `node_modules`. When the repository had none, the OCI runtime made that directory in
+  the person's tree as the container's root: on Linux, under rootless Podman with the
+  hardened workload every loadout run uses, a subordinate uid with mode `drwxr-xr-t`, so
+  the person's own `npm install` or `npm ci` then failed with `EACCES: permission denied,
+  mkdir 'node_modules/…'` until they removed it; on macOS it was the person's but stayed
+  behind after every run. Axocoatl now makes that directory as the person before the
+  container starts, and removes it again once no container mounts it (Close,
+  `axocoatl dev` stopping, or the next daemon start after one was killed), if it is
+  still empty. A repository's own `node_modules` is never made or removed, and what the
+  person installs into it while a Session is open stays theirs.
 - A run that ended at admission (a failed environment or setup) reported "0 recorded
   events" in its network summary; it now counts what the Session's record holds.
 - The `sandbox.egress` warning under `sandbox.network: bridge` said `allow` was
