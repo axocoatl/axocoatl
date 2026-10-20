@@ -478,7 +478,17 @@ pub struct LoadoutEnvironment {
     /// The exact setup command a run of this loadout approves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup: Option<ParamOr<String>>,
+    /// The language toolchain the run's image holds: `detected` (from the
+    /// repository's files), `node`, `python`, `rust`, `go`, or `none` (the
+    /// image as `image`/`recipes` say, without a toolchain). Absent: detected
+    /// when the loadout has a `detected` check and no `image`, else none.
+    /// Exclusive with `image`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolchain: Option<String>,
 }
+
+/// The values `environment.toolchain` and `axocoatl run --toolchain` take.
+pub const TOOLCHAIN_VALUES: [&str; 6] = ["detected", "none", "node", "python", "rust", "go"];
 
 /// `qa:`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1221,6 +1231,43 @@ pub fn validate_loadout(file: &LoadoutFile) -> Result<Vec<LoadoutWarning>, Loado
         if environment.image.is_some() && !environment.recipes.is_empty() {
             return Err(invalid("environment", "set image or recipes, not both"));
         }
+        if let Some(toolchain) = &environment.toolchain {
+            if !TOOLCHAIN_VALUES.contains(&toolchain.as_str()) {
+                return Err(invalid(
+                    "environment.toolchain",
+                    format!(
+                        "{toolchain:?} is not a toolchain: use {}",
+                        TOOLCHAIN_VALUES.join(", ")
+                    ),
+                ));
+            }
+            if environment.image.is_some() && toolchain != "none" {
+                return Err(invalid(
+                    "environment",
+                    "set image or toolchain, not both: a toolchain chooses Axocoatl's image \
+                     of that language",
+                ));
+            }
+            if let Some(recipe) = environment.recipes.iter().find(|recipe| {
+                TOOLCHAIN_VALUES[2..].contains(&recipe.as_str()) && *recipe != toolchain
+            }) {
+                return Err(invalid(
+                    "environment",
+                    format!("recipes name the toolchain {recipe}, and toolchain says {toolchain}"),
+                ));
+            }
+        }
+        let languages: Vec<&String> = environment
+            .recipes
+            .iter()
+            .filter(|recipe| TOOLCHAIN_VALUES[2..].contains(&recipe.as_str()))
+            .collect();
+        if languages.len() > 1 {
+            return Err(invalid(
+                "environment.recipes",
+                "an image holds one language toolchain",
+            ));
+        }
         if let Some(setup) = &environment.setup {
             check_param_ref(file, setup, "environment.setup", ParamKind::Text)?;
         }
@@ -1844,6 +1891,46 @@ mod tests {
             check_timeout_secs(&check).unwrap(),
             DEFAULT_CHECK_TIMEOUT_SECS
         );
+    }
+
+    #[test]
+    fn environment_toolchains_are_validated() {
+        let with = |environment: &str| {
+            parse_loadout(
+                &format!("{FIX_YAML}environment:\n{environment}"),
+                LoadoutSource::Builtin,
+            )
+        };
+        for value in TOOLCHAIN_VALUES {
+            let parsed = with(&format!("  toolchain: {value}\n")).unwrap();
+            assert_eq!(
+                parsed.file.environment.unwrap().toolchain.as_deref(),
+                Some(value)
+            );
+        }
+        let error = with("  toolchain: java\n").unwrap_err().to_string();
+        assert!(error.contains("\"java\" is not a toolchain"), "{error}");
+        let error = with("  toolchain: python\n  image: docker.io/library/python:3.12-slim\n")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("set image or toolchain, not both"),
+            "{error}"
+        );
+        // An image with toolchain none is the image as it is.
+        assert!(with("  toolchain: none\n  image: docker.io/library/python:3.12-slim\n").is_ok());
+        // A toolchain among the recipes composes with an agent recipe.
+        assert!(with("  recipes: [claude-code, python]\n").is_ok());
+        assert!(with("  recipes: [claude-code, python]\n  toolchain: python\n").is_ok());
+        let error = with("  recipes: [claude-code, python]\n  toolchain: go\n")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("recipes name the toolchain python"),
+            "{error}"
+        );
+        let error = with("  recipes: [python, rust]\n").unwrap_err().to_string();
+        assert!(error.contains("one language toolchain"), "{error}");
     }
 
     /// The qa re-smoke's `qa-tight` loadout validated with a budget too

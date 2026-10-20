@@ -218,7 +218,7 @@ enum Commands {
         command: secret_cmd::SecretCommands,
     },
 
-    /// Session image recipes (Claude Code, Codex, e2e)
+    /// Session image recipes (Claude Code, Codex, e2e, and the node, python, rust and go toolchains)
     Recipe {
         #[command(subcommand)]
         command: recipe_cmd::RecipeCommands,
