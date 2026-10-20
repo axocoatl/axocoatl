@@ -1,6 +1,6 @@
 ---
 title: axocoatl run
-description: Run a loadout headless against the running daemon. Flags, how it finds the daemon, its output, exit codes, the JUnit file, the record bundle and the signed receipt.
+description: Run a loadout headless against the running daemon. Flags, the models from your setup, what admission checks before a run starts, the dry run, how it finds the daemon, its output, exit codes, the JUnit file, the record bundle and the signed receipt.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -15,7 +15,7 @@ axocoatl run <LOADOUT> (--task <TEXT> | --task-file <FILE|->)
              [--repo <DIR>] [--junit <FILE>] [--record <FILE>] [--receipt <FILE>]
              [--model <ROLE>=<PROVIDER:MODEL>]... [--param <NAME>=<VALUE>]...
              [--check <CMD>] [--setup <CMD>] [--keep none|branch|pr]
-             [--json] [--url <DAEMON URL>] [-c, --config <CONFIG>]
+             [--json] [--dry-run] [--url <DAEMON URL>] [-c, --config <CONFIG>]
 ```
 
 | Flag | Meaning |
@@ -27,19 +27,116 @@ axocoatl run <LOADOUT> (--task <TEXT> | --task-file <FILE|->)
 | `--junit <FILE>` | Write the [JUnit file](#junit) of checks and findings. |
 | `--record <FILE>` | Write the [record bundle](#record-bundle). |
 | `--receipt <FILE>` | Write the run's [signed receipt](/workbench/receipts/), a DSSE envelope. |
-| `--model <ROLE>=<PROVIDER:MODEL>` | Sets the parameter `<ROLE>_model`, such as `--model writer=ollama:qwen3-coder:30b`. Repeatable. A parameter with a default needs none: `fix-claude-code` and `fix-codex` need only `--model reviewer=…`. |
+| `--model <ROLE>=<PROVIDER:MODEL>` | Sets the parameter `<ROLE>_model`, such as `--model writer=ollama:qwen3-coder:30b`. Repeatable. A parameter with a default needs none: `fix-claude-code` and `fix-codex` need only `--model reviewer=…`, and `writer_model` and `reviewer_model` default to the [models from your setup](#models-from-your-setup) when the configuration has them. `--model` wins over both. |
 | `--param <NAME>=<VALUE>` | Sets a loadout parameter, such as `--param credential=codex-chatgpt` for `fix-codex`. Repeatable. An unknown name is a usage error. |
 | `--check <CMD>` | The command a `detected: true` check runs, as `sh -c`, in place of the repository's detected check command. Needed when the repository has none. |
 | `--setup <CMD>` | The exact setup command this run approves, in place of the loadout's `environment.setup`. |
 | `--keep none\|branch\|pr` | What to do with a passing run's changes; default `none`. See [Keep as PR](/workbench/keep-as-pr/). |
-| `--json` | Print the Outcome as JSON on standard output instead of the summary. |
+| `--json` | Print the Outcome as JSON on standard output instead of the summary (with `--dry-run`, what admission found). |
+| `--dry-run` | Only check the run as admission would and list every problem; nothing is created or started. Also `--preflight`. `--task` is optional. See [The dry run](#the-dry-run). |
 | `--url <URL>` | The daemon's address. |
 | `-c, --config <CONFIG>` | The configuration file used to find the daemon's address and data root; default the user configuration. |
+
+## Models from your setup
+
+`axocoatl onboard` writes the writer and reviewer it set up as
+[`run.models`](/reference/config/#run-defaults) in the configuration. A run that does not name
+them takes them from there: `run.models.writer` is the default of the loadout's
+`writer_model` parameter and `run.models.reviewer` of its `reviewer_model`. With both
+configured, `axocoatl run fix --task "…"` needs no `--model`, and `fix-claude-code` and
+`fix-codex` take the reviewer.
+
+- `--model` (or `--param`) on the command line wins.
+- A default applies only where its provider fits: a writer on Ollama or OpenRouter is not
+  Claude Code's model, so `fix-claude-code` keeps its own `anthropic:sonnet` writer and says
+  why in a note.
+- A run whose writer and reviewer would be the same model because of a default is refused
+  (exit code 3): a default never reviews its own writer's change. Naming both yourself gives
+  the same-model warning instead.
+- The run says which defaults it used, as notes at the start (`· note: reviewer_model =
+  ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)`) and in
+  the summary's notes; the run's manifest records the values.
+
+The daemon reads `run.models` when it starts, like the rest of the configuration.
+
+## Before a run starts
+
+The daemon checks a run in one pass before it creates anything (admission), and refuses it
+with every problem it found, in one message:
+
+1. The loadout, the task and the repository.
+2. The parameters, with the defaults above. Every missing parameter is named at once, with
+   the `--model ROLE=provider:model` (or `--param`) that sets it and the `run.models` key
+   that can.
+3. A `detected` check needs the repository's check command or `--check`.
+4. Each external writer's stored credential: the one it names, or for `credential: auto`
+   the first of its runtime's that is stored. A credential that is not stored is refused
+   with the `axocoatl connect` command that stores it.
+5. Each native model (every native Agent and the reviewer) runs on Ollama or OpenRouter,
+   and that provider is configured. Claude Code and Codex can write but cannot review, so
+   `--model reviewer=anthropic:…`, `openai:…`, `claude-code:…` or `codex:…` is refused.
+6. On Ollama: the server answers, runs a version native runs accept and has its cloud
+   models off; then each model is pulled, is a GGUF model, loads and passes the contract
+   probes, and is loaded with at least 16,384 tokens of context. Each refusal keeps
+   Ollama's own reason and the fix, such as "Ollama does not have gpt-oss:20b: run
+   `ollama pull gpt-oss:20b`". Unless `OLLAMA_CONTEXT_LENGTH` says otherwise, Ollama loads
+   models with 4,096 tokens on a computer with less than about 23 GiB of GPU memory, and the
+   fix writer's first call alone is about 9,700 tokens, so a smaller context is refused
+   here, with the observed and the needed numbers and how to set `OLLAMA_CONTEXT_LENGTH`
+   (or to use OpenRouter for that role), instead of failing on the run's first call. A busy
+   server (HTTP 503) is asked once more.
+7. The budgets, the network routes, the recipe image, and for `qa` and e2e checks their
+   own settings.
+8. Podman, last: it must answer and run rootless. A stopped Podman machine (after a
+   reboot, say) is started, as it is for a Session. A run installs nothing and creates no
+   machine; that is left to you or to [`axocoatl onboard`](/start/onboard/).
+
+Usage problems (exit code 3) come before infrastructure ones (5), and a run with a usage
+problem never asks Podman, so a run that cannot start never starts a Podman machine. A
+refused run leaves nothing behind: no Workspace, Session, container, volume, run record or
+receipt. One problem is printed as itself; several as a numbered list:
+
+```text
+axocoatl run: 3 problems stop this run, and nothing was started:
+  1. Agent writer (claude-code) sends the stored credential "claude-code-oauth" (Claude Code's OAuth token, sent to api.anthropic.com), which is not stored: run `axocoatl connect claude-code` (…), then run again
+  2. the reviewer runs anthropic:opus, on the provider anthropic, and a native Agent or reviewer runs only on Ollama or OpenRouter (Claude Code and Codex can write, in fix-claude-code and fix-codex, but cannot review): pass --model reviewer=ollama:<model> or --model reviewer=openrouter:<vendor>/<model>
+  3. recipe images: no image is built from the recipes claude-code; run `axocoatl recipe build claude-code`
+```
+
+## The dry run
+
+`axocoatl run <LOADOUT> --dry-run` (or `--preflight`) runs the same checks and starts
+nothing: no Workspace, Session or run record is created, and Podman is asked
+(`podman info`, `podman machine list`) but never started, so a stopped machine is reported
+as "a run starts it first" rather than as a problem. `--task` is optional; `--junit`,
+`--record` and `--receipt` are refused, since there is no run. It prints the parameters the
+run would use, the notes, what Podman said and then either `Ready: yes, this run would
+start.` or every problem with its class:
+
+```text
+Dry run of loadout fix in /home/me/src/app: nothing was created or started.
+Parameters:
+  reviewer_model = ollama:gpt-oss:20b
+  writer_model = ollama:qwen3-coder:30b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+Sandbox: the Podman machine is stopped; a run starts it first
+Ready: yes, this run would start.
+```
+
+It exits 0 when the run would start, else with the first problem's code (3 or 5). With
+`--json` it prints the daemon's answer to
+[`POST /api/runs?dry_run=1`](/reference/http-api/#loadouts-and-runs):
+`{loadout, ready, exit_code, problems: [{code, exit_code, message}], params, defaults,
+warnings, notes, sandbox?}`. A dry run that is ready can still meet a Workspace another run
+holds (exit code 7) or a setup that changed in between.
 
 ## How it finds the daemon
 
 `axocoatl run` talks to a daemon that is already running (`axocoatl dev`, `axocoatl
-serve` or the [service](/operate/service/)) over its HTTP API. It never starts one.
+serve` or the [service](/operate/service/)) over its HTTP API. It never starts one; when
+none answers, it says to start one with `axocoatl dev`.
 
 - **Address:** `--url`, else `AXOCOATL_URL`, else `http://<server.host>:<server.port>`
   from the configuration file.
@@ -79,10 +176,13 @@ on the repository is admitted. The Outcome keeps each turn as it was observed.
 ## What it prints
 
 1. Once the daemon has admitted the run: the run id, the Session id and any warnings, on
-   standard error, then admission's notes, such as the stored credential an external
-   writer's route sends (`· note: Agent writer (codex) sends the stored credential …`). Admission prepares the Session's environment first; when that takes
-   more than a few seconds, a line says the command is waiting. A refused run prints its
-   reason and never says that it started.
+   standard error, then admission's notes, such as the models it took from your setup
+   (`· note: reviewer_model = ollama:gpt-oss:20b (from your setup: …)`) and the stored
+   credential an external writer's route sends (`· note: Agent writer (codex) sends the
+   stored credential …`). Admission prepares the Session's environment first (and starts a
+   stopped Podman machine); when that takes more than a few seconds, a line says the
+   command is waiting. A refused run prints every problem admission found
+   ([Before a run starts](#before-a-run-starts)) and never says that it started.
 2. One line per phase, turn start and end, warning, not-covered entry and provider retry,
    on standard error, while the run proceeds. Each warning is printed once.
 3. When the run finishes, a summary on standard output: the verdict; each check with its
@@ -129,9 +229,9 @@ writes `--junit`, `--record` and `--receipt`, and exits with code 6.
 | 0 | Pass: every required check passed, the review (if any) approved, every review finding was answered, nothing is not covered, and no finding the loadout fails on. |
 | 1 | A required check failed or timed out on the final result. |
 | 2 | Needs attention: the review did not pass, a finding was not answered, something was not covered, an audit area's findings could not be read, a check never ran on the final result, a turn needs attention or was blocked, a budget or the wall clock ran out, findings the loadout fails on (`fail_on_findings`), or Keep failed. |
-| 3 | Usage: a bad flag; an unknown loadout or one that cannot be used; a missing or unknown parameter; a built-in id that a file of yours also declares; a `detected` check with no detected command and no `--check`; a route credential that is neither configured nor stored, an external writer's `credential: auto` with none of its credentials stored, or a route that differs from one your configuration has for the same host; for `qa`, no `browser:` block or a URL the browser cannot reach; an e2e model that OpenRouter does not list with tool calls and image input; or budgets that cannot pay for the run's checks or review. |
+| 3 | Usage: a bad flag; an unknown loadout or one that cannot be used; a missing or unknown parameter; a writer and reviewer on the same model because of a [default from your setup](#models-from-your-setup); a built-in id that a file of yours also declares; a `detected` check with no detected command and no `--check`; an external writer's credential that is not stored (the one it names, or none of its runtime's for `credential: auto`), a route credential that is neither configured nor stored, or a route that differs from one your configuration has for the same host; a native model (an Agent's or the reviewer's) on a provider other than Ollama or OpenRouter, or on one that is not configured; an Ollama server that cannot be reached, runs a refused version or has its cloud models on, or a model it does not have, that is not GGUF, that does not load, or that it loads with less than 16,384 tokens of context; for `qa`, no `browser:` block or a URL the browser cannot reach; an e2e model that OpenRouter does not list with tool calls and image input; or budgets that cannot pay for one model call, or for the run's checks or review. Admission reports every one it finds at once. |
 | 4 | The daemon could not be reached, or it refused the credential. |
-| 5 | Infrastructure: the Session environment failed, the Session could not run under egress with the `hardened` workload (rootful Podman, `backend: e2b`), a recipe image was not built, OpenRouter's catalog could not be read for an e2e check, a provider is not configured, or another daemon error. |
+| 5 | Infrastructure: Podman is not installed, has no machine, cannot start its machine or does not answer; the Session could not run under egress with the `hardened` workload (rootful Podman, `backend: e2b`); a recipe image was not built; the Session environment failed; OpenRouter's catalog could not be read for an e2e check; a provider failed when the Session started; or another daemon error. |
 | 6 | You interrupted the run. |
 | 7 | Busy: another run, or a Session's turn, holds the repository's Workspace, so the run was not admitted or its next turn could not start. Nothing is wrong with the run; run it again once that turn ends. The message names the Session and turn that hold the Workspace when they are known. |
 
