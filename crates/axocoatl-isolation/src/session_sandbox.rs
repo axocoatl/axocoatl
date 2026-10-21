@@ -5865,6 +5865,8 @@ impl Sandbox for SessionSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::dependency_mountpoint::{Decision, Kept, Released};
 
     #[cfg(unix)]
     fn installed_test_supervisor(root: &Path) -> SupervisorProgram {
@@ -8924,6 +8926,48 @@ mod tests {
         .is_empty());
     }
 
+    /// What `release_unused` decides for `mountpoint` now.
+    #[cfg(unix)]
+    async fn release_decision(mountpoint: &Path) -> Option<Decision> {
+        crate::dependency_mountpoint::release_unused()
+            .await
+            .into_iter()
+            .find(|(path, _)| path == mountpoint)
+            .map(|(_, decision)| decision)
+    }
+
+    /// A running container of the person's own that mounts nothing of the
+    /// repository: a bind of a directory removed once it runs (so its source
+    /// resolves to nothing), a named volume and a tmpfs. While it runs, a
+    /// release removes a mount point only when `podman container inspect`
+    /// and `podman volume inspect` answered and its bind source was
+    /// resolved: a removal shows all three worked (with no container left,
+    /// a release asks Podman nothing more than `podman ps`).
+    #[cfg(unix)]
+    async fn unrelated_container() -> OwnContainer {
+        let gone = tempfile::tempdir().unwrap();
+        let own = OwnContainer(format!("axocoatl-test-unrelated-{}", uuid::Uuid::new_v4()));
+        podman_ok(&[
+            "run",
+            "-d",
+            "--name",
+            &own.0,
+            "--network=none",
+            "-v",
+            &format!("{}:/gone", gone.path().display()),
+            "-v",
+            &format!("{}:/volume", own.0),
+            "--tmpfs",
+            "/t",
+            DEFAULT_IMAGE,
+            "sleep",
+            "600",
+        ])
+        .await;
+        drop(gone);
+        own
+    }
+
     /// While `sandbox`'s container runs, after the release its start's lease
     /// spawned once the container existed has finished: the mount point is
     /// there, empty and the person's (not the OCI runtime's 01755 directory
@@ -8956,8 +9000,12 @@ mod tests {
         let probe = mountpoint.join("person-probe");
         std::fs::create_dir(&probe).expect("the person can write into it");
         std::fs::remove_dir(&probe).unwrap();
-        // One more release while the container runs keeps it as well.
-        crate::dependency_mountpoint::release_unused().await;
+        // One more release while the container runs keeps it as well, for
+        // the mount `podman ps` lists at its path.
+        assert_eq!(
+            release_decision(mountpoint).await,
+            Some(Decision::Kept(Kept::Listed))
+        );
         assert!(mountpoint.is_dir());
         let inside = sandbox
             .exec(
@@ -9023,11 +9071,18 @@ mod tests {
         let second = start(second_id.clone()).await;
         first.stop_checked().await.unwrap();
         assert!(mountpoint.is_dir(), "the second container still mounts it");
+        assert_eq!(
+            release_decision(&mountpoint).await,
+            Some(Decision::Kept(Kept::Listed)),
+            "the second container's mount at its path"
+        );
+        let unrelated = unrelated_container().await;
         second.stop_checked().await.unwrap();
         assert!(
             !mountpoint.exists(),
-            "no container mounts it and it is empty: removed"
+            "no container mounts it and it is empty: removed, with another container inspected"
         );
+        drop(unrelated);
 
         // What the person installs on the host while a container mounts it
         // stays theirs.
@@ -9088,11 +9143,13 @@ mod tests {
 
         assert_kept_while_mounted(&sandbox, &mountpoint).await;
 
+        let unrelated = unrelated_container().await;
         sandbox.stop_checked().await.unwrap();
         assert!(
             !mountpoint.exists(),
-            "no container mounts it and it is empty: removed"
+            "no container mounts it and it is empty: removed, with another container inspected"
         );
+        drop(unrelated);
         SessionSandbox::remove_named_with_dependencies(&id)
             .await
             .unwrap();
@@ -9155,20 +9212,33 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
-    /// End-to-end, needs Podman; what the three tests below share. A
-    /// Session on a repository without `node_modules` makes the mount
-    /// point. A container of the person's own, run with `options` (given
-    /// the repository and its `node_modules` as the person spells them, and
-    /// the container's name), has a mount on that directory although no
-    /// mount destination of it is that path; `setup` runs in it. Closing
-    /// the Session keeps the directory, empty, and `check` still passes in
-    /// that container: it keeps its mount (removing the directory would
-    /// take it away). Nothing runs when that container goes: the directory
-    /// stays until Axocoatl's next container start or removal in this
-    /// process, here `release_unused` itself, removes it.
+    /// How a container of the person's own mounts the directory Axocoatl
+    /// made: `podman` commands to run before it, its `podman run` options,
+    /// and where the directory is in it.
+    #[cfg(unix)]
+    struct OwnMount {
+        before: Vec<Vec<String>>,
+        options: Vec<String>,
+        at: &'static str,
+    }
+
+    /// End-to-end, needs Podman; what the tests below share. A Session on a
+    /// repository without `node_modules` makes the mount point. A container
+    /// of the person's own, run as `own` says (given the repository and its
+    /// `node_modules` as the person spells them, and the container's name),
+    /// has a mount on that directory although no mount destination of it is
+    /// that path; `setup` runs in it. Closing the Session keeps the
+    /// directory, empty, because `podman container inspect` saw that
+    /// container's mount on it at `at` (not because Podman could not say),
+    /// and `check` still passes in that container: it keeps its mount
+    /// (removing the directory would take it away). Nothing runs when that
+    /// container goes: the directory stays until Axocoatl's next container
+    /// start or removal in this process, here `release_unused` itself,
+    /// removes it, while another container of the person's own runs, so
+    /// that removal shows Podman's inspect worked.
     #[cfg(unix)]
     async fn assert_an_own_containers_mount_keeps_the_mount_point(
-        options: impl Fn(&Path, &Path, &str) -> Vec<String>,
+        own: impl Fn(&Path, &Path, &str) -> OwnMount,
         setup: &str,
         check: &str,
     ) {
@@ -9192,21 +9262,34 @@ mod tests {
         assert!(sandbox.uses_node_dependency_volume());
         assert_kept_while_mounted(&sandbox, &mountpoint).await;
 
-        let own = OwnContainer(format!("axocoatl-test-own-{}", uuid::Uuid::new_v4()));
-        let options = options(
+        let container = OwnContainer(format!("axocoatl-test-own-{}", uuid::Uuid::new_v4()));
+        let own = own(
             directory.path(),
             &directory.path().join("node_modules"),
-            &own.0,
+            &container.0,
         );
-        let mut run = vec!["run", "-d", "--name", &own.0, "--network=none"];
-        run.extend(options.iter().map(String::as_str));
+        for before in &own.before {
+            podman_ok(&before.iter().map(String::as_str).collect::<Vec<_>>()).await;
+        }
+        let mut run = vec!["run", "-d", "--name", &container.0, "--network=none"];
+        run.extend(own.options.iter().map(String::as_str));
         run.extend([DEFAULT_IMAGE, "sleep", "600"]);
-        podman_ok(&run).await;
-        podman_ok(&["exec", &own.0, "sh", "-c", setup]).await;
+        let own_id = podman_ok(&run).await;
+        podman_ok(&["exec", &container.0, "sh", "-c", setup]).await;
 
         sandbox.stop_checked().await.unwrap();
+        let decision = release_decision(&mountpoint).await;
+        assert!(
+            matches!(
+                &decision,
+                Some(Decision::Kept(Kept::Mounted { container, at, .. }))
+                    if *container == own_id && at == Path::new(own.at)
+            ),
+            "inspect saw the person's container {own_id} mount it at {}: {decision:?}",
+            own.at
+        );
         let checked = Command::new(PODMAN)
-            .args(["exec", &own.0, "sh", "-c", check])
+            .args(["exec", &container.0, "sh", "-c", check])
             .output()
             .await
             .unwrap();
@@ -9222,17 +9305,20 @@ mod tests {
         );
         assert_eq!(std::fs::read_dir(&mountpoint).unwrap().count(), 0);
 
-        podman_ok(&["rm", "-f", "-t", "0", &own.0]).await;
+        podman_ok(&["rm", "-f", "-t", "0", &container.0]).await;
         assert!(
             mountpoint.is_dir(),
             "nothing runs when the person's container goes"
         );
-        crate::dependency_mountpoint::release_unused().await;
-        assert!(
-            !mountpoint.exists(),
-            "no container mounts it and it is empty: removed"
+        let unrelated = unrelated_container().await;
+        assert_eq!(
+            release_decision(&mountpoint).await,
+            Some(Decision::Released(Released::Removed)),
+            "no container mounts it and it is empty: removed, with another container inspected"
         );
-        drop(own);
+        assert!(!mountpoint.exists());
+        drop(unrelated);
+        drop(container);
         SessionSandbox::remove_named_with_dependencies(&id)
             .await
             .unwrap();
@@ -9252,13 +9338,15 @@ mod tests {
     #[ignore = "requires podman; run this test explicitly"]
     async fn a_development_containers_node_modules_volume_keeps_the_mount_point() {
         assert_an_own_containers_mount_keeps_the_mount_point(
-            |repository, _, name| {
-                vec![
+            |repository, _, name| OwnMount {
+                before: Vec::new(),
+                options: vec![
                     "-v".into(),
                     format!("{}:/workspaces/x", repository.display()),
                     "--mount".into(),
                     format!("type=volume,source={name},destination=/workspaces/x/node_modules"),
-                ]
+                ],
+                at: "/workspaces/x/node_modules",
             },
             "echo dev > /workspaces/x/node_modules/dev-marker",
             "test \"$(cat /workspaces/x/node_modules/dev-marker)\" = dev",
@@ -9281,7 +9369,109 @@ mod tests {
     #[ignore = "requires podman; run this test explicitly"]
     async fn a_container_that_bind_mounts_the_mount_point_itself_keeps_it() {
         assert_an_own_containers_mount_keeps_the_mount_point(
-            |_, node_modules, _| vec!["-v".into(), format!("{}:/deps", node_modules.display())],
+            |_, node_modules, _| OwnMount {
+                before: Vec::new(),
+                options: vec!["-v".into(), format!("{}:/deps", node_modules.display())],
+                at: "/deps",
+            },
+            "true",
+            "touch /deps/probe && rm /deps/probe",
+        )
+        .await;
+    }
+
+    /// End-to-end: needs Podman. A container that bind-mounts the mount
+    /// point through a link to the repository: Podman reports the source as
+    /// it was given, link and all, so only resolving it on the host tells.
+    /// Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   session_sandbox::tests::a_bind_of_the_mount_point_through_a_link_keeps_it \
+    ///   -- --ignored --exact --test-threads=1
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires podman; run this test explicitly"]
+    async fn a_bind_of_the_mount_point_through_a_link_keeps_it() {
+        assert_an_own_containers_mount_keeps_the_mount_point(
+            |repository, _, _| {
+                let link = repository.join("repository-link");
+                std::os::unix::fs::symlink(repository, &link).unwrap();
+                OwnMount {
+                    before: Vec::new(),
+                    options: vec![
+                        "-v".into(),
+                        format!("{}:/deps", link.join("node_modules").display()),
+                    ],
+                    at: "/deps",
+                }
+            },
+            "true",
+            "touch /deps/probe && rm /deps/probe",
+        )
+        .await;
+    }
+
+    /// End-to-end: needs Podman. A volume of the local driver that binds the
+    /// mount point (`podman volume create --opt type=none --opt o=bind --opt
+    /// device=<dir>`, a Compose bind volume), mounted at `/deps`: inspect
+    /// reports the volume's own directory as its source, so the volume's
+    /// device is what tells. Removing the directory would leave `/deps` on a
+    /// deleted directory. Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   session_sandbox::tests::a_bind_volume_of_the_mount_point_keeps_it \
+    ///   -- --ignored --exact --test-threads=1
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires podman; run this test explicitly"]
+    async fn a_bind_volume_of_the_mount_point_keeps_it() {
+        assert_an_own_containers_mount_keeps_the_mount_point(
+            |_, node_modules, name| OwnMount {
+                before: vec![vec![
+                    "volume".into(),
+                    "create".into(),
+                    "--opt".into(),
+                    "type=none".into(),
+                    "--opt".into(),
+                    "o=bind".into(),
+                    "--opt".into(),
+                    format!("device={}", node_modules.display()),
+                    name.into(),
+                ]],
+                options: vec!["-v".into(), format!("{name}:/deps")],
+                at: "/deps",
+            },
+            "true",
+            "touch /deps/probe && rm /deps/probe",
+        )
+        .await;
+    }
+
+    /// End-to-end: needs Podman. An overlay volume of the mount point
+    /// (`-v <dir>:/deps:O`): inspect reports its merged directory in
+    /// Podman's storage as its source, and the directory it overlays as
+    /// `lowerdir=` among its options. Its container keeps the overlay when
+    /// the directory goes, but cannot start again. Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   session_sandbox::tests::an_overlay_volume_of_the_mount_point_keeps_it \
+    ///   -- --ignored --exact --test-threads=1
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires podman; run this test explicitly"]
+    async fn an_overlay_volume_of_the_mount_point_keeps_it() {
+        assert_an_own_containers_mount_keeps_the_mount_point(
+            |_, node_modules, _| OwnMount {
+                before: Vec::new(),
+                options: vec!["-v".into(), format!("{}:/deps:O", node_modules.display())],
+                at: "/deps",
+            },
             "true",
             "touch /deps/probe && rm /deps/probe",
         )
@@ -9303,13 +9493,15 @@ mod tests {
     #[ignore = "requires podman; run this test explicitly"]
     async fn a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it() {
         assert_an_own_containers_mount_keeps_the_mount_point(
-            |repository, _, _| {
-                vec![
+            |repository, _, _| OwnMount {
+                before: Vec::new(),
+                options: vec![
                     "-v".into(),
                     format!("{}:/workspaces/x", repository.display()),
                     "--tmpfs".into(),
                     "/workspaces/x/node_modules".into(),
-                ]
+                ],
+                at: "/workspaces/x/node_modules",
             },
             "echo tmp > /workspaces/x/node_modules/tmp-marker",
             "awk '$5 == \"/workspaces/x/node_modules\" { found = 1 } END { exit !found }' \

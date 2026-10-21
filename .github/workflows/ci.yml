@@ -382,7 +382,11 @@ jobs:
     # sidecars on this runner image reach package registries through), and
     # provisioning installs Git and the other Alpine packages from Alpine's
     # mirrors over it. The containers of the person's own they start have
-    # no network.
+    # no network. Each removal they assert runs while an unrelated container
+    # of the person's own exists, so it needs `podman container inspect` and
+    # `podman volume inspect` to work, and each keep they assert names why: a
+    # mount `podman ps` lists at the path, or the person's container that
+    # inspect saw mounting it, never Podman being unable to say.
     name: Podman suites (ignored tests)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -406,7 +410,11 @@ jobs:
             session_sandbox::tests::under_the_hardened_workload_the_mount_point_is_the_persons_until_removal \
             session_sandbox::tests::a_development_containers_node_modules_volume_keeps_the_mount_point \
             session_sandbox::tests::a_container_that_bind_mounts_the_mount_point_itself_keeps_it \
+            session_sandbox::tests::a_bind_of_the_mount_point_through_a_link_keeps_it \
+            session_sandbox::tests::a_bind_volume_of_the_mount_point_keeps_it \
+            session_sandbox::tests::an_overlay_volume_of_the_mount_point_keeps_it \
             session_sandbox::tests::a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it \
+            dependency_mountpoint::tests::podman_names_what_is_gone_and_the_rest_is_inspected \
             | tee "$RUNNER_TEMP/mountpoint-tests.log"
-          # All five ran: a renamed test must not pass by matching nothing.
-          grep -q '^test result: ok. 5 passed' "$RUNNER_TEMP/mountpoint-tests.log"
+          # All nine ran: a renamed test must not pass by matching nothing.
+          grep -q '^test result: ok. 9 passed' "$RUNNER_TEMP/mountpoint-tests.log"
