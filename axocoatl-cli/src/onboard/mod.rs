@@ -504,6 +504,8 @@ pub(crate) struct Choice {
     pub(crate) openrouter_key: Option<KeyRef>,
     pub(crate) writer_model: Option<ModelRef>,
     pub(crate) reviewer_model: Option<ModelRef>,
+    /// Claude Code or Codex, when one of them writes.
+    pub(crate) external_writer: Option<WriterChoice>,
     /// A writer model for an external writer (`anthropic:…`, `openai:…`).
     pub(crate) external_writer_model: Option<String>,
     /// The credential a Codex run uses, named on its command line.

@@ -243,6 +243,18 @@ async fn the_low_memory_menu_hands_the_writing_to_claude_code() {
     );
     assert!(!output.contains("keeps what is already set up"), "{output}");
     assert!(!o.paths.config_path.exists());
+    // The step left repeats the writer chosen, not only the reviewer:
+    // without --writer, running it again would ask Step 1 again.
+    assert_eq!(
+        o.steps.last().cloned(),
+        Some(format!(
+            "Export {missing} with your OpenRouter key in this shell, then run `axocoatl onboard \
+             --writer claude-code --reviewer openrouter:openai/gpt-oss-120b --openrouter-key-env \
+             {missing}`"
+        )),
+        "{:?}",
+        o.steps
+    );
 }
 
 /// I4. OpenRouter with no key: BYOK is explained before the question, the

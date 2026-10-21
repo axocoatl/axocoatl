@@ -1672,6 +1672,71 @@ async fn openrouter_writes_a_separate_reviewer_after_checking_key_and_models() {
     std::env::remove_var(&variable);
 }
 
+/// Without an OpenRouter key nothing is saved, and the step left repeats
+/// the writer: Claude Code or Codex (with its --writer-model), a local
+/// writer, or OpenRouter, so running it again does not ask Step 1 again.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_no_key_step_repeats_the_writer_chosen() {
+    let variable = format!("AXOCOATL_ONBOARD_TEST_NO_KEY_W_{}", std::process::id());
+    for (external, model, local, expected) in [
+        (
+            Some(WriterChoice::Codex),
+            Some("openai:gpt-5.1-codex"),
+            None,
+            "--writer codex --writer-model openai:gpt-5.1-codex",
+        ),
+        (
+            Some(WriterChoice::ClaudeCode),
+            None,
+            None,
+            "--writer claude-code",
+        ),
+        (
+            None,
+            None,
+            Some("qwen3-coder:30b"),
+            "--writer ollama --writer-model ollama:qwen3-coder:30b",
+        ),
+    ] {
+        let shims = Shims::new();
+        let facts = facts(
+            ubuntu(),
+            16,
+            no_podman(),
+            &shims,
+            "http://127.0.0.1:9",
+            OllamaService::Manual,
+        )
+        .await;
+        let mut o = onboarding(
+            &shims,
+            Ui::new(Mode::Yes, false, None),
+            facts,
+            OnboardArgs {
+                openrouter_key_env: Some(variable.clone()),
+                ..yes(external.unwrap_or(WriterChoice::Ollama))
+            },
+        );
+        let mut choice = Choice {
+            external_writer: external,
+            external_writer_model: model.map(str::to_string),
+            writer_model: local.map(|model| ModelRef::new(Provider::Ollama, model)),
+            ..Choice::default()
+        };
+        openrouter::run(&mut o, &mut choice, false).await;
+        assert!(choice.openrouter_key.is_none());
+        assert_eq!(
+            o.steps,
+            [format!(
+                "Export {variable} with your OpenRouter key in this shell, then run `axocoatl \
+                 onboard {expected} --reviewer openrouter:openai/gpt-oss-120b \
+                 --openrouter-key-env {variable}`"
+            )]
+        );
+    }
+}
+
 /// The same model for writer and reviewer is refused on the command line.
 #[test]
 fn the_same_model_twice_is_a_usage_error() {
