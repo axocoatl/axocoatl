@@ -228,10 +228,10 @@ that runs top-level sets it from script (`document.cookie`), and then sends it
 to the workbench at `localhost` (on every port) and to the Preview of every
 other Session. An app's server cannot do the same through the Preview
 proxies: they remove `Domain` from each `Set-Cookie` they forward, so Safari
-keeps those cookies host-only on the Preview origin that set them. A Preview runs top-level when
-you choose **Open full preview**, or in a window it opens itself: the Preview
-frame allows popups, so its code can open its own address in a new window when
-you click in it. Embedded in the workbench, Safari gives a Preview no cookies
+keeps those cookies host-only on the Preview origin that set them. A Preview
+runs top-level when you choose **Open full preview**, or in a window it opens
+itself: the Preview frame allows popups, so its code can open its own address
+in a new window when you click in it. Embedded in the workbench, Safari gives a Preview no cookies
 at all, so it cannot set one there and receives none.
 
 The Preview proxies remove only `axocoatl-token-*` cookies from the requests
@@ -292,8 +292,9 @@ It cannot:
   `axocoatl-token-*` cookie before the app sees the request.
 - Reach `127.0.0.1` or `[::1]`.
 
-To keep Sessions whose code you do not trust from reaching each other this way,
-use the workbench in a Chromium-based browser. The Safari behaviour on this page
+To keep Sessions whose code you do not trust from reaching each other or
+signing the workbench out this way, use the workbench in a Chromium-based
+browser. The Safari behaviour on this page
 was measured in Playwright's WebKit 26.4 on macOS, which uses the system's
 cookie store, not in Safari itself.
 
