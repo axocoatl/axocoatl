@@ -99,8 +99,9 @@ checklist) run once per browser engine from `browserEngines()`: Chromium always,
 and WebKit, the Safari engine and the default browser on a Mac, when Playwright's
 WebKit is installed (`npx playwright install webkit`). With
 `AXOCOATL_E2E_WEBKIT=1` a missing WebKit fails instead of being skipped; the
-gate script sets it when run with `AXO_BROWSER_WEBKIT=true`, which also installs
-WebKit. A journey that needs the daemon's own `HOME` (the folder picker starts
+gate script sets it when run with `AXO_BROWSER_ENGINE=webkit`, which also
+installs WebKit and runs every journey on WebKit, not only these per-engine
+ones. A journey that needs the daemon's own `HOME` (the folder picker starts
 there) passes `home: true` to `launchTestDaemon`, which gives the daemon a
 fixture home folder and keeps Podman's real configuration through the XDG
 directories.
