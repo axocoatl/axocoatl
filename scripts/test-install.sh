@@ -847,7 +847,9 @@ path_expect_installed_to "$case_home/.local/bin"
 path_expect_text "~/.local/bin is not on your PATH. For new terminals to find axocoatl, add this line to ~/.zprofile:"
 path_expect_text "    $(path_line_for zsh)"
 path_expect_text "Next:  $case_home/.local/bin/axocoatl onboard"
-path_expect_text "Podman, which every Session and run needs, is not installed yet; onboard (below) sets it up or says how, asking first"
+path_expect_text "Podman, which every Session and run needs, is not on PATH."
+path_expect_text "onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do."
+path_expect_text "# set up a writer and a reviewer, and Podman where it can (else it says how); it asks first"
 [ ! -e "$case_home/.zprofile" ] || fail "$name wrote ~/.zprofile without being asked"
 path_expect_next_runs
 
@@ -1446,6 +1448,7 @@ P_PODMAN=yes
 run_path_case path-podman-present
 path_expect_status 0
 path_refuse_text 'Podman, which every Session and run needs'
+path_refuse_text 'onboard (below) installs it'
 
 # --- Choosing the release ------------------------------------------------
 # AXOCOATL_VERSION installs that release without asking GitHub for the latest

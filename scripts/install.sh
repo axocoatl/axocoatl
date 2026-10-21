@@ -891,12 +891,15 @@ else
   fi
 fi
 
-# Every Session and run needs rootless Podman; onboarding sets it up.
+# Every Session and run needs rootless Podman. Onboarding installs it after
+# asking where it can (axocoatl-cli/src/onboard/sandbox.rs, install), and
+# otherwise says what to do.
 if ! command -v podman >/dev/null 2>&1; then
-  info "Podman, which every Session and run needs, is not installed yet; onboard (below) sets it up or says how, asking first"
+  info "Podman, which every Session and run needs, is not on PATH."
+  info "onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do."
 fi
 
 echo
-echo "Next:  ${run} onboard      # set up Podman, a writer and a reviewer for this user, asking first"
+echo "Next:  ${run} onboard      # set up a writer and a reviewer, and Podman where it can (else it says how); it asks first"
 echo "       ${run} doctor       # check the sandbox, the models and the daemon"
 echo "       ${run} dev          # start the daemon; leave it running"
