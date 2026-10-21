@@ -13,9 +13,16 @@ import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 // a real Session app on local Podman. Safari on macOS lets a top-level page on
 // <name>.localhost set a Domain=localhost cookie and then sends it to the
 // workbench and to every other Preview origin; Chromium and WebKit on Linux
-// refuse it (operate/security.mdx). From a full-page Preview the journey sets
-// a cookie that is not ASCII, a forged axocoatl-token-<port> and -signed-in
-// cookie, and 40 cookies of 1 KB. It asserts, in every engine:
+// refuse it (operate/security.mdx). So in Safari the workbench keeps a
+// Preview embedded: the last journey shows this real Preview in the
+// workbench and asserts that there Open full preview has no address, the
+// frame may not open windows, and the Preview's own window.open of its
+// address is blocked, while the app never receives the token cookie and the
+// workbench stays signed in. A Preview still runs top-level in Safari when
+// someone opens its address in a tab themselves. The first journeys do that
+// (page.goto), and set from that page a cookie that is not ASCII, a forged
+// axocoatl-token-<port> and -signed-in cookie, and 40 cookies of 1 KB. They
+// assert, in every engine:
 // - with those cookies the workbench stays signed in, and a signed-out
 //   browser passes the retry page at most once per navigation;
 // - the browser may send forged axocoatl-token-* cookies to a Preview origin
@@ -98,6 +105,9 @@ let browser;
 let session;
 let listenerPort;
 let safariSharesLocalhostCookies = false;
+// Where Safari shares those cookies, the workbench keeps Previews embedded
+// (static/ui/preview-embedding.js).
+let safariKeepsPreviewsEmbedded = false;
 
 const previewHost = (port) => `${session.id}-p${port}.localhost`;
 const previewOrigin = (port) => `http://${previewHost(port)}:${listenerPort}`;
@@ -184,6 +194,7 @@ before(async () => {
   browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
   safariSharesLocalhostCookies = process.platform === 'darwin'
     && browser.browserType().name() === 'webkit';
+  safariKeepsPreviewsEmbedded = safariSharesLocalhostCookies;
 });
 
 after(async () => {
@@ -192,12 +203,14 @@ after(async () => {
 });
 
 /**
- * Open `pathname` on Preview `port` top-level, as Open full preview does, and
- * set from its script: a cookie that is not ASCII, a forged token cookie, a
- * forged "signed in" cookie, a host-only cookie and a flood, all but the
- * host-only one for Domain=localhost. Returns what the page then reads.
+ * Open `pathname` on Preview `port` top-level, as someone does who opens the
+ * Preview's address in a tab of its own (Open full preview elsewhere; in
+ * Safari the workbench offers no way to), and set from its script: a cookie
+ * that is not ASCII, a forged token cookie, a forged "signed in" cookie, a
+ * host-only cookie and a flood, all but the host-only one for
+ * Domain=localhost. Returns what the page then reads.
  */
-async function forgeFromFullPreview(context, port, pathname = '/forge') {
+async function forgeFromTopLevelPreview(context, port, pathname = '/forge') {
   const page = await context.newPage();
   try {
     const response = await page.goto(`${previewOrigin(port)}${pathname}`);
@@ -228,7 +241,7 @@ async function visit(context, url) {
   }
 }
 
-test('a full-page Preview\'s non-ASCII, forged and 40 x 1 KB cookies leave the workbench signed in, and no Preview app receives an axocoatl-token cookie', { timeout: 300_000, skip: imageMissing }, async () => {
+test('a top-level Preview\'s non-ASCII, forged and 40 x 1 KB cookies leave the workbench signed in, and no Preview app receives an axocoatl-token cookie', { timeout: 300_000, skip: imageMissing }, async () => {
   const context = await browser.newContext();
   const echo = await startCookieEcho();
   try {
@@ -243,7 +256,7 @@ test('a full-page Preview\'s non-ASCII, forged and 40 x 1 KB cookies leave the w
     // The app's server asks for Domain=localhost cookies; the proxy removes
     // Domain, so the browser keeps them host-only on Preview 3000.
     await visit(context, `${previewOrigin(3000)}/set-cookies`);
-    const forged = await forgeFromFullPreview(context, 3000);
+    const forged = await forgeFromTopLevelPreview(context, 3000);
     assert.equal(forged.includes('upstream-domain=from-upstream'), true, cookieNames(forged));
     assert.equal(forged.includes('preview-host-only=from-a'), true, cookieNames(forged));
     assert.equal(forged.includes(`axocoatl-token-${listenerPort}=forged-by-a-preview`),
@@ -359,7 +372,7 @@ test('a forged signed-in cookie sends a signed-out browser through the retry pag
   // A browser that never signed in.
   const context = await browser.newContext();
   try {
-    await forgeFromFullPreview(context, 3000, '/forge-signed-out');
+    await forgeFromTopLevelPreview(context, 3000, '/forge-signed-out');
     const page = await context.newPage();
     const statuses = [];
     page.on('response', (response) => {
@@ -383,6 +396,70 @@ test('a forged signed-in cookie sends a signed-out browser through the retry pag
     // The sign-in page's CSP allows no fetch; ask from a public page.
     await page.goto(`http://localhost:${listenerPort}/health`);
     assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 401);
+  } finally {
+    await context.close();
+  }
+});
+
+test('the workbench shows the real Preview embedded; in Safari it offers no full page and the Preview cannot open itself in a window', { timeout: 300_000, skip: imageMissing }, async () => {
+  const context = await browser.newContext();
+  try {
+    const workbench = await context.newPage();
+    const signedIn = await workbench.goto(runtime.signInUrl);
+    assert.equal(signedIn?.status(), 200);
+    await workbench.waitForFunction(() => typeof S !== 'undefined' && S.liveConnection === 'connected');
+    await workbench.goto(`http://localhost:${listenerPort}/?session=${encodeURIComponent(session.id)}`);
+    await workbench.waitForFunction((sessionId) => typeof S !== 'undefined'
+      && S.session?.id === sessionId && sessionRuntimeSurfaceReady(S.session), session.id,
+    { timeout: 120_000 });
+    await workbench.locator('[data-session-view="browser"]').click();
+    await workbench.evaluate(() => browserGo('http://localhost:3000/embedded'));
+    const iframe = (await workbench.locator('#browser')
+      .evaluateHandle((element) => element.frame)).asElement();
+    assert.ok(iframe, 'the Preview must render in the workbench\'s frame');
+    assert.equal(await iframe.getAttribute('src'), `${previewOrigin(3000)}/embedded`);
+    const frame = await iframe.contentFrame();
+    await frame.waitForFunction(() => document.title === 'preview 3000/embedded');
+    const openFull = workbench.locator('ax-browser [data-act="open-full"]');
+    if (safariKeepsPreviewsEmbedded) {
+      assert.equal(await iframe.getAttribute('sandbox'),
+        'allow-scripts allow-same-origin allow-forms allow-modals');
+      assert.equal(await openFull.getAttribute('href'), null);
+      assert.equal(await openFull.getAttribute('aria-disabled'), 'true');
+      assert.match(await openFull.getAttribute('title'), /^In Safari, a Preview in its own tab could set cookies/);
+      assert.equal(await workbench.locator('ax-browser .embedded-note').isVisible(), true);
+      // The Preview's own code, on a real click in its frame, cannot open its
+      // address in a window: window.open returns null and no page opens.
+      await frame.evaluate(() => {
+        document.body.insertAdjacentHTML('beforeend', '<button id="open-self" type="button">Open myself</button>');
+        document.querySelector('#open-self').addEventListener('click', () => {
+          globalThis.__opened = window.open(location.href, '_blank') === null ? 'null' : 'a window';
+        });
+      });
+      const before = new Set(context.pages());
+      await openFull.click({ force: true });
+      await frame.locator('#open-self').click();
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      assert.deepEqual(context.pages().filter((page) => !before.has(page)).map((page) => page.url()), []);
+      assert.equal(await frame.evaluate(() => globalThis.__opened), 'null');
+    } else {
+      assert.equal(await iframe.getAttribute('sandbox'),
+        'allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
+      assert.equal(await openFull.getAttribute('href'), `${previewOrigin(3000)}/embedded`);
+      assert.equal(await openFull.getAttribute('aria-disabled'), 'false');
+    }
+    // The app served the embedded Preview, and no request it received carried
+    // the workbench's token cookie; the workbench is still signed in.
+    const seen = await appSeen();
+    assert.ok(seen.some((request) => request.port === 3000 && request.path === '/embedded'),
+      JSON.stringify(seen.map(({ port, path: at }) => `${port}${at}`)));
+    for (const request of seen) {
+      assert.equal(request.cookie.includes(runtime.token), false, `${request.port}${request.path}`);
+      assert.equal(/axocoatl-token-/i.test(request.cookie), false,
+        `${request.port}${request.path}: ${cookieNames(request.cookie)}`);
+    }
+    assert.equal(await workbench.evaluate(async () => (await fetch('/api/agents')).status), 200);
+    assert.notEqual(await workbench.title(), 'Sign in to Axocoatl');
   } finally {
     await context.close();
   }

@@ -1,3 +1,4 @@
+import { KEEPS_PREVIEWS_EMBEDDED, PREVIEW_STAYS_EMBEDDED } from './preview-embedding.js';
 import { adopt } from './sheets.js';
 
 /**
@@ -13,6 +14,10 @@ import { adopt } from './sheets.js';
  * preserves an application's normal module, storage, fetch, form, and
  * WebSocket semantics while keeping it cross-origin from the workbench. The
  * injected picker communicates with the workbench only through postMessage.
+ *
+ * In Safari (preview-embedding.js) a Preview never runs top-level: Open full
+ * preview is not offered, a line under the bar says why, and the frame may
+ * not open windows.
  *
  * @element ax-browser
  *
@@ -42,6 +47,10 @@ button:hover:not(:disabled), .open-full:hover:not([aria-disabled="true"]) {
 button:disabled, .open-full[aria-disabled="true"] { opacity: .35; cursor: not-allowed; }
 button:focus-visible, .open-full:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .open-full { white-space: nowrap; }
+.embedded-note {
+  margin: 0; padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--border);
+  color: var(--muted); font: var(--fs-xs) var(--font-sans); line-height: 1.4; flex-shrink: 0;
+}
 input {
   flex: 1; min-width: 0; background: var(--bg-3); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--r-sm);
@@ -66,10 +75,26 @@ iframe { flex: 1; border: 0; background: #fff; min-height: 0; }
 .empty-card button:hover:not(:disabled) { color: var(--bg); filter: brightness(1.08); }
 `;
 
+// `allow-same-origin` is required for modules, storage, fetch, forms, and
+// HMR. It is safe here because Session Preview has a dedicated origin and
+// cannot access the workbench origin or its control routes. In Safari the
+// frame may not open windows: a window it opened would run the Preview
+// top-level, where its script can set cookies for the workbench.
+const PREVIEW_SANDBOX = KEEPS_PREVIEWS_EMBEDDED
+  ? 'allow-scripts allow-same-origin allow-forms allow-modals'
+  : 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals';
+
+const OPEN_FULL = KEEPS_PREVIEWS_EMBEDDED
+  ? `<a class="open-full" data-act="open-full" aria-disabled="true"
+          aria-describedby="embedded-note">Open full preview</a>`
+  : `<a class="open-full" data-act="open-full" target="_blank" rel="noopener noreferrer"
+          aria-disabled="true"
+          title="Open this isolated Preview in a full tab for app cookies and debugging">Open full preview</a>`;
+
 export class AxBrowser extends HTMLElement {
   static get observedAttributes() { return ['session', 'url']; }
 
-  #root; #body; #addr; #back; #fwd; #reload; #openFull;
+  #root; #body; #addr; #back; #fwd; #reload; #openFull; #embeddedNote;
   /** Visited URLs and where we are in them. Ours, not the frame's — a
    *  cross-origin frame will not share its history. */
   #history = [];
@@ -86,10 +111,9 @@ export class AxBrowser extends HTMLElement {
         <button data-act="forward" title="Forward" aria-label="Go forward in Preview">→</button>
         <button data-act="reload" title="Reload" aria-label="Reload Preview">⟳</button>
         <input aria-label="Preview address" placeholder="http://localhost:3000" spellcheck="false" autocomplete="off" />
-        <a class="open-full" data-act="open-full" target="_blank" rel="noopener noreferrer"
-          aria-disabled="true"
-          title="Open this isolated Preview in a full tab for app cookies and debugging">Open full preview</a>
+        ${OPEN_FULL}
       </div>
+      <p class="embedded-note" id="embedded-note" hidden></p>
       <div class="body"></div>`;
     this.#body = this.#root.querySelector('.body');
     this.#addr = this.#root.querySelector('input');
@@ -97,6 +121,11 @@ export class AxBrowser extends HTMLElement {
     this.#fwd = this.#root.querySelector('[data-act="forward"]');
     this.#reload = this.#root.querySelector('[data-act="reload"]');
     this.#openFull = this.#root.querySelector('[data-act="open-full"]');
+    this.#embeddedNote = this.#root.querySelector('.embedded-note');
+    if (KEEPS_PREVIEWS_EMBEDDED) {
+      this.#openFull.title = PREVIEW_STAYS_EMBEDDED;
+      this.#embeddedNote.textContent = PREVIEW_STAYS_EMBEDDED;
+    }
 
     this.#root.addEventListener('click', (e) => {
       const act = e.target.closest('[data-act]')?.dataset.act;
@@ -229,10 +258,7 @@ export class AxBrowser extends HTMLElement {
     const f = document.createElement('iframe');
     f.setAttribute('part', 'frame');
     f.title = 'Session application Preview';
-    // `allow-same-origin` is required for modules, storage, fetch, forms, and
-    // HMR. It is safe here because Session Preview has a dedicated origin and
-    // cannot access the workbench origin or its control routes.
-    f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
+    f.setAttribute('sandbox', PREVIEW_SANDBOX);
     f.referrerPolicy = 'origin';
     f.src = this.proxied(url);
     this.#body.append(f);
@@ -249,7 +275,10 @@ export class AxBrowser extends HTMLElement {
     this.#fwd.disabled = !active || this.#at >= this.#history.length - 1;
     const hasUrl = active && Boolean(this.#history[this.#at] || this.url);
     this.#reload.disabled = !hasUrl;
-    const fullPreviewUrl = this.fullPreviewUrl();
+    // In Safari the link never gets an address: it stays disabled, and the
+    // line under the bar says why while a Preview is showing.
+    this.#embeddedNote.hidden = !(KEEPS_PREVIEWS_EMBEDDED && hasUrl);
+    const fullPreviewUrl = KEEPS_PREVIEWS_EMBEDDED ? '' : this.fullPreviewUrl();
     if (fullPreviewUrl) {
       this.#openFull.href = fullPreviewUrl;
       this.#openFull.setAttribute('aria-disabled', 'false');

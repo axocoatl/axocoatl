@@ -9093,6 +9093,8 @@ mod tests {
     #[test]
     fn preview_proxy_uses_strict_virtual_origin_and_resolved_transport() {
         const BROWSER_JS: &str = include_str!("../static/ui/browser.js");
+        const PREVIEW_EMBEDDING_JS: &str = include_str!("../static/ui/preview-embedding.js");
+        const TERMINAL_JS: &str = include_str!("../static/ui/terminal.js");
         const AXO_TAP_JS: &str = include_str!("../static/axo-tap.js");
 
         assert_eq!(
@@ -9194,15 +9196,30 @@ mod tests {
 
         assert!(LEGACY_PREVIEW_SANDBOX_CSP.starts_with("sandbox "));
         assert!(!LEGACY_PREVIEW_SANDBOX_CSP.contains("allow-same-origin"));
+        // The Preview frame's sandbox: popups everywhere but Safari, where a
+        // window the Preview opened would run it top-level and Open full
+        // preview never gets an address (static/ui/preview-embedding.js).
+        assert!(BROWSER_JS.contains("f.setAttribute('sandbox', PREVIEW_SANDBOX)"));
         assert!(BROWSER_JS.contains(
-            "f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals')"
+            "const PREVIEW_SANDBOX = KEEPS_PREVIEWS_EMBEDDED\n  ? 'allow-scripts allow-same-origin allow-forms allow-modals'\n  : 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals';"
         ));
+        assert!(!BROWSER_JS.contains("allow-top-navigation"));
+        assert!(!BROWSER_JS.contains("allow-popups-to-escape-sandbox"));
         assert!(BROWSER_JS.contains("-p${port}.localhost"));
         assert!(!BROWSER_JS.contains(".preview.localhost"));
         assert!(BROWSER_JS.contains("data-act=\"open-full\""));
         assert!(BROWSER_JS.contains("target=\"_blank\" rel=\"noopener noreferrer\""));
         assert!(BROWSER_JS.contains("this.#openFull.href = fullPreviewUrl"));
+        assert!(BROWSER_JS.contains(
+            "const fullPreviewUrl = KEEPS_PREVIEWS_EMBEDDED ? '' : this.fullPreviewUrl();"
+        ));
         assert!(!BROWSER_JS.contains("window.open("));
+        assert!(PREVIEW_EMBEDDING_JS.contains(
+            "export const KEEPS_PREVIEWS_EMBEDDED = isSafariEngineOnApple(globalThis.navigator);"
+        ));
+        assert!(TERMINAL_JS
+            .contains("...(KEEPS_PREVIEWS_EMBEDDED ? { linkHandler: SAFARI_LINK_HANDLER } : {}),"));
+        assert!(DASHBOARD_HTML.contains("guardTopLevelPreviews(window);"));
         assert!(DASHBOARD_HTML.contains("!url.hostname.endsWith('.localhost')"));
         assert!(DASHBOARD_HTML.contains("e.origin !== expectedOrigin"));
         assert!(DASHBOARD_HTML.contains("creation?.discovered_ids"));
