@@ -201,7 +201,7 @@
   import '/ui/settings.js';
   import '/ui/terminal.js';
   import '/ui/browser.js';
-  import { loadMonaco } from '/ui/editor.js';
+  import { loadMonaco, monacoIfLoaded } from '/ui/editor.js';
   import { MODULES as AX_MODULES } from '/ui/launcher.js';
   import { SETTINGS_SECTIONS as AX_SETTINGS_SECTIONS } from '/ui/settings.js';
   // The palette lists the same modules and settings sections the launcher and
@@ -210,6 +210,7 @@
   window.PALETTE_SETTINGS = AX_SETTINGS_SECTIONS;
   // One AMD load for the page: the diff editor in the shell shares it.
   window.axLoadMonaco = loadMonaco;
+  window.axMonacoIfLoaded = monacoIfLoaded;
   // Boot diagnostics: an exception during init() silently strands the app —
   // the live socket never opens and nothing says why. Record them where they
   // can be read instead of vanishing into an empty console.
@@ -589,10 +590,14 @@ function applyTheme(pref) {
   document.querySelectorAll('.theme-seg').forEach(b => {
     b.classList.toggle('active', b.dataset.themePref === pref);
   });
-  // Propagate to Monaco if it's loaded — the Sessions file editor uses
-  // its `vs` (light) and `vs-dark` themes.
-  if (window.monaco) {
-    try { window.monaco.editor.setTheme(effective === 'light' ? 'vs' : 'vs-dark'); } catch {}
+  // Propagate to Monaco if it has loaded — the Sessions file editor uses
+  // its `vs` (light) and `vs-dark` themes. Not through window.monaco, which
+  // is set before Monaco has finished loading: calling into it then takes
+  // the editor's suggestions and code actions away (monacoIfLoaded in
+  // ui/editor.js). Monaco applies the page's theme when it finishes.
+  const monaco = window.axMonacoIfLoaded?.();
+  if (monaco) {
+    try { monaco.editor.setTheme(effective === 'light' ? 'vs' : 'vs-dark'); } catch {}
   }
 }
 function setThemePref(pref) { localStorage.setItem(THEME_KEY, pref); applyTheme(pref); }

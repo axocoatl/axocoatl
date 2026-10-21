@@ -47,6 +47,21 @@ export const monacoLang = (raw) => {
 
 /** One AMD load for the page, however many editors ask for it. */
 let monacoReady = null;
+/** Monaco once all of it has loaded. */
+let loadedMonaco = null;
+
+/**
+ * Monaco's API once every module of it has run, or null.
+ *
+ * Not `window.monaco`, which the vendored build sets as soon as its core
+ * module has run, while the chunk that registers the services of
+ * suggestions, code actions, code lenses, inlay hints and drop into editor
+ * can still be loading. The first call into Monaco's services starts them
+ * with the services registered so far, so a call in that gap (setTheme,
+ * getModels) leaves every editor of the page without those features, each
+ * failing with "depends on UNKNOWN service ICodeLensCache" and the like.
+ */
+export function monacoIfLoaded() { return loadedMonaco; }
 
 export function loadMonaco() {
   if (monacoReady) return monacoReady;
@@ -57,10 +72,13 @@ export function loadMonaco() {
     tag.onload = () => {
       window.require.config({ paths: { vs: '/vendor/monaco/vs' } });
       window.require(['vs/editor/editor.main'], () => {
+        // Whatever theme the page has now: a change while Monaco loaded
+        // did not reach it (see monacoIfLoaded).
         try {
           const dt = document.documentElement.getAttribute('data-theme');
           window.monaco.editor.setTheme(dt === 'light' ? 'vs' : 'vs-dark');
         } catch { /* theme is cosmetic; a failure here must not block loading */ }
+        loadedMonaco = window.monaco;
         resolve(window.monaco);
       }, reject);
     };

@@ -120,6 +120,35 @@ nor `localhost`, instead of from a route. The crash is WebKit's and can
 still happen elsewhere: a journey that fails in WebKit on Linux with
 "internal error" or with its sign-in cookie gone may be this crash.
 
+The page itself cancelling what the workbench is still loading can do it
+too. `workbench.test.mjs`'s "cross-tab Close and Delete" journey sent a
+runtime transition and remounted the cockpit as soon as it was ready, which
+cancels the requests the cockpit still has in flight (about three were in
+flight each time, and its steps cancelled 40 of them in 100 repetitions).
+CI's WebKit leg failed on it at 27025d43 with `Can't find variable: S`. In
+the VM the crash is rare: the journey alone failed once in 210 runs, in the
+same second as a network process crash, and 900 repetitions of its steps
+crashed the network process once, 8 ms after the transition
+(`malloc_consolidate(): unaligned fastbin chunk detected`), and then failed
+the same way. So that journey, and the rail journey before each of its
+reloads, first wait with `settle()` (from `openSession`) until the workbench
+has had no request in flight for half a second; the transition then cancels
+none. `trackRequests` and `waitForNoRequestsInFlight` in
+`support/daemon.mjs` do the waiting, for `local-api-token.test.mjs`'s
+`waitForSettledWorkbench` too. Closing a context (200 times) or reloading
+the page (220 times) while the workbench loaded did not crash it in the VM.
+
+So the harness says when a context lost its sign-in. `authorizeContext` (and
+so `newAuthorizedContext`) checks that a context still holds the token
+cookies it was given when a daemon answers the context 401 and when the
+journey closes it. A cookie the journey did not remove itself (with
+`context.clearCookies`) is reported under that test as a `# lost sign-in:`
+line with the time and the request that was refused, so a failure that
+follows from it (the shell's reload on a 401 reaching the sign-in page, then
+`Can't find variable: S`) is not taken for a product failure and can be
+matched with the crash in the browser's stderr (`DEBUG=pw:browser`) or the
+system's crash log.
+
 Journeys a new user takes first (the folder picker and Workspace scope, Source
 Control's commit identity, Team and budget's suggested limits, the readiness
 checklist) run once per browser engine from `browserEngines()`: Chromium always,
@@ -195,6 +224,14 @@ the Preview and failure paths called out below.
   Source Control plus `Ctrl/Cmd+P` to the environment review dialog without
   reaching execution, tree, file read/write, Git, Preview, or terminal mutation
   APIs.
+- A theme change while Monaco is still loading leaves the editor its
+  suggestions, code actions, code lenses, inlay hints and drop into editor,
+  and the editor takes the page's theme. The vendored Monaco sets
+  `window.monaco` before the chunk that registers those features' services
+  has loaded, and any call into it then starts Monaco's services without
+  them; the journey holds that chunk to make the gap certain. The shell and
+  the journeys reach Monaco through `axMonacoIfLoaded()`, which is null until
+  Monaco has loaded.
 - Open workspace marks Git repositories, refuses the home folder until its
   name is typed, and Remove from list forgets a Workspace without touching its
   folder, refusing one with open Sessions.

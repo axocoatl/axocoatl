@@ -6,6 +6,7 @@ import { chromium } from 'playwright';
 
 import {
   launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext, settleTransitions, isWebKitLoadDiagnostic,
+  trackRequests, waitForNoRequestsInFlight,
 } from '../support/daemon.mjs';
 import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 
@@ -145,6 +146,7 @@ async function openSession(
 
 async function openSessionInContext(context, session, targetRuntime, beforeGoto) {
   const page = await context.newPage();
+  const requests = trackRequests(page);
   const browserErrors = [];
   const browserRequests = [];
   const browserResponses = [];
@@ -269,6 +271,11 @@ async function openSessionInContext(context, session, targetRuntime, beforeGoto)
     consoleMessages,
     assertNoBrowserErrors() {
       assert.deepEqual(browserErrors, [], browserErrors.join('\n'));
+    },
+    // Wait until the page has had no request in flight for half a second,
+    // before a step that reloads it or cancels what it is still loading.
+    settle() {
+      return waitForNoRequestsInFlight(requests, 'The workbench');
     },
   };
 }
@@ -411,7 +418,7 @@ function readySessionFixture(source) {
 
 test('rail collapse, keyboard toggle, reload, and compact resizing preserve one reversible preference', async () => {
   const session = runtime.fixtures.alpha.sessions[0];
-  const { context, page, assertNoBrowserErrors } = await openSession(session);
+  const { context, page, assertNoBrowserErrors, settle } = await openSession(session);
   try {
     const rail = page.locator('ax-rail');
     const collapse = page.locator('ax-rail #collapse');
@@ -425,6 +432,9 @@ test('rail collapse, keyboard toggle, reload, and compact resizing preserve one 
     assert.ok((await rail.boundingBox()).width <= 54, 'collapsed rail must finish at icon-strip width');
     assert.equal(await collapse.getAttribute('aria-label'), 'Expand the rail');
 
+    // Reload a workbench that has finished loading, as a person does
+    // (README, "WebKit (Safari)").
+    await settle();
     await page.reload({ waitUntil: 'domcontentloaded' });
     await waitForRailCollapsed(page, true);
     await collapse.click();
@@ -450,6 +460,7 @@ test('rail collapse, keyboard toggle, reload, and compact resizing preserve one 
     await page.setViewportSize({ width: 1280, height: 800 });
     await waitForTwoFrames(page);
     await waitForRailCollapsed(page, true);
+    await settle();
     await page.reload({ waitUntil: 'domcontentloaded' });
     await waitForRailCollapsed(page, true);
     assertNoBrowserErrors();
@@ -1166,8 +1177,10 @@ test('Ways suspension cancels delayed primary reads and preserves dirty editor d
     }, session.id);
 
     await page.evaluate(() => openFile('src/index.js'));
+    // Not window.monaco while Monaco loads: a call into it then takes the
+    // editor's features away (see the theme journey below).
     await page.waitForFunction(() => globalThis.axEditor().active === 'src/index.js'
-      && window.monaco?.editor?.getModels?.().length > 0);
+      && window.axMonacoIfLoaded()?.editor.getModels().length > 0);
     await page.evaluate(() => {
       const model = window.monaco.editor.getModels()
         .find((candidate) => candidate.uri?.path?.endsWith('/src/index.js'))
@@ -1246,6 +1259,86 @@ test('Ways suspension cancels delayed primary reads and preserves dirty editor d
     assertNoBrowserErrors();
   } finally {
     releasePrimaryReads?.();
+    await context.close();
+  }
+});
+
+test('a theme change while Monaco loads leaves the editor its suggestions, code actions and code lenses', async () => {
+  const session = readySessionFixture(runtime.fixtures.alpha.sessions[0]);
+  let chunkRequests = 0;
+  let releaseChunk;
+  const chunkRelease = new Promise((resolve) => { releaseChunk = resolve; });
+  const opened = await openSession(
+    session,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page }) => {
+      const sessions = JSON.stringify([session]);
+      await page.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => route.fulfill({ status: 200, contentType: 'application/json', body: sessions }),
+      );
+      await page.route('**/api/sessions', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: sessions,
+      }));
+      await page.route(`**/api/sessions/${session.id}/tasks`, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: route.request().method() === 'GET' ? '[]' : JSON.stringify({ id: 'theme-shell' }),
+      }));
+      await page.route(`**/api/sessions/${session.id}/file?*`, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          path: 'src/index.js', content: 'export const first = 1;\n', lang: 'js', truncated: false,
+        }),
+      }));
+      // The vendored Monaco sets window.monaco when its core module has run,
+      // before this chunk, which registers the services of suggestions, code
+      // actions, code lenses, inlay hints and drop into editor. Hold it there.
+      await page.route('**/vendor/monaco/vs/toggleHighContrast-*.js', async (route) => {
+        chunkRequests += 1;
+        await chunkRelease;
+        await route.continue();
+      });
+    },
+  );
+  const { context, page, assertNoBrowserErrors } = opened;
+  try {
+    await page.waitForFunction(() => sessionRuntimeSurfaceReady(S.session));
+    assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-theme')), 'light');
+    await page.evaluate(() => openFile('src/index.js'));
+    await page.waitForFunction(() => Boolean(window.monaco));
+    assert.equal(chunkRequests, 1, 'Monaco must be waiting for the held chunk');
+    assert.equal(await page.evaluate(() => window.axMonacoIfLoaded()), null);
+    // The system theme turns dark while Monaco is still loading.
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.waitForFunction(() => !document.documentElement.hasAttribute('data-theme'));
+    releaseChunk();
+    await page.waitForFunction(() => document.querySelector('ax-editor .monaco-editor'));
+    const editor = await page.evaluate(() => {
+      const [instance] = window.axMonacoIfLoaded().editor.getEditors();
+      const features = [
+        'editor.contrib.suggestController',
+        'editor.contrib.codeActionController',
+        'css.editor.codeLens',
+        'editor.contrib.InlayHints',
+        'editor.contrib.dropIntoEditorController',
+      ];
+      return {
+        text: instance.getModel().getValue(),
+        dark: instance.getDomNode().closest('.monaco-editor').classList.contains('vs-dark'),
+        missing: features.filter((id) => !instance.getContribution(id)),
+      };
+    });
+    assert.deepEqual(editor, { text: 'export const first = 1;\n', dark: true, missing: [] });
+    // The theme still follows the system once Monaco has loaded.
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.waitForFunction(() => document.querySelector('ax-editor .monaco-editor')
+      .classList.contains('vs'));
+    assertNoBrowserErrors();
+  } finally {
+    releaseChunk();
     await context.close();
   }
 });
@@ -2219,7 +2312,7 @@ test('cross-tab Close and Delete retire the visible Session instead of leaving a
   for (const lifecycle of ['closed', 'deleted']) {
     let canonical = structuredClone(session);
     let retired = false;
-    const { context, page, assertNoBrowserErrors } = await openSession(
+    const { context, page, assertNoBrowserErrors, settle } = await openSession(
       session,
       { width: 1280, height: 800 },
       runtime,
@@ -2247,6 +2340,9 @@ test('cross-tab Close and Delete retire the visible Session instead of leaving a
     );
     try {
       await page.waitForFunction(() => sessionRuntimeSurfaceReady(S.session));
+      // The transition and the remount below cancel what the cockpit is still
+      // loading; let it finish first (README, "WebKit (Safari)").
+      await settle();
       await page.evaluate((sessionId) => handleWsFrame({
         kind: 'session-environment-changing', session: sessionId, generation: 1,
       }), session.id);
