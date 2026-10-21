@@ -230,16 +230,22 @@
           <li>A Preview app's server can no longer set a cookie for <code>localhost</code>
               through the Preview proxies: they remove the <code>Domain</code> attribute
               from its <code>Set-Cookie</code> headers.</li>
-          <li>Known issue: in Safari on macOS, the script of a Preview opened full page can
-              still set a cookie for <code>localhost</code> that reaches the workbench and
-              every other Session's Preview. It cannot sign in or read the workbench's
-              cookies, but enough such cookies to fill the about 200 KB Safari sends with
-              a request can sign that browser out of the workbench's API (with
-              <code>Path=/api</code>, until localhost's data is removed in Safari's
-              settings) or out of the whole workbench (with <code>Path=/</code>; signing
-              in again works until the Preview writes them again), and with
-              <code>Path=/ws</code> they stop its live updates. For Sessions whose code you
-              do not trust, use a Chromium-based browser
+          <li>In Safari the workbench keeps every Preview embedded: it offers no Open full
+              preview, the Preview frame cannot open windows, and no link in the
+              workbench opens a Preview's address in a tab of its own. In Safari on macOS
+              the script of a Preview open in its own tab can set a cookie for
+              <code>localhost</code> that reaches the workbench and every other Session's
+              Preview.</li>
+          <li>Known issue: a Preview whose address you open in a Safari tab yourself
+              (typed, pasted, or Command-clicked inside the Preview) still can. It cannot
+              sign in or read the workbench's cookies, but enough such cookies to fill the
+              about 200 KB Safari sends with a request can sign that browser out of the
+              workbench's API (with <code>Path=/api</code>, until localhost's data is
+              removed in Safari's settings) or out of the whole workbench (with
+              <code>Path=/</code>; signing in again works until the Preview writes them
+              again), and with <code>Path=/ws</code> they stop its live updates. For
+              Sessions whose code you do not trust, do not open their Previews in a
+              Safari tab; for a full-page Preview, use a Chromium-based browser
               (<a href="https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies">details</a>).
               Measured in Playwright's WebKit, not in Safari itself.</li>
         </ul>

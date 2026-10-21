@@ -362,22 +362,40 @@ the Preview and failure paths called out below.
 - Opening the workbench at a loopback IP proves the product's canonical
   `127.0.0.1` → `localhost` document redirect. Preview cookie coverage checks
   that an ordinary embedded write is unavailable under modern third-party
-  policy and reaches nothing, **Open full preview** opens the exact virtual URL
-  with no opener, and host-only cookies work top-level and reach neither the
-  workbench nor another Session/port origin. The top-level page also sets, for
-  `Domain=localhost`, a cookie that is not ASCII, a forged
-  `axocoatl-token-<port>` and `-signed-in` cookie and 40 cookies of 1 KB. A
-  loopback cookie echo (`support/cookie-echo.mjs`) reads the Cookie headers the
-  browser sends (cookies ignore ports): the workbench's own token cookie
-  reaches the workbench and never a Preview origin, in every engine. Chromium
-  and WebKit on Linux refuse the `Domain=localhost` cookies; in WebKit on macOS
-  (Safari) the journey asserts the known behaviour instead, that every one of
-  them, the forged `axocoatl-token-*` cookies included, reaches the workbench
-  and every other Preview origin (`operate/security.mdx`). In every engine the
-  workbench page still reads the API, and a new workbench page opens, connects
-  and reads the API.
-- `preview-cookies.test.mjs` does the same through the real Preview proxy and a
-  real Session app on Podman, after signing in with the real link. It asserts
+  policy and reaches nothing. In Chromium and WebKit on Linux, **Open full
+  preview** opens the exact virtual URL with no opener, and host-only cookies
+  work top-level and reach neither the workbench nor another Session/port
+  origin. The top-level page also tries, for `Domain=localhost`, a cookie that
+  is not ASCII, a forged `axocoatl-token-<port>` and `-signed-in` cookie and
+  40 cookies of 1 KB, which those engines refuse. WebKit on macOS (Safari)
+  would accept them (`operate/security.mdx`), so there the workbench keeps
+  the Preview embedded (`static/ui/preview-embedding.js`): the journey asserts
+  that Open full preview has no address and says why, that the frame has no
+  `allow-popups`, and that the Preview's own `window.open` of its address, a
+  `target=_blank` link or form, a Command-click its script makes up and a
+  navigation of the workbench's tab open nothing. A loopback cookie echo
+  (`support/cookie-echo.mjs`) reads the Cookie headers the browser sends
+  (cookies ignore ports): the workbench's own token cookie reaches the
+  workbench and never a Preview origin, and no `Domain=localhost` cookie
+  reaches anything, in every engine. In every engine the workbench page still
+  reads the API, and a new workbench page opens, connects and reads the API.
+- The journey after it tries every other route by which the workbench could
+  put a Preview's address in a tab of its own: a Markdown link in the
+  conversation, a web-search citation (click, Command-click, middle click,
+  context menu, drag), `window.open` (how the file editor opens a link), and an
+  OSC 8 link a program prints in the Terminal (an `<ax-terminal>` whose
+  WebSocket Playwright answers). In WebKit on macOS each is refused, opens
+  nothing, and the workbench says why; in Chromium each opens the address as
+  before (the Terminal after xterm.js's own prompt).
+- `preview-embedding.test.mjs` checks, without a browser, which browsers keep
+  a Preview embedded (Safari's engine on macOS, iOS and iPadOS, by
+  `navigator.vendor`, then the user agent; not Chromium-based browsers,
+  Firefox, or WebKit on Linux) and which addresses the workbench then refuses
+  to open in a tab (any subdomain of `localhost`).
+- `preview-cookies.test.mjs` works through the real Preview proxy and a real
+  Session app on Podman, after signing in with the real link. It opens Preview
+  addresses top-level itself, as someone who opens one in a tab does (the
+  workbench does not in Safari), and sets the same cookies there. It asserts
   that no request or WebSocket upgrade the app receives on either Preview port
   carries an `axocoatl-token-*` cookie, while Safari sends the forged ones to
   those origins and the app gets the other forged cookies (an upgrade only the
@@ -387,6 +405,11 @@ the Preview and failure paths called out below.
   the API; and that a browser that never signed in, holding a forged
   `-signed-in` cookie, gets the retry page then the sign-in page on each
   navigation in Safari (the sign-in page at once elsewhere), never a loop.
+  Its last journey shows the real Preview in the workbench: in WebKit on macOS
+  Open full preview has no address, the frame has no `allow-popups`, and the
+  Preview's `window.open` of its address returns null and opens nothing; in
+  every engine the app received no token cookie and the workbench stays
+  signed in.
 - `signed-out.test.mjs`, in every engine: when `/` serves the shell but every
   API request answers 401 (Playwright answers them), the shell reloads once
   and then shows the signed-out message (a modal `alertdialog` over an inert
@@ -395,7 +418,7 @@ the Preview and failure paths called out below.
   reloads once more without another automatic
   reload; when the sign-in cookie is gone, one reload reaches the sign-in
   page; without `sessionStorage` it never reloads and shows the message.
-  Against the real daemon, a full-page Preview origin (served by Playwright)
+  Against the real daemon, a Preview origin opened top-level (served by Playwright)
   sets 51 cookies of 4,000 bytes and smaller ones for `localhost` with
   `Path=/api`, which fill WebKit's Cookie header cap: in WebKit on macOS
   (Safari) the token cookie is still stored but left off API requests, which

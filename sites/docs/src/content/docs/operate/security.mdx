@@ -118,8 +118,8 @@ described after this list.
   already sends the token cookie on these navigations, so no browser is
   signed in on one that Chromium would refuse. A link or form on another site
   still gets the sign-in page. A Session's app cannot set this cookie through
-  the Preview proxy. In Safari on macOS, code on a Preview origin can set it
-  as a `Domain=localhost` cookie ([see below](#safari-shares-domainlocalhost-cookies)),
+  the Preview proxy. In Safari on macOS, code on a Preview page open in a tab
+  of its own can set it as a `Domain=localhost` cookie ([see below](#safari-shares-domainlocalhost-cookies)),
   which the retry page cannot clear: while that browser is signed out, each
   navigation you start then passes through the retry page once before the
   sign-in page. It never signs anyone in.
@@ -215,9 +215,11 @@ streamed responses, and development-server WebSockets within its own virtual
 origin. Modern third-party-cookie policy can block ordinary cookies in the
 embedded frame. **Open full preview** opens that exact virtual URL top-level
 with `noopener`; it does not reveal the logical sandbox URL. Host-only cookies
-then work, and stay with that Session and port. Preview remains cross-origin
-from the parent workbench. DOM-pick messages are accepted only from the exact
-frame window and expected origin in both directions.
+then work, and stay with that Session and port. Safari is the exception: there
+the workbench keeps every Preview embedded and offers no **Open full preview**
+([see below](#safari-shares-domainlocalhost-cookies)). Preview remains
+cross-origin from the parent workbench. DOM-pick messages are accepted only
+from the exact frame window and expected origin in both directions.
 
 ### Safari shares `Domain=localhost` cookies
 
@@ -228,16 +230,40 @@ that runs top-level sets it from script (`document.cookie`), and then sends it
 to the workbench at `localhost` (on every port) and to the Preview of every
 other Session. An app's server cannot do the same through the Preview
 proxies: they remove `Domain` from each `Set-Cookie` they forward, so Safari
-keeps those cookies host-only on the Preview origin that set them. A Preview
-runs top-level when you choose **Open full preview**, or in a window it opens
-itself: the Preview frame allows popups, so its code can open its own address
-in a new window when you click in it. Embedded in the workbench, Safari gives a Preview no cookies
-at all, so it cannot set one there and receives none.
+keeps those cookies host-only on the Preview origin that set them. Embedded
+in the workbench, Safari gives a Preview no cookies at all, so it cannot set
+one there and receives none.
+
+So in Safari, and in every browser on iPhone and iPad (they all use Safari's
+engine), the workbench never runs a Preview top-level:
+
+- It does not offer **Open full preview**. The control stays disabled, and a
+  line under the Preview's address says why.
+- The Preview frame may not open windows: there its sandbox leaves out
+  `allow-popups`. The Preview's `window.open`, a `target="_blank"` link or
+  form in it, and a Command-click its script makes up open nothing. In every
+  browser the sandbox also leaves out top navigation, so a Preview cannot
+  navigate the workbench's tab.
+- No link in the workbench opens a `*.localhost` address, where every Preview
+  runs, in a tab or window of its own. A Markdown link to one in the
+  conversation keeps its text and loses its address. A click, Command-click,
+  middle click, context menu or drag on any other such link is refused, and so
+  are `window.open` (the file editor's links) and a link a program prints in
+  the Terminal. The workbench says why.
+
+Other browsers keep **Open full preview** and let a Preview open windows.
+
+A Preview still runs top-level in Safari when you open its address in a tab
+yourself: by typing or pasting it, or by Command-clicking a link inside the
+Preview, which Safari opens in a new tab whatever the frame's sandbox says.
+Safari's own context menu on such a link also offers Open Link in New Tab. The
+Preview's code can make one link cover the whole page. Then the rest of this
+section applies.
 
 The Preview proxies remove only `axocoatl-token-*` cookies from the requests
 they forward. Every other cookie reaches the Session's app, including one that
-another Session's Preview set this way. In Safari on macOS, code in one Session
-can therefore:
+another Session's Preview set this way. From a Preview page open in a tab of
+its own in Safari on macOS, code in one Session can therefore:
 
 - Send any other Session's app a cookie of any name. Safari sends it before a
   cookie of the same name that app's own server set (`sid=forged; sid=own`), so
@@ -301,10 +327,12 @@ It cannot:
 - Reach `127.0.0.1` or `[::1]`.
 
 To keep Sessions whose code you do not trust from reaching each other or
-signing the workbench out this way, use the workbench in a Chromium-based
-browser. The Safari behaviour on this page
-was measured in Playwright's WebKit 26.4 on macOS, which uses the system's
-cookie store, not in Safari itself.
+signing the workbench out this way, do not open their Preview addresses in a
+Safari tab, and do not Command-click links inside their Previews. For a
+full-page Preview, use the workbench in a Chromium-based browser. The Safari
+behaviour on this page was measured in Playwright's WebKit on macOS (26.4 for
+the cookies, 27.2 for the workbench keeping Previews embedded), which uses the
+system's cookie store, not in Safari itself.
 
 ## Understand Workspace authorization
 

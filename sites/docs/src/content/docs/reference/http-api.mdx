@@ -87,7 +87,8 @@ cookies while that origin is embedded; the workbench's **Open full preview**
 action opens the same virtual URL top-level with `noopener`, where host-only
 cookies work without becoming shared sibling cookies. Safari on macOS also
 lets a top-level Preview page's script set a `Domain=localhost` cookie, and
-sends it to the workbench and to every other Preview
+sends it to the workbench and to every other Preview, so in Safari the
+workbench keeps Previews embedded and offers no **Open full preview**
 ([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). A browser GET or HEAD
 for the exact `/` workbench document on a loopback IP literal redirects to
 `localhost` on the same listener and preserves the query. API, health, and
@@ -870,7 +871,9 @@ attribute, so the browser keeps each one host-only on that Preview origin; the
 rest of the header is unchanged. Whether a page's script may set a
 parent-domain cookie such as `Domain=localhost` is browser policy: Chromium and
 WebKit on Linux refuse it, and Safari on macOS accepts it from a top-level
-Preview page and sends it to the workbench and to every other Preview
+Preview page and sends it to the workbench and to every other Preview. The
+workbench never runs a Preview top-level in Safari; someone who opens a
+Preview's address in a Safari tab does
 ([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). The
 proxy forwards request cookies other than Axocoatl's; on a WebSocket upgrade,
 only those that are visible ASCII, which is all the handshake to the app can

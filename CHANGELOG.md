@@ -705,7 +705,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a request, longest path first, and skips each one that no longer fits. So cookies a
   page sets for `localhost` with `Path=/api`, 51 of 4,000 bytes and then smaller ones that
   fill what is left, leave the sign-in cookie off API requests (the 51 large ones alone
-  still leave room for it). A full-page Preview's script can set them. The page then
+  still leave room for it). A Preview's script can set them from a tab of its own (in
+  Safari the workbench no longer opens one: see Security). The page then
   reloaded without end (167 times in 20 seconds in Playwright WebKit 26.4). It now
   reloads at most once a minute, and only when it can record that in the tab's session
   storage. Otherwise it shows "This browser is signed out" over the page, with how to
@@ -747,19 +748,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The documentation site's build moves to vite 8.3.4 for GHSA-587h-7wmj-h5pm (its
   development server's editor launch on Windows). Nothing of the site's build ships in
   Axocoatl.
-- **Safari on macOS lets a full-page Preview's script set a cookie for `localhost`.**
-  This happens on a Preview page opened with **Open full preview**, or in a window the
-  Preview opens itself on a click (the Preview frame allows popups). The page's script
-  can set a `Domain=localhost` cookie. Safari then sends it to the workbench on every
-  port and to every other Session's Preview. The Preview proxies forward it to the app,
-  because they strip only `axocoatl-token-*` cookies. Chromium and WebKit on Linux refuse
-  a `Domain=localhost` cookie, and Safari gives an embedded Preview no cookies at all.
-  Until this changes, use a Chromium-based browser for Sessions whose code you do not
-  trust ([Security: Safari shares `Domain=localhost`
+- **In Safari the workbench keeps every Preview embedded.** Safari on macOS lets a
+  Preview page that runs in a tab of its own set a `Domain=localhost` cookie from
+  script, and then sends it to the workbench on every port and to every other Session's
+  Preview. The Preview proxies forward it to the app, because they strip only
+  `axocoatl-token-*` cookies. Chromium and WebKit on Linux refuse such a cookie, and
+  Safari gives an embedded Preview no cookies at all. So in Safari, and in every browser
+  on iPhone and iPad, the workbench never runs a Preview top-level:
+  - It offers no **Open full preview**: the control stays disabled, and a line under
+    the Preview's address says why. Other browsers keep it.
+  - The Preview frame may not open windows (no `allow-popups`), so the Preview's own
+    `window.open`, `target="_blank"` links and forms open nothing. Before, its code
+    could open its own address in a new window when you clicked in it.
+  - No link in the workbench opens a `*.localhost` address in a tab of its own: a
+    Markdown link to one in the conversation loses its address, and clicks, middle
+    clicks, the context menu and dragging on any other such link are refused, as are
+    `window.open` (the file editor's links) and a link a program prints in the
+    Terminal. The workbench says why.
+
+  A Preview still runs top-level when someone opens its address in a Safari tab, by
+  typing or pasting it or by Command-clicking a link inside the Preview, which Safari
+  opens in a new tab. For a Session whose code you do not trust, do not ([Security:
+  Safari shares `Domain=localhost`
   cookies](https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies)).
-  Measured in Playwright WebKit 26.4 on macOS, not in Safari itself.
-  - Safari sends it before the other app's own cookie of the same name, so it can plant
-    a value in another Session's app.
+  Measured in Playwright WebKit on macOS (26.4 for the cookies, 27.2 for the workbench
+  keeping Previews embedded), not in Safari itself. From a Preview in such a tab:
+  - Safari sends such a cookie before the other app's own cookie of the same name, so
+    the Preview can plant a value in another Session's app.
   - It can also pass values to another top-level Preview, and make a development server
     answer 431 (Safari sends about 200 KB of cookies).
   - It cannot sign in, read the workbench's host-only HttpOnly cookies, or reach
@@ -827,9 +842,12 @@ Also restate from the final runs (not yet run on the integrated build):
   - WebKit: 264 tests, 263 passed, 0 failed, 1 skipped (test 8, which needs
     AXOCOATL_REFERENCE_RUNTIME_IMAGE).
   - Chromium: the same counts.
-  - On darwin WebKit, "Preview browser contract" asserts the Safari Domain=localhost
-    behaviour, and signed-out.test.mjs asserts that the Path=/api sign-out (51 cookies of
-    4,000 bytes and 9 smaller ones) ends at the signed-out message after one reload.
+  - On darwin WebKit, "Preview browser contract" asserted the Safari Domain=localhost
+    behaviour there; from fix150/r8-safari it asserts instead that Safari keeps the
+    Preview embedded (no Open full preview, no popups from the frame), so restate it
+    from the final run. signed-out.test.mjs asserts that the Path=/api sign-out (51
+    cookies of 4,000 bytes and 9 smaller ones) ends at the signed-out message after one
+    reload.
 - That the product-browser CI legs and the release browser gate ran
   preview-cookies.test.mjs (not skipped) on GitHub's ubuntu-24.04 and ubuntu-24.04-arm
   runners.
@@ -852,7 +870,9 @@ Also restate from the final runs (not yet run on the integrated build):
 - That Safari > Settings > Privacy > Manage Website Data removes the `Domain=localhost`
   cookies (the Security entries, the docs and the workbench's signed-out message say
   so; the journeys clear the cookies with Playwright instead): the `C1-workbench-webkit`
-  path in Safari.
+  path in Safari. On the same path: that Safari shows Open full preview disabled with
+  the line under the address, and that Command-click on a link inside a Preview opens a
+  new tab (the Security entry says so from Playwright WebKit).
 - The release date: this heading and the site's changelog page say `Unreleased`.
 -->
 
