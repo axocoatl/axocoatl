@@ -195,6 +195,14 @@ the Preview and failure paths called out below.
   Source Control plus `Ctrl/Cmd+P` to the environment review dialog without
   reaching execution, tree, file read/write, Git, Preview, or terminal mutation
   APIs.
+- A theme change while Monaco is still loading leaves the editor its
+  suggestions, code actions, code lenses, inlay hints and drop into editor,
+  and the editor takes the page's theme. The vendored Monaco sets
+  `window.monaco` before the chunk that registers those features' services
+  has loaded, and any call into it then starts Monaco's services without
+  them; the journey holds that chunk to make the gap certain. The shell and
+  the journeys reach Monaco through `axMonacoIfLoaded()`, which is null until
+  Monaco has loaded.
 - Open workspace marks Git repositories, refuses the home folder until its
   name is typed, and Remove from list forgets a Workspace without touching its
   folder, refusing one with open Sessions.

@@ -711,6 +711,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   storage. Otherwise it shows "This browser is signed out" over the page, with how to
   sign in again. For Safari it says to remove localhost's data in Safari >
   Settings > Privacy > Manage Website Data and open the sign-in link again.
+- **A theme change while the file editor loads no longer takes its suggestions away.**
+  The vendored Monaco sets `window.monaco` before the chunk that registers the services
+  of suggestions, code actions, code lenses, inlay hints and drop into editor has
+  loaded, and the workbench applied a theme change through it. A change at that moment
+  (the system turning dark, or the theme control) while a page opened its first file
+  started Monaco's services without them, and every editor of the page lacked those
+  features until the page was reloaded. The workbench now gives Monaco a theme only
+  once Monaco has loaded; Monaco takes the page's theme when it finishes.
 
 ### Security
 - **The route to Ollama on this computer refuses Ollama 0.40's new endpoints.** Its
