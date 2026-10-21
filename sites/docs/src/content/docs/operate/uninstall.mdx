@@ -99,9 +99,9 @@ When the installer added `~/.local/bin` to your `PATH`, it wrote a line after th
 
 Delete those two lines from each file if nothing else of yours lives in `~/.local/bin`.
 
-The `scripts/install.sh` on the repository's `main` branch before 1.5.0 was released
-(October 20, 2026), run from fish, wrote `fish_add_path "$HOME/.local/bin"` (without
-`--path`). That also saved `~/.local/bin` in fish's universal `fish_user_paths`, which stays
+Before the 1.5.0 release, the `scripts/install.sh` on the repository's `main` branch,
+which the Upgrade page linked, wrote `fish_add_path "$HOME/.local/bin"` (without
+`--path`) when run from fish. That also saved `~/.local/bin` in fish's universal `fish_user_paths`, which stays
 after the line is gone. Remove it in fish:
 
 ```fish

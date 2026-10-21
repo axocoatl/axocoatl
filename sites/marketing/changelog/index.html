@@ -141,12 +141,14 @@
           <li><code>axocoatl onboard</code> is the one setup command: it sets up a writer
               (Claude Code, Codex, local models or OpenRouter) and a different reviewer,
               asking before each change, and ends ready or with the steps left. It
-              installs Podman with Homebrew on an Apple-silicon Mac, then creates its
-              machine, or with the package manager on Linux; on a Mac without Homebrew it
-              points to the podman.io installer, and it refuses Ubuntu 22.04 and older.
-              With 48 GB of memory or more it suggests <code>qwen3-coder:30b</code> writing
-              and <code>gpt-oss:20b</code> reviewing (<code>gpt-oss:120b</code> from 96 GB),
-              loaded one at a time.</li>
+              installs Podman with Homebrew on an Apple-silicon Mac, or with apt, dnf,
+              pacman or zypper on Linux; on a Mac without Homebrew it points to the
+              podman.io installer, on an Intel Mac to the Podman 5.8 package, and on
+              another Linux it says what to install; it refuses Ubuntu 22.04 and older. On
+              a Mac it then creates and starts the Podman machine. With 48 GB of memory or
+              more it suggests <code>qwen3-coder:30b</code> writing and
+              <code>gpt-oss:20b</code> reviewing (<code>gpt-oss:120b</code> from 96 GB);
+              a fix run calls them in turn.</li>
           <li><code>axocoatl doctor</code> reports the sandbox, the models, the writers and
               the daemon, each with its fix, and ends with whether Axocoatl is ready.</li>
           <li>The daemon follows <code>CONTAINER_CONNECTION</code> and
@@ -190,7 +192,8 @@
               and <code>/etc/subgid</code> on Linux, and print the exact command to add a
               free range, instead of passing while <code>keep-id</code> containers
               failed. When <code>newuidmap</code> or <code>newgidmap</code> is missing,
-              they name the package that ships them.</li>
+              they name the package that ships them, or its reinstall when that package
+              is installed.</li>
           <li>A run leaves no <code>node_modules</code> in a repository that had none; on
               Linux one owned by a subordinate uid made your own <code>npm install</code>
               fail.</li>
@@ -204,6 +207,9 @@
               showed as an extra blank line.</li>
           <li>Preview WebSockets stay open beside a cookie that is not ASCII, which in
               Safari stopped the live reload of every Session's Preview.</li>
+          <li>The workbench no longer reloads itself without end when its API answers
+              401 while its page still loads: it reloads at most once a minute, then says
+              this browser is signed out and how to sign in again.</li>
         </ul>
 
         <h3>Security</h3>
@@ -219,14 +225,15 @@
           <li>A cookie that is not ASCII no longer signs Safari out of the workbench: the
               daemon reads the <code>Cookie</code> header as bytes, one cookie at a
               time.</li>
-          <li>A Preview app's server can no longer set a cookie for <code>localhost</code>:
-              the Preview proxies remove the <code>Domain</code> attribute from its
-              <code>Set-Cookie</code> headers.</li>
+          <li>A Preview app's server can no longer set a cookie for <code>localhost</code>
+              through the Preview proxies: they remove the <code>Domain</code> attribute
+              from its <code>Set-Cookie</code> headers.</li>
           <li>Known issue: in Safari on macOS, the script of a Preview opened full page can
               still set a cookie for <code>localhost</code> that reaches the workbench and
               every other Session's Preview. It cannot sign in or read the workbench's
-              cookies. For Sessions whose code you do not trust, use a Chromium-based
-              browser
+              cookies, but about 52 large such cookies sign that browser out of the
+              workbench's API until localhost's data is removed in Safari's settings. For
+              Sessions whose code you do not trust, use a Chromium-based browser
               (<a href="https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies">details</a>).
               Measured in Playwright's WebKit, not in Safari itself.</li>
         </ul>

@@ -40,10 +40,13 @@ musl-based distributions such as Alpine; use the Cargo or source path there.
     directory is not on your `PATH`, it asks, on the terminal, before adding one line
     to the startup files your shell reads in a new terminal and a new login, and prints
     that line when it cannot ask or you answer with end of input (Ctrl-D). The line adds
-    the directory only when `PATH` does not have it. A file that has one of the
-    installer's lines anywhere in it gets none, so installing again adds nothing. So does
-    a file with the lines Ubuntu's and Debian's `~/.profile` use to add `~/.local/bin`,
-    when they are at its top level and nothing before them can keep them from running.
+    the directory only when `PATH` does not have it. A file that has the installer's
+    marked line, or its guarded `case` line, anywhere in it gets none, so installing again
+    adds nothing. So does a file with the `export PATH` line 1.4.0 printed, fish's
+    `fish_add_path` line, or the lines Ubuntu's and Debian's `~/.profile` use to add
+    `~/.local/bin`, when they are at its top level where the installer can tell nothing
+    before them keeps them from running (it cannot see `set -e` and a failing command, a
+    sourced file that exits, or a syntax error).
     In a GitHub Actions step it adds the directory to `$GITHUB_PATH` instead, for the
     job's later steps.
   </TabItem>
@@ -121,12 +124,12 @@ only reads. `axocoatl onboard` sets up both, and Podman where it can install it
   computer. Codex signs in with your ChatGPT plan. A local writer runs on Ollama.
 - **Reviewer.** A local model on Ollama, or a hosted one paid with OpenRouter credits.
 - **Memory for local models.** With 48 to 95 GB, onboarding offers the local pair,
-  `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing, one model loaded at a time. No
-  local pair has been tested with less memory: there, use OpenRouter for the reviewer
-  (or for both), or Claude Code or Codex as the writer. `gpt-oss:120b`, the reviewer we
-  measured, needs about 96 GB or more.
+  `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing; a fix run calls the reviewer
+  only after the writer and the checks finish. With less memory it offers no local pair
+  by default: use OpenRouter for the reviewer (or for both), or Claude Code or Codex as
+  the writer. `gpt-oss:120b`, the reviewer we measured, needs about 96 GB or more.
   {/* VERIFIED-PENDING: restate from the final live runs */}
-  {/* The local pair was tested on a 48 GB Mac, one model loaded at a time. */}
+  {/* The local pair was tested on a 48 GB Mac. */}
 - **Docker** is not supported; Axocoatl runs Podman, which can run alongside Docker.
 - **For `--keep pr`:** `git`, the `gh` CLI signed in, and a GitHub remote.
 
@@ -188,10 +191,11 @@ A run's sandbox also pulls its base image and packages the first time it starts.
   turns the cloud features off where the running server reads them, and pulls the
   models.
 
-Local models need memory. With 48 GB, `qwen3-coder:30b` (18.6 GB) writes and
-`gpt-oss:20b` (13.8 GB) reviews, one at a time; with 96 GB or more the reviewer is
-`gpt-oss:120b` (65.4 GB), the one Axocoatl has measured. No local pair has been tested
-below 48 GB; there onboarding suggests OpenRouter for the reviewer, or for both.
+Local models need memory. From 48 GB, onboarding offers `qwen3-coder:30b` (18.6 GB) to
+write and `gpt-oss:20b` (13.8 GB) to review, and a fix run calls them in turn; with
+96 GB or more the reviewer is `gpt-oss:120b` (65.4 GB), the one Axocoatl has measured.
+Below 48 GB onboarding offers no local pair by default and suggests OpenRouter for the
+reviewer, or for both.
 They are large downloads. A fix run needs a context of at least 16384 tokens, and
 Ollama gives a model 4096 on computers with less than about 23 GiB of graphics memory;
 onboarding then offers to set `OLLAMA_CONTEXT_LENGTH=32768` for the Homebrew or
@@ -233,9 +237,11 @@ designed for.
 forwards that loopback port to the host.
 
 <Aside type="caution" title="The default sandbox still needs Podman">
-Installing the Axocoatl binary does not install or start Podman; `axocoatl onboard`
-does, after asking. Without a ready Podman runtime, `doctor` fails, and neither
-Sessions nor `axocoatl run` can use the default local sandbox. A deliberately
+Installing the Axocoatl binary does not install or start Podman. `axocoatl onboard`
+installs it after asking where it can (Homebrew on an Apple-silicon Mac; apt, dnf,
+pacman or zypper on Linux) and otherwise says what to install. Without a ready Podman
+runtime, `doctor` fails, and neither Sessions nor `axocoatl run` can use the default
+local sandbox. A deliberately
 configured E2B Cloud backend is the separate remote option for workbench Sessions.
 </Aside>
 

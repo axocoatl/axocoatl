@@ -1381,13 +1381,22 @@ agent:**
   `node_modules`, the start makes that mount point as the person (left to the OCI
   runtime, it would belong to the container's root, a subordinate uid under rootless
   Podman), and marks it with a random nonce in its `user.axocoatl.mountpoint` extended
-  attribute. Every Session-container removal and the end of every start removes it again
-  once no container Podman lists has a mount on it, if it is still empty and still
-  carries that nonce (on a filesystem without user extended attributes, the same device,
-  inode and birth time). A mount counts when it is at its path, when its source resolves
-  to it, or when its source is a directory above it and the container has a volume, bind
-  or tmpfs where it is. This is checked with one `podman container inspect` of every
-  listed container; `HostConfig.Tmpfs` adds the tmpfs mounts that `Mounts` leaves out.
+  attribute. Every Session-container removal, the beginning of every container start
+  (which removes a stale container of the same name), and the end of a start that mounts
+  it remove it again once no container Podman lists has a mount on it, if it is still
+  empty and still carries that nonce (on a filesystem without user extended attributes,
+  the same device, inode and birth time). A mount counts when `podman ps` lists one at
+  its path, or when a host directory one of a container's mounts takes is it, or is a
+  directory above it while the container has a volume, bind or tmpfs where it is. Those
+  host directories are each bind's source, each `lowerdir=` of an overlay volume, and the
+  device of each `local` volume made with `o=bind` or `o=rbind`. This is checked with one
+  `podman container inspect` of every listed container (once more without any it reports
+  as `no such container`) and one `podman volume inspect` of the volumes they mount;
+  `HostConfig.Tmpfs` adds the tmpfs mounts that `Mounts` leaves out. Podman reports bind
+  sources with links unresolved, so they are compared by spelling first and then
+  resolved on dedicated threads (not tokio's blocking pool), for at most 5 s per
+  release; an error other than a missing path, or no answer in time, keeps every
+  candidate.
   Containers carry the nonce and identity in `io.axocoatl.dependency-mountpoint-identity`
   (`crates/axocoatl-isolation/src/dependency_mountpoint.rs`). If the canonical data root or
   external lease root is below the Workspace, an exact nested `tmpfs` masks that protected
