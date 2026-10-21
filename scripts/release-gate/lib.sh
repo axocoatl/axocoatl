@@ -407,20 +407,22 @@ gate_install_new_user() {
     return 1
   fi
   gate_record "installed binary is where the installer said" pass '' '' '' "$GATE_INSTALLED"
-  local dest=${GATE_INSTALLED%/*} report printed profile line profiles=''
+  local dest=${GATE_INSTALLED%/*} report printed profile line added='' profiles=''
   if report=$(gate_new_shells_find "$GATE_INSTALLED"); then
     gate_record "a new shell finds axocoatl" pass '' '' '' "$report"
   else
     printed=$(gate_printed_profile_line "$out")
     if [ -n "$printed" ]; then
+      # The read that ends the loop empties line, so the line is kept apart.
       while IFS=$'\t' read -r profile line; do
         mkdir -p "$(dirname -- "$profile")" && printf '\n%s\n' "$line" >>"$profile"
         profiles="$profiles${profiles:+ and }$profile"
+        added=$line
       done <<<"$printed"
       if report=$(gate_new_shells_find "$GATE_INSTALLED"); then
-        gate_record "a new shell finds axocoatl" pass '' '' '' "after adding the line the installer printed to $profiles ($line): $report"
+        gate_record "a new shell finds axocoatl" pass '' '' '' "after adding the line the installer printed to $profiles ($added): $report"
       else
-        gate_record "a new shell finds axocoatl" fail '' '' '' "the line the installer printed for $profiles ($line) does not put axocoatl on a new shell's PATH: $report"
+        gate_record "a new shell finds axocoatl" fail '' '' '' "the line the installer printed for $profiles ($added) does not put axocoatl on a new shell's PATH: $report"
       fi
     elif grep -q 'export PATH=' "$out"; then
       gate_record "a new shell finds axocoatl" fail '' '' '' "$report; the installer printed only an export for the current shell, which a new terminal does not keep"

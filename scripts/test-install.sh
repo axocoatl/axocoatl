@@ -1382,6 +1382,66 @@ path_expect_no_prompt
 [ "$(installer_lines "$case_home/.config/fish/config.fish")" = 1 ] || fail "$name added a line to config.fish again"
 path_reinstall_twice 1 .config/fish/config.fish
 
+# The release gate's new user (scripts/release-gate/lib.sh,
+# gate_install_new_user): without a terminal the installer prints its line,
+# and the gate adds it to each file the installer named, as the user is told
+# to, without the marker comment. path_gate_case NAME OS SHELL LAYOUT LINE
+# FILE...: from a home with LAYOUT (none; xdg: none, with XDG_CONFIG_HOME
+# set to a directory with a space in it under the home directory; or a
+# seed_home layout), the installer names exactly FILE... (relative to the
+# home directory), the gate's own parser (gate_printed_profile_line) reads
+# LINE (a path_line_for name) for each, two more installs neither ask nor add
+# a line, and every new SHELL finds axocoatl, with ~/.local/bin on PATH once.
+path_gate_case() {
+  gate_name=$1 gate_os=$2 gate_shell=$3 gate_layout=$4 gate_line="$(path_line_for "$5")"
+  shift 5
+  reset_path_case
+  P_OS=$gate_os P_SHELL=$gate_shell
+  case "$gate_layout" in
+    none) ;;
+    xdg) P_XDG_CONFIG_HOME="$work_dir/$gate_name/home/xdg config" ;;
+    *) seed_home "$gate_name" "$gate_layout" ;;
+  esac
+  run_path_case "$gate_name"
+  path_expect_status 0
+  path_expect_text "For new terminals to find axocoatl, add this line to "
+  gate_want=""
+  for gate_file in "$@"; do
+    gate_want="$gate_want${gate_want:+
+}$case_home/$gate_file	$gate_line"
+  done
+  gate_got="$(HOME="$case_home" bash -c '. "$1" && gate_printed_profile_line "$2"' sh \
+    "$repo_root/scripts/release-gate/lib.sh" "$output")"
+  [ "$gate_got" = "$gate_want" ] \
+    || fail "$name: the gate reads '$gate_got' from the installer's output, not '$gate_want': $(cat "$output")"
+  for gate_file in "$@"; do
+    [ ! -e "$case_home/$gate_file" ] || [ "$(installer_lines "$case_home/$gate_file")" = 0 ] \
+      || fail "$name wrote ~/$gate_file without being asked"
+    mkdir -p "$(dirname -- "$case_home/$gate_file")"
+    printf '\n%s\n' "$gate_line" >>"$case_home/$gate_file"
+  done
+  path_reinstall_twice 0 "$@"
+  P_LINE=$gate_line
+  gate_count=$#
+  for gate_file in "$@"; do
+    set -- "$@" "$case_home/$gate_file"
+  done
+  shift "$gate_count"
+  case "${gate_shell##*/}" in
+    zsh | bash | fish) path_expect_new_shells_find "${gate_shell##*/}" "$@" ;;
+    *) path_expect_new_shells_find sh "$@" ;;
+  esac
+}
+path_gate_case path-gate-mac-zsh Darwin /bin/zsh none zsh .zprofile
+path_gate_case path-gate-mac-bash Darwin /bin/bash none bash .bash_profile
+path_gate_case path-gate-linux-bash-ubuntu Linux /bin/bash ubuntu bash-nonlogin .bashrc
+path_gate_case path-gate-linux-bash-runner Linux /bin/bash runner bash .bashrc .bash_profile
+path_gate_case path-gate-linux-bash-empty Linux /bin/bash none bash .bashrc .profile
+path_gate_case path-gate-linux-zsh Linux /usr/bin/zsh none zsh .zshrc .zprofile
+path_gate_case path-gate-fish Linux /usr/bin/fish none fish .config/fish/config.fish
+path_gate_case path-gate-fish-xdg Linux /usr/bin/fish xdg fish "xdg config/fish/config.fish"
+path_gate_case path-gate-other-shell Linux /bin/ksh none sh .profile
+
 # Any other shell reads ~/.profile.
 reset_path_case
 P_SHELL=/bin/ksh P_TTY='y'
