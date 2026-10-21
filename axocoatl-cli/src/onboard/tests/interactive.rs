@@ -243,6 +243,18 @@ async fn the_low_memory_menu_hands_the_writing_to_claude_code() {
     );
     assert!(!output.contains("keeps what is already set up"), "{output}");
     assert!(!o.paths.config_path.exists());
+    // The step left repeats the writer chosen, not only the reviewer:
+    // without --writer, running it again would ask Step 1 again.
+    assert_eq!(
+        o.steps.last().cloned(),
+        Some(format!(
+            "Export {missing} with your OpenRouter key in this shell, then run `axocoatl onboard \
+             --writer claude-code --reviewer openrouter:openai/gpt-oss-120b --openrouter-key-env \
+             {missing}`"
+        )),
+        "{:?}",
+        o.steps
+    );
 }
 
 /// I4. OpenRouter with no key: BYOK is explained before the question, the
@@ -625,7 +637,7 @@ async fn an_ollama_at_another_address_can_be_entered() {
 }
 
 /// I3, doctor's side: a configured model that is not pulled and is too
-/// large for this computer gets the fix onboarding gives (choose another),
+/// large for this computer gets a smaller model or OpenRouter as its fix,
 /// never `ollama pull`; on a computer it fits, the pull.
 #[cfg(unix)]
 #[tokio::test]
@@ -671,7 +683,14 @@ async fn doctor_does_not_tell_a_small_computer_to_pull_a_model_too_large_for_it(
                 "qwen3-coder:30b is not pulled, and at 18.6 GB it is too large for this \
                  computer's 12 GB"
             );
-            assert!(fix.contains("axocoatl onboard --update"), "{fix}");
+            // The Agents onboarding wrote run it, and `--update` keeps
+            // Agents: `--replace` is the command that moves them.
+            assert_eq!(
+                fix,
+                "Choose a smaller model (`axocoatl onboard --replace`), or use OpenRouter for it \
+                 (`axocoatl onboard --replace --writer openrouter`) (`--update` would keep the \
+                 Agents that run qwen3-coder:30b; `--replace` backs this configuration up first)"
+            );
             assert!(!fix.contains("ollama pull"), "{fix}");
         } else {
             assert_eq!(item.detail, "qwen3-coder:30b is not pulled");

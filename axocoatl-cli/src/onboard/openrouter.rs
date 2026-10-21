@@ -203,8 +203,8 @@ fn key(o: &mut Onboarding, again: &str) -> Option<(KeyRef, zeroize::Zeroizing<St
             }
             None => {
                 o.step_left(format!(
-                    "Export {variable} with your OpenRouter key in this shell, then run \
-                     `axocoatl onboard` again"
+                    "Export {variable} with your OpenRouter key in this shell, then run `{again} \
+                     --openrouter-key-env {variable}`"
                 ));
                 None
             }
@@ -321,14 +321,25 @@ pub(crate) async fn run(o: &mut Onboarding, choice: &mut Choice, with_writer: bo
         );
     }
     // Nothing is saved without a key: the command that gives the same
-    // models again.
+    // writer and models again.
     let mut again = vec!["axocoatl onboard".to_string()];
-    match (&writer, &choice.writer_model) {
-        (Some(writer), _) => again.push(format!(
+    match (&writer, &choice.writer_model, choice.external_writer) {
+        (Some(writer), _, _) => again.push(format!(
             "--writer openrouter --writer-model openrouter:{writer}"
         )),
-        (None, Some(model)) if model.provider == Provider::Ollama => {
+        (None, Some(model), _) if model.provider == Provider::Ollama => {
             again.push(format!("--writer ollama --writer-model {}", model.spec()))
+        }
+        // Claude Code or Codex writes; Codex asks again which account pays
+        // (onboarding has no flag for it).
+        (None, _, Some(external)) => {
+            again.push(format!("--writer {}", external.id()));
+            if let Some(model) = &choice.external_writer_model {
+                again.push(format!(
+                    "--writer-model {}",
+                    super::host::shell_quote(model)
+                ));
+            }
         }
         _ => {}
     }

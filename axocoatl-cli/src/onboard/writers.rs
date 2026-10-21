@@ -131,6 +131,7 @@ pub(crate) async fn run(
     choice: &mut Choice,
 ) {
     let config = o.paths.config_path.display().to_string();
+    choice.external_writer = Some(writer);
     choice.external_writer_model = o.args.writer_model.clone();
     if writer == WriterChoice::ClaudeCode {
         match &o.facts.claude {

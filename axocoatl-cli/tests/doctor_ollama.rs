@@ -1,6 +1,9 @@
 //! `axocoatl doctor` against a stand-in Ollama server: a server native
 //! Sessions refuse must fail doctor, with the setting that fixes it. A shim
-//! Podman stands in for a ready rootless runtime, so only Ollama decides.
+//! Podman stands in for a ready rootless runtime, and on Linux doctor reads
+//! the user's subordinate id ranges from a test directory that gives the
+//! test user one (`AXOCOATL_TEST_ID_ROOT`), not from this computer's
+//! `/etc/subuid`, so only Ollama decides.
 
 use std::path::Path;
 use std::process::Command;
@@ -120,14 +123,42 @@ esac
     bin
 }
 
+/// The user doctor runs as in these tests (`USER`), whatever runs them.
+const TEST_USER: &str = "axocoatl-doctor-test";
+
+/// A directory standing in for `/` where doctor reads `etc/subuid` and
+/// `etc/subgid`, giving [`TEST_USER`] `lines` (none: empty files).
+fn id_root(root: &Path, lines: &str) -> std::path::PathBuf {
+    let ids = root.join("ids");
+    std::fs::create_dir_all(ids.join("etc")).unwrap();
+    for name in ["subuid", "subgid"] {
+        std::fs::write(ids.join("etc").join(name), lines).unwrap();
+    }
+    ids
+}
+
 /// Run doctor on an explicit configuration naming `base_url`, isolated from
-/// the user's configuration, data, daemon socket and Podman.
+/// the user's configuration, data, daemon socket, Podman and subordinate id
+/// ranges.
 fn doctor(root: &Path, base_url: &str) -> (bool, String) {
     doctor_with_model(root, base_url, "qwen3-coder:30b")
 }
 
 /// [`doctor`] with the Lead Agent on `model`.
 fn doctor_with_model(root: &Path, base_url: &str, model: &str) -> (bool, String) {
+    let ids = id_root(root, &format!("{TEST_USER}:100000:65536\n"));
+    let output = doctor_command(root, base_url, model)
+        .env("AXOCOATL_TEST_ID_ROOT", ids)
+        .output()
+        .unwrap();
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+    )
+}
+
+/// The doctor command [`doctor_with_model`] runs, before its id root is set.
+fn doctor_command(root: &Path, base_url: &str, model: &str) -> Command {
     let config = root.join("axocoatl.yaml");
     let bin = ready_podman(root);
     // Doctor also looks for the ollama CLI in /opt/homebrew/bin and
@@ -162,23 +193,20 @@ server:
         ),
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_axocoatl"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_axocoatl"));
+    command
         .arg("doctor")
         .arg("--config")
         .arg(&config)
         .current_dir(root)
         .env("HOME", root)
+        .env("USER", TEST_USER)
         .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
         .env("AXOCOATL_DATA_DIR", root.join("data"))
         .env("AXOCOATL_SOCKET_PATH", root.join("no-daemon.sock"))
         .env_remove("CONTAINER_CONNECTION")
-        .env_remove("CONTAINER_HOST")
-        .output()
-        .unwrap();
-    (
-        output.status.success(),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-    )
+        .env_remove("CONTAINER_HOST");
+    command
 }
 
 #[tokio::test]
@@ -385,4 +413,59 @@ async fn doctor_warns_about_a_newer_minor_and_passes_it_through_the_probes() {
         "{stdout}"
     );
     assert!(stdout.contains("contract probes passed"), "{stdout}");
+}
+
+/// Linux: the ranges doctor judges come from the id root the tests give it,
+/// not from this computer: with no line for the test user there, doctor
+/// FAILs "User ID ranges" with the usermod fix. With CONTAINER_HOST set,
+/// this computer's files say nothing about that Podman, so the same empty
+/// files are not judged and its `podman info` (a range) decides.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn doctor_reads_the_test_id_root_and_not_for_a_podman_elsewhere() {
+    let server = ollama(
+        json!({"version": AUDITED_OLLAMA_VERSION}),
+        Some(json!({"cloud": {"disabled": true, "source": "env"}})),
+    )
+    .await;
+    let root = tempfile::tempdir().unwrap();
+    let ids = id_root(root.path(), "");
+    let run = |container_host: Option<&str>| {
+        let mut command = doctor_command(root.path(), &server.uri(), "qwen3-coder:30b");
+        command.env("AXOCOATL_TEST_ID_ROOT", &ids);
+        if let Some(host) = container_host {
+            command.env("CONTAINER_HOST", host);
+        }
+        let output = command.output().unwrap();
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+        )
+    };
+    // Root needs no range, and doctor does not judge it from the files.
+    let root_user = Command::new("id")
+        .arg("-u")
+        .output()
+        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "0");
+    if !root_user {
+        let (ok, stdout) = run(None);
+        assert!(!ok, "doctor must fail:\n{stdout}");
+        assert!(
+            stdout.contains(&format!(
+                "[FAIL] User ID ranges: {TEST_USER} has no range of subordinate user and group \
+                 IDs in /etc/subuid and /etc/subgid"
+            )),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains(&format!(
+                "sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 \
+                 {TEST_USER} && podman system migrate"
+            )),
+            "{stdout}"
+        );
+    }
+    let (ok, stdout) = run(Some("unix:///run/user/4242/podman/podman.sock"));
+    assert!(ok, "doctor must pass:\n{stdout}");
+    assert!(!stdout.contains("User ID ranges"), "{stdout}");
 }

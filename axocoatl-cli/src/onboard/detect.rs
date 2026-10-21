@@ -109,6 +109,21 @@ impl PackageManager {
         args.extend_from_slice(packages);
         Cmd::sudo(args[0], &args[1..])
     }
+
+    /// The package with `newuidmap` and `newgidmap`, which rootless Podman
+    /// maps subordinate ids with: `uidmap` on Debian and Ubuntu (Podman
+    /// only recommends it), `shadow-utils` on Fedora, `shadow` on Arch (as
+    /// `rpm -qf` and `pacman -Qo` say in their images). openSUSE moved them
+    /// from `shadow` to `shadow-pw-mgmt` in Tumbleweed, so no one name
+    /// fits every release: `None`.
+    pub(crate) fn id_map_package(self) -> Option<&'static str> {
+        match self {
+            PackageManager::Apt => Some("uidmap"),
+            PackageManager::Dnf => Some("shadow-utils"),
+            PackageManager::Pacman => Some("shadow"),
+            PackageManager::Zypper => None,
+        }
+    }
 }
 
 /// Windows Subsystem for Linux.
@@ -532,7 +547,7 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str, check_port_8080: bool)
         Some(path) => podman_report::inspect_with(&path.to_string_lossy()).await,
         None => PodmanReport::not_installed(),
     };
-    podman.subordinate_ids = crate::doctor::subordinate_ids(host, &os, &user);
+    crate::doctor::read_id_ranges(&mut podman, host, &host.root, &os, &user);
     let ollama_cli = match host.find("ollama") {
         Some(path) => {
             let host_value = ollama_url.to_string();
@@ -865,6 +880,10 @@ mod tests {
             PackageManager::Zypper.install(&["podman"]).display(),
             "sudo zypper install -y podman"
         );
+        assert_eq!(PackageManager::Apt.id_map_package(), Some("uidmap"));
+        assert_eq!(PackageManager::Dnf.id_map_package(), Some("shadow-utils"));
+        assert_eq!(PackageManager::Pacman.id_map_package(), Some("shadow"));
+        assert_eq!(PackageManager::Zypper.id_map_package(), None);
     }
 
     #[test]
