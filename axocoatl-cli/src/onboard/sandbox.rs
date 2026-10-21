@@ -860,7 +860,13 @@ fn install_failed(command: &Cmd, error: &str, said: &str, fix_text: &str, rest: 
     let shown = command.display();
     let package = command.args.last().cloned().unwrap_or_default();
     let said = said.trim();
-    if said.contains("installed, but not available") {
+    // dnf5: "Packages for argument '…' installed, but not available."; dnf4
+    // (RHEL 9 and its rebuilds) ends with "Error: No packages marked for
+    // reinstall." after "Installed package … not available."
+    let dnf = command.args.first().is_some_and(|arg| arg == "dnf");
+    if said.contains("installed, but not available")
+        || (dnf && said.contains("No packages marked for reinstall"))
+    {
         return format!(
             "`{shown}` failed: dnf says \"{said}\": the {package} build installed here is not \
              in the enabled repositories (Fedora's updates repository keeps only the newest \
@@ -886,9 +892,17 @@ fn install_failed(command: &Cmd, error: &str, said: &str, fix_text: &str, rest: 
              && {fix_text}`"
         );
     }
+    // Anything else (the network, the repositories' metadata or keys): say
+    // what failed; running the same command only helps once that is fixed.
     match said {
-        "" => format!("{error}; run {fix_text}"),
-        said => format!("{error}: {said}; run {fix_text}"),
+        "" => format!(
+            "{error}; fix what it reported (often the network or the package manager's \
+             repositories), then run {fix_text}"
+        ),
+        said => format!(
+            "{error}: {said}; fix that (often the network or the package manager's \
+             repositories), then run {fix_text}"
+        ),
     }
 }
 
@@ -1067,4 +1081,50 @@ fn sandbox_ready_line(o: &Onboarding) -> String {
         parts.push(format!("Landlock ABI {abi}"));
     }
     format!("Sandbox ready: {}", parts.join(", "))
+}
+
+#[cfg(test)]
+mod install_failed_tests {
+    use super::*;
+
+    /// A reinstall dnf cannot do is named as such on dnf5 and on dnf4 (RHEL
+    /// 9 and its rebuilds), and any other failure says to fix what it
+    /// reported before running the command again.
+    #[test]
+    fn a_failed_install_says_what_failed_and_what_to_do() {
+        let migrate = [Cmd::new("podman", &["system", "migrate"])];
+        let dnf = Cmd::sudo("dnf", &["reinstall", "-y", "shadow-utils"]);
+        let fix_text = "sudo dnf reinstall -y shadow-utils && podman system migrate";
+        for said in [
+            "Packages for argument 'shadow-utils' installed, but not available.",
+            "Error: No packages marked for reinstall.",
+        ] {
+            let step = install_failed(
+                &dnf,
+                "`sudo dnf reinstall -y shadow-utils` failed (exit 1)",
+                said,
+                fix_text,
+                &migrate,
+            );
+            assert!(
+                step.contains("is not in the enabled repositories"),
+                "{step}"
+            );
+            assert!(step.contains("sudo dnf upgrade -y shadow-utils"), "{step}");
+            assert!(!step.contains(&format!("run {fix_text}")), "{step}");
+        }
+        let step = install_failed(
+            &dnf,
+            "`sudo dnf reinstall -y shadow-utils` failed (exit 1)",
+            "Error: Failed to download metadata for repo 'fedora'",
+            fix_text,
+            &migrate,
+        );
+        assert_eq!(
+            step,
+            "`sudo dnf reinstall -y shadow-utils` failed (exit 1): Error: Failed to download \
+             metadata for repo 'fedora'; fix that (often the network or the package manager's \
+             repositories), then run sudo dnf reinstall -y shadow-utils && podman system migrate"
+        );
+    }
 }

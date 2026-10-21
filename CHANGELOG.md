@@ -552,7 +552,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   earlier on `PATH` that the package does not own is to be deleted. No install is
   offered for either. When an install or reinstall runs and the helpers still cannot
   map, onboarding says so, runs nothing after it, and does not offer it again in that
-  run (doctor still names it, and a later onboarding offers it again). On other
+  run (doctor still names it, and a later onboarding offers it again). When the install
+  or reinstall itself fails, the step says why: a build dnf no longer has (dnf5's and
+  dnf4's wording; `sudo dnf upgrade -y shadow-utils` instead), apt's out-of-date lists
+  (`sudo apt-get update` first), or otherwise what the command reported, to fix before
+  running it again. On other
   distributions the fix says what to install or reinstall. The workbench's readiness
   item, a loadout run refused for this, and every command that first makes Podman ready
   (Session start, `axocoatl run`, `recipe build`, `connect codex`, the browser
