@@ -47,7 +47,10 @@ with `Sec-Fetch-Dest: document` or no `Sec-Fetch-Dest`, that carries
 with a page that opens the same address again from its own origin and clears
 the signed-in cookie. The token cookie is ignored on requests marked
 `Sec-Fetch-Site: cross-site` or `same-site`; the signed-in cookie is never a
-credential.
+credential. The `Cookie` header is read as bytes, and a request carrying
+several `axocoatl-token-<port>` cookies is accepted when any of them holds the
+token, so neither a cookie that is not ASCII nor a forged cookie of the same
+name hides the real one.
 Public paths in this mode: `/health`, `/health/ready`, `/health/live`, `/ui/*`,
 `/vendor/*`, `/lattice/*`, `/brand/*`, `/axo-tap.js`, and the sign-in page at
 `/`. `server.auth.allow_unauthenticated: true` turns the token off but keeps
@@ -83,8 +86,8 @@ its own browser storage/cookie origin. Modern browsers can block ordinary app
 cookies while that origin is embedded; the workbench's **Open full preview**
 action opens the same virtual URL top-level with `noopener`, where host-only
 cookies work without becoming shared sibling cookies. Safari on macOS also
-accepts a `Domain=localhost` cookie from a top-level Preview page and sends it
-to the workbench and to every other Preview
+lets a top-level Preview page's script set a `Domain=localhost` cookie, and
+sends it to the workbench and to every other Preview
 ([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). A browser GET or HEAD
 for the exact `/` workbench document on a loopback IP literal redirects to
 `localhost` on the same listener and preserves the query. API, health, and
@@ -861,13 +864,17 @@ WebSocket upgrades. HTML receives the source-and-origin-pinned picker bridge;
 non-HTML bodies stream without whole-response buffering. The upstream app sees
 the validated virtual authority while the TCP connection remains loopback.
 Sibling Sessions can therefore use the same logical port without sharing a
-host port, browser origin, host-only cookies, or control-plane access. Whether
-a parent-domain cookie such as `Domain=localhost` is refused is browser policy:
-Chromium and WebKit on Linux refuse it, and Safari on macOS accepts it from a
-top-level Preview page and sends it to the workbench and to every other Preview
+host port, browser origin, host-only cookies, or control-plane access. The
+proxy forwards an application's `Set-Cookie` headers without their `Domain`
+attribute, so the browser keeps each one host-only on that Preview origin; the
+rest of the header is unchanged. Whether a page's script may set a
+parent-domain cookie such as `Domain=localhost` is browser policy: Chromium and
+WebKit on Linux refuse it, and Safari on macOS accepts it from a top-level
+Preview page and sends it to the workbench and to every other Preview
 ([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). The
-proxy forwards application `Set-Cookie` headers unchanged, `Domain` included,
-and forwards request cookies other than Axocoatl's. Both proxies remove `axocoatl-token-*` cookies
+proxy forwards request cookies other than Axocoatl's; on a WebSocket upgrade,
+only those that are visible ASCII, which is all the handshake to the app can
+carry. Both proxies remove `axocoatl-token-*` cookies
 from forwarded requests and drop upstream `Set-Cookie` headers that would set
 one. The legacy `/api/sessions/{id}/proxy/{port}` path sits behind API
 authentication and never forwards Axocoatl credential headers. Its sandboxed

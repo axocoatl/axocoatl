@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
 import {
   launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext, settleTransitions, isWebKitLoadDiagnostic,
 } from '../support/daemon.mjs';
+import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 
 test('a reconnect snapshot preserves its already-owned cold runtime preparation request', async () => {
   const session = readySessionFixture(runtime.fixtures.alpha.sessions[0]);
@@ -124,48 +124,6 @@ async function waitForSessionProjection(page, predicate, argument) {
       connection:S.liveConnection}));
     throw new Error(`${error.message}\nSession projection: ${JSON.stringify(state)}`, {cause:error});
   }
-}
-
-// A loopback server that records the Cookie header of each request it gets.
-// Cookies ignore ports, so what reaches http://<host>:<its port>/ is what the
-// browser sends to <host> on the daemon's port too: the workbench at
-// localhost, or a Preview origin whose responses a journey fulfils itself
-// (and a WebKit route handler is never shown the Cookie header).
-async function startCookieEcho() {
-  const requests = [];
-  const handler = (request, response) => {
-    requests.push({ path: request.url, cookie: request.headers.cookie || '' });
-    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-    response.end('<!doctype html><title>cookie echo</title>');
-  };
-  const listen = (server, port, host) => new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, host, resolve);
-  });
-  const servers = [createServer(handler)];
-  await listen(servers[0], 0, '127.0.0.1');
-  const { port } = servers[0].address();
-  // localhost and <name>.localhost may resolve to [::1] first.
-  const ipv6 = createServer(handler);
-  try { await listen(ipv6, port, '::1'); servers.push(ipv6); } catch {}
-  let next = 0;
-  return {
-    /** The Cookie header a top-level navigation to `host` carries. */
-    async cookieAt(context, host) {
-      next += 1;
-      const pathname = `/cookie-echo/${next}`;
-      const page = await context.newPage();
-      try {
-        await page.goto(`http://${host}:${port}${pathname}`);
-      } finally {
-        await page.close();
-      }
-      const seen = requests.find((request) => request.path === pathname);
-      assert.ok(seen, `the cookie echo at ${host} received no request`);
-      return seen.cookie;
-    },
-    close: () => Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve)))),
-  };
 }
 
 async function openSession(
@@ -2626,8 +2584,11 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   // Domain=localhost cookie, which it then sends to localhost and to every
   // other <name>.localhost (measured in Playwright WebKit on macOS).
   // Chromium refuses it, and so does WebKit on Linux (libsoup). Axocoatl
-  // does not stop it; operate/security.mdx says what such a cookie can and
-  // cannot do.
+  // cannot stop a page's script from setting one; operate/security.mdx says
+  // what such a cookie can and cannot do. The full-page step below sets the
+  // ones that matter to the workbench, and asserts the workbench stays
+  // signed in. preview-cookies.test.mjs asserts the same against a real
+  // Preview app behind the real proxy, and what that app receives.
   const safariSharesLocalhostCookies = process.platform === 'darwin'
     && browser.browserType().name() === 'webkit';
   const {
@@ -2726,6 +2687,17 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
               if (window === top) {
                 document.cookie = 'preview-host-only=from-a; Path=/';
                 document.cookie = 'preview-parent-attempt=from-a; Domain=localhost; Path=/';
+                // What else Session code can set for localhost in Safari: a
+                // cookie that is not ASCII (Safari sends the byte 0xE9), a
+                // forged token cookie and "signed in" cookie, and a moderate
+                // flood (40 cookies of 1 KB).
+                const port = location.port;
+                document.cookie = 'junk=\u00e9; Domain=localhost; Path=/';
+                document.cookie = 'axocoatl-token-' + port + '=forged-by-a-preview; Domain=localhost; Path=/';
+                document.cookie = 'axocoatl-token-' + port + '-signed-in=1; Domain=localhost; Path=/';
+                for (let i = 0; i < 40; i += 1) {
+                  document.cookie = 'flood-' + i + '=' + 'x'.repeat(1000) + '; Domain=localhost; Path=/';
+                }
                 globalThis.__topLevelCookieResult = {
                   cookies: document.cookie,
                   openerIsNull: window.opener === null,
@@ -3082,36 +3054,62 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
 
     // What the browser now sends to the workbench's host, to this Session's
     // other Preview port and to another Session's Preview, read from the
-    // real Cookie headers.
+    // real Cookie headers before any proxy sees them.
     const otherSession = runtime.fixtures.alpha.sessions[1];
     const atWorkbench = await cookieEcho.cookieAt(context, 'localhost');
     const atPreviews = [
       await cookieEcho.cookieAt(context, `${session.id}-p5000.localhost`),
       await cookieEcho.cookieAt(context, `${otherSession.id}-p3000.localhost`),
     ];
-    // The workbench's sign-in cookies are host-only on localhost: the
-    // workbench gets them, and no request to a Preview origin ever carries an
-    // axocoatl-token-* cookie, in every engine.
-    assert.equal(new RegExp(`(?:^|; )axocoatl-token-${listenerPort}=`).test(atWorkbench), true);
-    for (const cookie of atPreviews) assert.equal(/axocoatl-token-/i.test(cookie), false);
+    // (Failures name the cookies, never the token's value.)
+    const pairs = (cookie) => cookie.split('; ');
+    const realToken = `axocoatl-token-${listenerPort}=${runtime.token}`;
+    const forgedToken = `axocoatl-token-${listenerPort}=forged-by-a-preview`;
+    const signedIn = `axocoatl-token-${listenerPort}-signed-in=1`;
+    // The workbench's own sign-in cookies are host-only on localhost: the
+    // workbench gets them, and no request to a Preview origin carries them,
+    // in every engine.
+    assert.equal(pairs(atWorkbench).includes(realToken), true, cookieNames(atWorkbench));
+    for (const cookie of atPreviews) {
+      assert.equal(cookie.includes(runtime.token), false, cookieNames(cookie));
+    }
     // Preview A's host-only cookie stays on Preview A.
     for (const cookie of [atWorkbench, ...atPreviews]) {
-      assert.equal(cookie.includes('preview-host-only='), false);
+      assert.equal(cookie.includes('preview-host-only='), false, cookieNames(cookie));
     }
-    // Its Domain=localhost cookie: refused (Chromium, WebKit on Linux), or,
-    // in Safari on macOS, sent to the workbench and to every other Preview.
-    // (Failures name the cookies, never the token's value.)
-    const names = (cookie) => cookie.split('; ').map((pair) => pair.split('=')[0]).join(', ');
+    // Its Domain=localhost cookies: refused (Chromium, WebKit on Linux), or,
+    // in Safari on macOS, sent to the workbench and to every other Preview,
+    // forged axocoatl-token-* cookies included. The Preview proxies strip
+    // those before an app sees them (preview-cookies.test.mjs).
     for (const cookie of [atWorkbench, ...atPreviews]) {
-      assert.equal(cookie.includes('preview-parent-attempt=from-a'), safariSharesLocalhostCookies, names(cookie));
+      const sent = pairs(cookie);
+      for (const [label, present] of [
+        ['preview-parent-attempt', sent.includes('preview-parent-attempt=from-a')],
+        ['forged token', sent.includes(forgedToken)],
+        ['non-ASCII junk', sent.some((pair) => /^junk=[^\x00-\x7f]/.test(pair))],
+        ['flood', sent.filter((pair) => pair.startsWith('flood-')).length === 40],
+      ]) {
+        assert.equal(present, safariSharesLocalhostCookies, `${label}: ${cookieNames(cookie)}`);
+      }
     }
+    for (const cookie of atPreviews) {
+      assert.equal(pairs(cookie).includes(signedIn), safariSharesLocalhostCookies, cookieNames(cookie));
+    }
+    assert.equal(
+      pairs(atWorkbench).filter((pair) => pair === signedIn).length,
+      safariSharesLocalhostCookies ? 2 : 1,
+      cookieNames(atWorkbench),
+    );
 
-    // The workbench Session is unaffected: a new workbench page opens with
-    // the real token cookie and the API answers it.
+    // The workbench Session is unaffected, with every one of those cookies:
+    // its page still reads the API, and a new workbench page opens with the
+    // real token cookie, connects its WebSocket, and the API answers it.
+    assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 200);
     const workbenchAgain = await context.newPage();
     try {
       const response = await workbenchAgain.goto(`http://localhost:${listenerPort}/`);
       assert.equal(response?.status(), 200);
+      assert.notEqual(await workbenchAgain.title(), 'Sign in to Axocoatl');
       await workbenchAgain.waitForFunction(() =>
         typeof S !== 'undefined' && S.liveConnection === 'connected');
       assert.equal(await workbenchAgain.evaluate(async () => (await fetch('/api/agents')).status), 200);

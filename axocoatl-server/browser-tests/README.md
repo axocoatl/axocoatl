@@ -138,7 +138,11 @@ journey requires a real Podman runtime image selected with
 (`native-turn-git.test.mjs`) runs one native turn on Podman against a stub
 Ollama server, in `docker.io/library/rust:bookworm` (or the curated image with
 Git that `AXOCOATL_NATIVE_TURN_IMAGE` names); it is skipped, not pulled, when
-that image is not on the machine. A cold embedding cache can require downloading
+that image is not on the machine. The Preview cookie journey
+(`preview-cookies.test.mjs`) runs a real Session app in the curated
+`docker.io/library/node:20-slim` behind the real Preview proxy, with
+`sandbox.network: bridge` so the Session's ports are published; it too is
+skipped, not pulled, when that image is not on the machine. A cold embedding cache can require downloading
 the pinned local embedding model. The harness starts only a fresh loopback Axocoatl daemon; its
 Sessions remain at environment review, while controlled browser responses mock
 the Preview and failure paths called out below.
@@ -209,13 +213,29 @@ the Preview and failure paths called out below.
   that an ordinary embedded write is unavailable under modern third-party
   policy and reaches nothing, **Open full preview** opens the exact virtual URL
   with no opener, and host-only cookies work top-level and reach neither the
-  workbench nor another Session/port origin. A loopback cookie echo reads the
-  real Cookie headers (cookies ignore ports): no request to a Preview origin
-  ever carries an `axocoatl-token-*` cookie, and the workbench still opens with
-  its own. An attempted `Domain=localhost` cookie from the top-level Preview is
-  refused in Chromium and in WebKit on Linux; in WebKit on macOS (Safari) the
-  journey asserts the known behaviour instead, that it reaches the workbench and
-  every other Preview origin (`operate/security.mdx`).
+  workbench nor another Session/port origin. The top-level page also sets, for
+  `Domain=localhost`, a cookie that is not ASCII, a forged
+  `axocoatl-token-<port>` and `-signed-in` cookie and 40 cookies of 1 KB. A
+  loopback cookie echo (`support/cookie-echo.mjs`) reads the Cookie headers the
+  browser sends (cookies ignore ports): the workbench's own token cookie
+  reaches the workbench and never a Preview origin, in every engine. Chromium
+  and WebKit on Linux refuse the `Domain=localhost` cookies; in WebKit on macOS
+  (Safari) the journey asserts the known behaviour instead, that every one of
+  them, the forged `axocoatl-token-*` cookies included, reaches the workbench
+  and every other Preview origin (`operate/security.mdx`). In every engine the
+  workbench page still reads the API, and a new workbench page opens, connects
+  and reads the API.
+- `preview-cookies.test.mjs` does the same through the real Preview proxy and a
+  real Session app on Podman, after signing in with the real link. It asserts
+  that no request or WebSocket upgrade the app receives on either Preview port
+  carries an `axocoatl-token-*` cookie, while Safari sends the forged ones to
+  those origins and the app gets the other forged cookies (an upgrade only the
+  visible-ASCII ones, and its WebSocket opens); that the app's own
+  `Set-Cookie` with `Domain=localhost` stays host-only on its Preview origin
+  (the proxy removes `Domain`); that the workbench reloads, connects and reads
+  the API; and that a browser that never signed in, holding a forged
+  `-signed-in` cookie, gets the retry page then the sign-in page on each
+  navigation in Safari (the sign-in page at once elsewhere), never a loop.
 - Manual E2B cleanup is high-friction for both retained identities: the dialog
   requires the exact runtime ID or `axocoatl_creation_token`, begins unchecked,
   sends no request before affirmation, posts the exact confirmation payload,
@@ -232,9 +252,13 @@ WebSocket fixtures are intercepted at the virtual browser origin; this suite
 does not claim those fixture bytes traversed the Rust transport proxy. Server
 tests separately cover strict Host parsing and origin rejection, body/header
 classification and limits, and mode-aware credential/Host forwarding observed
-by a real loopback upstream. A live sandbox/dev-server transport remains part of
-the separate full Session/Attempt acceptance journey.
+by a real loopback upstream. `preview-cookies.test.mjs` is the one journey
+here whose Preview requests reach a live sandbox app through the proxy; the
+rest of the live sandbox/dev-server transport remains part of the separate full
+Session/Attempt acceptance journey.
 
-The default suite does not approve `npm ci`, start Podman, execute a successful
-Agent turn, or mutate a project repository. The opt-in compatibility reference journey
+Apart from the first-turn and Preview cookie journeys, which start a Session
+on Podman when their image is present, the default suite does not approve
+`npm ci`, start Podman, execute a successful Agent turn, or mutate a project
+repository. The opt-in compatibility reference journey
 executes controlled work inside its disposable runtime.

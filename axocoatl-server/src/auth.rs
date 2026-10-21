@@ -48,8 +48,9 @@ const LOCAL_TOKEN_COOKIE_MAX_AGE_SECS: u64 = 30 * 24 * 60 * 60;
 /// requests and drop an upstream `Set-Cookie` that would set it, as they do
 /// for the token cookie. Safari on macOS lets a page on a Preview origin set
 /// a `Domain=localhost` cookie, so Session code can still set this one there;
-/// the most that does is send a navigation the person started to the
-/// same-origin retry page once.
+/// while that browser is signed out, the most that does is send each
+/// navigation the person starts through the same-origin retry page once
+/// before the sign-in page.
 const SIGNED_IN_COOKIE_SUFFIX: &str = "-signed-in";
 
 /// The per-daemon local API secret and the cookie name a browser stores it
@@ -257,28 +258,38 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
         .map(String::from)
 }
 
-/// Values of every cookie named `name`, across all `Cookie` headers.
-fn cookie_values<'a>(headers: &'a HeaderMap, name: &'a str) -> impl Iterator<Item = &'a str> {
+/// Values of every cookie named `name`, across all `Cookie` headers, in the
+/// order the browser sent them.
+///
+/// The headers are read as bytes, one `;`-separated pair at a time, the way
+/// [`without_local_token_cookies`] reads them. A pair that is not visible
+/// ASCII is only that pair: Safari sends a cookie that a page set to `é` as
+/// the byte 0xE9, and reading the whole header as text would then drop the
+/// token cookie beside it and sign that browser out. A pair without `=`, or
+/// with any other name, is skipped. Every value of `name` is returned, so a
+/// forged cookie of the same name (a `Domain=localhost` one Safari lets a
+/// Preview page set) sits beside the real one instead of replacing it.
+fn cookie_values<'a>(headers: &'a HeaderMap, name: &'a str) -> impl Iterator<Item = &'a [u8]> {
     headers
         .get_all(header::COOKIE)
         .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(';'))
+        .flat_map(|value| value.as_bytes().split(|byte| *byte == b';'))
         .filter_map(move |pair| {
-            let (key, value) = pair.split_once('=')?;
-            (key.trim() == name).then_some(value.trim())
+            let equals = pair.iter().position(|byte| *byte == b'=')?;
+            let (key, value) = (&pair[..equals], &pair[equals + 1..]);
+            (key.trim_ascii() == name.as_bytes()).then_some(value.trim_ascii())
         })
 }
 
 /// Constant-time comparison. Both sides are hashed first so the comparison
 /// length never depends on the presented value, and an empty expected secret
 /// (for example an unset `${ENV}` in `server.auth`) never matches.
-fn secret_matches(expected: &str, presented: &str) -> bool {
+fn secret_matches(expected: &str, presented: impl AsRef<[u8]>) -> bool {
     if expected.is_empty() {
         return false;
     }
     let expected = Sha256::digest(expected.as_bytes());
-    let presented = Sha256::digest(presented.as_bytes());
+    let presented = Sha256::digest(presented.as_ref());
     let difference = expected
         .iter()
         .zip(presented.iter())
@@ -338,7 +349,7 @@ fn has_valid_token_cookie(local: &LocalToken, headers: &HeaderMap) -> bool {
 }
 
 fn has_signed_in_cookie(local: &LocalToken, headers: &HeaderMap) -> bool {
-    cookie_values(headers, &local.signed_in_cookie_name).any(|value| value == "1")
+    cookie_values(headers, &local.signed_in_cookie_name).any(|value| value == b"1")
 }
 
 /// `Set-Cookie` for the secret-free "signed in" cookie: `1` to set it, or
@@ -709,10 +720,15 @@ async fn local_dashboard(
 /// sign in: a link or form on another site (`cross-site`) still gets the
 /// sign-in page and its one-click Continue. The token cookie keeps HttpOnly,
 /// SameSite=Strict and its value; the "signed in" cookie holds no secret and
-/// is never a credential. This response clears it, so it sends a browser
-/// back at most once: if the token cookie is still missing on the second
-/// request, that request gets the sign-in page. The next workbench load the
-/// token cookie opens sets it again.
+/// is never a credential. It sends a navigation back at most once: the
+/// request this page makes is `Sec-Fetch-Site: same-origin`, so if the token
+/// cookie is still missing there, that request gets the sign-in page,
+/// whatever cookies it carries. That holds for a `Domain=localhost` copy of
+/// the "signed in" cookie that a Preview page set in Safari, which this
+/// response cannot clear. The response clears the host-only one, so without
+/// such a copy the next navigation the person starts goes straight to the
+/// sign-in page; the next workbench load the token cookie opens sets it
+/// again.
 fn same_origin_retry_page(local: &LocalToken, uri: &Uri) -> Response {
     let target = html_attribute_url(&location_without_sign_in_token(uri));
     let mut response = (
@@ -1086,6 +1102,21 @@ mod tests {
         uri: &str,
         headers: &[(&str, &str)],
     ) -> Response {
+        let headers = headers
+            .iter()
+            .map(|(name, value)| (*name, value.as_bytes()))
+            .collect::<Vec<_>>();
+        send_bytes(config, method, uri, &headers).await
+    }
+
+    /// [`send`] with header values given as bytes, which may be outside
+    /// visible ASCII the way Safari sends a cookie a page set to `é`.
+    async fn send_bytes(
+        config: &AuthConfig,
+        method: Method,
+        uri: &str,
+        headers: &[(&str, &[u8])],
+    ) -> Response {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if !headers
@@ -1095,7 +1126,7 @@ mod tests {
             builder = builder.header(header::HOST, format!("localhost:{PORT}"));
         }
         for (name, value) in headers {
-            builder = builder.header(*name, *value);
+            builder = builder.header(*name, HeaderValue::from_bytes(value).unwrap());
         }
         stub_app(config.clone())
             .oneshot(builder.body(Body::empty()).unwrap())
@@ -1490,6 +1521,219 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// Cookie pairs that are not one visible-ASCII `name=value`: what Safari
+    /// sends for `document.cookie = 'junk=é; Domain=localhost'` (the byte
+    /// 0xE9), the same value in UTF-8, a non-ASCII name, quotes, a pair
+    /// without a name or without `=`, and empty pairs.
+    const MALFORMED_COOKIES: [&[u8]; 9] = [
+        b"junk=\xe9",
+        b"junk=\xc3\xa9",
+        b"j\xfcnk=1",
+        b"junk=\"\xe9\"",
+        b"=\xe9",
+        b"\xe9",
+        b"no-equals-sign",
+        b"",
+        b" ;; ",
+    ];
+
+    /// `parts` joined the way a browser joins cookies into one header.
+    fn cookie_header(parts: &[&[u8]]) -> Vec<u8> {
+        parts.join(&b"; "[..])
+    }
+
+    /// One of these pairs, before or after the token cookie, in one `Cookie`
+    /// header or in separate ones, never hides the token: the API, the
+    /// WebSocket routes and the workbench all accept it. Without the token
+    /// cookie the same requests are refused.
+    #[tokio::test]
+    async fn a_cookie_that_is_not_ascii_never_hides_the_token_cookie() {
+        let config = token_config();
+        let valid = cookie(TOKEN);
+        let forged = cookie("forged-by-a-preview");
+        for malformed in MALFORMED_COOKIES {
+            let signed_in: Vec<Vec<(&str, Vec<u8>)>> = vec![
+                vec![("cookie", cookie_header(&[malformed, valid.as_bytes()]))],
+                vec![("cookie", cookie_header(&[valid.as_bytes(), malformed]))],
+                vec![(
+                    "cookie",
+                    cookie_header(&[b"theme=dark", malformed, valid.as_bytes(), b"app=1"]),
+                )],
+                vec![
+                    ("cookie", malformed.to_vec()),
+                    ("cookie", valid.as_bytes().to_vec()),
+                ],
+                vec![
+                    ("cookie", valid.as_bytes().to_vec()),
+                    ("cookie", malformed.to_vec()),
+                ],
+            ];
+            for headers in &signed_in {
+                let headers = headers
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_slice()))
+                    .collect::<Vec<_>>();
+                for uri in ["/api/agents", "/ws", "/api/sessions/s1/terminals/t1/ws"] {
+                    let response = send_bytes(&config, Method::GET, uri, &headers).await;
+                    assert_eq!(response.status(), StatusCode::OK, "{uri} {headers:?}");
+                }
+                let mut typed = headers.clone();
+                typed.extend([
+                    ("sec-fetch-site", &b"none"[..]),
+                    ("sec-fetch-mode", b"navigate"),
+                    ("sec-fetch-dest", b"document"),
+                ]);
+                let response = send_bytes(&config, Method::GET, "/", &typed).await;
+                assert_eq!(response.status(), StatusCode::OK, "{typed:?}");
+                assert_eq!(
+                    body_text(response).await,
+                    include_str!("../static/index.html")
+                );
+            }
+            for refused in [
+                cookie_header(&[malformed]),
+                cookie_header(&[malformed, forged.as_bytes()]),
+                cookie_header(&[forged.as_bytes(), malformed]),
+            ] {
+                let headers = [("cookie", refused.as_slice())];
+                let response = send_bytes(&config, Method::GET, "/api/agents", &headers).await;
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{refused:?}");
+            }
+        }
+    }
+
+    /// Safari lets a Preview page set `axocoatl-token-<port>=…;
+    /// Domain=localhost`, and then sends it beside the workbench's own
+    /// host-only token cookie, before or after it. The real one still
+    /// signs the request in; the forged one never does on its own.
+    #[tokio::test]
+    async fn a_forged_token_cookie_authorizes_only_beside_the_real_one() {
+        let config = token_config();
+        let valid = cookie(TOKEN);
+        let forged_values = [
+            "forged-by-a-preview".to_string(),
+            String::new(),
+            TOKEN[..TOKEN.len() - 1].to_string(),
+            format!("{TOKEN}x"),
+            format!("{TOKEN}=x"),
+        ];
+        for forged in forged_values.iter().map(|value| cookie(value)) {
+            for headers in [
+                vec![("cookie", format!("{forged}; {valid}"))],
+                vec![("cookie", format!("{valid}; {forged}"))],
+                vec![("cookie", format!("{forged}; junk=1; {valid}; {forged}"))],
+                vec![("cookie", forged.clone()), ("cookie", valid.clone())],
+                vec![("cookie", valid.clone()), ("cookie", forged.clone())],
+            ] {
+                let headers = headers
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_str()))
+                    .collect::<Vec<_>>();
+                for uri in ["/api/agents", "/ws"] {
+                    let response = send(&config, Method::GET, uri, &headers).await;
+                    assert_eq!(response.status(), StatusCode::OK, "{uri} {headers:?}");
+                }
+                let response = send(&config, Method::GET, "/", &typed_navigation(&headers)).await;
+                assert_eq!(response.status(), StatusCode::OK, "{headers:?}");
+                assert_eq!(
+                    body_text(response).await,
+                    include_str!("../static/index.html")
+                );
+            }
+            for headers in [
+                vec![("cookie", forged.clone())],
+                vec![("cookie", format!("{forged}; {forged}"))],
+                vec![("cookie", format!("{forged}; {SIGNED_IN}"))],
+            ] {
+                let headers = headers
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_str()))
+                    .collect::<Vec<_>>();
+                for uri in ["/api/agents", "/ws"] {
+                    let response = send(&config, Method::GET, uri, &headers).await;
+                    assert_eq!(
+                        response.status(),
+                        StatusCode::UNAUTHORIZED,
+                        "{uri} {headers:?}"
+                    );
+                }
+            }
+        }
+        // The real token cookie still counts only where it would alone.
+        let both = format!("{}; {valid}", cookie("forged"));
+        let response = send(
+            &config,
+            Method::GET,
+            "/api/agents",
+            &[("cookie", both.as_str()), ("sec-fetch-site", "same-site")],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// A `Domain=localhost` "signed in" cookie that a Preview page set in
+    /// Safari stays after the retry page clears the host-only one. While
+    /// the browser is signed out, a navigation the person starts passes
+    /// through the retry page once: the request that page makes is
+    /// same-origin, so it gets the sign-in page with every cookie it
+    /// carries. While the browser is signed in, it changes nothing.
+    #[tokio::test]
+    async fn a_forged_signed_in_cookie_yields_the_retry_page_at_most_once() {
+        let config = token_config();
+        let forged_token = cookie("forged-by-a-preview");
+        let signed_out = [
+            SIGNED_IN.to_string(),
+            format!("{SIGNED_IN}; {SIGNED_IN}"),
+            format!("{forged_token}; {SIGNED_IN}"),
+            format!("{SIGNED_IN}; junk=1; {forged_token}"),
+        ];
+        for cookies in &signed_out {
+            for malformed in [&b""[..], b"junk=\xe9"] {
+                let mut header = cookies.as_bytes().to_vec();
+                if !malformed.is_empty() {
+                    header = cookie_header(&[malformed, &header]);
+                }
+                let typed: Vec<(&str, &[u8])> = vec![
+                    ("cookie", &header),
+                    ("sec-fetch-site", b"none"),
+                    ("sec-fetch-mode", b"navigate"),
+                    ("sec-fetch-dest", b"document"),
+                ];
+                let response = send_bytes(&config, Method::GET, "/", &typed).await;
+                assert_eq!(response.status(), StatusCode::OK, "{header:?}");
+                assert!(body_text(response).await.contains("Opening Axocoatl"));
+                // The page's own navigation, still carrying the forged
+                // cookie the response could not clear.
+                let from_the_retry_page: Vec<(&str, &[u8])> = vec![
+                    ("cookie", &header),
+                    ("sec-fetch-site", b"same-origin"),
+                    ("sec-fetch-mode", b"navigate"),
+                    ("sec-fetch-dest", b"document"),
+                ];
+                let response = send_bytes(&config, Method::GET, "/", &from_the_retry_page).await;
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{header:?}");
+                assert!(response.headers().get(header::SET_COOKIE).is_none());
+                assert!(body_text(response).await.contains("axocoatl url"));
+            }
+        }
+        // Signed in, the forged cookies change nothing: the shell, and no
+        // cookie is set or cleared.
+        let signed_in = format!("{forged_token}; {SIGNED_IN}; {}", cookie(TOKEN));
+        let response = send(
+            &config,
+            Method::GET,
+            "/",
+            &typed_navigation(&[("cookie", signed_in.as_str())]),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(header::SET_COOKIE).is_none());
+        assert_eq!(
+            body_text(response).await,
+            include_str!("../static/index.html")
+        );
     }
 
     #[tokio::test]
