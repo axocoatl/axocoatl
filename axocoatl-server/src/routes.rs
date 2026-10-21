@@ -7311,6 +7311,45 @@ fn rewrite_preview_location(value: &HeaderValue) -> HeaderValue {
     HeaderValue::from_str(&relative).unwrap_or_else(|_| value.clone())
 }
 
+/// An upstream `Set-Cookie` without its `Domain` attributes, so the browser
+/// stores the cookie host-only on the Preview origin that answered. Safari
+/// on macOS accepts `Domain=localhost` from a top-level `<name>.localhost`
+/// page and then sends that cookie to the workbench and to every other
+/// Session's Preview; Chromium refuses it. A `Domain` naming the Preview's
+/// own host only adds subdomains, which no Preview has. One naming another
+/// site (an app's production domain) was refused by every browser and is
+/// now stored host-only on the Preview origin instead. The name, the value
+/// and every other attribute are kept byte for byte.
+/// Attributes are split at `;` and named by the text before `=`, trimmed
+/// and compared without case, as browsers parse them (RFC 6265 5.2).
+///
+/// This closes only the server path: script on a top-level Preview page can
+/// still set a `Domain=localhost` cookie in Safari (operate/security.mdx).
+/// `None` (the cookie is dropped) only if the remaining bytes were not a
+/// header value, which cannot happen for bytes taken from one.
+fn host_only_preview_cookie(value: &HeaderValue) -> Option<HeaderValue> {
+    let mut parts = value.as_bytes().split(|byte| *byte == b';');
+    let mut kept = parts.next().unwrap_or_default().to_vec();
+    let mut removed = false;
+    for attribute in parts {
+        let name = attribute
+            .split(|byte| *byte == b'=')
+            .next()
+            .unwrap_or_default()
+            .trim_ascii();
+        if name.eq_ignore_ascii_case(b"domain") {
+            removed = true;
+            continue;
+        }
+        kept.push(b';');
+        kept.extend_from_slice(attribute);
+    }
+    if !removed {
+        return Some(value.clone());
+    }
+    HeaderValue::from_bytes(&kept).ok()
+}
+
 fn inject_preview_bridge(mut html: String, mode: &PreviewProxyMode) -> String {
     if let PreviewProxyMode::LegacyOpaque { base } = mode {
         let base = format!(r#"<base href="{base}">"#);
@@ -7562,7 +7601,15 @@ async fn proxy_preview_http_to_port(
         if !response_header_is_forwardable(name) {
             continue;
         }
-        if name == header::SET_COOKIE && crate::auth::sets_local_token_cookie(value) {
+        if name == header::SET_COOKIE {
+            // Session code cannot plant or replace the workbench sign-in
+            // cookie, and the app's own cookies stay on its Preview origin.
+            if crate::auth::sets_local_token_cookie(value) {
+                continue;
+            }
+            if let Some(value) = host_only_preview_cookie(value) {
+                response_headers.append(name, value);
+            }
             continue;
         }
         let value = if name == header::LOCATION {
@@ -9285,6 +9332,53 @@ mod tests {
         assert!(!legacy_request.contains("workbench-secret"));
     }
 
+    #[test]
+    fn preview_set_cookie_loses_only_its_domain() {
+        let host_only = |value: &[u8]| {
+            host_only_preview_cookie(&HeaderValue::from_bytes(value).unwrap())
+                .map(|value| value.as_bytes().to_vec())
+        };
+        for (upstream, forwarded) in [
+            (
+                &b"sid=1; Domain=localhost; Path=/"[..],
+                &b"sid=1; Path=/"[..],
+            ),
+            (
+                b"sid=1; Path=/app; Domain=localhost; Secure; HttpOnly; SameSite=None; Partitioned; Max-Age=60",
+                b"sid=1; Path=/app; Secure; HttpOnly; SameSite=None; Partitioned; Max-Age=60",
+            ),
+            (b"sid=1;domain=.localhost", b"sid=1"),
+            (b"sid=1;  DOMAIN = LOCALHOST ;Path=/", b"sid=1;Path=/"),
+            (b"sid=1; Domain", b"sid=1"),
+            (b"sid=1; Domain=", b"sid=1"),
+            (
+                b"sid=1; Domain=a.localhost; Domain=localhost; Expires=Wed, 21 Oct 2037 07:28:00 GMT",
+                b"sid=1; Expires=Wed, 21 Oct 2037 07:28:00 GMT",
+            ),
+            (
+                b"sid=1; Domain=ses-1-p3000.localhost",
+                b"sid=1",
+            ),
+            (b"sid=1; Domain=example.com; Path=/", b"sid=1; Path=/"),
+            // Only attributes lose `Domain`; a cookie may be named Domain.
+            (b"Domain=localhost; Path=/", b"Domain=localhost; Path=/"),
+            (b"Domain=localhost; Domain=localhost", b"Domain=localhost"),
+            // The value and other attributes stay byte for byte.
+            (b"v=\xe9 \"q\"=; Path=/x;Max-Age=1", b"v=\xe9 \"q\"=; Path=/x;Max-Age=1"),
+            (b"sid=1; Path=/; Comment=Domain=localhost", b"sid=1; Path=/; Comment=Domain=localhost"),
+            (b"sid=1; DomainX=localhost", b"sid=1; DomainX=localhost"),
+            (b"sid=1", b"sid=1"),
+            (b"", b""),
+        ] {
+            assert_eq!(
+                host_only(upstream).as_deref(),
+                Some(forwarded),
+                "{}",
+                String::from_utf8_lossy(upstream)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn preview_http_proxy_transports_real_requests_and_responses() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -9336,7 +9430,7 @@ mod tests {
             let html_request = read_request(&mut html_socket).await;
             let html = b"<!doctype html><html><body><main>saved</main></body></html>";
             let response = format!(
-                "HTTP/1.1 201 Created\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nLocation: http://127.0.0.1:9999/done?ok=1#saved\r\nSet-Cookie: app_session=alpha; Path=/; HttpOnly\r\nSet-Cookie: axocoatl-token-18080=forged; Path=/\r\nX-Upstream: real-html\r\nContent-Security-Policy: default-src 'none'\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 201 Created\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nLocation: http://127.0.0.1:9999/done?ok=1#saved\r\nSet-Cookie: app_session=alpha; Path=/; HttpOnly\r\nSet-Cookie: axocoatl-token-18080=forged; Path=/\r\nSet-Cookie: axocoatl-token-18080-signed-in=1; Domain=localhost; Path=/\r\nSet-Cookie: shared=from-a; Domain=localhost; Path=/; SameSite=Lax; Max-Age=60\r\nX-Upstream: real-html\r\nContent-Security-Policy: default-src 'none'\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n",
                 html.len()
             );
             html_socket
@@ -9396,21 +9490,20 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("/done?ok=1#saved")
         );
-        assert_eq!(
-            html_response
-                .headers()
-                .get(header::SET_COOKIE)
-                .and_then(|value| value.to_str().ok()),
-            Some("app_session=alpha; Path=/; HttpOnly")
-        );
-        // Session code cannot plant or replace the workbench sign-in cookie.
+        // Session code cannot plant or replace the workbench sign-in
+        // cookies, and the app's own cookies lose `Domain`, so they stay
+        // host-only on this Preview origin.
         assert_eq!(
             html_response
                 .headers()
                 .get_all(header::SET_COOKIE)
                 .iter()
-                .count(),
-            1
+                .map(|value| value.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "app_session=alpha; Path=/; HttpOnly",
+                "shared=from-a; Path=/; SameSite=Lax; Max-Age=60",
+            ]
         );
         assert_eq!(
             html_response
