@@ -705,9 +705,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Also restate from the final runs (not yet run on the integrated build):
 - `connect openrouter` signed in to a real OpenRouter account through the browser (the
-  founder did this live on 2026-10-20 during the 1.5.0 verification; the
-  `connect_cmd/openrouter*` code is unchanged since 583320b, onboarding's OpenRouter
-  step is not).
+  founder did this live on 2026-10-20 during the 1.5.0 verification; the sign-in code
+  in `connect_cmd/openrouter*` is unchanged since 583320b, apart from two
+  `allow(dead_code)` attributes fix150/r3-onboard removes because doctor now calls
+  `doctor_key_line`; onboarding's OpenRouter step and doctor's key check changed).
 - The macOS product-gate legs: WebKit and Chromium counts (fix150/r3-auth be6a7a72
   measured 254 tests on WebKit: 253 passed, 0 failed, 1 skipped, test 8, which needs
   AXOCOATL_REFERENCE_RUNTIME_IMAGE; Chromium the same), and that on darwin WebKit the
