@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use axocoatl_config::AxocoatlConfig;
-use axocoatl_isolation::podman::PodmanReadiness;
+use axocoatl_isolation::podman::{InstallRoute, PodmanReadiness};
 use axocoatl_llm_ollama::{NativeOllamaServerCheck, OllamaCloudMode};
 use serde::Serialize;
 
@@ -110,9 +110,15 @@ pub struct ReadinessInputs {
     pub agents_running: usize,
 }
 
-/// The Podman item, and why Sessions are blocked when they are.
-pub fn podman_item(readiness: &PodmanReadiness) -> (ReadinessItem, Option<String>) {
-    let onboard = "Run `axocoatl onboard`: it sets up Podman for Axocoatl.";
+/// The Podman item, and why Sessions are blocked when they are. `route` is
+/// how Podman gets onto this computer ([`InstallRoute::detect`]): a missing
+/// Podman's fix is `axocoatl doctor`'s, from the same
+/// [`axocoatl_isolation::podman::install_fix`], so it says onboarding
+/// installs Podman only where it does.
+pub fn podman_item(
+    readiness: &PodmanReadiness,
+    route: &InstallRoute,
+) -> (ReadinessItem, Option<String>) {
     match readiness {
         PodmanReadiness::Ready => (
             ReadinessItem::new(
@@ -143,8 +149,8 @@ pub fn podman_item(readiness: &PodmanReadiness) -> (ReadinessItem, Option<String
                     ReadinessStatus::Fail,
                     detail,
                     Some(format!(
-                        "{onboard} Or {}.",
-                        axocoatl_isolation::podman::manual_install_hint().trim_end_matches('.')
+                        "{}.",
+                        axocoatl_isolation::podman::install_fix(route)
                     )),
                 ),
                 Some(detail.to_string()),
@@ -160,7 +166,8 @@ pub fn podman_item(readiness: &PodmanReadiness) -> (ReadinessItem, Option<String
                     ReadinessStatus::Fail,
                     detail,
                     Some(format!(
-                        "{onboard} Or run `podman machine init && podman machine start` yourself."
+                        "Run `axocoatl onboard` (it creates the machine after asking), or: `{}`.",
+                        axocoatl_isolation::podman::machine_create_hint()
                     )),
                 ),
                 Some(detail.to_string()),
@@ -400,7 +407,10 @@ pub async fn check_readiness(inputs: ReadinessInputs) -> ReadinessReport {
             None,
         ));
     } else {
-        let (item, blocked) = podman_item(&axocoatl_isolation::podman::detect().await);
+        let (item, blocked) = podman_item(
+            &axocoatl_isolation::podman::detect().await,
+            &InstallRoute::detect(),
+        );
         sections.sandbox.push(item);
         sessions_blocked = blocked;
     }
@@ -509,31 +519,80 @@ mod tests {
         })
     }
 
+    const UBUNTU: &str = "ID=ubuntu\nID_LIKE=debian\nVERSION_ID=\"24.04\"\n";
+
     #[test]
     fn a_missing_podman_or_machine_fails_and_blocks_sessions_a_stopped_one_does_not() {
-        let (item, blocked) = podman_item(&PodmanReadiness::MachineMissing);
+        let here = InstallRoute::detect();
+        let (item, blocked) = podman_item(&PodmanReadiness::MachineMissing, &here);
         assert_eq!(item.status, ReadinessStatus::Fail);
-        assert!(item.fix.as_deref().unwrap().contains("axocoatl onboard"));
-        assert!(item
-            .fix
-            .as_deref()
-            .unwrap()
-            .contains("`podman machine init && podman machine start`"));
-        assert!(blocked.is_some());
-        let (item, blocked) = podman_item(&PodmanReadiness::NotInstalled);
+        // The machine Axocoatl creates, sized, never Podman's 2 GiB default.
+        assert_eq!(
+            item.fix.as_deref(),
+            Some(
+                format!(
+                    "Run `axocoatl onboard` (it creates the machine after asking), or: `{}`.",
+                    axocoatl_isolation::podman::machine_create_hint()
+                )
+                .as_str()
+            )
+        );
+        assert!(item.fix.as_deref().unwrap().contains(" --memory "));
+        assert_eq!(blocked.as_deref(), Some(item.detail.as_str()));
+        let (item, blocked) = podman_item(&PodmanReadiness::NotInstalled, &here);
         assert_eq!(item.status, ReadinessStatus::Fail);
-        assert!(item
-            .fix
-            .as_deref()
-            .unwrap()
-            .starts_with("Run `axocoatl onboard`"));
-        assert!(blocked.is_some());
-        let (item, blocked) = podman_item(&PodmanReadiness::MachineStopped);
+        assert_eq!(
+            item.fix,
+            Some(format!(
+                "{}.",
+                axocoatl_isolation::podman::install_fix(&here)
+            ))
+        );
+        assert_eq!(blocked.as_deref(), Some(item.detail.as_str()));
+        let (item, blocked) = podman_item(&PodmanReadiness::MachineStopped, &here);
         assert_eq!(item.status, ReadinessStatus::Ok);
         assert!(blocked.is_none());
-        let (item, blocked) = podman_item(&PodmanReadiness::Unavailable("timed out".into()));
+        let (item, blocked) = podman_item(&PodmanReadiness::Unavailable("timed out".into()), &here);
         assert_eq!(item.status, ReadinessStatus::Fail);
         assert!(blocked.is_none(), "a failed probe is reported, not a block");
+    }
+
+    /// The first screen's fix for a missing Podman names onboarding once and
+    /// says it installs Podman only where it does, on every platform.
+    #[test]
+    fn a_missing_podman_fix_says_once_what_onboarding_does_on_each_platform() {
+        let fix = |route: InstallRoute| {
+            podman_item(&PodmanReadiness::NotInstalled, &route)
+                .0
+                .fix
+                .unwrap()
+        };
+        assert_eq!(
+            fix(InstallRoute::for_mac(true, true)),
+            "Run `axocoatl onboard` (it installs Podman after asking), or: `brew install podman`."
+        );
+        assert_eq!(
+            fix(InstallRoute::for_mac(true, false)),
+            "Install Podman with the installer from https://podman.io (or install Homebrew and \
+             run `brew install podman`), then run `axocoatl onboard`."
+        );
+        assert!(fix(InstallRoute::for_mac(false, true))
+            .starts_with("Podman 6 no longer supports Intel Macs"));
+        assert_eq!(
+            fix(InstallRoute::for_linux(UBUNTU)),
+            "Run `axocoatl onboard` (it installs Podman after asking), or: `sudo apt-get install \
+             -y podman`."
+        );
+        assert_eq!(
+            fix(InstallRoute::for_linux("ID=ubuntu\nVERSION_ID=\"22.04\"\n")),
+            "This Ubuntu's Podman is too old (22.04 ships 3.4.4; Axocoatl runs need 4.3 or \
+             later, 4.9 tested): use Ubuntu 24.04 or newer."
+        );
+        assert_eq!(
+            fix(InstallRoute::for_linux("ID=nixos\n")),
+            "Install Podman 4.9 or later (https://podman.io/docs/installation), then run \
+             `axocoatl onboard`."
+        );
     }
 
     #[test]
@@ -616,7 +675,7 @@ mod tests {
         let mut sections = ReadinessSections::default();
         sections
             .sandbox
-            .push(podman_item(&PodmanReadiness::Ready).0);
+            .push(podman_item(&PodmanReadiness::Ready, &InstallRoute::detect()).0);
         sections.models.push(ReadinessItem::new(
             "m",
             "M",
@@ -627,7 +686,8 @@ mod tests {
         let report = ReadinessReport::from_sections(sections.clone(), None);
         assert!(report.ready);
         assert_eq!(report.version, DAEMON_VERSION);
-        sections.sandbox[0] = podman_item(&PodmanReadiness::MachineMissing).0;
+        sections.sandbox[0] =
+            podman_item(&PodmanReadiness::MachineMissing, &InstallRoute::detect()).0;
         let report = ReadinessReport::from_sections(sections, Some("blocked".into()));
         assert!(!report.ready);
         let json = serde_json::to_value(&report).unwrap();

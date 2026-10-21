@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
@@ -123,6 +124,48 @@ async function waitForSessionProjection(page, predicate, argument) {
       connection:S.liveConnection}));
     throw new Error(`${error.message}\nSession projection: ${JSON.stringify(state)}`, {cause:error});
   }
+}
+
+// A loopback server that records the Cookie header of each request it gets.
+// Cookies ignore ports, so what reaches http://<host>:<its port>/ is what the
+// browser sends to <host> on the daemon's port too: the workbench at
+// localhost, or a Preview origin whose responses a journey fulfils itself
+// (and a WebKit route handler is never shown the Cookie header).
+async function startCookieEcho() {
+  const requests = [];
+  const handler = (request, response) => {
+    requests.push({ path: request.url, cookie: request.headers.cookie || '' });
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    response.end('<!doctype html><title>cookie echo</title>');
+  };
+  const listen = (server, port, host) => new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, resolve);
+  });
+  const servers = [createServer(handler)];
+  await listen(servers[0], 0, '127.0.0.1');
+  const { port } = servers[0].address();
+  // localhost and <name>.localhost may resolve to [::1] first.
+  const ipv6 = createServer(handler);
+  try { await listen(ipv6, port, '::1'); servers.push(ipv6); } catch {}
+  let next = 0;
+  return {
+    /** The Cookie header a top-level navigation to `host` carries. */
+    async cookieAt(context, host) {
+      next += 1;
+      const pathname = `/cookie-echo/${next}`;
+      const page = await context.newPage();
+      try {
+        await page.goto(`http://${host}:${port}${pathname}`);
+      } finally {
+        await page.close();
+      }
+      const seen = requests.find((request) => request.path === pathname);
+      assert.ok(seen, `the cookie echo at ${host} received no request`);
+      return seen.cookie;
+    },
+    close: () => Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve)))),
+  };
 }
 
 async function openSession(
@@ -2579,10 +2622,20 @@ test('Preview app code cannot cross from its dedicated origin into the workbench
 
 test('Preview browser contract keeps modules, app APIs, storage, forms, assets, encoding negotiation, and HMR working', async () => {
   const session = runtime.fixtures.alpha.sessions[0];
+  // Safari's WebKit on macOS lets a top-level page on <name>.localhost set a
+  // Domain=localhost cookie, which it then sends to localhost and to every
+  // other <name>.localhost (measured in Playwright WebKit on macOS).
+  // Chromium refuses it, and so does WebKit on Linux (libsoup). Axocoatl
+  // does not stop it; operate/security.mdx says what such a cookie can and
+  // cannot do.
+  const safariSharesLocalhostCookies = process.platform === 'darwin'
+    && browser.browserType().name() === 'webkit';
   const {
     context, page, browserErrors, browserRequests, assertNoBrowserErrors,
   } = await openSession(session);
+  let cookieEcho = null;
   try {
+    cookieEcho = await startCookieEcho();
     assert.equal(new URL(page.url()).hostname, 'localhost');
     assert.ok(browserRequests.some((request) =>
       new URL(request.url).hostname === '127.0.0.1'
@@ -2981,7 +3034,13 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     assert.equal(await previewFrame.evaluate(selector => document.querySelector(selector) === document.querySelector('#pick-target'), selectedRef.selector),true,
       'the retained reference still resolves after picker cleanup');
 
-    // Modern Chromium blocks ordinary third-party cookies in the embedded
+    // The embedded Preview's script tried a host-only and a Domain=localhost
+    // cookie. Third-party cookie policy refuses both in the workbench's
+    // frame in every engine, so nothing reached the workbench's host.
+    const embeddedAtWorkbench = await cookieEcho.cookieAt(context, 'localhost');
+    assert.equal(/preview-(?:parent-attempt|host-only)=/.test(embeddedAtWorkbench), false);
+
+    // Modern browsers block ordinary third-party cookies in the embedded
     // Preview. The explicit full-preview action opens this exact virtual URL
     // top-level (never the logical localhost address), where normal host-only
     // app cookies work without regaining access to the workbench origin.
@@ -3014,11 +3073,55 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
       globalThis.__topLevelCookieResult);
     assert.equal(topLevelCookieResult.openerIsNull, true);
     assert.equal(topLevelCookieResult.cookies.includes('preview-host-only=from-a'), true);
-    assert.equal(topLevelCookieResult.cookies.includes('preview-parent-attempt='), false);
+    assert.equal(
+      topLevelCookieResult.cookies.includes('preview-parent-attempt=from-a'),
+      safariSharesLocalhostCookies,
+      `Domain=localhost from a top-level Preview: ${topLevelCookieResult.cookies}`,
+    );
     await fullPreviewPage.close();
 
-    // Neither Preview A's host-only cookie nor its rejected parent-domain
-    // attempt may cross into Preview B.
+    // What the browser now sends to the workbench's host, to this Session's
+    // other Preview port and to another Session's Preview, read from the
+    // real Cookie headers.
+    const otherSession = runtime.fixtures.alpha.sessions[1];
+    const atWorkbench = await cookieEcho.cookieAt(context, 'localhost');
+    const atPreviews = [
+      await cookieEcho.cookieAt(context, `${session.id}-p5000.localhost`),
+      await cookieEcho.cookieAt(context, `${otherSession.id}-p3000.localhost`),
+    ];
+    // The workbench's sign-in cookies are host-only on localhost: the
+    // workbench gets them, and no request to a Preview origin ever carries an
+    // axocoatl-token-* cookie, in every engine.
+    assert.equal(new RegExp(`(?:^|; )axocoatl-token-${listenerPort}=`).test(atWorkbench), true);
+    for (const cookie of atPreviews) assert.equal(/axocoatl-token-/i.test(cookie), false);
+    // Preview A's host-only cookie stays on Preview A.
+    for (const cookie of [atWorkbench, ...atPreviews]) {
+      assert.equal(cookie.includes('preview-host-only='), false);
+    }
+    // Its Domain=localhost cookie: refused (Chromium, WebKit on Linux), or,
+    // in Safari on macOS, sent to the workbench and to every other Preview.
+    // (Failures name the cookies, never the token's value.)
+    const names = (cookie) => cookie.split('; ').map((pair) => pair.split('=')[0]).join(', ');
+    for (const cookie of [atWorkbench, ...atPreviews]) {
+      assert.equal(cookie.includes('preview-parent-attempt=from-a'), safariSharesLocalhostCookies, names(cookie));
+    }
+
+    // The workbench Session is unaffected: a new workbench page opens with
+    // the real token cookie and the API answers it.
+    const workbenchAgain = await context.newPage();
+    try {
+      const response = await workbenchAgain.goto(`http://localhost:${listenerPort}/`);
+      assert.equal(response?.status(), 200);
+      await workbenchAgain.waitForFunction(() =>
+        typeof S !== 'undefined' && S.liveConnection === 'connected');
+      assert.equal(await workbenchAgain.evaluate(async () => (await fetch('/api/agents')).status), 200);
+    } finally {
+      await workbenchAgain.close();
+    }
+
+    // In the workbench's frame the second Preview origin sees neither of
+    // Preview A's cookies: third-party policy gives an embedded Preview no
+    // cookies at all, in Safari too.
     await page.evaluate(() => document.querySelector('#browser')
       .go('http://localhost:5000/cookie-check'));
     const cookieIframeProperty = await page.locator('#browser')
@@ -3031,11 +3134,6 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     assert.equal(cookiesAtOtherPreview.includes('preview-parent-attempt='), false);
     assert.equal(cookiesAtOtherPreview.includes('preview-host-only='), false);
     assert.ok(otherPreviewCookieRequests.length > 0);
-    assert.ok(otherPreviewCookieRequests.every((cookie) =>
-      !cookie.includes('preview-parent-attempt=') && !cookie.includes('preview-host-only=')));
-    // The workbench sign-in cookie is host-only on localhost; Session code on
-    // a Preview origin never receives it.
-    assert.ok(otherPreviewCookieRequests.every((cookie) => !cookie.includes('axocoatl-token-')));
 
     // The valid Preview Host boundary owns every path. None of these direct
     // URLs may fall through to the workbench, even with the sign-in cookie.
@@ -3049,6 +3147,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     assertNoBrowserErrors();
   } finally {
     await context.close();
+    await cookieEcho?.close();
   }
 });
 

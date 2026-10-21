@@ -99,8 +99,9 @@ checklist) run once per browser engine from `browserEngines()`: Chromium always,
 and WebKit, the Safari engine and the default browser on a Mac, when Playwright's
 WebKit is installed (`npx playwright install webkit`). With
 `AXOCOATL_E2E_WEBKIT=1` a missing WebKit fails instead of being skipped; the
-gate script sets it when run with `AXO_BROWSER_WEBKIT=true`, which also installs
-WebKit. A journey that needs the daemon's own `HOME` (the folder picker starts
+gate script sets it when run with `AXO_BROWSER_ENGINE=webkit`, which also
+installs WebKit and runs every journey on WebKit, not only these per-engine
+ones. A journey that needs the daemon's own `HOME` (the folder picker starts
 there) passes `home: true` to `launchTestDaemon`, which gives the daemon a
 fixture home folder and keeps Podman's real configuration through the XDG
 directories.
@@ -206,9 +207,15 @@ the Preview and failure paths called out below.
 - Opening the workbench at a loopback IP proves the product's canonical
   `127.0.0.1` → `localhost` document redirect. Preview cookie coverage checks
   that an ordinary embedded write is unavailable under modern third-party
-  policy, **Open full preview** opens the exact virtual URL with no opener,
-  host-only cookies work top-level, and neither that cookie nor an attempted
-  `Domain=localhost` parent cookie reaches a sibling Session/port origin.
+  policy and reaches nothing, **Open full preview** opens the exact virtual URL
+  with no opener, and host-only cookies work top-level and reach neither the
+  workbench nor another Session/port origin. A loopback cookie echo reads the
+  real Cookie headers (cookies ignore ports): no request to a Preview origin
+  ever carries an `axocoatl-token-*` cookie, and the workbench still opens with
+  its own. An attempted `Domain=localhost` cookie from the top-level Preview is
+  refused in Chromium and in WebKit on Linux; in WebKit on macOS (Safari) the
+  journey asserts the known behaviour instead, that it reaches the workbench and
+  every other Preview origin (`operate/security.mdx`).
 - Manual E2B cleanup is high-friction for both retained identities: the dialog
   requires the exact runtime ID or `axocoatl_creation_token`, begins unchecked,
   sends no request before affirmation, posts the exact confirmation payload,

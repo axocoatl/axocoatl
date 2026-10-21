@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { createServer } from 'node:http';
-import { chmod, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -21,6 +22,7 @@ const macos = process.platform === 'darwin';
 let runtime;
 let ollama;
 let shims;
+let podmanFix;
 
 async function fakeOllama(version) {
   const server = createServer((req, res) => {
@@ -34,7 +36,42 @@ async function fakeOllama(version) {
   return server;
 }
 
+/**
+ * What onboarding does about a missing Podman on this Linux, from
+ * `/etc/os-release` (`InstallRoute::for_linux` in axocoatl-isolation): the
+ * readiness item's whole fix, so a repeated sentence or an onboarding that
+ * claims to install Podman where it cannot fails here.
+ */
+function linuxInstallFix(osRelease) {
+  const field = (key) => {
+    const line = osRelease.split('\n').find((entry) => entry.startsWith(`${key}=`));
+    return (line ? line.slice(key.length + 1) : '').trim().replace(/^["']|["']$/g, '');
+  };
+  const id = field('ID').toLowerCase();
+  const like = field('ID_LIKE').toLowerCase().split(/\s+/).filter(Boolean);
+  const is = (family) => id === family || like.includes(family);
+  const onboard = (command) => `Run \`axocoatl onboard\` (it installs Podman after asking), or: \`${command}\`.`;
+  if (id === 'ubuntu' && Number.parseInt(field('VERSION_ID').split('.')[0], 10) <= 22) {
+    return "This Ubuntu's Podman is too old (22.04 ships 3.4.4; Axocoatl runs need 4.3 or later, 4.9 tested): use Ubuntu 24.04 or newer.";
+  }
+  if (is('debian') || is('ubuntu')) return onboard('sudo apt-get install -y podman');
+  if (is('fedora') || is('rhel') || is('centos')) return onboard('sudo dnf install -y podman');
+  if (is('arch')) return onboard('sudo pacman -S --noconfirm podman');
+  if (is('suse') || id.startsWith('opensuse') || is('sles')) return onboard('sudo zypper install -y podman');
+  return 'Install Podman 4.9 or later (https://podman.io/docs/installation), then run `axocoatl onboard`.';
+}
+
+/** The Podman item's whole fix: on macOS the machine, sized for this computer. */
+function assertPodmanFix(fix) {
+  if (macos) {
+    assert.match(fix, /^Run `axocoatl onboard` \(it creates the machine after asking\), or: `podman machine init --cpus \d+ --memory \d+ --disk-size 60 && podman machine start`\.$/);
+  } else {
+    assert.equal(fix, podmanFix);
+  }
+}
+
 before(async () => {
+  if (!macos) podmanFix = linuxInstallFix(await readFile('/etc/os-release', 'utf8'));
   ollama = await fakeOllama('0.20.6');
   shims = await mkdtemp(path.join(tmpdir(), 'axocoatl-readiness-shims-'));
   runtime = await launchTestDaemon({
@@ -91,7 +128,7 @@ test('GET /api/readiness names a missing Podman (no machine on macOS, not instal
   assert.equal(report.ready, false);
   const podman = report.sections.sandbox.find((item) => item.id === 'podman');
   assert.equal(podman.status, 'fail', JSON.stringify(podman));
-  assert.match(podman.fix, /axocoatl onboard/);
+  assertPodmanFix(podman.fix);
   assert.match(report.sessions_blocked, macos ? /has no machine/ : /Podman is not installed/);
   assert.equal(report.sessions_blocked, podman.detail);
   const version = report.sections.models.find((item) => item.id === 'ollama.version');
@@ -103,6 +140,51 @@ test('GET /api/readiness names a missing Podman (no machine on macOS, not instal
   assert.equal(report.version, health.version);
   // The readiness report is not public.
   assert.equal((await runtime.fetchWithoutToken('/api/readiness')).status, 401);
+});
+
+/** What a Mac's first screen says about a Podman that is not installed. */
+async function macInstallFix(searchPath) {
+  if (process.arch !== 'arm64') return null;
+  const candidates = [
+    ...searchPath.split(path.delimiter).filter(Boolean).map((directory) => path.join(directory, 'brew')),
+    '/opt/homebrew/bin/brew',
+    '/usr/local/bin/brew',
+  ];
+  let homebrew = false;
+  for (const candidate of candidates) {
+    try { await access(candidate, constants.X_OK); homebrew = true; break; } catch {}
+  }
+  return homebrew
+    ? 'Run `axocoatl onboard` (it installs Podman after asking), or: `brew install podman`.'
+    : 'Install Podman with the installer from https://podman.io (or install Homebrew and run `brew install podman`), then run `axocoatl onboard`.';
+}
+
+// The fixture daemon on macOS has a Podman with no machine; a second one
+// here has none on its PATH, the state of a Mac before onboarding.
+test('a Mac without Podman gets the install fix for this Mac', { skip: !macos && 'Linux: the daemon above has no Podman' }, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'axocoatl-readiness-nopodman-'));
+  let notInstalled;
+  try {
+    const searchPath = await pathWithoutPodman(root);
+    notInstalled = await launchTestDaemon({
+      ollamaBaseUrl: `http://127.0.0.1:${ollama.address().port}`,
+      env: { PATH: searchPath },
+    });
+    const report = await (await fetch(`${notInstalled.baseUrl}/api/readiness`)).json();
+    const podman = report.sections.sandbox.find((item) => item.id === 'podman');
+    assert.equal(podman.status, 'fail', JSON.stringify(podman));
+    assert.equal(podman.detail, 'Podman is not installed. Every Session runs in a Podman sandbox.');
+    assert.equal(report.sessions_blocked, podman.detail);
+    const expected = await macInstallFix(searchPath);
+    if (expected) {
+      assert.equal(podman.fix, expected);
+    } else {
+      assert.match(podman.fix, /^Podman 6 no longer supports Intel Macs and Homebrew refuses it: install the Podman 5\.8 amd64 package from https:\/\/github\.com\/containers\/podman\/releases \(Axocoatl has not been tested on Intel Macs\), then run `axocoatl onboard`\.$/);
+    }
+  } finally {
+    await notInstalled?.stop();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 for (const engine of engines) {
@@ -130,7 +212,20 @@ for (const engine of engines) {
       assert.equal(await version.locator('.fix-text code').textContent(), 'axocoatl doctor');
       const podman = checklist.locator('.inline li[data-id="podman"]');
       assert.equal(await podman.getAttribute('data-status'), 'fail');
+      // The whole fix as the checklist shows it: each command once, copyable.
+      const report = await page.evaluate(() => document.querySelector('#readiness').report);
+      const fix = report.sections.sandbox.find((item) => item.id === 'podman').fix;
+      assertPodmanFix(fix);
+      assert.deepEqual(
+        await podman.locator('.fix-text code').allTextContents(),
+        fix.split('`').filter((_, index) => index % 2 === 1),
+      );
       assert.equal(await podman.locator('.fix-text code').first().textContent(), 'axocoatl onboard');
+      assert.equal(await podman.locator('.fix-text').evaluate((text) => {
+        const copy = text.cloneNode(true);
+        for (const button of copy.querySelectorAll('button')) button.remove();
+        return copy.textContent;
+      }), fix.replaceAll('`', ''));
       // No default model is suggested anywhere.
       assert.doesNotMatch(await checklist.textContent(), /llama3\.2/);
 
@@ -152,7 +247,7 @@ for (const engine of engines) {
       await blocked.waitFor();
       assert.match(await blocked.textContent(), /No Session can run yet/);
       assert.match(await blocked.textContent(), macos ? /has no machine/ : /Podman is not installed/);
-      assert.match(await blocked.textContent(), /axocoatl onboard/);
+      assert.equal(await blocked.locator('code').textContent(), fix.replaceAll('`', ''));
       assert.equal(await page.locator('ax-session-home [data-action="picker-use"]').isDisabled(), true);
       assert.deepEqual(errors, []);
     } finally {
