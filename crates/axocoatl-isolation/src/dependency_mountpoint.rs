@@ -71,7 +71,10 @@
 //!     `--volumes-from`, which its own inspect leaves out (4.9.3 and
 //!     6.1.4): read from that other container's inspect, at the same place.
 //!     The volumes it takes are in its own inspect; an overlay volume or a
-//!     tmpfs Podman does not copy.
+//!     tmpfs Podman does not copy. Podman keeps that other container as it
+//!     was named, so one made since under that name is read in its place,
+//!     and an entry that is only `ro`, `rw` or `z` (4.9.3 splits `a:ro,z`
+//!     in two) names a container only while one of that name is listed.
 //!
 //! Podman reports a bind's source made absolute and clean but as it was
 //! given, links and all (4.9.3 and 6.1.4). So each host directory is first
