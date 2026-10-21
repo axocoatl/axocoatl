@@ -733,6 +733,8 @@ startup_expect adds_to_path yes "fish's line after blocks" \
 startup_expect adds_to_path no "fish's unmarked line in a block" "$(printf 'if test (uname) = SunOS\n  %s\nend' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line in a function" "$(printf 'function local_bin\n  %s\nend' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line after a return" "$(printf 'status is-interactive; or return\n%s' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path no "fish's unmarked line after a \\ and a comment line" "$(printf 'echo a \\\n# c\n%s' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path yes "fish's unmarked line after a \\, a comment line and a blank line" "$(printf 'echo a \\\n# c\n\n%s' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line after an exec" "$(printf 'exec zsh\n%s' "$(path_line_for fish)")" config.fish
 # No fish line counts after a return, exit or exec where a command starts:
 # also after &&, ||, & or |, and after and, or, not or !. A line that ends in
@@ -1428,6 +1430,22 @@ path_expect_status 0
 path_expect_text "added to ~/.config/fish/config.fish:  $(path_line_for fish)"
 path_reinstall_twice 1 .config/fish/config.fish
 path_expect_new_shells_find fish "$case_home/.config/fish/config.fish"
+
+# A config.fish that returns early for some shells: the line goes at the end,
+# so the installer says the file can stop before it instead of saying new
+# terminals find axocoatl (a non-login fish, a new terminal on Linux, returns
+# first), and a login fish finds it.
+reset_path_case
+P_OS=Linux P_SHELL=/usr/bin/fish P_TTY='y'
+name=path-fish-early-return
+mkdir -p "$work_dir/$name/home/.config/fish"
+printf '%s\n' 'status is-login || return' >"$work_dir/$name/home/.config/fish/config.fish"
+run_path_case "$name"
+path_expect_status 0
+path_expect_text "added to ~/.config/fish/config.fish:  $(path_line_for fish)"
+path_expect_text '~/.config/fish/config.fish can stop before that line in some shells (a return, exit or exec, or a line the installer cannot follow, comes first); if a new terminal does not find axocoatl, move the line above it'
+path_refuse_text 'new terminals find axocoatl'
+path_expect_text 'in this terminal, run:'
 
 # The fish line unreleased 1.5.0 builds wrote (without --path) counts:
 # nothing is asked or added, then or on two more installs.

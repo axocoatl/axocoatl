@@ -430,13 +430,13 @@ adds_to_path() {
       scan_anywhere="$(guarded_line @DIR@; echo; printf '%s' "$nonlogin_prefix"; guarded_line @DIR@)"
       ;;
   esac
-  scan_dir="$dest" scan_rel="$dest_rel" scan_syntax="$scan_syntax" \
+  scan_dir="$dest" scan_rel="$dest_rel" scan_syntax="$scan_syntax" scan_end="${scan_end:-}" \
   scan_lines="$scan_lines" scan_anywhere="$scan_anywhere" awk "$startup_awk"'
     BEGIN {
       stanza = 0
       found = 0
       prev = ""
-      fdepth = 0; fended = 0; flost = 0; fcont = 0; fop = 0
+      fdepth = 0; fended = 0; flost = 0; fcont = 0; fop = 0; fbs = 0
       fish = (ENVIRON["scan_syntax"] == "fish")
       n = split(ENVIRON["scan_lines"], list, "\n")
       for (i = 1; i <= n; i++) own[list[i]] = 1
@@ -497,12 +497,15 @@ adds_to_path() {
       if (fish) {
         if (line in own && !fdepth && !fended && !flost && !fcont) { found = 1; exit }
         fish_track(line)
-        # fish goes on on the next line after a \, and after a &&, || or |
-        # (also one that a comment follows) past blank and comment lines.
-        if (line == "" || line ~ /^#/) fcont = fop
+        # fish goes on after a line that ends in \\ past comment lines,
+        # until a blank line (fish 3.7), and after a &&, || or | (also one
+        # that a comment follows) past blank and comment lines.
+        if (line == "") { fbs = 0; fcont = fop }
+        else if (line ~ /^#/) fcont = fop || fbs
         else {
           fop = (line ~ /(&&|\|)[ \t]*(\\|#.*)?$/)
-          fcont = fop || line ~ /\\$/
+          fbs = (line ~ /\\$/)
+          fcont = fop || fbs
         }
         prev = line
         next
@@ -515,8 +518,27 @@ adds_to_path() {
       if (stanza == 0 && sure() && line ~ /^if[ \t]+\[[ \t]+-d[ \t]+"?@DIR@"?[ \t]+\][ \t]*;[ \t]*then$/) stanza = 1
       track($0)
     }
-    END { exit !found }
+    END {
+      if (ENVIRON["scan_end"] == "1") exit !(!fish || (!fdepth && !fended && !flost && !fcont))
+      exit !found
+    }
   ' "$1" 2>/dev/null
+}
+
+# Whether a line appended at the end of fish file $1 surely runs in every
+# fish shell that reads it: no block is left open, no return, exit or exec
+# came before it (as in `status is-login || return`), the reader did not
+# lose track, and the last line does not go on. Always true for sh, bash and
+# zsh files, whose usual early stops (Ubuntu's ~/.bashrc returns in
+# non-interactive shells) do not keep a new terminal from reading the line.
+appended_line_runs() {
+  case "$1" in *.fish) ;; *) return 0 ;; esac
+  [ -f "$1" ] || return 0
+  scan_end=1
+  adds_to_path "$1"
+  end_status=$?
+  scan_end=""
+  return "$end_status"
 }
 
 # Whether bash login file $1 (~/.bash_profile or ~/.bash_login) counts as
@@ -875,11 +897,14 @@ offer_profile_line() {
   if [ "$answer" = "yes" ]; then
     written=""
     failed=""
+    stops=""
     old_ifs=$IFS
     IFS='
 '
     set -f
     for profile in $missing; do
+      appended_line_runs "$profile" || stops="${stops}${stops:+
+}${profile}"
       if mkdir -p "${profile%/*}" 2>/dev/null \
         && printf '\n# Added by the Axocoatl installer\n%s\n' "$path_line" 2>/dev/null >>"$profile"; then
         written="${written}${written:+
@@ -892,8 +917,15 @@ offer_profile_line() {
     set +f
     IFS=$old_ifs
     [ -z "$written" ] || info "added to $(display_paths "$written"):  ${path_line}"
+    if [ -n "$stops" ]; then
+      info "$(display_paths "$stops") can stop before that line in some shells (a return, exit or exec, or a line the installer cannot follow, comes first); if a new terminal does not find ${BIN}, move the line above it"
+    fi
     if [ -z "$failed" ]; then
-      info "new terminals find ${BIN}; in this one, run:  ${now_line}"
+      if [ -z "$stops" ]; then
+        info "new terminals find ${BIN}; in this one, run:  ${now_line}"
+      else
+        info "in this terminal, run:  ${now_line}"
+      fi
       return 0
     fi
     info "could not write $(display_paths "$failed")"
