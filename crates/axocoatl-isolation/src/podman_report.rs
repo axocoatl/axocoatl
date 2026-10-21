@@ -841,11 +841,15 @@ impl IdMapTools {
                         1 => "it to be setuid root or to have its file capability",
                         _ => "them to be setuid root or to have their file capabilities",
                     };
+                    // Named here unless the fix runs it anyway (for a
+                    // helper that is nowhere).
                     let install = match (&self.package, &self.install, self.package_installed) {
-                        (Some(package), Some(install), Some(false)) => format!(
+                        (Some(package), Some(install), Some(false)) if self.command().is_none() => {
+                            format!(
                             "; {package}, which installs a newuidmap and newgidmap that can map, \
                              is not installed (`{install}`)"
-                        ),
+                        )
+                        }
                         _ => String::new(),
                     };
                     format!(
@@ -2774,6 +2778,18 @@ mod tests {
         assert!(!ranges.fix.unwrap().contains("Reinstall the package"));
         let fix = local_fix(&report, "alex", &IdRangeProblem::NoIdMapTools).unwrap();
         assert!(fix.manual.is_some() && fix.install.is_none(), "{fix:?}");
+        // newgidmap nowhere as well: the install is the command, not named
+        // twice.
+        report.id_map_tools.as_mut().unwrap().missing = vec!["newgidmap".to_string()];
+        assert_eq!(
+            ranges_finding(&report).unwrap().fix.as_deref(),
+            Some(
+                "Remove or fix /usr/local/bin/newuidmap (Podman needs it to be setuid root or to \
+                 have its file capability), or take its directory off PATH: no package \
+                 installed it, so no reinstall changes it, then: sudo apt-get install -y uidmap \
+                 && podman system migrate"
+            )
+        );
         // Whose package is not known (no package manager answered): both.
         report.id_map_tools = Some(IdMapTools {
             unprivileged: vec!["/usr/bin/newuidmap".to_string()],
