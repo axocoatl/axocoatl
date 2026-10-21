@@ -328,12 +328,21 @@ pub(crate) fn run_program(
 /// Where keystrokes are written to the program: its terminal's master side,
 /// through a descriptor of its own. Not portable-pty's `take_writer`, whose
 /// writer, when dropped, types a line break and an end-of-file into the
-/// program's terminal: it is dropped once the program has exited (or is
-/// being stopped), and the terminal could then echo that line break into
-/// the output still being read, an extra blank line after the program's
-/// last line (or after the error line held for the caller), or hand it to a
-/// program still running as a keystroke nobody typed.
-fn keystroke_writer(master: &dyn portable_pty::MasterPty) -> std::io::Result<std::fs::File> {
+/// program's terminal. The relay drops its writer once the program has
+/// exited (`run_program` waits for that after a stop too). On Linux the
+/// program's terminal lasts until the relay closes its own side, so it
+/// echoed that line break into the output still being read: an extra blank
+/// line after the program's last line (or after the error line held for the
+/// caller), always while a process the program left holds the terminal and
+/// now and then otherwise; such a process could also read it as a keystroke
+/// nobody typed. On macOS the terminal is revoked when the program exits,
+/// so the line break reached nothing. Tested by
+/// `the_keystroke_writer_types_nothing_when_it_is_dropped` (both platforms)
+/// and `the_relay_types_nothing_into_a_terminal_the_program_left_open`
+/// (Linux).
+pub(crate) fn keystroke_writer(
+    master: &dyn portable_pty::MasterPty,
+) -> std::io::Result<std::fs::File> {
     let fd = portable_pty::MasterPty::as_raw_fd(master).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::Unsupported,

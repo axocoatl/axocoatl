@@ -3055,6 +3055,132 @@ fn a_held_line_is_kept_only_when_the_program_ends_with_an_error() {
     );
 }
 
+/// A fresh pseudo-terminal of portable-pty's, as the relay opens one, and
+/// its slave side opened again: the program's end, read as the program
+/// reads it (canonical, echoing, as a new terminal is).
+fn program_terminal() -> (portable_pty::PtyPair, OwnedFd) {
+    let pair = portable_pty::native_pty_system()
+        .openpty(portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let name = pair.master.tty_name().unwrap();
+    let slave = rustix::fs::open(
+        name.as_path(),
+        rustix::fs::OFlags::RDWR | rustix::fs::OFlags::NOCTTY,
+        rustix::fs::Mode::empty(),
+    )
+    .unwrap();
+    (pair, slave)
+}
+
+/// What the program could read from its terminal within `timeout`, up to
+/// an end of file (a VEOF at the start of a line).
+fn typed_to_program(slave: &OwnedFd, timeout: Duration) -> Vec<u8> {
+    use rustix::event::{poll, PollFd, PollFlags, Timespec};
+    let mut typed = Vec::new();
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let mut fds = [PollFd::new(slave, PollFlags::IN)];
+        let wait = Timespec {
+            tv_sec: 0,
+            tv_nsec: 20_000_000,
+        };
+        if poll(&mut fds, Some(&wait)).unwrap_or(0) == 0 {
+            continue;
+        }
+        let mut buffer = [0u8; 256];
+        match rustix::io::read(slave, &mut buffer) {
+            Ok(read) if read > 0 => typed.extend_from_slice(&buffer[..read]),
+            Ok(_) => {
+                typed.extend_from_slice(b"<end of file>");
+                break;
+            }
+            Err(rustix::io::Errno::INTR | rustix::io::Errno::AGAIN) => {}
+            Err(error) => panic!("reading the program's terminal: {error}"),
+        }
+    }
+    typed
+}
+
+/// Keystrokes reach the program through [`relay::keystroke_writer`], which
+/// types what it is given and nothing when it is dropped (the relay drops
+/// it as the program ends or is stopped). portable-pty's own writer types a
+/// line break and an end of file into the program's terminal when it is
+/// dropped; that is why the relay does not use it, and it is checked here
+/// so that this test shows such a line break would be seen.
+#[test]
+fn the_keystroke_writer_types_nothing_when_it_is_dropped() {
+    let (pair, slave) = program_terminal();
+    drop(pair.master.take_writer().unwrap());
+    assert_eq!(
+        String::from_utf8_lossy(&typed_to_program(&slave, Duration::from_secs(5))),
+        "\n<end of file>",
+        "portable-pty's writer no longer types a line break and an end of file when dropped"
+    );
+
+    let (pair, slave) = program_terminal();
+    let mut writer = relay::keystroke_writer(&*pair.master).unwrap();
+    writer.write_all(b"typed\r").unwrap();
+    writer.flush().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&typed_to_program(&slave, Duration::from_millis(500))),
+        "typed\n"
+    );
+    drop(writer);
+    assert_eq!(
+        String::from_utf8_lossy(&typed_to_program(&slave, Duration::from_secs(1))),
+        ""
+    );
+    // The program's terminal is still the relay's to write to.
+    let mut writer = relay::keystroke_writer(&*pair.master).unwrap();
+    writer.write_all(b"again\r").unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&typed_to_program(&slave, Duration::from_millis(500))),
+        "again\n"
+    );
+}
+
+/// When the program exits, the relay stops and drops its keystroke writer
+/// while a process the program left behind may still hold the program's
+/// terminal open (here one that ignores the hangup). Nothing is typed into
+/// that terminal then, so nothing is echoed after the program's last
+/// output (portable-pty's writer echoed an extra line break here). Linux
+/// only: macOS revokes the terminal when the program, its session leader,
+/// exits, so there the process left behind holds nothing and a line break
+/// typed then would reach nobody (the test would pass with either writer).
+#[cfg(target_os = "linux")]
+#[test]
+fn the_relay_types_nothing_into_a_terminal_the_program_left_open() {
+    let terminal = user_terminal();
+    terminal.set_size(SIZE);
+    let screen = Screen::default();
+    let mut output = screen.clone();
+    let args = ["-c", "trap '' HUP; printf done; sleep 1 & exit 0"];
+    let run = relay::run_program(
+        &relay::Program {
+            path: Path::new("/bin/sh"),
+            args: &args,
+            cwd: None,
+            set_env: &[],
+            remove_env: &[],
+            filters: redact::FilterChain::codex,
+            open_sign_in: None,
+            hold_error_line: false,
+        },
+        terminal.slave.as_fd(),
+        &mut output,
+        &std::sync::atomic::AtomicBool::new(false),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(run.exit_code, Some(0));
+    assert_eq!(String::from_utf8_lossy(&screen.bytes()), "done");
+}
+
 /// The outcome after the relayed output (as `cmd_connect_codex` prints
 /// it, after the line breaks [`relay::Lines`] asks for) is set off from the
 /// last line shown by exactly one blank line however the output ended:
