@@ -624,14 +624,18 @@ reset_path_case() {
 
 # Reading startup files: the installer's adds_to_path and reads_dot_profile
 # on startup files a user may have. A file counts as adding ~/.local/bin when
-# it has one of the installer's own lines anywhere (so that no construct makes
-# a reinstall add the line again), or Debian's and Ubuntu's lines where they
-# surely run: at the top level, not after a line that ends in &&, ||, | or \,
-# not in a string, a function, a subshell or a block for another OS, and not
-# after a return, an exec or anything the reader cannot follow. Counting a
-# file that only seems to add it would leave new terminals without axocoatl;
-# an extra line is harmless. A bash login file counts as reading ~/.profile
-# by the same rule.
+# it has the installer's marked line or its guarded line anywhere (so that no
+# construct makes a reinstall add the line again), or the unmarked export
+# line, fish's line or Debian's and Ubuntu's lines where the installer can
+# tell nothing before them keeps them from running: at the top level, not
+# after a line that ends in &&, ||, | or \, not in a string, a function, a
+# subshell or a block for another OS, and not after a return, an exec or
+# anything the reader cannot follow. What it cannot see (set -e and a failing
+# command, a sourced file that exits, a syntax error it does not notice) is
+# not tested here: such a file can count without running the line. Counting
+# a file that only seems to add it would leave new terminals without
+# axocoatl; an extra line is harmless. A bash login file counts as reading
+# ~/.profile by the same rule.
 install_helpers="$work_dir/install-helpers.sh"
 sed -n '/^# A path as the user knows it/,/^# The startup files a new shell/p' "$installer" >"$install_helpers"
 grep '^adds_to_path()' "$install_helpers" >/dev/null && grep '^reads_dot_profile()' "$install_helpers" >/dev/null \
@@ -672,7 +676,8 @@ c_for='for ((i = 0; i < 1; i++)); do :; done'
 
 # The installer's own lines count wherever they are when its marker comment
 # is right before them, and the guarded line always; an own line without the
-# marker (as 1.4.0 told users to add it) counts only where it surely runs.
+# marker (as 1.4.0 told users to add it) counts only where the installer can
+# tell nothing before it keeps it from running.
 startup_expect adds_to_path yes "the installer's line" "$(printf '# Added by the Axocoatl installer\n%s' "$guarded")"
 startup_expect adds_to_path yes "the installer's ~/.bashrc line" "$nonlogin"
 startup_expect adds_to_path yes "the unguarded line (1.4.0 and earlier printed it; unreleased 1.5.0 builds wrote it)" "$unguarded"
@@ -706,6 +711,7 @@ startup_expect adds_to_path yes "fish's line after blocks" \
 startup_expect adds_to_path no "fish's unmarked line in a block" "$(printf 'if test (uname) = SunOS\n  %s\nend' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line in a function" "$(printf 'function local_bin\n  %s\nend' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line after a return" "$(printf 'status is-interactive; or return\n%s' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path no "fish's unmarked line after an exec" "$(printf 'exec zsh\n%s' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path yes "fish's unmarked line after a block word in quotes" "$(printf 'echo "begin"\n%s' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line in a block with a quoted end" \
   "$(printf 'if test -n x\n  echo "x; end"\n  %s\nend' "$(path_line_for fish)")" config.fish
@@ -722,7 +728,8 @@ startup_expect adds_to_path no "the installer's line in a comment" "# $guarded"
 startup_expect adds_to_path no "the installer's line with more on its line" "$guarded # mine"
 startup_expect adds_to_path no "a line for another OS" '[ "$(uname)" = SunOS ] && export PATH="$HOME/.local/bin:$PATH"'
 
-# Debian's and Ubuntu's lines count only where they surely run.
+# Debian's and Ubuntu's lines count only where the installer can tell
+# nothing before them keeps them from running.
 startup_expect adds_to_path yes "Ubuntu's lines" "$stanza"
 startup_expect adds_to_path yes "Ubuntu's lines after a keyword that starts no command" \
   "$(printf '%s\n' "zstyle ':completion:*' list-prompt %SAt %p: Hit TAB for more, or the character to insert%s" \
@@ -763,6 +770,22 @@ then
     PATH="$HOME/.local/bin:$HOME/bin:$PATH"
 fi'
 startup_expect adds_to_path no "Ubuntu's lines in fish" "$stanza" config.fish
+# Constructs the reader once misread, so that a line in or after them
+# counted although no shell runs it: a case inside a $( ) over several lines
+# (its pattern's ) is not the end of the $( )), an apostrophe in a comment
+# inside an array (not a quote), return or exit written with a backslash,
+# and zsh's bye.
+startup_expect adds_to_path no "Ubuntu's lines in a case inside a \$( ) over several lines" \
+  "$(printf 'x=$(\ncase a in\nb)\n%s\n;;\nesac\n)' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines in a quote after an array with an apostrophe in a comment" \
+  "$(printf "plugins=(\n  git  # don't remove\n)\ny='a)\n%s\n'" "$stanza")" .zshrc
+startup_expect adds_to_path yes "Ubuntu's lines after an array with an apostrophe in a comment" \
+  "$(printf "plugins=(\n  git  # don't remove\n)\n%s" "$stanza")" .zshrc
+startup_expect adds_to_path yes "Ubuntu's lines after a zsh glob flag in an array" \
+  "$(printf 'files=(*(#qN))\n%s' "$stanza")" .zshrc
+startup_expect adds_to_path no "Ubuntu's lines after return written with a backslash" "$(printf '[ -n "$PS1" ] || \\return\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after zsh's bye" "$(printf '[[ -o interactive ]] || bye\n%s' "$stanza")" .zshrc
+startup_expect adds_to_path no "the unmarked line after exit written with a backslash" "$(printf '[ -n "$PS1" ] || \\exit\n%s' "$unguarded")" .zshrc
 
 for reads in '. ~/.profile' 'source ~/.profile' '. "$HOME/.profile"' '. "$HOME"/.profile' '. "${HOME}"/.profile' \
   ". '$startup_home/.profile'" "source \"$startup_home/.profile\"" '[ -f ~/.profile ] && . ~/.profile' \
@@ -861,10 +884,11 @@ path_reinstall_twice 1 .zprofile
 
 # A ~/.zprofile that only seems to add ~/.local/bin does not count: a
 # subdirectory, a line that takes it out of PATH, PATH only in a comment, a
-# line for another OS, and Debian's lines where they do not surely run (for
-# another OS, after a line that ends in && or \, in a function, or after a
-# function inside a block for another OS). Each gets the line, and a new login
-# shell finds axocoatl, with ~/.local/bin on PATH once.
+# line for another OS, and Debian's lines where something before them can
+# keep them from running (for another OS, after a line that ends in && or \,
+# in a function, or after a function inside a block for another OS). Each
+# gets the line, and a new login shell finds axocoatl, with ~/.local/bin on
+# PATH once.
 fake_number=0
 while IFS= read -r fake_line <&3; do
   [ -n "$fake_line" ] || continue
