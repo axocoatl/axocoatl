@@ -26,7 +26,9 @@ import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 // - an app's Set-Cookie with Domain=localhost stays host-only on its own
 //   Preview origin, because the proxy removes Domain.
 // It needs Podman and the curated node:20-slim image, and is skipped when
-// that image is not on the machine, rather than pulling it.
+// that image is not on the machine, rather than pulling it. CI pulls the
+// image and sets AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1, which makes a missing
+// image fail this journey instead.
 const IMAGE = 'docker.io/library/node:20-slim';
 const FLOOD = 40;
 const imageMissing = await new Promise((resolve) => {
@@ -34,6 +36,9 @@ const imageMissing = await new Promise((resolve) => {
     ? `${IMAGE} is not on this machine (or Podman is not running); pull it to run this journey`
     : false));
 });
+if (imageMissing && process.env.AXOCOATL_E2E_REQUIRE_NODE_IMAGE === '1') {
+  throw new Error(`AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1, but ${imageMissing}`);
+}
 
 // The Session's app: one Node server on ports 3000 and 5000 that records the
 // Cookie headers of every request and WebSocket upgrade it receives (as

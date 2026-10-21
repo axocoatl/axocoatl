@@ -180,11 +180,26 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: axocoatl-server/browser-tests/package-lock.json
+      # preview-cookies.test.mjs runs a real Session app in node:20-slim on
+      # the runner's rootless Podman, with its ports published on loopback
+      # (sandbox.network: bridge). The pull is pinned to the image index by
+      # digest and tagged with the name the journey and the daemon look up;
+      # the daemon pulls only an image that is missing. With
+      # AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1 a missing image fails the journey
+      # instead of skipping it.
+      - name: Pull the Session image the Preview cookie journey runs
+        env:
+          NODE_IMAGE: docker.io/library/node@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+        run: |
+          command -v podman >/dev/null || { sudo apt-get update && sudo apt-get install -y podman; }
+          podman pull "$NODE_IMAGE"
+          podman tag "$NODE_IMAGE" docker.io/library/node:20-slim
       - name: Build and exercise the visible product surface
         env:
           AXO_BROWSER_INSTALL_WITH_DEPS: 'true'
           AXO_BROWSER_ENGINE: ${{ matrix.engine }}
           AXO_BROWSER_PROFILE: release
+          AXOCOATL_E2E_REQUIRE_NODE_IMAGE: '1'
         run: ./scripts/verify-product-browser-gate.sh
 
   cross-aarch64-linux:
