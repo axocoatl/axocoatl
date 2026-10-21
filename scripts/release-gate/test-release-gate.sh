@@ -470,7 +470,13 @@ if grep -q 'add this line to' "$repo_root/scripts/install.sh"; then new_shell_ex
     if (e.pass !== (process.argv[2] === "pass")) { console.error("the path verdict does not follow its required steps"); process.exit(1); }
     if (!e.attachments.includes("A-test/logs/install.log")) { console.error("install.log is not attached"); process.exit(1); }
     if (!/why it failed/.test(e.steps.find((s) => s.name === "a step that fails").detail)) process.exit(1);
-  ' "$GATE_BUNDLE/A-test.json" "$new_shell_expect"
+    // When the gate added the line the installer printed, its record names
+    // that line.
+    const shells = e.steps.find((s) => s.name === "a new shell finds axocoatl").detail;
+    if (/^after adding the line the installer printed to /.test(shells) && (!process.argv[3] || !shells.includes(`(${process.argv[3]}):`))) {
+      console.error(`the record does not name the line the installer printed (${process.argv[3]}): ${shells}`); process.exit(1);
+    }
+  ' "$GATE_BUNDLE/A-test.json" "$new_shell_expect" "$(sed -n 's/^    //p' "$GATE_ATTACH/logs/install.log" | head -n 1)"
 )
 install_status=$?
 if [ "$install_status" = 0 ]; then

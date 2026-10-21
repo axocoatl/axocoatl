@@ -9,10 +9,14 @@
 # ~/.zprofile for zsh on Linux; for bash the login file that exists, else
 # ~/.bash_profile on macOS and ~/.profile on Linux, and on Linux ~/.bashrc
 # too; fish's config.fish; ~/.profile otherwise). The line adds the directory
-# only when PATH does not have it. A file gets none when it has one of this
-# installer's own lines anywhere, or the lines Debian's and Ubuntu's
-# ~/.profile use to add ~/.local/bin where they surely run (adds_to_path);
-# next to such a ~/.profile the ~/.bashrc line skips login shells.
+# only when PATH does not have it. A file gets none when it has this
+# installer's marked line or its guarded case line anywhere, or, where the
+# installer can tell nothing before them keeps them from running, the export
+# line 1.4.0 printed, fish's line, or the lines Debian's and Ubuntu's
+# ~/.profile use to add ~/.local/bin (adds_to_path, which also says what the
+# installer cannot see, such as set -e and a failing command, a sourced file
+# that exits, or a syntax error); next to such a ~/.profile the ~/.bashrc
+# line skips login shells.
 # Without a terminal (or when the answer is end of input) it only prints that
 # line. In a GitHub Actions step it adds the directory to $GITHUB_PATH
 # instead, for the job's later steps.
@@ -117,30 +121,36 @@ own_fish_lines() {
 #     which covers function bodies too;
 #   - no quote, $( ), ${ }, backquote or ( ) inside a word (a=( ... )) is
 #     open;
-#   - the line before did not end in &&, ||, |, |&, \, ! or a function header
-#     still waiting for its body, and no [[ ]] is open;
-#   - no return, exit, exec or logout came before it, anywhere (ended);
+#   - the line before did not end in &&, ||, |, |&, \, !, time or a function
+#     header still waiting for its body, and no [[ ]] is open;
+#   - no return, exit, exec, logout or bye came before it, anywhere, also
+#     written with a backslash (ended);
 #   - the reader did not lose track (lost) before it, at a here-document, a
 #     closing word that does not match the open block (fi in a { }, } in an
 #     if), a redirection without a target, an operator where a command
-#     should start (a line that starts with |), or a construct it does not
-#     follow (( where no command starts, as in for ((...)) and zsh's
-#     for f (...); zsh's foreach and repeat; coproc).
+#     should start (a line that starts with |), a case inside $( ), or a
+#     construct it does not follow (( where no command starts, as in
+#     for ((...)) and zsh's for f (...); zsh's foreach and repeat; coproc).
 # It splits words much as the shell does, with quotes, backslashes and
-# comments, and takes a keyword only where a command starts. Where it cannot
-# tell, it errs toward a line not counting: it opens a block for any word
-# that ends in {, but closes one only at a } where a command starts, so after
-# zsh's `f() { cmd }` no later line counts. What it does not know: a command
-# that stops the shell another way (a sourced file that exits, set -e and a
-# failing command), and a syntax error it does not notice, after which the
-# shell stops reading the file. It also sets branched after an else or elif
-# of a block at the top level. swap(s, from, to) replaces every from in s
-# with to, and trim(s) removes leading and trailing blanks.
+# comments (also in $( ) and in a ( ) word), and takes a keyword only where a
+# command starts. Where it sees that it cannot follow the file, later lines
+# do not count: it opens a block for any word that ends in {, but closes one
+# only at a } where a command starts, so after zsh's `f() { cmd }` no later
+# line counts. So sure() means only that the installer can tell nothing
+# before the line keeps it from running. What it cannot see: a command that
+# stops the shell another way (set -e and a failing command, a sourced file
+# or an eval that returns or exits), a syntax error it does not notice,
+# after which the shell stops reading the file, and a later line that takes
+# the directory out of PATH again; a valid file it misreads in some other way
+# can make a line count too. It also numbers each block it opens (bid) and
+# sets branched after an else or elif of a block at the top level.
+# swap(s, from, to) replaces every from in s with to, and trim(s) removes
+# leading and trailing blanks.
 # shellcheck disable=SC2016
 startup_awk='
 BEGIN {
   sq = sprintf("%c", 39)
-  nctx = 0; nblk = 0; cmd = 1; cont = 0; lost = 0; ended = 0; branched = 0
+  nctx = 0; nblk = 0; nbid = 0; cmd = 1; cont = 0; lost = 0; ended = 0; branched = 0
   testmode = 0; pending = 0; redir = 0; fname = 0; fnparen = 0; afterfname = 0
   prevcmd = 0; word = ""; inword = 0; last = ""
 }
@@ -161,18 +171,22 @@ function trim(s) {
 function sure() {
   return !lost && !ended && !nctx && !nblk && !cont && !pending && !testmode && !fname && !fnparen && !afterfname
 }
-function push(kind, m) { nblk++; blk[nblk] = kind; mode[nblk] = m }
+function push(kind, m) { nblk++; blk[nblk] = kind; mode[nblk] = m; bid[nblk] = ++nbid }
 function shut(kind, m) {
   if (nblk && blk[nblk] == kind && (m == "" || mode[nblk] == m)) nblk--
   else lost = 1
 }
-function tok_word(w,    k, m, opens) {
+function tok_word(w,    k, m, opens, u) {
   prevcmd = 0
   afterfname = 0
   last = w
   if (fnparen) { lost = 1; return }
   if (redir) { redir = 0; return }
-  if (w == "return" || w == "exit" || w == "exec" || w == "logout") ended = 1
+  # A word that stops the shell, also with a backslash in it (\return), and
+  # bye in zsh; anywhere, not only where a command starts.
+  u = w
+  gsub(/\\/, "", u)
+  if (u == "return" || u == "exit" || u == "exec" || u == "logout" || u == "bye") ended = 1
   if (testmode) { if (w == "]]") { testmode = 0; cmd = 0 } return }
   k = nblk ? blk[nblk] : ""
   m = nblk ? mode[nblk] : ""
@@ -292,7 +306,13 @@ function track(s,    i, n, c, t, two, three, op, bs) {
       }
       if (t == "C" && substr(s, i, 3) == "<<<") { i += 2; continue }
       if (t == "C" && substr(s, i, 2) == "<<") lost = 1
+      # A case in $( ) has patterns that end in ), which this count of
+      # parentheses would take as the end of the $( ).
+      if (t == "C" && substr(s, i, 4) == "case" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;(|&]/) && (i + 4 > n || substr(s, i + 4, 1) ~ /[ \t;]/)) lost = 1
       if (t == "C" && c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;(]/)) i = n
+      # A comment in a ( ) word (an array over several lines); not (#...),
+      # which is a zsh glob flag there.
+      if (t == "P" && c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t]/)) i = n
       continue
     }
     if (c == "\\") {
@@ -357,10 +377,11 @@ function track(s,    i, n, c, t, two, three, op, bs) {
 #     the same after the ~/.bashrc prefix), anywhere: nothing but this
 #     installer writes that case statement;
 #   - an own line without the marker (the export line installers up to 1.4.0
-#     printed for the user to add, or a fish line) is on a line that surely
-#     runs: sure() for sh, bash and zsh; for fish, outside any block (if,
-#     for, while, function, switch, begin ... end), before any return or
-#     exit, and not after a line ending in \;
+#     printed for the user to add, or a fish line) is on a line where the
+#     installer can tell nothing before it keeps it from running: sure() for
+#     sh, bash and zsh; for fish, outside any block (if, for, while,
+#     function, switch, begin ... end), before any return, exit or exec, and
+#     not after a line ending in \;
 #   - in a file that does not end in .fish, it has the three lines Debian's
 #     and Ubuntu's ~/.profile use, starting on a line sure() is true for:
 #       if [ -d "$HOME/.local/bin" ] ; then
@@ -369,9 +390,13 @@ function track(s,    i, n, c, t, two, three, op, bs) {
 # Nothing else counts: not a subdirectory, a line that takes the directory
 # out of PATH or names it in a comment, an own line with more on its line,
 # nor an unmarked own line or Debian's lines in a block, after a line that
-# ends in && or \, or after a return. The installer's line does nothing when
-# PATH has the directory, so adding one too many costs nothing, while
-# counting a file wrongly would leave new terminals without axocoatl.
+# ends in && or \, or after a return. Neither reader can see what the
+# startup_awk comment lists (set -e and a failing command, a sourced file
+# that exits, a syntax error, a later line that takes the directory out of
+# PATH again), so in such a file a line can count that does not run. The
+# installer's line does nothing when PATH has the directory, so adding one
+# too many costs nothing, while counting a file wrongly would leave new
+# terminals without axocoatl.
 adds_to_path() {
   [ -f "$1" ] || return 1
   case "$dest" in
@@ -399,12 +424,12 @@ adds_to_path() {
       for (i = 1; i <= n; i++) if (list[i] != "") anywhere[list[i]] = 1
     }
     # fish: blocks open with if, for, while, function, switch or begin where
-    # a command starts and close with end; return and exit end the file. A
-    # line with a quote or a # that names one of those words anywhere is not
-    # followed (flost), so nothing after it counts.
+    # a command starts and close with end; return, exit and exec end the
+    # file. A line with a quote or a # that names one of those words anywhere
+    # is not followed (flost), so nothing after it counts.
     function fish_track(s,    parts, k, w, m) {
       if (s ~ /^#/) return
-      if ((index(s, "\"") || index(s, sq) || index(s, "#")) && s ~ /(^|[ \t;(])(if|for|while|function|switch|begin|end|return|exit)([ \t;)]|$)/) {
+      if ((index(s, "\"") || index(s, sq) || index(s, "#")) && s ~ /(^|[ \t;(])(if|for|while|function|switch|begin|end|return|exit|exec)([ \t;)]|$)/) {
         flost = 1
         return
       }
@@ -415,7 +440,7 @@ adds_to_path() {
         sub(/[ \t].*/, "", w)
         if (w ~ /^(if|for|while|function|switch|begin)$/) fdepth++
         else if (w == "end") { if (fdepth > 0) fdepth--; else flost = 1 }
-        else if (w == "return" || w == "exit") fended = 1
+        else if (w == "return" || w == "exit" || w == "exec") fended = 1
       }
     }
     # The line with each way of writing the directory as @DIR@.
@@ -454,13 +479,19 @@ adds_to_path() {
 
 # Whether bash login file $1 (~/.bash_profile or ~/.bash_login) counts as
 # reading ~/.profile (written ~/.profile, $HOME/.profile, ${HOME}/.profile,
-# with double quotes around all or part of it, or its full path). It does
-# with `. FILE` or `source FILE` alone, after `[ -f FILE ] &&` (or [[ ]],
-# test, -r, -e, -s), or as `if [ -f FILE ]; then . FILE; fi`, on a line
-# sure() is true for; or with `. FILE` alone in the then branch of a
-# multi-line `if [ -f FILE ]; then` that starts on such a line, before any
-# else or elif, on a line for which sure() would be true but for that one
-# open if (not after a line that ends in && or \, nor inside another block).
+# with double quotes around all or part of it, or its full path; not with a
+# quote right before or after the ~, which then is not the home directory).
+# It does with `. FILE` or `source FILE` alone, after `[ -f FILE ] &&` (or
+# [[ ]], test, -r, -e, -s), or as `if [ -f FILE ]; then . FILE; fi`, on a
+# line sure() is true for. It also does with `. FILE` alone in the then
+# branch of a multi-line `if [ -f FILE ]; then` that starts on such a line:
+# before any else or elif of that same if (each block the reader opens has its
+# own number, so an if that a later `fi; if` or `done; if` opens is another
+# one), on a line for which sure() would be true but for that one open if
+# (not after a line that ends in && or \, nor inside another block), and only
+# when that if then ends with `fi` alone on its line, so that it runs in this
+# shell (not `fi | cmd` or `fi &`, which run it in a subshell). The reader's
+# limits (startup_awk) apply here too.
 reads_dot_profile() {
   [ -f "$1" ] || return 1
   scan_profile="$HOME/.profile" awk "$startup_awk"'
@@ -473,27 +504,38 @@ reads_dot_profile() {
       guarded = "^" exists "[ \t]*&&[ \t]*" src tail
       one_if = "^if[ \t]+" exists "[ \t]*;[ \t]*then[ \t]+" src "[ \t]*;[ \t]*fi" tail
       open_if = "^if[ \t]+" exists "[ \t]*;[ \t]*then" tail
+      close_if = "^fi" tail
       abs = ENVIRON["scan_profile"]
+      # opened: the number of the multi-line if that tests ~/.profile, while
+      # it is open; sourced: the same, once its then branch reads ~/.profile.
       opened = 0
+      sourced = 0
       found = 0
     }
     {
       line = swap($0, sq abs sq, "$HOME/.profile")
       line = swap(line, abs, "$HOME/.profile")
       line = swap(line, "${HOME}", "$HOME")
-      # A quoted ~ is not the home directory; other double quotes go.
-      gsub("[\"" sq "]~", "@QUOTED@", line)
+      # A quoted ~, or a ~ right before a quote, is not the home directory;
+      # other double quotes go.
+      gsub("[\"" sq "]~|~[\"" sq "]", "@QUOTED@", line)
       gsub(/"/, "", line)
       line = trim(line)
       top = sure()
-      in_then = opened && !branched && nblk == 1 && blk[1] == "if"
+      cur = (nblk == 1) ? bid[1] : 0
+      in_then = opened && cur == opened && !branched && blk[1] == "if"
       in_then = in_then && !lost && !ended && !nctx && !cont && !pending && !testmode && !fname && !fnparen && !afterfname
       if (top && (line ~ alone || line ~ guarded || line ~ one_if)) { found = 1; exit }
-      if (in_then && line ~ alone) { found = 1; exit }
+      if (in_then && line ~ alone) sourced = opened
       was = nblk
       track($0)
-      if (top && was == 0 && nblk == 1) { opened = (line ~ open_if); branched = 0 }
-      if (nblk == 0) opened = 0
+      if (top && was == 0 && nblk == 1) { opened = (line ~ open_if) ? bid[1] : 0; sourced = 0; branched = 0 }
+      if (opened && cur == opened && (nblk == 0 || bid[1] != opened)) {
+        # That if ended on this line.
+        if (sourced == opened && line ~ close_if && nblk == 0 && !lost) { found = 1; exit }
+        opened = 0
+        sourced = 0
+      }
     }
     END { exit !found }
   ' "$1" 2>/dev/null
@@ -849,12 +891,15 @@ else
   fi
 fi
 
-# Every Session and run needs rootless Podman; onboarding sets it up.
+# Every Session and run needs rootless Podman. Onboarding installs it after
+# asking where it can (axocoatl-cli/src/onboard/sandbox.rs, install), and
+# otherwise says what to do.
 if ! command -v podman >/dev/null 2>&1; then
-  info "Podman, which every Session and run needs, is not installed yet; onboard (below) sets it up or says how, asking first"
+  info "Podman, which every Session and run needs, is not on PATH."
+  info "onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do."
 fi
 
 echo
-echo "Next:  ${run} onboard      # set up Podman, a writer and a reviewer for this user, asking first"
+echo "Next:  ${run} onboard      # set up a writer and a reviewer, and Podman where it can (else it says how); it asks first"
 echo "       ${run} doctor       # check the sandbox, the models and the daemon"
 echo "       ${run} dev          # start the daemon; leave it running"

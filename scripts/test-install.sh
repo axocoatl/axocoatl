@@ -624,14 +624,18 @@ reset_path_case() {
 
 # Reading startup files: the installer's adds_to_path and reads_dot_profile
 # on startup files a user may have. A file counts as adding ~/.local/bin when
-# it has one of the installer's own lines anywhere (so that no construct makes
-# a reinstall add the line again), or Debian's and Ubuntu's lines where they
-# surely run: at the top level, not after a line that ends in &&, ||, | or \,
-# not in a string, a function, a subshell or a block for another OS, and not
-# after a return, an exec or anything the reader cannot follow. Counting a
-# file that only seems to add it would leave new terminals without axocoatl;
-# an extra line is harmless. A bash login file counts as reading ~/.profile
-# by the same rule.
+# it has the installer's marked line or its guarded line anywhere (so that no
+# construct makes a reinstall add the line again), or the unmarked export
+# line, fish's line or Debian's and Ubuntu's lines where the installer can
+# tell nothing before them keeps them from running: at the top level, not
+# after a line that ends in &&, ||, | or \, not in a string, a function, a
+# subshell or a block for another OS, and not after a return, an exec or
+# anything the reader cannot follow. What it cannot see (set -e and a failing
+# command, a sourced file that exits, a syntax error it does not notice) is
+# not tested here: such a file can count without running the line. Counting
+# a file that only seems to add it would leave new terminals without
+# axocoatl; an extra line is harmless. A bash login file counts as reading
+# ~/.profile by the same rule.
 install_helpers="$work_dir/install-helpers.sh"
 sed -n '/^# A path as the user knows it/,/^# The startup files a new shell/p' "$installer" >"$install_helpers"
 grep '^adds_to_path()' "$install_helpers" >/dev/null && grep '^reads_dot_profile()' "$install_helpers" >/dev/null \
@@ -672,7 +676,8 @@ c_for='for ((i = 0; i < 1; i++)); do :; done'
 
 # The installer's own lines count wherever they are when its marker comment
 # is right before them, and the guarded line always; an own line without the
-# marker (as 1.4.0 told users to add it) counts only where it surely runs.
+# marker (as 1.4.0 told users to add it) counts only where the installer can
+# tell nothing before it keeps it from running.
 startup_expect adds_to_path yes "the installer's line" "$(printf '# Added by the Axocoatl installer\n%s' "$guarded")"
 startup_expect adds_to_path yes "the installer's ~/.bashrc line" "$nonlogin"
 startup_expect adds_to_path yes "the unguarded line (1.4.0 and earlier printed it; unreleased 1.5.0 builds wrote it)" "$unguarded"
@@ -706,6 +711,7 @@ startup_expect adds_to_path yes "fish's line after blocks" \
 startup_expect adds_to_path no "fish's unmarked line in a block" "$(printf 'if test (uname) = SunOS\n  %s\nend' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line in a function" "$(printf 'function local_bin\n  %s\nend' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line after a return" "$(printf 'status is-interactive; or return\n%s' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path no "fish's unmarked line after an exec" "$(printf 'exec zsh\n%s' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path yes "fish's unmarked line after a block word in quotes" "$(printf 'echo "begin"\n%s' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line in a block with a quoted end" \
   "$(printf 'if test -n x\n  echo "x; end"\n  %s\nend' "$(path_line_for fish)")" config.fish
@@ -722,7 +728,8 @@ startup_expect adds_to_path no "the installer's line in a comment" "# $guarded"
 startup_expect adds_to_path no "the installer's line with more on its line" "$guarded # mine"
 startup_expect adds_to_path no "a line for another OS" '[ "$(uname)" = SunOS ] && export PATH="$HOME/.local/bin:$PATH"'
 
-# Debian's and Ubuntu's lines count only where they surely run.
+# Debian's and Ubuntu's lines count only where the installer can tell
+# nothing before them keeps them from running.
 startup_expect adds_to_path yes "Ubuntu's lines" "$stanza"
 startup_expect adds_to_path yes "Ubuntu's lines after a keyword that starts no command" \
   "$(printf '%s\n' "zstyle ':completion:*' list-prompt %SAt %p: Hit TAB for more, or the character to insert%s" \
@@ -763,6 +770,22 @@ then
     PATH="$HOME/.local/bin:$HOME/bin:$PATH"
 fi'
 startup_expect adds_to_path no "Ubuntu's lines in fish" "$stanza" config.fish
+# Constructs the reader once misread, so that a line in or after them
+# counted although no shell runs it: a case inside a $( ) over several lines
+# (its pattern's ) is not the end of the $( )), an apostrophe in a comment
+# inside an array (not a quote), return or exit written with a backslash,
+# and zsh's bye.
+startup_expect adds_to_path no "Ubuntu's lines in a case inside a \$( ) over several lines" \
+  "$(printf 'x=$(\ncase a in\nb)\n%s\n;;\nesac\n)' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines in a quote after an array with an apostrophe in a comment" \
+  "$(printf "plugins=(\n  git  # don't remove\n)\ny='a)\n%s\n'" "$stanza")" .zshrc
+startup_expect adds_to_path yes "Ubuntu's lines after an array with an apostrophe in a comment" \
+  "$(printf "plugins=(\n  git  # don't remove\n)\n%s" "$stanza")" .zshrc
+startup_expect adds_to_path yes "Ubuntu's lines after a zsh glob flag in an array" \
+  "$(printf 'files=(*(#qN))\n%s' "$stanza")" .zshrc
+startup_expect adds_to_path no "Ubuntu's lines after return written with a backslash" "$(printf '[ -n "$PS1" ] || \\return\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after zsh's bye" "$(printf '[[ -o interactive ]] || bye\n%s' "$stanza")" .zshrc
+startup_expect adds_to_path no "the unmarked line after exit written with a backslash" "$(printf '[ -n "$PS1" ] || \\exit\n%s' "$unguarded")" .zshrc
 
 for reads in '. ~/.profile' 'source ~/.profile' '. "$HOME/.profile"' '. "$HOME"/.profile' '. "${HOME}"/.profile' \
   ". '$startup_home/.profile'" "source \"$startup_home/.profile\"" '[ -f ~/.profile ] && . ~/.profile' \
@@ -785,6 +808,35 @@ for reads in '# . ~/.profile' '. ~/.profile.local' '. "~/.profile"' ". '\$HOME/.
   "$(printf 'exec zsh\n. ~/.profile')" "$(printf '%s\n. ~/.profile' "$here_document")"; do
   startup_expect reads_dot_profile no "$reads" "$reads" .bash_profile
 done
+# The then branch of an if that tests ~/.profile reads it only while that
+# same if is open, and only when that if ends with fi alone, in this shell:
+# not in an if that a later `fi; if`, `fi && if`, `done; if`, `}; if`,
+# `esac; if` or `); if` opens on the line that closes the first block, and
+# not when the if ends in `fi | cat` or `fi &`. A ~ with a quote right
+# after it is not the home directory either.
+for reads in \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi; if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi && if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi;if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  for d in a; do\n    :\n  done; fi; if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi; while false; do\n  :\ndone; if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi; {\n  :\n}; if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi; case $- in\n  *) :;;\nesac; if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi; (\n  :\n); if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nfi | cat')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nfi &')" \
+  '. ~"/.profile"' ". ~'/.profile'"; do
+  startup_expect reads_dot_profile no "$reads" "$reads" .bash_profile
+done
+for reads in \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nelse\n  :\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nfi  # read it')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nfi\nif [ "$(uname)" = SunOS ]; then\n  :\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi\nif [ -f ~/.profile ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'for d in a; do\n  :\ndone\nif [ -f ~/.profile ]; then\n  . ~/.profile\nfi')" \
+  '. ~/".profile"'; do
+  startup_expect reads_dot_profile yes "$reads" "$reads" .bash_profile
+done
 
 # A stock Mac in a pipe with no terminal: ~/.local/bin, the persistent line
 # printed for ~/.zprofile, nothing written, and the next command a full path.
@@ -795,7 +847,9 @@ path_expect_installed_to "$case_home/.local/bin"
 path_expect_text "~/.local/bin is not on your PATH. For new terminals to find axocoatl, add this line to ~/.zprofile:"
 path_expect_text "    $(path_line_for zsh)"
 path_expect_text "Next:  $case_home/.local/bin/axocoatl onboard"
-path_expect_text "Podman, which every Session and run needs, is not installed yet; onboard (below) sets it up or says how, asking first"
+path_expect_text "Podman, which every Session and run needs, is not on PATH."
+path_expect_text "onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do."
+path_expect_text "# set up a writer and a reviewer, and Podman where it can (else it says how); it asks first"
 [ ! -e "$case_home/.zprofile" ] || fail "$name wrote ~/.zprofile without being asked"
 path_expect_next_runs
 
@@ -832,10 +886,11 @@ path_reinstall_twice 1 .zprofile
 
 # A ~/.zprofile that only seems to add ~/.local/bin does not count: a
 # subdirectory, a line that takes it out of PATH, PATH only in a comment, a
-# line for another OS, and Debian's lines where they do not surely run (for
-# another OS, after a line that ends in && or \, in a function, or after a
-# function inside a block for another OS). Each gets the line, and a new login
-# shell finds axocoatl, with ~/.local/bin on PATH once.
+# line for another OS, and Debian's lines where something before them can
+# keep them from running (for another OS, after a line that ends in && or \,
+# in a function, or after a function inside a block for another OS). Each
+# gets the line, and a new login shell finds axocoatl, with ~/.local/bin on
+# PATH once.
 fake_number=0
 while IFS= read -r fake_line <&3; do
   [ -n "$fake_line" ] || continue
@@ -1327,6 +1382,66 @@ path_expect_no_prompt
 [ "$(installer_lines "$case_home/.config/fish/config.fish")" = 1 ] || fail "$name added a line to config.fish again"
 path_reinstall_twice 1 .config/fish/config.fish
 
+# The release gate's new user (scripts/release-gate/lib.sh,
+# gate_install_new_user): without a terminal the installer prints its line,
+# and the gate adds it to each file the installer named, as the user is told
+# to, without the marker comment. path_gate_case NAME OS SHELL LAYOUT LINE
+# FILE...: from a home with LAYOUT (none; xdg: none, with XDG_CONFIG_HOME
+# set to a directory with a space in it under the home directory; or a
+# seed_home layout), the installer names exactly FILE... (relative to the
+# home directory), the gate's own parser (gate_printed_profile_line) reads
+# LINE (a path_line_for name) for each, two more installs neither ask nor add
+# a line, and every new SHELL finds axocoatl, with ~/.local/bin on PATH once.
+path_gate_case() {
+  gate_name=$1 gate_os=$2 gate_shell=$3 gate_layout=$4 gate_line="$(path_line_for "$5")"
+  shift 5
+  reset_path_case
+  P_OS=$gate_os P_SHELL=$gate_shell
+  case "$gate_layout" in
+    none) ;;
+    xdg) P_XDG_CONFIG_HOME="$work_dir/$gate_name/home/xdg config" ;;
+    *) seed_home "$gate_name" "$gate_layout" ;;
+  esac
+  run_path_case "$gate_name"
+  path_expect_status 0
+  path_expect_text "For new terminals to find axocoatl, add this line to "
+  gate_want=""
+  for gate_file in "$@"; do
+    gate_want="$gate_want${gate_want:+
+}$case_home/$gate_file	$gate_line"
+  done
+  gate_got="$(HOME="$case_home" bash -c '. "$1" && gate_printed_profile_line "$2"' sh \
+    "$repo_root/scripts/release-gate/lib.sh" "$output")"
+  [ "$gate_got" = "$gate_want" ] \
+    || fail "$name: the gate reads '$gate_got' from the installer's output, not '$gate_want': $(cat "$output")"
+  for gate_file in "$@"; do
+    [ ! -e "$case_home/$gate_file" ] || [ "$(installer_lines "$case_home/$gate_file")" = 0 ] \
+      || fail "$name wrote ~/$gate_file without being asked"
+    mkdir -p "$(dirname -- "$case_home/$gate_file")"
+    printf '\n%s\n' "$gate_line" >>"$case_home/$gate_file"
+  done
+  path_reinstall_twice 0 "$@"
+  P_LINE=$gate_line
+  gate_count=$#
+  for gate_file in "$@"; do
+    set -- "$@" "$case_home/$gate_file"
+  done
+  shift "$gate_count"
+  case "${gate_shell##*/}" in
+    zsh | bash | fish) path_expect_new_shells_find "${gate_shell##*/}" "$@" ;;
+    *) path_expect_new_shells_find sh "$@" ;;
+  esac
+}
+path_gate_case path-gate-mac-zsh Darwin /bin/zsh none zsh .zprofile
+path_gate_case path-gate-mac-bash Darwin /bin/bash none bash .bash_profile
+path_gate_case path-gate-linux-bash-ubuntu Linux /bin/bash ubuntu bash-nonlogin .bashrc
+path_gate_case path-gate-linux-bash-runner Linux /bin/bash runner bash .bashrc .bash_profile
+path_gate_case path-gate-linux-bash-empty Linux /bin/bash none bash .bashrc .profile
+path_gate_case path-gate-linux-zsh Linux /usr/bin/zsh none zsh .zshrc .zprofile
+path_gate_case path-gate-fish Linux /usr/bin/fish none fish .config/fish/config.fish
+path_gate_case path-gate-fish-xdg Linux /usr/bin/fish xdg fish "xdg config/fish/config.fish"
+path_gate_case path-gate-other-shell Linux /bin/ksh none sh .profile
+
 # Any other shell reads ~/.profile.
 reset_path_case
 P_SHELL=/bin/ksh P_TTY='y'
@@ -1393,6 +1508,7 @@ P_PODMAN=yes
 run_path_case path-podman-present
 path_expect_status 0
 path_refuse_text 'Podman, which every Session and run needs'
+path_refuse_text 'onboard (below) installs it'
 
 # --- Choosing the release ------------------------------------------------
 # AXOCOATL_VERSION installs that release without asking GitHub for the latest
