@@ -246,17 +246,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `config.fish`, under `$XDG_CONFIG_HOME` when that is set, which changes only `PATH` and
   saves nothing in fish's universal `fish_user_paths`; `~/.profile` otherwise), and
   prints that line and those files when it cannot ask. The line adds the directory only
-  when PATH does not have it. A file gets none when one of its lines is one of the
-  installer's own lines, wherever it is in the file, so installing again never adds a
-  second one. That includes the `export PATH="…/.local/bin:$PATH"` line that 1.4.0 and
-  earlier printed for you to add; an installer line you moved under a condition still
-  counts. A file also gets none when it has the lines Debian's and Ubuntu's `~/.profile`
-  use to add `~/.local/bin` at its top level, where nothing before them can keep them
-  from running: not in a block or a function, not after a line that ends in `&&`, `||`,
-  `|` or `\`, not inside a quote, and not after `return`, `exit`, `exec` or a construct
-  the installer cannot follow. A subdirectory, a line that removes the directory, a
-  mention in a comment, or Debian's lines behind an OS check do not count, so such a file
-  gets the line too. Next to such a `~/.profile`, read directly or by a `~/.bash_profile`
+  when PATH does not have it. A file gets none when it has the installer's marked line
+  (or its guarded `case` line), wherever it is in the file, so installing again never
+  adds a second one; a marked line you moved under a condition still counts. It also gets
+  none when it has, where nothing before can keep it from running, the
+  `export PATH="…/.local/bin:$PATH"` line that 1.4.0 and earlier printed for you to add,
+  fish's `fish_add_path` line, or the lines Debian's and Ubuntu's `~/.profile` use to add
+  `~/.local/bin`: at the top level, not in a block or a function, not after a line that
+  ends in `&&`, `||`, `|` or `\`, not inside a quote, and not after `return`, `exit`,
+  `exec` or a construct the installer cannot follow. A subdirectory, a line that removes
+  the directory, a mention in a comment, or such a line behind an OS check do not count,
+  so such a file gets the line too. Next to such a `~/.profile`, read directly or by a `~/.bash_profile`
   that sources it by the same rule (`. ~/.profile`, `. "$HOME"/.profile`, its full path,
   or behind `[ -f … ] &&` or `if [ -f … ]`), only `~/.bashrc` gets a line, one that skips
   login shells. A new login, an SSH login (`bash -il`) and a new terminal each list
@@ -490,7 +490,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capabilities, `podman info` maps only the user's own id (a pause process started before
   the range was added). Usually, with a range in the files, it fails instead: `command
   required for rootless mode with multiple IDs: exec: "newuidmap": executable file not
-  found in $PATH`, and again after the `podman system migrate` its message suggests.
+  found in $PATH`; after the `podman system migrate` that message suggests, Podman logs
+  the same failure with its quotes escaped, and both forms are recognized.
   Doctor's Podman line now names the package that ships them, where it said to run
   `podman info`. Onboarding offers it after asking, like the Podman install (under
   `--yes` only with `--allow-sudo`): `sudo apt-get install -y uidmap && podman system
