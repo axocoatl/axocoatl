@@ -297,8 +297,8 @@ plain, hardened keep-id, a development container, a bind of the mount point
 itself, a bind through a link, a bind volume, an overlay volume, a tmpfs
 through a bind of the repository, and Podman's `no such container` and `no
 such volume` answers). Each removal they assert runs while an unrelated
-container exists, and each keep they assert names why, so a broken `podman
-container inspect` fails them. The step must report `9 passed`, so that a
+container exists, and each keep of the empty mount point they assert names
+why, so a broken `podman container inspect` fails them. The step must report `9 passed`, so that a
 renamed test cannot pass by matching nothing. The egress and workload suites need prepared local images and are
 not wired yet.
 
@@ -517,33 +517,41 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   - a forged signed-in cookie gives a signed-out browser the retry page at
     most once per navigation.
 
-  `signed-out.test.mjs` asserts in every engine that the workbench reloads at
-  most once a minute when its API answers 401, and otherwise shows "This
-  browser is signed out". In WebKit on a Mac it sets, from a full-page Preview
-  origin, about 52 large `Path=/api` cookies for `localhost`, and asserts:
+  `signed-out.test.mjs` asserts in every engine that while `/` serves the
+  shell and the API answers 401, the workbench reloads once and then shows
+  "This browser is signed out": no further automatic reload in the 3 seconds
+  it then waits, nor after a click on the message's Reload button, and no
+  reload at all without sessionStorage. It does not pin the one-minute window
+  the page's code uses (`ONE_MINUTE`). In WebKit on a Mac it sets, from a
+  full-page Preview origin, 60 `Path=/api` cookies for `localhost` (51 of
+  4,000 bytes, then 9 from 2,048 down to 8 bytes; the large ones alone leave
+  room for the token cookie), and asserts:
   - the token cookie stays stored but API requests get 401;
-  - the workbench loads twice, then shows the message;
+  - the workbench loads twice, then shows the message, and does not reload in
+    the next 5 seconds, nor in the 3 seconds after the sign-in link is opened
+    again;
   - the same cookies with `Path=/ws` leave the live connection reconnecting.
 - Known gap: in Safari on macOS a top-level Preview's script can set a
   `Domain=localhost` cookie that reaches the workbench and every other Preview
   ([Safari shares `Domain=localhost` cookies](https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies)).
   The app's server no longer can through the Preview proxies.
-  - About 52 large such cookies with `Path=/api` sign that browser out of the
-    workbench's API until localhost's data is removed in Safari's settings.
-    The workbench then says "This browser is signed out" instead of reloading
-    without end.
+  - Such cookies with `Path=/api`, 51 of 4,000 bytes and then smaller ones
+    that fill what is left of the about 200 KB Safari sends, sign that browser
+    out of the workbench's API until localhost's data is removed in Safari's
+    settings. The workbench then says "This browser is signed out" instead of
+    reloading without end.
   - With `Path=/` they sign that browser out of the workbench entirely (the
     sign-in page, not the signed-out message) until the cookies are removed
     and that Preview is closed; signing in again works until it writes them
     again. No journey asserts this case yet.
   - With `Path=/ws` they keep its live connection from opening.
 
-  The macOS WebKit journeys assert this. The person on the
-  `C1-workbench-webkit` path should confirm it in Safari, including that
-  Safari > Settings > Privacy > Manage Website Data removes the cookies. Any
-  page in Safari can also sign out a browser that signed in seconds earlier
-  and has no workbench page open, by writing about 1,000 cookies, because
-  WebKit drops its whole cookie jar.
+  The macOS WebKit journeys assert the `Path=/api` and `Path=/ws` cases. The
+  person on the `C1-workbench-webkit` path should confirm all three in Safari,
+  including that Safari > Settings > Privacy > Manage Website Data removes the
+  cookies. Any page in Safari can also sign out a browser that signed in
+  seconds earlier and has no workbench page open, by writing about 1,000
+  cookies, because WebKit drops its whole cookie jar.
 
 Pass: every required path exits 0 and every receipt verifies; no command
 copied from the site fails; doctor ends ready; time to first success and the

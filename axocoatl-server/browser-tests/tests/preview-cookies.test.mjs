@@ -25,8 +25,8 @@ import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 // - an app's Set-Cookie with Domain=localhost stays host-only on its own
 //   Preview origin, because the proxy removes Domain.
 // Other cookies such a page can set do harm in Safari (signed-out.test.mjs):
-// about 52 large ones with Path=/api sign it out of the API, and with
-// Path=/ws keep the live connection from opening. About 1,000 at once,
+// 51 large ones and smaller fillers with Path=/api sign it out of the API,
+// and with Path=/ws keep the live connection from opening. About 1,000 at once,
 // seconds after a sign-in with no workbench page open, sign it out
 // (operate/security.mdx).
 // It needs Podman and the curated node:20-slim image, and is skipped when

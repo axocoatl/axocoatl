@@ -13,7 +13,7 @@ host enforced. One open-source Rust executable; no Axocoatl account or telemetry
 
 ```bash
 curl -fsSL https://axocoatl.ai/install.sh | sh   # macOS, Linux, or inside WSL2 on Windows (not PowerShell; WSL2 not yet verified)
-axocoatl onboard   # set up a writer and a reviewer for this OS user, and Podman where it can install it (else it names the installer); it asks before each change
+axocoatl onboard   # set up a writer and a reviewer for this OS user, and Podman where it can install it (else it says what to do); it asks before each change
 axocoatl doctor    # check the sandbox, the models, the writers and the daemon
 axocoatl dev       # start the daemon and leave it running
 
@@ -25,8 +25,8 @@ axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo 
 ```
 
 Onboarding installs Podman after asking where it can: with Homebrew on an Apple-silicon
-Mac, and with apt, dnf, pacman or zypper (using `sudo`) on Linux. On a Mac without
-Homebrew it points to the podman.io installer, on an Intel Mac to the Podman 5.8
+Mac, and with apt, dnf, pacman or zypper (using `sudo`) on Linux. On an Apple-silicon Mac
+without Homebrew it points to the podman.io installer, on an Intel Mac to the Podman 5.8
 package, and on another Linux distribution it names what to install; Ubuntu 22.04 and
 older are refused, since their Podman is too old. On a Mac it then creates and starts
 the Podman machine, after asking.
@@ -43,8 +43,9 @@ check, such as `npm test`, `pytest` or `go test ./...`
 ([repository toolchains](https://docs.axocoatl.ai/configure/toolchains/)).
 
 On a Mac with 48 GB of memory, onboarding offers `qwen3-coder:30b` (19 GB) to write and
-`gpt-oss:20b` (14 GB) to review, on Ollama 0.40.6 or a later 0.x release;
-`gpt-oss:20b` as reviewer has not been measured. The reviewer in the
+`gpt-oss:20b` (14 GB) to review, on Ollama 0.40.6 or a later 0.x release (models you
+already have come first when they fit and make a pair); `gpt-oss:20b` as reviewer has
+not been measured. The reviewer in the
 measurements below, `gpt-oss:120b` (65 GB), needs about 96 GB of memory or more. With less
 memory, use OpenRouter for the reviewer (or for both), or Claude Code or Codex as the
 writer. What each path needs and downloads is on

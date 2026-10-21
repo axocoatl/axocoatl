@@ -284,9 +284,10 @@ with its MLX runner instead, and MLX's limit is the model's own maximum context,
 `num_ctx`: Axocoatl refuses a model Ollama shows as non-GGUF or MLX, or loads with any
 runner but `llama-server`. When a tag on your Mac pulled its MLX variant,
 `ollama pull --runner llamacpp <model>` pulls the GGUF one; Ollama does not document
-that flag. `qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) are GGUF; together they
-are the default Lead and Reviewer pair on a 48 GB Mac (Ollama swaps them between
-writing and review).
+that flag. `qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) are GGUF; they are the
+Lead and Reviewer pair onboarding offers with 48 to 95 GB of memory when no installed
+pair fits. Axocoatl sets nothing that keeps both loaded or unloads either (no
+`keep_alive`): whether both stay in memory is up to Ollama.
 
 **Contract probes.** When Team & budget observes a model's context, Axocoatl sends two
 small requests to your server with that context and the settings every call uses

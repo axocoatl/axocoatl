@@ -9,13 +9,18 @@ import { browserEngines, launchTestDaemon } from '../support/daemon.mjs';
 // Usually `/` then serves the sign-in page as well (a cleared or expired
 // sign-in cookie, a rotated local API token), and one reload shows it. But
 // `/` can go on serving the shell while the API answers 401. Safari on macOS
-// does that when a page it has open set about 52 large cookies for localhost
-// with Path=/api: WebKit caps the Cookie header it sends at about 200 KB and
-// fills it with the longest-path cookies first, so the token cookie is left
-// off every API request and still sent to `/`. A full-page Preview's script
-// can set those cookies (operate/security.mdx). The shell used to reload
-// itself without end there. It now reloads at most once a minute, and
-// otherwise says this browser is signed out and how to sign in again.
+// does that when a page it has open set, for localhost with Path=/api, 51
+// cookies of 4,000 bytes and then smaller ones: WebKit caps the Cookie header
+// it sends at about 200 KB, puts the longest-path cookies first and skips
+// each one that no longer fits, so the smaller ones fill what the large ones
+// leave (the large ones alone still leave room for the token cookie), and
+// the token cookie is left off every API request and still sent to `/`. A
+// full-page Preview's script can set those cookies (operate/security.mdx).
+// The shell used to reload itself without end there. Its code now reloads
+// at most once a minute, and otherwise says this browser is signed out and
+// how to sign in again. These journeys pin one automatic reload, then the
+// message, and no further automatic reload in the seconds each one waits
+// after it; they do not pin the one-minute window itself.
 //
 // The first and third journeys make the API answer 401 with Playwright, and
 // the second clears the browser's cookies. The last two set the cookies from
@@ -153,8 +158,8 @@ for (const engine of engines) {
       assert.deepEqual(loads, [200, 200]);
 
       // Reload, the person's own choice, loads the shell once more and
-      // shows the message again: the automatic reload stays used for the
-      // minute.
+      // shows the message again, with no automatic reload in the 3 s this
+      // waits (the code keeps the automatic reload used for a minute).
       await Promise.all([
         page.waitForResponse((response) => response.request().isNavigationRequest()
           && new URL(response.url()).pathname === '/'),
@@ -214,7 +219,7 @@ for (const engine of engines) {
     }
   });
 
-  test(`${engine.name}: about 52 large cookies a full-page Preview sets for localhost with Path=/api sign Safari out of the API, and the shell says so instead of reloading without end`, { timeout: 180_000 }, async () => {
+  test(`${engine.name}: the large and filler cookies a full-page Preview sets for localhost with Path=/api sign Safari out of the API, and the shell says so instead of reloading without end`, { timeout: 180_000 }, async () => {
     const browser = await engine.launch();
     const safariSharesLocalhostCookies = process.platform === 'darwin'
       && browser.browserType().name() === 'webkit';
@@ -244,13 +249,16 @@ for (const engine of engines) {
         return;
       }
       // Safari: `/` serves the shell, its API answers 401, one reload, then
-      // the message. Before, this page reloaded without end (43 loads in 8 s).
+      // the message. A shell that reloaded on every 401 loaded 167 documents
+      // in the 20 s this journey waits for the message (Playwright WebKit 26.4
+      // on macOS).
       await assertSignedOutMessage(page, loads);
       await page.waitForTimeout(5_000);
       assert.deepEqual(loads, [200, 200]);
 
       // Opening the sign-in link again does not help while the cookies stay,
-      // and still does not loop: within the minute the shell does not reload.
+      // and still does not loop: the shell does not reload in the 3 s this
+      // waits.
       loads.length = 0;
       await page.goto(runtime.signInUrl, { waitUntil: 'commit' });
       await assertSignedOutMessage(page, loads);
@@ -271,7 +279,7 @@ for (const engine of engines) {
     }
   });
 
-  test(`${engine.name}: about 52 large cookies a full-page Preview sets for localhost with Path=/ws keep Safari's live connection from opening, while the API answers`, { timeout: 180_000 }, async () => {
+  test(`${engine.name}: the large and filler cookies a full-page Preview sets for localhost with Path=/ws keep Safari's live connection from opening, while the API answers`, { timeout: 180_000 }, async () => {
     const browser = await engine.launch();
     const safariSharesLocalhostCookies = process.platform === 'darwin'
       && browser.browserType().name() === 'webkit';

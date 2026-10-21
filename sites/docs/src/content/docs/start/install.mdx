@@ -46,7 +46,8 @@ musl-based distributions such as Alpine; use the Cargo or source path there.
     `fish_add_path` line, or the lines Ubuntu's and Debian's `~/.profile` use to add
     `~/.local/bin`, when they are at its top level where the installer can tell nothing
     before them keeps them from running (it cannot see `set -e` and a failing command, a
-    sourced file that exits, or a syntax error).
+    sourced file that exits, or a syntax error, and it can misread a valid file in other
+    ways).
     In a GitHub Actions step it adds the directory to `$GITHUB_PATH` instead, for the
     job's later steps.
   </TabItem>
@@ -123,11 +124,15 @@ only reads. `axocoatl onboard` sets up both, and Podman where it can install it
 - **Writer.** Claude Code needs a Claude Pro or Max plan and the `claude` CLI on this
   computer. Codex signs in with your ChatGPT plan. A local writer runs on Ollama.
 - **Reviewer.** A local model on Ollama, or a hosted one paid with OpenRouter credits.
-- **Memory for local models.** With 48 to 95 GB, onboarding offers the local pair,
-  `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing; a fix run calls the reviewer
-  only after the writer and the checks finish. With less memory it offers no local pair
-  by default: use OpenRouter for the reviewer (or for both), or Claude Code or Codex as
-  the writer. `gpt-oss:120b`, the reviewer we measured, needs about 96 GB or more.
+- **Memory for local models.** Models already on your Ollama server come first: when
+  they include a pair that fits this computer, a writer and a gpt-oss model or a larger
+  one to review it ([how it picks them](/start/onboard/)), onboarding suggests those.
+  Otherwise, with 48 to 95 GB it offers the local pair, `qwen3-coder:30b` writing and
+  `gpt-oss:20b` reviewing; a fix run calls the reviewer only after the writer and the
+  checks finish. With less memory no local pair has been tested: onboarding first offers
+  OpenRouter for the reviewer (or for both), or Claude Code or Codex as the writer, and
+  suggests local models only if you then choose them, and only ones that fit.
+  `gpt-oss:120b`, the reviewer we measured, needs about 96 GB or more.
   {/* VERIFIED-PENDING: restate from the final live runs */}
   {/* The local pair was tested on a 48 GB Mac. */}
 - **Docker** is not supported; Axocoatl runs Podman, which can run alongside Docker.
@@ -191,11 +196,13 @@ A run's sandbox also pulls its base image and packages the first time it starts.
   turns the cloud features off where the running server reads them, and pulls the
   models.
 
-Local models need memory. From 48 GB, onboarding offers `qwen3-coder:30b` (18.6 GB) to
-write and `gpt-oss:20b` (13.8 GB) to review, and a fix run calls them in turn; with
-96 GB or more the reviewer is `gpt-oss:120b` (65.4 GB), the one Axocoatl has measured.
-Below 48 GB onboarding offers no local pair by default and suggests OpenRouter for the
-reviewer, or for both.
+Local models need memory. Unless models already on your Ollama server include a pair
+that fits this computer, which onboarding then suggests, from 48 GB it offers
+`qwen3-coder:30b` (18.6 GB) to write and `gpt-oss:20b` (13.8 GB) to review, and a fix
+run calls them in turn; with 96 GB or more the reviewer is `gpt-oss:120b` (65.4 GB), the
+one Axocoatl has measured. Below 48 GB no local pair has been tested, and onboarding
+first offers OpenRouter for the reviewer or for both, or Claude Code or Codex as the
+writer.
 They are large downloads. A fix run needs a context of at least 16384 tokens, and
 Ollama gives a model 4096 on computers with less than about 23 GiB of graphics memory;
 onboarding then offers to set `OLLAMA_CONTEXT_LENGTH=32768` for the Homebrew or

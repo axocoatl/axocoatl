@@ -180,8 +180,9 @@ verified).
 <!-- VERIFIED-PENDING: restate here what the final live runs verified (template: CHANGELOG.md, 1.5.0, Verified) -->
 
 Onboarding offers the local pair, qwen3-coder:30b writing and gpt-oss:20b reviewing, from
-48 GB of memory; with less, use OpenRouter for the reviewer or both, or Claude Code or
-Codex as the writer. Not yet verified: Intel Macs, Macs with less than 48 GB for local models,
+48 GB of memory, unless models already installed fit and make a pair, which come first;
+with less, use OpenRouter for the reviewer or both, or Claude Code or Codex as the
+writer. Not yet verified: Intel Macs, Macs with less than 48 GB for local models,
 Ubuntu 22.04, Debian 12, Fedora with SELinux, and WSL2 on Windows. Docker is not
 supported; Podman can run alongside it. The first daemon start downloads an 87 MB
 embedding model from huggingface.co. Removing Axocoatl:
