@@ -377,8 +377,12 @@ jobs:
     # The Podman suites ignored by default, against the runner's rootless
     # Podman (docs/RELEASE_GATE.md). The egress and workload suites need
     # prepared local images and are not wired yet. The node_modules mount
-    # point tests start Session containers, and one development container,
-    # from the same Alpine image, and provision Git in it from the network.
+    # point tests start Session containers from the same Alpine image on
+    # Podman's default rootless network (the one the new-user job's egress
+    # sidecars on this runner image reach package registries through), and
+    # provisioning installs Git and the other Alpine packages from Alpine's
+    # mirrors over it. The containers of the person's own they start have
+    # no network.
     name: Podman suites (ignored tests)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -394,13 +398,15 @@ jobs:
         run: podman pull docker.io/library/alpine:3.20
       - name: Session trust volume on rootless Podman
         run: cargo test --locked -p axocoatl-isolation --test session_trust_podman -- --ignored --test-threads=1
-      - name: Node dependency mount point on rootless Podman (plain, hardened keep-id, devcontainer)
+      - name: Node dependency mount point on rootless Podman (plain, hardened keep-id, the person's containers)
         run: |
           set -o pipefail
           cargo test --locked -p axocoatl-isolation --lib -- --ignored --exact --test-threads=1 \
             session_sandbox::tests::a_repository_without_node_modules_has_none_left_behind \
             session_sandbox::tests::under_the_hardened_workload_the_mount_point_is_the_persons_until_removal \
             session_sandbox::tests::a_development_containers_node_modules_volume_keeps_the_mount_point \
+            session_sandbox::tests::a_container_that_bind_mounts_the_mount_point_itself_keeps_it \
+            session_sandbox::tests::a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it \
             | tee "$RUNNER_TEMP/mountpoint-tests.log"
-          # All three ran: a renamed test must not pass by matching nothing.
-          grep -q '^test result: ok. 3 passed' "$RUNNER_TEMP/mountpoint-tests.log"
+          # All five ran: a renamed test must not pass by matching nothing.
+          grep -q '^test result: ok. 5 passed' "$RUNNER_TEMP/mountpoint-tests.log"

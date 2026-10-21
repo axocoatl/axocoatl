@@ -8948,6 +8948,11 @@ mod tests {
             "not the OCI runtime's 01755 mount point"
         );
         assert_eq!(std::fs::read_dir(mountpoint).unwrap().count(), 0);
+        assert!(
+            crate::dependency_mountpoint::carries_a_nonce(mountpoint),
+            "marked with {}",
+            crate::dependency_mountpoint::MARK_ATTRIBUTE
+        );
         let probe = mountpoint.join("person-probe");
         std::fs::create_dir(&probe).expect("the person can write into it");
         std::fs::remove_dir(&probe).unwrap();
@@ -8981,7 +8986,8 @@ mod tests {
 
     /// End-to-end: needs Podman. A repository without `node_modules` keeps
     /// none: the mount point is the person's while a container mounts it,
-    /// and is gone once no container does. Run with:
+    /// and is gone once Axocoatl removes the last container that does. Run
+    /// with:
     ///
     /// ```text
     /// cargo test -p axocoatl-isolation --lib \
@@ -9092,52 +9098,87 @@ mod tests {
             .unwrap();
     }
 
-    /// End-to-end: needs Podman. A container of the person's own that
-    /// bind-mounts the repository elsewhere, with its own `node_modules`
-    /// volume below that (a development container), mounts over the
-    /// directory Axocoatl made though none of its mount destinations is
-    /// that path. Closing the Session keeps the directory, and the
-    /// development container keeps its volume (on Linux, removing it would
-    /// detach that mount), until that container is gone too. Run with:
-    ///
-    /// ```text
-    /// cargo test -p axocoatl-isolation --lib \
-    ///   session_sandbox::tests::a_development_containers_node_modules_volume_keeps_the_mount_point \
-    ///   -- --ignored --exact --test-threads=1
-    /// ```
+    /// A container of the person's own, from [`DEFAULT_IMAGE`] with no
+    /// network: removed, with a volume of its name, however the test ends.
     #[cfg(unix)]
-    #[tokio::test]
-    #[ignore = "requires podman; run this test explicitly"]
-    async fn a_development_containers_node_modules_volume_keeps_the_mount_point() {
-        /// Removes the development container and its volume, however the
-        /// test ends.
-        struct DevContainer(String);
-        impl Drop for DevContainer {
-            fn drop(&mut self) {
-                let _ = std::process::Command::new(PODMAN)
-                    .args(["rm", "-f", "-t", "0", &self.0])
-                    .output();
-                let _ = std::process::Command::new(PODMAN)
-                    .args(["volume", "rm", "-f", &self.0])
-                    .output();
-            }
-        }
-        async fn podman(args: &[&str]) -> String {
-            let output = Command::new(PODMAN).args(args).output().await.unwrap();
-            assert!(
-                output.status.success(),
-                "podman {args:?}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            String::from_utf8_lossy(&output.stdout).trim().to_string()
-        }
+    struct OwnContainer(String);
 
+    #[cfg(unix)]
+    impl Drop for OwnContainer {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new(PODMAN)
+                .args(["rm", "-f", "-t", "0", &self.0])
+                .output();
+            let _ = std::process::Command::new(PODMAN)
+                .args(["volume", "rm", "-f", &self.0])
+                .output();
+        }
+    }
+
+    /// A Session's container and dependency volume, removed however the
+    /// test ends.
+    #[cfg(unix)]
+    struct SessionLeftovers(String);
+
+    #[cfg(unix)]
+    impl Drop for SessionLeftovers {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new(PODMAN)
+                .args([
+                    "rm",
+                    "-f",
+                    "-t",
+                    "0",
+                    &SessionSandbox::container_name(&self.0),
+                ])
+                .output();
+            let _ = std::process::Command::new(PODMAN)
+                .args([
+                    "volume",
+                    "rm",
+                    "-f",
+                    &SessionSandbox::dependency_volume_name(&self.0),
+                ])
+                .output();
+        }
+    }
+
+    #[cfg(unix)]
+    async fn podman_ok(args: &[&str]) -> String {
+        let output = Command::new(PODMAN).args(args).output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "podman {args:?}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// End-to-end, needs Podman; what the three tests below share. A
+    /// Session on a repository without `node_modules` makes the mount
+    /// point. A container of the person's own, run with `options` (given
+    /// the repository and its `node_modules` as the person spells them, and
+    /// the container's name), has a mount on that directory although no
+    /// mount destination of it is that path; `setup` runs in it. Closing
+    /// the Session keeps the directory, empty, and `check` still passes in
+    /// that container: it keeps its mount (removing the directory would
+    /// take it away). Nothing runs when that container goes: the directory
+    /// stays until Axocoatl's next container start or removal in this
+    /// process, here `release_unused` itself, removes it.
+    #[cfg(unix)]
+    async fn assert_an_own_containers_mount_keeps_the_mount_point(
+        options: impl Fn(&Path, &Path, &str) -> Vec<String>,
+        setup: &str,
+        check: &str,
+    ) {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         let mountpoint = std::fs::canonicalize(directory.path())
             .unwrap()
             .join("node_modules");
-        let id = format!("node-mountpoint-devcontainer-{}", uuid::Uuid::new_v4());
+        let id = format!("node-mountpoint-own-{}", uuid::Uuid::new_v4());
+        let _leftovers = SessionLeftovers(id.clone());
         let sandbox = SessionSandbox::start(
             &id,
             directory.path(),
@@ -9151,66 +9192,131 @@ mod tests {
         assert!(sandbox.uses_node_dependency_volume());
         assert_kept_while_mounted(&sandbox, &mountpoint).await;
 
-        // The repository as the person spelled it (not canonical on macOS),
-        // at /workspaces/x, and a volume of its own on its node_modules.
-        let dev = DevContainer(format!(
-            "axocoatl-test-devcontainer-{}",
-            uuid::Uuid::new_v4()
-        ));
-        podman(&[
-            "run",
-            "-d",
-            "--name",
-            &dev.0,
-            "-v",
-            &format!("{}:/workspaces/x", directory.path().display()),
-            "--mount",
-            &format!(
-                "type=volume,source={},destination=/workspaces/x/node_modules",
-                dev.0
-            ),
-            DEFAULT_IMAGE,
-            "sleep",
-            "600",
-        ])
-        .await;
-        podman(&[
-            "exec",
-            &dev.0,
-            "sh",
-            "-c",
-            "echo dev > /workspaces/x/node_modules/dev-marker",
-        ])
-        .await;
+        let own = OwnContainer(format!("axocoatl-test-own-{}", uuid::Uuid::new_v4()));
+        let options = options(
+            directory.path(),
+            &directory.path().join("node_modules"),
+            &own.0,
+        );
+        let mut run = vec!["run", "-d", "--name", &own.0, "--network=none"];
+        run.extend(options.iter().map(String::as_str));
+        run.extend([DEFAULT_IMAGE, "sleep", "600"]);
+        podman_ok(&run).await;
+        podman_ok(&["exec", &own.0, "sh", "-c", setup]).await;
 
         sandbox.stop_checked().await.unwrap();
+        let checked = Command::new(PODMAN)
+            .args(["exec", &own.0, "sh", "-c", check])
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            checked.status.success(),
+            "the person's container keeps its mount: {}{}",
+            String::from_utf8_lossy(&checked.stdout),
+            String::from_utf8_lossy(&checked.stderr)
+        );
         assert!(
             mountpoint.is_dir(),
-            "the development container still mounts its volume on it"
+            "the person's container still has a mount on it"
         );
         assert_eq!(std::fs::read_dir(&mountpoint).unwrap().count(), 0);
-        assert_eq!(
-            podman(&[
-                "exec",
-                &dev.0,
-                "cat",
-                "/workspaces/x/node_modules/dev-marker"
-            ])
-            .await,
-            "dev",
-            "the development container keeps its volume"
-        );
 
-        podman(&["rm", "-f", "-t", "0", &dev.0]).await;
+        podman_ok(&["rm", "-f", "-t", "0", &own.0]).await;
+        assert!(
+            mountpoint.is_dir(),
+            "nothing runs when the person's container goes"
+        );
         crate::dependency_mountpoint::release_unused().await;
         assert!(
             !mountpoint.exists(),
             "no container mounts it and it is empty: removed"
         );
-        drop(dev);
+        drop(own);
         SessionSandbox::remove_named_with_dependencies(&id)
             .await
             .unwrap();
+    }
+
+    /// End-to-end: needs Podman. A development container: the repository
+    /// at `/workspaces/x` and a volume of its own on its `node_modules`.
+    /// Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   session_sandbox::tests::a_development_containers_node_modules_volume_keeps_the_mount_point \
+    ///   -- --ignored --exact --test-threads=1
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires podman; run this test explicitly"]
+    async fn a_development_containers_node_modules_volume_keeps_the_mount_point() {
+        assert_an_own_containers_mount_keeps_the_mount_point(
+            |repository, _, name| {
+                vec![
+                    "-v".into(),
+                    format!("{}:/workspaces/x", repository.display()),
+                    "--mount".into(),
+                    format!("type=volume,source={name},destination=/workspaces/x/node_modules"),
+                ]
+            },
+            "echo dev > /workspaces/x/node_modules/dev-marker",
+            "test \"$(cat /workspaces/x/node_modules/dev-marker)\" = dev",
+        )
+        .await;
+    }
+
+    /// End-to-end: needs Podman. A container that bind-mounts the mount
+    /// point itself somewhere else, here `/deps`, which no destination
+    /// named `node_modules` gives away. Removing the directory would leave
+    /// `/deps` on a deleted directory nothing can be created in. Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   session_sandbox::tests::a_container_that_bind_mounts_the_mount_point_itself_keeps_it \
+    ///   -- --ignored --exact --test-threads=1
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires podman; run this test explicitly"]
+    async fn a_container_that_bind_mounts_the_mount_point_itself_keeps_it() {
+        assert_an_own_containers_mount_keeps_the_mount_point(
+            |_, node_modules, _| vec!["-v".into(), format!("{}:/deps", node_modules.display())],
+            "true",
+            "touch /deps/probe && rm /deps/probe",
+        )
+        .await;
+    }
+
+    /// End-to-end: needs Podman. A container that bind-mounts the
+    /// repository and mounts a tmpfs on its `node_modules`: `podman
+    /// container inspect` leaves tmpfs mounts out of `Mounts`. On Linux,
+    /// removing the directory would detach that tmpfs. Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   session_sandbox::tests::a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it \
+    ///   -- --ignored --exact --test-threads=1
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires podman; run this test explicitly"]
+    async fn a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it() {
+        assert_an_own_containers_mount_keeps_the_mount_point(
+            |repository, _, _| {
+                vec![
+                    "-v".into(),
+                    format!("{}:/workspaces/x", repository.display()),
+                    "--tmpfs".into(),
+                    "/workspaces/x/node_modules".into(),
+                ]
+            },
+            "echo tmp > /workspaces/x/node_modules/tmp-marker",
+            "awk '$5 == \"/workspaces/x/node_modules\" { found = 1 } END { exit !found }' \
+             /proc/self/mountinfo || { echo 'nothing is mounted at /workspaces/x/node_modules' >&2; \
+             exit 1; }; test \"$(cat /workspaces/x/node_modules/tmp-marker)\" = tmp",
+        )
+        .await;
     }
 
     /// End-to-end cancellation: needs Podman and package-network access.
