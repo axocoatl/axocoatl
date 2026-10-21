@@ -659,9 +659,18 @@ pub struct IdMapTools {
     /// Whether [`IdMapTools::package`] is installed (`None`: not known).
     pub package_installed: Option<bool>,
     /// Of [`IdMapTools::unprivileged`], the ones the package does not own
-    /// (a copy elsewhere on `PATH`, before the package's): no reinstall
-    /// changes them.
+    /// (a copy elsewhere on `PATH`, before the package's, or one no
+    /// package installed): no reinstall changes them.
     pub foreign: Vec<String>,
+    /// Why reinstalling the installed package would leave the helpers as
+    /// they are, each in words with what to do first (a dpkg diversion, a
+    /// stat override or a `path-exclude` for the package's file, dnf set
+    /// to install files without their file capabilities, a package that
+    /// does not ship a helper or ships it unable to map). Read from the
+    /// package manager each time, so doctor and every onboarding run see
+    /// it, not only the run whose reinstall changed nothing: no reinstall
+    /// is offered while it is not empty.
+    pub reinstall_keeps: Vec<String>,
     /// The command that installs the package here (`sudo apt-get install -y
     /// uidmap`), or reinstalls it when it is installed (`sudo apt-get
     /// install --reinstall -y uidmap`, `sudo dnf reinstall -y
@@ -771,11 +780,14 @@ impl IdMapTools {
     /// The command that fixes the helpers here, when one does: it installs
     /// (or reinstalls) the package for a helper that is nowhere, and
     /// reinstalls an installed package for one that cannot map. Never for a
-    /// helper that is there but not on `PATH`, which no install changes.
+    /// helper that is there but not on `PATH`, which no install changes,
+    /// nor a reinstall that the package manager's own records say would
+    /// leave the helpers as they are ([`IdMapTools::reinstall_keeps`]).
     pub fn command(&self) -> Option<String> {
         let needed = !self.not_found().is_empty()
             || (!self.packaged_unprivileged().is_empty() && self.reinstalls());
-        self.install.clone().filter(|_| needed)
+        let kept = self.reinstalls() && !self.reinstall_keeps.is_empty();
+        self.install.clone().filter(|_| needed && !kept)
     }
 
     /// [`IdMapTools::unprivileged`] without [`IdMapTools::foreign`]: the
@@ -789,9 +801,10 @@ impl IdMapTools {
     }
 
     /// What only the person can do about the helpers, beside
-    /// [`IdMapTools::command`]: put a directory on `PATH`, remove a copy
-    /// the package does not own, reinstall a package whose state is not
-    /// known, or install them where no package is known.
+    /// [`IdMapTools::command`]: put a directory on `PATH`, remove or fix a
+    /// copy the package does not own, undo what keeps a reinstall from
+    /// restoring them, reinstall a package whose state is not known, or
+    /// install them where no package is known.
     fn manual(&self) -> Option<String> {
         let mut words = Vec::new();
         let directories = self.off_path_directories();
@@ -815,23 +828,54 @@ impl IdMapTools {
                     (_, 1) => ("their directory", "they are", "files", "them"),
                     _ => ("their directories", "they are", "files", "them"),
                 };
-            let package = self.package.as_deref().unwrap_or("the package");
-            words.push(format!(
-                "Delete {} or take {its_directory} off PATH: {they_are} not the {file} {package} \
-                 installed, so no reinstall changes {them}",
-                self.foreign.join(" and ")
-            ));
+            let paths = self.foreign.join(" and ");
+            words.push(match (&self.package, self.package_installed) {
+                (Some(package), Some(true)) => format!(
+                    "Delete {paths} or take {its_directory} off PATH: {they_are} not the {file} \
+                     {package} installed, so no reinstall changes {them}"
+                ),
+                // No package installed it: a copy someone put there, which
+                // only its owner can remove or fix.
+                _ => {
+                    let needs = match self.foreign.len() {
+                        1 => "it to be setuid root or to have its file capability",
+                        _ => "them to be setuid root or to have their file capabilities",
+                    };
+                    // Named here unless the fix runs it anyway (for a
+                    // helper that is nowhere).
+                    let install = match (&self.package, &self.install, self.package_installed) {
+                        (Some(package), Some(install), Some(false)) if self.command().is_none() => {
+                            format!(
+                            "; {package}, which installs a newuidmap and newgidmap that can map, \
+                             is not installed (`{install}`)"
+                        )
+                        }
+                        _ => String::new(),
+                    };
+                    format!(
+                        "Remove or fix {paths} (Podman needs {needs}), or take {its_directory} \
+                         off PATH: no package installed {them}, so no reinstall changes \
+                         {them}{install}"
+                    )
+                }
+            });
+        }
+        // The package manager's records say a reinstall changes nothing:
+        // what keeps it from that, and what to do first.
+        if self.reinstalls() {
+            words.extend(self.reinstall_keeps.iter().cloned());
         }
         let packaged = self.packaged_unprivileged();
         if !packaged.is_empty() && !self.reinstalls() {
-            let (they, are, have, their) = if packaged.len() == 1 {
-                ("it", "is", "has", "its")
+            let (they, are, have, their, them, copy) = if packaged.len() == 1 {
+                ("it", "is", "has", "its", "it", "that copy")
             } else {
-                ("they", "are", "have", "their")
+                ("they", "are", "have", "their", "them", "those copies")
             };
             words.push(format!(
                 "Reinstall the package that provides {} so that {they} {are} setuid root or \
-                 {have} {their} file capabilities again ({ID_MAP_PACKAGES})",
+                 {have} {their} file capabilities again ({ID_MAP_PACKAGES}); if no package \
+                 installed {them} (a copy put there by hand), remove or fix {copy} instead",
                 packaged.join(" and ")
             ));
         }
@@ -2498,7 +2542,8 @@ mod tests {
             Some(
                 "Reinstall the package that provides /usr/bin/newuidmap so that it is setuid root \
                  or has its file capabilities again (Debian and Ubuntu: uidmap; Fedora and RHEL: \
-                 shadow-utils; Arch: shadow), then: podman system migrate"
+                 shadow-utils; Arch: shadow); if no package installed it (a copy put there by \
+                 hand), remove or fix that copy instead, then: podman system migrate"
                     .to_string()
             )
         );
@@ -2595,7 +2640,8 @@ mod tests {
             Some(
                 "Reinstall the package that provides /usr/bin/newuidmap so that it is setuid root \
                  or has its file capabilities again (Debian and Ubuntu: uidmap; Fedora and RHEL: \
-                 shadow-utils; Arch: shadow), then: podman system migrate"
+                 shadow-utils; Arch: shadow); if no package installed it (a copy put there by \
+                 hand), remove or fix that copy instead, then: podman system migrate"
             )
         );
         // Both: "they".
@@ -2657,6 +2703,107 @@ mod tests {
         let mut mapped = linux_report(LINUX_INFO, Some(ok));
         mapped.id_map_tools = Some(tools);
         assert_eq!(id_range_problem(&mapped), None);
+    }
+
+    /// When the package manager's records say a reinstall of the installed
+    /// package would leave the helpers as they are, the reinstall is never
+    /// the command: the words say why and what to do first, and nothing
+    /// runs. A copy no package installed (uidmap not installed, or under
+    /// /usr/local) is to be removed or fixed, never "reinstalled".
+    #[test]
+    fn a_reinstall_that_changes_nothing_and_a_copy_no_package_installed_get_words() {
+        let ok = parse_subordinate_ids("alex:100000:65536\n", "alex:100000:65536\n", "alex", None);
+        let mut report = linux_report(SINGLE_INFO, Some(ok));
+        let apt = "sudo apt-get install --reinstall -y uidmap";
+        let keeps = "uidmap installs /usr/bin/newuidmap setuid root, but a dpkg stat override \
+                     gives it mode 755 (`dpkg-statoverride --list /usr/bin/newuidmap`), and \
+                     reinstalling uidmap applies that mode: remove the override (`sudo \
+                     dpkg-statoverride --remove /usr/bin/newuidmap`), then reinstall uidmap \
+                     (`sudo apt-get install --reinstall -y uidmap`)";
+        let tools = IdMapTools {
+            unprivileged: vec!["/usr/bin/newuidmap".to_string()],
+            package: Some("uidmap".to_string()),
+            package_installed: Some(true),
+            install: Some(apt.to_string()),
+            reinstall_keeps: vec![keeps.to_string()],
+            ..IdMapTools::default()
+        };
+        assert_eq!(tools.command(), None);
+        report.id_map_tools = Some(tools.clone());
+        let fix = local_fix(&report, "alex", &IdRangeProblem::NoIdMapTools).unwrap();
+        assert_eq!(fix.install, None);
+        assert_eq!(fix.manual.as_deref(), Some(keeps));
+        assert_eq!(
+            ranges_finding(&report).unwrap().fix,
+            Some(format!("{keeps}, then: podman system migrate"))
+        );
+        // Missing helpers, the same: no reinstall.
+        report.id_map_tools = Some(IdMapTools {
+            missing: vec!["newgidmap".to_string()],
+            unprivileged: Vec::new(),
+            ..tools.clone()
+        });
+        assert_eq!(report.id_map_tools.as_ref().unwrap().command(), None);
+        // Without such a reason the reinstall is the command again.
+        report.id_map_tools = Some(IdMapTools {
+            reinstall_keeps: Vec::new(),
+            ..tools.clone()
+        });
+        assert_eq!(
+            ranges_finding(&report).unwrap().fix.as_deref(),
+            Some("sudo apt-get install --reinstall -y uidmap && podman system migrate")
+        );
+
+        // A copy no package installed, uidmap not installed: removed or
+        // fixed, with uidmap's install named.
+        report.id_map_tools = Some(IdMapTools {
+            unprivileged: vec!["/usr/local/bin/newuidmap".to_string()],
+            foreign: vec!["/usr/local/bin/newuidmap".to_string()],
+            package: Some("uidmap".to_string()),
+            package_installed: Some(false),
+            install: Some("sudo apt-get install -y uidmap".to_string()),
+            ..IdMapTools::default()
+        });
+        let ranges = ranges_finding(&report).unwrap();
+        assert_eq!(
+            ranges.fix.as_deref(),
+            Some(
+                "Remove or fix /usr/local/bin/newuidmap (Podman needs it to be setuid root or to \
+                 have its file capability), or take its directory off PATH: no package \
+                 installed it, so no reinstall changes it; uidmap, which installs a newuidmap \
+                 and newgidmap that can map, is not installed (`sudo apt-get install -y \
+                 uidmap`), then: podman system migrate"
+            )
+        );
+        assert!(!ranges.fix.unwrap().contains("Reinstall the package"));
+        let fix = local_fix(&report, "alex", &IdRangeProblem::NoIdMapTools).unwrap();
+        assert!(fix.manual.is_some() && fix.install.is_none(), "{fix:?}");
+        // newgidmap nowhere as well: the install is the command, not named
+        // twice.
+        report.id_map_tools.as_mut().unwrap().missing = vec!["newgidmap".to_string()];
+        assert_eq!(
+            ranges_finding(&report).unwrap().fix.as_deref(),
+            Some(
+                "Remove or fix /usr/local/bin/newuidmap (Podman needs it to be setuid root or to \
+                 have its file capability), or take its directory off PATH: no package \
+                 installed it, so no reinstall changes it, then: sudo apt-get install -y uidmap \
+                 && podman system migrate"
+            )
+        );
+        // Whose package is not known (no package manager answered): both.
+        report.id_map_tools = Some(IdMapTools {
+            unprivileged: vec!["/usr/bin/newuidmap".to_string()],
+            ..IdMapTools::default()
+        });
+        assert_eq!(
+            ranges_finding(&report).unwrap().fix.as_deref(),
+            Some(
+                "Reinstall the package that provides /usr/bin/newuidmap so that it is setuid root \
+                 or has its file capabilities again (Debian and Ubuntu: uidmap; Fedora and RHEL: \
+                 shadow-utils; Arch: shadow); if no package installed it (a copy put there by \
+                 hand), remove or fix that copy instead, then: podman system migrate"
+            )
+        );
     }
 
     /// A helper whose package is installed is missing because its file was

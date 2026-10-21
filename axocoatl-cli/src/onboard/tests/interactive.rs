@@ -674,6 +674,7 @@ async fn doctor_does_not_tell_a_small_computer_to_pull_a_model_too_large_for_it(
     for gb in [12, 48] {
         let mut env = doctor_env(&shims);
         env.memory_bytes = Some(gb * GIB);
+        env.default_config = config_path.clone();
         let report = crate::doctor::collect(&config_path, &env).await;
         let item = report
             .sections

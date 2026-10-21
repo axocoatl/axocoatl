@@ -282,6 +282,19 @@ async fn doctor_passes_a_cloud_disabled_audited_server() {
     assert!(!stdout.contains("[FAIL]"), "{stdout}");
     assert!(stdout.contains("Ready for: workbench Sessions"), "{stdout}");
     assert!(stdout.ends_with("Ready: yes\n"), "{stdout}");
+    // `--config` names a configuration that is not the default one
+    // (HOME's): no fix offers onboarding, which writes only the default.
+    assert!(
+        !stdout.contains("axocoatl onboard --update")
+            && !stdout.contains("axocoatl onboard --replace"),
+        "{stdout}"
+    );
+    if stdout.contains("too large for this computer's") {
+        assert!(
+            stdout.contains("(`axocoatl onboard` writes only the default configuration, "),
+            "{stdout}"
+        );
+    }
 }
 
 #[tokio::test]

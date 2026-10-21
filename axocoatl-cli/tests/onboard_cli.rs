@@ -192,10 +192,28 @@ fn doctor_json_fails_without_podman() {
     assert!(!report["steps_left"].as_array().unwrap().is_empty());
 }
 
-/// Without a configuration, doctor says to run onboard.
+/// Without the default configuration, doctor says to run onboard, which
+/// writes it. Onboarding has no --config: for another configuration that
+/// is missing, doctor says onboarding writes only the default one.
 #[test]
 fn doctor_without_a_configuration_points_to_onboard() {
     let home = tempfile::tempdir().unwrap();
+    let output = axocoatl(home.path())
+        .arg("doctor")
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout.contains("[FAIL] Config missing: no configuration at"),
+        "{stdout}"
+    );
+    // Without a configuration there is no port to look at.
+    assert!(!stdout.contains("Port"), "{stdout}");
+    assert!(stdout.contains("→ Run `axocoatl onboard`\n"), "{stdout}");
+    assert!(stdout.ends_with("Ready: no\n"), "{stdout}");
+
     let output = axocoatl(home.path())
         .args(["doctor", "--config"])
         .arg(home.path().join("missing.yaml"))
@@ -208,10 +226,14 @@ fn doctor_without_a_configuration_points_to_onboard() {
         stdout.contains("[FAIL] Config missing: no configuration at"),
         "{stdout}"
     );
-    // Without a configuration there is no port to look at.
-    assert!(!stdout.contains("Port"), "{stdout}");
-    assert!(stdout.contains("Run `axocoatl onboard`"), "{stdout}");
-    assert!(stdout.ends_with("Ready: no\n"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "Write a configuration there, or check the default one with `axocoatl doctor` \
+             (`axocoatl onboard` writes only the default configuration, "
+        ),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("→ Run `axocoatl onboard`\n"), "{stdout}");
 }
 
 /// `dev` holds its port before it starts or prints that it runs: a taken

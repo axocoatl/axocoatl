@@ -424,19 +424,25 @@ pub fn ambiguous_message(candidates: &[Candidate], check: Option<&str>) -> Strin
         })
         .collect::<Vec<_>>()
         .join(", ");
-    let names = candidates
+    // The choices in words beside a placeholder: `node|go` pasted into a
+    // shell is a pipeline.
+    let names: Vec<&str> = candidates
         .iter()
         .map(|candidate| candidate.toolchain.name())
-        .collect::<Vec<_>>()
-        .join("|");
+        .collect();
+    let names = match names.split_last() {
+        Some((last, [])) => last.to_string(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        None => String::new(),
+    };
     let check = match check {
         Some(check) => format!("the check `{check}` does not say which one it needs"),
         None => "no check command was found to say which one it needs".into(),
     };
     format!(
         "the repository has the files of several toolchains: {found}, and {check}. Pass \
-         --toolchain {names} (or --toolchain none for the plain image), or give the check with \
-         --check \"<command>\""
+         --toolchain <language>, where <language> is {names} (or --toolchain none for the plain \
+         image), or give the check with --check \"<command>\""
     )
 }
 
@@ -1659,7 +1665,11 @@ mod tests {
         let message = ambiguous_message(&listed, Some("make test"));
         assert!(message.contains("package.json (node)"), "{message}");
         assert!(message.contains("go.mod (go)"), "{message}");
-        assert!(message.contains("--toolchain node|python|go"), "{message}");
+        assert!(
+            message.contains("Pass --toolchain <language>, where <language> is node, python or go"),
+            "{message}"
+        );
+        assert!(!message.contains('|'), "{message}");
         assert!(message.contains("`make test`"), "{message}");
         // A check for a toolchain the repository lacks does not choose.
         assert!(matches!(
