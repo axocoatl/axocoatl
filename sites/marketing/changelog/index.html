@@ -162,7 +162,7 @@
               where its archive is.</li>
           <li>Commands on the home page, /install, the README and the docs' first-run pages
               that did not run as written are fixed, a lint checks their shape, and the
-              pages say what is not yet verified.</li>
+              pages say what the release gate verified and what is not yet verified.</li>
         </ul>
 
         <h3>Added</h3>
@@ -244,18 +244,26 @@
               Measured in Playwright's WebKit, not in Safari itself.</li>
         </ul>
 
-        <!-- VERIFIED-PENDING: restate from the final live runs -->
-        <!--
         <h3>Verified</h3>
         <ul>
-          <li>The release candidate was verified live on clean machines: on a 48 GB Mac wiped
-              of Podman, Ollama and Axocoatl, the published install command and
-              axocoatl onboard; fix, fix-claude-code and fix-codex on Node.js, Python, Go and
-              Rust repositories, every receipt verified; connect claude-code, connect codex
-              and connect openrouter signed in through the browser. On Ubuntu 24.04, fix on
-              Node.js, Python, Go and Rust.</li>
+          <li>The release commit went from the published install command to passing,
+              signed runs on clean machines, every receipt verified. On a 48 GB Mac on
+              Apple silicon (macOS 26.6), with Axocoatl, Podman and Ollama uninstalled
+              first, <code>axocoatl onboard</code> installed Podman and Ollama with
+              Homebrew; <code>fix</code> with local models passed on Node.js, Python, Rust
+              and Go repositories, and <code>fix-claude-code</code>, <code>fix-codex</code>
+              and <code>fix</code> with OpenRouter models on Node.js and Python, after
+              <code>connect claude-code</code>, <code>connect codex</code> and
+              <code>connect openrouter</code> signed in through the browser. The workbench
+              in Safari went from the sign-in link to a commit.</li>
+          <li>On Ubuntu 24.04 on arm64, in a VM, as a new user: Podman from apt, OpenRouter
+              models, and <code>fix</code> on Node.js, Python, Rust and Go. In CI, the same
+              new-user flow on Ubuntu 24.04 on x86_64 and arm64 against a scripted model
+              server.</li>
+          <li>Each path's transcript, times, downloads and tool versions are in the signed
+              evidence bundle under <code>release-evidence/1.5.0/</code> in the
+              repository.</li>
         </ul>
-        -->
       </article>
 
       <article class="release">
