@@ -236,6 +236,24 @@ the Preview and failure paths called out below.
   the API; and that a browser that never signed in, holding a forged
   `-signed-in` cookie, gets the retry page then the sign-in page on each
   navigation in Safari (the sign-in page at once elsewhere), never a loop.
+- `signed-out.test.mjs`, in every engine: when `/` serves the shell but every
+  API request answers 401 (Playwright answers them), the shell reloads once
+  and then shows the signed-out message (a modal `alertdialog` that takes
+  focus and names `axocoatl url`, `axocoatl dev` and Safari's Manage Website
+  Data), and its Reload button reloads once more without another automatic
+  reload; when the sign-in cookie is gone, one reload reaches the sign-in
+  page; without `sessionStorage` it never reloads and shows the message.
+  Against the real daemon, a full-page Preview origin (served by Playwright)
+  sets 51 cookies of 4,000 bytes and smaller ones for `localhost` with
+  `Path=/api`, which fill WebKit's Cookie header cap: in WebKit on macOS
+  (Safari) the token cookie is still stored but left off API requests, which
+  answer 401, and the workbench loads twice and then shows the message (a
+  shell that reloads on every 401 loaded 167 documents in 20 seconds here);
+  opening the sign-in link again shows it again without a reload; clearing
+  the cookies and signing in again restores the workbench. The same cookies
+  with `Path=/ws` keep the live connection from opening (the status bar says
+  it is reconnecting) while the API answers. Chromium and WebKit on Linux
+  refuse the cookies, and the journey asserts the workbench works.
 - Manual E2B cleanup is high-friction for both retained identities: the dialog
   requires the exact runtime ID or `axocoatl_creation_token`, begins unchecked,
   sends no request before affirmation, posts the exact confirmation payload,
