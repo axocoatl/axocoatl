@@ -140,7 +140,7 @@ own_fish_lines() {
 startup_awk='
 BEGIN {
   sq = sprintf("%c", 39)
-  nctx = 0; nblk = 0; cmd = 1; cont = 0; lost = 0; ended = 0; branched = 0
+  nctx = 0; nblk = 0; nbid = 0; cmd = 1; cont = 0; lost = 0; ended = 0; branched = 0
   testmode = 0; pending = 0; redir = 0; fname = 0; fnparen = 0; afterfname = 0
   prevcmd = 0; word = ""; inword = 0; last = ""
 }
@@ -161,7 +161,7 @@ function trim(s) {
 function sure() {
   return !lost && !ended && !nctx && !nblk && !cont && !pending && !testmode && !fname && !fnparen && !afterfname
 }
-function push(kind, m) { nblk++; blk[nblk] = kind; mode[nblk] = m }
+function push(kind, m) { nblk++; blk[nblk] = kind; mode[nblk] = m; bid[nblk] = ++nbid }
 function shut(kind, m) {
   if (nblk && blk[nblk] == kind && (m == "" || mode[nblk] == m)) nblk--
   else lost = 1
@@ -454,13 +454,19 @@ adds_to_path() {
 
 # Whether bash login file $1 (~/.bash_profile or ~/.bash_login) counts as
 # reading ~/.profile (written ~/.profile, $HOME/.profile, ${HOME}/.profile,
-# with double quotes around all or part of it, or its full path). It does
-# with `. FILE` or `source FILE` alone, after `[ -f FILE ] &&` (or [[ ]],
-# test, -r, -e, -s), or as `if [ -f FILE ]; then . FILE; fi`, on a line
-# sure() is true for; or with `. FILE` alone in the then branch of a
-# multi-line `if [ -f FILE ]; then` that starts on such a line, before any
-# else or elif, on a line for which sure() would be true but for that one
-# open if (not after a line that ends in && or \, nor inside another block).
+# with double quotes around all or part of it, or its full path; not with a
+# quote right before or after the ~, which then is not the home directory).
+# It does with `. FILE` or `source FILE` alone, after `[ -f FILE ] &&` (or
+# [[ ]], test, -r, -e, -s), or as `if [ -f FILE ]; then . FILE; fi`, on a
+# line sure() is true for. It also does with `. FILE` alone in the then
+# branch of a multi-line `if [ -f FILE ]; then` that starts on such a line:
+# before any else or elif of that same if (each block the reader opens has its
+# own number, so an if that a later `fi; if` or `done; if` opens is another
+# one), on a line for which sure() would be true but for that one open if
+# (not after a line that ends in && or \, nor inside another block), and only
+# when that if then ends with `fi` alone on its line, so that it runs in this
+# shell (not `fi | cmd` or `fi &`, which run it in a subshell). The reader's
+# limits (startup_awk) apply here too.
 reads_dot_profile() {
   [ -f "$1" ] || return 1
   scan_profile="$HOME/.profile" awk "$startup_awk"'
@@ -473,27 +479,38 @@ reads_dot_profile() {
       guarded = "^" exists "[ \t]*&&[ \t]*" src tail
       one_if = "^if[ \t]+" exists "[ \t]*;[ \t]*then[ \t]+" src "[ \t]*;[ \t]*fi" tail
       open_if = "^if[ \t]+" exists "[ \t]*;[ \t]*then" tail
+      close_if = "^fi" tail
       abs = ENVIRON["scan_profile"]
+      # opened: the number of the multi-line if that tests ~/.profile, while
+      # it is open; sourced: the same, once its then branch reads ~/.profile.
       opened = 0
+      sourced = 0
       found = 0
     }
     {
       line = swap($0, sq abs sq, "$HOME/.profile")
       line = swap(line, abs, "$HOME/.profile")
       line = swap(line, "${HOME}", "$HOME")
-      # A quoted ~ is not the home directory; other double quotes go.
-      gsub("[\"" sq "]~", "@QUOTED@", line)
+      # A quoted ~, or a ~ right before a quote, is not the home directory;
+      # other double quotes go.
+      gsub("[\"" sq "]~|~[\"" sq "]", "@QUOTED@", line)
       gsub(/"/, "", line)
       line = trim(line)
       top = sure()
-      in_then = opened && !branched && nblk == 1 && blk[1] == "if"
+      cur = (nblk == 1) ? bid[1] : 0
+      in_then = opened && cur == opened && !branched && blk[1] == "if"
       in_then = in_then && !lost && !ended && !nctx && !cont && !pending && !testmode && !fname && !fnparen && !afterfname
       if (top && (line ~ alone || line ~ guarded || line ~ one_if)) { found = 1; exit }
-      if (in_then && line ~ alone) { found = 1; exit }
+      if (in_then && line ~ alone) sourced = opened
       was = nblk
       track($0)
-      if (top && was == 0 && nblk == 1) { opened = (line ~ open_if); branched = 0 }
-      if (nblk == 0) opened = 0
+      if (top && was == 0 && nblk == 1) { opened = (line ~ open_if) ? bid[1] : 0; sourced = 0; branched = 0 }
+      if (opened && cur == opened && (nblk == 0 || bid[1] != opened)) {
+        # That if ended on this line.
+        if (sourced == opened && line ~ close_if && nblk == 0 && !lost) { found = 1; exit }
+        opened = 0
+        sourced = 0
+      }
     }
     END { exit !found }
   ' "$1" 2>/dev/null

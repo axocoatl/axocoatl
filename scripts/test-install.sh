@@ -785,6 +785,35 @@ for reads in '# . ~/.profile' '. ~/.profile.local' '. "~/.profile"' ". '\$HOME/.
   "$(printf 'exec zsh\n. ~/.profile')" "$(printf '%s\n. ~/.profile' "$here_document")"; do
   startup_expect reads_dot_profile no "$reads" "$reads" .bash_profile
 done
+# The then branch of an if that tests ~/.profile reads it only while that
+# same if is open, and only when that if ends with fi alone, in this shell:
+# not in an if that a later `fi; if`, `fi && if`, `done; if`, `}; if`,
+# `esac; if` or `); if` opens on the line that closes the first block, and
+# not when the if ends in `fi | cat` or `fi &`. A ~ with a quote right
+# after it is not the home directory either.
+for reads in \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi; if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi && if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi;if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  for d in a; do\n    :\n  done; fi; if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi; while false; do\n  :\ndone; if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi; {\n  :\n}; if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi; case $- in\n  *) :;;\nesac; if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi; (\n  :\n); if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nfi | cat')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nfi &')" \
+  '. ~"/.profile"' ". ~'/.profile'"; do
+  startup_expect reads_dot_profile no "$reads" "$reads" .bash_profile
+done
+for reads in \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nelse\n  :\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nfi  # read it')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nfi\nif [ "$(uname)" = SunOS ]; then\n  :\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nfi\nif [ -f ~/.profile ]; then\n  . ~/.profile\nfi')" \
+  "$(printf 'for d in a; do\n  :\ndone\nif [ -f ~/.profile ]; then\n  . ~/.profile\nfi')" \
+  '. ~/".profile"'; do
+  startup_expect reads_dot_profile yes "$reads" "$reads" .bash_profile
+done
 
 # A stock Mac in a pipe with no terminal: ~/.local/bin, the persistent line
 # printed for ~/.zprofile, nothing written, and the next command a full path.
