@@ -9840,6 +9840,160 @@ mod tests {
             .expect("downstream Preview WebSocket server joins");
     }
 
+    /// The real WebSocket proxy forwards a browser's cookies through
+    /// `preview_websocket_cookie`: without the Axocoatl token cookies and
+    /// without a cookie that is not visible ASCII. Safari on macOS sends a
+    /// `Domain=localhost` cookie a Preview page set to `é` as the byte 0xE9.
+    /// Forwarded the way plain HTTP requests forward cookies, it cannot be
+    /// written into the upstream handshake, and the browser's WebSocket gets
+    /// 502. The client here writes its handshake by hand, because
+    /// tungstenite's client refuses that byte too.
+    #[tokio::test]
+    // Tungstenite fixes the handshake callback's error type to a full HTTP
+    // response.
+    #[allow(clippy::result_large_err)]
+    async fn preview_websocket_proxy_opens_beside_a_cookie_that_is_not_ascii() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind real Preview WebSocket upstream");
+        let upstream_port = upstream_listener
+            .local_addr()
+            .expect("real WebSocket upstream address")
+            .port();
+        let (cookie_tx, cookie_rx) = tokio::sync::oneshot::channel::<Option<Vec<u8>>>();
+        let upstream = tokio::spawn(async move {
+            let (socket, _) = upstream_listener
+                .accept()
+                .await
+                .expect("accept proxied WebSocket");
+            let mut cookie_tx = Some(cookie_tx);
+            let mut socket = tokio_tungstenite::accept_hdr_async(
+                socket,
+                move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                      response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    cookie_tx
+                        .take()
+                        .expect("handshake callback runs once")
+                        .send(
+                            request
+                                .headers()
+                                .get(header::COOKIE)
+                                .map(|value| value.as_bytes().to_vec()),
+                        )
+                        .expect("Preview test still observes the handshake");
+                    Ok(response)
+                },
+            )
+            .await
+            .expect("accept the proxied WebSocket handshake");
+            while let Some(Ok(message)) = socket.next().await {
+                if matches!(message, UpstreamWsMessage::Close(_)) {
+                    break;
+                }
+            }
+        });
+
+        let downstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind downstream Preview WebSocket listener");
+        let downstream_address = downstream_listener
+            .local_addr()
+            .expect("downstream Preview WebSocket address");
+        let app = axum::Router::new().fallback(
+            move |request: axum::http::Request<axum::body::Body>| async move {
+                let target = match preview_target_from_headers(request.headers()) {
+                    Ok(Some(target)) => target,
+                    _ => return StatusCode::MISDIRECTED_REQUEST.into_response(),
+                };
+                if !is_websocket_upgrade(request.headers())
+                    || preview_request_has_disallowed_origin(
+                        request.method(),
+                        true,
+                        request.headers(),
+                    )
+                {
+                    return StatusCode::FORBIDDEN.into_response();
+                }
+                preview_websocket_proxy_to_port(target, request, upstream_port).await
+            },
+        );
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let downstream = tokio::spawn(async move {
+            axum::serve(downstream_listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .expect("serve downstream Preview WebSocket");
+        });
+
+        let virtual_host = format!(
+            "ses-websocket-p5173.localhost:{}",
+            downstream_address.port()
+        );
+        let mut handshake = format!(
+            "GET /hmr HTTP/1.1\r\nHost: {virtual_host}\r\nOrigin: http://{virtual_host}\r\n\
+             Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nCookie: "
+        )
+        .into_bytes();
+        handshake.extend_from_slice(
+            b"junk=\xe9; axocoatl-token-18080=workbench-secret; app=1; \
+              axocoatl-token-18080-signed-in=1\r\n\r\n",
+        );
+        let mut client = tokio::net::TcpStream::connect(downstream_address)
+            .await
+            .expect("connect to the real Preview WebSocket proxy");
+        client
+            .write_all(&handshake)
+            .await
+            .expect("send the browser's handshake");
+        let mut head = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            let read =
+                tokio::time::timeout(std::time::Duration::from_secs(20), client.read(&mut byte))
+                    .await
+                    .expect("the proxy answers the handshake")
+                    .expect("read the proxy's answer");
+            if read == 0 {
+                break;
+            }
+            head.push(byte[0]);
+        }
+        let head = String::from_utf8_lossy(&head);
+        assert!(
+            head.starts_with("HTTP/1.1 101"),
+            "the Preview WebSocket did not open: {head}"
+        );
+        // Session code receives the app's cookie, and neither the workbench
+        // sign-in cookies nor the one it could not have been sent.
+        assert_eq!(
+            cookie_rx
+                .await
+                .expect("observe upstream handshake")
+                .as_deref(),
+            Some(&b"app=1"[..])
+        );
+
+        let mut client = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            client,
+            tokio_tungstenite::tungstenite::protocol::Role::Client,
+            None,
+        )
+        .await;
+        client.close(None).await.expect("close downstream client");
+        upstream.await.expect("real WebSocket upstream joins");
+        shutdown_tx
+            .send(())
+            .expect("downstream Preview server is still running");
+        downstream
+            .await
+            .expect("downstream Preview WebSocket server joins");
+    }
+
     #[test]
     fn preview_origins_cannot_write_across_session_or_port_boundaries() {
         let mut headers = HeaderMap::new();

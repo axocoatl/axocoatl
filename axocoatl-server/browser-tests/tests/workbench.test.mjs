@@ -2585,10 +2585,12 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   // other <name>.localhost (measured in Playwright WebKit on macOS).
   // Chromium refuses it, and so does WebKit on Linux (libsoup). Axocoatl
   // cannot stop a page's script from setting one; operate/security.mdx says
-  // what such a cookie can and cannot do. The full-page step below sets the
-  // ones that matter to the workbench, and asserts the workbench stays
-  // signed in. preview-cookies.test.mjs asserts the same against a real
-  // Preview app behind the real proxy, and what that app receives.
+  // what such a cookie can and cannot do. The full-page step below sets a
+  // cookie that is not ASCII, forged token and signed-in cookies and 40 of
+  // 1 KB, and asserts the workbench stays signed in with them.
+  // preview-cookies.test.mjs asserts the same against a real Preview app
+  // behind the real proxy, and what that app receives; signed-out.test.mjs,
+  // the ~52 large Path=/api cookies that do sign Safari out of the API.
   const safariSharesLocalhostCookies = process.platform === 'darwin'
     && browser.browserType().name() === 'webkit';
   const {

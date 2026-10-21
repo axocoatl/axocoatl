@@ -14,19 +14,25 @@ import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 // <name>.localhost set a Domain=localhost cookie and then sends it to the
 // workbench and to every other Preview origin; Chromium and WebKit on Linux
 // refuse it (operate/security.mdx). From a full-page Preview the journey sets
-// what matters to the workbench: a cookie that is not ASCII, a forged
-// axocoatl-token-<port> and -signed-in cookie, and a moderate flood. It
-// asserts, in every engine:
-// - the workbench stays signed in, and a signed-out browser passes the
-//   retry page at most once per navigation;
+// a cookie that is not ASCII, a forged axocoatl-token-<port> and -signed-in
+// cookie, and 40 cookies of 1 KB. It asserts, in every engine:
+// - with those cookies the workbench stays signed in, and a signed-out
+//   browser passes the retry page at most once per navigation;
 // - the browser may send forged axocoatl-token-* cookies to a Preview origin
 //   (Safari does), but no Preview's app ever receives one, over HTTP or on a
 //   WebSocket upgrade: the proxy strips them, and passes the app's other
 //   cookies on (on an upgrade, those that are visible ASCII);
 // - an app's Set-Cookie with Domain=localhost stays host-only on its own
 //   Preview origin, because the proxy removes Domain.
+// Other cookies such a page can set do harm in Safari (signed-out.test.mjs):
+// about 52 large ones with Path=/api sign it out of the API, and with
+// Path=/ws keep the live connection from opening. About 1,000 at once,
+// seconds after a sign-in with no workbench page open, sign it out
+// (operate/security.mdx).
 // It needs Podman and the curated node:20-slim image, and is skipped when
-// that image is not on the machine, rather than pulling it.
+// that image is not on the machine, rather than pulling it. CI pulls the
+// image and sets AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1, which makes a missing
+// image fail this journey instead.
 const IMAGE = 'docker.io/library/node:20-slim';
 const FLOOD = 40;
 const imageMissing = await new Promise((resolve) => {
@@ -34,6 +40,9 @@ const imageMissing = await new Promise((resolve) => {
     ? `${IMAGE} is not on this machine (or Podman is not running); pull it to run this journey`
     : false));
 });
+if (imageMissing && process.env.AXOCOATL_E2E_REQUIRE_NODE_IMAGE === '1') {
+  throw new Error(`AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1, but ${imageMissing}`);
+}
 
 // The Session's app: one Node server on ports 3000 and 5000 that records the
 // Cookie headers of every request and WebSocket upgrade it receives (as
@@ -219,7 +228,7 @@ async function visit(context, url) {
   }
 }
 
-test('a full-page Preview cannot sign the workbench out, and no Preview app receives an axocoatl-token cookie', { timeout: 300_000, skip: imageMissing }, async () => {
+test('a full-page Preview\'s non-ASCII, forged and 40 x 1 KB cookies leave the workbench signed in, and no Preview app receives an axocoatl-token cookie', { timeout: 300_000, skip: imageMissing }, async () => {
   const context = await browser.newContext();
   const echo = await startCookieEcho();
   try {
@@ -321,9 +330,10 @@ test('a full-page Preview cannot sign the workbench out, and no Preview app rece
     }
     assert.equal(at(3000, '/check-fetch').includes('upstream-domain=from-upstream'), true);
 
-    // The workbench stays signed in, with every one of those cookies: the
-    // open page reads the API, a reload and a new page get the workbench,
-    // and both connect their WebSocket.
+    // The workbench stays signed in with these cookies (not with every set a
+    // Preview can write; see the header): the open page reads the API, a
+    // reload and a new page get the workbench, and both connect their
+    // WebSocket.
     assert.equal(await workbench.evaluate(async () => (await fetch('/api/agents')).status), 200);
     const reloaded = await workbench.reload();
     assert.equal(reloaded?.status(), 200);
