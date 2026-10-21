@@ -69,20 +69,24 @@
   #session-lattice-host { display: flex; flex-direction: column; }
   .session-turn-controls { align-self: flex-start; flex: 0 0 auto; margin-bottom: 8px; }
   @media(max-width:720px) { .session-graph-layout > ax-activation-inspector { flex: 0 0 0; } }
-  /* The signed-out message (see the script below). */
+  /* The signed-out message (see the script below), over the whole page. */
   #signed-out {
-    width: min(36rem, calc(100vw - 32px)); max-width: none; padding: 20px 22px;
+    position: fixed; inset: 0; z-index: 2147483647; display: flex;
+    align-items: center; justify-content: center; padding: 16px;
+    background: rgba(0, 0, 0, .55);
+  }
+  #signed-out:focus { outline: none; }
+  #signed-out > div {
+    width: min(36rem, 100%); max-height: 100%; overflow: auto; padding: 20px 22px;
     border: 1px solid var(--border-strong, #888); border-radius: 12px;
     background: var(--panel, Canvas); color: var(--text, CanvasText);
     box-shadow: var(--shadow-lg, none);
     font: var(--fs-body, 14px)/1.55 var(--font-sans, system-ui, sans-serif);
   }
-  #signed-out::backdrop { background: rgba(0, 0, 0, .55); }
+  #signed-out:focus-visible > div { box-shadow: var(--focus-ring); }
   #signed-out h2 { margin: 0 0 10px; font-size: 16px; font-weight: 600; }
   #signed-out p { margin: 0 0 10px; }
   #signed-out code { font: 12.5px var(--font-mono, ui-monospace, monospace); }
-  #signed-out:focus { outline: none; }
-  #signed-out:focus-visible { box-shadow: var(--focus-ring); }
 </style>
 <!-- Signed out. When the API answers 401 (a cleared or expired sign-in
      cookie, or a rotated local API token), `/` serves the sign-in page
@@ -92,8 +96,8 @@
      localhost with Path=/api fill the Cookie header it sends, and a
      full-page Preview's script can set them. So this page reloads at most
      once a minute, and only when sessionStorage can record when it did;
-     otherwise it shows that this browser is signed out and how to sign in
-     again, and leaves the page as it is. -->
+     otherwise it shows, over the page, that this browser is signed out and
+     how to sign in again. -->
 <script>
   (() => {
     const send = window.fetch.bind(window);
@@ -118,26 +122,35 @@
         document.addEventListener('DOMContentLoaded', showSignedOut, { once: true });
         return;
       }
-      const dialog = document.createElement('dialog');
-      dialog.id = 'signed-out';
-      dialog.tabIndex = -1;
-      dialog.setAttribute('role', 'alertdialog');
-      dialog.setAttribute('aria-labelledby', 'signed-out-title');
-      dialog.setAttribute('aria-describedby', 'signed-out-text');
-      dialog.innerHTML = `
+      // A modal alertdialog over the whole page, which it makes inert. Not a
+      // <dialog>: Escape would close that one in Chromium, and the page
+      // behind it cannot work.
+      const message = document.createElement('div');
+      message.id = 'signed-out';
+      message.tabIndex = -1;
+      message.setAttribute('role', 'alertdialog');
+      message.setAttribute('aria-modal', 'true');
+      message.setAttribute('aria-labelledby', 'signed-out-title');
+      message.setAttribute('aria-describedby', 'signed-out-text');
+      message.innerHTML = `<div>
         <h2 id="signed-out-title">This browser is signed out</h2>
         <div id="signed-out-text">
           <p>Axocoatl's API answered 401 to this page: this browser did not send it a valid sign-in cookie.</p>
           <p>Run <code>axocoatl url</code> in a terminal, with the same <code>--config</code> and <code>AXOCOATL_DATA_DIR</code> that started this daemon, and open the link it prints. You can also open the sign-in link that <code>axocoatl serve</code> or <code>axocoatl dev</code> printed when it started.</p>
           <p>In Safari, if this comes back after you sign in, a page open in Safari (a full-page Preview, for example) may have set so many cookies for localhost that Safari no longer sends the sign-in cookie with these requests. Remove localhost's data in Safari &gt; Settings &gt; Privacy &gt; Manage Website Data, then open the sign-in link again.</p>
         </div>
-        <button type="button" class="btn">Reload</button>`;
-      // Escape does not hide it: the page behind it cannot work.
-      dialog.addEventListener('cancel', (event) => event.preventDefault());
-      dialog.querySelector('button').addEventListener('click', () => location.reload());
-      document.body.append(dialog);
-      dialog.showModal();
-      dialog.focus();
+        <button type="button" class="btn">Reload</button>
+      </div>`;
+      message.querySelector('button').addEventListener('click', () => location.reload());
+      const makeInert = (element) => { if (element !== message) element.inert = true; };
+      for (const element of document.body.children) makeInert(element);
+      new MutationObserver((records) => {
+        for (const record of records) for (const node of record.addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) makeInert(node);
+        }
+      }).observe(document.body, { childList: true });
+      document.body.append(message);
+      message.focus();
     };
     window.fetch = async (...args) => {
       const response = await send(...args);

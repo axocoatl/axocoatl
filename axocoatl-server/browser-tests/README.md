@@ -243,9 +243,10 @@ the Preview and failure paths called out below.
   navigation in Safari (the sign-in page at once elsewhere), never a loop.
 - `signed-out.test.mjs`, in every engine: when `/` serves the shell but every
   API request answers 401 (Playwright answers them), the shell reloads once
-  and then shows the signed-out message (a modal `alertdialog` that takes
-  focus and names `axocoatl url`, `axocoatl dev` and Safari's Manage Website
-  Data), and its Reload button reloads once more without another automatic
+  and then shows the signed-out message (a modal `alertdialog` over an inert
+  page, which takes focus, stays after Escape, and names `axocoatl url`,
+  `axocoatl dev` and Safari's Manage Website Data), and its Reload button
+  reloads once more without another automatic
   reload; when the sign-in cookie is gone, one reload reaches the sign-in
   page; without `sessionStorage` it never reloads and shows the message.
   Against the real daemon, a full-page Preview origin (served by Playwright)

@@ -56,9 +56,10 @@ function documentLoads(page) {
 const signedOutMessage = (page) => page.getByRole('alertdialog', { name: SIGNED_OUT });
 
 /**
- * The signed-out message is shown, modal, focused, and says what to do.
- * `loads` (from documentLoads) is reported if it never appears, so a reload
- * loop shows how many documents it loaded.
+ * The signed-out message is shown, modal (the rest of the page is inert),
+ * focused, says what to do, and stays after Escape. `loads` (from
+ * documentLoads) is reported if it never appears, so a reload loop shows how
+ * many documents it loaded.
  */
 async function assertSignedOutMessage(page, loads) {
   const message = signedOutMessage(page);
@@ -72,15 +73,18 @@ async function assertSignedOutMessage(page, loads) {
   assert.match(text, /axocoatl dev/);
   assert.match(text, /Safari > Settings > Privacy > Manage Website Data/);
   assert.deepEqual(await page.evaluate(() => {
-    const dialog = document.getElementById('signed-out');
+    const message = document.getElementById('signed-out');
     return {
-      modal: dialog.matches(':modal'),
-      focused: dialog.contains(document.activeElement),
-      description: document.getElementById(dialog.getAttribute('aria-describedby'))?.textContent.includes('axocoatl url'),
+      modal: message.getAttribute('aria-modal'),
+      othersInert: [...document.body.children].every((element) => element === message || element.inert),
+      focused: message.contains(document.activeElement),
+      description: document.getElementById(message.getAttribute('aria-describedby'))?.textContent.includes('axocoatl url'),
       count: document.querySelectorAll('#signed-out').length,
     };
-  }), { modal: true, focused: true, description: true, count: 1 });
+  }), { modal: 'true', othersInert: true, focused: true, description: true, count: 1 });
   await page.getByRole('button', { name: 'Reload' }).waitFor({ state: 'visible' });
+  for (let press = 0; press < 2; press += 1) await page.keyboard.press('Escape');
+  assert.equal(await message.isVisible(), true, 'Escape hid the signed-out message');
 }
 
 /** A new signed-in context, through the real sign-in link. */
