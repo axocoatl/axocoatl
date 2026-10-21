@@ -208,35 +208,55 @@ fn machine_state_from_output(
 /// Which Podman connection this process's environment selects.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ConnectionOverride {
-    /// Neither variable is set: Podman uses its default connection (on
-    /// macOS, the default machine).
+    /// Neither variable is set, or, on macOS and Windows, neither is
+    /// non-empty: Podman uses its default connection (on Linux, the local
+    /// engine; on macOS, the default machine).
     #[default]
     None,
-    /// `CONTAINER_HOST=…` without `CONTAINER_CONNECTION`: a Podman service
-    /// reached by URL, never a machine Axocoatl manages.
+    /// `CONTAINER_HOST=…` without a non-empty `CONTAINER_CONNECTION`: a
+    /// Podman service reached by URL, never a machine Axocoatl manages. On
+    /// Linux the value is empty when `CONTAINER_HOST` is set but empty
+    /// (see [`ConnectionOverride::from_env`]).
     Host(String),
     /// `CONTAINER_CONNECTION=NAME`, whether or not `CONTAINER_HOST` is set
     /// too: a named connection, which is a machine of that name when
-    /// `podman machine list` lists one.
+    /// `podman machine list` lists one. On Linux the name is empty when
+    /// `CONTAINER_CONNECTION` is set but empty and `CONTAINER_HOST` is not
+    /// set (see [`ConnectionOverride::from_env`]).
     Connection(String),
 }
 
 impl ConnectionOverride {
     /// The connection `CONTAINER_CONNECTION` and `CONTAINER_HOST` select,
-    /// read as Podman reads them: a non-empty `CONTAINER_CONNECTION` wins
-    /// over `CONTAINER_HOST` when both are set, and an empty value counts
-    /// as unset (`setupRemoteConnection` in Podman's `cmd/podman/root.go`
-    /// switches on `connEnv != ""` before `hostEnv != ""` in 4.9.3, 5.6.0
-    /// and 6.1.4).
+    /// read as Podman 4.9.3 to 6.1.4 reads them. To choose the connection
+    /// (`setupRemoteConnection` in `cmd/podman/root.go`), a non-empty
+    /// `CONTAINER_CONNECTION` wins over `CONTAINER_HOST`, and an empty
+    /// value counts as unset. To choose remote mode (`IsRemote` in
+    /// `cmd/podman/registry/remote.go`), Podman asks only whether either
+    /// variable is set (`os.LookupEnv`), so on Linux one set but empty
+    /// turns the local engine off: Podman then reaches its default system
+    /// connection, else this user's API socket
+    /// (`unix:///run/user/<uid>/podman/podman.sock` rootless), and that is
+    /// read here as an override with an empty value ([`Self::Host`] when
+    /// `CONTAINER_HOST` is set, else [`Self::Connection`]). On macOS and
+    /// Windows the client is always remote, so an empty value is the same
+    /// as unset. A byte of a value that is not UTF-8 becomes U+FFFD here;
+    /// Podman uses the bytes as they are.
     pub fn from_env() -> Self {
         Self::from_values(
             std::env::var_os("CONTAINER_CONNECTION").as_deref(),
             std::env::var_os("CONTAINER_HOST").as_deref(),
+            needs_machine(),
         )
     }
 
-    /// [`ConnectionOverride::from_env`] given the two values.
-    fn from_values(connection: Option<&std::ffi::OsStr>, host: Option<&std::ffi::OsStr>) -> Self {
+    /// [`ConnectionOverride::from_env`] given the two values, and whether
+    /// the `podman` client is always remote (macOS and Windows).
+    fn from_values(
+        connection: Option<&std::ffi::OsStr>,
+        host: Option<&std::ffi::OsStr>,
+        always_remote: bool,
+    ) -> Self {
         let set = |value: Option<&std::ffi::OsStr>| {
             value
                 .filter(|value| !value.is_empty())
@@ -246,6 +266,12 @@ impl ConnectionOverride {
             ConnectionOverride::Connection(name)
         } else if let Some(host) = set(host) {
             ConnectionOverride::Host(host)
+        } else if always_remote {
+            ConnectionOverride::None
+        } else if host.is_some() {
+            ConnectionOverride::Host(String::new())
+        } else if connection.is_some() {
+            ConnectionOverride::Connection(String::new())
         } else {
             ConnectionOverride::None
         }
@@ -1158,6 +1184,10 @@ esac"#,
                           not answer through it: ";
         let default_down = "Unavailable(\"OCI container setup failed: podman info failed: \
                             Cannot connect to Podman\")";
+        let empty_host_down =
+            "Unavailable(\"CONTAINER_HOST= is set, and Podman does not answer through it: ";
+        let empty_connection_down =
+            "Unavailable(\"CONTAINER_CONNECTION= is set, and Podman does not answer through it: ";
         let mac = needs_machine();
         // (what the case is, its variables, the verdict on macOS, on Linux)
         let cases = [
@@ -1227,6 +1257,29 @@ esac"#,
                 default_down,
                 default_down,
             ),
+            (
+                "CONTAINER_HOST is set but empty, the default machine is stopped",
+                vec![("CONTAINER_HOST", ""), machines(STOPPED)],
+                "MachineStopped",
+                empty_host_down,
+            ),
+            (
+                "CONTAINER_CONNECTION is set but empty, the default machine is stopped",
+                vec![named(""), machines(STOPPED)],
+                "MachineStopped",
+                empty_connection_down,
+            ),
+            (
+                "both are set but empty, and Podman answers",
+                vec![
+                    named(""),
+                    ("CONTAINER_HOST", ""),
+                    machines(RUNNING),
+                    answers,
+                ],
+                "Ready",
+                "Ready",
+            ),
         ];
         for (case, env, on_mac, on_linux) in cases {
             let expected = if mac { on_mac } else { on_linux };
@@ -1243,7 +1296,9 @@ esac"#,
                 "{case}: the daemon and onboarding disagree"
             );
             // CONTAINER_CONNECTION wins over CONTAINER_HOST, as in Podman.
-            if env.iter().any(|(name, _)| *name == "CONTAINER_HOST")
+            if env
+                .iter()
+                .any(|(name, value)| *name == "CONTAINER_HOST" && !value.is_empty())
                 && !env.iter().any(|(name, _)| *name == "CONTAINER_CONNECTION")
             {
                 assert!(
@@ -1255,13 +1310,29 @@ esac"#,
     }
 
     /// Podman reads `CONTAINER_CONNECTION` before `CONTAINER_HOST`, and an
-    /// empty value as unset (`setupRemoteConnection`, `cmd/podman/root.go`,
-    /// 4.9.3 to 6.1.4); so does Axocoatl.
+    /// empty value as unset, to choose the connection
+    /// (`setupRemoteConnection`, `cmd/podman/root.go`, 4.9.3 to 6.1.4); so
+    /// does Axocoatl. On Linux a variable set but empty still turns Podman
+    /// remote (`IsRemote`), and Axocoatl reads it as an override.
     #[test]
     fn container_connection_wins_over_container_host_as_in_podman() {
         use std::ffi::OsStr;
+        let read_on = |connection: Option<&str>, host: Option<&str>, always_remote| {
+            ConnectionOverride::from_values(
+                connection.map(OsStr::new),
+                host.map(OsStr::new),
+                always_remote,
+            )
+        };
         let read = |connection: Option<&str>, host: Option<&str>| {
-            ConnectionOverride::from_values(connection.map(OsStr::new), host.map(OsStr::new))
+            let on_mac = read_on(connection, host, true);
+            let on_linux = read_on(connection, host, false);
+            if host.is_some_and(str::is_empty) || connection.is_some_and(str::is_empty) {
+                // Only an empty value reads differently.
+            } else {
+                assert_eq!(on_mac, on_linux, "{connection:?} {host:?}");
+            }
+            on_mac
         };
         assert_eq!(
             read(Some("axocoatl"), Some("unix:///run/x.sock")),
@@ -1281,6 +1352,37 @@ esac"#,
         );
         assert_eq!(read(Some(""), Some("")), ConnectionOverride::None);
         assert_eq!(read(None, None), ConnectionOverride::None);
+        assert_eq!(read_on(None, None, false), ConnectionOverride::None);
+        // Set but empty: the same as unset where the client is always
+        // remote, the default remote connection on Linux.
+        assert_eq!(read_on(None, Some(""), true), ConnectionOverride::None);
+        assert_eq!(read_on(Some(""), None, true), ConnectionOverride::None);
+        assert_eq!(
+            read_on(None, Some(""), false),
+            ConnectionOverride::Host(String::new())
+        );
+        assert_eq!(
+            read_on(Some(""), Some(""), false),
+            ConnectionOverride::Host(String::new())
+        );
+        assert_eq!(
+            read_on(Some(""), None, false),
+            ConnectionOverride::Connection(String::new())
+        );
+        assert_eq!(
+            read_on(Some(""), Some("unix:///run/x.sock"), false),
+            ConnectionOverride::Host("unix:///run/x.sock".into())
+        );
+        assert_eq!(
+            read_on(Some("axocoatl"), Some(""), false),
+            ConnectionOverride::Connection("axocoatl".into())
+        );
+        assert_eq!(
+            ConnectionOverride::Host(String::new())
+                .describe()
+                .as_deref(),
+            Some("CONTAINER_HOST=")
+        );
         // Podman does not trim either: such a name is not found, and says so.
         assert_eq!(
             read(Some(" axocoatl"), None),
