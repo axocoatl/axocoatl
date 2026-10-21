@@ -399,9 +399,12 @@ jobs:
     # mirrors over it. The containers of the person's own they start have
     # no network. Each removal they assert runs while an unrelated container
     # of the person's own exists, so it needs `podman container inspect` and
-    # `podman volume inspect` to work, and each keep they assert names why: a
-    # mount `podman ps` lists at the path, or the person's container that
-    # inspect saw mounting it, never Podman being unable to say.
+    # `podman volume inspect` to work, and each keep of the empty mount point
+    # they assert names why: a mount `podman ps` lists at the path, the
+    # person's container that inspect saw mounting it, or the one reason
+    # Axocoatl cannot tell that the test sets up (a container that took its
+    # mounts with --volumes-from from one since removed; a keep-id
+    # container's overlay volume it may not read), never Podman failing.
     name: Podman suites (ignored tests)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -429,7 +432,9 @@ jobs:
             session_sandbox::tests::a_bind_volume_of_the_mount_point_keeps_it \
             session_sandbox::tests::an_overlay_volume_of_the_mount_point_keeps_it \
             session_sandbox::tests::a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it \
+            session_sandbox::tests::mounts_taken_with_volumes_from_keep_the_mount_point \
+            session_sandbox::tests::an_overlay_of_a_keep_id_container_keeps_it_and_says_why \
             dependency_mountpoint::tests::podman_names_what_is_gone_and_the_rest_is_inspected \
             | tee "$RUNNER_TEMP/mountpoint-tests.log"
-          # All nine ran: a renamed test must not pass by matching nothing.
-          grep -q '^test result: ok. 9 passed' "$RUNNER_TEMP/mountpoint-tests.log"
+          # All eleven ran: a renamed test must not pass by matching nothing.
+          grep -q '^test result: ok. 11 passed' "$RUNNER_TEMP/mountpoint-tests.log"

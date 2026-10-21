@@ -55,31 +55,40 @@ Session's container (at Close, when `axocoatl dev` stops), before it starts one,
 a start that mounts such a directory has its container, it removes that directory if it is
 still empty and still carries that value, and no container Podman lists has a mount on
 it. A container counts when `podman ps` lists a mount at the directory's path; when one
-of its bind mounts, an overlay volume (`-v …:O`), or a volume of the `local` driver made
-with `o=bind` (`podman volume create --opt type=none --opt o=bind --opt device=…`, a
-Compose bind volume) takes the directory itself; or when one takes a directory above it
-and the container mounts a volume, a bind or a tmpfs where the directory is (a
-development container's `node_modules` volume). Axocoatl compares those paths as Podman reports them and, when
-that settles nothing, as they resolve on the host at that moment, waiting at most 5
-seconds. When Podman cannot say, or resolving a path fails other than by finding nothing
-there, or does not finish in time (a stale network mount), the directory stays for a
-later removal or start. A `node_modules` you
-had, or made in its place, is left as it is (a copy of Axocoatl's that kept its extended
-attributes, as `cp -a` makes, counts as Axocoatl's), and so is what you install into it
-on the host. On a filesystem that takes no user extended attributes (NFS v3, tmpfs before
-Linux 6.6), Axocoatl tells the directory apart by its device, inode and birth time
-instead, which a directory you remove and make again at once can match. Removing a
-container of your own that kept the directory removes nothing: Axocoatl removes it at its
-next such start or removal after that, and if the daemon stops first, the empty
-directory stays. Some mounts on the directory Axocoatl does not see: those of Docker, of
-rootful `sudo podman`, or of another Podman connection or machine; a bind through a link
-you have since removed or changed; the tmpfs Podman mounts for an image's `VOLUME` under
-`--image-volume=tmpfs`; an overlay volume of a container that has never started; and a
-volume plugin's. From the start of a Session on such a
-repository until the directory is gone, do not mount it, or anything on it, in those
-ways: removing the directory breaks those mounts (on Linux it detaches a volume or tmpfs
-mounted on it, and a bind mount or bind volume of the directory is left on a deleted
-one). The
+of its bind mounts, an overlay volume (`-v …:O`, or the `upperdir` or `workdir` you give
+one), a volume of the `local` driver made with `o=bind` or `type=bind` (`podman volume
+create --opt type=none --opt o=bind --opt device=…`, a Compose bind volume), or a bind
+mount it takes from another container with `--volumes-from` takes the directory itself;
+or when one takes a directory above it and the container mounts a volume, a bind or a
+tmpfs where the directory is (a development container's `node_modules` volume). Axocoatl
+compares those paths as Podman reports them and, when that settles nothing, as they
+resolve on the host at that moment, waiting at most 5 seconds. When Axocoatl cannot
+tell, the directory stays for a later removal or start, and the daemon logs why, naming
+the container and mount when one is the reason: Podman cannot say; resolving a path
+fails other than by finding nothing there, or does not finish in time (a stale network
+mount); a container took mounts with `--volumes-from` from one since removed, after
+which Podman no longer says what they are; or, on Linux, a container run with
+`--userns=keep-id` has an overlay volume, whose directory in Podman's storage you cannot
+read, so every such directory stays until that container is removed. A `node_modules`
+you had, or made in its place, is left as it is (a copy of Axocoatl's that kept its
+extended attributes, as `cp -a` makes, counts as Axocoatl's), and so is what you install
+into it on the host. On a filesystem that takes no user extended attributes (NFS v3,
+tmpfs before Linux 6.6), Axocoatl tells the directory apart by its device, inode and
+birth time instead, which a directory you remove and make again at once can match.
+Removing a container of your own that kept the directory removes nothing: Axocoatl
+removes it at its next such start or removal after that, and if the daemon stops first,
+the empty directory stays. Some mounts on the directory Axocoatl does not see: those of
+Docker, of rootful `sudo podman`, of another Podman connection or machine, or of a
+container `podman ps -a` lists only with `--external` (Buildah's, a `podman build`'s); a
+bind through a link you have since removed or changed; a mount whose host path reaches
+the directory through another mount of it (a bind mount on the host of a directory above
+it, or on macOS a path spelled through `/System/Volumes/Data`); the tmpfs Podman mounts
+for an image's `VOLUME` under `--image-volume=tmpfs`; an overlay volume of a container
+that has never started; the root filesystem of a container run with `--rootfs`; and a
+volume plugin's. From the start of a Session on such a repository until the directory is
+gone, do not mount it, or anything on it, in those ways: removing the directory breaks
+those mounts (on Linux it detaches a volume or tmpfs mounted on it, and a bind mount or
+bind volume of the directory is left on a deleted one). The
 workspace is still mounted read-write: an approved command may change tracked or
 untracked project files, and nested package directories are not given an additional
 dependency-volume boundary.

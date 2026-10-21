@@ -55,13 +55,26 @@
 //!   inspect's `Mounts`, a tmpfs in its `HostConfig.Tmpfs`, or one `podman
 //!   ps` lists (a development container that bind-mounts the repository and
 //!   mounts a volume or a tmpfs on its `node_modules`). Those host
-//!   directories are the source of each bind mount; each directory an
-//!   overlay volume (`-v <dir>:<dst>:O`) overlays, which inspect gives as
-//!   `lowerdir=` among its options (its source is its merged directory in
-//!   Podman's storage); and the device of each volume of the `local` driver
-//!   made with `o=bind` or `o=rbind` (`podman volume create --opt type=none
-//!   --opt o=bind --opt device=<dir>`, a Compose bind volume), which inspect
-//!   reports only as the volume's own directory.
+//!   directories are:
+//!   - the source of each bind mount;
+//!   - each directory an overlay volume (`-v <dir>:<dst>:O`) uses, which
+//!     inspect gives among its options as `lowerdir=`, `upperdir=` and
+//!     `workdir=` (the last two are in Podman's storage unless `-v
+//!     <dir>:<dst>:O,upperdir=<dir>,workdir=<dir>` gives them), and its
+//!     source, its merged directory in Podman's storage;
+//!   - the device of each volume of the `local` driver made with `o=bind`
+//!     or `o=rbind` (`podman volume create --opt type=none --opt o=bind
+//!     --opt device=<dir>`, a Compose bind volume) or with `type=bind`
+//!     (`--opt type=bind --opt device=<dir>`), which inspect reports only
+//!     as the volume's own directory;
+//!   - the source of each bind mount the container takes from another with
+//!     `--volumes-from`, which its own inspect leaves out (4.9.3 and
+//!     6.1.4): read from that other container's inspect, at the same place.
+//!     The volumes it takes are in its own inspect; an overlay volume or a
+//!     tmpfs Podman does not copy. Podman keeps that other container as it
+//!     was named, so one made since under that name is read in its place,
+//!     and an entry that is only `ro`, `rw` or `z` (4.9.3 splits `a:ro,z`
+//!     in two) names a container only while one of that name is listed.
 //!
 //! Podman reports a bind's source made absolute and clean but as it was
 //! given, links and all (4.9.3 and 6.1.4). So each host directory is first
@@ -88,19 +101,37 @@
 //! without an id or mounts a volume without a usable name, leaves out a
 //! container or volume it was asked about (one it says no longer exists,
 //! `no such container` or `no such volume`, went since it was listed, and
-//! the rest are inspected once more without it), or resolving a host
-//! directory fails otherwise (a permission, a stale file handle) or does not
-//! return in time (a stale NFS, SMB or sshfs mount).
+//! the rest are inspected once more without it); a container takes mounts
+//! with `--volumes-from` from one Podman no longer lists (Podman lets that
+//! one be removed while the other exists, and then says nothing of the bind
+//! mounts it took); or resolving a host directory fails otherwise or does
+//! not return in time. Resolving fails with a permission for an overlay
+//! volume's merged directory when its container runs with
+//! `--userns=keep-id` (Podman 4.9.3 on Linux: the container's own directory
+//! in Podman's storage then belongs to a subordinate uid, mode 0700), so
+//! such a container keeps every mount point Axocoatl made until it is
+//! removed. A stale NFS, SMB or sshfs mount fails with a stale file handle
+//! or does not return. Each such keep is logged at `info`, naming the
+//! container, its mount and what failed ([`log_kept`]).
 //!
 //! What this does not see, so a mount on the directory that removing it
-//! breaks: containers of another runtime (Docker), of rootful Podman (`sudo
-//! podman`) while Axocoatl's is rootless, or of another Podman connection or
-//! machine; the tmpfs Podman mounts for an image's `VOLUME` under
-//! `--image-volume=tmpfs` (neither inspect nor `podman ps` reports it); an
-//! overlay volume of a container that has never started (inspect reports
-//! none until it has; removing the directory makes its start fail); a
-//! volume of another driver (a volume plugin); and a bind through a link
-//! that has been removed or changed since the container started.
+//! breaks:
+//! - containers of another runtime (Docker), of rootful Podman (`sudo
+//!   podman`) while Axocoatl's is rootless, or of another Podman connection
+//!   or machine, and those `podman ps -a` lists only with `--external`
+//!   (Buildah's, a `podman build`'s);
+//! - the tmpfs Podman mounts for an image's `VOLUME` under
+//!   `--image-volume=tmpfs` (neither inspect nor `podman ps` reports it);
+//! - an overlay volume of a container that has never started (inspect
+//!   reports none until it has; removing the directory makes its start
+//!   fail);
+//! - a volume of another driver (a volume plugin), and a root filesystem
+//!   given with `--rootfs`;
+//! - a bind through a link that has been removed or changed since the
+//!   container started;
+//! - the directory reached through another mount of it: a bind mount on the
+//!   host of a directory above it, or on macOS a spelling through
+//!   `/System/Volumes/Data`, which resolving keeps as it is.
 //!
 //! This process remembers the mount points it made. A container that mounts
 //! one carries [`DEPENDENCY_MOUNTPOINT_LABEL`] naming it and
@@ -137,12 +168,13 @@ pub(crate) const NODE_MODULES: &str = "node_modules";
 /// short as one removal command's deadline.
 const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 /// What `podman container inspect` prints of each container, one JSON
-/// object a line: its id, its mounts, and its tmpfs mounts, which `Mounts`
+/// object a line: its id, its mounts, its tmpfs mounts, which `Mounts`
 /// leaves out (`GetMounts` in Podman's `libpod/container_inspect.go`
-/// discards them, 4.9.3 to 6.1.4). The id's field is `ID` (Podman cannot
-/// evaluate `.Id`, its JSON name, inside `json`).
-const INSPECT_FORMAT: &str =
-    r#"{"Id":{{json .ID}},"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}"#;
+/// discards them, 4.9.3 to 6.1.4), and the containers it takes mounts from
+/// with `--volumes-from`, whose bind mounts `Mounts` leaves out too. The
+/// id's field is `ID` (Podman cannot evaluate `.Id`, its JSON name, inside
+/// `json`).
+const INSPECT_FORMAT: &str = r#"{"Id":{{json .ID}},"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}},"VolumesFrom":{{json .HostConfig.VolumesFrom}}}"#;
 /// What `podman volume inspect` prints of each volume, one JSON object a
 /// line: its name, its driver and the options it was made with.
 const VOLUME_FORMAT: &str =
@@ -421,7 +453,8 @@ pub(crate) enum Kept {
     /// mount their dependency volume there).
     Listed,
     /// `podman container inspect` says the container `container` has a mount
-    /// on it: the host directory `source` (a bind's source or a bind
+    /// on it: the host directory `source` (a bind's source, one it takes
+    /// with `--volumes-from`, a directory an overlay volume uses or a bind
     /// volume's device, as Podman spells it) is it or a directory above it,
     /// read by its spelling or as it resolves on the host, and the directory
     /// is at `at` in that container.
@@ -830,6 +863,11 @@ struct Inspected {
     /// Its tmpfs mounts: destination and options (`HostConfig.Tmpfs`).
     #[serde(rename = "Tmpfs", default)]
     tmpfs: Option<HashMap<String, String>>,
+    /// The containers it takes mounts from (`--volumes-from
+    /// <container>[:<options>]`), as they were given: a name or an id or
+    /// the start of one ([`volumes_from_container`]).
+    #[serde(rename = "VolumesFrom", default)]
+    volumes_from: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Clone, serde::Deserialize)]
@@ -849,7 +887,10 @@ struct InspectedMount {
     #[serde(rename = "Destination", default)]
     destination: Option<String>,
     /// Its mount options: an overlay volume's (`-v <dir>:<dst>:O`) name the
-    /// host directories it overlays, `lowerdir=<dir>[:<dir>...]`.
+    /// host directories it uses, `lowerdir=<dir>[:<dir>...]`,
+    /// `upperdir=<dir>` and `workdir=<dir>` (the last two in Podman's
+    /// storage unless `-v <dir>:<dst>:O,upperdir=<dir>,workdir=<dir>` gives
+    /// them).
     #[serde(rename = "Options", default)]
     options: Option<Vec<String>>,
 }
@@ -858,7 +899,32 @@ impl InspectedMount {
     fn is_volume(&self) -> bool {
         self.kind.as_deref() == Some("volume")
     }
+
+    /// The host directories an overlay volume uses, each with its option's
+    /// name; none for any other mount.
+    fn overlay_directories(&self) -> Vec<(&'static str, &str)> {
+        let mut directories = Vec::new();
+        for option in self.options.iter().flatten() {
+            for key in OVERLAY_DIRECTORIES {
+                let Some(value) = option
+                    .strip_prefix(key)
+                    .and_then(|rest| rest.strip_prefix('='))
+                else {
+                    continue;
+                };
+                if key == "lowerdir" {
+                    directories.extend(value.split(':').map(|dir| (key, dir)));
+                } else {
+                    directories.push((key, value));
+                }
+            }
+        }
+        directories
+    }
 }
+
+/// The options that name the host directories an overlay mount uses.
+const OVERLAY_DIRECTORIES: [&str; 3] = ["lowerdir", "upperdir", "workdir"];
 
 /// One volume as [`VOLUME_FORMAT`] prints it.
 #[derive(Debug, Default, Clone, serde::Deserialize)]
@@ -874,18 +940,21 @@ struct InspectedVolume {
 impl InspectedVolume {
     /// The host directory this volume binds at its own directory whenever a
     /// container that uses it starts, as it was given: a volume of the
-    /// `local` driver made with `o=bind` or `o=rbind` and an absolute
-    /// `device` (`podman volume create --opt type=none --opt o=bind --opt
-    /// device=<dir>`).
+    /// `local` driver with an absolute `device`, made with `o=bind` or
+    /// `o=rbind` (`podman volume create --opt type=none --opt o=bind --opt
+    /// device=<dir>`) or with `type=bind` and any `o` (`--opt type=bind
+    /// --opt device=<dir>`: Podman mounts it with `-o bind`). Podman hands
+    /// any other `type`, `rbind` too, to `mount -t`, which binds nothing
+    /// (4.9.3 and 6.1.4 then fail the container's start).
     fn bound(&self) -> Option<PathBuf> {
         if !matches!(self.driver.as_deref(), None | Some("local")) {
             return None;
         }
         let options = self.options.as_ref()?;
-        let binds = options
-            .get("o")?
-            .split(',')
-            .any(|option| matches!(option.trim(), "bind" | "rbind"));
+        let binds = options.get("o").is_some_and(|o| {
+            o.split(',')
+                .any(|option| matches!(option.trim(), "bind" | "rbind"))
+        }) || options.get("type").map(String::as_str) == Some("bind");
         let device = Path::new(options.get("device")?);
         (binds && device.is_absolute()).then(|| device.to_path_buf())
     }
@@ -904,25 +973,118 @@ fn plausible_volume_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
 }
 
+/// What a host directory is to the container mount that takes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HostKind {
+    /// A bind mount's source.
+    Bind,
+    /// The source of a bind mount the container takes from the container
+    /// named here with `--volumes-from`.
+    BindFrom(String),
+    /// An overlay volume's source: its merged directory, in Podman's
+    /// storage.
+    OverlayMerged,
+    /// A directory an overlay volume uses, with its option's name
+    /// (`lowerdir`, `upperdir` or `workdir`).
+    Overlay(&'static str),
+    /// The device of the bind volume named here ([`InspectedVolume::bound`]).
+    VolumeDevice(String),
+}
+
+/// A host directory one of a container's mounts takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Host {
+    /// As Podman spells it.
+    path: PathBuf,
+    /// Where that mount is in the container.
+    at: PathBuf,
+    kind: HostKind,
+}
+
+/// A container id as Podman shortens it.
+fn short_id(id: &str) -> &str {
+    id.get(..12).unwrap_or(id)
+}
+
+impl Host {
+    fn new(path: impl Into<PathBuf>, at: &Path, kind: HostKind) -> Self {
+        Self {
+            path: path.into(),
+            at: at.to_path_buf(),
+            kind,
+        }
+    }
+
+    /// What it is to container `container`, for a person to read.
+    fn describe(&self, container: &str) -> String {
+        let (container, at) = (short_id(container), self.at.display());
+        match &self.kind {
+            HostKind::Bind => format!("the source of container {container}'s bind mount at {at}"),
+            HostKind::BindFrom(from) => format!(
+                "the source of the bind mount at {at} that container {container} takes from \
+                 container {from} with --volumes-from"
+            ),
+            HostKind::OverlayMerged => format!(
+                "the merged directory, in Podman's storage, of container {container}'s overlay \
+                 volume at {at}"
+            ),
+            HostKind::Overlay(option) => {
+                format!("the {option} of container {container}'s overlay volume at {at}")
+            }
+            HostKind::VolumeDevice(name) => {
+                format!("the device of volume {name}, which container {container} mounts at {at}")
+            }
+        }
+    }
+
+    /// Why a release keeps every mount point it could concern when this
+    /// host directory, of container `container`, could not be resolved.
+    fn unresolved(&self, container: &str, why: &str, denied: bool) -> String {
+        let mut said = format!(
+            "could not resolve {}, {}: {why}",
+            self.path.display(),
+            self.describe(container)
+        );
+        if denied && self.kind == HostKind::OverlayMerged {
+            said.push_str(
+                ". Podman keeps it under the container's own directory in its storage, which \
+                 belongs to the container's root: a subordinate uid of yours, not you, when the \
+                 container runs with --userns=keep-id",
+            );
+        }
+        said.push_str(&format!(
+            ". Node dependency mount points Axocoatl made stay while that container exists \
+             (until it is removed, or {} resolves)",
+            self.path.display()
+        ));
+        said
+    }
+}
+
 /// What one container mounts, as far as host directories go.
 #[derive(Debug, Default, Clone)]
 struct Mounts {
     id: String,
-    /// The host directories its mounts take, as Podman spells them, each with
-    /// where it is mounted: each bind's source, each directory an overlay
-    /// volume overlays, and each bind volume's device
-    /// ([`InspectedVolume::bound`]).
-    hosts: Vec<(PathBuf, PathBuf)>,
+    /// The host directories its mounts take: each bind's source, each
+    /// directory an overlay volume uses and its merged directory, each bind
+    /// volume's device ([`InspectedVolume::bound`]), and the source of each
+    /// bind mount it takes from another container with `--volumes-from`.
+    hosts: Vec<Host>,
     /// Every place something is mounted in it: inspect's `Mounts` and
-    /// `HostConfig.Tmpfs`, and what `podman ps` lists for it.
+    /// `HostConfig.Tmpfs`, what `podman ps` lists for it, and where the bind
+    /// mounts it takes with `--volumes-from` are.
     destinations: HashSet<PathBuf>,
+    /// Why what it mounts cannot be told, when it cannot.
+    unknown: Option<String>,
 }
 
 impl Mounts {
     /// What `container` mounts, with `volumes`, every volume it mounts that
     /// still exists and the host directory it binds, if any. `Err` when it
     /// mounts a volume whose name Podman cannot be asked about. `listed` are
-    /// the mount destinations `podman ps` lists for it.
+    /// the mount destinations `podman ps` lists for it. The bind mounts it
+    /// takes with `--volumes-from` are not in its inspect
+    /// ([`take_volumes_from`]).
     fn of(
         container: &Inspected,
         listed: &[String],
@@ -960,22 +1122,36 @@ impl Mounts {
                 // A volume gone since it was listed (`no such volume`) binds
                 // nothing any more.
                 if let Some(device) = volumes.get(name).cloned().flatten() {
-                    mounts.hosts.push((device, destination));
+                    mounts.hosts.push(Host::new(
+                        device,
+                        &destination,
+                        HostKind::VolumeDevice(name.to_string()),
+                    ));
                 }
             } else if mount.kind.as_deref() != Some("image") {
-                // A bind's source, and the directories an overlay volume
-                // overlays; an image's source is a reference, and `devpts`
-                // names a filesystem, not a host directory.
-                let lower = mount
-                    .options
-                    .iter()
-                    .flatten()
-                    .filter_map(|option| option.strip_prefix("lowerdir="))
-                    .flat_map(|dirs| dirs.split(':'));
-                for host in mount.source.as_deref().into_iter().chain(lower) {
-                    let host = PathBuf::from(host);
-                    if host.is_absolute() {
-                        mounts.hosts.push((host, destination.clone()));
+                // A bind's source, or an overlay volume's merged directory
+                // and the directories it uses; an image's source is a
+                // reference, and `devpts` names a filesystem, not a host
+                // directory.
+                let overlay = mount.overlay_directories();
+                let source_kind = if overlay.is_empty() {
+                    HostKind::Bind
+                } else {
+                    HostKind::OverlayMerged
+                };
+                let hosts = mount
+                    .source
+                    .as_deref()
+                    .map(|source| (source, source_kind))
+                    .into_iter()
+                    .chain(
+                        overlay
+                            .into_iter()
+                            .map(|(option, dir)| (dir, HostKind::Overlay(option))),
+                    );
+                for (host, kind) in hosts {
+                    if Path::new(host).is_absolute() {
+                        mounts.hosts.push(Host::new(host, &destination, kind));
                     }
                 }
             }
@@ -997,17 +1173,97 @@ impl Mounts {
     /// The first of its host directories that, read with `read`, is one of
     /// `spellings` or above it, as [`Kept::Mounted`].
     fn over(&self, spellings: &[PathBuf], read: impl Fn(&Path) -> Option<PathBuf>) -> Option<Kept> {
-        self.hosts.iter().find_map(|(host, destination)| {
-            let real = read(host)?;
+        self.hosts.iter().find_map(|host| {
+            let real = read(&host.path)?;
             spellings.iter().find_map(|path| {
-                self.place(path, &real, destination)
-                    .map(|at| Kept::Mounted {
-                        container: self.id.clone(),
-                        source: host.clone(),
-                        at,
-                    })
+                self.place(path, &real, &host.at).map(|at| Kept::Mounted {
+                    container: self.id.clone(),
+                    source: host.path.clone(),
+                    at,
+                })
             })
         })
+    }
+}
+
+/// The container a `--volumes-from` entry names: what comes before its
+/// options (`<container>[:<options>]`), and whether the entry may be options
+/// alone, `ro`, `rw` or `z`, the only ones Podman takes: 4.9.3 keeps
+/// `--volumes-from a:ro,z` as `a:ro` and `z` (6.1.4 as `a:ro,z`). `None` for
+/// an entry that names nothing.
+fn volumes_from_container(entry: &str) -> Option<(&str, bool)> {
+    let (name, options_alone) = match entry.split_once(':') {
+        Some((name, _)) => (name, false),
+        None => (entry, matches!(entry, "ro" | "rw" | "z")),
+    };
+    (!name.is_empty()).then_some((name, options_alone))
+}
+
+/// Add to each of `containers` the bind mounts it takes from another with
+/// `--volumes-from` (`inspected` say which; `listed` give the names), which
+/// its own inspect leaves out: Podman copies the other container's bind
+/// mounts, at the same places, when it makes the container (its volumes the
+/// container's inspect shows itself, and an overlay volume it does not
+/// copy). A container that takes them from one no longer there (removed,
+/// which Podman allows while this one exists) mounts what Podman no longer
+/// says: [`Mounts::unknown`].
+fn take_volumes_from(containers: &mut [Mounts], inspected: &[Inspected], listed: &[Listed]) {
+    let own: Vec<Mounts> = containers.to_vec();
+    for (container, mounts) in inspected.iter().zip(containers.iter_mut()) {
+        for (name, options_alone) in container
+            .volumes_from
+            .iter()
+            .flatten()
+            .filter_map(|entry| volumes_from_container(entry))
+        {
+            // Podman takes a full id, a name or the start of an id. A
+            // container listed that is gone since is not among `own`.
+            let named: Vec<&str> = listed
+                .iter()
+                .filter(|entry| entry.named_any_of(&[name.to_string()]))
+                .filter_map(|entry| entry.id.as_deref())
+                .collect();
+            let from: Vec<&Mounts> = own
+                .iter()
+                .filter(|other| {
+                    other.id != mounts.id
+                        && (named.contains(&other.id.as_str())
+                            || (name.bytes().all(|byte| byte.is_ascii_hexdigit())
+                                && other.id.starts_with(name)))
+                })
+                .collect();
+            // `z` is the option unless a container has that name.
+            if from.is_empty() && options_alone {
+                continue;
+            }
+            if from.is_empty() {
+                mounts.unknown.get_or_insert_with(|| {
+                    format!(
+                        "container {} takes mounts from container {name} with --volumes-from, \
+                         and no container Podman lists is {name} any more, so Podman no longer \
+                         says what those mounts are. Node dependency mount points Axocoatl made \
+                         stay while container {} exists",
+                        short_id(&mounts.id),
+                        short_id(&mounts.id)
+                    )
+                });
+                continue;
+            }
+            for other in from {
+                for host in other
+                    .hosts
+                    .iter()
+                    .filter(|host| host.kind == HostKind::Bind)
+                {
+                    mounts.destinations.insert(host.at.clone());
+                    mounts.hosts.push(Host::new(
+                        host.path.clone(),
+                        &host.at,
+                        HostKind::BindFrom(short_id(&other.id).to_string()),
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -1019,7 +1275,9 @@ enum Resolved {
     /// Nothing is there now: it, or a directory on the way, is missing, is
     /// not a directory, or is a link that loops.
     Nothing,
-    /// The host could not say: why.
+    /// The host does not let this process look (EACCES or EPERM): why.
+    Denied(String),
+    /// The host could not say otherwise: why.
     Unknown(String),
 }
 
@@ -1040,6 +1298,9 @@ impl Resolved {
                     || loops(&error) =>
             {
                 Self::Nothing
+            }
+            Err(error) if error.kind() == ErrorKind::PermissionDenied => {
+                Self::Denied(error.to_string())
             }
             Err(error) => Self::Unknown(error.to_string()),
         }
@@ -1198,9 +1459,24 @@ async fn decide(
     }
     let hosts: HashSet<PathBuf> = containers
         .iter()
-        .flat_map(|container| container.hosts.iter().map(|(host, _)| host.clone()))
+        .flat_map(|container| container.hosts.iter().map(|host| host.path.clone()))
         .collect();
     let resolved = resolve_all(hosts, resolve, timeout).await;
+    // The first container, in Podman's order, whose mounts cannot be told.
+    let unknown = containers.iter().find_map(|container| {
+        container.unknown.clone().or_else(|| {
+            container
+                .hosts
+                .iter()
+                .find_map(|host| match resolved.get(&host.path) {
+                    Some(Resolved::Denied(why)) => Some(host.unresolved(&container.id, why, true)),
+                    Some(Resolved::Unknown(why)) => {
+                        Some(host.unresolved(&container.id, why, false))
+                    }
+                    _ => None,
+                })
+        })
+    });
     for (path, spellings) in undecided {
         let mounted = containers.iter().find_map(|container| {
             container.over(&spellings, |host| match resolved.get(host) {
@@ -1208,16 +1484,7 @@ async fn decide(
                 _ => None,
             })
         });
-        let unknown = || {
-            resolved.iter().find_map(|(host, outcome)| match outcome {
-                Resolved::Unknown(why) => Some(Kept::Unknown(format!(
-                    "could not resolve the mount source {}: {why}",
-                    host.display()
-                ))),
-                _ => None,
-            })
-        };
-        if let Some(why) = mounted.or_else(unknown) {
+        if let Some(why) = mounted.or_else(|| unknown.clone().map(Kept::Unknown)) {
             kept.insert(path, why);
         }
     }
@@ -1342,7 +1609,7 @@ async fn containers(listed: &[Listed]) -> Result<Vec<Mounts>, String> {
         .filter_map(|volume| Some((volume.name.clone()?, volume.bound())))
         .collect()
     };
-    inspected
+    let mut mounts = inspected
         .iter()
         .map(|container| {
             let listed_mounts = listed
@@ -1352,7 +1619,9 @@ async fn containers(listed: &[Listed]) -> Result<Vec<Mounts>, String> {
                 .unwrap_or_default();
             Mounts::of(container, listed_mounts, &volumes)
         })
-        .collect()
+        .collect::<Result<Vec<Mounts>, String>>()?;
+    take_volumes_from(&mut mounts, &inspected, listed);
+    Ok(mounts)
 }
 
 /// One bounded `podman` command, its standard output.
@@ -1506,6 +1775,26 @@ pub(crate) async fn adopt_labelled_named(containers: &[String]) {
     }
 }
 
+/// Say why a release kept the mount point at `path`. When Axocoatl cannot
+/// tell, at `info`, which the daemon shows by default: the directory stays,
+/// and nothing else tells the person why.
+fn log_kept(path: &Path, why: &Kept) {
+    match why {
+        Kept::Unknown(why) => tracing::info!(
+            path = %path.display(),
+            %why,
+            "kept the empty Node dependency mount point Axocoatl made: it cannot tell whether a \
+             container has a mount on it, and removes it at a later container start or removal \
+             once it can"
+        ),
+        Kept::Listed | Kept::Mounted { .. } => tracing::debug!(
+            path = %path.display(),
+            ?why,
+            "kept the Node dependency mount point Axocoatl made"
+        ),
+    }
+}
+
 /// Remove every Node dependency mount point this process made that no start
 /// is using and no container Podman lists (of any daemon, or the person's
 /// own) has a mount on, if it is still the empty directory made for it, and
@@ -1533,11 +1822,7 @@ pub(crate) async fn release_unused() -> Vec<(PathBuf, Decision)> {
         .iter()
         .filter_map(|(path, _)| {
             let why = in_use.get(path)?;
-            tracing::debug!(
-                path = %path.display(),
-                ?why,
-                "kept the Node dependency mount point Axocoatl made"
-            );
+            log_kept(path, why);
             Some((path.clone(), Decision::Kept(why.clone())))
         })
         .collect();
@@ -2112,12 +2397,17 @@ mod tests {
     }
 
     /// What Podman printed for `podman container inspect --format
-    /// INSPECT_FORMAT`: 6.1.4, of a container run with `-v <repo>:/workspaces/x
-    /// --tmpfs /workspaces/x/node_modules -v <repo>/node_modules:/deps`, of
-    /// one with no mounts, of one with an image mount and a devpts mount,
-    /// and of one with a bind volume; 4.9.3's `podman volume inspect --format
-    /// VOLUME_FORMAT` of that bind volume, and its inspect of a stopped
-    /// container with an overlay volume, `-v <dir>:/o:O`.
+    /// INSPECT_FORMAT` (the first five before it named `VolumesFrom`): 6.1.4,
+    /// of a container run with `-v <repo>:/workspaces/x --tmpfs
+    /// /workspaces/x/node_modules -v <repo>/node_modules:/deps`, of one with
+    /// no mounts, of one with an image mount and a devpts mount, and of one
+    /// with a bind volume; 4.9.3's `podman volume inspect --format
+    /// VOLUME_FORMAT` of that bind volume and of one made with `type=bind`
+    /// alone, and its inspect of a stopped container with an overlay volume,
+    /// `-v <dir>:/o:O`, of a running one whose overlay volume names its
+    /// upperdir and workdir, `-v <dir>:/o:O,upperdir=<dir>,workdir=<dir>`,
+    /// and of a container run with `-v <repo>:/w` and one run with
+    /// `--volumes-from <that one>:ro,z --tmpfs /w/node_modules`.
     #[test]
     fn inspect_output_parses_one_container_a_line() {
         let output = br#"{"Id":"15944f798e01584918a5d129eaa2ef79f149ec49ac42ae7783159f92c0c40760","Mounts":[{"Type":"bind","Source":"/r","Destination":"/workspaces/x","Driver":"","Mode":"","Options":["rbind"],"RW":true,"Propagation":"rprivate"},{"Type":"bind","Source":"/r/node_modules","Destination":"/deps","Driver":"","Mode":"","Options":["rbind"],"RW":true,"Propagation":"rprivate"}],"Tmpfs":{"/workspaces/x/node_modules":"rprivate,nosuid,nodev,tmpcopyup"}}
@@ -2125,11 +2415,15 @@ mod tests {
 {"Id":"e82cad8350984f25aa5795c8e141c205814f58d53a7ec46f9ea0790b105d2178","Mounts":[{"Type":"image","Source":"docker.io/library/alpine:3.20","Destination":"/img"},{"Type":"bind","Source":"devpts","Destination":"/dp"}],"Tmpfs":{"/t":"rprivate,nosuid,nodev,tmpcopyup"}}
 {"Id":"319e4c26fba24c9044488063e3f962ffa983167b588ae0084b8095aeec831532","Mounts":[{"Type":"volume","Name":"r4iso-bindvol","Source":"/var/home/core/.local/share/containers/storage/volumes/r4iso-bindvol/_data","Destination":"/deps","Driver":"local","Mode":"","Options":["nosuid","nodev","rbind"],"RW":true,"Propagation":"rprivate"}],"Tmpfs":{}}
 {"Id":"cc0d62a44de0289ab5a198b85e70fd6d690b751d7ed5143f04ef906c6e56220d","Mounts":[{"Type":"bind","Source":"/home/r4iso/.local/share/containers/storage/overlay-containers/cc0d62a44de0289ab5a198b85e70fd6d690b751d7ed5143f04ef906c6e56220d/userdata/overlay/2342896064/merge","Destination":"/o","Driver":"","Mode":"","Options":["lowerdir=/tmp/r4iso-ov.Dud1/repo/node_modules","upperdir=/home/r4iso/.local/share/containers/storage/overlay-containers/cc0d62a44de0289ab5a198b85e70fd6d690b751d7ed5143f04ef906c6e56220d/userdata/overlay/2342896064/upper","workdir=/home/r4iso/.local/share/containers/storage/overlay-containers/cc0d62a44de0289ab5a198b85e70fd6d690b751d7ed5143f04ef906c6e56220d/userdata/overlay/2342896064/work","userxattr"],"RW":true,"Propagation":"private"}],"Tmpfs":{}}
+{"Id":"b2e267e47c59759e49aa368a9b14c92db2302635552918b84d8f7b79024448e3","Mounts":[{"Type":"bind","Source":"/home/r5iso/.local/share/containers/storage/overlay-containers/b2e267e47c59759e49aa368a9b14c92db2302635552918b84d8f7b79024448e3/userdata/overlay/590688343/merge","Destination":"/o","Driver":"","Mode":"","Options":["lowerdir=/tmp/r5f.rA4P/other","upperdir=/tmp/r5f.rA4P/repo/node_modules","workdir=/tmp/r5f.rA4P/work","userxattr"],"RW":true,"Propagation":"private"}],"Tmpfs":{},"VolumesFrom":null}
+{"Id":"165161b7d95aabeddcacc303d6f96e271475ed5be59ee9dfa2f31e531455d886","Mounts":[{"Type":"bind","Source":"/tmp/r5f.rA4P/repo","Destination":"/w","Driver":"","Mode":"","Options":["rbind"],"RW":true,"Propagation":"rprivate"}],"Tmpfs":{},"VolumesFrom":null}
+{"Id":"69ff6ecdca310b756eba3529d365ff1f0dd2f03459c09584d714dd1004f4dc0b","Mounts":[],"Tmpfs":{"/w/node_modules":"rw,rprivate,nosuid,nodev,tmpcopyup"},"VolumesFrom":["r5f-a:ro","z"]}
 "#;
         let inspected: Vec<Inspected> = parse_json_lines(output).unwrap();
-        assert_eq!(inspected.len(), 5);
+        assert_eq!(inspected.len(), 8);
         let volumes: Vec<InspectedVolume> = parse_json_lines(
             br#"{"Name":"r4iso-bindvol","Driver":"local","Options":{"device":"/tmp/r4iso-src.hTid/repo/node_modules","o":"bind","type":"none"}}
+{"Name":"r5a-vol-type-bind","Driver":"local","Options":{"device":"/tmp/r5a.PaHi/repo/node_modules","type":"bind"}}
 "#,
         )
         .unwrap();
@@ -2137,22 +2431,33 @@ mod tests {
             .iter()
             .map(|volume| (volume.name.clone().unwrap(), volume.bound()))
             .collect();
+        assert_eq!(
+            volumes["r5a-vol-type-bind"].as_deref(),
+            Some(Path::new("/tmp/r5a.PaHi/repo/node_modules"))
+        );
         let mounts: Vec<Mounts> = inspected
             .iter()
             .map(|container| Mounts::of(container, &[], &volumes).unwrap())
             .collect();
-        let hosts = |mounts: &Mounts| -> Vec<(String, String)> {
+        let hosts = |mounts: &Mounts| -> Vec<(String, String, HostKind)> {
             mounts
                 .hosts
                 .iter()
-                .map(|(host, at)| (host.display().to_string(), at.display().to_string()))
+                .map(|host| {
+                    (
+                        host.path.display().to_string(),
+                        host.at.display().to_string(),
+                        host.kind.clone(),
+                    )
+                })
                 .collect()
         };
+        let host = |path: &str, at: &str, kind: HostKind| (path.to_string(), at.to_string(), kind);
         assert_eq!(
             hosts(&mounts[0]),
             [
-                ("/r".to_string(), "/workspaces/x".to_string()),
-                ("/r/node_modules".to_string(), "/deps".to_string())
+                host("/r", "/workspaces/x", HostKind::Bind),
+                host("/r/node_modules", "/deps", HostKind::Bind)
             ]
         );
         assert!(mounts[0]
@@ -2172,29 +2477,58 @@ mod tests {
         // The bind volume: its device, not its own directory.
         assert_eq!(
             hosts(&mounts[3]),
-            [(
-                "/tmp/r4iso-src.hTid/repo/node_modules".to_string(),
-                "/deps".to_string()
+            [host(
+                "/tmp/r4iso-src.hTid/repo/node_modules",
+                "/deps",
+                HostKind::VolumeDevice("r4iso-bindvol".into())
             )]
         );
-        // An overlay volume: its merged directory, and the directory it
-        // overlays.
+        // An overlay volume: its merged directory, and the directories it
+        // uses, in Podman's storage or given.
+        let storage = "/home/r4iso/.local/share/containers/storage/overlay-containers/\
+                       cc0d62a44de0289ab5a198b85e70fd6d690b751d7ed5143f04ef906c6e56220d/userdata/\
+                       overlay/2342896064";
         assert_eq!(
             hosts(&mounts[4]),
             [
-                (
-                    "/home/r4iso/.local/share/containers/storage/overlay-containers/\
-                     cc0d62a44de0289ab5a198b85e70fd6d690b751d7ed5143f04ef906c6e56220d/userdata/\
-                     overlay/2342896064/merge"
-                        .to_string(),
-                    "/o".to_string()
+                host(&format!("{storage}/merge"), "/o", HostKind::OverlayMerged),
+                host(
+                    "/tmp/r4iso-ov.Dud1/repo/node_modules",
+                    "/o",
+                    HostKind::Overlay("lowerdir")
                 ),
-                (
-                    "/tmp/r4iso-ov.Dud1/repo/node_modules".to_string(),
-                    "/o".to_string()
-                )
+                host(
+                    &format!("{storage}/upper"),
+                    "/o",
+                    HostKind::Overlay("upperdir")
+                ),
+                host(
+                    &format!("{storage}/work"),
+                    "/o",
+                    HostKind::Overlay("workdir")
+                ),
             ]
         );
+        assert_eq!(
+            hosts(&mounts[5])[1..],
+            [
+                host("/tmp/r5f.rA4P/other", "/o", HostKind::Overlay("lowerdir")),
+                host(
+                    "/tmp/r5f.rA4P/repo/node_modules",
+                    "/o",
+                    HostKind::Overlay("upperdir")
+                ),
+                host("/tmp/r5f.rA4P/work", "/o", HostKind::Overlay("workdir")),
+            ]
+        );
+        // `--volumes-from`: its own inspect has its tmpfs and none of the
+        // bind mounts it takes; 4.9.3 splits `r5f-a:ro,z` in two.
+        assert!(hosts(&mounts[7]).is_empty());
+        assert_eq!(
+            inspected[7].volumes_from.as_deref(),
+            Some(&["r5f-a:ro".to_string(), "z".to_string()][..])
+        );
+        assert_eq!(inspected[6].volumes_from, None);
         // A volume gone since (not printed) binds nothing.
         assert!(hosts(&Mounts::of(&inspected[3], &[], &HashMap::new()).unwrap()).is_empty());
         // `null` mounts and tmpfs, as an older Podman may print them.
@@ -2206,7 +2540,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_local_volume_made_with_bind_binds_a_host_directory() {
+    fn only_a_local_volume_made_to_bind_binds_a_host_directory() {
         let volume = |driver: Option<&str>, options: &[(&str, &str)]| InspectedVolume {
             name: Some("v".into()),
             driver: driver.map(str::to_string),
@@ -2226,16 +2560,36 @@ mod tests {
             );
         }
         assert!(volume(None, &[("o", "bind"), device]).bound().is_some());
+        // `type=bind`, with or without `o`: Podman mounts it with `-o bind`.
+        for options in [
+            vec![("type", "bind"), device],
+            vec![("type", "bind"), ("o", "ro"), device],
+            vec![("type", "bind"), ("o", "uid=1000"), device],
+        ] {
+            assert_eq!(
+                volume(Some("local"), &options).bound(),
+                Some(PathBuf::from("/r/node_modules")),
+                "{options:?}"
+            );
+        }
         for (driver, options) in [
             (Some("local"), vec![("o", "uid=1000"), device]),
             (Some("local"), vec![("type", "tmpfs"), ("device", "tmpfs")]),
+            // `mount -t rbind`, which fails the container's start.
+            (Some("local"), vec![("type", "rbind"), device]),
             (
                 Some("local"),
                 vec![("o", "bind"), ("device", "r/node_modules")],
             ),
+            (
+                Some("local"),
+                vec![("type", "bind"), ("device", "r/node_modules")],
+            ),
             (Some("local"), vec![("o", "bind")]),
+            (Some("local"), vec![("type", "bind")]),
             (Some("local"), vec![device]),
             (Some("some-plugin"), vec![("o", "bind"), device]),
+            (Some("some-plugin"), vec![("type", "bind"), device]),
         ] {
             assert_eq!(
                 volume(driver, &options).bound(),
@@ -2262,7 +2616,7 @@ mod tests {
                 destination: Some("/d".into()),
                 options: None,
             }]),
-            tmpfs: None,
+            ..Inspected::default()
         };
         assert!(Mounts::of(&container, &[], &HashMap::new()).is_err());
     }
@@ -2271,20 +2625,21 @@ mod tests {
         std::sync::Arc::new(|path: &Path| std::fs::canonicalize(path))
     }
 
-    /// A container with these host directories (as spelled) at these places,
-    /// and these other mounts.
+    /// A container with these host directories (as spelled, bind sources)
+    /// at these places, and these other mounts.
     fn container(id: &str, hosts: &[(&Path, &str)], others: &[&str]) -> Mounts {
         Mounts {
             id: id.to_string(),
             hosts: hosts
                 .iter()
-                .map(|(host, at)| (host.to_path_buf(), PathBuf::from(at)))
+                .map(|(host, at)| Host::new(*host, Path::new(at), HostKind::Bind))
                 .collect(),
             destinations: hosts
                 .iter()
                 .map(|(_, at)| PathBuf::from(at))
                 .chain(others.iter().map(PathBuf::from))
                 .collect(),
+            unknown: None,
         }
     }
 
@@ -2421,7 +2776,7 @@ mod tests {
                 destination: Some("/deps".into()),
                 options: None,
             }]),
-            tmpfs: None,
+            ..Inspected::default()
         };
         let volumes = [("bindvol".to_string(), Some(linked.clone()))].into();
         let bound = Mounts::of(&volume, &[], &volumes).unwrap();
@@ -2432,6 +2787,332 @@ mod tests {
         // The same volume without `o=bind`: its own directory is all it is.
         let plain = Mounts::of(&volume, &[], &[("bindvol".to_string(), None)].into()).unwrap();
         assert_eq!(decided(&path, &[plain]).await, None);
+    }
+
+    /// A subscriber that keeps each event's level and fields.
+    #[derive(Clone, Default)]
+    struct Seen(std::sync::Arc<Mutex<Vec<(tracing::Level, String)>>>);
+
+    impl tracing::Subscriber for Seen {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Fields(String);
+            impl tracing::field::Visit for Fields {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    self.0.push_str(&format!("{}={value:?};", field.name()));
+                }
+            }
+            let mut fields = Fields(String::new());
+            event.record(&mut fields);
+            self.0
+                .lock()
+                .unwrap()
+                .push((*event.metadata().level(), fields.0));
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// A mount point kept because Axocoatl cannot tell is said at `info`,
+    /// the daemon's default, with why; the other keeps only at `debug`.
+    #[test]
+    fn a_keep_it_cannot_explain_otherwise_is_said_at_info_with_why() {
+        let seen = Seen::default();
+        let path = Path::new("/r/node_modules");
+        tracing::subscriber::with_default(seen.clone(), || {
+            log_kept(
+                path,
+                &Kept::Unknown("could not resolve /s, the merged directory".into()),
+            );
+            log_kept(path, &Kept::Listed);
+        });
+        let seen = seen.0.lock().unwrap();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert_eq!(seen[0].0, tracing::Level::INFO);
+        for said in [
+            "path=/r/node_modules;",
+            "why=could not resolve /s, the merged directory;",
+            "it cannot tell whether a container has a mount on it",
+        ] {
+            assert!(seen[0].1.contains(said), "{said:?} in {:?}", seen[0].1);
+        }
+        assert_eq!(seen[1].0, tracing::Level::DEBUG);
+    }
+
+    #[test]
+    fn a_volumes_from_entry_names_its_container_before_its_options() {
+        for (entry, container) in [
+            ("r5f-a", Some(("r5f-a", false))),
+            ("r5f-a:ro", Some(("r5f-a", false))),
+            ("r5f-a:ro,z", Some(("r5f-a", false))),
+            ("74806aa6c795:rw", Some(("74806aa6c795", false))),
+            ("z", Some(("z", true))),
+            ("ro", Some(("ro", true))),
+            ("rw", Some(("rw", true))),
+            ("z:ro", Some(("z", false))),
+            ("", None),
+            (":ro", None),
+        ] {
+            assert_eq!(volumes_from_container(entry), container, "{entry:?}");
+        }
+    }
+
+    /// `--volumes-from`: a container's own inspect leaves out the bind
+    /// mounts it takes from another (4.9.3 and 6.1.4), so they are the ones
+    /// in that other container's inspect, at the same places: named by its
+    /// name, by its id or the start of one, with options as 4.9.3 and 6.1.4
+    /// keep them. An overlay volume or a tmpfs is not taken. When the other
+    /// container is gone, Podman no longer says what was taken: kept, saying
+    /// why.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mounts_taken_with_volumes_from_count_and_a_gone_source_keeps_it() {
+        let repo = tempfile::tempdir().unwrap();
+        let repo_path = std::fs::canonicalize(repo.path()).unwrap();
+        let path = repo_path.join(NODE_MODULES);
+        std::fs::create_dir(&path).unwrap();
+        let (a, b) = ("a".repeat(64), "b".repeat(64));
+        let bind = serde_json::json!({"Type": "bind", "Source": repo_path, "Destination": "/w",
+            "Options": ["rbind"]});
+        let overlay = serde_json::json!({"Type": "bind", "Source": "/storage/merge",
+            "Destination": "/w", "Options": [format!("lowerdir={}", repo_path.display()),
+            "upperdir=/storage/upper", "workdir=/storage/work", "userxattr"]});
+        let listed = parse_listing(
+            serde_json::json!([
+                {"Id": a, "Names": ["r5f-a"], "Mounts": ["/w"]},
+                {"Id": b, "Names": ["r5f-b"], "Mounts": ["/w/node_modules"]},
+            ])
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+        // `a` mounts `a_mount` at /w; `b` takes from `from` and has a tmpfs
+        // where node_modules is under /w. Only `inspect` of them were
+        // inspected.
+        let mounts_of = |a_mount: &serde_json::Value, from: &[&str], inspect: &[&str]| {
+            let lines = [
+                (
+                    a.as_str(),
+                    serde_json::json!({"Id": a, "Mounts": [a_mount], "Tmpfs": {},
+                        "VolumesFrom": null}),
+                ),
+                (
+                    b.as_str(),
+                    serde_json::json!({"Id": b, "Mounts": [],
+                        "Tmpfs": {"/w/node_modules": "rw,rprivate,nosuid,nodev,tmpcopyup"},
+                        "VolumesFrom": from}),
+                ),
+            ];
+            let output: String = lines
+                .iter()
+                .filter(|(id, _)| inspect.contains(id))
+                .map(|(_, line)| format!("{line}\n"))
+                .collect();
+            let inspected: Vec<Inspected> = parse_json_lines(output.as_bytes()).unwrap();
+            let mut mounts: Vec<Mounts> = inspected
+                .iter()
+                .map(|container| Mounts::of(container, &[], &HashMap::new()).unwrap())
+                .collect();
+            take_volumes_from(&mut mounts, &inspected, &listed);
+            mounts
+        };
+        let both = [a.as_str(), b.as_str()];
+        let short = a[..12].to_string();
+        let short_rw = format!("{short}:rw");
+        for from in [
+            &["r5f-a"][..],
+            &["r5f-a:ro", "z"],
+            &["r5f-a:ro,z"],
+            &[short.as_str()],
+            &[short_rw.as_str()],
+            &[a.as_str()],
+        ] {
+            let mounts = mounts_of(&bind, from, &both);
+            assert_eq!(mounts[1].unknown, None, "{from:?}");
+            assert_eq!(
+                mounts[1].hosts,
+                [Host::new(
+                    &repo_path,
+                    Path::new("/w"),
+                    HostKind::BindFrom(short.clone())
+                )],
+                "{from:?}"
+            );
+            assert_eq!(
+                decided(&path, &mounts).await,
+                mounted_by(&b, &repo_path, "/w/node_modules"),
+                "{from:?}"
+            );
+        }
+        // Without `--volumes-from`, or with only options, neither container
+        // alone has a mount on it.
+        for from in [&[][..], &["z"]] {
+            let mounts = mounts_of(&bind, from, &both);
+            assert_eq!(mounts[1].unknown, None);
+            assert_eq!(decided(&path, &mounts).await, None, "{from:?}");
+        }
+        // A container really named `z`: the entry `z` is its name.
+        let named_z = parse_listing(
+            serde_json::json!([{"Id": a, "Names": ["z"]}, {"Id": b, "Names": ["r5f-b"]}])
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap();
+        let inspected: Vec<Inspected> = parse_json_lines(
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({"Id": a, "Mounts": [bind], "Tmpfs": {}, "VolumesFrom": null}),
+                serde_json::json!({"Id": b, "Mounts": [], "Tmpfs": {"/w/node_modules": "rw"},
+                    "VolumesFrom": ["z"]})
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let mut mounts: Vec<Mounts> = inspected
+            .iter()
+            .map(|container| Mounts::of(container, &[], &HashMap::new()).unwrap())
+            .collect();
+        take_volumes_from(&mut mounts, &inspected, &named_z);
+        assert_eq!(
+            decided(&path, &mounts).await,
+            mounted_by(&b, &repo_path, "/w/node_modules")
+        );
+        // An overlay volume is not taken.
+        let mounts = mounts_of(&overlay, &["r5f-a"], &both);
+        assert!(mounts[1].hosts.is_empty() && mounts[1].unknown.is_none());
+        assert_eq!(decided(&path, &mounts).await, None);
+        // Taken from a container Podman no longer lists, or one listed that
+        // was gone by the inspect: what it took cannot be told.
+        for (from, inspect) in [(&["r5f-gone:ro"][..], &both[..]), (&["r5f-a"], &both[1..])] {
+            let mounts = mounts_of(&bind, from, inspect);
+            let Some(Kept::Unknown(why)) = decided(&path, &mounts).await else {
+                panic!("{from:?}: {mounts:?}");
+            };
+            let (name, _) = volumes_from_container(from[0]).unwrap();
+            assert!(
+                why.contains(&format!(
+                    "container {} takes mounts from container {name} with --volumes-from",
+                    &b[..12]
+                )) && why.contains("no longer says what those mounts are"),
+                "{why}"
+            );
+        }
+    }
+
+    /// A host directory the host does not let this process look at keeps
+    /// every mount point it could concern, and the reason names the
+    /// container, the mount and what the directory is to it. An overlay
+    /// volume's merged directory is in Podman's storage, under the
+    /// container's own directory, which under `--userns=keep-id` belongs to
+    /// a subordinate uid (4.9.3, 0700): the reason says so.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_mount_directory_it_may_not_read_keeps_it_and_says_why() {
+        let repo = tempfile::tempdir().unwrap();
+        let repo_path = std::fs::canonicalize(repo.path()).unwrap();
+        let path = repo_path.join(NODE_MODULES);
+        std::fs::create_dir(&path).unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let id = "6eaf080d3f764584b34cd9d0bd5677eb1983e637e8f3b88c8f68d445ba6fe9d0";
+        let storage = format!(
+            "/home/r5iso/.local/share/containers/storage/overlay-containers/{id}/userdata/overlay/\
+             247019271"
+        );
+        let line = serde_json::json!({"Id": id, "Mounts": [{"Type": "bind",
+            "Source": format!("{storage}/merge"), "Destination": "/o", "Driver": "", "Mode": "",
+            "Options": [format!("lowerdir={}", other.path().display()),
+                format!("upperdir={storage}/upper"), format!("workdir={storage}/work"),
+                "userxattr"],
+            "RW": true, "Propagation": "private"}], "Tmpfs": {}, "VolumesFrom": null});
+        let inspected: Vec<Inspected> = parse_json_lines(line.to_string().as_bytes()).unwrap();
+        let overlay = Mounts::of(&inspected[0], &[], &HashMap::new()).unwrap();
+        // As the host answered live: Permission denied for each directory in
+        // the container's own one.
+        let denying: Resolve = std::sync::Arc::new(|host: &Path| {
+            if host.starts_with("/home/r5iso/.local/share/containers") {
+                Err(std::io::Error::from_raw_os_error(
+                    rustix::io::Errno::ACCESS.raw_os_error(),
+                ))
+            } else {
+                std::fs::canonicalize(host)
+            }
+        });
+        let kept = decide(
+            vec![path.clone()],
+            std::slice::from_ref(&overlay),
+            &denying,
+            Duration::from_secs(5),
+        )
+        .await;
+        let Some(Kept::Unknown(why)) = kept.get(&path) else {
+            panic!("{kept:?}");
+        };
+        assert!(
+            why.starts_with(&format!(
+                "could not resolve {storage}/merge, the merged directory, in Podman's storage, of \
+                 container 6eaf080d3f76's overlay volume at /o: Permission denied"
+            )),
+            "{why}"
+        );
+        assert!(
+            why.contains(
+                "a subordinate uid of yours, not you, when the container runs with \
+                 --userns=keep-id"
+            ),
+            "{why}"
+        );
+        assert!(
+            why.ends_with(&format!(
+                "stay while that container exists (until it is removed, or {storage}/merge \
+                 resolves)"
+            )),
+            "{why}"
+        );
+        // A container that does mount it still decides, next to that one.
+        assert_eq!(
+            decide(
+                vec![path.clone()],
+                &[overlay, container("i", &[(&path, "/deps")], &[])],
+                &denying,
+                Duration::from_secs(5),
+            )
+            .await
+            .remove(&path),
+            mounted_by("i", &path, "/deps")
+        );
+        // A bind source it may not read is not blamed on Podman's storage.
+        let kept = decide(
+            vec![path.clone()],
+            &[container(
+                "c".repeat(64).as_str(),
+                &[(Path::new("/home/r5iso/.local/share/containers/x"), "/x")],
+                &[],
+            )],
+            &denying,
+            Duration::from_secs(5),
+        )
+        .await;
+        let Some(Kept::Unknown(why)) = kept.get(&path) else {
+            panic!("{kept:?}");
+        };
+        assert!(
+            why.starts_with(
+                "could not resolve /home/r5iso/.local/share/containers/x, the source of container \
+                 cccccccccccc's bind mount at /x: Permission denied"
+            ) && !why.contains("keep-id"),
+            "{why}"
+        );
     }
 
     /// A host directory that matches by its spelling decides without
