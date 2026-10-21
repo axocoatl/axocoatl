@@ -112,8 +112,9 @@ described after this list.
   bookmark, a link opened from another app: `Sec-Fetch-Site: none`) reaches
   `/` without a valid token cookie but with this one, the daemon answers with
   a page that opens the same address again from `localhost` itself, which
-  every browser sends the token cookie with. That page clears the cookie, so
-  it does this at most once; the next workbench load sets it again. Chromium
+  every browser sends the token cookie with. The request that page makes is
+  same-origin, so a navigation passes through it at most once. The page also
+  clears the cookie, and the next workbench load sets it again. Chromium
   already sends the token cookie on these navigations, so no browser is
   signed in on one that Chromium would refuse. A link or form on another site
   still gets the sign-in page. A Session's app cannot set this cookie through
@@ -127,6 +128,10 @@ described after this list.
 - The cookie counts only on same-origin requests, typed navigations, and
   requests without Fetch Metadata such as WebSocket upgrades. A request marked
   `Sec-Fetch-Site: cross-site` or `same-site` must send a header instead.
+- The daemon reads the `Cookie` header as bytes, one cookie at a time, and
+  accepts the request when any `axocoatl-token-<port>` value in it matches.
+  Another cookie whose value or name is not ASCII, or a second
+  `axocoatl-token-<port>` with another value, does not hide the token cookie.
 - Health probes, the sign-in page, and static assets (`/ui/`, `/vendor/`,
   `/lattice/`, `/brand/`, `/axo-tap.js`) stay public. Every route that reads
   or changes state requires the token, including `/ws`, terminal WebSockets,
@@ -197,6 +202,8 @@ credentials, even with `allow_unauthenticated`, Hosts other than `localhost` and
 loopback IP literals are rejected with 421 to prevent DNS rebinding. Preview origins never receive the workbench
 sign-in cookie, and the Preview proxies remove `axocoatl-token-*` cookies from
 forwarded requests and drop upstream `Set-Cookie` headers that would set one.
+From every other upstream `Set-Cookie` they remove the `Domain` attribute, so
+the browser keeps an app's cookies host-only on its own Preview origin.
 
 If the workbench document is opened through a loopback IP literal, its exact
 root navigation redirects to `localhost` on the same listener. This gives the
@@ -215,16 +222,17 @@ frame window and expected origin in both directions.
 ### Safari shares `Domain=localhost` cookies
 
 Whether a page on a Preview origin may set a cookie for the parent domain,
-`Domain=localhost`, is the browser's decision; the Preview proxy passes an
-app's other `Set-Cookie` headers through unchanged. Chromium refuses such a
-cookie, and so does WebKit on Linux. **Safari on macOS accepts it** from a
-Preview page that runs top-level, whether the page's script or its server sets
-it, and then sends it to the workbench at `localhost` (on every port) and to the
-Preview of every other Session. A Preview runs top-level when you choose **Open full preview**, or in a
-window it opens itself: the Preview frame allows popups, so its code can open
-its own address in a new window when you click in it. Embedded in the
-workbench, Safari gives a Preview no cookies at all, so it cannot set one there
-and receives none.
+`Domain=localhost`, is the browser's decision. Chromium refuses such a cookie,
+and so does WebKit on Linux. **Safari on macOS accepts it** when a Preview page
+that runs top-level sets it from script (`document.cookie`), and then sends it
+to the workbench at `localhost` (on every port) and to the Preview of every
+other Session. An app's server cannot do the same: the Preview proxies remove
+`Domain` from each `Set-Cookie` they forward, so Safari keeps those cookies
+host-only on the Preview origin that set them. A Preview runs top-level when
+you choose **Open full preview**, or in a window it opens itself: the Preview
+frame allows popups, so its code can open its own address in a new window when
+you click in it. Embedded in the workbench, Safari gives a Preview no cookies
+at all, so it cannot set one there and receives none.
 
 The Preview proxies remove only `axocoatl-token-*` cookies from the requests
 they forward. Every other cookie reaches the Session's app, including one that
@@ -244,21 +252,34 @@ can therefore:
 - Send the workbench `axocoatl-token-<port>-signed-in=1`. While that browser is
   signed out, each navigation you start then passes through the retry page once
   before the sign-in page.
+- Sign out a browser that signed in a few seconds earlier, by writing about
+  1,000 cookies at once. WebKit then dropped every cookie the browser held,
+  and the workbench answered with the sign-in page. This needs no
+  `Domain=localhost`: 1,000 host-only cookies did the same, so any page open in
+  Safari can do it. With 20 seconds between the sign-in and the cookies the
+  sign-in survived, and 300 cookies changed nothing. Open the sign-in link
+  again (`axocoatl url`) to sign back in.
 
 It cannot:
 
 - Sign in or use the API. A forged `axocoatl-token-<port>` cookie never matches
   the token, and the signed-in cookie is never a credential.
-- Sign the workbench out. Safari still sends the workbench's own token cookie
-  beside forged ones; the workbench opened and its API answered with them, and
-  with 60 such cookies of 4 KB each.
-- Read the workbench's cookies or pass them on. They are host-only on
-  `localhost` and HttpOnly, no request to a Preview origin carries them, and a
-  Preview proxy strips a forged `axocoatl-token-*` cookie before the app sees it.
+- Sign the workbench out with the cookies it sets, short of the flood above.
+  The daemon reads the `Cookie` header as bytes, so the token cookie stays
+  readable beside a cookie that is not ASCII (Safari sends `é` as the byte
+  0xE9), beside a forged `axocoatl-token-<port>` sent before or after it, and
+  beside 40 cookies of 1 KB: the workbench reloads, connects, and its API
+  answers. Safari refuses a cookie that holds a control character.
+- Read the workbench's cookies. They are host-only on `localhost` and HttpOnly,
+  so Safari never sends them to a Preview origin. Safari does send a forged
+  `axocoatl-token-*` cookie there; the Preview proxies strip every
+  `axocoatl-token-*` cookie before the app sees the request.
 - Reach `127.0.0.1` or `[::1]`.
 
 To keep Sessions whose code you do not trust from reaching each other this way,
-use the workbench in a Chromium-based browser.
+use the workbench in a Chromium-based browser. The Safari behaviour on this page
+was measured in Playwright's WebKit 26.4 on macOS, which uses the system's
+cookie store, not in Safari itself.
 
 ## Understand Workspace authorization
 
