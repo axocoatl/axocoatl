@@ -294,6 +294,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AXOCOATL_INSTALL_BASE_URL` (`https://` or `file://`, with `AXOCOATL_VERSION`) names the
   directory holding its archive and `.sha256` file, which is still required; both are
   checked before any download.
+- The Upgrade page's release installer is `curl -fsSL https://axocoatl.ai/install.sh |
+  sh`, as on the install page; the site deploys that file only once its version has a
+  published release. The page ran `scripts/install.sh` from the repository's `main`
+  branch, whose code may not be released yet.
 - **Commands on the home page, /install, the README, `llms.txt` and the docs' first-run
   pages that did not run as written are fixed, and a lint checks their shape.** The
   receipt check is
@@ -791,10 +795,11 @@ Also restate from the final runs (not yet run on the integrated build):
 - That the product-browser CI legs and the release browser gate ran
   preview-cookies.test.mjs (not skipped) on GitHub's ubuntu-24.04 and ubuntu-24.04-arm
   runners.
-- The example run summary on the README and the home page (re-capture it, and its
-  `fix@1` loadout digest, from a run of the final build), the 48 GB statements on
-  /install, in the docs' install and onboarding pages and in `docs/CLAIMS.md`, and the
-  README's "That pair has run end to end on a 48 GB Mac".
+- The example run summary on the README and the home page (re-capture it from a run of
+  the final build; its `fix@1` digest, 54394b32…, is the SHA-256 of
+  `crates/axocoatl-config/loadouts/fix.yaml` as it stands after round 4), the 48 GB
+  statements on /install, in the docs' install and onboarding pages and in
+  `docs/CLAIMS.md`, and the README's "That pair has run end to end on a 48 GB Mac".
 - The product's own messages that name what was tested, which the pending markers do not
   cover because they are code: onboarding's "runs end to end on 48 GB" and "The local
   pair Axocoatl has tested … runs on 48 GB of memory" (`ollama_setup.rs`,
