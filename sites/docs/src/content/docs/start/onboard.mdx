@@ -170,7 +170,8 @@ On **Linux and WSL2**:
   so onboarding offers the reinstall: `sudo apt-get install --reinstall -y uidmap`,
   `sudo dnf reinstall -y shadow-utils` on Fedora and RHEL (where shadow-utils is always
   installed), `sudo pacman -S --noconfirm shadow` on Arch. If an install or reinstall
-  runs and the helpers still cannot map, onboarding says so and does not offer it again.
+  runs and the helpers still cannot map, onboarding says so and does not offer it again
+  in that run (`axocoatl doctor` still names it, and a later onboarding offers it again).
   Helpers in `/usr/bin` while `/usr/bin` is not on `PATH` are reported as such, with no
   install, and so is a copy earlier on `PATH` that the package does not own; on other
   distributions the fix says what to install or reinstall. Doctor names the
@@ -228,9 +229,12 @@ prints a line such as `✓ Sandbox ready: Podman 5.8.2, applehv, rootless, 6 CPU
      `sudo systemctl restart ollama`.
 
    This also turns off Ollama's web search.
-4. **Models by memory.** Models already installed come first. Any model larger than
-   about 0.65 of this computer's memory is labelled too large and never preselected.
-   With nothing suitable installed:
+4. **Models by memory.** Models already installed come first, at any memory size.
+   Among those that fit this computer, onboarding picks a writer (Qwen3-Coder first, then
+   the largest coding model, then the largest other model, vision models last); when
+   another of them is a gpt-oss model or is larger than that writer, it suggests the two,
+   and Enter (or `--yes`) takes them. Any model larger than about 0.65 of this computer's
+   memory is labelled too large and never preselected. With no such pair installed:
 
    | Memory | Writer | Reviewer | What is known |
    | --- | --- | --- | --- |
@@ -243,10 +247,12 @@ prints a line such as `✓ Sandbox ready: Podman 5.8.2, applehv, rootless, 6 CPU
 
    Under 48 GB onboarding suggests a model only when it fits this computer, as `doctor`
    judges it (at most about 0.65 of its memory): on a 24 GB Mac only `gpt-oss:20b` of
-   these models does, and on a Mac with less memory neither does. At a terminal it offers OpenRouter for both, Claude Code or Codex as the writer
-   (their setup follows), or local models you name. The reviewer must be a different
-   model from the writer. Under 48 GB with `--yes`, `--writer ollama` stays local:
-   without `--writer-model` and `--reviewer`, naming the models is a step left
+   these models does, and on a Mac with less memory neither does. With no such pair
+   installed, at a terminal it first offers OpenRouter for both (the default), Claude
+   Code or Codex as the writer (their setup follows), a local writer with OpenRouter
+   reviewing, or local models for both. The reviewer must be a different model from the
+   writer. Under 48 GB with `--yes` and no such pair installed, `--writer ollama` stays
+   local: without `--writer-model` and `--reviewer`, naming the models is a step left
    (onboarding never switches it to OpenRouter by itself).
 5. **Pull.** One question shows each size and the free disk, counting a tenth more for
    Ollama's temporary files:
