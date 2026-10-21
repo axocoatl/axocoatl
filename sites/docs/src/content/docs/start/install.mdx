@@ -129,7 +129,7 @@ only reads. `axocoatl onboard` sets up both, and Podman where it can install it
   one to review it ([how it picks them](/start/onboard/)), onboarding suggests those.
   Otherwise, with 48 to 95 GB it offers the local pair, `qwen3-coder:30b` writing and
   `gpt-oss:20b` reviewing; a fix run calls the reviewer only after the writer and the
-  checks finish. With less memory no local pair has been tested: onboarding first offers
+  checks finish. With less memory onboarding offers no default local pair: it first offers
   OpenRouter for the reviewer (or for both), or Claude Code or Codex as the writer, and
   suggests local models only if you then choose them, and only ones that fit.
   `gpt-oss:120b`, the reviewer we measured, needs about 96 GB or more.
@@ -200,7 +200,7 @@ Local models need memory. Unless models already on your Ollama server include a 
 that fits this computer, which onboarding then suggests, from 48 GB it offers
 `qwen3-coder:30b` (18.6 GB) to write and `gpt-oss:20b` (13.8 GB) to review, and a fix
 run calls them in turn; with 96 GB or more the reviewer is `gpt-oss:120b` (65.4 GB), the
-one Axocoatl has measured. Below 48 GB no local pair has been tested, and onboarding
+one Axocoatl has measured. Below 48 GB onboarding has no default local pair, and it
 first offers OpenRouter for the reviewer or for both, or Claude Code or Codex as the
 writer.
 They are large downloads. A fix run needs a context of at least 16384 tokens, and

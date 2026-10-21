@@ -284,7 +284,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or an `if [ -f … ]` that ends with `fi` alone on its line), only `~/.bashrc` gets a
   line, one that skips login shells. With Debian's and Ubuntu's own startup files, read
   directly or through such a `~/.bash_profile`, a new login, an SSH login (`bash -il`)
-  and a new terminal each list `~/.local/bin` once.
+  and a new terminal each list `~/.local/bin` once. The line goes at the end of the file;
+  when `config.fish` can stop before its end in some shells (`status is-login || return`,
+  another return, exit or exec, or a line the installer cannot follow), the installer says
+  so and to move the line above that point, instead of saying new terminals find
+  axocoatl.
   `AXOCOATL_MODIFY_PATH=yes` adds it without asking and `=no` never asks; end of input at
   the question (Ctrl-D) counts as no. In a GitHub Actions step it adds the directory to
   `$GITHUB_PATH` instead. The next commands are printed with the binary's full path
