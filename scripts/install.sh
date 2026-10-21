@@ -213,15 +213,43 @@ adds_to_path() {
 }
 
 # Whether bash login file $1 (~/.bash_profile or ~/.bash_login) reads
-# ~/.profile with `.` or `source`.
+# ~/.profile (written ~/.profile, $HOME/.profile, ${HOME}/.profile, with
+# double quotes around all or part of it, or its full path), at its top level
+# with no return or exit before: `. FILE` or `source FILE`, alone, after
+# `[ -f FILE ] &&` (or [[ ]], test, -r, -e, -s), or in the then branch of
+# `if [ -f FILE ]; then`.
 reads_dot_profile() {
   [ -f "$1" ] || return 1
-  awk '
+  scan_profile="$HOME/.profile" awk "$startup_awk"'
+    BEGIN {
+      p = "(~|\\$HOME)/\\.profile"
+      src = "(\\.|source)[ \t]+" p
+      exists = "(\\[[ \t]+-[efrs][ \t]+" p "[ \t]+\\]|\\[\\[[ \t]+-[efrs][ \t]+" p "[ \t]+\\]\\]|test[ \t]+-[efrs][ \t]+" p ")"
+      tail = "[ \t]*;?[ \t]*(#.*)?$"
+      alone = "^" src tail
+      guarded = "^" exists "[ \t]*&&[ \t]*" src tail
+      one_if = "^if[ \t]+" exists "[ \t]*;[ \t]*then[ \t]+" src "[ \t]*;[ \t]*fi" tail
+      open_if = "^if[ \t]+" exists "[ \t]*;[ \t]*then" tail
+      abs = ENVIRON["scan_profile"]
+      opened = 0
+      found = 0
+    }
     {
-      line = $0
+      line = swap($0, "'\''" abs "'\''", "$HOME/.profile")
+      line = swap(line, abs, "$HOME/.profile")
+      line = swap(line, "${HOME}", "$HOME")
+      # A quoted ~ is not the home directory; other double quotes go.
+      gsub(/["'\'']~/, "@QUOTED@", line)
+      gsub(/"/, "", line)
       sub(/^[ \t]+/, "", line)
-      if (substr(line, 1, 1) == "#") next
-      if (line ~ /(^|[^A-Za-z0-9_])(\.|source)[ \t]+["'\'']?(~|\$HOME|\$\{HOME\})\/\.profile(["'\'' \t;]|$)/) { found = 1; exit }
+      sub(/[ \t]+$/, "", line)
+      if (!ended && !lost) {
+        if (depth == 0 && (line ~ alone || line ~ guarded || line ~ one_if)) { found = 1; exit }
+        if (depth == 1 && opened && !branched && line ~ alone) { found = 1; exit }
+      }
+      was = depth
+      track(line)
+      if (was == 0 && depth == 1) { opened = (line ~ open_if); branched = 0 }
     }
     END { exit !found }
   ' "$1" 2>/dev/null

@@ -509,6 +509,11 @@ path_line_for() {
 #                 loads nvm)
 #   bash-profile-reads-profile  ubuntu's files and a .bash_profile that
 #                 reads .profile
+#   bash-profile-reads-profile-quoted  the same, with `. "$HOME"/.profile`
+#   bash-profile-reads-profile-full-path  the same, with
+#                 `source '<home>/.profile'`
+#   bash-profile-reads-profile-elsewhere  the same, with a .bash_profile that
+#                 reads .profile only on another OS
 #   ubuntu-elsewhere  ubuntu's files with the ~/.local/bin lines in .profile
 #                 only for another OS
 #   arch          a .bash_profile that reads .bashrc, and a .bashrc that
@@ -519,7 +524,7 @@ seed_home() {
   seed_dir="$work_dir/$1/${P_HOME_NAME:-home}"
   mkdir -p "$seed_dir"
   case "$2" in
-    ubuntu | reads-bashrc | runner | bash-profile-reads-profile)
+    ubuntu | reads-bashrc | runner | bash-profile-reads-profile*)
       printf '%s\n' '# like Ubuntu: bash reads .bashrc' \
         'if [ -n "$BASH_VERSION" ]; then' \
         '    if [ -f "$HOME/.bashrc" ]; then' \
@@ -567,6 +572,15 @@ seed_home() {
     bash-profile-reads-profile)
       printf '%s\n' '[ -f "$HOME/.profile" ] && . "$HOME/.profile"' >"$seed_dir/.bash_profile"
       ;;
+    bash-profile-reads-profile-quoted)
+      printf '%s\n' '. "$HOME"/.profile' >"$seed_dir/.bash_profile"
+      ;;
+    bash-profile-reads-profile-full-path)
+      printf "source '%s/.profile'\n" "$seed_dir" >"$seed_dir/.bash_profile"
+      ;;
+    bash-profile-reads-profile-elsewhere)
+      printf '%s\n' '[ "$(uname)" = SunOS ] && . ~/.profile' >"$seed_dir/.bash_profile"
+      ;;
   esac
 }
 
@@ -590,7 +604,8 @@ reset_path_case() {
 # on startup files a user may have. A file counts as adding ~/.local/bin only
 # with the installer's own line or Debian's and Ubuntu's lines, at its top
 # level; counting one that only seems to would leave new terminals without
-# axocoatl.
+# axocoatl. A bash login file counts as reading ~/.profile only when it does
+# so in every login shell.
 install_helpers="$work_dir/install-helpers.sh"
 sed -n '/^# A path as the user knows it/,/^# The startup files a new shell/p' "$installer" >"$install_helpers"
 grep '^adds_to_path()' "$install_helpers" >/dev/null && grep '^reads_dot_profile()' "$install_helpers" >/dev/null \
@@ -655,6 +670,17 @@ then
 fi'
 startup_expect adds_to_path no "fish's line for another OS" \
   "$(printf 'if test (uname) = SunOS\n  %s\nend' "$(path_line_for fish)")" config.fish
+for reads in '. ~/.profile' 'source ~/.profile' '. "$HOME/.profile"' '. "$HOME"/.profile' '. "${HOME}"/.profile' \
+  ". '$startup_home/.profile'" "source \"$startup_home/.profile\"" '[ -f ~/.profile ] && . ~/.profile' \
+  '[[ -r "$HOME/.profile" ]] && source "$HOME/.profile"' 'test -f ~/.profile && . ~/.profile' \
+  'if [ -f ~/.profile ]; then . ~/.profile; fi' "$(printf 'if [ -f "$HOME/.profile" ]; then\n    . "$HOME/.profile"\nfi')"; do
+  startup_expect reads_dot_profile yes "$reads" "$reads" .bash_profile
+done
+for reads in '# . ~/.profile' '. ~/.profile.local' '. "~/.profile"' ". '\$HOME/.profile'" '. ~/x/.profile' \
+  '[ "$(uname)" = SunOS ] && . ~/.profile' "emulate sh -c '. ~/.profile'" "$(os_block '  . ~/.profile')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nelse\n  . ~/.profile\nfi')" "$(printf '[ -n "$PS1" ] || return\n. ~/.profile')"; do
+  startup_expect reads_dot_profile no "$reads" "$reads" .bash_profile
+done
 
 # A stock Mac in a pipe with no terminal: ~/.local/bin, the persistent line
 # printed for ~/.zprofile, nothing written, and the next command a full path.
@@ -851,6 +877,36 @@ grep -F 'Add it in ~/.bashrc? [Y/n]' "$case_tty" >/dev/null \
 [ "$(installer_lines "$case_home/.profile")" = 0 ] || fail "$name wrote ~/.profile, which adds ~/.local/bin already"
 P_LINE="$(path_line_for bash-nonlogin)"
 path_expect_new_shells_find bash "$case_home/.bashrc"
+
+# The same with `. "$HOME"/.profile` and with ~/.profile's full path in
+# ~/.bash_profile: an interactive login shell (bash -ilc, as SSH starts)
+# reads ~/.bash_profile, ~/.profile, ~/.bashrc and ~/.profile's own lines, and
+# lists ~/.local/bin once.
+for layout in bash-profile-reads-profile-quoted bash-profile-reads-profile-full-path; do
+  reset_path_case
+  P_OS=Linux P_SHELL=/bin/bash P_TTY='y'
+  seed_home "path-linux-$layout" "$layout"
+  run_path_case "path-linux-$layout"
+  path_expect_status 0
+  path_expect_text '~/.profile already adds ~/.local/bin to PATH in a new login'
+  grep -F 'Add it in ~/.bashrc? [Y/n]' "$case_tty" >/dev/null \
+    || fail "$name did not ask about ~/.bashrc alone: $(cat "$case_tty")"
+  [ "$(installer_lines "$case_home/.bash_profile")" = 0 ] || fail "$name wrote ~/.bash_profile, which reads ~/.profile"
+  P_LINE="$(path_line_for bash-nonlogin)"
+  path_expect_new_shells_find bash "$case_home/.bashrc"
+done
+
+# A ~/.bash_profile that reads ~/.profile only on another OS: a login shell
+# here reads ~/.bash_profile alone, so it gets the line too.
+reset_path_case
+P_OS=Linux P_SHELL=/bin/bash P_TTY='y'
+seed_home path-linux-bash-profile-elsewhere bash-profile-reads-profile-elsewhere
+run_path_case path-linux-bash-profile-elsewhere
+path_expect_status 0
+path_refuse_text 'already adds'
+grep -F 'Add it in ~/.bashrc and ~/.bash_profile? [Y/n]' "$case_tty" >/dev/null \
+  || fail "$name did not name ~/.bashrc and ~/.bash_profile in its question: $(cat "$case_tty")"
+path_expect_new_shells_find bash "$case_home/.bashrc" "$case_home/.bash_profile"
 
 # A ~/.profile whose ~/.local/bin lines are only for another OS: it does not
 # count, and gets the line with ~/.bashrc.
