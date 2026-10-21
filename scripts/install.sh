@@ -152,7 +152,7 @@ BEGIN {
   sq = sprintf("%c", 39)
   nctx = 0; nblk = 0; nbid = 0; cmd = 1; cont = 0; lost = 0; ended = 0; branched = 0
   testmode = 0; pending = 0; redir = 0; fname = 0; fnparen = 0; afterfname = 0
-  prevcmd = 0; word = ""; inword = 0; last = ""
+  prevcmd = 0; word = ""; inword = 0; last = ""; ctxbs = 0
 }
 function swap(s, from, to,    at, out) {
   if (from == "") return s
@@ -271,15 +271,19 @@ function newline(    k, m) {
 }
 function open_ctx(t, n) { nctx++; ctx[nctx] = t; par[nctx] = n }
 function shut_ctx(c) { nctx--; if (!nctx) word = word c }
-function track(s,    i, n, c, t, two, three, op, bs) {
+function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
   n = length(s)
   bs = 0
+  # esc: where the last character written with a backslash is on this line
+  # (0 for the line break before it, when the line before ended in one).
+  esc = ctxbs ? 0 : -1
+  ctxbs = 0
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
     if (nctx) {
       t = ctx[nctx]
       if (t == "S") { if (c == sq) shut_ctx(c); continue }
-      if (c == "\\") { i++; continue }
+      if (c == "\\") { if (i == n) ctxbs = 1; esc = i + 1; i++; continue }
       if (t == "E") { if (c == sq) shut_ctx(c); continue }
       if (t == "B") { if (c == "`") shut_ctx(c); continue }
       if (t == "D" || t == "V") {
@@ -309,10 +313,19 @@ function track(s,    i, n, c, t, two, three, op, bs) {
       # A case in $( ) has patterns that end in ), which this count of
       # parentheses would take as the end of the $( ).
       if (t == "C" && substr(s, i, 4) == "case" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;(|&]/) && (i + 4 > n || substr(s, i + 4, 1) ~ /[ \t;]/)) lost = 1
-      if (t == "C" && c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;(]/)) i = n
-      # A comment in a ( ) word (an array over several lines); not (#...),
-      # which is a zsh glob flag there.
-      if (t == "P" && c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t]/)) i = n
+      # A comment: a # at the start of a line, or after a blank (in $( )
+      # also after ; or (), unless that line break or character is written
+      # with a backslash (x\ #y, x\;#y, and x\ with #y on the next line, are
+      # each one word). In a ( ) word (an array over several lines), not
+      # (#...), which is a zsh glob flag there. In $( ), a # after a blank
+      # written with a backslash starts a comment too, as bash 3.2 reads it:
+      # the reader then stays in the $( ) longer, where no line counts.
+      if (c == "#" && (t == "C" || t == "P")) {
+        before = (i == 1) ? "" : substr(s, i - 1, 1)
+        escaped = (i == 1) ? (esc == 0) : (esc == i - 1)
+        if (t == "P" && !escaped && (i == 1 || before ~ /[ \t]/)) i = n
+        if (t == "C" && (before ~ /[ \t]/ || (!escaped && (i == 1 || before ~ /[;(]/)))) i = n
+      }
       continue
     }
     if (c == "\\") {
@@ -356,8 +369,10 @@ function track(s,    i, n, c, t, two, three, op, bs) {
     word = word c; inword = 1
   }
   if (nctx) return
-  if (inword) { tok_word(word); word = ""; inword = 0 }
+  # A line that ends in a backslash goes on on the next line, and so does
+  # the word it ends in (a # that starts the next line is part of it).
   if (bs) { cont = 1; return }
+  if (inword) { tok_word(word); word = ""; inword = 0 }
   newline()
 }
 '

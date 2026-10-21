@@ -794,6 +794,24 @@ startup_expect adds_to_path yes "Ubuntu's lines after a zsh glob flag in an arra
 startup_expect adds_to_path no "Ubuntu's lines after return written with a backslash" "$(printf '[ -n "$PS1" ] || \\return\n%s' "$stanza")"
 startup_expect adds_to_path no "Ubuntu's lines after zsh's bye" "$(printf '[[ -o interactive ]] || bye\n%s' "$stanza")" .zshrc
 startup_expect adds_to_path no "the unmarked line after exit written with a backslash" "$(printf '[ -n "$PS1" ] || \\exit\n%s' "$unguarded")" .zshrc
+# A # starts a comment only at the start of a word, not after a blank, ;
+# or ( written with a backslash, nor at the start of a line that goes on
+# from a line ending in a backslash: x\ #y is one word. Read as a comment,
+# the rest of the line (here the array's closing parenthesis) would be
+# skipped, and the case pattern's ) would close the array while the shell is
+# in the case. In $( ), a # after a blank written with a backslash is a
+# comment for bash 3.2, so there the reader takes it as one.
+startup_expect adds_to_path no "Ubuntu's lines in a case after an array with x\\ #y in it" \
+  "$(printf 'a=(x\\ #y)\ncase "$x" in zz)\n%s\n;; esac' "$stanza")" .zshrc
+startup_expect adds_to_path no "Ubuntu's lines in a case after an array with x\\ and #y on the next line" \
+  "$(printf 'a=(x\\\n#y)\ncase "$x" in zz)\n%s\n;; esac' "$stanza")" .zshrc
+startup_expect adds_to_path yes "Ubuntu's lines after an array with x\\ #y in it" "$(printf 'a=(x\\ #y)\n%s' "$stanza")" .zshrc
+startup_expect adds_to_path yes "Ubuntu's lines after an array with x\\ and #y on the next line" "$(printf 'a=(x\\\n#y)\n%s' "$stanza")" .zshrc
+startup_expect adds_to_path no "Ubuntu's lines in an if that starts after a line ending in \\ and a #" \
+  "$(printf 'echo a\\\n#b; if false; then\n%s\nfi' "$stanza")"
+startup_expect adds_to_path yes "Ubuntu's lines after a \$( ) with a\;#b in it" "$(printf 'x=$(echo a\;#b)\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a \$( ) with a\\ #b in it (bash 3.2 reads a comment)" \
+  "$(printf 'x=$(echo a\\ #b)\n%s' "$stanza")"
 
 for reads in '. ~/.profile' 'source ~/.profile' '. "$HOME/.profile"' '. "$HOME"/.profile' '. "${HOME}"/.profile' \
   ". '$startup_home/.profile'" "source \"$startup_home/.profile\"" '[ -f ~/.profile ] && . ~/.profile' \
