@@ -626,7 +626,8 @@ pub(crate) mod testing {
 
     impl Shims {
         /// Shims whose root gives the tests' user, alex, the usual range
-        /// of subordinate ids in `etc/subuid` and `etc/subgid`.
+        /// of subordinate ids in `etc/subuid` and `etc/subgid`, with a
+        /// setuid `newuidmap` and `newgidmap` on PATH.
         pub(crate) fn new() -> Self {
             let shims = Self {
                 dir: tempfile::tempdir().unwrap(),
@@ -634,7 +635,31 @@ pub(crate) mod testing {
                 root: tempfile::tempdir().unwrap(),
             };
             shims.subordinate_ids(Some("alex:100000:65536\n"));
+            shims.id_map_tools(Some(0o4755));
             shims
+        }
+
+        /// Put `newuidmap` and `newgidmap` on PATH with `mode` (`0o4755`:
+        /// setuid; `0o755`: they cannot map), or remove them. They are
+        /// never run: onboarding only looks at them.
+        pub(crate) fn id_map_tools(&self, mode: Option<u32>) {
+            for name in ["newuidmap", "newgidmap"] {
+                let path = self.dir.path().join(name);
+                match mode {
+                    #[cfg(unix)]
+                    Some(mode) => {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::write(&path, "#!/bin/sh\nexit 1\n").unwrap();
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                            .unwrap();
+                    }
+                    #[cfg(not(unix))]
+                    Some(_) => std::fs::write(&path, "").unwrap(),
+                    None => {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
         }
 
         /// Write `etc/subuid` and `etc/subgid` under the root with `lines`,

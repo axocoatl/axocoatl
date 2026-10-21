@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use axocoatl_isolation::podman::PodmanReadiness;
+use axocoatl_isolation::podman::{ConnectionOverride, PodmanReadiness};
 use axocoatl_isolation::podman_report::PodmanReport;
 use serde_json::{json, Value};
 use wiremock::matchers::{method, path};
@@ -661,8 +661,13 @@ async fn linux_sandbox(shims: &Shims, sudo_body: &str, args: OnboardArgs) -> Onb
         OllamaService::Manual,
     )
     .await;
-    found.podman.subordinate_ids =
-        crate::doctor::subordinate_ids(&shims.host(false), &found.os, &found.user);
+    crate::doctor::read_id_ranges(
+        &mut found.podman,
+        &shims.host(false),
+        shims.root.path(),
+        &found.os,
+        &found.user,
+    );
     let ui = Ui::new(Mode::Yes, args.allow_sudo, None);
     onboarding(shims, ui, found, args)
 }
@@ -879,6 +884,303 @@ async fn doctor_fails_a_missing_subuid_range_on_linux() {
         "{:?}",
         report.sections.sandbox
     );
+}
+
+/// [`podman_shim`] whose `podman info` maps only the user's own id while
+/// `stale` exists beside it; `podman system migrate` removes it once a
+/// setuid `newuidmap` is on PATH (rootless Podman maps a range only through
+/// it).
+fn stale_podman(shims: &Shims) {
+    podman_shim(shims);
+    let script = std::fs::read_to_string(shims.dir.path().join("podman")).unwrap();
+    let script = script
+        .replace(
+            r#"if [ -f "$D/rootful" ]; then"#,
+            r#"if [ -f "$D/stale" ]; then echo "$info" | sed 's/{"container_id":1,"host_id":100000,"size":65536}//g; s/},\]/}]/g'; elif [ -f "$D/rootful" ]; then"#,
+        )
+        .replace(
+            r#""system migrate") ;;"#,
+            r#""system migrate") [ -u "$D/newuidmap" ] && rm -f "$D/stale"; true ;;"#,
+        );
+    std::fs::write(shims.dir.path().join("podman"), script).unwrap();
+}
+
+/// A Podman reached through CONTAINER_HOST (another user's rootless socket
+/// on this computer, or another computer) is not judged by this computer's
+/// /etc/subuid: with no range for alex in the files but one in that
+/// Podman's `podman info`, the sandbox step passes. When that Podman maps
+/// one id, the step left says where to fix it, and onboarding runs no sudo
+/// and no `podman system migrate` (Podman refuses it through an override),
+/// even with --allow-sudo.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_podman_reached_through_container_host_is_not_changed_here() {
+    for stale in [false, true] {
+        let shims = Shims::new();
+        shims.subordinate_ids(Some("newuser:100000:65536\n"));
+        shims.add("sudo", "exit 0");
+        stale_podman(&shims);
+        podman_state(&shims, &["machine", "running"]);
+        if stale {
+            podman_state(&shims, &["stale"]);
+        }
+        let mut found = facts(
+            ubuntu(),
+            64,
+            podman_report(&shims).await,
+            &shims,
+            "http://127.0.0.1:9",
+            OllamaService::Manual,
+        )
+        .await;
+        found.podman.connection =
+            ConnectionOverride::Host("unix:///run/user/2000/podman/podman.sock".to_string());
+        crate::doctor::read_id_ranges(
+            &mut found.podman,
+            &shims.host(false),
+            shims.root.path(),
+            &found.os,
+            &found.user,
+        );
+        assert!(found.podman.subordinate_ids.is_none());
+        assert!(found.podman.id_map_tools.is_none());
+        let args = OnboardArgs {
+            allow_sudo: true,
+            ..yes(WriterChoice::Ollama)
+        };
+        let mut o = onboarding(&shims, Ui::new(Mode::Yes, true, None), found, args);
+        let ready = sandbox::run(&mut o).await;
+        let calls = shims.calls();
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.starts_with("sudo") || call.contains("system migrate")),
+            "{calls:?}"
+        );
+        if stale {
+            assert!(!ready);
+            assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+            assert!(
+                o.steps[0].starts_with(
+                    "Podman reached through \
+                     CONTAINER_HOST=unix:///run/user/2000/podman/podman.sock runs rootless with \
+                     only one user ID mapped"
+                ),
+                "{:?}",
+                o.steps
+            );
+            assert!(
+                !o.steps[0].contains("migrate") && !o.steps[0].contains("sudo"),
+                "{:?}",
+                o.steps
+            );
+            assert!(!calls.iter().any(|call| call.starts_with("podman run")));
+        } else {
+            assert!(ready, "{:?}\n{}", o.steps, o.ui.output());
+            assert!(calls.iter().any(|call| call.starts_with("podman run")));
+        }
+    }
+}
+
+/// Rootless Podman maps one id while /etc/subuid gives alex a range,
+/// because newuidmap and newgidmap are missing (Debian and Ubuntu ship them
+/// in uidmap, which Podman only recommends). Onboarding says so instead of
+/// offering `podman system migrate` again and again: under --yes without
+/// --allow-sudo it runs nothing; with it, it installs uidmap, restarts
+/// rootless Podman, and the sandbox check runs.
+#[cfg(unix)]
+#[tokio::test]
+async fn missing_newuidmap_is_installed_instead_of_only_migrating() {
+    for allow_sudo in [false, true] {
+        let shims = Shims::new();
+        shims.id_map_tools(None);
+        stale_podman(&shims);
+        podman_state(&shims, &["stale"]);
+        let sudo = format!(
+            r#"case "$*" in
+  "apt-get install -y uidmap") for n in newuidmap newgidmap; do printf '#!/bin/sh\nexit 1\n' > "{dir}/$n"; chmod 4755 "{dir}/$n"; done ;;
+  *) exit 1 ;;
+esac"#,
+            dir = shims.dir.path().display()
+        );
+        let mut o = linux_sandbox(
+            &shims,
+            &sudo,
+            OnboardArgs {
+                allow_sudo,
+                ..yes(WriterChoice::Ollama)
+            },
+        )
+        .await;
+        assert_eq!(
+            axocoatl_isolation::podman_report::id_range_problem(&o.facts.podman),
+            Some(axocoatl_isolation::podman_report::IdRangeProblem::NoIdMapTools)
+        );
+        let ready = sandbox::run(&mut o).await;
+        let calls = shims.calls();
+        if allow_sudo {
+            assert!(ready, "{:?}\n{}", o.steps, o.ui.output());
+            let position = |wanted: &str| {
+                calls
+                    .iter()
+                    .position(|call| call.starts_with(wanted))
+                    .unwrap_or_else(|| panic!("{wanted}: {calls:?}"))
+            };
+            assert!(
+                position("sudo apt-get install -y uidmap") < position("podman system migrate")
+                    && position("podman system migrate") < position("podman run"),
+                "{calls:?}"
+            );
+            assert!(o.steps.is_empty(), "{:?}", o.steps);
+        } else {
+            assert!(!ready);
+            assert_eq!(
+                o.steps,
+                ["newuidmap and newgidmap are not installed, so rootless Podman maps only alex's \
+                  own user ID, whatever /etc/subuid and /etc/subgid give, and cannot unpack \
+                  images or start Sessions: sudo apt-get install -y uidmap && podman system \
+                  migrate"]
+            );
+            assert!(
+                !calls
+                    .iter()
+                    .any(|call| call.starts_with("sudo") || call.contains("system migrate")),
+                "{calls:?}"
+            );
+        }
+    }
+}
+
+/// Only /etc/subgid lacks alex's range: onboarding adds a group range and
+/// no user range.
+#[cfg(unix)]
+#[tokio::test]
+async fn only_the_missing_group_range_is_added() {
+    let shims = Shims::new();
+    let etc = shims.root.path().join("etc");
+    std::fs::write(etc.join("subgid"), "").unwrap();
+    let sudo = format!(
+        r#"case "$*" in
+  "usermod --add-subgids 165536-231071 alex") echo "alex:165536:65536" >> "{}/subgid" ;;
+  *) exit 1 ;;
+esac"#,
+        etc.display()
+    );
+    let mut o = linux_sandbox(
+        &shims,
+        &sudo,
+        OnboardArgs {
+            allow_sudo: true,
+            ..yes(WriterChoice::Ollama)
+        },
+    )
+    .await;
+    assert!(
+        sandbox::run(&mut o).await,
+        "{:?}\n{}",
+        o.steps,
+        o.ui.output()
+    );
+    let calls = shims.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call == "sudo usermod --add-subgids 165536-231071 alex"),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.contains("--add-subuids")),
+        "{calls:?}"
+    );
+}
+
+/// The files leave no free range from 100000 up: onboarding names no range
+/// (one it named would overlap another user's) and runs nothing.
+#[cfg(unix)]
+#[tokio::test]
+async fn no_free_range_leaves_a_step_and_runs_nothing() {
+    let shims = Shims::new();
+    shims.subordinate_ids(Some("other:100000:4294867295\n"));
+    let mut o = linux_sandbox(
+        &shims,
+        "exit 0",
+        OnboardArgs {
+            allow_sudo: true,
+            ..yes(WriterChoice::Ollama)
+        },
+    )
+    .await;
+    assert!(!sandbox::run(&mut o).await);
+    let calls = shims.calls();
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("sudo") || call.contains("system migrate")),
+        "{calls:?}"
+    );
+    assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+    assert!(
+        o.steps[0].ends_with(
+            "Choose 65536 IDs that no line of /etc/subuid or /etc/subgid uses (none is free from \
+             100000 up to 4294967294 here) and add them: sudo usermod --add-subuids FIRST-LAST \
+             --add-subgids FIRST-LAST alex, then: podman system migrate"
+        ),
+        "{:?}",
+        o.steps
+    );
+}
+
+/// Doctor judges a Podman reached through CONTAINER_HOST by its own `podman
+/// info`, as before it read the files: no false FAIL for this computer's
+/// /etc/subuid, and when that Podman maps one id, a FAIL whose fix runs
+/// nothing here.
+#[cfg(unix)]
+#[tokio::test]
+async fn doctor_judges_a_podman_reached_elsewhere_by_its_podman_info() {
+    let shims = Shims::new();
+    stale_podman(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    shims.subordinate_ids(Some("newuser:100000:65536\n"));
+    let env = crate::doctor::Environment {
+        os: ubuntu(),
+        host: shims.host(false),
+        podman_connection: ConnectionOverride::Host(
+            "ssh://builder/run/user/1000/podman/podman.sock".to_string(),
+        ),
+        ..doctor_env(&shims)
+    };
+    let config_path = shims.home.path().join("config.yaml");
+    let report = crate::doctor::collect(&config_path, &env).await;
+    assert!(
+        !report
+            .sections
+            .sandbox
+            .iter()
+            .any(|item| item.name == "User ID ranges"),
+        "{:?}",
+        report.sections.sandbox
+    );
+    podman_state(&shims, &["stale"]);
+    let report = crate::doctor::collect(&config_path, &env).await;
+    let ranges = report
+        .sections
+        .sandbox
+        .iter()
+        .find(|item| item.name == "User ID ranges")
+        .unwrap_or_else(|| panic!("{:?}", report.sections.sandbox));
+    assert_eq!(ranges.status, crate::doctor::Status::Fail);
+    let fix = ranges.fix.as_deref().unwrap();
+    assert!(
+        ranges
+            .detail
+            .contains("CONTAINER_HOST=ssh://builder/run/user/1000/podman/podman.sock"),
+        "{ranges:?}"
+    );
+    assert!(
+        !fix.contains("migrate") && !fix.contains("sudo") && !fix.contains("alex"),
+        "{fix}"
+    );
+    assert!(fix.ends_with("Or unset CONTAINER_HOST to use rootless Podman on this computer"));
 }
 
 /// Ubuntu 22.04's Podman 3.4.4 is refused by name, before any install.
@@ -2629,6 +2931,8 @@ fn doctor_env(shims: &Shims) -> crate::doctor::Environment {
         contexts_read: Default::default(),
         socket_path: home.join("no-daemon.sock"),
         podman: shims.dir.path().join("podman").display().to_string(),
+        podman_connection: ConnectionOverride::None,
+        id_root: shims.root.path().to_path_buf(),
         data_dir: Some(home.join("data")),
         landlock_abi: Some(6),
     }

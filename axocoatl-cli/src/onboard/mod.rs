@@ -489,6 +489,8 @@ impl Onboarding {
                 .unwrap_or_else(|| PathBuf::from("/nonexistent/podman"))
                 .display()
                 .to_string(),
+            podman_connection: self.facts.podman.connection.clone(),
+            id_root: self.host.root.clone(),
             data_dir: self.data_dir_override.clone(),
             landlock_abi: self.facts.landlock_abi,
         }

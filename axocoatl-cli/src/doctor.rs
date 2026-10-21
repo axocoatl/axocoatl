@@ -11,6 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use axocoatl_isolation::podman::ConnectionOverride;
 use axocoatl_isolation::podman_report::{self, Level, Platform};
 use serde::Serialize;
 
@@ -149,6 +150,12 @@ pub(crate) struct Environment {
     pub(crate) socket_path: PathBuf,
     /// The Podman client.
     pub(crate) podman: String,
+    /// The connection `CONTAINER_HOST` or `CONTAINER_CONNECTION` selects
+    /// for it.
+    pub(crate) podman_connection: ConnectionOverride,
+    /// `/`, where the user's subordinate id files and `newuidmap` are read
+    /// (a test's directory instead).
+    pub(crate) id_root: PathBuf,
     /// The data directory, when it is not the one the configuration selects
     /// (tests).
     pub(crate) data_dir: Option<PathBuf>,
@@ -156,9 +163,20 @@ pub(crate) struct Environment {
     pub(crate) landlock_abi: Option<i64>,
 }
 
+/// For tests of the `axocoatl` binary: a directory that stands in for `/`
+/// where doctor reads `etc/subuid`, `etc/subgid`, `etc/nsswitch.conf` and
+/// `usr/bin/newuidmap` (and `newgidmap`), so a test does not depend on the
+/// user ranges of the computer running it. Not documented; it changes
+/// nothing but where doctor reads those files.
+const ID_ROOT_VARIABLE: &str = "AXOCOATL_TEST_ID_ROOT";
+
 impl Environment {
     pub(crate) async fn current() -> Result<Self, String> {
         let host = crate::onboard::host::Host::from_env(None)?;
+        let id_root = std::env::var_os(ID_ROOT_VARIABLE)
+            .map(PathBuf::from)
+            .filter(|root| root.is_absolute())
+            .unwrap_or_else(|| host.root.clone());
         let os = if host.macos {
             Os::MacOs {
                 version: None,
@@ -190,6 +208,8 @@ impl Environment {
             contexts_read: BTreeMap::new(),
             socket_path: axocoatl_daemon::ipc::default_socket_path(),
             podman: "podman".to_string(),
+            podman_connection: ConnectionOverride::from_env(),
+            id_root,
             data_dir: None,
             landlock_abi: detect::landlock_abi(),
         })
@@ -249,16 +269,26 @@ pub(crate) fn podman_install_fix(os: &Os, homebrew: bool) -> String {
     }
 }
 
-/// Linux: the subordinate ids `/etc/subuid` and `/etc/subgid` (under the
-/// host's root) give `user`, this process's user. `None` on macOS, where
-/// the machine has its own.
-pub(crate) fn subordinate_ids(
+/// Linux, when Podman runs on this computer ([`PodmanReport::runs_here`]):
+/// add to `report` what `/etc/subuid` and `/etc/subgid` (under `root`) give
+/// `user`, this process's user, and whether `newuidmap` and `newgidmap` (on
+/// the host's `PATH`, else under `root`) can map them. Nothing is read on
+/// macOS, whose machine has its own, nor for a Podman reached through
+/// `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote connection: this
+/// computer's files do not govern it, so its own `podman info` decides.
+///
+/// [`PodmanReport::runs_here`]: podman_report::PodmanReport::runs_here
+pub(crate) fn read_id_ranges(
+    report: &mut podman_report::PodmanReport,
     host: &crate::onboard::host::Host,
+    root: &Path,
     os: &Os,
     user: &str,
-) -> Option<podman_report::SubordinateIds> {
-    if os.is_macos() {
-        return None;
+) {
+    report.subordinate_ids = None;
+    report.id_map_tools = None;
+    if os.is_macos() || !report.runs_here() {
+        return;
     }
     let uid = {
         #[cfg(unix)]
@@ -271,7 +301,79 @@ pub(crate) fn subordinate_ids(
             None
         }
     };
-    podman_report::read_subordinate_ids(&host.root, user, uid)
+    report.subordinate_ids = podman_report::read_subordinate_ids(root, user, uid);
+    report.id_map_tools = Some(id_map_tools(host, root, os));
+}
+
+/// `newuidmap` and `newgidmap` as rootless Podman finds them (on `PATH`,
+/// else in `usr/bin` under `root`), and the command that installs them on
+/// this distribution.
+pub(crate) fn id_map_tools(
+    host: &crate::onboard::host::Host,
+    root: &Path,
+    os: &Os,
+) -> podman_report::IdMapTools {
+    let mut tools = podman_report::IdMapTools {
+        install: os
+            .release()
+            .and_then(|release| release.package_manager())
+            .and_then(|manager| {
+                manager
+                    .id_map_package()
+                    .map(|package| manager.install(&[package]).display())
+            }),
+        ..Default::default()
+    };
+    for name in ["newuidmap", "newgidmap"] {
+        let found = host.find(name).or_else(|| {
+            Some(root.join("usr/bin").join(name))
+                .filter(|path| crate::onboard::host::is_executable(path))
+        });
+        match found {
+            None => tools.missing.push(name.to_string()),
+            Some(path) if !may_map_ids(&path) => {
+                tools.unprivileged.push(path.display().to_string())
+            }
+            Some(_) => {}
+        }
+    }
+    tools
+}
+
+/// `path` may map another user's ids: it is setuid, or (Fedora, Arch) has
+/// file capabilities (`security.capability`). The owner is not checked: a
+/// setuid helper is root's.
+fn may_map_ids(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::metadata(path).is_ok_and(|metadata| metadata.permissions().mode() & 0o4000 != 0)
+        {
+            return true;
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(name) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // SAFETY: both strings are valid and NUL-terminated; a null buffer
+        // of size 0 asks only for the attribute's size.
+        let size = unsafe {
+            libc::getxattr(
+                name.as_ptr(),
+                c"security.capability".as_ptr(),
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        size > 0
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
 }
 
 /// The Landlock line for a Linux kernel with `abi` (`None`: no Landlock).
@@ -427,8 +529,9 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         });
 
     // ── Sandbox ──
-    let mut report = podman_report::inspect_with(&env.podman).await;
-    report.subordinate_ids = subordinate_ids(&env.host, &env.os, &env.user);
+    let mut report =
+        podman_report::inspect_through(&env.podman, env.podman_connection.clone()).await;
+    read_id_ranges(&mut report, &env.host, &env.id_root, &env.os, &env.user);
     let e2b = config
         .as_ref()
         .is_some_and(|config| config.sandbox.backend == "e2b");

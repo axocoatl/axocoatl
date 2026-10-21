@@ -13,8 +13,8 @@ use axocoatl_isolation::podman::{
     MIN_MACHINE_MEMORY_MIB, TESTED_MACHINE_MEMORY_MIB,
 };
 use axocoatl_isolation::podman_report::{
-    self, rootless_switch_command, subordinate_ids_command, IdRangeProblem, PodmanReport,
-    MIN_PODMAN_VERSION, TESTED_LINUX_PODMAN,
+    self, rootless_switch_command, IdRangeProblem, LocalIdFix, PodmanReport, MIN_PODMAN_VERSION,
+    TESTED_LINUX_PODMAN,
 };
 
 use super::detect::Os;
@@ -56,8 +56,13 @@ async fn reinspect(o: &mut Onboarding) {
         Some(program) => podman_report::inspect_with(&program).await,
         None => PodmanReport::not_installed(),
     };
-    o.facts.podman.subordinate_ids =
-        crate::doctor::subordinate_ids(&o.host, &o.facts.os, &o.facts.user);
+    crate::doctor::read_id_ranges(
+        &mut o.facts.podman,
+        &o.host,
+        &o.host.root,
+        &o.facts.os,
+        &o.facts.user,
+    );
 }
 
 /// Step 2; returns whether the sandbox is ready.
@@ -618,52 +623,55 @@ fn version(o: &mut Onboarding) -> bool {
     true
 }
 
-/// Linux: a range of subordinate user and group ids in `/etc/subuid` and
-/// `/etc/subgid` that rootless Podman maps. Adding one runs `sudo usermod`
-/// (only with consent, and under `--yes` only with `--allow-sudo`); a range
-/// Podman has not picked up yet needs only `podman system migrate`.
+/// Linux: a range of subordinate user and group ids that rootless Podman
+/// maps. When Podman runs on this computer, onboarding adds a missing
+/// range to `/etc/subuid` and `/etc/subgid` with `sudo usermod`, installs a
+/// missing `newuidmap` and `newgidmap` with the package manager (each only
+/// with consent, and under `--yes` only with `--allow-sudo`), and restarts
+/// rootless Podman with `podman system migrate`; a range Podman has not
+/// picked up yet needs only the migrate. For a Podman reached through
+/// `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote connection it runs
+/// nothing: that Podman's range is set where it runs, and Podman refuses
+/// `system migrate` through an override.
 async fn subordinate_ids(o: &mut Onboarding) -> bool {
     let Some(problem) = podman_report::id_range_problem(&o.facts.podman) else {
         return true;
     };
     let user = o.facts.user.clone();
     let finding = podman_report::id_range_finding(&o.facts.podman, &user, &problem);
-    let fix = finding.fix.clone().unwrap_or_default();
-    let migrate = Cmd::new("podman", &["system", "migrate"]);
-    let (question, commands, sudo) = match problem {
-        IdRangeProblem::Missing => {
-            let (first, last) = o.facts.podman.free_subordinate_range();
-            let range = format!("{first}-{last}");
-            let usermod = Cmd::sudo(
-                "usermod",
-                &["--add-subuids", &range, "--add-subgids", &range, &user],
-            );
-            (
-                format!(
-                    "{}. Add a range with `{fix}`? `podman system migrate` stops your running \
-                     containers.",
-                    finding.detail
-                ),
-                vec![usermod, migrate],
-                true,
-            )
-        }
-        IdRangeProblem::NotApplied => (
-            format!(
-                "{}. Restart rootless Podman with `podman system migrate`? It stops your running \
-                 containers.",
-                finding.detail
-            ),
-            vec![migrate],
-            false,
+    let fix_text = finding.fix.clone().unwrap_or_default();
+    // Elsewhere, or something only the person can do (choose a range,
+    // reinstall a helper): a step left, nothing run.
+    let commands = podman_report::local_fix(&o.facts.podman, &user, &problem)
+        .filter(|fix| fix.manual.is_none())
+        .and_then(|fix| id_fix_commands(o, &fix).map(|commands| (commands, fix.uses_sudo())));
+    let Some((commands, sudo)) = commands else {
+        o.step_left(format!("{}: {fix_text}", finding.detail));
+        return false;
+    };
+    let question = match problem {
+        IdRangeProblem::NotApplied => format!(
+            "{}. Restart rootless Podman with `podman system migrate`? It stops your running \
+             containers.",
+            finding.detail
+        ),
+        IdRangeProblem::NoIdMapTools => format!(
+            "{}. Install them with `{fix_text}`? `podman system migrate` stops your running \
+             containers.",
+            finding.detail
+        ),
+        IdRangeProblem::Missing | IdRangeProblem::Elsewhere => format!(
+            "{}. Add a range with `{fix_text}`? `podman system migrate` stops your running \
+             containers.",
+            finding.detail
         ),
     };
     if !o.ui.consent(&question, true, sudo) {
-        o.step_left(format!("{}: {fix}", finding.detail));
+        o.step_left(format!("{}: {fix_text}", finding.detail));
         return false;
     }
     if let Err(error) = o.ui.execute_all(&o.host, &commands).await {
-        o.step_left(format!("{error}; run {fix}"));
+        o.step_left(format!("{error}; run {fix_text}"));
         return false;
     }
     reinspect(o).await;
@@ -682,6 +690,34 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
             false
         }
     }
+}
+
+/// The commands that run `fix`, exactly as its text shows them. `None` when
+/// the install command cannot be rebuilt here as shown.
+fn id_fix_commands(o: &Onboarding, fix: &LocalIdFix) -> Option<Vec<Cmd>> {
+    let mut commands = Vec::new();
+    if let Some(shown) = &fix.install {
+        let install = o
+            .facts
+            .os
+            .release()
+            .and_then(|release| release.package_manager())
+            .and_then(|manager| {
+                manager
+                    .id_map_package()
+                    .map(|package| manager.install(&[package]))
+            })
+            .filter(|install| install.display() == *shown)?;
+        commands.push(install);
+    }
+    if let Some(usermod) = &fix.usermod {
+        let args: Vec<&str> = usermod.iter().skip(1).map(String::as_str).collect();
+        commands.push(Cmd::sudo(&usermod[0], &args));
+    }
+    if fix.migrate {
+        commands.push(Cmd::new("podman", &["system", "migrate"]));
+    }
+    Some(commands)
 }
 
 fn landlock(o: &mut Onboarding) -> bool {
@@ -795,13 +831,7 @@ async fn proof(o: &mut Onboarding) -> bool {
                 .iter()
                 .any(|sign| reason.contains(sign));
             let fix = if ids {
-                match &o.facts.podman.subordinate_ids {
-                    Some(found) if found.enough() => podman_report::MIGRATE_FIX.to_string(),
-                    _ => subordinate_ids_command(
-                        &o.facts.user,
-                        o.facts.podman.free_subordinate_range(),
-                    ),
-                }
+                podman_report::id_failure_fix(&o.facts.podman, &o.facts.user)
             } else if reason.contains("keep-id") {
                 "upgrade Podman to 4.9 or later".to_string()
             } else {
