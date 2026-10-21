@@ -459,6 +459,14 @@ path_expect_new_shells_find() {
       "$shell_path" "$flags" 'echo "PATH=$PATH"; command -v axocoatl' </dev/null 2>/dev/null)"
     path_expect_once "a new '$shell_name $flags'" "$shell_out" "$@"
   done
+  # fish_add_path without --path saves the directory in the universal
+  # fish_user_paths (fish_variables), where it outlives the line.
+  if [ "$shell_name" = fish ]; then
+    fish_variables="${P_XDG_CONFIG_HOME:-$case_home/.config}/fish/fish_variables"
+    if [ -f "$fish_variables" ] && grep -F 'fish_user_paths' "$fish_variables" >/dev/null; then
+      fail "$name: fish saved a universal fish_user_paths: $(cat "$fish_variables")"
+    fi
+  fi
 }
 
 # path_expect_once WHAT OUTPUT FILE...: OUTPUT (a PATH=... line, then what
@@ -483,7 +491,7 @@ path_expect_once() {
 # not a login shell, for ~/.bashrc next to a ~/.profile that adds it).
 path_line_for() {
   case "$1" in
-    fish) printf '%s' 'fish_add_path "$HOME/.local/bin"' ;;
+    fish) printf '%s' 'fish_add_path --path "$HOME/.local/bin"' ;;
     bash-nonlogin) printf '%s' 'shopt -q login_shell || case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac' ;;
     *) printf '%s' 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac' ;;
   esac
@@ -907,6 +915,20 @@ grep -F "Add it in $P_XDG_CONFIG_HOME/fish/config.fish? [Y/n]" "$case_tty" >/dev
   || fail "$name did not name \$XDG_CONFIG_HOME/fish/config.fish in its question: $(cat "$case_tty")"
 [ ! -e "$case_home/.config/fish/config.fish" ] || fail "$name wrote ~/.config/fish/config.fish next to XDG_CONFIG_HOME"
 path_expect_new_shells_find fish "$P_XDG_CONFIG_HOME/fish/config.fish"
+
+# The line a 1.5.0 release candidate wrote for fish counts: nothing is asked
+# or added.
+reset_path_case
+P_OS=Linux P_SHELL=/usr/bin/fish P_TTY='y'
+name=path-fish-release-candidate-line
+mkdir -p "$work_dir/$name/home/.config/fish"
+printf '\n# Added by the Axocoatl installer\n%s\n' 'fish_add_path "$HOME/.local/bin"' \
+  >"$work_dir/$name/home/.config/fish/config.fish"
+run_path_case "$name"
+path_expect_status 0
+path_expect_text '~/.config/fish/config.fish already adds ~/.local/bin to PATH; new terminals find axocoatl'
+path_expect_no_prompt
+[ "$(installer_lines "$case_home/.config/fish/config.fish")" = 1 ] || fail "$name added a line to config.fish again"
 
 # Any other shell reads ~/.profile.
 reset_path_case

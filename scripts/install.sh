@@ -188,9 +188,10 @@ ${login_file}"
       ;;
     fish)
       # fish reads config.fish in every shell, login or not, and
-      # fish_add_path adds nothing PATH already has.
+      # fish_add_path adds nothing PATH already has; with --path it changes
+      # only this shell's PATH and saves nothing (fish 3.2 or later).
       profiles="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
-      path_line="fish_add_path \"${dir_expr}\""
+      path_line="fish_add_path --path \"${dir_expr}\""
       now_line=$path_line
       ;;
     *)

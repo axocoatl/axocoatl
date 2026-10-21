@@ -88,10 +88,24 @@ cargo uninstall axocoatl-cli
 ```
 
 When the installer added `~/.local/bin` to your `PATH`, it wrote a line after the comment
-`# Added by the Axocoatl installer` in your shell's startup files (`~/.zprofile`, and on
-Linux `~/.zshrc`, for zsh; `~/.bash_profile`, `~/.bash_login` or `~/.profile`, and on
-Linux `~/.bashrc`, for bash; `~/.config/fish/config.fish` for fish). Delete those two
-lines from each file if nothing else of yours lives in `~/.local/bin`.
+`# Added by the Axocoatl installer` in the startup files of the shell you log in with:
+
+- **zsh**: `~/.zprofile`, and on Linux `~/.zshrc` too. With `ZDOTDIR` set, the files of
+  those names in `$ZDOTDIR` instead.
+- **bash**: `~/.bash_profile`, `~/.bash_login` or `~/.profile`, and on Linux `~/.bashrc`.
+- **fish**: `config.fish` in `$XDG_CONFIG_HOME/fish`, or in `~/.config/fish` when
+  `XDG_CONFIG_HOME` is not set.
+- **Any other shell**: `~/.profile`.
+
+Delete those two lines from each file if nothing else of yours lives in `~/.local/bin`.
+
+The fish line a 1.5.0 release candidate wrote, `fish_add_path "$HOME/.local/bin"`
+(without `--path`), also saved `~/.local/bin` in fish's universal `fish_user_paths`,
+which stays after the line is gone. Remove it in fish:
+
+```fish
+set -l i (contains -i ~/.local/bin $fish_user_paths); and set -Ue fish_user_paths[$i]
+```
 
 ## 5. Optional: Podman, Ollama and your sign-ins
 
