@@ -214,6 +214,7 @@ run_case() {
   set +e
   AXOCOATL_INSTALL_SYSTEM_DIR="$case_system" \
   AXOCOATL_INSTALL_TTY="$work_dir/no-terminal" \
+  AXOCOATL_INSTALL_ROOT="$work_dir/$name-root" \
   AXOCOATL_MODIFY_PATH=ask \
   AXOCOATL_VERSION= \
   AXOCOATL_INSTALL_BASE_URL= \
@@ -299,6 +300,9 @@ run_case checksum-tool-missing fail "neither sha256sum nor shasum is available" 
 #   P_HOME_NAME   the home directory's last path segment
 #   P_GITHUB_PATH yes: GITHUB_PATH names a file, as in a GitHub Actions step
 #   P_PODMAN      yes: a podman command is on PATH (a stub that runs nothing)
+#   P_PODMAN_AT   directories, separated by blanks, that hold such a podman
+#                 under the case's stand-in for / (AXOCOATL_INSTALL_ROOT),
+#                 not on PATH; "-" before one makes it not executable
 #   P_VERSION     the AXOCOATL_VERSION value
 #   P_BASE_URL    the AXOCOATL_INSTALL_BASE_URL value
 #   P_BIN         the directory of tools on PATH (default: the stubs)
@@ -328,6 +332,15 @@ run_path_case() {
     chmod 0755 "$podman_dir/podman"
     case_path="$case_path:$podman_dir"
   fi
+  case_root="$work_dir/$name-root"
+  for podman_at in ${P_PODMAN_AT:-}; do
+    mkdir -p "$case_root${podman_at#-}"
+    printf '%s\n' '#!/bin/sh' 'exit 0' > "$case_root${podman_at#-}/podman"
+    case "$podman_at" in
+      -*) chmod 0644 "$case_root${podman_at#-}/podman" ;;
+      *) chmod 0755 "$case_root${podman_at#-}/podman" ;;
+    esac
+  done
   case_github_path=""
   if [ "${P_GITHUB_PATH:-no}" = yes ]; then
     case_github_path="$work_dir/$name.github-path"
@@ -354,6 +367,7 @@ run_path_case() {
   set +e
   AXOCOATL_INSTALL_SYSTEM_DIR="$case_system" \
   AXOCOATL_INSTALL_TTY="$case_tty" \
+  AXOCOATL_INSTALL_ROOT="$case_root" \
   AXOCOATL_MODIFY_PATH="${P_MODIFY:-ask}" \
   AXOCOATL_VERSION="${P_VERSION:-}" \
   AXOCOATL_INSTALL_BASE_URL="${P_BASE_URL:-}" \
@@ -627,7 +641,7 @@ path_reinstall_twice() {
 
 reset_path_case() {
   P_OS=Darwin P_SHELL=/bin/zsh P_SYSTEM=missing P_ON_PATH=no P_SHADOW=no P_TTY=none P_MODIFY=ask P_HOME_NAME=home
-  P_GITHUB_PATH=no P_PODMAN=no P_VERSION='' P_BASE_URL='' P_BIN='' P_XDG_CONFIG_HOME='' P_ZDOTDIR='' P_LINE=''
+  P_GITHUB_PATH=no P_PODMAN=no P_PODMAN_AT='' P_VERSION='' P_BASE_URL='' P_BIN='' P_XDG_CONFIG_HOME='' P_ZDOTDIR='' P_LINE=''
 }
 
 # Reading startup files: the installer's adds_to_path and reads_dot_profile
@@ -720,6 +734,25 @@ startup_expect adds_to_path no "fish's unmarked line in a block" "$(printf 'if t
 startup_expect adds_to_path no "fish's unmarked line in a function" "$(printf 'function local_bin\n  %s\nend' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line after a return" "$(printf 'status is-interactive; or return\n%s' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line after an exec" "$(printf 'exec zsh\n%s' "$(path_line_for fish)")" config.fish
+# No fish line counts after a return, exit or exec where a command starts:
+# also after &&, ||, & or |, and after and, or, not or !. A line that ends in
+# &&, || or | goes on on the next line, past blank lines and comments, and so
+# does one with a comment after them; one that ends in \ goes on on the next
+# line only. An escaped ; separates no commands, and a block that starts
+# after && or | is a block.
+fish_line="$(path_line_for fish)"
+for fish_before in 'status is-login || return' 'status is-interactive || exit' 'not status is-interactive && return' \
+  'status is-login || exec bash' '! status is-interactive && return' 'not not return' 'true & return' \
+  'status is-login ||' 'status is-login &&' 'echo x |' "echo a \\" \
+  "$(printf 'status is-login ||\n# a comment')" 'status is-login || # a comment'; do
+  startup_expect adds_to_path no "fish's unmarked line after $fish_before" "$(printf '%s\n%s' "$fish_before" "$fish_line")" config.fish
+done
+startup_expect adds_to_path no "fish's unmarked line after || and a blank line" "$(printf 'status is-login ||\n\n%s' "$fish_line")" config.fish
+for fish_before in "$(printf 'true && begin\n  :\nend')" "$(printf 'cat /dev/null | while read -l x\n  :\nend')" \
+  'echo a\;end'; do
+  startup_expect adds_to_path yes "fish's unmarked line after $fish_before" "$(printf '%s\n%s' "$fish_before" "$fish_line")" config.fish
+done
+startup_expect adds_to_path yes "fish's unmarked line after a line ending in \\ and a blank line" "$(printf 'echo a \\\n\n%s' "$fish_line")" config.fish
 startup_expect adds_to_path yes "fish's unmarked line after a block word in quotes" "$(printf 'echo "begin"\n%s' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line in a block with a quoted end" \
   "$(printf 'if test -n x\n  echo "x; end"\n  %s\nend' "$(path_line_for fish)")" config.fish
@@ -794,6 +827,24 @@ startup_expect adds_to_path yes "Ubuntu's lines after a zsh glob flag in an arra
 startup_expect adds_to_path no "Ubuntu's lines after return written with a backslash" "$(printf '[ -n "$PS1" ] || \\return\n%s' "$stanza")"
 startup_expect adds_to_path no "Ubuntu's lines after zsh's bye" "$(printf '[[ -o interactive ]] || bye\n%s' "$stanza")" .zshrc
 startup_expect adds_to_path no "the unmarked line after exit written with a backslash" "$(printf '[ -n "$PS1" ] || \\exit\n%s' "$unguarded")" .zshrc
+# A # starts a comment only at the start of a word, not after a blank, ;
+# or ( written with a backslash, nor at the start of a line that goes on
+# from a line ending in a backslash: x\ #y is one word. Read as a comment,
+# the rest of the line (here the array's closing parenthesis) would be
+# skipped, and the case pattern's ) would close the array while the shell is
+# in the case. In $( ), a # after a blank written with a backslash is a
+# comment for bash 3.2, so there the reader takes it as one.
+startup_expect adds_to_path no "Ubuntu's lines in a case after an array with x\\ #y in it" \
+  "$(printf 'a=(x\\ #y)\ncase "$x" in zz)\n%s\n;; esac' "$stanza")" .zshrc
+startup_expect adds_to_path no "Ubuntu's lines in a case after an array with x\\ and #y on the next line" \
+  "$(printf 'a=(x\\\n#y)\ncase "$x" in zz)\n%s\n;; esac' "$stanza")" .zshrc
+startup_expect adds_to_path yes "Ubuntu's lines after an array with x\\ #y in it" "$(printf 'a=(x\\ #y)\n%s' "$stanza")" .zshrc
+startup_expect adds_to_path yes "Ubuntu's lines after an array with x\\ and #y on the next line" "$(printf 'a=(x\\\n#y)\n%s' "$stanza")" .zshrc
+startup_expect adds_to_path no "Ubuntu's lines in an if that starts after a line ending in \\ and a #" \
+  "$(printf 'echo a\\\n#b; if false; then\n%s\nfi' "$stanza")"
+startup_expect adds_to_path yes "Ubuntu's lines after a \$( ) with a\;#b in it" "$(printf 'x=$(echo a\;#b)\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a \$( ) with a\\ #b in it (bash 3.2 reads a comment)" \
+  "$(printf 'x=$(echo a\\ #b)\n%s' "$stanza")"
 
 for reads in '. ~/.profile' 'source ~/.profile' '. "$HOME/.profile"' '. "$HOME"/.profile' '. "${HOME}"/.profile' \
   ". '$startup_home/.profile'" "source \"$startup_home/.profile\"" '[ -f ~/.profile ] && . ~/.profile' \
@@ -846,6 +897,9 @@ for reads in \
   startup_expect reads_dot_profile yes "$reads" "$reads" .bash_profile
 done
 
+# What onboarding does when it finds no Podman (onboard/sandbox.rs, install).
+podman_install_text="onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do."
+
 # A stock Mac in a pipe with no terminal: ~/.local/bin, the persistent line
 # printed for ~/.zprofile, nothing written, and the next command a full path.
 reset_path_case
@@ -855,8 +909,8 @@ path_expect_installed_to "$case_home/.local/bin"
 path_expect_text "~/.local/bin is not on your PATH. For new terminals to find axocoatl, add this line to ~/.zprofile:"
 path_expect_text "    $(path_line_for zsh)"
 path_expect_text "Next:  $case_home/.local/bin/axocoatl onboard"
-path_expect_text "Podman, which every Session and run needs, is not on PATH."
-path_expect_text "onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do."
+path_expect_text "Podman, which every Session and run needs, is not on PATH or in /opt/homebrew/bin, /usr/local/bin or /opt/podman/bin."
+path_expect_text "$podman_install_text"
 path_expect_text "# set up a writer and a reviewer, and Podman where it can (else it says how); it asks first"
 [ ! -e "$case_home/.zprofile" ] || fail "$name wrote ~/.zprofile without being asked"
 path_expect_next_runs
@@ -1510,13 +1564,86 @@ path_expect_status 0
 [ ! -s "$case_github_path" ] || fail "$name wrote GITHUB_PATH with AXOCOATL_MODIFY_PATH=no"
 path_expect_text 'add this line to ~/.zprofile:'
 
-# With Podman on PATH there is no Podman note.
+# With Podman on PATH there is no Podman note, wherever else one is.
 reset_path_case
-P_PODMAN=yes
+P_PODMAN=yes P_PODMAN_AT='/opt/podman/bin'
 run_path_case path-podman-present
 path_expect_status 0
 path_refuse_text 'Podman, which every Session and run needs'
-path_refuse_text 'onboard (below) installs it'
+path_refuse_text 'onboard (below)'
+
+# A podman that is not on PATH but where onboarding also looks
+# (axocoatl-cli/src/onboard/host.rs, extra_dirs: on macOS /opt/homebrew/bin,
+# /usr/local/bin, /opt/podman/bin, in that order, and Ollama's app directory;
+# on Linux /usr/local/bin): the installer says where it is and that its
+# directory is not on PATH, not that onboarding installs it. A file there that
+# is not executable, or one in a directory onboarding does not look in on that
+# OS, is no podman.
+for podman_case in \
+  'Darwin /opt/podman/bin /opt/podman/bin' \
+  'Darwin /opt/homebrew/bin /opt/homebrew/bin /opt/podman/bin' \
+  'Darwin /usr/local/bin -/opt/homebrew/bin /usr/local/bin' \
+  'Darwin /Applications/Ollama.app/Contents/Resources /Applications/Ollama.app/Contents/Resources' \
+  'Linux /usr/local/bin /usr/local/bin /opt/podman/bin'; do
+  set -f
+  # shellcheck disable=SC2086
+  set -- $podman_case
+  set +f
+  podman_os=$1 podman_where=$2
+  shift 2
+  reset_path_case
+  P_OS=$podman_os P_PODMAN_AT="$*"
+  run_path_case "path-podman-off-path-$podman_os-$(printf '%s' "$podman_where" | tr '/.' '--')"
+  path_expect_status 0
+  path_expect_text "Podman, which every Session and run needs, is installed at $podman_where/podman, but $podman_where is not on PATH, where axocoatl dev looks for it."
+  path_expect_text "Add $podman_where to PATH for new terminals; onboard (below) finds Podman there, but does not change PATH."
+  path_refuse_text 'onboard (below) installs it'
+  path_refuse_text 'is not on PATH or in'
+done
+for podman_case in \
+  'Darwin -/opt/homebrew/bin' \
+  'Linux /opt/podman/bin /opt/homebrew/bin -/usr/local/bin' \
+  'Linux'; do
+  set -f
+  # shellcheck disable=SC2086
+  set -- $podman_case
+  set +f
+  podman_os=$1
+  shift
+  reset_path_case
+  P_OS=$podman_os P_PODMAN_AT="$*"
+  run_path_case "path-podman-absent-$podman_os-$#"
+  path_expect_status 0
+  case "$podman_os" in
+    Darwin) path_expect_text "Podman, which every Session and run needs, is not on PATH or in /opt/homebrew/bin, /usr/local/bin or /opt/podman/bin." ;;
+    *) path_expect_text "Podman, which every Session and run needs, is not on PATH or in /usr/local/bin." ;;
+  esac
+  path_expect_text "$podman_install_text"
+  path_refuse_text 'is installed at'
+done
+
+# Those directories are the ones onboarding searches, per OS and in its
+# order: the installer's two podman_dirs lists match Host::from_env's
+# extra_dirs (the macOS list, then the other one).
+onboard_dirs="$(awk '
+  /let extra_dirs = if macos \{/ { on = 1; os = 1; next }
+  on && /\} else \{/ { os = 2; next }
+  on && /^[ \t]*\};/ { exit }
+  on {
+    while (match($0, /"[^"]*"/)) {
+      dirs[os] = dirs[os] (dirs[os] == "" ? "" : " ") substr($0, RSTART + 1, RLENGTH - 2)
+      $0 = substr($0, RSTART + RLENGTH)
+    }
+  }
+  END { print dirs[1]; print dirs[2] }
+' "$repo_root/axocoatl-cli/src/onboard/host.rs")"
+installer_dirs="$(sed -n "s/^ *podman_dirs='\(.*\)'$/\1/p" "$installer")"
+case "$onboard_dirs" in
+  /opt/homebrew/bin*) ;;
+  *) fail "could not read extra_dirs from axocoatl-cli/src/onboard/host.rs: '$onboard_dirs'" ;;
+esac
+[ "$installer_dirs" = "$onboard_dirs" ] \
+  || fail "install.sh looks for podman in '$installer_dirs', onboarding in '$onboard_dirs' (host.rs, extra_dirs)"
 
 # --- Choosing the release ------------------------------------------------
 # AXOCOATL_VERSION installs that release without asking GitHub for the latest

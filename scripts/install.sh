@@ -27,7 +27,8 @@
 # the directory that holds its archive and .sha256 file instead of the GitHub
 # release; the checksum is still required.
 # AXOCOATL_INSTALL_SYSTEM_DIR and AXOCOATL_INSTALL_TTY replace /usr/local/bin
-# and /dev/tty for scripts/test-install.sh.
+# and /dev/tty for scripts/test-install.sh, and AXOCOATL_INSTALL_ROOT stands
+# in for / where it looks for a podman that is not on PATH.
 set -eu
 
 REPO="axocoatl/axocoatl"
@@ -62,6 +63,7 @@ case "$base_url" in
 esac
 system_dir="${AXOCOATL_INSTALL_SYSTEM_DIR:-/usr/local/bin}"
 tty_device="${AXOCOATL_INSTALL_TTY:-/dev/tty}"
+root_dir="${AXOCOATL_INSTALL_ROOT:-}"
 
 # A path as the user knows it: ~/... under the home directory.
 display_path() {
@@ -152,7 +154,7 @@ BEGIN {
   sq = sprintf("%c", 39)
   nctx = 0; nblk = 0; nbid = 0; cmd = 1; cont = 0; lost = 0; ended = 0; branched = 0
   testmode = 0; pending = 0; redir = 0; fname = 0; fnparen = 0; afterfname = 0
-  prevcmd = 0; word = ""; inword = 0; last = ""
+  prevcmd = 0; word = ""; inword = 0; last = ""; ctxbs = 0
 }
 function swap(s, from, to,    at, out) {
   if (from == "") return s
@@ -271,15 +273,19 @@ function newline(    k, m) {
 }
 function open_ctx(t, n) { nctx++; ctx[nctx] = t; par[nctx] = n }
 function shut_ctx(c) { nctx--; if (!nctx) word = word c }
-function track(s,    i, n, c, t, two, three, op, bs) {
+function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
   n = length(s)
   bs = 0
+  # esc: where the last character written with a backslash is on this line
+  # (0 for the line break before it, when the line before ended in one).
+  esc = ctxbs ? 0 : -1
+  ctxbs = 0
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
     if (nctx) {
       t = ctx[nctx]
       if (t == "S") { if (c == sq) shut_ctx(c); continue }
-      if (c == "\\") { i++; continue }
+      if (c == "\\") { if (i == n) ctxbs = 1; esc = i + 1; i++; continue }
       if (t == "E") { if (c == sq) shut_ctx(c); continue }
       if (t == "B") { if (c == "`") shut_ctx(c); continue }
       if (t == "D" || t == "V") {
@@ -309,10 +315,19 @@ function track(s,    i, n, c, t, two, three, op, bs) {
       # A case in $( ) has patterns that end in ), which this count of
       # parentheses would take as the end of the $( ).
       if (t == "C" && substr(s, i, 4) == "case" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;(|&]/) && (i + 4 > n || substr(s, i + 4, 1) ~ /[ \t;]/)) lost = 1
-      if (t == "C" && c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;(]/)) i = n
-      # A comment in a ( ) word (an array over several lines); not (#...),
-      # which is a zsh glob flag there.
-      if (t == "P" && c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t]/)) i = n
+      # A comment: a # at the start of a line, or after a blank (in $( )
+      # also after ; or (), unless that line break or character is written
+      # with a backslash (x\ #y, x\;#y, and x\ with #y on the next line, are
+      # each one word). In a ( ) word (an array over several lines), not
+      # (#...), which is a zsh glob flag there. In $( ), a # after a blank
+      # written with a backslash starts a comment too, as bash 3.2 reads it:
+      # the reader then stays in the $( ) longer, where no line counts.
+      if (c == "#" && (t == "C" || t == "P")) {
+        before = (i == 1) ? "" : substr(s, i - 1, 1)
+        escaped = (i == 1) ? (esc == 0) : (esc == i - 1)
+        if (t == "P" && !escaped && (i == 1 || before ~ /[ \t]/)) i = n
+        if (t == "C" && (before ~ /[ \t]/ || (!escaped && (i == 1 || before ~ /[;(]/)))) i = n
+      }
       continue
     }
     if (c == "\\") {
@@ -356,8 +371,10 @@ function track(s,    i, n, c, t, two, three, op, bs) {
     word = word c; inword = 1
   }
   if (nctx) return
-  if (inword) { tok_word(word); word = ""; inword = 0 }
+  # A line that ends in a backslash goes on on the next line, and so does
+  # the word it ends in (a # that starts the next line is part of it).
   if (bs) { cont = 1; return }
+  if (inword) { tok_word(word); word = ""; inword = 0 }
   newline()
 }
 '
@@ -380,8 +397,10 @@ function track(s,    i, n, c, t, two, three, op, bs) {
 #     printed for the user to add, or a fish line) is on a line where the
 #     installer can tell nothing before it keeps it from running: sure() for
 #     sh, bash and zsh; for fish, outside any block (if, for, while,
-#     function, switch, begin ... end), before any return, exit or exec, and
-#     not after a line ending in \;
+#     function, switch, begin ... end), before any return, exit or exec
+#     (where a command starts: also after &&, ||, and, or, not), before any
+#     line fish_track does not follow, and not on a line that goes on from
+#     one ending in \, &&, || or |;
 #   - in a file that does not end in .fish, it has the three lines Debian's
 #     and Ubuntu's ~/.profile use, starting on a line sure() is true for:
 #       if [ -d "$HOME/.local/bin" ] ; then
@@ -394,9 +413,10 @@ function track(s,    i, n, c, t, two, three, op, bs) {
 # startup_awk comment lists (set -e and a failing command, a sourced file
 # that exits, a syntax error, a later line that takes the directory out of
 # PATH again), so in such a file a line can count that does not run. The
-# installer's line does nothing when PATH has the directory, so adding one
-# too many costs nothing, while counting a file wrongly would leave new
-# terminals without axocoatl.
+# installer's line does nothing when PATH has the directory, so one line too
+# many costs at most a second listing of it (where a later line adds it
+# whether or not PATH has it, as Debian's lines do), while counting a file
+# wrongly would leave new terminals without axocoatl.
 adds_to_path() {
   [ -f "$1" ] || return 1
   case "$dest" in
@@ -416,27 +436,43 @@ adds_to_path() {
       stanza = 0
       found = 0
       prev = ""
-      fdepth = 0; fended = 0; flost = 0; fcont = 0
+      fdepth = 0; fended = 0; flost = 0; fcont = 0; fop = 0
       fish = (ENVIRON["scan_syntax"] == "fish")
       n = split(ENVIRON["scan_lines"], list, "\n")
       for (i = 1; i <= n; i++) own[list[i]] = 1
       n = split(ENVIRON["scan_anywhere"], list, "\n")
       for (i = 1; i <= n; i++) if (list[i] != "") anywhere[list[i]] = 1
     }
-    # fish: blocks open with if, for, while, function, switch or begin where
-    # a command starts and close with end; return, exit and exec end the
-    # file. A line with a quote or a # that names one of those words anywhere
-    # is not followed (flost), so nothing after it counts.
-    function fish_track(s,    parts, k, w, m) {
+    # fish: a command starts at the start of a line and after a ;, & or |
+    # (so also after && and ||) that is not written with a backslash, and
+    # its first word is the one after any and, or, not, !, command or
+    # builtin. Blocks open with if, for, while, function, switch or begin
+    # where a command starts and close with end. After a return, exit or
+    # exec where a command starts (status is-login || return, not
+    # status is-interactive && exit), even in a block, no line counts
+    # (fended). A line with a quote or a # that names one of those words
+    # anywhere is not followed (flost), so nothing after it counts.
+    function fish_track(s,    i, n, c, nparts, part, k, w) {
       if (s ~ /^#/) return
-      if ((index(s, "\"") || index(s, sq) || index(s, "#")) && s ~ /(^|[ \t;(])(if|for|while|function|switch|begin|end|return|exit|exec)([ \t;)]|$)/) {
+      if ((index(s, "\"") || index(s, sq) || index(s, "#")) && s ~ /(^|[ \t;(&|])(if|for|while|function|switch|begin|end|return|exit|exec)([ \t;)&|]|$)/) {
         flost = 1
         return
       }
-      m = split(s, parts, ";")
-      for (k = 1; k <= m; k++) {
-        w = trim(parts[k])
-        sub(/^(and|or|not|command|builtin)[ \t]+/, "", w)
+      nparts = 1
+      part[1] = ""
+      n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") { part[nparts] = part[nparts] substr(s, i, 2); i++ }
+        else if (c == ";" || c == "&" || c == "|") part[++nparts] = ""
+        else part[nparts] = part[nparts] c
+      }
+      for (k = 1; k <= nparts; k++) {
+        w = trim(part[k])
+        while (w ~ /^(and|or|not|!|command|builtin)([ \t]|$)/) {
+          sub(/^[^ \t]+/, "", w)
+          w = trim(w)
+        }
         sub(/[ \t].*/, "", w)
         if (w ~ /^(if|for|while|function|switch|begin)$/) fdepth++
         else if (w == "end") { if (fdepth > 0) fdepth--; else flost = 1 }
@@ -461,7 +497,13 @@ adds_to_path() {
       if (fish) {
         if (line in own && !fdepth && !fended && !flost && !fcont) { found = 1; exit }
         fish_track(line)
-        fcont = (line ~ /\\$/)
+        # fish goes on on the next line after a \, and after a &&, || or |
+        # (also one that a comment follows) past blank and comment lines.
+        if (line == "" || line ~ /^#/) fcont = fop
+        else {
+          fop = (line ~ /(&&|\|)[ \t]*(\\|#.*)?$/)
+          fcont = fop || line ~ /\\$/
+        }
         prev = line
         next
       }
@@ -891,12 +933,36 @@ else
   fi
 fi
 
-# Every Session and run needs rootless Podman. Onboarding installs it after
-# asking where it can (axocoatl-cli/src/onboard/sandbox.rs, install), and
-# otherwise says what to do.
+# Every Session and run needs rootless Podman, which `axocoatl dev` finds on
+# PATH. Onboarding looks for programs on PATH and then in podman_dirs, the
+# same list as extra_dirs in axocoatl-cli/src/onboard/host.rs (Host::from_env;
+# scripts/test-install.sh checks that they match). When it finds no podman
+# there, it installs Podman after asking where it can, and otherwise says what
+# to do (onboard/sandbox.rs, install). When it finds one only in such a
+# directory, it installs nothing and does not change PATH (sandbox.rs,
+# on_path).
 if ! command -v podman >/dev/null 2>&1; then
-  info "Podman, which every Session and run needs, is not on PATH."
-  info "onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do."
+  if [ "$os" = "Darwin" ]; then
+    podman_dirs='/opt/homebrew/bin /usr/local/bin /opt/podman/bin /Applications/Ollama.app/Contents/Resources'
+    podman_dirs_shown='/opt/homebrew/bin, /usr/local/bin or /opt/podman/bin'
+  else
+    podman_dirs='/usr/local/bin'
+    podman_dirs_shown='/usr/local/bin'
+  fi
+  podman_found=""
+  for podman_dir in $podman_dirs; do
+    if [ -f "${root_dir}${podman_dir}/podman" ] && [ -x "${root_dir}${podman_dir}/podman" ]; then
+      podman_found="${podman_dir}/podman"
+      break
+    fi
+  done
+  if [ -n "$podman_found" ]; then
+    info "Podman, which every Session and run needs, is installed at ${podman_found}, but ${podman_dir} is not on PATH, where axocoatl dev looks for it."
+    info "Add ${podman_dir} to PATH for new terminals; onboard (below) finds Podman there, but does not change PATH."
+  else
+    info "Podman, which every Session and run needs, is not on PATH or in ${podman_dirs_shown}."
+    info "onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do."
+  fi
 fi
 
 echo
