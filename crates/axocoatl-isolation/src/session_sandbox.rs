@@ -9414,11 +9414,12 @@ mod tests {
     }
 
     /// End-to-end: needs Podman. A volume of the local driver that binds the
-    /// mount point (`podman volume create --opt type=none --opt o=bind --opt
-    /// device=<dir>`, a Compose bind volume), mounted at `/deps`: inspect
-    /// reports the volume's own directory as its source, so the volume's
-    /// device is what tells. Removing the directory would leave `/deps` on a
-    /// deleted directory. Run with:
+    /// mount point, mounted at `/deps`, made either way Podman binds one:
+    /// `podman volume create --opt type=none --opt o=bind --opt
+    /// device=<dir>` (a Compose bind volume), or `--opt type=bind --opt
+    /// device=<dir>` with no `o`. Inspect reports the volume's own directory
+    /// as its source, so the volume's device is what tells. Removing the
+    /// directory would leave `/deps` on a deleted directory. Run with:
     ///
     /// ```text
     /// cargo test -p axocoatl-isolation --lib \
@@ -9429,33 +9430,42 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires podman; run this test explicitly"]
     async fn a_bind_volume_of_the_mount_point_keeps_it() {
-        assert_an_own_containers_mount_keeps_the_mount_point(
-            |_, node_modules, name| OwnMount {
-                before: vec![vec![
-                    "volume".into(),
-                    "create".into(),
-                    "--opt".into(),
-                    "type=none".into(),
-                    "--opt".into(),
-                    "o=bind".into(),
-                    "--opt".into(),
-                    format!("device={}", node_modules.display()),
-                    name.into(),
-                ]],
-                options: vec!["-v".into(), format!("{name}:/deps")],
-                at: "/deps",
-            },
-            "true",
-            "touch /deps/probe && rm /deps/probe",
-        )
-        .await;
+        for made_with in [&["type=none", "o=bind"][..], &["type=bind"]] {
+            eprintln!("a bind volume made with {made_with:?}");
+            assert_an_own_containers_mount_keeps_the_mount_point(
+                |_, node_modules, name| {
+                    let mut create: Vec<String> = vec!["volume".into(), "create".into()];
+                    for option in made_with {
+                        create.extend(["--opt".into(), option.to_string()]);
+                    }
+                    create.extend([
+                        "--opt".into(),
+                        format!("device={}", node_modules.display()),
+                        name.into(),
+                    ]);
+                    OwnMount {
+                        before: vec![create],
+                        options: vec!["-v".into(), format!("{name}:/deps")],
+                        at: "/deps",
+                    }
+                },
+                "true",
+                "touch /deps/probe && rm /deps/probe",
+            )
+            .await;
+        }
     }
 
     /// End-to-end: needs Podman. An overlay volume of the mount point
     /// (`-v <dir>:/deps:O`): inspect reports its merged directory in
     /// Podman's storage as its source, and the directory it overlays as
     /// `lowerdir=` among its options. Its container keeps the overlay when
-    /// the directory goes, but cannot start again. Run with:
+    /// the directory goes, but cannot start again. On Linux also an overlay
+    /// volume whose upperdir is the mount point (`-v
+    /// <other>:/deps:O,upperdir=<dir>,workdir=<work>`), which inspect reports
+    /// as `upperdir=`: the container writes into it, and removing it makes
+    /// those writes fail. (Through a Podman machine on macOS, such an
+    /// overlay is read-only.) Run with:
     ///
     /// ```text
     /// cargo test -p axocoatl-isolation --lib \
@@ -9466,6 +9476,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires podman; run this test explicitly"]
     async fn an_overlay_volume_of_the_mount_point_keeps_it() {
+        eprintln!("an overlay volume of the mount point");
         assert_an_own_containers_mount_keeps_the_mount_point(
             |_, node_modules, _| OwnMount {
                 before: Vec::new(),
@@ -9476,6 +9487,284 @@ mod tests {
             "touch /deps/probe && rm /deps/probe",
         )
         .await;
+
+        #[cfg(target_os = "linux")]
+        {
+            /// The overlay's lower and work directories, removed however
+            /// the test ends: the kernel makes `work/work` mode 000.
+            struct OverlayScratch(tempfile::TempDir);
+            impl Drop for OverlayScratch {
+                fn drop(&mut self) {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        self.0.path().join("work/work"),
+                        std::fs::Permissions::from_mode(0o700),
+                    );
+                }
+            }
+            eprintln!("an overlay volume whose upperdir is the mount point");
+            let scratch = OverlayScratch(tempfile::tempdir().unwrap());
+            let (lower, work) = (
+                scratch.0.path().join("lower"),
+                scratch.0.path().join("work"),
+            );
+            std::fs::create_dir(&lower).unwrap();
+            std::fs::create_dir(&work).unwrap();
+            assert_an_own_containers_mount_keeps_the_mount_point(
+                |_, node_modules, _| OwnMount {
+                    before: Vec::new(),
+                    options: vec![
+                        "-v".into(),
+                        format!(
+                            "{}:/deps:O,upperdir={},workdir={}",
+                            lower.display(),
+                            node_modules.display(),
+                            work.display()
+                        ),
+                    ],
+                    at: "/deps",
+                },
+                "true",
+                "touch /deps/probe && rm /deps/probe",
+            )
+            .await;
+        }
+    }
+
+    /// End-to-end: needs Podman. A development container's way of
+    /// `--volumes-from`: container A bind-mounts the repository at
+    /// `/workspaces/x`, and container B takes A's mounts (`--volumes-from
+    /// A`) and mounts a tmpfs on `/workspaces/x/node_modules`. B's own
+    /// inspect leaves out the bind it takes, so it is read from A's. Podman
+    /// lets A go while B runs, and then says nothing of B's bind: the
+    /// directory stays, saying why. Removing it would detach B's tmpfs on
+    /// Linux. Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   session_sandbox::tests::mounts_taken_with_volumes_from_keep_the_mount_point \
+    ///   -- --ignored --exact --test-threads=1
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires podman; run this test explicitly"]
+    async fn mounts_taken_with_volumes_from_keep_the_mount_point() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("package.json"), "{}").unwrap();
+        let mountpoint = std::fs::canonicalize(directory.path())
+            .unwrap()
+            .join("node_modules");
+        let id = format!("node-mountpoint-from-{}", uuid::Uuid::new_v4());
+        let _leftovers = SessionLeftovers(id.clone());
+        let sandbox = SessionSandbox::start(
+            &id,
+            directory.path(),
+            None,
+            &[],
+            &[],
+            &SandboxPolicy::default(),
+        )
+        .await
+        .expect("Node sandbox should start");
+        assert!(sandbox.uses_node_dependency_volume());
+        assert_kept_while_mounted(&sandbox, &mountpoint).await;
+
+        let from = OwnContainer(format!("axocoatl-test-from-{}", uuid::Uuid::new_v4()));
+        let taker = OwnContainer(format!("axocoatl-test-taker-{}", uuid::Uuid::new_v4()));
+        podman_ok(&[
+            "run",
+            "-d",
+            "--name",
+            &from.0,
+            "--network=none",
+            "-v",
+            &format!("{}:/workspaces/x", directory.path().display()),
+            DEFAULT_IMAGE,
+            "sleep",
+            "600",
+        ])
+        .await;
+        let taker_id = podman_ok(&[
+            "run",
+            "-d",
+            "--name",
+            &taker.0,
+            "--network=none",
+            "--volumes-from",
+            &from.0,
+            "--tmpfs",
+            "/workspaces/x/node_modules",
+            DEFAULT_IMAGE,
+            "sleep",
+            "600",
+        ])
+        .await;
+        podman_ok(&[
+            "exec",
+            &taker.0,
+            "sh",
+            "-c",
+            "echo tmp > /workspaces/x/node_modules/tmp-marker",
+        ])
+        .await;
+        /// The taker still has its tmpfs, with what it wrote.
+        async fn still_mounted(taker: &str) {
+            let checked = Command::new(PODMAN)
+                .args([
+                    "exec",
+                    taker,
+                    "sh",
+                    "-c",
+                    "awk '$5 == \"/workspaces/x/node_modules\" { found = 1 } END { exit !found }' \
+                     /proc/self/mountinfo && test \"$(cat /workspaces/x/node_modules/tmp-marker)\" \
+                     = tmp",
+                ])
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                checked.status.success(),
+                "the taker keeps its tmpfs: {}{}",
+                String::from_utf8_lossy(&checked.stdout),
+                String::from_utf8_lossy(&checked.stderr)
+            );
+        }
+
+        sandbox.stop_checked().await.unwrap();
+        let decision = release_decision(&mountpoint).await;
+        assert!(
+            matches!(
+                &decision,
+                Some(Decision::Kept(Kept::Mounted { container, source, at }))
+                    if *container == taker_id
+                        && source == directory.path()
+                        && at == Path::new("/workspaces/x/node_modules")
+            ),
+            "inspect of {} gave the bind {taker_id} takes with --volumes-from: {decision:?}",
+            from.0
+        );
+        still_mounted(&taker.0).await;
+
+        // The container it took them from goes; the taker keeps its mounts.
+        podman_ok(&["rm", "-f", "-t", "0", &from.0]).await;
+        let decision = release_decision(&mountpoint).await;
+        assert!(
+            matches!(
+                &decision,
+                Some(Decision::Kept(Kept::Unknown(why)))
+                    if why.contains(&format!(
+                        "container {} takes mounts from container {} with --volumes-from",
+                        &taker_id[..12],
+                        from.0
+                    ))
+            ),
+            "kept, saying Podman no longer says what {taker_id} takes: {decision:?}"
+        );
+        assert!(mountpoint.is_dir());
+        assert_eq!(std::fs::read_dir(&mountpoint).unwrap().count(), 0);
+        still_mounted(&taker.0).await;
+
+        podman_ok(&["rm", "-f", "-t", "0", &taker.0]).await;
+        let unrelated = unrelated_container().await;
+        assert_eq!(
+            release_decision(&mountpoint).await,
+            Some(Decision::Released(Released::Removed)),
+            "no container mounts it and it is empty: removed, with another container inspected"
+        );
+        assert!(!mountpoint.exists());
+        drop(unrelated);
+        SessionSandbox::remove_named_with_dependencies(&id)
+            .await
+            .unwrap();
+    }
+
+    /// End-to-end: needs rootless Podman on Linux. A container of the
+    /// person's own run with `--userns=keep-id` and an overlay volume of
+    /// another directory: the overlay's merged directory, in Podman's
+    /// storage under the container's own directory, belongs to a
+    /// subordinate uid then (4.9.3: mode 0700), so the host does not let the
+    /// person resolve it. Axocoatl cannot tell whether that container has a
+    /// mount on the directory it made: it stays while that container exists,
+    /// and the decision says which container and mount, and why. Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   session_sandbox::tests::an_overlay_of_a_keep_id_container_keeps_it_and_says_why \
+    ///   -- --ignored --exact --test-threads=1
+    /// ```
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires rootless podman; run this test explicitly"]
+    async fn an_overlay_of_a_keep_id_container_keeps_it_and_says_why() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("package.json"), "{}").unwrap();
+        let mountpoint = std::fs::canonicalize(directory.path())
+            .unwrap()
+            .join("node_modules");
+        let id = format!("node-mountpoint-keep-id-{}", uuid::Uuid::new_v4());
+        let _leftovers = SessionLeftovers(id.clone());
+        let sandbox = SessionSandbox::start(
+            &id,
+            directory.path(),
+            None,
+            &[],
+            &[],
+            &SandboxPolicy::default(),
+        )
+        .await
+        .expect("Node sandbox should start");
+        assert!(sandbox.uses_node_dependency_volume());
+        assert_kept_while_mounted(&sandbox, &mountpoint).await;
+
+        let other = tempfile::tempdir().unwrap();
+        let own = OwnContainer(format!("axocoatl-test-keep-id-{}", uuid::Uuid::new_v4()));
+        let own_id = podman_ok(&[
+            "run",
+            "-d",
+            "--name",
+            &own.0,
+            "--network=none",
+            "--userns=keep-id",
+            "-v",
+            &format!("{}:/o:O", other.path().display()),
+            DEFAULT_IMAGE,
+            "sleep",
+            "600",
+        ])
+        .await;
+
+        sandbox.stop_checked().await.unwrap();
+        let decision = release_decision(&mountpoint).await;
+        let Some(Decision::Kept(Kept::Unknown(why))) = &decision else {
+            panic!("kept, Axocoatl unable to read {own_id}'s overlay: {decision:?}");
+        };
+        for said in [
+            format!(
+                "the merged directory, in Podman's storage, of container {}'s overlay volume at \
+                 /o: Permission denied",
+                &own_id[..12]
+            ),
+            "a subordinate uid of yours, not you, when the container runs with --userns=keep-id"
+                .to_string(),
+            "stay while that container exists".to_string(),
+        ] {
+            assert!(why.contains(&said), "{said:?} in {why}");
+        }
+        assert!(mountpoint.is_dir());
+        assert_eq!(std::fs::read_dir(&mountpoint).unwrap().count(), 0);
+
+        podman_ok(&["rm", "-f", "-t", "0", &own.0]).await;
+        let unrelated = unrelated_container().await;
+        assert_eq!(
+            release_decision(&mountpoint).await,
+            Some(Decision::Released(Released::Removed)),
+            "no container mounts it and it is empty: removed, with another container inspected"
+        );
+        assert!(!mountpoint.exists());
+        drop(unrelated);
+        SessionSandbox::remove_named_with_dependencies(&id)
+            .await
+            .unwrap();
     }
 
     /// End-to-end: needs Podman. A container that bind-mounts the
