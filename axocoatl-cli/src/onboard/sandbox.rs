@@ -676,13 +676,12 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
         o.step_left(format!("{}: {fix_text}", finding.detail));
         return false;
     };
-    // Their package is installed: the command reinstalls it.
-    let reinstall = o
-        .facts
-        .podman
-        .id_map_tools
-        .as_ref()
-        .is_some_and(|tools| tools.package_installed == Some(true));
+    // The command reinstalls their package (it is installed, or rpm did
+    // not say, where shadow-utils always is).
+    let reinstall = commands
+        .first()
+        .filter(|_| install)
+        .is_some_and(|command| command.args.iter().any(|arg| arg.contains("reinstall")));
     let install_them = if reinstall {
         "Reinstall their package"
     } else {
@@ -721,14 +720,44 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
         false => (None, &commands[..]),
     };
     if let Some(command) = &install_command {
-        if let Err(error) = o.ui.execute(&o.host, command).await {
-            o.step_left(format!("{error}; run {fix_text}"));
+        let output = match o.ui.execute_showing_output(&o.host, command).await {
+            Ok(output) => output,
+            Err(error) => {
+                // `… failed (exit 1): <what it said last>`
+                let (failed, said) = match error.split_once("): ") {
+                    Some((failed, said)) => (format!("{failed})"), said.to_string()),
+                    None => (error.clone(), String::new()),
+                };
+                o.step_left(install_failed(command, &failed, &said, &fix_text, rest));
+                return false;
+            }
+        };
+        // apt-get exits 0 when it cannot download the package to
+        // reinstall it, and changes nothing.
+        if output.contains("is not possible, it cannot be downloaded") {
+            let said = output
+                .lines()
+                .find(|line| line.contains("is not possible, it cannot be downloaded"))
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            o.step_left(install_failed(
+                command,
+                &format!("`{}` did not reinstall it", command.display()),
+                &said,
+                &fix_text,
+                rest,
+            ));
             return false;
         }
         if !o.ui.plan() {
             let now = crate::doctor::id_map_tools(&o.host, &o.host.root, &o.facts.os).await;
             if !now.usable() {
-                o.step_left(install_did_not_fix(&command.display(), &now.describe()));
+                o.step_left(install_did_not_fix(
+                    &command.display(),
+                    &now.describe(),
+                    &now.reinstall_keeps,
+                ));
                 return false;
             }
         }
@@ -752,7 +781,16 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
         // its other form once PATH has them but Podman still fails), so
         // never one.
         match (install_command.as_ref().map(Cmd::display), again) {
-            (Some(installed), Some(_)) => install_did_not_fix(&installed, &finding.detail),
+            (Some(installed), Some(_)) => {
+                let keeps = o
+                    .facts
+                    .podman
+                    .id_map_tools
+                    .as_ref()
+                    .map(|tools| tools.reinstall_keeps.clone())
+                    .unwrap_or_default();
+                install_did_not_fix(&installed, &finding.detail, &keeps)
+            }
             _ => format!("{}: {}", finding.detail, finding.fix.unwrap_or_default()),
         }
     });
@@ -784,13 +822,74 @@ fn lowercase_first(text: &str) -> String {
 
 /// The step left when `ran`, the install or reinstall of the id-map
 /// helpers' package, succeeded and the helpers still cannot map (`still`
-/// says why): in words, without the same command.
-fn install_did_not_fix(ran: &str, still: &str) -> String {
-    format!(
-        "`{ran}` ran, but did not fix this: {still}. Running it again would not help: find where \
-         this distribution puts newuidmap and newgidmap, make sure they are on PATH and are \
-         setuid root or have file capabilities, then run `podman system migrate`"
-    )
+/// says why): in words, without the same command. With what keeps a
+/// reinstall from fixing them, when the package manager's records say
+/// (`keeps`, [`IdMapTools::reinstall_keeps`], which doctor and a later run
+/// read too, so neither offers it again).
+///
+/// [`IdMapTools::reinstall_keeps`]: podman_report::IdMapTools::reinstall_keeps
+fn install_did_not_fix(ran: &str, still: &str, keeps: &[String]) -> String {
+    match keeps {
+        [] => format!(
+            "`{ran}` ran, but did not fix this: {still}. Running it again would not help: find \
+             where this distribution puts newuidmap and newgidmap, make sure they are on PATH and \
+             are setuid root or have file capabilities, then run `podman system migrate`"
+        ),
+        // Each starts with a package's or program's name, in lower case.
+        keeps => format!(
+            "`{ran}` ran, but did not fix this: {still}. Why: {}, then run `podman system \
+             migrate`",
+            keeps.join("; ")
+        ),
+    }
+}
+
+/// The step left when `command`, the install or reinstall of the id-map
+/// helpers' package, failed or changed nothing (`error`), the package
+/// manager's last words being `said`: what failed, and what to do where
+/// the same command cannot work as it is. dnf cannot reinstall a build
+/// that no enabled repository has any more (Fedora's updates repository
+/// keeps only the newest build): `Packages for argument 'shadow-utils'
+/// installed, but not available.` (exit 1, dnf5 5.2.18 in fedora:42). apt
+/// cannot download a package its lists do not have, or no longer have:
+/// `Reinstallation of uidmap is not possible, it cannot be downloaded.`
+/// (exit 0, apt 2.7 in ubuntu:24.04), `Unable to locate package`, `Unable
+/// to fetch some archives`; its lists need `apt-get update` first. `rest`:
+/// what the fix runs after it (`usermod`, `podman system migrate`).
+fn install_failed(command: &Cmd, error: &str, said: &str, fix_text: &str, rest: &[Cmd]) -> String {
+    let shown = command.display();
+    let package = command.args.last().cloned().unwrap_or_default();
+    let said = said.trim();
+    if said.contains("installed, but not available") {
+        return format!(
+            "`{shown}` failed: dnf says \"{said}\": the {package} build installed here is not \
+             in the enabled repositories (Fedora's updates repository keeps only the newest \
+             build), so dnf cannot reinstall it. Install the newest build instead, which writes \
+             its files again (`sudo dnf upgrade -y {package}`), or, when dnf says there is \
+             nothing to do, enable a repository that has {package} (`dnf repolist --all` lists \
+             them); then run `{}`",
+            joined(rest)
+        );
+    }
+    let apt = command.args.first().is_some_and(|arg| arg == "apt-get");
+    let lists = [
+        "cannot be downloaded",
+        "Unable to locate package",
+        "has no installation candidate",
+        "Unable to fetch some archives",
+        "Failed to fetch",
+    ];
+    if apt && lists.iter().any(|words| said.contains(words)) {
+        return format!(
+            "{error}: apt says \"{said}\": apt's package lists are out of date or no longer \
+             have {package}, so it cannot download it. Update them first: `sudo apt-get update \
+             && {fix_text}`"
+        );
+    }
+    match said {
+        "" => format!("{error}; run {fix_text}"),
+        said => format!("{error}: {said}; run {fix_text}"),
+    }
 }
 
 /// The commands that run `fix`, exactly as its text shows them. `None` when

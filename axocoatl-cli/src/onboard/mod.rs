@@ -557,6 +557,8 @@ impl Onboarding {
             id_root: self.host.root.clone(),
             data_dir: self.data_dir_override.clone(),
             landlock_abi: self.facts.landlock_abi,
+            // The configuration onboarding writes is the default one.
+            default_config: self.paths.config_path.clone(),
         }
     }
 }

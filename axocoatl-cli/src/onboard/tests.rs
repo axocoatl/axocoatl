@@ -1249,8 +1249,10 @@ async fn doctor_names_the_uidmap_install_when_podman_info_fails() {
         "{:?}",
         report.steps_left
     );
-    // A newuidmap that is there but not setuid, uidmap's state not known
-    // (no dpkg-query): reinstalled, in words.
+    // Helpers that are there but not setuid, while uidmap is not
+    // installed and no package owns them (`dpkg-query -S` exits 1): a copy
+    // someone put there, which no reinstall changes, so the fix says to
+    // remove or fix it, and that uidmap is not installed.
     shims.id_map_tools(Some(0o755));
     let report = crate::doctor::collect(&config_path, &env).await;
     let podman = &report.sections.sandbox[0];
@@ -1258,13 +1260,40 @@ async fn doctor_names_the_uidmap_install_when_podman_info_fails() {
         podman.detail.contains("cannot set up namespace using"),
         "{podman:?}"
     );
-    assert!(
-        podman
-            .fix
-            .as_deref()
-            .unwrap()
-            .starts_with("Reinstall the package that provides"),
+    assert_eq!(
+        podman.fix,
+        Some(format!(
+            "Remove or fix {} and {} (Podman needs them to be setuid root or to have their file \
+             capabilities), or take their directory off PATH: no package installed them, so no \
+             reinstall changes them; uidmap, which installs a newuidmap and newgidmap that can \
+             map, is not installed (`sudo apt-get install -y uidmap`), then: podman system \
+             migrate",
+            shims.dir.path().join("newuidmap").display(),
+            shims.dir.path().join("newgidmap").display()
+        )),
         "{podman:?}"
+    );
+    assert!(!podman
+        .fix
+        .as_deref()
+        .unwrap()
+        .contains("Reinstall the package"));
+    crate::paste_safe::assert_paste_safe(podman.fix.as_deref().unwrap());
+    // No dpkg-query at all: whether a package owns them is not known, so
+    // the fix says both.
+    std::fs::remove_file(shims.dir.path().join("dpkg-query")).unwrap();
+    let report = crate::doctor::collect(&config_path, &env).await;
+    let fix = report.sections.sandbox[0].fix.clone().unwrap();
+    assert!(
+        fix.starts_with(&format!(
+            "Reinstall the package that provides {} and {} so that they are setuid root or have \
+             their file capabilities again (Debian and Ubuntu: uidmap; Fedora and RHEL: \
+             shadow-utils; Arch: shadow); if no package installed them (a copy put there by \
+             hand), remove or fix those copies instead",
+            shims.dir.path().join("newuidmap").display(),
+            shims.dir.path().join("newgidmap").display()
+        )),
+        "{fix}"
     );
     // dpkg says uidmap is installed and owns that newuidmap: `apt-get
     // install` would do nothing, so the fix is its reinstall, which
@@ -1522,6 +1551,402 @@ esac"#,
     );
 }
 
+fn fedora() -> Os {
+    Os::Linux {
+        release: OsRelease::parse("ID=fedora\nVERSION_ID=42\n"),
+        wsl: None,
+        systemd: true,
+    }
+}
+
+/// `rpm` as fedora:42 answers for an installed shadow-utils whose records
+/// give the helpers `caps` (`cap_setuid=ep`) or none (`""`).
+fn rpm_shim(shims: &Shims, caps: bool) {
+    let (uid, gid) = if caps {
+        ("cap_setuid=ep", "cap_setgid=ep")
+    } else {
+        ("", "")
+    };
+    shims.add(
+        "rpm",
+        &format!(
+            r#"case "$*" in
+  "-q shadow-utils") echo shadow-utils-4.17.4-1.fc42.aarch64 ;;
+  "-q --qf "*) printf '/usr/bin/newgidmap\t100755\t{gid}\n/usr/bin/newuidmap\t100755\t{uid}\n/usr/share/man/man1/newuidmap.1.gz\t100644\t\n' ;;
+  "-qf --qf "*) echo shadow-utils ;;
+  *) exit 2 ;;
+esac"#
+        ),
+    );
+}
+
+/// `dpkg-query` as ubuntu:24.04 answers for an installed uidmap, with a
+/// local diversion of /usr/bin/newuidmap when `diverted`.
+fn dpkg_shim(shims: &Shims, diverted: bool) {
+    let diversion = if diverted {
+        r#"[ "$2" = /usr/bin/newuidmap ] && printf 'local diversion from: /usr/bin/newuidmap\nlocal diversion to: /usr/bin/newuidmap.distrib\n';"#
+    } else {
+        ""
+    };
+    shims.add(
+        "dpkg-query",
+        &format!(
+            r#"case "$1" in
+  -W) printf installed ;;
+  -L) printf '/.\n/usr\n/usr/bin\n/usr/bin/getsubids\n/usr/bin/newgidmap\n/usr/bin/newuidmap\n/usr/share/man/man1/newuidmap.1.gz\n' ;;
+  -S) {diversion} echo "uidmap: $2" ;;
+  *) exit 2 ;;
+esac"#
+        ),
+    );
+}
+
+/// The no-loop rule across runs and doctor: when the package manager's own
+/// records and settings say a reinstall of the helpers' installed package
+/// would leave them as they are (dnf set to `nocaps`, an rpm that gives
+/// them neither setuid nor capabilities, a dpkg diversion, a stat override
+/// without the setuid bit, a dpkg `path-exclude`), doctor says why in words
+/// and offers no reinstall, and onboarding runs no sudo, this run or the
+/// next. Without such a cause, the same helpers get the reinstall, which
+/// onboarding runs.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reinstall_the_package_records_say_changes_nothing_is_never_offered() {
+    let dnf = "sudo dnf reinstall -y shadow-utils";
+    let apt = "sudo apt-get install --reinstall -y uidmap";
+    struct Case {
+        name: &'static str,
+        os: Os,
+        /// `None`: the helpers are missing; `Some(mode)`: there, with it.
+        helpers: Option<u32>,
+        setup: fn(&Shims),
+        /// The fix's words, before ", then reinstall …" when the reinstall
+        /// helps once they are done; `None`: the reinstall is the fix.
+        why: Option<&'static str>,
+        reinstall: &'static str,
+    }
+    // Only an rpm whose records give the helpers no privilege is never
+    // helped by a reinstall.
+    let then_reinstall = |why: &str| !why.starts_with("shadow-utils installs");
+    let cases = [
+        Case {
+            name: "dnf nocaps, helpers deleted",
+            os: fedora(),
+            helpers: None,
+            setup: |shims| {
+                rpm_shim(shims, true);
+                let etc = shims.root.path().join("etc/dnf");
+                std::fs::create_dir_all(&etc).unwrap();
+                std::fs::write(
+                    etc.join("dnf.conf"),
+                    "[main]\ntsflags=nodocs\ntsflags=nocaps\n",
+                )
+                .unwrap();
+            },
+            why: Some(
+                "shadow-utils gives /usr/bin/newuidmap and /usr/bin/newgidmap their file \
+                 capabilities, and dnf is set to install files without them (nocaps in tsflags, \
+                 in /etc/dnf/dnf.conf), so reinstalling shadow-utils leaves them unable to map: \
+                 take nocaps out of tsflags",
+            ),
+            reinstall: dnf,
+        },
+        Case {
+            name: "dnf nocaps, capabilities removed",
+            os: fedora(),
+            helpers: Some(0o755),
+            setup: |shims| {
+                rpm_shim(shims, true);
+                let etc = shims.root.path().join("etc/dnf/libdnf5.conf.d");
+                std::fs::create_dir_all(&etc).unwrap();
+                std::fs::write(etc.join("90-nocaps.conf"), "[main]\ntsflags=nocaps\n").unwrap();
+            },
+            why: Some(
+                "shadow-utils gives /usr/bin/newuidmap and /usr/bin/newgidmap their file \
+                 capabilities, and dnf is set to install files without them (nocaps in tsflags, \
+                 in /etc/dnf/libdnf5.conf.d/90-nocaps.conf), so reinstalling shadow-utils \
+                 leaves them unable to map: take nocaps out of tsflags",
+            ),
+            reinstall: dnf,
+        },
+        Case {
+            name: "rpm records without setuid or capabilities",
+            os: fedora(),
+            helpers: Some(0o755),
+            setup: |shims| rpm_shim(shims, false),
+            why: Some(
+                "shadow-utils installs /usr/bin/newuidmap and /usr/bin/newgidmap neither setuid \
+                 nor with file capabilities, so reinstalling it leaves them unable to map: make \
+                 them setuid root, or give them their file capability (cap_setuid for \
+                 newuidmap, cap_setgid for newgidmap)",
+            ),
+            reinstall: dnf,
+        },
+        Case {
+            name: "dnf, capabilities removed, nothing keeps them off",
+            os: fedora(),
+            helpers: Some(0o755),
+            setup: |shims| rpm_shim(shims, true),
+            why: None,
+            reinstall: dnf,
+        },
+        Case {
+            name: "dpkg local diversion",
+            os: ubuntu(),
+            helpers: Some(0o755),
+            setup: |shims| dpkg_shim(shims, true),
+            why: Some(
+                "dpkg diverts /usr/bin/newuidmap to /usr/bin/newuidmap.distrib (a local \
+                 diversion, added by hand), so reinstalling uidmap writes its file there, not at \
+                 /usr/bin/newuidmap: remove that diversion if nothing needs it (`dpkg-divert \
+                 --list /usr/bin/newuidmap` shows it)",
+            ),
+            reinstall: apt,
+        },
+        Case {
+            name: "dpkg stat override",
+            os: ubuntu(),
+            helpers: Some(0o755),
+            setup: |shims| {
+                dpkg_shim(shims, false);
+                shims.add(
+                    "dpkg-statoverride",
+                    r#"[ "$2" = /usr/bin/newuidmap ] && echo "root root 755 $2" && exit 0; exit 1"#,
+                );
+            },
+            why: Some(
+                "uidmap installs /usr/bin/newuidmap setuid root, but a dpkg stat override gives \
+                 it mode 755 (`dpkg-statoverride --list /usr/bin/newuidmap`), and reinstalling \
+                 uidmap applies that mode: remove the override (`sudo dpkg-statoverride --remove \
+                 /usr/bin/newuidmap`)",
+            ),
+            reinstall: apt,
+        },
+        Case {
+            name: "dpkg path-exclude, helpers deleted",
+            os: ubuntu(),
+            helpers: None,
+            setup: |shims| {
+                dpkg_shim(shims, false);
+                let d = shims.root.path().join("etc/dpkg/dpkg.cfg.d");
+                std::fs::create_dir_all(&d).unwrap();
+                std::fs::write(d.join("90-local"), "path-exclude=/usr/bin/newgidmap\n").unwrap();
+            },
+            why: Some(
+                "uidmap's /usr/bin/newgidmap was removed, and dpkg is set to leave it out \
+                 (path-exclude=/usr/bin/newgidmap in /etc/dpkg/dpkg.cfg.d/90-local), so \
+                 reinstalling uidmap does not write it: remove that line",
+            ),
+            reinstall: apt,
+        },
+        Case {
+            name: "dpkg, helpers deleted, nothing keeps them off",
+            os: ubuntu(),
+            helpers: None,
+            setup: |shims| dpkg_shim(shims, false),
+            why: None,
+            reinstall: apt,
+        },
+    ];
+    for case in cases {
+        let shims = Shims::new();
+        shims.id_map_tools(case.helpers);
+        stale_podman(&shims);
+        podman_state(&shims, &["machine", "running"]);
+        (case.setup)(&shims);
+        let restore = format!(
+            r#"for n in newuidmap newgidmap; do printf '#!/bin/sh\nexit 1\n' > "{dir}/$n"; chmod 4755 "{dir}/$n"; done"#,
+            dir = shims.dir.path().display()
+        );
+        let sudo = format!(
+            r#"case "$*" in
+  "{}") {restore} ;;
+  *) exit 1 ;;
+esac"#,
+            case.reinstall.trim_start_matches("sudo ")
+        );
+        shims.add("sudo", &sudo);
+        // Doctor.
+        let env = crate::doctor::Environment {
+            os: case.os.clone(),
+            host: shims.host(false),
+            ..doctor_env(&shims)
+        };
+        let config_path = shims.home.path().join("config.yaml");
+        let report = crate::doctor::collect(&config_path, &env).await;
+        let podman = &report.sections.sandbox[0];
+        let fix = podman.fix.clone().unwrap_or_default();
+        match case.why {
+            Some(why) if then_reinstall(why) => assert_eq!(
+                fix,
+                format!(
+                    "{why}, then reinstall {} (`{}`), then: podman system migrate",
+                    if case.reinstall == dnf {
+                        "shadow-utils"
+                    } else {
+                        "uidmap"
+                    },
+                    case.reinstall
+                ),
+                "{}: {podman:?}",
+                case.name
+            ),
+            Some(why) => assert_eq!(
+                fix,
+                format!("{why}, then: podman system migrate"),
+                "{}: {podman:?}",
+                case.name
+            ),
+            None => assert_eq!(
+                fix,
+                format!("{} && podman system migrate", case.reinstall),
+                "{}: {podman:?}",
+                case.name
+            ),
+        }
+        crate::paste_safe::assert_paste_safe(&fix);
+        // Onboarding, twice: each run reads the same records.
+        for run in 0..2 {
+            let mut o = linux_sandbox_on(
+                &shims,
+                case.os.clone(),
+                &sudo,
+                OnboardArgs {
+                    allow_sudo: true,
+                    ..yes(WriterChoice::Ollama)
+                },
+            )
+            .await;
+            let ready = sandbox::run(&mut o).await;
+            let calls = shims.calls();
+            let sudo_calls = calls.iter().filter(|call| call.starts_with("sudo")).count();
+            match case.why {
+                Some(why) => {
+                    assert!(!ready, "{}", case.name);
+                    assert_eq!(sudo_calls, 0, "{}: {calls:?}", case.name);
+                    assert!(
+                        !calls.iter().any(|call| call.contains("system migrate")),
+                        "{}: {calls:?}",
+                        case.name
+                    );
+                    assert_eq!(o.steps.len(), 1, "{}: {:?}", case.name, o.steps);
+                    assert!(o.steps[0].ends_with(&fix), "{}: {:?}", case.name, o.steps);
+                    assert!(o.steps[0].contains(why), "{}", case.name);
+                }
+                None if run == 0 => {
+                    assert!(ready, "{}: {:?}\n{}", case.name, o.steps, o.ui.output());
+                    assert_eq!(sudo_calls, 1, "{}: {calls:?}", case.name);
+                }
+                // Restored on the first run: nothing left to do.
+                None => {
+                    assert!(ready, "{}: {:?}", case.name, o.steps);
+                    assert_eq!(sudo_calls, 1, "{}: {calls:?}", case.name);
+                }
+            }
+        }
+    }
+}
+
+/// A reinstall that fails, or that apt skips, is not offered again as it
+/// is: dnf cannot reinstall a build no enabled repository has (Fedora's
+/// updates repository keeps only the newest), which an upgrade replaces;
+/// apt cannot download a package its lists do not have, after which
+/// `apt-get update` comes first. Its words are in the step left, and
+/// nothing runs after it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reinstall_that_cannot_run_says_what_failed_and_what_to_do() {
+    // The OS, its package records, the command, what sudo does, the step.
+    type Case = (Os, fn(&Shims), &'static str, &'static str, String);
+    let cases: [Case; 3] = [
+        (
+            fedora(),
+            |shims| rpm_shim(shims, true),
+            "dnf reinstall -y shadow-utils",
+            "echo 'Updating and loading repositories:'; echo 'Failed to resolve the transaction:' >&2; echo \"Packages for argument 'shadow-utils' installed, but not available.\" >&2; exit 1",
+            "`sudo dnf reinstall -y shadow-utils` failed: dnf says \"Packages for argument \
+             'shadow-utils' installed, but not available.\": the shadow-utils build installed \
+             here is not in the enabled repositories (Fedora's updates repository keeps only the \
+             newest build), so dnf cannot reinstall it. Install the newest build instead, which \
+             writes its files again (`sudo dnf upgrade -y shadow-utils`), or, when dnf says \
+             there is nothing to do, enable a repository that has shadow-utils (`dnf repolist \
+             --all` lists them); then run `podman system migrate`"
+                .to_string(),
+        ),
+        (
+            ubuntu(),
+            |shims| dpkg_shim(shims, false),
+            "apt-get install --reinstall -y uidmap",
+            "echo 'Reinstallation of uidmap is not possible, it cannot be downloaded.'; echo '0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.'; exit 0",
+            "`sudo apt-get install --reinstall -y uidmap` did not reinstall it: apt says \
+             \"Reinstallation of uidmap is not possible, it cannot be downloaded.\": apt's \
+             package lists are out of date or no longer have uidmap, so it cannot download it. \
+             Update them first: `sudo apt-get update && sudo apt-get install --reinstall -y \
+             uidmap && podman system migrate`"
+                .to_string(),
+        ),
+        (
+            ubuntu(),
+            |shims| {
+                shims.add(
+                    "dpkg-query",
+                    "echo 'dpkg-query: no packages found matching uidmap' >&2; exit 1",
+                )
+            },
+            "apt-get install -y uidmap",
+            "echo 'E: Unable to locate package uidmap' >&2; exit 100",
+            "`sudo apt-get install -y uidmap` failed (exit 100): apt says \"E: Unable to locate \
+             package uidmap\": apt's package lists are out of date or no longer have uidmap, so \
+             it cannot download it. Update them first: `sudo apt-get update && sudo apt-get \
+             install -y uidmap && podman system migrate`"
+                .to_string(),
+        ),
+    ];
+    for (os, setup, command, body, expected) in cases {
+        let shims = Shims::new();
+        shims.id_map_tools(None);
+        stale_podman(&shims);
+        setup(&shims);
+        let sudo = format!(
+            r#"case "$*" in
+  "{command}") {body} ;;
+  *) exit 1 ;;
+esac"#
+        );
+        let mut o = linux_sandbox_on(
+            &shims,
+            os,
+            &sudo,
+            OnboardArgs {
+                allow_sudo: true,
+                ..yes(WriterChoice::Ollama)
+            },
+        )
+        .await;
+        assert!(!sandbox::run(&mut o).await);
+        let calls = shims.calls();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.starts_with("sudo"))
+                .collect::<Vec<_>>(),
+            [&format!("sudo {command}")],
+            "{calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|call| call.contains("system migrate")),
+            "{calls:?}"
+        );
+        assert_eq!(o.steps, std::slice::from_ref(&expected));
+        assert!(
+            !o.steps[0].contains(&format!("run sudo {command}")),
+            "{:?}",
+            o.steps
+        );
+        crate::paste_safe::assert_paste_safe(&o.steps[0]);
+    }
+}
+
 /// Doctor looks for newuidmap and newgidmap on PATH only, as Podman does
 /// (`exec.LookPath`): setuid helpers in the root's usr/bin that are not on
 /// PATH are missing for Podman, and so for doctor, which says where they
@@ -1655,14 +2080,19 @@ async fn doctor_looks_for_the_id_map_tools_on_path_only() {
         assert_eq!(tools.command().as_deref(), install, "{os_release} {answer}");
         assert_eq!(tools.describe(), described, "{os_release} {answer}");
     }
-    // Only read-only queries ran.
+    // Only read-only queries ran: whether the package is installed, and
+    // (when it is) its files, which a reinstall would write.
     let calls = shims.calls();
     assert!(
-        calls
-            .iter()
-            .all(|call| call == "dpkg-query -W -f ${db:Status-Status} uidmap"
-                || call == "rpm -q shadow-utils"
-                || call == "pacman -Q shadow"),
+        calls.iter().all(|call| {
+            call
+            == "dpkg-query -W -f ${db:Status-Status} uidmap"
+            || call == "dpkg-query -L uidmap"
+            || call == "rpm -q shadow-utils"
+            || call
+                == "rpm -q --qf [%{FILENAMES}\\t%{FILEMODES:octal}\\t%{FILECAPS}\\n] shadow-utils"
+            || call == "pacman -Q shadow"
+        }),
         "{calls:?}"
     );
     assert!(calls.contains(&"dpkg-query -W -f ${db:Status-Status} uidmap".to_string()));
@@ -3617,6 +4047,7 @@ async fn doctor_moves_a_too_large_reviewer_not_the_claude_code_writer() {
     .unwrap();
     let env = crate::doctor::Environment {
         memory_bytes: Some(16 * GIB),
+        default_config: config_path.clone(),
         ..doctor_env(&shims)
     };
     let report = crate::doctor::collect(&config_path, &env).await;
@@ -3871,6 +4302,10 @@ fn doctor_env(shims: &Shims) -> crate::doctor::Environment {
         id_root: shims.root.path().to_path_buf(),
         data_dir: Some(home.join("data")),
         landlock_abi: Some(6),
+        // Not the configuration a test checks (`home/config.yaml`), which
+        // doctor then treats as one given with --config; a test of the
+        // default one says so.
+        default_config: home.join("default").join("config.yaml"),
     }
 }
 

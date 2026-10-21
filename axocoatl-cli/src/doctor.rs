@@ -161,6 +161,10 @@ pub(crate) struct Environment {
     pub(crate) data_dir: Option<PathBuf>,
     /// The kernel's Landlock ABI on Linux.
     pub(crate) landlock_abi: Option<i64>,
+    /// The default configuration, the one `axocoatl onboard` writes (it
+    /// has no `--config`): a fix for another one names it with `--config`,
+    /// or says what to change in its file instead of an onboarding command.
+    pub(crate) default_config: PathBuf,
 }
 
 /// For tests of the `axocoatl` binary: a directory that stands in for `/`
@@ -225,6 +229,7 @@ impl Environment {
             id_root,
             data_dir: None,
             landlock_abi: detect::landlock_abi(),
+            default_config: crate::default_config_path_for_clap(),
         })
     }
 
@@ -324,10 +329,12 @@ const SYSTEM_BIN_DIRECTORIES: [&str; 4] = ["/usr/bin", "/usr/sbin", "/bin", "/sb
 /// helper in `/usr/bin` that is not on `PATH` counts as missing, as it does
 /// for Podman. When one is missing or cannot map, also what is known about
 /// why: a missing one found in a system directory under `root` that is not
-/// on `PATH`, whether the package that ships them here is installed, and
-/// whether one that cannot map is that package's file (asked with
-/// dpkg-query, rpm or pacman, read-only). With the command that installs
-/// that package, or reinstalls it when it is installed.
+/// on `PATH`, whether the package that ships them here is installed,
+/// whether one that cannot map is a package's file at all, and what a
+/// reinstall of the installed package would write ([`reinstall_keeps`]),
+/// all read-only (dpkg-query, dpkg-statoverride, rpm, pacman, and dpkg's
+/// and dnf's configuration files). With the command that installs that
+/// package, or reinstalls it when it is installed.
 pub(crate) async fn id_map_tools(
     host: &crate::onboard::host::Host,
     root: &Path,
@@ -369,30 +376,221 @@ pub(crate) async fn id_map_tools(
                 .probe(program, &args)
                 .await
                 .and_then(|probe| manager.package_installed(probe.code, &probe.stdout));
-            // A helper that cannot map is reinstalled only when it is the
-            // package's own file: a copy earlier on PATH stays as it is.
-            if tools.package_installed == Some(true) {
-                for path in tools.unprivileged.clone() {
-                    let real = std::fs::canonicalize(&path)
-                        .map(|real| real.display().to_string())
-                        .unwrap_or_else(|_| path.clone());
+        }
+        // A helper that cannot map is reinstalled only when it is the
+        // package's own file. A copy earlier on PATH, or one no package
+        // installed, stays as it is: it is to be removed or fixed.
+        for path in tools.unprivileged.clone() {
+            let real = std::fs::canonicalize(&path)
+                .map(|real| real.display().to_string())
+                .unwrap_or_else(|_| path.clone());
+            let owner = match manager {
+                Some(manager) => {
                     let (program, args) = manager.owner_query(&real);
                     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-                    let owned = host
-                        .probe(program, &args)
-                        .await
-                        .and_then(|probe| manager.owns(package, probe.code, &probe.stdout));
-                    if owned == Some(false) {
-                        tools.foreign.push(path);
-                    }
+                    host.probe(program, &args).await.map(|probe| {
+                        match (package, tools.package_installed) {
+                            (Some(package), Some(true)) => {
+                                manager.owns(package, probe.code, &probe.stdout)
+                            }
+                            // Not installed, or not known: only "no package
+                            // owns it" (exit 1) tells.
+                            _ => (probe.code == Some(1)).then_some(false),
+                        }
+                    })
                 }
+                None => None,
+            }
+            .flatten()
+            // Not asked: no distribution package installs a file under
+            // /usr/local, /opt or a home directory.
+            .or_else(|| {
+                let local = ["/usr/local/", "/opt/"]
+                    .iter()
+                    .any(|prefix| real.starts_with(prefix))
+                    || Path::new(&real).starts_with(&host.home);
+                local.then_some(false)
+            });
+            if owner == Some(false) {
+                tools.foreign.push(path);
             }
         }
     }
     tools.install = manager
         .and_then(|manager| manager.id_map_install(tools.package_installed))
         .map(|install| install.display());
+    if let (Some(manager), Some(package), Some(install), Some(true)) = (
+        manager,
+        package,
+        tools.install.clone(),
+        tools.package_installed,
+    ) {
+        tools.reinstall_keeps =
+            reinstall_keeps(host, root, manager, package, &install, &tools).await;
+    }
     tools
+}
+
+/// Why reinstalling `package` (installed, by `install`) would leave the
+/// helpers `tools` found missing or unable to map as they are, from what
+/// the package manager records and is set to do, each in words with what
+/// to do first (nothing when it would restore them, or when its records
+/// were not read). A reinstall writes the package's file where the package
+/// manager puts it, with the mode and file capabilities it gives it: dpkg
+/// writes a diverted file elsewhere, applies a stat override's mode, skips
+/// a path its `path-exclude` filters leave out, and gives the helpers their
+/// setuid bit (uidmap ships them setuid root on Debian and Ubuntu); rpm
+/// gives the mode and file capabilities in its records, without the
+/// capabilities when dnf is set to `nocaps`. pacman's records are not read.
+async fn reinstall_keeps(
+    host: &crate::onboard::host::Host,
+    root: &Path,
+    manager: detect::PackageManager,
+    package: &str,
+    install: &str,
+    tools: &podman_report::IdMapTools,
+) -> Vec<String> {
+    use detect::PackageManager;
+    // The helpers a reinstall was to fix: missing ones that are nowhere
+    // here, and the package's own files that cannot map.
+    let off_path: Vec<&str> = tools
+        .off_path
+        .iter()
+        .filter_map(|path| Path::new(path).file_name().and_then(|name| name.to_str()))
+        .collect();
+    let mut wanted: Vec<(&str, bool)> = tools
+        .missing
+        .iter()
+        .filter(|name| !off_path.contains(&name.as_str()))
+        .map(|name| (name.as_str(), true))
+        .collect();
+    for path in tools
+        .unprivileged
+        .iter()
+        .filter(|path| !tools.foreign.contains(path))
+    {
+        if let Some(name) = Path::new(path).file_name().and_then(|name| name.to_str()) {
+            if ["newuidmap", "newgidmap"].contains(&name) {
+                wanted.push((name, false));
+            }
+        }
+    }
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let Some((program, args)) = manager.files_query(package) else {
+        return Vec::new();
+    };
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    // An installed package has files: no list says nothing.
+    let files = match host.probe(program, &args).await {
+        Some(probe) if probe.success => manager.package_files(&probe.stdout),
+        _ => Vec::new(),
+    };
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let then = format!("then reinstall {package} (`{install}`)");
+    let mut keeps = Vec::new();
+    let mut not_shipped: Vec<&str> = Vec::new();
+    let mut no_caps: Vec<String> = Vec::new();
+    let mut unprivileged: Vec<String> = Vec::new();
+    for (name, missing) in wanted {
+        let Some(file) = detect::program_file(&files, name) else {
+            not_shipped.push(name);
+            continue;
+        };
+        let path = file.path.as_str();
+        match manager {
+            PackageManager::Apt => {
+                let diversion = host
+                    .probe("dpkg-query", &["-S", path])
+                    .await
+                    .filter(|probe| probe.success)
+                    .and_then(|probe| detect::dpkg_diversion(&probe.stdout, path));
+                if let Some((to, by)) = diversion {
+                    let whose = match by {
+                        Some(by) => format!("a diversion by the package {by}"),
+                        None => "a local diversion, added by hand".to_string(),
+                    };
+                    keeps.push(format!(
+                        "dpkg diverts {path} to {to} ({whose}), so reinstalling {package} \
+                         writes its file there, not at {path}: remove that diversion if nothing \
+                         needs it (`dpkg-divert --list {path}` shows it), {then}"
+                    ));
+                    continue;
+                }
+                if missing {
+                    if let Some((line, config)) = detect::dpkg_excluded(root, path) {
+                        keeps.push(format!(
+                            "{package}'s {path} was removed, and dpkg is set to leave it out \
+                             ({line} in {config}), so reinstalling {package} does not write \
+                             it: remove that line, {then}"
+                        ));
+                        continue;
+                    }
+                }
+                let mode = host
+                    .probe("dpkg-statoverride", &["--list", path])
+                    .await
+                    .filter(|probe| probe.success)
+                    .and_then(|probe| detect::dpkg_override_mode(&probe.stdout, path));
+                if let Some(mode) = mode.filter(|mode| mode & 0o4000 == 0) {
+                    keeps.push(format!(
+                        "{package} installs {path} setuid root, but a dpkg stat override gives \
+                         it mode {mode:o} (`dpkg-statoverride --list {path}`), and reinstalling \
+                         {package} applies that mode: remove the override (`sudo \
+                         dpkg-statoverride --remove {path}`), {then}"
+                    ));
+                }
+            }
+            PackageManager::Dnf => {
+                let setuid = file.mode.is_some_and(|mode| mode & 0o4000 != 0);
+                let caps = file.caps.as_deref().is_some_and(|caps| !caps.is_empty());
+                if !setuid && !caps {
+                    unprivileged.push(path.to_string());
+                } else if !setuid {
+                    no_caps.push(path.to_string());
+                }
+            }
+            PackageManager::Pacman | PackageManager::Zypper => {}
+        }
+    }
+    if !no_caps.is_empty() {
+        if let Some(config) = detect::dnf_nocaps(root) {
+            let (them, their) = match no_caps.len() {
+                1 => ("it", "its"),
+                _ => ("them", "their"),
+            };
+            keeps.push(format!(
+                "{package} gives {} {their} file capabilities, and dnf is set to install files \
+                 without them (nocaps in tsflags, in {config}), so reinstalling {package} \
+                 leaves {them} unable to map: take nocaps out of tsflags, {then}",
+                no_caps.join(" and ")
+            ));
+        }
+    }
+    if !unprivileged.is_empty() {
+        let (them, their) = match unprivileged.len() {
+            1 => ("it", "its"),
+            _ => ("them", "their"),
+        };
+        keeps.push(format!(
+            "{package} installs {} neither setuid nor with file capabilities, so reinstalling \
+             it leaves {them} unable to map: make {them} setuid root, or give {them} {their} \
+             file capability (cap_setuid for newuidmap, cap_setgid for newgidmap)",
+            unprivileged.join(" and ")
+        ));
+    }
+    if !not_shipped.is_empty() {
+        let them = if not_shipped.len() == 1 { "it" } else { "them" };
+        keeps.push(format!(
+            "{package} is installed but does not ship {}, so reinstalling it does not bring \
+             {them} back: install the package that ships {them} on this distribution",
+            not_shipped.join(" or ")
+        ));
+    }
+    keeps
 }
 
 /// `path` may map another user's ids: it is setuid, or (Fedora, RHEL) has
@@ -621,11 +819,11 @@ struct ModelFixes {
     unreadable: String,
 }
 
-/// When the configuration does not say who writes: name the model to
-/// change, or the writer to write a new configuration for. The writer is a
-/// placeholder with the choices in words: `--writer claude-code|codex|…`
-/// pasted into a shell is a pipeline that replaces the configuration with
-/// a Claude Code one.
+/// When the default configuration does not say who writes: name the
+/// model to change, or the writer to write a new configuration for. The
+/// writer is a placeholder with the choices in words: `--writer
+/// claude-code|codex|…` pasted into a shell is a pipeline that replaces
+/// the configuration with a Claude Code one.
 fn unknown_writer_fix(model: &str, what: &str) -> String {
     format!(
         "{what} in place of {model} in this configuration, or write a new one (this one is \
@@ -634,17 +832,57 @@ fn unknown_writer_fix(model: &str, what: &str) -> String {
     )
 }
 
+/// The configuration doctor checks, when it is not the default one
+/// (`doctor --config PATH`): `axocoatl onboard` has no `--config` and
+/// writes only the default configuration, so no `axocoatl onboard` command
+/// changes this one, and a fix says what to change in the file instead.
+#[derive(Debug, Clone, Copy)]
+struct OtherConfig<'a> {
+    path: &'a Path,
+    default: &'a Path,
+}
+
+impl<'a> OtherConfig<'a> {
+    /// `Some` when `config_path` is not `default`, the default
+    /// configuration.
+    fn of(config_path: &'a Path, default: &'a Path) -> Option<Self> {
+        (config_path != default).then_some(Self {
+            path: config_path,
+            default,
+        })
+    }
+
+    /// `in PATH (`axocoatl onboard` writes only the default configuration,
+    /// DEFAULT)`, to end a fix that edits the file.
+    fn in_file(&self) -> String {
+        format!(
+            "in {} (`axocoatl onboard` writes only the default configuration, {})",
+            self.path.display(),
+            self.default.display()
+        )
+    }
+}
+
 /// The fix for `model`, configured on Ollama and too large for this
 /// computer: a smaller model, or OpenRouter, for the role it has. A model
 /// that is only the reviewer (`run.models.reviewer` and not the writer, as
 /// onboarding sets up Claude Code, Codex, or a local writer with a hosted
-/// reviewer) moves the reviewer, never the writer ([`ModelChange`]).
+/// reviewer) moves the reviewer, never the writer ([`ModelChange`]). For a
+/// configuration that is not the default one, in words: onboarding would
+/// change the default one ([`OtherConfig`]).
 fn too_large_fix(
     model: &str,
     config: &axocoatl_config::AxocoatlConfig,
     run: &onboard_config::RunModels,
     writer: Option<&str>,
+    other: Option<OtherConfig<'_>>,
 ) -> String {
+    if let Some(other) = other {
+        return format!(
+            "Name a smaller model, or an OpenRouter one, in place of {model} {}",
+            other.in_file()
+        );
+    }
     let change = ModelChange::new(model, config, run, writer);
     let hosted = format!(
         " --reviewer openrouter:{}",
@@ -681,13 +919,22 @@ fn too_large_fix(
 }
 
 /// The fix for `model` when its context could not be read: check it, or
-/// choose another for its role ([`ModelChange`]).
+/// choose another for its role ([`ModelChange`]; in words for a
+/// configuration that is not the default one, [`OtherConfig`]).
 fn unreadable_model_fix(
     model: &str,
     config: &axocoatl_config::AxocoatlConfig,
     run: &onboard_config::RunModels,
     writer: Option<&str>,
+    other: Option<OtherConfig<'_>>,
 ) -> String {
+    if let Some(other) = other {
+        return format!(
+            "Check the model with `ollama run {model}`, or name another model in place of {model} \
+             {}",
+            other.in_file()
+        );
+    }
     let change = ModelChange::new(model, config, run, writer);
     let another = match change.writer.as_deref() {
         None => {
@@ -711,6 +958,9 @@ fn unreadable_model_fix(
 
 /// Collect the report for `config_path`.
 pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
+    // `doctor --config PATH` for another configuration than the default
+    // one, which no `axocoatl onboard` command changes.
+    let other = OtherConfig::of(config_path, &env.default_config);
     let mut sections = Sections::default();
     let mut model_states: BTreeMap<String, ModelState> = BTreeMap::new();
     let mut openrouter_ready = false;
@@ -725,7 +975,14 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                     "Config missing: no configuration at {}",
                     config_path.display()
                 ),
-                "Run `axocoatl onboard`",
+                match other {
+                    None => "Run `axocoatl onboard`".to_string(),
+                    Some(other) => format!(
+                        "Write a configuration there, or check the default one with `axocoatl \
+                         doctor` (`axocoatl onboard` writes only the default configuration, {})",
+                        other.default.display()
+                    ),
+                },
             ));
             None
         }
@@ -906,8 +1163,8 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 .map(|model| {
                     let writer = chosen_writer.as_deref();
                     let fixes = ModelFixes {
-                        too_large: too_large_fix(model, config, &run, writer),
-                        unreadable: unreadable_model_fix(model, config, &run, writer),
+                        too_large: too_large_fix(model, config, &run, writer, other),
+                        unreadable: unreadable_model_fix(model, config, &run, writer, other),
                     };
                     (model.clone(), fixes)
                 })
@@ -940,7 +1197,13 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 .flatten()
                 .any(|spec| spec.starts_with("openrouter:"));
         if let Some(openrouter) = &config.providers.openrouter {
-            match provider_key("OpenRouter", openrouter, data_dir.as_deref(), config_path) {
+            match provider_key(
+                "OpenRouter",
+                openrouter,
+                data_dir.as_deref(),
+                config_path,
+                &env.default_config,
+            ) {
                 Ok(line) => {
                     openrouter_ready = true;
                     sections.models.push(Item::ok("OpenRouter", line));
@@ -966,7 +1229,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                     "Run `{}`: it signs you in to OpenRouter in the browser, stores the key it \
                      issues and adds providers.openrouter to this configuration, changing nothing \
                      else in it",
-                    connect_openrouter_command(config_path)
+                    connect_openrouter_command(config_path, &env.default_config)
                 ),
             ));
         }
@@ -978,7 +1241,13 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         ] {
             if let Some(credentials) = credentials {
                 sections.models.push(
-                    match provider_key(name, credentials, data_dir.as_deref(), config_path) {
+                    match provider_key(
+                        name,
+                        credentials,
+                        data_dir.as_deref(),
+                        config_path,
+                        &env.default_config,
+                    ) {
                         Ok(line) => Item::ok(name, line),
                         Err((line, hint)) => Item::warn(name, line, Some(hint)),
                     },
@@ -1174,15 +1443,23 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                         "port {port} is in use by another program, so `axocoatl dev` would not \
                          start on it"
                     ),
-                    Some(format!(
-                        "Choose another port: `axocoatl onboard --update --port {}`, or set \
-                         server.port in {}",
-                        crate::onboard::host::first_free_port(
+                    Some({
+                        let free = crate::onboard::host::first_free_port(
                             port.saturating_add(1),
-                            crate::onboard::host::port_free
-                        ),
-                        config_path.display()
-                    )),
+                            crate::onboard::host::port_free,
+                        );
+                        match other {
+                            None => format!(
+                                "Choose another port: `axocoatl onboard --update --port {free}`, \
+                                 or set server.port in {}",
+                                config_path.display()
+                            ),
+                            Some(other) => format!(
+                                "Choose another port, such as {free}: set server.port {}",
+                                other.in_file()
+                            ),
+                        }
+                    }),
                 ));
             }
         }
@@ -1269,11 +1546,16 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
     };
     let reviewer_problem = || -> Option<String> {
         match reviewer {
-            None => Some(
-                "no reviewer model: run `axocoatl onboard`, or pass --model \
-                 reviewer=PROVIDER:MODEL"
+            None => Some(match other {
+                None => "no reviewer model: run `axocoatl onboard`, or pass --model \
+                         reviewer=PROVIDER:MODEL"
                     .to_string(),
-            ),
+                Some(other) => format!(
+                    "no reviewer model: set run.models.reviewer {}, or pass --model \
+                     reviewer=PROVIDER:MODEL",
+                    other.in_file()
+                ),
+            }),
             Some(spec) => model_ok(spec).err(),
         }
     };
@@ -1285,11 +1567,18 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             // Only an Ollama or OpenRouter writer gets here: `--update`
             // with that writer asks for its model and writes it to
             // `run.models.writer`.
-            None => problems.push(format!(
-                "no writer model: pass --model writer=PROVIDER:MODEL, or run `axocoatl onboard \
-                 --update --writer {}`",
-                chosen_writer.as_deref().unwrap_or("ollama")
-            )),
+            None => problems.push(match other {
+                None => format!(
+                    "no writer model: pass --model writer=PROVIDER:MODEL, or run `axocoatl \
+                     onboard --update --writer {}`",
+                    chosen_writer.as_deref().unwrap_or("ollama")
+                ),
+                Some(other) => format!(
+                    "no writer model: pass --model writer=PROVIDER:MODEL, or set \
+                     run.models.writer {}",
+                    other.in_file()
+                ),
+            }),
             Some(spec) => problems.extend(model_ok(spec).err()),
         }
         problems.extend(reviewer_problem());
@@ -1371,11 +1660,13 @@ fn provider_key(
     credentials: &axocoatl_config::ProviderCredentials,
     data_dir: Option<&Path>,
     config_path: &Path,
+    default_config: &Path,
 ) -> Result<String, (String, String)> {
     if let Some(line) = data_dir.and_then(|data_dir| {
         crate::connect_cmd::openrouter::doctor_key_line(name, credentials, data_dir)
     }) {
-        return line.map_err(|(line, hint)| (line, with_config_flag(&hint, config_path)));
+        return line
+            .map_err(|(line, hint)| (line, with_config_flag(&hint, config_path, default_config)));
     }
     let key = credentials.api_key.expose_secret();
     if key.is_empty() || key.contains("your-key") || key.starts_with("${") {
@@ -1391,8 +1682,8 @@ fn provider_key(
 /// ` --config PATH` when doctor checks another configuration than the
 /// default one, else nothing: a command that stores a key or adds a
 /// provider then acts on that configuration and its data directory.
-fn config_flag(config_path: &Path) -> String {
-    if config_path == crate::default_config_path_for_clap() {
+fn config_flag(config_path: &Path, default: &Path) -> String {
+    if config_path == default {
         String::new()
     } else {
         format!(
@@ -1404,16 +1695,19 @@ fn config_flag(config_path: &Path) -> String {
 
 /// `axocoatl connect openrouter`, with `--config` when doctor checks
 /// another configuration than the default one.
-fn connect_openrouter_command(config_path: &Path) -> String {
-    format!("axocoatl connect openrouter{}", config_flag(config_path))
+fn connect_openrouter_command(config_path: &Path, default: &Path) -> String {
+    format!(
+        "axocoatl connect openrouter{}",
+        config_flag(config_path, default)
+    )
 }
 
 /// `hint` (how to store a provider's key) with [`config_flag`] added to
 /// each `axocoatl connect openrouter` and `axocoatl secret set` command in
 /// it, so the key goes to the data directory of the configuration doctor
 /// checks.
-fn with_config_flag(hint: &str, config_path: &Path) -> String {
-    let flag = config_flag(config_path);
+fn with_config_flag(hint: &str, config_path: &Path, default: &Path) -> String {
+    let flag = config_flag(config_path, default);
     if flag.is_empty() {
         return hint.to_string();
     }
@@ -1930,7 +2224,7 @@ mod tests {
             let written = onboard_config::render(&plan(writer, None, local.clone()));
             let (config, run) = parsed(&written);
             assert_eq!(
-                too_large_fix("gpt-oss:20b", &config, &run, Some(writer)),
+                too_large_fix("gpt-oss:20b", &config, &run, Some(writer), None),
                 format!(
                     "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer \
                      {writer} --reviewer openrouter:openai/gpt-oss-120b`), or choose a smaller \
@@ -1959,7 +2253,7 @@ mod tests {
         let written = onboard_config::render(&plan("ollama", Some(writer), local));
         let (config, run) = parsed(&written);
         assert_eq!(
-            too_large_fix("gpt-oss:20b", &config, &run, Some("ollama")),
+            too_large_fix("gpt-oss:20b", &config, &run, Some("ollama"), None),
             "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer ollama \
              --writer-model ollama:qwen3-coder:30b --reviewer openrouter:openai/gpt-oss-120b`), or \
              choose a smaller reviewer (`axocoatl onboard --replace --writer ollama --writer-model \
@@ -1969,20 +2263,20 @@ mod tests {
         // The writer (Lead) model keeps the writer's fix, naming the
         // writer so `--replace` does not ask Step 1 again.
         assert_eq!(
-            too_large_fix("qwen3-coder:30b", &config, &run, Some("ollama")),
+            too_large_fix("qwen3-coder:30b", &config, &run, Some("ollama"), None),
             "Choose a smaller model (`axocoatl onboard --replace --writer ollama`), or use \
              OpenRouter for it (`axocoatl onboard --replace --writer openrouter`) (`--update` \
              would keep the Agents that run qwen3-coder:30b; `--replace` backs this \
              configuration up first)"
         );
         assert_eq!(
-            unreadable_model_fix("qwen3-coder:30b", &config, &run, Some("ollama")),
+            unreadable_model_fix("qwen3-coder:30b", &config, &run, Some("ollama"), None),
             "Check the model with `ollama run qwen3-coder:30b`, or choose another (`axocoatl \
              onboard --replace --writer ollama`) (`--update` would keep the Agents that run \
              qwen3-coder:30b; `--replace` backs this configuration up first)"
         );
         assert_eq!(
-            unreadable_model_fix("gpt-oss:20b", &config, &run, Some("ollama")),
+            unreadable_model_fix("gpt-oss:20b", &config, &run, Some("ollama"), None),
             "Check the model with `ollama run gpt-oss:20b`, or choose another reviewer \
              (`axocoatl onboard --replace --writer ollama --writer-model ollama:qwen3-coder:30b`) \
              (`--update` would keep the Agents that run gpt-oss:20b; `--replace` backs this \
@@ -2002,7 +2296,7 @@ mod tests {
                     \"openrouter:qwen/qwen3-coder\"\n    reviewer: \"ollama:gpt-oss:20b\"\n";
         let (config, run) = parsed(text);
         assert_eq!(
-            too_large_fix("gpt-oss:20b", &config, &run, Some("openrouter")),
+            too_large_fix("gpt-oss:20b", &config, &run, Some("openrouter"), None),
             "Use OpenRouter for the reviewer (`axocoatl onboard --update --writer openrouter \
              --reviewer openrouter:openai/gpt-oss-120b`)"
         );
@@ -2028,7 +2322,7 @@ mod tests {
         );
         let (config, run) = parsed(&text);
         assert!(ollama_models(&config, &run).contains_key("gpt-oss:20b"));
-        let fix = too_large_fix("gpt-oss:20b", &config, &run, Some("openrouter"));
+        let fix = too_large_fix("gpt-oss:20b", &config, &run, Some("openrouter"), None);
         assert_eq!(
             fix,
             "Use OpenRouter for it (`axocoatl onboard --replace --writer openrouter \
@@ -2051,7 +2345,7 @@ mod tests {
             local,
         )));
         assert_eq!(
-            too_large_fix("gpt-oss:20b", &config, &run, Some("openrouter")),
+            too_large_fix("gpt-oss:20b", &config, &run, Some("openrouter"), None),
             "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer openrouter \
              --writer-model openrouter:qwen/qwen3-coder --reviewer openrouter:openai/gpt-oss-120b`) \
              (`--update` would keep the Agents that run gpt-oss:20b; `--replace` backs this \
@@ -2070,20 +2364,66 @@ mod tests {
                         this configuration, or write a new one (this one is backed up first) \
                         with `axocoatl onboard --replace --writer WRITER`, where WRITER is \
                         claude-code, codex, ollama or openrouter";
-        assert_eq!(too_large_fix("gpt-oss:20b", &config, &run, None), expected);
+        assert_eq!(
+            too_large_fix("gpt-oss:20b", &config, &run, None, None),
+            expected
+        );
         crate::paste_safe::assert_paste_safe(expected);
         crate::paste_safe::assert_paste_safe(&unreadable_model_fix(
             "gpt-oss:20b",
             &config,
             &run,
             None,
+            None,
         ));
         assert!(
-            unreadable_model_fix("gpt-oss:20b", &config, &run, None).starts_with(
+            unreadable_model_fix("gpt-oss:20b", &config, &run, None, None).starts_with(
                 "Check the model with `ollama run gpt-oss:20b`, or name another model in place \
                  of gpt-oss:20b in this configuration"
             )
         );
+        // `doctor --config` for another configuration: `axocoatl onboard`
+        // has no --config and would back up and replace the default one,
+        // so no onboarding command is offered for this one, whoever writes.
+        let path = Path::new("/srv/team a/axocoatl.yaml");
+        let default = PathBuf::from("/home/alex/.config/axocoatl/config.yaml");
+        let other = OtherConfig::of(path, &default);
+        for writer in [
+            None,
+            Some("ollama"),
+            Some("claude-code"),
+            Some("openrouter"),
+        ] {
+            let too_large = too_large_fix("gpt-oss:20b", &config, &run, writer, other);
+            assert_eq!(
+                too_large,
+                format!(
+                    "Name a smaller model, or an OpenRouter one, in place of gpt-oss:20b in \
+                     /srv/team a/axocoatl.yaml (`axocoatl onboard` writes only the default \
+                     configuration, {})",
+                    default.display()
+                )
+            );
+            let unreadable = unreadable_model_fix("gpt-oss:20b", &config, &run, writer, other);
+            assert_eq!(
+                unreadable,
+                format!(
+                    "Check the model with `ollama run gpt-oss:20b`, or name another model in \
+                     place of gpt-oss:20b in /srv/team a/axocoatl.yaml (`axocoatl onboard` \
+                     writes only the default configuration, {})",
+                    default.display()
+                )
+            );
+            for fix in [too_large, unreadable] {
+                assert!(
+                    !fix.contains("--replace") && !fix.contains("--update"),
+                    "{fix}"
+                );
+                assert!(!fix.contains("this one"), "{fix}");
+                crate::paste_safe::assert_paste_safe(&fix);
+            }
+        }
+        assert!(OtherConfig::of(&default, &default).is_none());
         // No comment, but run.models.writer says Ollama writes (doctor's
         // chosen writer): named, with its model, which `--replace` keeps.
         let text = text.replace(
@@ -2092,7 +2432,7 @@ mod tests {
         );
         let (config, run) = parsed(&text);
         assert!(
-            too_large_fix("gpt-oss:20b", &config, &run, Some("ollama")).starts_with(
+            too_large_fix("gpt-oss:20b", &config, &run, Some("ollama"), None).starts_with(
                 "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer ollama \
              --writer-model ollama:qwen3-coder:30b --reviewer openrouter:openai/gpt-oss-120b`)"
             )
@@ -2113,7 +2453,7 @@ mod tests {
             ),
         );
         assert_eq!(
-            too_large_fix("qwen3-coder:30b", &config, &run, Some("claude-code")),
+            too_large_fix("qwen3-coder:30b", &config, &run, Some("claude-code"), None),
             "Choose a smaller model (`axocoatl onboard --replace --writer claude-code`), or use \
              OpenRouter for it (`axocoatl onboard --replace --writer claude-code --reviewer \
              openrouter:openai/gpt-oss-120b`) (`--update` would keep the Agents that run \
@@ -2316,10 +2656,12 @@ mod tests {
     #[test]
     fn key_hints_name_a_configuration_that_is_not_the_default() {
         let other = Path::new("/tmp/team a/axocoatl.yaml");
+        let default = crate::default_config_path_for_clap();
         assert_eq!(
             with_config_flag(
                 "Run `axocoatl connect openrouter --secret work`, which signs you in",
-                other
+                other,
+                &default
             ),
             "Run `axocoatl connect openrouter --secret work --config '/tmp/team a/axocoatl.yaml'`, \
              which signs you in"
@@ -2328,20 +2670,20 @@ mod tests {
             with_config_flag(
                 "Pipe the key into `axocoatl secret set mistral` (it reads standard input) or \
                  name a variable with `--from-env`",
-                other
+                other,
+                &default
             ),
             "Pipe the key into `axocoatl secret set mistral --config '/tmp/team a/axocoatl.yaml'` \
              (it reads standard input) or name a variable with `--from-env`"
         );
-        let default = crate::default_config_path_for_clap();
         let hint = "Run `axocoatl connect openrouter`, which signs you in";
-        assert_eq!(with_config_flag(hint, &default), hint);
+        assert_eq!(with_config_flag(hint, &default, &default), hint);
         assert_eq!(
-            connect_openrouter_command(other),
+            connect_openrouter_command(other, &default),
             "axocoatl connect openrouter --config '/tmp/team a/axocoatl.yaml'"
         );
         assert_eq!(
-            connect_openrouter_command(&default),
+            connect_openrouter_command(&default, &default),
             "axocoatl connect openrouter"
         );
     }

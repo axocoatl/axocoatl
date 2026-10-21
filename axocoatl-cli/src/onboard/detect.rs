@@ -205,6 +205,299 @@ impl PackageManager {
             _ => None,
         }
     }
+
+    /// The read-only command that lists the files of the installed
+    /// `package`: `dpkg-query -L`, and `rpm -q --qf` with the mode and the
+    /// file capabilities rpm gives each one (a reinstall gives them
+    /// again). `None` for pacman and zypper, whose records are not read.
+    pub(crate) fn files_query(self, package: &str) -> Option<(&'static str, Vec<String>)> {
+        let (program, args): (&'static str, Vec<&str>) = match self {
+            PackageManager::Apt => ("dpkg-query", vec!["-L", package]),
+            PackageManager::Dnf => (
+                "rpm",
+                vec![
+                    "-q",
+                    "--qf",
+                    "[%{FILENAMES}\\t%{FILEMODES:octal}\\t%{FILECAPS}\\n]",
+                    package,
+                ],
+            ),
+            PackageManager::Pacman | PackageManager::Zypper => return None,
+        };
+        Some((program, args.into_iter().map(str::to_string).collect()))
+    }
+
+    /// The files [`PackageManager::files_query`] printed: a path a line
+    /// for dpkg, `path<TAB>mode<TAB>capabilities` for rpm (`100755`,
+    /// `cap_setuid=ep`, or nothing).
+    pub(crate) fn package_files(self, stdout: &str) -> Vec<PackageFile> {
+        stdout
+            .lines()
+            .filter(|line| line.starts_with('/'))
+            .map(|line| {
+                let mut fields = line.split('\t');
+                let path = fields.next().unwrap_or_default().to_string();
+                match self {
+                    PackageManager::Dnf => PackageFile {
+                        path,
+                        mode: fields
+                            .next()
+                            .and_then(|mode| u32::from_str_radix(mode.trim(), 8).ok()),
+                        caps: fields.next().map(|caps| caps.trim().to_string()),
+                    },
+                    _ => PackageFile {
+                        path,
+                        mode: None,
+                        caps: None,
+                    },
+                }
+            })
+            .collect()
+    }
+}
+
+/// A file of an installed package, as its package manager records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PackageFile {
+    pub(crate) path: String,
+    /// The mode rpm installs it with (`0o100755`); dpkg does not record
+    /// one.
+    pub(crate) mode: Option<u32>,
+    /// The file capabilities rpm gives it (`cap_setuid=ep`, empty for
+    /// none); dpkg gives none.
+    pub(crate) caps: Option<String>,
+}
+
+/// The file of `files` that is the program `name`: in a `bin` or `sbin`
+/// directory (`/usr/bin/newuidmap`, not its manual page).
+pub(crate) fn program_file<'a>(files: &'a [PackageFile], name: &str) -> Option<&'a PackageFile> {
+    files.iter().find(|file| {
+        let path = Path::new(&file.path);
+        path.file_name().is_some_and(|file_name| file_name == name)
+            && path
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|directory| directory == "bin" || directory == "sbin")
+    })
+}
+
+/// The diversion of `path` that `dpkg-query -S PATH` printed (`local
+/// diversion from: P` and `local diversion to: D`, or `diversion by PKG
+/// from: …`): where dpkg writes the package's file instead, and the package
+/// that added it (`None`: a local one, added by hand).
+pub(crate) fn dpkg_diversion(stdout: &str, path: &str) -> Option<(String, Option<String>)> {
+    let mut from = None;
+    let mut to = None;
+    let mut by = None;
+    for line in stdout.lines() {
+        let (who, rest) = if let Some(rest) = line.strip_prefix("local diversion ") {
+            (None, rest)
+        } else if let Some(rest) = line.strip_prefix("diversion by ") {
+            match rest.split_once(' ') {
+                Some((package, rest)) => (Some(package.to_string()), rest),
+                None => continue,
+            }
+        } else {
+            continue;
+        };
+        if let Some(diverted) = rest.strip_prefix("from: ") {
+            from = Some(diverted.trim().to_string());
+            by = who;
+        } else if let Some(diverted) = rest.strip_prefix("to: ") {
+            to = Some(diverted.trim().to_string());
+        }
+    }
+    match (from, to) {
+        (Some(from), Some(to)) if from == path && to != path => Some((to, by)),
+        _ => None,
+    }
+}
+
+/// The mode a dpkg stat override gives `path`, from what
+/// `dpkg-statoverride --list PATH` printed (`root root 755 /usr/bin/x`;
+/// nothing, exit 1, for no override): dpkg applies it whenever it writes
+/// the file, a reinstall too.
+pub(crate) fn dpkg_override_mode(stdout: &str, path: &str) -> Option<u32> {
+    stdout.lines().find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        match fields.as_slice() {
+            [_, _, mode, overridden] if *overridden == path => u32::from_str_radix(mode, 8).ok(),
+            _ => None,
+        }
+    })
+}
+
+/// The `path-exclude` that keeps dpkg from writing `path` (checked with
+/// dpkg 1.22 in ubuntu:24.04), as its line and file, under `root`: dpkg
+/// reads the files of `etc/dpkg/dpkg.cfg.d` whose names are only letters,
+/// digits, `-` and `_`, in order, then `etc/dpkg/dpkg.cfg`; each
+/// `path-exclude` or `path-include` line (`=` or a space, quotes dropped)
+/// is a glob, and the last one that matches decides.
+pub(crate) fn dpkg_excluded(root: &Path, path: &str) -> Option<(String, String)> {
+    let directory = root.join("etc/dpkg/dpkg.cfg.d");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&directory)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| {
+                    entry.file_name().to_str().is_some_and(|name| {
+                        !name.is_empty()
+                            && name
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                    })
+                })
+                .map(|entry| entry.path())
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files.push(root.join("etc/dpkg/dpkg.cfg"));
+    let mut decided: Option<(String, String)> = None;
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            let Some(end) = line.find(|c: char| c == '=' || c.is_whitespace()) else {
+                continue;
+            };
+            let (option, value) = line.split_at(end);
+            let exclude = match option {
+                "path-exclude" => true,
+                "path-include" => false,
+                _ => continue,
+            };
+            let pattern = value
+                .trim_start_matches(|c: char| c == '=' || c.is_whitespace())
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'');
+            if glob_matches(pattern, path) {
+                decided = exclude.then(|| {
+                    let shown = file
+                        .strip_prefix(root)
+                        .map(|relative| Path::new("/").join(relative))
+                        .unwrap_or(file.clone());
+                    (line.to_string(), shown.display().to_string())
+                });
+            }
+        }
+    }
+    decided
+}
+
+/// `text` matches the glob `pattern` as fnmatch(3) without flags does (as
+/// dpkg's filters use it): `*` matches any run of characters, `/` too, `?`
+/// any one, `[…]` one of a set (`!` or `^` first negates it, `a-z` is a
+/// range), and `\` takes the next character as it is.
+pub(crate) fn glob_matches(pattern: &str, text: &str) -> bool {
+    fn matches(pattern: &[char], text: &[char]) -> bool {
+        match pattern.split_first() {
+            None => text.is_empty(),
+            Some(('*', rest)) => (0..=text.len()).any(|skip| matches(rest, &text[skip..])),
+            Some(('?', rest)) => !text.is_empty() && matches(rest, &text[1..]),
+            Some(('[', rest)) => {
+                let Some((&first, text_rest)) = text.split_first() else {
+                    return false;
+                };
+                let negated = matches!(rest.first(), Some('!' | '^'));
+                let mut index = usize::from(negated);
+                let mut found = false;
+                let mut closed = false;
+                while index < rest.len() {
+                    let c = rest[index];
+                    // A `]` right after `[` (or `[!`) is one of the set.
+                    if c == ']' && index > usize::from(negated) {
+                        closed = true;
+                        break;
+                    }
+                    if rest.get(index + 1) == Some(&'-')
+                        && rest.get(index + 2).is_some_and(|end| *end != ']')
+                    {
+                        if rest[index] <= first && first <= rest[index + 2] {
+                            found = true;
+                        }
+                        index += 3;
+                    } else {
+                        if c == first {
+                            found = true;
+                        }
+                        index += 1;
+                    }
+                }
+                if !closed {
+                    // No closing `]`: a plain `[`.
+                    return first == '[' && matches(rest, text_rest);
+                }
+                found != negated && matches(&rest[index + 1..], text_rest)
+            }
+            Some(('\\', rest)) if !rest.is_empty() => {
+                text.first() == Some(&rest[0]) && matches(&rest[1..], &text[1..])
+            }
+            Some((c, rest)) => text.first() == Some(c) && matches(rest, &text[1..]),
+        }
+    }
+    let pattern: Vec<char> = pattern.chars().collect();
+    let text: Vec<char> = text.chars().collect();
+    matches(&pattern, &text)
+}
+
+/// Where dnf is set to install files without their file capabilities
+/// (`nocaps` in `tsflags`), under `root`: the `[main]` section of
+/// `etc/dnf/dnf.conf`, or of a dnf5 drop-in (`usr/share/dnf5/libdnf.conf.d`,
+/// `etc/dnf/libdnf5.conf.d`). dnf5 adds up `tsflags` across these files
+/// (checked with dnf5 5.2.18 in fedora:42: `nocaps` in a drop-in and
+/// `nodocs` in dnf.conf give `nocaps, nodocs`), and in one file the last
+/// line counts. Read from the files, since `dnf --dump-main-config` writes
+/// a log in the home directory of a user who runs it.
+pub(crate) fn dnf_nocaps(root: &Path) -> Option<String> {
+    let mut files = vec![root.join("etc/dnf/dnf.conf")];
+    for directory in ["usr/share/dnf5/libdnf.conf.d", "etc/dnf/libdnf5.conf.d"] {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(root.join(directory))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.extension()
+                            .is_some_and(|extension| extension == "conf")
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        found.sort();
+        files.extend(found);
+    }
+    files.into_iter().find_map(|file| {
+        let text = std::fs::read_to_string(&file).ok()?;
+        let mut section = String::new();
+        let mut tsflags = None;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('[') && line.ends_with(']') {
+                section = line[1..line.len() - 1].trim().to_string();
+            } else if let Some((key, value)) = line.split_once('=') {
+                if section == "main" && key.trim() == "tsflags" {
+                    tsflags = Some(value.trim().to_string());
+                }
+            }
+        }
+        tsflags
+            .filter(|value| {
+                value
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .any(|flag| flag == "nocaps")
+            })
+            .map(|_| {
+                file.strip_prefix(root)
+                    .map(|relative| Path::new("/").join(relative))
+                    .unwrap_or(file.clone())
+                    .display()
+                    .to_string()
+            })
+    })
 }
 
 /// Windows Subsystem for Linux.
@@ -968,6 +1261,244 @@ mod tests {
         assert_eq!(PackageManager::Dnf.id_map_package(), Some("shadow-utils"));
         assert_eq!(PackageManager::Pacman.id_map_package(), Some("shadow"));
         assert_eq!(PackageManager::Zypper.id_map_package(), None);
+    }
+
+    /// What a reinstall would write, as dpkg, dpkg-statoverride and rpm
+    /// print their records (their output copied from ubuntu:24.04 with dpkg
+    /// 1.22 and fedora:42 with rpm 4.20).
+    #[test]
+    fn package_records_are_read_as_dpkg_and_rpm_print_them() {
+        use PackageManager::{Apt, Dnf, Pacman};
+        let list = "/.\n/usr\n/usr/bin\n/usr/bin/getsubids\n/usr/bin/newgidmap\n\
+                    /usr/bin/newuidmap\n/usr/share/man/man1/newuidmap.1.gz\n";
+        let files = Apt.package_files(list);
+        assert_eq!(
+            program_file(&files, "newuidmap").map(|file| file.path.as_str()),
+            Some("/usr/bin/newuidmap")
+        );
+        assert_eq!(program_file(&files, "newuidmap").unwrap().mode, None);
+        let rpm = "/usr/bin/newgidmap\t100755\tcap_setgid=ep\n/usr/bin/newgrp\t104755\t\n\
+                   /usr/bin/newuidmap\t100755\tcap_setuid=ep\n\
+                   /usr/share/man/man1/newuidmap.1.gz\t100644\t\n";
+        let files = Dnf.package_files(rpm);
+        let newuidmap = program_file(&files, "newuidmap").unwrap();
+        assert_eq!(newuidmap.path, "/usr/bin/newuidmap");
+        assert_eq!(newuidmap.mode, Some(0o100755));
+        assert_eq!(newuidmap.caps.as_deref(), Some("cap_setuid=ep"));
+        assert_eq!(program_file(&files, "newgrp").unwrap().mode, Some(0o104755));
+        assert_eq!(
+            program_file(&files, "newgrp").unwrap().caps.as_deref(),
+            Some("")
+        );
+        assert_eq!(program_file(&files, "newusers"), None);
+        // `rpm -q` without --qf, or a query that printed no file.
+        assert!(Dnf
+            .package_files("shadow-utils-4.17.4-1.fc42.aarch64\n")
+            .is_empty());
+        assert!(Apt.package_files("installed").is_empty());
+        assert_eq!(Pacman.files_query("shadow"), None);
+        assert_eq!(
+            Dnf.files_query("shadow-utils"),
+            Some((
+                "rpm",
+                vec![
+                    "-q".to_string(),
+                    "--qf".to_string(),
+                    "[%{FILENAMES}\\t%{FILEMODES:octal}\\t%{FILECAPS}\\n]".to_string(),
+                    "shadow-utils".to_string()
+                ]
+            ))
+        );
+
+        // `dpkg-query -S /usr/bin/newuidmap` with a local diversion, and
+        // with one a package added.
+        let local = "local diversion from: /usr/bin/newuidmap\nlocal diversion to: \
+                     /usr/bin/newuidmap.distrib\nuidmap: /usr/bin/newuidmap\n";
+        assert_eq!(
+            dpkg_diversion(local, "/usr/bin/newuidmap"),
+            Some(("/usr/bin/newuidmap.distrib".to_string(), None))
+        );
+        let by = "diversion by fakepkg from: /usr/bin/newuidmap\ndiversion by fakepkg to: \
+                  /usr/bin/newuidmap.real\nuidmap: /usr/bin/newuidmap\n";
+        assert_eq!(
+            dpkg_diversion(by, "/usr/bin/newuidmap"),
+            Some((
+                "/usr/bin/newuidmap.real".to_string(),
+                Some("fakepkg".to_string())
+            ))
+        );
+        assert_eq!(dpkg_diversion(by, "/usr/bin/newgidmap"), None);
+        assert_eq!(
+            dpkg_diversion("uidmap: /usr/bin/newuidmap\n", "/usr/bin/newuidmap"),
+            None
+        );
+        // `dpkg-statoverride --list PATH`: the mode is octal.
+        assert_eq!(
+            dpkg_override_mode("root root 755 /usr/bin/newuidmap\n", "/usr/bin/newuidmap"),
+            Some(0o755)
+        );
+        assert_eq!(
+            dpkg_override_mode("root root 4755 /usr/bin/newuidmap\n", "/usr/bin/newuidmap"),
+            Some(0o4755)
+        );
+        assert_eq!(dpkg_override_mode("", "/usr/bin/newuidmap"), None);
+    }
+
+    /// dpkg's path filters, as dpkg 1.22 in ubuntu:24.04 applied them to a
+    /// reinstall of uidmap: `=` or a space, quotes dropped, globs with
+    /// classes; files of dpkg.cfg.d named with a dot, `~` or a leading dot
+    /// are not read; dpkg.cfg.d comes before dpkg.cfg; the last match
+    /// decides.
+    #[test]
+    fn dpkg_path_filters_are_read_as_dpkg_reads_them() {
+        let root = tempfile::tempdir().unwrap();
+        let d = root.path().join("etc/dpkg/dpkg.cfg.d");
+        std::fs::create_dir_all(&d).unwrap();
+        let path = "/usr/bin/newgidmap";
+        let excluded = |files: &[(&str, &str)]| {
+            for entry in std::fs::read_dir(&d).unwrap() {
+                std::fs::remove_file(entry.unwrap().path()).unwrap();
+            }
+            let _ = std::fs::remove_file(root.path().join("etc/dpkg/dpkg.cfg"));
+            for (name, text) in files {
+                let file = if *name == "dpkg.cfg" {
+                    root.path().join("etc/dpkg/dpkg.cfg")
+                } else {
+                    d.join(name)
+                };
+                std::fs::write(file, text).unwrap();
+            }
+            dpkg_excluded(root.path(), path)
+        };
+        // Ubuntu's container images leave out manual pages and docs only.
+        assert_eq!(
+            excluded(&[(
+                "excludes",
+                "# Drop all man pages\npath-exclude=/usr/share/man/*\npath-exclude=/usr/share/doc/*\n"
+            )]),
+            None
+        );
+        assert_eq!(
+            excluded(&[("90-test", "path-exclude=/usr/bin/newgidmap\n")]),
+            Some((
+                "path-exclude=/usr/bin/newgidmap".to_string(),
+                "/etc/dpkg/dpkg.cfg.d/90-test".to_string()
+            ))
+        );
+        for (files, left_out) in [
+            (
+                vec![("90-space", "path-exclude /usr/bin/newgidmap\n")],
+                true,
+            ),
+            (
+                vec![("90-quoted", "path-exclude=\"/usr/bin/newgid*\"\n")],
+                true,
+            ),
+            (
+                vec![("90-dot.conf", "path-exclude=/usr/bin/newgidmap\n")],
+                false,
+            ),
+            (
+                vec![(".hidden", "path-exclude=/usr/bin/newgidmap\n")],
+                false,
+            ),
+            (
+                vec![("90-tilde~", "path-exclude=/usr/bin/newgidmap\n")],
+                false,
+            ),
+            (
+                vec![(
+                    "90-incl",
+                    "path-exclude=/usr/*\npath-include=/usr/bin/newgid*\n",
+                )],
+                false,
+            ),
+            (
+                vec![
+                    ("80-incl", "path-include=/usr/bin/newgid*\n"),
+                    ("90-excl", "path-exclude=/usr/bin/*\n"),
+                ],
+                true,
+            ),
+            (
+                vec![("90-class", "path-exclude=/usr/bin/newg[a-i]dmap\n")],
+                true,
+            ),
+            (
+                vec![("90-class", "path-exclude=/usr/bin/newg[!a-i]dmap\n")],
+                false,
+            ),
+            (
+                vec![("dpkg.cfg", "path-exclude=/usr/bin/newgidmap\n")],
+                true,
+            ),
+            (
+                vec![
+                    ("zz-incl", "path-include=/usr/bin/newgidmap\n"),
+                    ("dpkg.cfg", "path-exclude=/usr/bin/newgidmap\n"),
+                ],
+                true,
+            ),
+            (
+                vec![
+                    ("zz-excl", "path-exclude=/usr/bin/newgidmap\n"),
+                    ("dpkg.cfg", "path-include=/usr/bin/newgidmap\n"),
+                ],
+                false,
+            ),
+        ] {
+            assert_eq!(excluded(&files).is_some(), left_out, "{files:?}");
+        }
+        assert!(glob_matches("/usr/*", "/usr/bin/newgidmap"));
+        assert!(glob_matches("/usr/bin/new?idmap", "/usr/bin/newgidmap"));
+        assert!(!glob_matches("/usr/bin/new?idmap", "/usr/bin/newidmap"));
+        assert!(glob_matches("/usr/bin/\\*", "/usr/bin/*"));
+        assert!(!glob_matches("/usr/bin/\\*", "/usr/bin/x"));
+        assert!(glob_matches("/usr/bin/[]x]", "/usr/bin/]"));
+        assert!(glob_matches("/usr/bin/[x", "/usr/bin/[x"));
+    }
+
+    /// Whether dnf installs files without their file capabilities, as
+    /// dnf5 5.2.18 in fedora:42 reads its configuration (`dnf
+    /// --dump-main-config`): the last `tsflags` of a file's [main], added up
+    /// across dnf.conf and dnf5's drop-ins.
+    #[test]
+    fn dnf_nocaps_is_read_from_its_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        let etc = root.path().join("etc/dnf");
+        std::fs::create_dir_all(etc.join("libdnf5.conf.d")).unwrap();
+        assert_eq!(dnf_nocaps(root.path()), None);
+        std::fs::write(etc.join("dnf.conf"), "[main]\ntsflags=nodocs\n").unwrap();
+        assert_eq!(dnf_nocaps(root.path()), None);
+        std::fs::write(
+            etc.join("dnf.conf"),
+            "[main]\ntsflags=nodocs\ntsflags=nocaps\n",
+        )
+        .unwrap();
+        assert_eq!(
+            dnf_nocaps(root.path()).as_deref(),
+            Some("/etc/dnf/dnf.conf")
+        );
+        std::fs::write(
+            etc.join("dnf.conf"),
+            "[main]\ntsflags=nocaps\ntsflags=nodocs\n",
+        )
+        .unwrap();
+        assert_eq!(dnf_nocaps(root.path()), None);
+        std::fs::write(etc.join("dnf.conf"), "[main]\ntsflags = nodocs, nocaps\n").unwrap();
+        assert!(dnf_nocaps(root.path()).is_some());
+        // In another section it is not dnf's.
+        std::fs::write(etc.join("dnf.conf"), "[fedora]\ntsflags=nocaps\n").unwrap();
+        assert_eq!(dnf_nocaps(root.path()), None);
+        std::fs::write(
+            etc.join("libdnf5.conf.d/90-nocaps.conf"),
+            "[main]\ntsflags=nocaps\n",
+        )
+        .unwrap();
+        assert_eq!(
+            dnf_nocaps(root.path()).as_deref(),
+            Some("/etc/dnf/libdnf5.conf.d/90-nocaps.conf")
+        );
     }
 
     /// What dpkg-query, rpm and pacman print (checked in ubuntu:24.04 and

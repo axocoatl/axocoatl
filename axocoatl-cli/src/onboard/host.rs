@@ -688,7 +688,7 @@ pub(crate) mod testing {
             self.write_program(
                 name,
                 &format!(
-                    "#!/bin/sh\nPATH=\"$PATH:/usr/bin:/bin\"\necho \"{name} $*\" >> \"{}\"\n{body}\n",
+                    "#!/bin/sh\nPATH=\"$PATH:/usr/bin:/bin\"\nprintf '%s\\n' \"{name} $*\" >> \"{}\"\n{body}\n",
                     self.dir.path().join("calls.log").display()
                 ),
             );

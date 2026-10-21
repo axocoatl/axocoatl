@@ -221,7 +221,8 @@ pub fn plan(args: &RunArgs, task_from_file: Option<String>) -> Result<RunPlan, F
         (None, None) if args.dry_run => String::new(),
         (None, None) => {
             return Err(Failure::usage(
-                "say what to do: --task \"...\" or --task-file <file|->",
+                "say what to do: --task \"...\" or --task-file <file> (- reads the task from \
+                 standard input)",
             ))
         }
         (Some(_), Some(_)) => return Err(Failure::usage("give --task or --task-file, not both")),

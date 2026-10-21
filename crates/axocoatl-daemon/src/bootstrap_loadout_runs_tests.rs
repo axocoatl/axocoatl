@@ -1715,7 +1715,10 @@ async fn toolchain_admission_child_body() {
             .admit_loadout_run(request(several.path(), "several", Some("make test")))
             .await,
     );
-    assert!(message.contains("--toolchain node|go"), "{message}");
+    assert!(
+        message.contains("Pass --toolchain <language>, where <language> is node or go"),
+        "{message}"
+    );
     assert!(daemon.list_loadout_runs().await.unwrap().is_empty());
 
     // A Rust repository is planned like the others: with building turned

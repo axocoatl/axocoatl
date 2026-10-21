@@ -744,9 +744,11 @@ pub fn probe_refusal(
         if plan.toolchain.is_none() {
             // A missing module already named the Python toolchain.
             if !matches!(missing, ProbeMissing::Module(_)) {
+                // A placeholder with the choices in words: `node|python`
+                // pasted into a shell is a pipeline.
                 fixes.push(
-                    "pass --toolchain node|python|rust|go for Axocoatl's image of the \
-                     repository's language"
+                    "pass --toolchain <language> for Axocoatl's image of the repository's \
+                     language, where <language> is node, python, rust or go"
                         .into(),
                 );
             }
@@ -1032,7 +1034,10 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(error.contains("--toolchain node|go"), "{error}");
+        assert!(
+            error.contains("Pass --toolchain <language>, where <language> is node or go"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1477,7 +1482,7 @@ mod tests {
             "{message}"
         );
         assert!(!message.contains("pip install <package>"), "{message}");
-        assert!(!message.contains("node|python|rust|go"), "{message}");
+        assert!(!message.contains("node, python, rust or go"), "{message}");
     }
 
     /// The probe's hints come from the repository's files.
