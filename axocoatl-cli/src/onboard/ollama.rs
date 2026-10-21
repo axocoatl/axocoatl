@@ -195,13 +195,13 @@ pub(crate) async fn writer_and_reviewer(
         .collect();
     models.dedup();
     if let Some(base_url) = base_url {
-        if pull(o, &base_url, &models).await {
-            let read = context(o, &base_url, &models).await;
+        if pull(o, &base_url, &models, WriterChoice::Ollama).await {
+            let read = context(o, &base_url, &models, WriterChoice::Ollama).await;
             choice.contexts.extend(read);
         }
     } else {
         for model in &models {
-            let step = pull_step(o, model, " once Ollama is ready");
+            let step = pull_step(o, model, " once Ollama is ready", WriterChoice::Ollama);
             o.steps.push(step);
         }
     }
@@ -211,18 +211,20 @@ pub(crate) async fn writer_and_reviewer(
 /// The reviewer alone on Ollama (for Claude Code and Codex): the server and
 /// one model, no writer questions.
 pub(crate) async fn reviewer_only(o: &mut Onboarding, choice: &mut Choice) {
+    // Claude Code or Codex, which `writers::run` recorded.
+    let writer = choice.external_writer.unwrap_or(WriterChoice::ClaudeCode);
     let base_url = server(o).await;
     choice.ollama_base_url = Some(o.facts.ollama_url.clone());
     let (_, reviewer) = choose_models(o, base_url.is_some(), false, true).await;
     choice.reviewer_model = reviewer.map(|model| ModelRef::new(Provider::Ollama, &model));
     if let (Some(base_url), Some(reviewer)) = (base_url, &choice.reviewer_model) {
         let models = vec![reviewer.model.clone()];
-        if pull(o, &base_url, &models).await {
-            let read = context(o, &base_url, &models).await;
+        if pull(o, &base_url, &models, writer).await {
+            let read = context(o, &base_url, &models, writer).await;
             choice.contexts.extend(read);
         }
     } else if let Some(reviewer) = &choice.reviewer_model {
-        let step = pull_step(o, &reviewer.model, " once Ollama is ready");
+        let step = pull_step(o, &reviewer.model, " once Ollama is ready", writer);
         o.steps.push(step);
     }
 }
@@ -297,18 +299,30 @@ pub(crate) fn too_large(o: &Onboarding, model: &str) -> Option<String> {
 }
 
 /// The step left for a model that is not pulled: pull it, or, when it is
-/// too large for this computer, choose another (a pull would not help).
-fn pull_step(o: &Onboarding, model: &str, when: &str) -> String {
-    match too_large(o, model) {
-        Some(why) => format!(
-            "{model}{} is {why}, so it was not pulled: choose a smaller model with `axocoatl \
-             onboard --update`, or a hosted writer and reviewer with `axocoatl onboard --update \
-             --writer openrouter` (or claude-code, or codex)",
-            model_size(o, model)
-                .map(|size| format!(" ({})", size_text(size)))
-                .unwrap_or_default()
+/// too large for this computer, choose another (a pull would not help),
+/// with the command that keeps `writer` ([`Onboarding::model_change`]).
+pub(super) fn pull_step(o: &Onboarding, model: &str, when: &str, writer: WriterChoice) -> String {
+    let Some(why) = too_large(o, model) else {
+        return format!("Pull {model}{when}: ollama pull {model}");
+    };
+    let size = model_size(o, model)
+        .map(|size| format!(" ({})", size_text(size)))
+        .unwrap_or_default();
+    let (mode, because) = o.model_change(&[model]);
+    match writer {
+        WriterChoice::ClaudeCode | WriterChoice::Codex => format!(
+            "{model}{size} is {why}, so it was not pulled: choose a smaller reviewer with \
+             `axocoatl onboard {mode} --writer {id}`, or OpenRouter for the reviewer with \
+             `axocoatl onboard {mode} --writer {id} --reviewer openrouter:{reviewer}`{because}",
+            id = writer.id(),
+            reviewer = super::openrouter::DEFAULT_REVIEWER
         ),
-        None => format!("Pull {model}{when}: ollama pull {model}"),
+        WriterChoice::Ollama | WriterChoice::Openrouter => format!(
+            "{model}{size} is {why}, so it was not pulled: choose a smaller model with `axocoatl \
+             onboard {mode} --writer ollama`, or a hosted writer and reviewer with `axocoatl \
+             onboard {mode} --writer openrouter` (or `--writer claude-code`, or `--writer \
+             codex`){because}"
+        ),
     }
 }
 
@@ -1094,7 +1108,7 @@ async fn choose_models(
 /// Pull the models that are not installed, with their sizes and this
 /// computer's free disk shown, checking each pull's exit status and that it
 /// gave a GGUF model. `false` when a model is still missing.
-async fn pull(o: &mut Onboarding, base_url: &str, models: &[String]) -> bool {
+async fn pull(o: &mut Onboarding, base_url: &str, models: &[String], writer: WriterChoice) -> bool {
     let installed = o.facts.ollama_server.models().to_vec();
     let missing: Vec<String> = models
         .iter()
@@ -1163,7 +1177,7 @@ async fn pull(o: &mut Onboarding, base_url: &str, models: &[String]) -> bool {
         o.ui.say(format!("  {question} no: it does not fit this disk"));
         for model in &missing {
             let step = match too_large(o, model) {
-                Some(_) => pull_step(o, model, ""),
+                Some(_) => pull_step(o, model, "", writer),
                 None => format!("Free disk space for {model}, then pull it: ollama pull {model}"),
             };
             o.step_left(step);
@@ -1177,7 +1191,7 @@ async fn pull(o: &mut Onboarding, base_url: &str, models: &[String]) -> bool {
             "  {question} no: it does not fit this computer's memory (--pull pulls it anyway)"
         ));
         for model in &missing {
-            let step = pull_step(o, model, "");
+            let step = pull_step(o, model, "", writer);
             o.step_left(step);
         }
         return false;
@@ -1200,7 +1214,7 @@ async fn pull(o: &mut Onboarding, base_url: &str, models: &[String]) -> bool {
     };
     if !pull_now {
         for model in &missing {
-            let step = pull_step(o, model, "");
+            let step = pull_step(o, model, "", writer);
             o.step_left(step);
         }
         return false;
@@ -1282,7 +1296,12 @@ async fn pull(o: &mut Onboarding, base_url: &str, models: &[String]) -> bool {
 /// `OLLAMA_CONTEXT_LENGTH` when one is below [`MIN_CONTEXT_TOKENS`].
 /// Returns the models read with enough context and their context, which
 /// Step 5's check uses instead of loading them again.
-async fn context(o: &mut Onboarding, base_url: &str, models: &[String]) -> Vec<(String, usize)> {
+async fn context(
+    o: &mut Onboarding,
+    base_url: &str,
+    models: &[String],
+    writer: WriterChoice,
+) -> Vec<(String, usize)> {
     let mut read = Vec::new();
     if o.ui.plan() {
         o.ui.say("  would load each model once to read its context and run the contract probes");
@@ -1333,19 +1352,43 @@ async fn context(o: &mut Onboarding, base_url: &str, models: &[String]) -> Vec<(
         if still.is_empty() {
             return read;
         }
+        let hosted = hosted_instead(o, &low, writer);
         o.step_left(format!(
             "{}: Ollama may not have the memory for a {CONTEXT_FIX_TOKENS}-token context here; \
-             use OpenRouter for these models (`axocoatl onboard --update --writer openrouter`)",
+             use OpenRouter {hosted}",
             still.join("; ")
         ));
     } else {
+        let hosted = hosted_instead(o, &low, writer);
         o.step_left(format!(
             "{problem} Give Ollama a {CONTEXT_FIX_TOKENS}-token context: {}; or use OpenRouter \
-             (`axocoatl onboard --update --writer openrouter`)",
+             {hosted}",
             ollama_host(o).context()
         ));
     }
     read
+}
+
+/// `for these models (`axocoatl onboard … --writer openrouter`)`, or for
+/// the reviewer of Claude Code or Codex: the command that moves the models
+/// in `low` to OpenRouter and keeps `writer` ([`Onboarding::model_change`]).
+pub(super) fn hosted_instead(
+    o: &Onboarding,
+    low: &[(String, usize)],
+    writer: WriterChoice,
+) -> String {
+    let models: Vec<&str> = low.iter().map(|(model, _)| model.as_str()).collect();
+    let (mode, because) = o.model_change(&models);
+    match writer {
+        WriterChoice::ClaudeCode | WriterChoice::Codex => format!(
+            "for the reviewer (`axocoatl onboard {mode} --writer {} --reviewer openrouter:{}`){because}",
+            writer.id(),
+            super::openrouter::DEFAULT_REVIEWER
+        ),
+        WriterChoice::Ollama | WriterChoice::Openrouter => format!(
+            "for these models (`axocoatl onboard {mode} --writer openrouter`){because}"
+        ),
+    }
 }
 
 /// Homebrew's `brew services --help` says it reads a per-formula

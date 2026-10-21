@@ -53,7 +53,9 @@ async fn reinspect(o: &mut Onboarding) {
         .map(|path| path.to_string_lossy().into_owned());
     o.facts.podman_path = o.host.find("podman");
     o.facts.podman = match program {
-        Some(program) => podman_report::inspect_with(&program).await,
+        Some(program) => {
+            podman_report::inspect_through(&program, o.host.podman_connection.clone()).await
+        }
         None => PodmanReport::not_installed(),
     };
     crate::doctor::read_id_ranges(
@@ -83,6 +85,9 @@ pub(crate) async fn run(o: &mut Onboarding) -> bool {
     }
     // In --plan, each change is assumed made, so the next one is shown.
     let mut assumed = 0;
+    // The id fix already ran (or, in --plan, was shown) for a `podman info`
+    // that failed for want of the helpers.
+    let mut ids_done = false;
     for _ in 0..6 {
         let readiness = if o.ui.plan() && assumed > 0 {
             match assumed {
@@ -126,6 +131,21 @@ pub(crate) async fn run(o: &mut Onboarding) -> bool {
                 }
                 assumed = 2;
             }
+            // `podman info` fails here for want of newuidmap or newgidmap
+            // (a range in the files, the helpers missing): install them,
+            // asked like the Podman install, instead of a step that says
+            // to read `podman info` (whose message says to run `podman
+            // system migrate`, which alone changes nothing).
+            PodmanReadiness::Unavailable(error)
+                if o.facts.podman.runs_here()
+                    && podman_report::id_map_tools_failure(&error).is_some() =>
+            {
+                if !subordinate_ids(o).await {
+                    return false;
+                }
+                ids_done = true;
+                assumed = 2;
+            }
             PodmanReadiness::Unavailable(error) => {
                 o.step_left(format!(
                     "Podman does not answer ({}): check `podman system connection list` and \
@@ -155,7 +175,9 @@ pub(crate) async fn run(o: &mut Onboarding) -> bool {
     ready &= rootless(o).await;
     ready &= machine_memory(o).await;
     ready &= version(o);
-    ready &= subordinate_ids(o).await;
+    if !ids_done {
+        ready &= subordinate_ids(o).await;
+    }
     ready &= landlock(o);
     if ready {
         ready = proof(o).await;
@@ -629,7 +651,8 @@ fn version(o: &mut Onboarding) -> bool {
 /// missing `newuidmap` and `newgidmap` with the package manager (each only
 /// with consent, and under `--yes` only with `--allow-sudo`), and restarts
 /// rootless Podman with `podman system migrate`; a range Podman has not
-/// picked up yet needs only the migrate. For a Podman reached through
+/// picked up yet needs only the migrate. Step 2 also comes here when
+/// `podman info` fails for want of the helpers. For a Podman reached through
 /// `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote connection it runs
 /// nothing: that Podman's range is set where it runs, and Podman refuses
 /// `system migrate` through an override.
@@ -644,8 +667,11 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
     // reinstall a helper): a step left, nothing run.
     let commands = podman_report::local_fix(&o.facts.podman, &user, &problem)
         .filter(|fix| fix.manual.is_none())
-        .and_then(|fix| id_fix_commands(o, &fix).map(|commands| (commands, fix.uses_sudo())));
-    let Some((commands, sudo)) = commands else {
+        .and_then(|fix| {
+            id_fix_commands(o, &fix)
+                .map(|commands| (commands, fix.uses_sudo(), fix.install.is_some()))
+        });
+    let Some((commands, sudo, install)) = commands else {
         o.step_left(format!("{}: {fix_text}", finding.detail));
         return false;
     };
@@ -661,9 +687,13 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
             finding.detail
         ),
         IdRangeProblem::Missing | IdRangeProblem::Elsewhere => format!(
-            "{}. Add a range with `{fix_text}`? `podman system migrate` stops your running \
-             containers.",
-            finding.detail
+            "{}. {} with `{fix_text}`? `podman system migrate` stops your running containers.",
+            finding.detail,
+            if install {
+                "Install them and add a range"
+            } else {
+                "Add a range"
+            }
         ),
     };
     if !o.ui.consent(&question, true, sudo) {

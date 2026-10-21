@@ -384,6 +384,9 @@ pub(crate) struct ExistingProviders {
 pub(crate) struct ExistingOllama {
     #[serde(default)]
     pub(crate) base_url: Option<String>,
+    /// The model an Agent without one runs.
+    #[serde(default)]
+    pub(crate) model: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

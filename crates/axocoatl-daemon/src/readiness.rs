@@ -179,7 +179,14 @@ pub fn podman_item(
                 "Podman",
                 ReadinessStatus::Fail,
                 format!("Podman did not answer its readiness check: {error}"),
-                Some("Run `axocoatl doctor` to see what Podman reports.".to_string()),
+                // Without newuidmap or newgidmap, Podman's own message says
+                // to run `podman system migrate`, which alone changes nothing.
+                Some(
+                    match axocoatl_isolation::podman_report::id_map_tools_hint(error) {
+                        Some(hint) => format!("{hint}."),
+                        None => "Run `axocoatl doctor` to see what Podman reports.".to_string(),
+                    },
+                ),
             ),
             None,
         ),
@@ -555,6 +562,47 @@ mod tests {
         let (item, blocked) = podman_item(&PodmanReadiness::Unavailable("timed out".into()), &here);
         assert_eq!(item.status, ReadinessStatus::Fail);
         assert!(blocked.is_none(), "a failed probe is reported, not a block");
+        assert_eq!(
+            item.fix.as_deref(),
+            Some("Run `axocoatl doctor` to see what Podman reports.")
+        );
+    }
+
+    /// Podman 4.9.3 with a range in /etc/subuid and no newuidmap on PATH:
+    /// `podman info` fails, and Podman's message says to run `podman system
+    /// migrate`. The first screen names the missing helper and its package
+    /// instead.
+    #[test]
+    fn a_podman_without_newuidmap_is_told_to_install_it() {
+        let error = "OCI container setup failed: podman info failed: Error: command required \
+                     for rootless mode with multiple IDs: exec: \"newuidmap\": executable file \
+                     not found in $PATH";
+        let (item, blocked) = podman_item(
+            &PodmanReadiness::Unavailable(error.into()),
+            &InstallRoute::for_linux(UBUNTU),
+        );
+        assert_eq!(item.status, ReadinessStatus::Fail);
+        assert!(blocked.is_none());
+        assert_eq!(
+            item.fix.as_deref(),
+            Some(
+                "Rootless Podman needs newuidmap and newgidmap to map your subordinate user and \
+                 group IDs, and newuidmap is not installed: install (or reinstall) them (Debian \
+                 and Ubuntu: uidmap; Fedora and RHEL: shadow-utils; Arch: shadow), then run \
+                 `podman system migrate`; `axocoatl doctor` names the command for this computer."
+            )
+        );
+        let refused = crate::loadout::admission::podman_not_ready(error);
+        assert!(
+            refused.ends_with(
+                "Rootless Podman needs newuidmap and newgidmap to map your subordinate user and \
+                 group IDs, and newuidmap is not installed: install (or reinstall) them (Debian \
+                 and Ubuntu: uidmap; Fedora and RHEL: shadow-utils; Arch: shadow), then run \
+                 `podman system migrate`; `axocoatl doctor` names the command for this computer"
+            ),
+            "{refused}"
+        );
+        assert!(!crate::loadout::admission::podman_unanswered("timed out").contains("newuidmap"));
     }
 
     /// The first screen's fix for a missing Podman names onboarding once and

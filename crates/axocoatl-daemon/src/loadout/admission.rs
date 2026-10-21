@@ -528,12 +528,27 @@ pub fn rootful_podman() -> String {
 
 /// Podman could not be asked, and could not be made ready.
 pub fn podman_not_ready(error: &str) -> String {
-    format!("a loadout Session needs rootless Podman, and Podman is not ready: {error}")
+    format!(
+        "a loadout Session needs rootless Podman, and Podman is not ready: {error}{}",
+        id_map_tools_note(error)
+    )
 }
 
 /// Podman could not be asked whether it runs rootless.
 pub fn podman_unanswered(error: &str) -> String {
-    format!("a loadout Session needs rootless Podman, and Podman could not be asked: {error}")
+    format!(
+        "a loadout Session needs rootless Podman, and Podman could not be asked: {error}{}",
+        id_map_tools_note(error)
+    )
+}
+
+/// `. ` and what to do when `error` is Podman failing for want of
+/// `newuidmap` or `newgidmap` (whose own message says to run `podman system
+/// migrate`, which alone changes nothing); else nothing.
+fn id_map_tools_note(error: &str) -> String {
+    axocoatl_isolation::podman_report::id_map_tools_hint(error)
+        .map(|hint| format!(". {hint}"))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

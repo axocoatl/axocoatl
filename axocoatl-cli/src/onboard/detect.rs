@@ -544,7 +544,10 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str, check_port_8080: bool)
     let podman_path = host.find("podman");
     let user = current_user();
     let mut podman = match &podman_path {
-        Some(path) => podman_report::inspect_with(&path.to_string_lossy()).await,
+        Some(path) => {
+            podman_report::inspect_through(&path.to_string_lossy(), host.podman_connection.clone())
+                .await
+        }
         None => PodmanReport::not_installed(),
     };
     crate::doctor::read_id_ranges(&mut podman, host, &host.root, &os, &user);
