@@ -174,8 +174,70 @@ export async function authorizeContext(context) {
       });
     }
   }
-  if (cookies.length) await context.addCookies(cookies);
+  if (cookies.length) {
+    await context.addCookies(cookies);
+    watchSignIn(context, cookies.filter((cookie) => !cookie.name.endsWith('-signed-in')));
+  }
   return context;
+}
+
+// Sign-in cookies that contexts lost during the current test, as messages.
+const lostSignIns = [];
+
+// Playwright's WebKit on Linux drops every context's cookies when its network
+// process crashes, and goes on without saying so (README, "WebKit
+// (Safari)"). A journey then fails far from the cause: the shell's reload on
+// a 401 lands on the sign-in page, and the next read of the workbench fails
+// with "Can't find variable: S". So each context the harness signs in is
+// checked for its token cookies when a daemon answers it 401 and when the
+// journey closes it; a cookie the journey did not clear itself is reported
+// with the test (see the afterEach hook below).
+function watchSignIn(context, tokenCookies) {
+  const expected = tokenCookies.map(({ name, url }) => ({ name, host: new URL(url).hostname }));
+  let cleared = false;
+  let reported = false;
+  const clearCookies = context.clearCookies.bind(context);
+  context.clearCookies = async (...args) => {
+    cleared = true;
+    return clearCookies(...args);
+  };
+  const check = async (when) => {
+    if (cleared || reported) return;
+    let held;
+    try {
+      held = await context.cookies();
+    } catch {
+      return; // The context or the browser has closed.
+    }
+    const missing = expected.filter(({ name, host }) => !held.some((cookie) =>
+      cookie.name === name && cookie.domain.replace(/^\./, '') === host));
+    if (cleared || reported || missing.length === 0) return;
+    reported = true;
+    lostSignIns.push(`${new Date().toISOString()} ${when}: this browser context no longer `
+      + `holds the sign-in cookie ${missing.map(({ name, host }) => `${name} for ${host}`).join(' and ')} `
+      + 'it was given, and the journey did not clear it. Playwright\'s WebKit on Linux drops '
+      + 'every context\'s cookies when its network process crashes (README, "WebKit (Safari)"); '
+      + 'a failure after this, such as a page that went to the sign-in page, follows from that.');
+  };
+  context.on('response', (response) => {
+    if (response.status() !== 401 || !daemonForUrl(response.url())) return;
+    const { pathname } = new URL(response.url());
+    void check(`${response.request().method()} ${pathname} answered 401`);
+  });
+  const close = context.close.bind(context);
+  context.close = async (...args) => {
+    await check('when the journey closed it');
+    return close(...args);
+  };
+}
+
+// Under `node --test` (not in run-tests.mjs, which imports this module too),
+// report a lost sign-in with the test it happened in.
+if (process.env.NODE_TEST_CONTEXT) {
+  const { afterEach } = await import('node:test');
+  afterEach((t) => {
+    for (const message of lostSignIns.splice(0)) t.diagnostic(`lost sign-in: ${message}`);
+  });
 }
 
 // `browser.newContext(options)` with the sign-in cookies already in place.

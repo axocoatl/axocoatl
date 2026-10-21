@@ -120,6 +120,17 @@ nor `localhost`, instead of from a route. The crash is WebKit's and can
 still happen elsewhere: a journey that fails in WebKit on Linux with
 "internal error" or with its sign-in cookie gone may be this crash.
 
+So the harness says when a context lost its sign-in. `authorizeContext` (and
+so `newAuthorizedContext`) checks that a context still holds the token
+cookies it was given when a daemon answers the context 401 and when the
+journey closes it. A cookie the journey did not remove itself (with
+`context.clearCookies`) is reported under that test as a `# lost sign-in:`
+line with the time and the request that was refused, so a failure that
+follows from it (the shell's reload on a 401 reaching the sign-in page, then
+`Can't find variable: S`) is not taken for a product failure and can be
+matched with the crash in the browser's stderr (`DEBUG=pw:browser`) or the
+system's crash log.
+
 Journeys a new user takes first (the folder picker and Workspace scope, Source
 Control's commit identity, Team and budget's suggested limits, the readiness
 checklist) run once per browser engine from `browserEngines()`: Chromium always,
