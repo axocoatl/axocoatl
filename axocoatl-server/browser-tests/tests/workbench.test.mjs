@@ -6,6 +6,7 @@ import { chromium } from 'playwright';
 
 import {
   launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext, settleTransitions, isWebKitLoadDiagnostic,
+  trackRequests, waitForNoRequestsInFlight,
 } from '../support/daemon.mjs';
 import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 
@@ -145,6 +146,7 @@ async function openSession(
 
 async function openSessionInContext(context, session, targetRuntime, beforeGoto) {
   const page = await context.newPage();
+  const requests = trackRequests(page);
   const browserErrors = [];
   const browserRequests = [];
   const browserResponses = [];
@@ -269,6 +271,11 @@ async function openSessionInContext(context, session, targetRuntime, beforeGoto)
     consoleMessages,
     assertNoBrowserErrors() {
       assert.deepEqual(browserErrors, [], browserErrors.join('\n'));
+    },
+    // Wait until the page has had no request in flight for half a second,
+    // before a step that reloads it or cancels what it is still loading.
+    settle() {
+      return waitForNoRequestsInFlight(requests, 'The workbench');
     },
   };
 }
@@ -411,7 +418,7 @@ function readySessionFixture(source) {
 
 test('rail collapse, keyboard toggle, reload, and compact resizing preserve one reversible preference', async () => {
   const session = runtime.fixtures.alpha.sessions[0];
-  const { context, page, assertNoBrowserErrors } = await openSession(session);
+  const { context, page, assertNoBrowserErrors, settle } = await openSession(session);
   try {
     const rail = page.locator('ax-rail');
     const collapse = page.locator('ax-rail #collapse');
@@ -425,6 +432,9 @@ test('rail collapse, keyboard toggle, reload, and compact resizing preserve one 
     assert.ok((await rail.boundingBox()).width <= 54, 'collapsed rail must finish at icon-strip width');
     assert.equal(await collapse.getAttribute('aria-label'), 'Expand the rail');
 
+    // Reload a workbench that has finished loading, as a person does
+    // (README, "WebKit (Safari)").
+    await settle();
     await page.reload({ waitUntil: 'domcontentloaded' });
     await waitForRailCollapsed(page, true);
     await collapse.click();
@@ -450,6 +460,7 @@ test('rail collapse, keyboard toggle, reload, and compact resizing preserve one 
     await page.setViewportSize({ width: 1280, height: 800 });
     await waitForTwoFrames(page);
     await waitForRailCollapsed(page, true);
+    await settle();
     await page.reload({ waitUntil: 'domcontentloaded' });
     await waitForRailCollapsed(page, true);
     assertNoBrowserErrors();
@@ -2301,7 +2312,7 @@ test('cross-tab Close and Delete retire the visible Session instead of leaving a
   for (const lifecycle of ['closed', 'deleted']) {
     let canonical = structuredClone(session);
     let retired = false;
-    const { context, page, assertNoBrowserErrors } = await openSession(
+    const { context, page, assertNoBrowserErrors, settle } = await openSession(
       session,
       { width: 1280, height: 800 },
       runtime,
@@ -2329,6 +2340,9 @@ test('cross-tab Close and Delete retire the visible Session instead of leaving a
     );
     try {
       await page.waitForFunction(() => sessionRuntimeSurfaceReady(S.session));
+      // The transition and the remount below cancel what the cockpit is still
+      // loading; let it finish first (README, "WebKit (Safari)").
+      await settle();
       await page.evaluate((sessionId) => handleWsFrame({
         kind: 'session-environment-changing', session: sessionId, generation: 1,
       }), session.id);

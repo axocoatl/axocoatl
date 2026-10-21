@@ -120,6 +120,24 @@ nor `localhost`, instead of from a route. The crash is WebKit's and can
 still happen elsewhere: a journey that fails in WebKit on Linux with
 "internal error" or with its sign-in cookie gone may be this crash.
 
+The page itself cancelling what the workbench is still loading can do it
+too. `workbench.test.mjs`'s "cross-tab Close and Delete" journey sent a
+runtime transition and remounted the cockpit as soon as it was ready, which
+cancels the requests the cockpit still has in flight (about three were in
+flight each time, and its steps cancelled 40 of them in 100 repetitions).
+CI's WebKit leg failed on it at 27025d43 with `Can't find variable: S`. In
+the VM the crash is rare: the journey alone failed once in 210 runs, in the
+same second as a network process crash, and 900 repetitions of its steps
+crashed the network process once, 8 ms after the transition
+(`malloc_consolidate(): unaligned fastbin chunk detected`), and then failed
+the same way. So that journey, and the rail journey before each of its
+reloads, first wait with `settle()` (from `openSession`) until the workbench
+has had no request in flight for half a second; the transition then cancels
+none. `trackRequests` and `waitForNoRequestsInFlight` in
+`support/daemon.mjs` do the waiting, for `local-api-token.test.mjs`'s
+`waitForSettledWorkbench` too. Closing a context (200 times) or reloading
+the page (220 times) while the workbench loaded did not crash it in the VM.
+
 So the harness says when a context lost its sign-in. `authorizeContext` (and
 so `newAuthorizedContext`) checks that a context still holds the token
 cookies it was given when a daemon answers the context 401 and when the

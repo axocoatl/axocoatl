@@ -279,6 +279,42 @@ export async function settleTransitions(page) {
   });
 }
 
+/** The requests `page` has in flight, and when that set last changed. */
+export function trackRequests(page) {
+  const requests = { inFlight: new Set(), changedAt: Date.now() };
+  const started = (request) => {
+    requests.inFlight.add(request);
+    requests.changedAt = Date.now();
+  };
+  const ended = (request) => {
+    requests.inFlight.delete(request);
+    requests.changedAt = Date.now();
+  };
+  page.on('request', started);
+  page.on('requestfinished', ended);
+  page.on('requestfailed', ended);
+  return requests;
+}
+
+/**
+ * Wait until the page whose requests `trackRequests` returned has had no
+ * request in flight for half a second. On Linux, WebKit's network process now
+ * and then crashes when requests a workbench that has just loaded is still
+ * making are cancelled, and the crash signs every context out (README,
+ * "WebKit (Safari)"). A person acts on a workbench that has loaded; a journey
+ * that reloads or leaves one waits for this first.
+ */
+export async function waitForNoRequestsInFlight(requests, what = 'The page') {
+  const deadline = Date.now() + 30_000;
+  while (requests.inFlight.size > 0 || Date.now() - requests.changedAt < 500) {
+    if (Date.now() > deadline) {
+      const urls = [...requests.inFlight].map((request) => request.url());
+      throw new Error(`${what} still had requests in flight after 30 s: ${urls.join(', ')}`);
+    }
+    await delay(50);
+  }
+}
+
 async function api(baseUrl, method, pathname, body) {
   const headers = new Headers();
   if (body !== undefined) headers.set('content-type', 'application/json');

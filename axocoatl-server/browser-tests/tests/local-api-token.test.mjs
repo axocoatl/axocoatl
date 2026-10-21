@@ -3,7 +3,9 @@ import { createServer } from 'node:http';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
 
-import { launchTestDaemon, resolveChromiumExecutable } from '../support/daemon.mjs';
+import {
+  launchTestDaemon, resolveChromiumExecutable, trackRequests, waitForNoRequestsInFlight,
+} from '../support/daemon.mjs';
 
 // Every context here starts signed out (plain `browser.newContext`): these
 // journeys exercise the real sign-in link and cookie.
@@ -60,24 +62,6 @@ after(async () => {
 
 const port = () => new URL(runtime.baseUrl).port;
 const workbenchConnected = () => typeof S !== 'undefined' && S.liveConnection === 'connected';
-const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-
-/** The requests `page` has in flight, and when that set last changed. */
-function trackRequests(page) {
-  const requests = { inFlight: new Set(), changedAt: Date.now() };
-  const started = (request) => {
-    requests.inFlight.add(request);
-    requests.changedAt = Date.now();
-  };
-  const ended = (request) => {
-    requests.inFlight.delete(request);
-    requests.changedAt = Date.now();
-  };
-  page.on('request', started);
-  page.on('requestfinished', ended);
-  page.on('requestfailed', ended);
-  return requests;
-}
 
 /**
  * Wait until the workbench is connected and its page has had no request in
@@ -90,14 +74,7 @@ function trackRequests(page) {
  */
 async function waitForSettledWorkbench(page, requests) {
   await page.waitForFunction(workbenchConnected);
-  const deadline = Date.now() + 30_000;
-  while (requests.inFlight.size > 0 || Date.now() - requests.changedAt < 500) {
-    if (Date.now() > deadline) {
-      const urls = [...requests.inFlight].map((request) => request.url());
-      throw new Error(`The workbench still had requests in flight after 30 s: ${urls.join(', ')}`);
-    }
-    await delay(50);
-  }
+  await waitForNoRequestsInFlight(requests, 'The workbench');
 }
 
 /**
