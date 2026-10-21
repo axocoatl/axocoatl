@@ -714,7 +714,7 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
         return false;
     }
     // The install (or reinstall) first, on its own: when it succeeds and
-    // the helpers are still unusable, it changed nothing, and offering it
+    // the helpers are still unusable, it did not fix them, and offering it
     // again would only repeat it.
     let (install_command, rest) = match install {
         true => (commands.first().cloned(), &commands[1..]),
@@ -728,7 +728,7 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
         if !o.ui.plan() {
             let now = crate::doctor::id_map_tools(&o.host, &o.host.root, &o.facts.os).await;
             if !now.usable() {
-                o.step_left(install_changed_nothing(&command.display(), &now.describe()));
+                o.step_left(install_did_not_fix(&command.display(), &now.describe()));
                 return false;
             }
         }
@@ -752,7 +752,7 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
         // its other form once PATH has them but Podman still fails), so
         // never one.
         match (install_command.as_ref().map(Cmd::display), again) {
-            (Some(installed), Some(_)) => install_changed_nothing(&installed, &finding.detail),
+            (Some(installed), Some(_)) => install_did_not_fix(&installed, &finding.detail),
             _ => format!("{}: {}", finding.detail, finding.fix.unwrap_or_default()),
         }
     });
@@ -783,11 +783,11 @@ fn lowercase_first(text: &str) -> String {
 }
 
 /// The step left when `ran`, the install or reinstall of the id-map
-/// helpers' package, succeeded and `still` (what is wrong with them) did
-/// not change: in words, without the same command.
-fn install_changed_nothing(ran: &str, still: &str) -> String {
+/// helpers' package, succeeded and the helpers still cannot map (`still`
+/// says why): in words, without the same command.
+fn install_did_not_fix(ran: &str, still: &str) -> String {
     format!(
-        "`{ran}` ran, but changed nothing: {still}. Running it again would not help: find where \
+        "`{ran}` ran, but did not fix this: {still}. Running it again would not help: find where \
          this distribution puts newuidmap and newgidmap, make sure they are on PATH and are \
          setuid root or have file capabilities, then run `podman system migrate`"
     )

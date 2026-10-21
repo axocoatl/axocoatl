@@ -162,6 +162,38 @@ impl PackageManager {
         (program, args.into_iter().map(str::to_string).collect())
     }
 
+    /// The read-only command that names the package owning the file at
+    /// `path`: `dpkg-query -S` (`uidmap: /usr/bin/newuidmap`), `rpm -qf
+    /// --qf '%{NAME}\n'`, `pacman -Qqo`. Each exits 1 for a file no
+    /// package owns.
+    pub(crate) fn owner_query(self, path: &str) -> (&'static str, Vec<String>) {
+        let (program, args): (&'static str, Vec<&str>) = match self {
+            PackageManager::Apt => ("dpkg-query", vec!["-S", path]),
+            PackageManager::Dnf | PackageManager::Zypper => {
+                ("rpm", vec!["-qf", "--qf", "%{NAME}\n", path])
+            }
+            PackageManager::Pacman => ("pacman", vec!["-Qqo", path]),
+        };
+        (program, args.into_iter().map(str::to_string).collect())
+    }
+
+    /// Whether `package` owns the file [`PackageManager::owner_query`]
+    /// asked about, from what the query printed and its exit code; `None`
+    /// when that does not say.
+    pub(crate) fn owns(self, package: &str, code: Option<i32>, stdout: &str) -> Option<bool> {
+        match code {
+            Some(0) => Some(stdout.lines().any(|line| match self {
+                // `pkg1, pkg2: /path`; a diversion line has no package.
+                PackageManager::Apt => line.split_once(": ").is_some_and(|(owners, _)| {
+                    owners.split(", ").any(|owner| owner.trim() == package)
+                }),
+                _ => line.trim() == package,
+            })),
+            Some(1) => Some(false),
+            _ => None,
+        }
+    }
+
     /// Whether the package [`PackageManager::package_query`] asked about is
     /// installed, from what the query printed and its exit code; `None`
     /// when that does not say.
@@ -936,6 +968,96 @@ mod tests {
         assert_eq!(PackageManager::Dnf.id_map_package(), Some("shadow-utils"));
         assert_eq!(PackageManager::Pacman.id_map_package(), Some("shadow"));
         assert_eq!(PackageManager::Zypper.id_map_package(), None);
+    }
+
+    /// What dpkg-query, rpm and pacman print (checked in ubuntu:24.04 and
+    /// fedora:42): installed or not, and which package owns a file. The
+    /// reinstall form is chosen only when the package is installed.
+    #[test]
+    fn package_queries_are_read_as_the_package_managers_print_them() {
+        use PackageManager::{Apt, Dnf, Pacman};
+        assert_eq!(Apt.package_installed(Some(0), "installed"), Some(true));
+        assert_eq!(Apt.package_installed(Some(0), "not-installed"), Some(false));
+        assert_eq!(Apt.package_installed(Some(0), "config-files"), Some(false));
+        // "dpkg-query: no packages found matching uidmap"
+        assert_eq!(Apt.package_installed(Some(1), ""), Some(false));
+        assert_eq!(
+            Dnf.package_installed(Some(0), "shadow-utils-4.17.4-1.fc42.aarch64\n"),
+            Some(true)
+        );
+        assert_eq!(
+            Dnf.package_installed(Some(1), "package x is not installed"),
+            Some(false)
+        );
+        assert_eq!(Pacman.package_installed(Some(2), ""), None);
+        assert_eq!(Apt.package_installed(None, ""), None);
+
+        assert_eq!(
+            Apt.owns("uidmap", Some(0), "uidmap: /usr/bin/newuidmap\n"),
+            Some(true)
+        );
+        assert_eq!(
+            Apt.owns("uidmap", Some(0), "other, uidmap: /usr/bin/newuidmap\n"),
+            Some(true)
+        );
+        assert_eq!(
+            Apt.owns(
+                "uidmap",
+                Some(0),
+                "diversion by x from: /usr/bin/newuidmap\nx: /usr/bin/newuidmap\n"
+            ),
+            Some(false)
+        );
+        assert_eq!(Apt.owns("uidmap", Some(1), ""), Some(false));
+        assert_eq!(
+            Dnf.owns("shadow-utils", Some(0), "shadow-utils\n"),
+            Some(true)
+        );
+        assert_eq!(Dnf.owns("shadow-utils", Some(1), ""), Some(false));
+        assert_eq!(Pacman.owns("shadow", Some(0), "shadow\n"), Some(true));
+        assert_eq!(Pacman.owns("shadow", None, ""), None);
+
+        assert_eq!(
+            Apt.id_map_install(Some(true)).unwrap().display(),
+            "sudo apt-get install --reinstall -y uidmap"
+        );
+        for state in [Some(false), None] {
+            assert_eq!(
+                Apt.id_map_install(state).unwrap().display(),
+                "sudo apt-get install -y uidmap"
+            );
+        }
+        for state in [Some(true), None] {
+            assert_eq!(
+                Dnf.id_map_install(state).unwrap().display(),
+                "sudo dnf reinstall -y shadow-utils"
+            );
+        }
+        assert_eq!(
+            Dnf.id_map_install(Some(false)).unwrap().display(),
+            "sudo dnf install -y shadow-utils"
+        );
+        assert_eq!(
+            Pacman.id_map_install(Some(true)).unwrap().display(),
+            "sudo pacman -S --noconfirm shadow"
+        );
+        assert!(PackageManager::Zypper.id_map_install(Some(true)).is_none());
+        assert_eq!(
+            Apt.package_query("uidmap"),
+            (
+                "dpkg-query",
+                vec![
+                    "-W".to_string(),
+                    "-f".to_string(),
+                    "${db:Status-Status}".to_string(),
+                    "uidmap".to_string()
+                ]
+            )
+        );
+        assert_eq!(
+            Dnf.owner_query("/usr/bin/newuidmap").1,
+            ["-qf", "--qf", "%{NAME}\n", "/usr/bin/newuidmap"]
+        );
     }
 
     #[test]

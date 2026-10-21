@@ -324,9 +324,10 @@ const SYSTEM_BIN_DIRECTORIES: [&str; 4] = ["/usr/bin", "/usr/sbin", "/bin", "/sb
 /// helper in `/usr/bin` that is not on `PATH` counts as missing, as it does
 /// for Podman. When one is missing or cannot map, also what is known about
 /// why: a missing one found in a system directory under `root` that is not
-/// on `PATH`, and whether the package that ships them here is installed
-/// (asked with dpkg-query, rpm or pacman, read-only). With the command
-/// that installs that package, or reinstalls it when it is installed.
+/// on `PATH`, whether the package that ships them here is installed, and
+/// whether one that cannot map is that package's file (asked with
+/// dpkg-query, rpm or pacman, read-only). With the command that installs
+/// that package, or reinstalls it when it is installed.
 pub(crate) async fn id_map_tools(
     host: &crate::onboard::host::Host,
     root: &Path,
@@ -368,6 +369,24 @@ pub(crate) async fn id_map_tools(
                 .probe(program, &args)
                 .await
                 .and_then(|probe| manager.package_installed(probe.code, &probe.stdout));
+            // A helper that cannot map is reinstalled only when it is the
+            // package's own file: a copy earlier on PATH stays as it is.
+            if tools.package_installed == Some(true) {
+                for path in tools.unprivileged.clone() {
+                    let real = std::fs::canonicalize(&path)
+                        .map(|real| real.display().to_string())
+                        .unwrap_or_else(|_| path.clone());
+                    let (program, args) = manager.owner_query(&real);
+                    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                    let owned = host
+                        .probe(program, &args)
+                        .await
+                        .and_then(|probe| manager.owns(package, probe.code, &probe.stdout));
+                    if owned == Some(false) {
+                        tools.foreign.push(path);
+                    }
+                }
+            }
         }
     }
     tools.install = manager

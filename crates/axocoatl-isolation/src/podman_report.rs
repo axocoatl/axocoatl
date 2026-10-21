@@ -658,6 +658,10 @@ pub struct IdMapTools {
     pub package: Option<String>,
     /// Whether [`IdMapTools::package`] is installed (`None`: not known).
     pub package_installed: Option<bool>,
+    /// Of [`IdMapTools::unprivileged`], the ones the package does not own
+    /// (a copy elsewhere on `PATH`, before the package's): no reinstall
+    /// changes them.
+    pub foreign: Vec<String>,
     /// The command that installs the package here (`sudo apt-get install -y
     /// uidmap`), or reinstalls it when it is installed (`sudo apt-get
     /// install --reinstall -y uidmap`, `sudo dnf reinstall -y
@@ -769,15 +773,25 @@ impl IdMapTools {
     /// reinstalls an installed package for one that cannot map. Never for a
     /// helper that is there but not on `PATH`, which no install changes.
     pub fn command(&self) -> Option<String> {
-        let needed =
-            !self.not_found().is_empty() || (!self.unprivileged.is_empty() && self.reinstalls());
+        let needed = !self.not_found().is_empty()
+            || (!self.packaged_unprivileged().is_empty() && self.reinstalls());
         self.install.clone().filter(|_| needed)
     }
 
+    /// [`IdMapTools::unprivileged`] without [`IdMapTools::foreign`]: the
+    /// package's own files, which a reinstall restores.
+    fn packaged_unprivileged(&self) -> Vec<String> {
+        self.unprivileged
+            .iter()
+            .filter(|path| !self.foreign.contains(path))
+            .cloned()
+            .collect()
+    }
+
     /// What only the person can do about the helpers, beside
-    /// [`IdMapTools::command`]: put a directory on `PATH`, reinstall a
-    /// package whose state is not known, or install them where no package
-    /// is known.
+    /// [`IdMapTools::command`]: put a directory on `PATH`, remove a copy
+    /// the package does not own, reinstall a package whose state is not
+    /// known, or install them where no package is known.
     fn manual(&self) -> Option<String> {
         let mut words = Vec::new();
         let directories = self.off_path_directories();
@@ -788,8 +802,29 @@ impl IdMapTools {
                 directories.join(" and ")
             ));
         }
-        if !self.unprivileged.is_empty() && !self.reinstalls() {
-            let (they, are, have, their) = if self.unprivileged.len() == 1 {
+        if !self.foreign.is_empty() {
+            let mut directories: Vec<&std::path::Path> = self
+                .foreign
+                .iter()
+                .filter_map(|path| std::path::Path::new(path).parent())
+                .collect();
+            directories.dedup();
+            let (its_directory, they_are, file, them) =
+                match (self.foreign.len(), directories.len()) {
+                    (1, _) => ("its directory", "it is", "file", "it"),
+                    (_, 1) => ("their directory", "they are", "files", "them"),
+                    _ => ("their directories", "they are", "files", "them"),
+                };
+            let package = self.package.as_deref().unwrap_or("the package");
+            words.push(format!(
+                "Delete {} or take {its_directory} off PATH: {they_are} not the {file} {package} \
+                 installed, so no reinstall changes {them}",
+                self.foreign.join(" and ")
+            ));
+        }
+        let packaged = self.packaged_unprivileged();
+        if !packaged.is_empty() && !self.reinstalls() {
+            let (they, are, have, their) = if packaged.len() == 1 {
                 ("it", "is", "has", "its")
             } else {
                 ("they", "are", "have", "their")
@@ -797,7 +832,7 @@ impl IdMapTools {
             words.push(format!(
                 "Reinstall the package that provides {} so that {they} {are} setuid root or \
                  {have} {their} file capabilities again ({ID_MAP_PACKAGES})",
-                self.unprivileged.join(" and ")
+                packaged.join(" and ")
             ));
         }
         if !self.not_found().is_empty() && self.install.is_none() {
@@ -2690,6 +2725,22 @@ mod tests {
             ranges.fix.as_deref(),
             Some("sudo apt-get install --reinstall -y uidmap && podman system migrate")
         );
+        // A copy the package does not own, first on PATH: a reinstall would
+        // change nothing, so the fix is in words and runs nothing.
+        report.id_map_tools.as_mut().unwrap().unprivileged =
+            vec!["/home/alex/bin/newuidmap".to_string()];
+        report.id_map_tools.as_mut().unwrap().foreign =
+            vec!["/home/alex/bin/newuidmap".to_string()];
+        let ranges = ranges_finding(&report).unwrap();
+        assert_eq!(
+            ranges.fix.as_deref(),
+            Some(
+                "Delete /home/alex/bin/newuidmap or take its directory off PATH: it is not the \
+                 file uidmap installed, so no reinstall changes it, then: podman system migrate"
+            )
+        );
+        let fix = local_fix(&report, "alex", &IdRangeProblem::NoIdMapTools).unwrap();
+        assert!(fix.manual.is_some() && fix.install.is_none(), "{fix:?}");
 
         // In /usr/bin, which is not on PATH: said so, and no command but
         // the migrate once PATH has it.

@@ -169,9 +169,10 @@ On **Linux and WSL2**:
   so onboarding offers the reinstall: `sudo apt-get install --reinstall -y uidmap`,
   `sudo dnf reinstall -y shadow-utils` on Fedora and RHEL (where shadow-utils is always
   installed), `sudo pacman -S --noconfirm shadow` on Arch. If an install or reinstall
-  runs and changes nothing, onboarding says so and does not offer it again. Helpers in
-  `/usr/bin` while `/usr/bin` is not on `PATH` are reported as such, with no install;
-  on other distributions the fix says what to install or reinstall. Doctor names the
+  runs and the helpers still cannot map, onboarding says so and does not offer it again.
+  Helpers in `/usr/bin` while `/usr/bin` is not on `PATH` are reported as such, with no
+  install, and so is a copy earlier on `PATH` that the package does not own; on other
+  distributions the fix says what to install or reinstall. Doctor names the
   same fix: on its Podman line when `podman info` fails, otherwise on its User ID ranges
   line. With `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote connection, this
   computer's files are not read and nothing is run: the range belongs where that Podman

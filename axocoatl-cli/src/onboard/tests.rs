@@ -1266,15 +1266,53 @@ async fn doctor_names_the_uidmap_install_when_podman_info_fails() {
             .starts_with("Reinstall the package that provides"),
         "{podman:?}"
     );
-    // dpkg says uidmap is installed: `apt-get install` would do nothing,
-    // so the fix is its reinstall, which restores the setuid bit.
-    shims.add("dpkg-query", "printf installed");
+    // dpkg says uidmap is installed and owns that newuidmap: `apt-get
+    // install` would do nothing, so the fix is its reinstall, which
+    // restores the setuid bit.
+    shims.add(
+        "dpkg-query",
+        r#"case "$1" in -W) printf installed ;; -S) echo "uidmap: $2" ;; *) exit 2 ;; esac"#,
+    );
     let report = crate::doctor::collect(&config_path, &env).await;
     let podman = &report.sections.sandbox[0];
     assert_eq!(
         podman.fix.as_deref(),
         Some("sudo apt-get install --reinstall -y uidmap && podman system migrate"),
         "{podman:?}"
+    );
+    // A newuidmap that uidmap does not own (a copy earlier on PATH): no
+    // reinstall changes it, so the fix says to remove it.
+    shims.add(
+        "dpkg-query",
+        r#"case "$1" in -W) printf installed ;; -S) echo "dpkg-query: no path found matching pattern $2" >&2; exit 1 ;; *) exit 2 ;; esac"#,
+    );
+    let report = crate::doctor::collect(&config_path, &env).await;
+    let podman = &report.sections.sandbox[0];
+    let copy = std::fs::canonicalize(shims.dir.path().join("newuidmap")).unwrap();
+    assert_eq!(
+        podman.fix,
+        Some(format!(
+            "Delete {} and {} or take their directory off PATH: they are not the files uidmap \
+             installed, so no reinstall changes them, then: podman system migrate",
+            shims.dir.path().join("newuidmap").display(),
+            shims.dir.path().join("newgidmap").display()
+        )),
+        "{podman:?}"
+    );
+    assert!(
+        !podman.fix.as_deref().unwrap().contains("sudo"),
+        "{podman:?}"
+    );
+    assert!(
+        shims
+            .calls()
+            .contains(&format!("dpkg-query -S {}", copy.display())),
+        "{:?}",
+        shims.calls()
+    );
+    shims.add(
+        "dpkg-query",
+        r#"case "$1" in -W) printf installed ;; -S) echo "uidmap: $2" ;; *) exit 2 ;; esac"#,
     );
     // The same for helpers deleted from an installed uidmap, which doctor
     // says are missing, not "not installed".
@@ -1411,7 +1449,7 @@ esac"#
             assert_eq!(
                 o.steps,
                 [format!(
-                    "`sudo {reinstall}` ran, but changed nothing: newuidmap and newgidmap are \
+                    "`sudo {reinstall}` ran, but did not fix this: newuidmap and newgidmap are \
                      missing, though their package {package} is installed. Running it again \
                      would not help: find where this distribution puts newuidmap and \
                      newgidmap, make sure they are on PATH and are setuid root or have file \
@@ -1471,7 +1509,7 @@ esac"#,
     assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
     assert!(
         o.steps[0].starts_with(
-            "`sudo apt-get install --reinstall -y uidmap` ran, but changed nothing: Rootless \
+            "`sudo apt-get install --reinstall -y uidmap` ran, but did not fix this: Rootless \
              Podman cannot map"
         ),
         "{:?}",
