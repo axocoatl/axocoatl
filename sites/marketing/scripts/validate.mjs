@@ -975,6 +975,27 @@ if (releaseBound) {
   if (changelog && latestTag !== expectedTag) {
     fail('changelog/index.html', `newest release is ${latestTag || 'missing'}; the release-bound site needs ${expectedTag}`);
   }
+  // A VERIFIED-PENDING marker stands where a statement of what was verified
+  // live is restated from the release's final live runs. A release cannot
+  // ship with one left, in the site or in the pages published beside it.
+  const pendingMarker = 'VERIFIED-PENDING';
+  const docsContent = resolve(repositoryRoot, 'sites/docs/src/content/docs');
+  const docsPages = existsSync(docsContent)
+    ? readdirSync(docsContent, { recursive: true })
+      .filter((name) => /\.mdx?$/.test(name))
+      .map((name) => `sites/docs/src/content/docs/${name}`)
+    : [];
+  const published = [
+    'README.md', 'CHANGELOG.md', 'llms.txt', 'docs/RELEASE_GATE.md',
+    ...pages.map((page) => `sites/marketing/${page}`),
+    ...docsPages,
+  ];
+  for (const file of published) {
+    const path = resolve(repositoryRoot, file);
+    if (existsSync(path) && readFileSync(path, 'utf8').includes(pendingMarker)) {
+      fail(file, `${pendingMarker}: restate what was verified from the release's final live runs before releasing`);
+    }
+  }
 }
 
 if (filmsPending) {
