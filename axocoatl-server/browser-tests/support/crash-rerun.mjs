@@ -10,9 +10,13 @@ export const CRASH_LINE = 'browser crash:';
 /** Errors that a browser crash gives a journey, and that alone prove nothing. */
 export const CRASH_ERRORS = /Target page, context or browser has been closed|Target crashed|Page crashed|page crashed|WebKit encountered an internal error|Browser has been closed|Browser closed/;
 
-export const DEFAULT_RERUN_CAP = 3;
+// Off unless asked for: a page 'crash' can also be the product's own page
+// running the renderer out of memory now and then, which a rerun would hide.
+// CI and the release gates rerun nothing; the crash lines still say what
+// happened. Set AXO_BROWSER_CRASH_RERUNS to rerun while triaging.
+export const DEFAULT_RERUN_CAP = 0;
 
-/** AXO_BROWSER_CRASH_RERUNS: how many files a suite may rerun (0 never reruns). */
+/** AXO_BROWSER_CRASH_RERUNS: how many files a suite may rerun (0, the default, never reruns). */
 export function rerunCap(value) {
   if (value === undefined || value === '') return DEFAULT_RERUN_CAP;
   if (!/^\d+$/.test(value) || Number(value) > 20) {

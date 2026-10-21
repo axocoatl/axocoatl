@@ -59,7 +59,8 @@ test('more crashed files than the cap reruns none and fails; a bare non-zero exi
   assert.deepEqual(judgeRun({ code: 1, report: { files } }, 4).rerun.length, 4);
   assert.deepEqual(judgeRun({ code: 1, report: { files: { 'tests/a.test.mjs': file([]) } } }, 3).problems,
     ['node --test exited with 1 without reporting a failed test']);
-  assert.equal(rerunCap(undefined), 3);
+  assert.equal(rerunCap(undefined), 0);
+  assert.equal(rerunCap(''), 0);
   assert.equal(rerunCap('0'), 0);
   assert.throws(() => rerunCap('three'), /AXO_BROWSER_CRASH_RERUNS=three/);
   assert.equal(rerunPassed({ code: 0, report: { files: { 'tests/a.test.mjs': file([]) } } }, ['tests/a.test.mjs']), true);

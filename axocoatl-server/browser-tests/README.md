@@ -104,8 +104,15 @@ load that was under way fails with "WebKit encountered an internal error" or
 never ends, and the cookies of every context, which only the old process
 held, are gone, so a journey that had signed in goes on signed out.
 
-Measured with Playwright 1.60's WebKit on Ubuntu 24.04 (libsoup 3.4.4), the
-journeys of `local-api-token.test.mjs` hit this when they reloaded or left a
+The cause is the libsoup that Playwright's Linux WebKit bundles (it never
+loads the system's): WebKit 26.4 in Playwright 1.60 bundles libsoup 3.6.5,
+and libsoup 3.6.6 fixes a heap use-after-free in its session. These tests
+pin Playwright 1.64.1 (WebKit 27.2, libsoup 3.6.6). Under the same stress in
+an Ubuntu 24.04 VM (aarch64), 1.60's WebKit crashed 26 times in 1,212
+iterations, with 20 failures, and 1.64.1's crashed 0 times in 1,000.
+
+Measured with Playwright 1.60's WebKit on Ubuntu 24.04, the journeys of
+`local-api-token.test.mjs` hit this when they reloaded or left a
 workbench that had just connected and was still loading: the loopback IP
 journey failed in 6 of 200 runs and the "once signed in" journey in 12 of
 440 (it then served its other website with `page.route`, which makes
@@ -213,22 +220,28 @@ every engine, and prints what it saw under the test it happened in, as a
 
 `npm test` (`support/run-tests.mjs`) reads each failure and the lines under
 it (`support/crash-report.mjs`, a second node:test reporter beside the usual
-one), and then:
+one). By default it reruns nothing: every failure fails the suite, with its
+crash lines printed under it, in CI and in the release gates alike. A page
+'crash' can also be the product's own page running the renderer out of
+memory now and then, which a rerun would hide. While triaging, set
+`AXO_BROWSER_CRASH_RERUNS=N` (up to 20), and it:
 
 - runs a test file once more when every failure in it has a
   `# browser crash:` line. The rerun must pass entirely;
 - never reruns a file with a failure that has none; that failure fails the
-  suite. A failure of the file itself (a hook, a daemon left running) has
-  none;
-- reruns at most three files in a suite (`AXO_BROWSER_CRASH_RERUNS`, `0`
-  to never rerun). More than that fails the suite and reruns none;
+  suite. A failure of the file itself (a hook) has none, though a daemon left
+  running that only sets the exit code is not seen when another test of the
+  file failed;
+- reruns at most N files in a suite. More than that fails the suite and
+  reruns none;
 - prints both runs and then a summary: the first run's counts, each failure
   with its crash lines, the rerun's counts, and `Browser regressions: PASS`
   or `FAIL`. On GitHub Actions each rerun is also an annotation: a warning
   when the rerun passed, an error when it did not.
 
-This is on for every engine. A crash in the same test as a real failure gets
-the file rerun, and the real failure then fails the rerun and so the suite.
+Detection is on for every engine. With reruns on, a crash in the same test as
+a real failure gets the file rerun, and a failure that happens every time
+then fails the rerun and so the suite; an intermittent one can pass.
 A crash the harness does not see (the network process of a browser none of
 whose contexts holds a sign-in cookie, for example) is a plain failure.
 `tests/browser-crash.test.mjs` checks these rules, and runs a lost sign-in
