@@ -411,8 +411,15 @@ export async function launchTestDaemon({
   home = false,
   // Extra environment for the daemon (for example a PATH with fake tools).
   env = {},
+  // `sandbox.network` (none, bridge or egress), written unquoted as other
+  // journeys expect. A journey that serves a real Preview needs `bridge`,
+  // which publishes a Session's exposed ports on host loopback.
+  network = 'none',
   port: requestedPort = Number(process.env.AXOCOATL_E2E_PORT) || 0,
 } = {}) {
+  if (!['none', 'bridge', 'egress'].includes(network)) {
+    throw new Error(`launchTestDaemon: network must be none, bridge or egress, not ${network}`);
+  }
   const runRoot = await mkdtemp(path.join(tmpdir(), 'axocoatl-browser-e2e-'));
   const dataDirectory = path.join(runRoot, 'data');
   const projectsDirectory = path.join(runRoot, 'projects');
@@ -502,7 +509,7 @@ sandbox:
   backend: podman
   allow_untrusted_images: false
   allow_post_create_command: ${allowPostCreateCommand}
-  network: none
+  network: ${network}
   require_resource_limits: false
 
 consolidation:
