@@ -138,16 +138,13 @@ none. `trackRequests` and `waitForNoRequestsInFlight` in
 `waitForSettledWorkbench` too. Closing a context (200 times) or reloading
 the page (220 times) while the workbench loaded did not crash it in the VM.
 
-So the harness says when a context lost its sign-in. `authorizeContext` (and
-so `newAuthorizedContext`) checks that a context still holds the token
-cookies it was given when a daemon answers the context 401 and when the
-journey closes it. A cookie the journey did not remove itself (with
-`context.clearCookies`) is reported under that test as a `# lost sign-in:`
-line with the time and the request that was refused, so a failure that
-follows from it (the shell's reload on a 401 reaching the sign-in page, then
-`Can't find variable: S`) is not taken for a product failure and can be
-matched with the crash in the browser's stderr (`DEBUG=pw:browser`) or the
-system's crash log.
+So the harness says when a context lost its sign-in, under the test, as a
+`# browser crash:` line with the time and the request that was refused, and
+reruns a file whose failures all followed such a crash ("Browser crashes"
+below). A failure that follows from it (the shell's reload on a 401 reaching
+the sign-in page, then `Can't find variable: S`) is then not taken for a
+product failure, and can be matched with the crash in the browser's stderr
+(`DEBUG=pw:browser`) or the system's crash log.
 
 Journeys a new user takes first (the folder picker and Workspace scope, Source
 Control's commit identity, Team and budget's suggested limits, the readiness
@@ -165,7 +162,8 @@ directories.
 `npm test` builds the current `axocoatl-cli` package before opening the embedded
 page. The no-build command still discovers every `tests/*.test.mjs` file in
 sorted order and fails when the suite is empty, so adding a test file cannot
-silently leave it outside the gate.
+silently leave it outside the gate. Naming files runs only those
+(`npm run test:no-build -- tests/signed-out.test.mjs`).
 
 The runner creates one disposable embedding-model cache for the run. A healthy
 fixture publishes only files matching the daemon's pinned sizes and SHA-256
@@ -177,6 +175,76 @@ runs retain the shorter default unless `AXOCOATL_E2E_STARTUP_TIMEOUT_MS` is set
 (maximum `300000`). `AXOCOATL_E2E_MODEL_CACHE` can point to an existing directory
 containing the three pinned model files; an externally supplied cache is not
 removed by the runner.
+
+## Browser crashes
+
+A browser can crash under a journey without the product doing anything
+wrong, and the journey then fails far from the cause. Playwright 1.60's
+WebKit on Linux does this now and then: its network process dies of heap
+corruption and takes every context's cookies with it (above), or a web
+process dies under a live page, whose next action fails with "Target page,
+context or browser has been closed". CI's WebKit leg failed this way in 3 of
+8 runs, each time in a different journey. A Chromium renderer or browser
+that crashes is not a product failure either.
+
+So `support/browser-crash.mjs` watches every browser a journey launches, in
+every engine, and prints what it saw under the test it happened in, as a
+`# browser crash:` line with the time:
+
+- a page whose web process crashed (Playwright's page `crash` event), unless
+  the journey was closing that page, its context or its browser;
+- a browser that disconnected although the journey did not close it;
+- a context or page the browser has not created after 30 seconds, which then
+  fails the journey's `newContext` or `newPage`. Creating one runs no
+  product code, and Playwright's WebKit never finishes a page whose web
+  process ends while it is being created, so the journey would otherwise
+  wait until CI cancels the job;
+- a context that no longer holds the sign-in cookie it was given
+  (`authorizeContext`, so `newAuthorizedContext`) or signed in with
+  (`/?token=`), although the journey did not clear it with
+  `context.clearCookies`. Axocoatl never removes that cookie. A context is
+  checked when a daemon answers it 401, when the journey closes it, and when
+  the test ends, and the test's lines are printed after those checks have
+  finished;
+- a failure with "Target page, context or browser has been closed", "Target
+  crashed", "Page crashed" or "WebKit encountered an internal error", but only
+  with one of the above in the same test, or on a browser that disconnected
+  earlier in the file. Alone, those errors prove nothing.
+
+`npm test` (`support/run-tests.mjs`) reads each failure and the lines under
+it (`support/crash-report.mjs`, a second node:test reporter beside the usual
+one), and then:
+
+- runs a test file once more when every failure in it has a
+  `# browser crash:` line. The rerun must pass entirely;
+- never reruns a file with a failure that has none; that failure fails the
+  suite. A failure of the file itself (a hook, a daemon left running) has
+  none;
+- reruns at most three files in a suite (`AXO_BROWSER_CRASH_RERUNS`, `0`
+  to never rerun). More than that fails the suite and reruns none;
+- prints both runs and then a summary: the first run's counts, each failure
+  with its crash lines, the rerun's counts, and `Browser regressions: PASS`
+  or `FAIL`. On GitHub Actions each rerun is also an annotation: a warning
+  when the rerun passed, an error when it did not.
+
+This is on for every engine. A crash in the same test as a real failure gets
+the file rerun, and the real failure then fails the rerun and so the suite.
+A crash the harness does not see (the network process of a browser none of
+whose contexts holds a sign-in cookie, for example) is a plain failure.
+`tests/browser-crash.test.mjs` checks these rules, and runs a lost sign-in
+and a killed browser in a child `node --test`.
+
+Measured in an Ubuntu 24.04 VM (aarch64) with Playwright 1.60's WebKit and a
+release build, by signalling the run's own browser processes a fraction of a
+second into a journey: killing `WPENetworkProcess` (SIGSEGV in 10 runs,
+SIGKILL in 4) or `WPEWebProcess` (SIGKILL in 18 runs) was detected each time,
+and the file was run once more and passed. In 7 of the web process runs the
+process ended while a page was being created, and `newPage` failed after 30
+seconds instead of waiting forever. A SIGSEGV sent to `WPEWebProcess` with
+`kill` did not end it (4 runs), so those runs used SIGKILL. A deliberately broken
+assertion failed the suite with no rerun. With a crash in the same test the
+file was rerun and the assertion failed the rerun; with a crash in another
+test of the file, the file was not rerun.
 
 ## CI gate
 

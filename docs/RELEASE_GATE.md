@@ -496,7 +496,9 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   (`AXO_BROWSER_ENGINE=webkit`, see `axocoatl-server/browser-tests/README.md`),
   and in Chromium on x86_64 and aarch64, all against the release build.
   `release.yml`'s browser gate still runs Chromium only, until the WebKit leg
-  has passed in CI. Run on a Mac with `AXO_BROWSER_ENGINE=webkit`, Playwright's
+  has passed in CI. In every engine the suite runs a test file once more
+  when every failure in it followed a browser crash it detected, and fails
+  on any other failure (that README, "Browser crashes"). Run on a Mac with `AXO_BROWSER_ENGINE=webkit`, Playwright's
   WebKit (measured with 26.4) accepts `Domain=localhost` cookies as Safari on
   macOS is expected to; live Safari has not confirmed it yet. There the
   "Preview browser contract" journey asserts that a top-level Preview's
